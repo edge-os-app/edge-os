@@ -56,9 +56,9 @@ Do not use `p.md`, BUILDER-ONLY REFERENCE `p.md` as a product specification. It 
 | Execution direction | User-owned Privy wallet with a restricted, revocable signer; documentation revision authorized |
 | Existing delegation proof | Assensus X Layer testnet spike passed; see Privy research for scope and sources |
 | Monad–Kuru delegated execution | Unproved; no Edge OS spike or runtime gate marked complete |
-| Dangerous-claim prototype | Not started |
-| Scoped probe plan | Drafted at `docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md`; inputs and separate approvals pending |
-| Probe A, research/compiler/rejection | `NOT_STARTED`; proposed owner is the builder |
+| Dangerous-claim prototype | Scoped experiments in progress; complete prototype gate unpassed |
+| Scoped probe plan | Individual approvals and pending recovery proposal recorded at `docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md`; complete product design remains a draft |
+| Probe A, research/compiler/rejection | `IN_PROGRESS`; 1A recovery passed mechanics; 1B offline repair passed, live recovery pending; historical investigation has not run; owner is the builder |
 | Probe B, Monad–Kuru delegation | `NOT_STARTED`; owner is the builder |
 | Optional post-core extensions and demo revision | Proposed; scope/economics and revised recording contract remain unapproved |
 | Product code | Not started under this workflow |
@@ -67,7 +67,7 @@ Do not use `p.md`, BUILDER-ONLY REFERENCE `p.md` as a product specification. It 
 | Submission deadline | 2026-10-14 03:59 UTC, 04:59 Africa/Kinshasa |
 | Internal cutoff | 2026-10-13 23:59 Africa/Kinshasa |
 
-The exact next action is to instantiate and review [the shared scoped probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md), then approve or revise each experiment's design, inputs and permissions. A and B may proceed independently after their own approvals. The full build still needs approved product/design and build-brief boundaries. The 2026-10-02 documentation authorization does not approve code, Nansen, provider costs, wallet changes or transactions. Current Compass Phase 3 remains in progress; no later gate is marked passed.
+The exact next action is to review [the retained Probe A results](prototypes/EDGE_OS_PROBE_A_RESULT.md) and the pending live 1B recovery proposal in [the shared scoped probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). Part 1A recovery passed 81/81 mechanics checks; part 1B offline repair passed 25/25 authored-fixture checks. The original live 1B rejection remains evidence. Offline fixtures do not prove live model accuracy, endpoint schema enforcement or research quality. The builder must approve or revise the recovery allowance before more inference. Historical checkpoint 2 still needs an exact market and qualified dataset. Probe B remains independently scoped and unstarted. The full build needs approved product/design and build-brief boundaries. Current Compass Phase 3 remains in progress; checkpoint 1, Probe A and the complete prototype gate remain unpassed. This synchronization adds no execution or spending approval.
 
 ### Engineering execution
 
@@ -510,7 +510,9 @@ Exit gate:
 
 ### Phase 6: prototype the dangerous claim
 
-Status: `NOT STARTED`
+Status: `SCOPED EXPERIMENTS IN PROGRESS; FULL PHASE GATE UNPASSED`
+
+The [result report](prototypes/EDGE_OS_PROBE_A_RESULT.md) records the passing 1A recovery and 1B offline repair, the retained live rejection and remaining work. These narrow experiments do not complete the earlier challenge/build-brief gates or move the current Compass stage past Phase 3.
 
 The prototype must test the research and rejection engine before building the full application.
 
@@ -675,7 +677,9 @@ If the primary meme spot path is unstable on 2026-10-08, defer live LP execution
 
 ## 9. Team ownership
 
-### Builder: quant and agent systems
+### Builder: backend, product decisions, and prototypes
+
+The builder owns the whole backend for now and all prototyping, including the research, execution and UI interaction probes. Teammates implement accepted tickets against the builder's published contracts and findings.
 
 Own:
 
@@ -689,7 +693,19 @@ Own:
 - quant, Jev, and Hermes boundaries;
 - deterministic risk rules;
 - mandate semantics, strategy-version binding, and typed agent handoffs;
-- reference implementation fixtures.
+- reference implementation fixtures;
+- application API, persistence and background research job state;
+- bounded provider collection, provenance, quality, request/cost accounting and data reconciliation;
+- Privy wallet ownership, restricted signer consent, current policy checks, and owner removal;
+- backend secret isolation and separate policy administration;
+- persistent strategy workers, exclusive claims, reserved capital, and durable intent records;
+- recovery of pending transactions, orders, and fills before another submission;
+- Monad data and transaction plumbing;
+- Kuru and Envio ingestion, QuickNode integration, public-RPC fallback, and provider-health checks;
+- official X API collection and forward snapshot storage when access is available;
+- Kuru spot adapter and a verified LP adapter when selected;
+- receipt storage and explorer links;
+- backend deployment, monitoring, recovery and reproduction instructions.
 
 ### Teammate: frontend and judge experience
 
@@ -707,27 +723,19 @@ Own:
 - demo-safe fixture playback;
 - project graphic support.
 
-### Teammate: platform, Monad, and deployment
+### Teammate: tokenization extension
 
-Implement accepted tickets after the builder supplies the probe findings and required contracts. This role does not own prototyping.
+Implement accepted extension tickets after the builder accepts their behavior and interfaces. This role does not own core backend work or prototyping.
 
 Own:
 
-- application API and persistence;
-- background research job state;
-- bounded provider collection, provenance, quality, request/cost accounting and data reconciliation;
-- Privy wallet ownership, restricted signer consent, current policy checks, and owner removal;
-- backend secret isolation and separate policy administration;
-- persistent strategy workers, exclusive claims, reserved capital, and durable intent records;
-- recovery of pending transactions, orders, and fills before another submission;
-- Monad data and transaction plumbing;
-- Kuru and Envio ingestion, QuickNode integration, public-RPC fallback, and provider-health checks;
-- official X API collection and forward snapshot storage when access is available;
-- Kuru spot adapter;
-- verified LP adapter when selected;
-- receipt storage and explorer links;
-- hosted deployment, monitoring, and recovery path;
-- public reproduction instructions.
+- approved token/publication contracts and integration interfaces;
+- extension-specific tests, denied-action cases and inspectable accounting;
+- extension deployment and reproduction instructions under separately approved permissions.
+
+Before a dependent ticket is ready, accept the holder's utility/rights, immutable strategy-revision binding, eligibility evidence, fee route, liquidity source, pause/version-change behavior, governance limits and absent claims. Ownership does not authorize the teammate to choose these terms or expand trading authority.
+
+Implementation may proceed against clearly labeled fixtures once its behavior and interfaces are accepted. Activation requires the core proof, the extension's own checks and separate builder approval. Optional economics and activation remain unapproved and must not block the core probes.
 
 ### Integration contract
 
@@ -754,7 +762,7 @@ Minimum fixtures:
 - signer removal with a still-open order;
 - LP StrategySpec and simulated result.
 
-The frontend and platform should work against these fixtures while the real engine is being built.
+The frontend should work against these fixtures while the real engine is being built. Tokenization work uses its separately accepted publication contract and revision/eligibility fixtures. A fixture grants no live authority and establishes no profitability.
 
 ## 10. Quant course knowledge base
 
@@ -980,7 +988,9 @@ Do not revive Funnel phase gates, candidate ranking, or product selection. Edge 
 
 ## 15. Current next action
 
-Instantiate and review [EDGE_OS_SCOPED_PROBE_PLAN.md](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). Approve or revise Probe A and Probe B separately. Select the exact safe inputs, runtime/grammar and dependency configuration before approval. Set numeric provider and financial limits only where needed; no secrets belong in the plan.
+Review [EDGE_OS_PROBE_A_RESULT.md](prototypes/EDGE_OS_PROBE_A_RESULT.md), then approve or revise the pending live 1B recovery in [EDGE_OS_SCOPED_PROBE_PLAN.md](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). The proposed allowance is four additional calls, five cumulatively, retaining the prior charge and the USD 0.10 working cap / USD 0.30 maximum. No automatic retries, repair calls or model escalation are included. The original rejection and all earlier evidence remain preserved. This documentation update does not approve that proposal.
+
+Part 1A recovery has passed; do not repeat it merely to restart the workflow. A live 1B pass would establish interpretation and compiler compatibility for the frozen cases, not alpha generation or persistent trading. Review checkpoint 1 before proceeding to the separately qualified historical investigation. Exact market/data approval remains necessary for checkpoint 2. Probe B remains unstarted with separate execution permissions.
 
 Review:
 
@@ -988,10 +998,14 @@ Review:
 
 The revised draft records Privy delegation, mandate limits, persistent recovery, independent policy denial, and revocation with pending exposure. It preserves the Kuru, QuickNode, and Envio boundaries and the JEV Trader semantic-drift test. The Privy research note records Assensus's completed narrow proof and its limits. Monad–Kuru delegated execution remains unproved.
 
-Review `docs/EDGE_OS_RESEARCH_CONTRACTS.md` with the design. Mechanism questions, structured evidence packages and reference acceptance cases are documented, not implemented or tested. `NANSEN-Q01` remains `NOT_STARTED`; the builder must select its token/venue and feature, approve account costs and a numeric budget, and preserve historical-versus-forward limits before a separate authorized run. Do not create a completed qualification report before evidence exists.
+Review `docs/EDGE_OS_RESEARCH_CONTRACTS.md` with the design. The full research contracts have not been implemented or qualified; the result report identifies the limited mechanics and offline handoff checks already tested. `NANSEN-Q01` remains `NOT_STARTED`; the builder must select its token/venue and feature, approve account costs and a numeric budget, and preserve historical-versus-forward limits before a separate authorized run. Do not create a completed qualification report before evidence exists.
 
 The full design still needs `APPROVE`, `REVISE`, or `NARROW`. The immediate proposed route uses the two independently approved experiments to resolve the dangerous assumptions before final production planning. Carry their evidence into the short challenge and design decision. Preserve unknown user demand. Use Wayfinder only for remaining dependent core decisions, then approve the production design/build brief and tickets. Full product implementation remains blocked until those boundaries are approved.
 
 The builder authorized the documentation revisions and replacement Compass session prompt on 2026-09-30. Those authorizations do not approve the complete design, advance a Compass stage or run a prototype.
 
-On 2026-10-02, the builder authorized synchronizing the spec, this workflow and controller handoff and creating the shared probe plan. Both probes remain `NOT_STARTED`. No experiment approval, paid access, financial execution, phase completion or optional-token activation is recorded.
+### Historical setup record
+
+On 2026-10-02, the builder authorized synchronizing the spec, this workflow and controller handoff and creating the shared probe plan. At that point both probes were `NOT_STARTED`; that setup update approved no experiment, paid access, financial execution, phase completion or optional-token activation.
+
+The same day's controller follow-up revised Probe A for an actual bounded Hermes investigator and a separate data qualification preflight. Direct inspection resolved the named S15/S16 compiler-source questions, not runtime correctness or course-wide parity. At that planning checkpoint, Hermes isolation, usage/cost qualification and historical market data remained unproved, and experiment approvals were pending. Later approvals and executed findings are recorded in the scoped plan and result report; those records supersede this historical setup status.
