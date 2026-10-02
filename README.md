@@ -33,7 +33,13 @@ Liquidity-provider research is the second product domain. Its initial scope is c
 
 ## Current status
 
-Edge OS is in design and prototype preparation. The research/compiler/rejection probe and the Monad–Kuru delegated-execution probe have not yet run.
+Edge OS is in design and scoped prototyping. Probe A has started:
+
+- Part 1A recovery passed the deterministic compiler, timing, leakage and accounting checks: 81/81 checks passed.
+- Part 1B's offline repair passed 25/25 checks with authored fixtures. The original live attempt was rejected; live recovery remains pending approval.
+- The historical investigation and complete Probe A gate remain unpassed. Probe B, delegated Monad–Kuru execution, has not started.
+
+See the [probe result report](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) for evidence and limitations. Offline fixtures do not prove model accuracy or historical research quality.
 
 Research results, profitable strategies and autonomous execution are not established capabilities. A passing test or completed transaction does not prove a trading edge.
 
@@ -45,7 +51,8 @@ The specification, contracts, scoped probe plan and project workflow in this rep
 - [Edge OS Compass workflow](docs/EDGE_OS_COMPASS_WORKFLOW.md).
 - [Product design, draft for builder review](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md).
 - [Research contracts, draft for builder review](docs/EDGE_OS_RESEARCH_CONTRACTS.md).
-- [Scoped probe plan, draft for builder review](docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md).
+- [Scoped probe plan and approval record](docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md).
+- [Probe findings and limitations](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md).
 - [Hackathon brief](docs/research/00_HACKATHON_BRIEF.md).
 - [Hackathon Winning Compass](playbooks/HACKATHON_WINNING_COMPASS.md).
 - [Matt Pocock project workflow](playbooks/MATT_POCOCK_PROJECT_WORKFLOW.md).
@@ -54,7 +61,9 @@ The specification, contracts, scoped probe plan and project workflow in this rep
 
 Track assigned work in [GitHub Issues](https://github.com/edge-os-app/edge-os/issues). Read [AGENTS.md](AGENTS.md) before an agent task. Tracker, label and domain conventions are under [docs/agents/](docs/agents/).
 
-The builder owns product decisions and prototyping. Teammates implement accepted tickets on task branches and submit pull requests for builder acceptance. Only the builder merges to `main` by team agreement. The builder selected this manual gate instead of requiring GitHub-enforced approvals or branch protection. Required checks and implementation review still apply.
+The builder owns product decisions, all prototyping and the whole backend. One teammate implements the frontend; the other implements the gated tokenization extension after its behavior and interfaces are accepted. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records the boundaries. Assigning an owner does not approve an extension's economics or activation.
+
+Teammates implement accepted tickets on task branches and submit pull requests for builder acceptance. Only the builder merges to `main` by team agreement. The builder selected this manual gate instead of requiring GitHub-enforced approvals or branch protection. Required checks and implementation review still apply.
 
 Skills require installation in each contributor's agent environment. These documentation files do not install skills or create remote labels.
 
