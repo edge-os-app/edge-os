@@ -8,6 +8,8 @@ A trading idea can sound convincing while leaving the important questions unansw
 
 We are building Edge OS to connect research, strategy construction, testing, delegated execution and monitoring. The wider vision includes publishing strategies and optional token-based distribution or agent funding. These are planned capabilities, not a description of a finished product.
 
+The goal is to take a trading idea through research, explicit strategy rules, historical backtesting and risk checks. Where historical data is insufficient, the strategy needs further observation or paper testing. Once it meets the required evidence checks, the user can deploy it as an agent that monitors markets and carries out permitted actions while they are offline. The user controls its limits and can revoke its authority. Passing compilation or a backtest alone does not qualify a strategy for deployment or prove future profitability.
+
 ## Who it is for
 
 Onchain traders and strategy creators can investigate an observation without building their own data pipeline, research notebooks, simulator and trading runtime. Liquidity providers can investigate whether pool fees compensate for inventory exposure and operating costs.
@@ -29,9 +31,11 @@ Thesis, intuition or bounded research request
 → clarification or an approved research budget
 → mechanism hypothesis and supporting/contrary evidence
 → quantitative effect tests and inspectable strategy rules
-→ false-edge checks, execution simulation and applicable forward testing
+→ historical backtesting or replay where the data supports it, with realistic execution costs
+→ false-edge and robustness checks, plus paper or forward testing where needed
 → rejected, unresolved or eligible for the next evidence stage
-→ separately authorized, bounded Monad execution and monitoring
+→ user-approved deployment as a bounded strategy agent
+→ ongoing monitoring, permitted Monad execution and inspectable receipts
 ```
 
 Research starts with a mechanism question. Who produces the relevant flow? What incentive or constraint explains it? Why might an opportunity remain after competition? What costs, liquidity limits and capacity restrict capture? Which evidence would disprove the explanation?
