@@ -1,6 +1,8 @@
 # Edge OS
 
-An edge-generation and strategy research system for onchain traders and liquidity providers.
+An edge-generation and alpha research system for onchain traders and liquidity providers.
+
+Edge OS generates market hypotheses, investigates their mechanisms, and turns sufficiently supported ideas into inspectable strategy rules. It preserves the evidence and rejects unsupported results before they reach capital.
 
 A trading idea can sound convincing while leaving the important questions unanswered. What causes the opportunity? When should a position open or close? What would disprove the thesis? Does the result survive realistic costs, or only look attractive in a backtest?
 
@@ -56,6 +58,6 @@ The builder owns product decisions and prototyping. Teammates implement accepted
 
 Skills require installation in each contributor's agent environment. These documentation files do not install skills or create remote labels.
 
-Research sources marked `BUILDER-ONLY REFERENCE` remain in the builder's private workspace. Teammates do not need that workspace. The builder must supply required verified extracts and fixtures with each task. See [reference and document rules](docs/agents/domain.md#shared-documents-and-private-evidence).
+For supporting evidence and required task inputs, follow the [contributor reference rules](docs/agents/domain.md#shared-documents-and-private-evidence).
 
 Verified installation, build and test commands will be added when the runnable application and its tooling exist.
