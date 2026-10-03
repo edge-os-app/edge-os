@@ -1,6 +1,6 @@
 # Edge OS team handoff
 
-Last updated: 2026-10-02, Africa/Kinshasa.
+Last updated: 2026-10-03, Africa/Kinshasa.
 
 This file records team-facing state. The builder's detailed controller history, retired Funnel ledger, courses and research archives are private and are not required inputs for a teammate's clone.
 
@@ -10,7 +10,9 @@ This file records team-facing state. The builder's detailed controller history, 
 - Governing method: [Hackathon Winning Compass](../playbooks/HACKATHON_WINNING_COMPASS.md), applied through the [project workflow](EDGE_OS_COMPASS_WORKFLOW.md).
 - Current Compass stage: Phase 3, frame the product.
 - [Product design](superpowers/specs/2026-09-29-edge-os-hackathon-design.md) and [research contracts](EDGE_OS_RESEARCH_CONTRACTS.md) remain drafts for builder review. The [scoped probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md) records the individual experiment approvals; these do not approve the complete design.
-- Probe A, research/compiler/rejection: `IN_PROGRESS`. Part 1A recovery passed 81/81 mechanics checks. Part 1B offline repair passed 25/25 authored-fixture checks after the rejected live attempt. Live 1B recovery is pending approval; historical checkpoint 2 has not run. Checkpoint 1, complete Probe A and the Compass prototype gate remain unpassed.
+- Probe A, research/compiler/rejection: `IN_PROGRESS`. Part 1A recovery passed 81/81 mechanics checks. Part 1B `1B-sol-an-recheck-09` passed all five fresh live Sol cases under one v6 candidate, including clarification and compilation/reload. Final offline checks passed 35/35 interpretation and 19/19 boundary checks. Checkpoint 1 passes for its bounded scope. Historical checkpoint 2 has not run; complete Probe A and the Compass prototype gate remain unpassed.
+- Cause of the earlier failures: Luna produced invalid responses, and our interpretation contracts/checkers also disagreed. The v6 no-thesis correction preserves adopted settings as research configuration without inventing a selected strategy or granting readiness/authority. This small comparison does not establish general model superiority.
+- The live recovery is closed. Actual cumulative usage is 26 requests, USD 0.0308868625, with all charges settled. No further paid calls are authorized by this status record.
 - Execution evidence: [Probe A result report](prototypes/EDGE_OS_PROBE_A_RESULT.md). Consult the report for results and limitations, and the plan for approvals. Preserve the original rejections.
 - Probe B, delegated Monad–Kuru execution: `NOT_STARTED`.
 - Result-state interaction prototype: not started and separately scoped.
@@ -53,9 +55,9 @@ The [hackathon brief](research/00_HACKATHON_BRIEF.md) records detailed rules, so
 
 ## Next authorized action
 
-Review the retained offline repair evidence and the pending live 1B recovery proposal with the builder. The proposal allows four additional calls, five cumulatively, with prior usage retained and the USD 0.10 working cap / USD 0.30 maximum. It is not yet approved. No retries, repair calls or model escalation are included.
+Use the passing checkpoint 1 evidence to prepare the historical checkpoint 2 data qualification. Select one exact market and assess historical coverage, gaps, price/amount units, availability provenance and usable trade-reference observations. Record the remaining A01/A02 gaps in the scoped plan before proposing an investigation. This documentation publication does not select a market, approve a dataset or authorize provider calls.
 
-Do not rerun completed 1A work merely to restart the workflow. If live 1B passes, review checkpoint 1, then qualify and approve the exact market and historical dataset before checkpoint 2. Probe B remains separately scoped and unstarted. Code, paid access, wallet changes and transactions require their applicable approvals; this status update grants none.
+Do not restart passed 1A or 1B merely to advance the workflow. Qualify and approve the exact market and historical dataset before checkpoint 2. Probe B remains separately scoped and unstarted. Code, paid access, wallet changes and transactions require their applicable approvals; this status update grants none.
 
 Return separate findings and limitations. Use focused planning or a small Wayfinder map only for unresolved dependent decisions. Accept the production design and build brief before publishing ready implementation tickets.
 

@@ -2,7 +2,7 @@
 
 Private source pointers are marked `BUILDER-ONLY REFERENCE`. They are not included in a teammate's clone. Follow the [reference rules](agents/domain.md#shared-documents-and-private-evidence). Source labels preserve provenance, not new verification.
 
-Last updated: 2026-10-02, Africa/Kinshasa
+Last updated: 2026-10-03, Africa/Kinshasa
 
 This repository document is authoritative for team workflow. The workspace path redirects here. The builder owns all prototypes; teammate ownership below refers to accepted implementation work. Private evidence follows the [reference rules](agents/domain.md#shared-documents-and-private-evidence).
 
@@ -57,8 +57,8 @@ Do not use `p.md`, BUILDER-ONLY REFERENCE `p.md` as a product specification. It 
 | Existing delegation proof | Assensus X Layer testnet spike passed; see Privy research for scope and sources |
 | Monad–Kuru delegated execution | Unproved; no Edge OS spike or runtime gate marked complete |
 | Dangerous-claim prototype | Scoped experiments in progress; complete prototype gate unpassed |
-| Scoped probe plan | Individual approvals and pending recovery proposal recorded at `docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md`; complete product design remains a draft |
-| Probe A, research/compiler/rejection | `IN_PROGRESS`; 1A recovery passed mechanics; 1B offline repair passed, live recovery pending; historical investigation has not run; owner is the builder |
+| Scoped probe plan | Individual approvals and closed live recovery recorded at `docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md`; complete product design remains a draft |
+| Probe A, research/compiler/rejection | `IN_PROGRESS`; 1A passed 81 mechanics checks; 1B passed all five fresh live Sol v6 cases; checkpoint 1 passes for its bounded scope; historical investigation has not run; owner is the builder |
 | Probe B, Monad–Kuru delegation | `NOT_STARTED`; owner is the builder |
 | Optional post-core extensions and demo revision | Proposed; scope/economics and revised recording contract remain unapproved |
 | Product code | Not started under this workflow |
@@ -67,7 +67,9 @@ Do not use `p.md`, BUILDER-ONLY REFERENCE `p.md` as a product specification. It 
 | Submission deadline | 2026-10-14 03:59 UTC, 04:59 Africa/Kinshasa |
 | Internal cutoff | 2026-10-13 23:59 Africa/Kinshasa |
 
-The exact next action is to review [the retained Probe A results](prototypes/EDGE_OS_PROBE_A_RESULT.md) and the pending live 1B recovery proposal in [the shared scoped probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). Part 1A recovery passed 81/81 mechanics checks; part 1B offline repair passed 25/25 authored-fixture checks. The original live 1B rejection remains evidence. Offline fixtures do not prove live model accuracy, endpoint schema enforcement or research quality. The builder must approve or revise the recovery allowance before more inference. Historical checkpoint 2 still needs an exact market and qualified dataset. Probe B remains independently scoped and unstarted. The full build needs approved product/design and build-brief boundaries. Current Compass Phase 3 remains in progress; checkpoint 1, Probe A and the complete prototype gate remain unpassed. This synchronization adds no execution or spending approval.
+Checkpoint 1 now passes for its bounded meaning, compilation and known-invalid-input scope. Part 1A passed 81/81 mechanics checks; part 1B `1B-sol-an-recheck-09` passed all five fresh live Sol cases under one v6 candidate. Final offline suites passed 35/35 interpretation and 19/19 boundary checks. Earlier failures remain in [the result report](prototypes/EDGE_OS_PROBE_A_RESULT.md). Both model behavior and contract/checker defects contributed to those failures. This evidence does not establish arbitrary-language reliability, historical research quality or profitability.
+
+The next action is to prepare checkpoint 2 data qualification using [the shared scoped probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). It still needs an exact market and qualified historical dataset. The live interpretation run is closed: 26 cumulative requests, USD 0.0308868625, all charges settled. Probe B remains independently scoped and unstarted. Current Compass Phase 3 remains in progress; complete Probe A and the full prototype gate remain unpassed. The full build needs accepted product/design and build-brief boundaries. This synchronization adds no execution, spending, market or dataset approval.
 
 ### Engineering execution
 
@@ -512,7 +514,7 @@ Exit gate:
 
 Status: `SCOPED EXPERIMENTS IN PROGRESS; FULL PHASE GATE UNPASSED`
 
-The [result report](prototypes/EDGE_OS_PROBE_A_RESULT.md) records the passing 1A recovery and 1B offline repair, the retained live rejection and remaining work. These narrow experiments do not complete the earlier challenge/build-brief gates or move the current Compass stage past Phase 3.
+The [result report](prototypes/EDGE_OS_PROBE_A_RESULT.md) records the passing 1A recovery, all five passing fresh live Sol v6 cases and the bounded checkpoint 1 pass. It preserves earlier failures and the remaining historical investigation. These narrow experiments do not pass complete Probe A, complete the earlier challenge/build-brief gates or move the current Compass stage past Phase 3.
 
 The prototype must test the research and rejection engine before building the full application.
 
@@ -988,9 +990,9 @@ Do not revive Funnel phase gates, candidate ranking, or product selection. Edge 
 
 ## 15. Current next action
 
-Review [EDGE_OS_PROBE_A_RESULT.md](prototypes/EDGE_OS_PROBE_A_RESULT.md), then approve or revise the pending live 1B recovery in [EDGE_OS_SCOPED_PROBE_PLAN.md](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). The proposed allowance is four additional calls, five cumulatively, retaining the prior charge and the USD 0.10 working cap / USD 0.30 maximum. No automatic retries, repair calls or model escalation are included. The original rejection and all earlier evidence remain preserved. This documentation update does not approve that proposal.
+Checkpoint 1 passed its bounded interpretation/compiler experiment. Review [EDGE_OS_PROBE_A_RESULT.md](prototypes/EDGE_OS_PROBE_A_RESULT.md) for the accepted evidence and limits, then prepare historical checkpoint 2 data qualification under [EDGE_OS_SCOPED_PROBE_PLAN.md](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). Select an exact market and assess coverage, gaps, price/amount units, availability provenance and usable trade-reference observations before asking the builder to approve that dataset and investigation.
 
-Part 1A recovery has passed; do not repeat it merely to restart the workflow. A live 1B pass would establish interpretation and compiler compatibility for the frozen cases, not alpha generation or persistent trading. Review checkpoint 1 before proceeding to the separately qualified historical investigation. Exact market/data approval remains necessary for checkpoint 2. Probe B remains unstarted with separate execution permissions.
+Do not repeat passed 1A or 1B merely to restart the workflow. The live 1B pass establishes interpretation and compiler compatibility for five frozen cases, not alpha generation or persistent trading. All inference profiles for this recovery are closed. Exact market/data and applicable provider-cost approval remain necessary for checkpoint 2. Probe B remains unstarted with separate execution permissions. This documentation update authorizes no new experiment or financial action.
 
 Review:
 
@@ -998,7 +1000,7 @@ Review:
 
 The revised draft records Privy delegation, mandate limits, persistent recovery, independent policy denial, and revocation with pending exposure. It preserves the Kuru, QuickNode, and Envio boundaries and the JEV Trader semantic-drift test. The Privy research note records Assensus's completed narrow proof and its limits. Monad–Kuru delegated execution remains unproved.
 
-Review `docs/EDGE_OS_RESEARCH_CONTRACTS.md` with the design. The full research contracts have not been implemented or qualified; the result report identifies the limited mechanics and offline handoff checks already tested. `NANSEN-Q01` remains `NOT_STARTED`; the builder must select its token/venue and feature, approve account costs and a numeric budget, and preserve historical-versus-forward limits before a separate authorized run. Do not create a completed qualification report before evidence exists.
+Review `docs/EDGE_OS_RESEARCH_CONTRACTS.md` with the design. The full research contracts have not been implemented or qualified; the result report identifies the limited mechanics and live interpretation/clarification checks already tested. `NANSEN-Q01` remains `NOT_STARTED`; the builder must select its token/venue and feature, approve account costs and a numeric budget, and preserve historical-versus-forward limits before a separate authorized run. Do not create a completed qualification report before evidence exists.
 
 The full design still needs `APPROVE`, `REVISE`, or `NARROW`. The immediate proposed route uses the two independently approved experiments to resolve the dangerous assumptions before final production planning. Carry their evidence into the short challenge and design decision. Preserve unknown user demand. Use Wayfinder only for remaining dependent core decisions, then approve the production design/build brief and tickets. Full product implementation remains blocked until those boundaries are approved.
 
