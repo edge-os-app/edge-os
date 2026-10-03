@@ -176,6 +176,41 @@ After the shared runtime and spot path work, the team can add one narrow LP comp
 - Live LP portfolio management before the spot path is stable.
 - Any claim of guaranteed profitability.
 
+### Conditional publication, token and funding extensions
+
+Status: `PROPOSED; ECONOMICS, ELIGIBILITY AND ACTIVATION UNAPPROVED`.
+
+These extensions preserve the wider product vision in the shared specification. They can be implemented after the agreed core works, including during this hackathon when separately accepted scope, dependencies and time permit. Documenting them does not expand the first probes or authorize token issuance, market creation, funding or financial actions.
+
+A strategy can remain private and useful without a token. Publication is opt-in. A public record binds an immutable strategy revision and semantic identity to its evidence manifest, actual validation coverage, risk policy, operating state and permitted execution history. Label fixture, historical, paper and live records separately. Publish only authorized material; exclude credentials and private user or research data.
+
+The token models are alternatives:
+
+| Model | Proposed purpose | Boundary |
+|---|---|---|
+| Agent-community token | Identity, community and distribution. | No default claim on assets, operating funds or strategy profits. Define holder utility before selecting it. |
+| Agent-financing token | A verified fee route finances declared inference, data or operating costs. | Verify collection and accounting. Keep operating budgets separate from user trading capital and execution authority. |
+| Strategy-associated token | Associate a token with an exact strategy revision, evidence status and observable operation. | Association alone grants no asset backing, redemption, profit rights or validation status. |
+
+A financing mechanism and strategy association may form one extension. No requirement exists to implement all models. Funding trading capital, buybacks, profit distribution, pooled assets and autonomous treasuries are separate unresolved mechanisms, not automatic consequences of token trading.
+
+Before an extension becomes an implementation ticket, the builder must accept its choices and observable behavior:
+
+1. **Purpose and rights.** Define the creator, holder, actual utility, enforceable rights and expressly absent rights. Keep identity, funding and ownership distinct.
+2. **Strategy identity.** Bind the public/token record to the immutable strategy revision, semantic manifest and evidence identity. A changed strategy creates a new recorded relationship and applicable validation/approval decision; it cannot overwrite the earlier record.
+3. **Eligibility.** Define required validation and any forward observation, warning limits and disqualification conditions. Compilation, a running worker, a token purchase or a completed transaction cannot independently satisfy eligibility.
+4. **Public evidence.** Define displayed periods, costs, limitations, funding balances and operating state. Report measured performance only. Unknown or stale evidence must not appear as a current passing result.
+5. **Issuance and liquidity.** Select network, supply, allocation, market parameters, initial liquidity source, permitted actors and failure handling. Qualify the actual deployment path. Issuance and funding require separate authority from the spot mandate.
+6. **Funding.** Identify the verified fee source, collection path, recipients, budgets and reconciliation. No fee percentage or onward payment is assumed. Extra revenue grants no extra trading authority. Insufficient operating funding pauses affected work instead of weakening controls.
+7. **Control.** Separate creator, wallet owner, signer and policy administrator. Holder or governance proposals can request a new revision; they cannot directly change risk limits, wallet policy or a user's mandate.
+8. **Failure behavior.** Specify pause, revocation, strategy replacement, expired evidence, unavailable fee routes and insufficient liquidity. State whether token trading can continue while the agent is inactive. Do not imply a relationship that contracts do not enforce.
+9. **Claims.** Describe the implemented rights and evidence. Do not call a token asset-backed or redeemable without the corresponding designed and verified mechanism. Funding or transaction proof does not establish profitability or demand.
+10. **Acceptance.** Test ineligible-launch denial, revision mismatch, unauthorized changes, actual collection/accounting, stale public status and the approved issuance/liquidity path where applicable. A page displaying these fields is not proof of the underlying operation.
+
+Activation requires accepted core checks, a useful research path and the agreed spot and LP proof scope, or an explicit builder-approved scope revision. Delegated execution must pass its separate gate when the extension depends on a live agent. Submission artifacts and the core recording path must remain viable. The extension needs a concrete user benefit, verified dependencies, accepted economics, funds/access approval, a bounded work budget and passing acceptance evidence. An implementation ticket is not approval to move funds.
+
+Strategy export or forks can be considered separately. A fork receives its own revision, lineage and evidence; it cannot inherit execution eligibility or another user's mandate. Licensing, marketplaces, public rankings, broad search and additional venues remain later research-dependent possibilities. The core and its demonstration must work with every optional extension disabled.
+
 ## 6. Accepted inputs
 
 ### Concrete thesis
@@ -858,4 +893,4 @@ After `APPROVE`, run the Compass Phase 4 challenge with one target user and one 
 
 Review the research contracts alongside the mandate/runtime sections. Approving these written definitions is separate from approving an instantiated Nansen investigation and its paid access. No Nansen qualification result exists yet.
 
-The post-core scope reassessment, BUILDER-ONLY REFERENCE `docs/research/13_EDGE_OS_POST_CORE_SCOPE_AND_DEMO_REASSESSMENT.md` proposes gated publication, tokenization and operating-funding extensions. Their classification and economics remain pending builder approval. The exclusions in section 5 remain outside the core; they do not prohibit specifying an optional extension. No extension is activated by this amendment.
+The post-core scope reassessment, BUILDER-ONLY REFERENCE `docs/research/13_EDGE_OS_POST_CORE_SCOPE_AND_DEMO_REASSESSMENT.md` supplies the reasoning for section 5's conditional publication, token and funding extensions. The shared requirements are now recorded in this specification so teammates do not need that private note. Model selection, economics, eligibility and activation remain pending builder approval. Section 5's exclusions remain outside the core. No extension is activated by this amendment.

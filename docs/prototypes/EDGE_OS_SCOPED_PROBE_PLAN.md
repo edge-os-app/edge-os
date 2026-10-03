@@ -4,7 +4,7 @@ Private source pointers are marked `BUILDER-ONLY REFERENCE`. They are not includ
 
 Date: 2026-10-02, Africa/Kinshasa.
 
-Status: `DRAFT FOR BUILDER REVIEW`. Probe A: `1A-recovery-01` is `PASS — MECHANICS ONLY`; earlier aggregate-read result remains `REJECT — MECHANICS ONLY`. Part 1B `1B-01/adapter-04`: `REJECT`; repair `1B-offline-repair-01`: `OFFLINE REPAIR PASS — LIVE 1B UNPROVED`. Checkpoint 1 and full Probe A remain unpassed. Probe B: `NOT_STARTED`.
+Status: `DRAFT FOR BUILDER REVIEW`. Latest `1B-sol-an-recheck-09`: `PASS — BOUNDED INTERPRETATION AND COMPILER COMPATIBILITY`, all five fresh live Sol v6 cases pass. `1A-recovery-01` remains `PASS — MECHANICS ONLY`, 81 checks; compiler unchanged. Checkpoint 1 passes for the approved meaning/compilation/known-invalid subset. Historical checkpoint 2, full Probe A and Compass remain unpassed. Earlier failures and charges are preserved. Probe B: `NOT_STARTED`.
 
 The builder authorized this documentation update and, by the subsequent part-1A task prompt, deterministic mechanics code, startup checks and local reporting only. The partial approval is recorded in section 8. Section 8 records the later scoped 1B credential/model-call approval. Other paid processing, credentials access, wallet changes and transactions remain unapproved. Approve each other instantiated experiment separately. Keep the full design draft and unpassed gates visible.
 
@@ -495,3 +495,446 @@ Actual cumulative usage remains one inference request, 970 input and 455 output 
 Next recovery approval proposal: **PENDING**, four additional inference requests, five cumulatively. Preserve the previous charge, counts and journals. Keep the USD 0.10 working cap and USD 0.30 maximum, frozen case order, A01 token limits, 1,024 output tokens and 90-second request deadline. No automatic retries, repair calls or model escalation. A separately approved recovery must persist that allowance and cumulative prior usage, verify admission offline and explicitly enable its live route before dispatch. This proposal changes no current approval or ledger. A01/A02, historical investigation, Probe B, deployment, financial permissions and the complete product remain unchanged.
 
 Private evidence: `prototypes/edge-os/probe-a/evidence/A01/1B-offline-repair-01/`. [The shared result report](EDGE_OS_PROBE_A_RESULT.md) records root causes, contract/source identities, red/green commands and limitations. Stop for builder review.
+
+
+### Part 1B live recovery approval, 2026-10-02
+
+The builder approved `1B-recovery-01`: four additional inference requests, five cumulatively, for A-T, A-I, A-N and the unsupported extension in frozen order. Preserve the previous paid request, USD 0.0003245 charge, token usage and all evidence. The USD 0.10 working cap remains active; USD 0.30 is the absolute maximum. No extra allocation, automatic retry, output-repair request, model escalation or broader research is approved. No larger working reservation cap is activated by this record.
+
+Use the repaired contract, unchanged compiler, pinned Hermes setup and selected GPT model. Before dispatch, verify offline that persisted cumulative accounting includes prior usage, admits at most four new requests and denies uncertain charges, malformed records and allowance overruns. Retain each actual response and Hermes completion state. Stop on an unexpected failure. Missing historical evidence leaves A-N unresolved at intake. Historical checkpoint 2, Probe B, deployment, production implementation and financial permissions remain unchanged and unapproved. Results are pending.
+
+
+### Part 1B live recovery observed result, 2026-10-02
+
+`1B-recovery-01`: **REJECT — HERMES INTERPRETATION**. A-T passed; A-I failed `CLARIFICATION_GAPS`. A-N and the unsupported extension were NOT_RUN under the existing failure stop. The original live rejection and all earlier 1A/offline-repair results remain preserved. Checkpoint 1, complete Probe A and the Compass gate remain unpassed.
+
+Before inference, 28/28 offline checks passed against the executed program. The new persisted recovery profile retains the original journal's identity and usage: one request, 970 prompt/455 completion tokens, USD 0.0003245. It admits at most four additional calls, five cumulatively, within the USD 0.10 active working cap and USD 0.30 absolute maximum. Unknown-charge, malformed-record, request/token/cost limits and normal-gate denial checks pass. Offline fixtures remain separate from actual usage.
+
+A-T's genuine response retained all fixed strategy meaning, unknown mechanism and empty permissions. Actual Hermes completion, packet validation, unchanged compilation, canonical serialization, reload and equality with the frozen 1A semantic identity passed. No broader search was imported. A-I completed and returned useful clarification without a strategy or search, but omitted direction confirmation. Its descriptive gap strings also differ from the validator's canonical field names. The schema permits free-text gaps; this surviving contract mismatch was not exposed by the authored fixtures. No aliases or missing fields were supplied after inference. Expected outcomes and assertions were not changed.
+
+A-T cost USD 0.000583925; A-I cost USD 0.00015534. New usage: two POSTs, 5,915 prompt/622 completion tokens, USD 0.000739265. Cumulative actual usage: three requests, 6,885 prompt/1,077 completion tokens, USD 0.001063765. Both reservations settled; no unknown charge remains. Provider cache-charge details are retained. The larger working cap was not activated. No retry, repair call, model escalation, provider metadata call or historical-data request occurred.
+
+Both received gzip responses now reached successful Hermes completion. The exact original live failure's compression attribution remains unconfirmed. The strict-schema endpoint accepted these requests; local validation and frozen meaning checks remained mandatory. The compiler, contract, source pin, lockfile, configuration and model are unchanged. All 761 prior evidence files remained unchanged. No post-dispatch code changes occurred.
+
+Commands, exit codes, actual packets/conversation states, canonical meaning, per-case resources and persisted accounting are in private `prototypes/edge-os/probe-a/evidence/A01/1B-recovery-01/`; see `recovery-manifest.json`. [The result report](EDGE_OS_PROBE_A_RESULT.md) records the remaining contract issue and substantive clarification omission. Two new calls were unspent, but the failure stop requires controller review before further dispatch. Next proposed task: a separately scoped offline clarification-contract review/repair, then review any explicit inference recovery. Historical checkpoint 2, Probe B, production implementation and financial permissions remain unchanged. Stop for controller review.
+
+
+## 11. Offline interpretation-contract repair and prospective clarification loop
+
+Date: 2026-10-02. Identity: `1B-contract-repair-01`. The builder authorized adapter, contract, focused tests and these shared records, with offline checks only. No credential access, provider request, inference, spending, installation or financial action was authorized. All earlier results and journals remain authoritative for their own runs. The original 1B rejection and `1B-recovery-01` rejection are not replaced. Its A-T pass remains a genuine, narrow result; its incomplete A-I remains failed. A-N/A-U have not run live.
+
+**OFFLINE CONTRACT REPAIR PASS — LIVE INTERPRETATION AND CLARIFICATION LOOP UNPROVED.** The final complete suite passed 41/41 checks, exit 0. No new inference occurred. Part 1B, complete checkpoint 1, Probe A and the Compass gate remain unpassed. This revision governs the prepared contract, not a new execution approval. Scope and execution approval for the prospective experiment remain **PENDING**.
+
+### Shared contract and decision boundary
+
+Use `probe-a-1b-output-v3`. One installed Pydantic schema supplies strict generation structure and local validation. The instructions reference that same schema and its gap definitions. All properties are required, including nullable fields; additional properties, invalid enum values and ambiguous numeric forms are rejected. Numeric parameters remain fixed-decimal strings with separate units; timing values remain integers. The compiler is unchanged. No unrestricted executable code is accepted.
+
+| Stable missing-meaning ID | Meaning |
+|---|---|
+| `threshold` | Return definition, completed lookback and cutoff chosen by the user. |
+| `direction` | Advances, declines or both; supported compilation is upward continuation only. |
+| `horizon` | Future response interval, separate from financial authority. |
+| `timing` | UTC evaluation, feature availability and research reference schedule. |
+| `entry` | A research entry reference if not already supplied through timing. |
+| `exit` | Exit reference/rule, separate from response horizon. |
+| `sizing` | Research quote amount/unit, paper balance and position restrictions. |
+| `comparison` | Confirmation of conflicting strict/inclusive comparisons. |
+
+`missing_fields` contains only these IDs. `questions` contains exactly one nonempty `{field, question}` record per missing ID. Order and faithful wording are flexible. Duplicate IDs, missing questions, missing necessary IDs and requests for supplied information fail. Enum membership does not prove that each human question asks the identified meaning. That requires a separate semantic review; there is no auxiliary model judge.
+
+`requested_scope` separately records market, domain, action and required inputs. The finite probe schema admits `SPOT`/`LP`, `ASSOCIATION_TEST`/`REBALANCE`, and `PRICE`/`WALLET_LABELS`/`X_ATTENTION`. These identify requested capabilities, not permissions. `unsupported_capabilities` identifies unavailable wallet labels, X attention, LP rebalance, strategy form or execution. `exclusions` retains user prohibitions; excluding a capability must not be treated as requesting it. `evidence_gaps` identifies unavailable real market identity, qualified historical prices and availability times. Free-text explanations and domain descriptions no longer need particular English keywords.
+
+Outcomes remain distinct. `NEEDS_CLARIFICATION` asks for missing or conflicting meaning. `UNSUPPORTED` preserves an unavailable operation or domain without substitution. `UNRESOLVED` identifies missing evidence and may retain the bounded search at intake. `COMPILED` retains sufficiently specified, supported rules through the unchanged compiler. Representation, refusal and transport failures describe the proposed output or conversation; they do not automatically condemn the user's idea. No outcome grants profitability, paper readiness, deployment or execution authority.
+
+A-T receives only its declared thesis and references. A-I receives no threshold, schedule or sizing defaults. A-N alone receives its finite search. The extension retains its wallet-label/X/LP domain. A clarification exchange adds only the original request, the preceding validated interpretation and an explicitly authored user reply. The transport gate denies arbitrary added context. A model response is never filled from an expected answer. The sole compiler compatibility mapping remains `input_class`; the real model or authored-fixture provenance is retained separately.
+
+The selected endpoint previously accepted v2 strict-schema requests. Local v3 schema construction and serialized `json_schema` routing pass offline. **Native v3 enforcement has not been tested live.** Public capability guidance was reused from BUILDER-ONLY REFERENCE `docs/research/PROBE_1B_CLARIFICATION_EXTERNAL_GUIDANCE_2026-10-02.md`; no documentation/provider request was made here. An unsupported schema, refusal, malformed output or truncation must stop the prospective run. No silent JSON-object fallback or repair request is proposed.
+
+### Offline results and preserved failure
+
+The historical A-I packet is unchanged. It still lacks direction confirmation and uses old descriptive gap strings. Replaying it through v3 fails; no question was inserted. Independently authored fixtures demonstrate valid IDs and flexible questions, not a corrected historical model response.
+
+The final suite exercises real Hermes completion with prepared plain/gzip provider responses, structured validation, meaning checks, unchanged compilation, serialization and canonical reload. It also checks missing direction despite valid IDs, reordered/paraphrased questions, supplied answers not requested again, invented parameters, changed comparisons/times/units/prohibitions, unauthorized search, unsupported substitution, fabricated winner, malformed/truncated/refused output, failed completion with a valid captured packet, persisted usage, unknown charges, capped admission, evidence collisions and denial of live entry before credential access. No local fixture-read count ceiling was added.
+
+Root causes: free-text gap schema versus fixed-ID validator; substantive missing direction; wording-dependent evidence/domain gates. A new prompt's trailing newline caused exact-context denial because Hermes strips it; the canonical authored prompt now has no trailing whitespace. A focused negative check also exposed an overly broad input override in the new clarification seam; exact exchange validation now denies it before fixture dispatch. A final focused check also exposed reply-added restrictions being omitted from the clarification admission check. The shared validator now requires them. Authored partial/unknown/conflict explanations were corrected to name only remaining gaps, and fixture exclusions were aligned with the actual input. These fixture edits are recorded; no historical model response or frozen expectation changed. Compression handling and successful-completion requirements remain intact. The original compression attribution remains unconfirmed because its received headers were not retained.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/1B-contract-repair-01/`. The directory retains before/after source snapshots, raw authored fixtures, actual Hermes completion states, requests, wire/decoded responses, structured decisions, canonical results, red/green checks, caller traces, historical-usage verification and `final-manifest.json`. All 1,057 earlier evidence files remained byte-identical. The final command was:
+
+```sh
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage final-v3-11
+```
+
+Exit 0; 41 checks; 9.788 seconds suite wall time, 8.840 CPU seconds, 174,309,376 bytes peak observed RSS. The existing watchdog, CPU limit, observed-memory checks and output ceiling remain. No hard-memory, affinity, production tenancy or OS sandbox claim is made. Repeated stage identities deny overwrites. Future offline checks need a new stage name. Historical actual usage remains three requests, 6,885 input tokens, 1,077 output tokens and USD 0.001063765, with no unresolved reservation.
+
+Compiler SHA-256: `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`. Contract/schema identities and executed adapter/test hashes are in the shared result report and private manifest.
+
+### Prospective clarification loop — approval PENDING
+
+Use a **fresh v3 A-I response** as turn one. Do not reuse the historical failed response or author its missing direction question. Review that the fresh questions cover the frozen six gaps without inventing a strategy. Then supply this explicitly authored test-user reply, verbatim:
+
+> I mean upward continuation only. Define strong as a net return strictly greater than 0.02 over three contiguous completed five-minute bars. Measure the next 30 minutes. Each hour in UTC decide at hh:10 using the close ending hh:05 only if available then. Use the hh:15 entry and hh:45 exit trade references with a 60-second reference window. Use 5 MON quote notional from a 100 MON paper balance, one position, leverage 1, no borrowing or compounding, and cost cases 0, 50 and 100 basis points per side. Research simulation only; no trading permissions. Participants, incentives and persistence remain unknown. Keep the original restrictions; do not add wallet or social inputs, stops or causal claims.
+
+The reply makes its own decisions. It deliberately differs from A-T in lookback, threshold and notional. The independent expected rule is `gt(netret_3(),const_0.02)` with 5 MON, all supplied timing/paper restrictions, unknown mechanism, research mode and empty permissions. This expected structure is evaluator-only; Hermes receives the raw reply, not a prewritten strategy. Require actual successful completion, validation, compilation, canonical reload and explanation consistent with the answers and original restrictions. Save the original input, prior questions, reply, genuine revised packet and explicit before/after field changes. No default substitution is allowed.
+
+Offline-only reply variations are retained verbatim in `clarification-replies.json`, with authored provenance:
+
+| Variation | Supplied meaning / remaining issue | Expected outcome |
+|---|---|---|
+| Partial | Upward, three bars, strict 0.02 and 30 minutes supplied; schedule, exit and size undecided. | `NEEDS_CLARIFICATION` for timing, exit and sizing only; no strategy. |
+| Unknown | All complete-reply values supplied except advances/declines/both remains unknown. | `NEEDS_CLARIFICATION` for direction only; do not choose it. |
+| Unsupported | Reply explicitly requests the wallet-label/X/LP rebalance instead, preserving no trading. | `UNSUPPORTED`; preserve the revision and no strategy/substitution. |
+| Conflict | Strict `> 0.02` and entry at exact equality are both requested. | `NEEDS_CLARIFICATION` for comparison only; no silently chosen operator. |
+
+These variations are not extra live calls in this proposal. A terminal conversation and saved packets suffice. No chat application is proposed.
+
+Stage issue: the frozen A-I test asks for exit and sizing to reach this compiler's research-position interface. A price-association intake does not necessarily need those choices, and does not require a live mandate. The historical six-gap requirement remains unchanged in this recovery. **Prospective intake-only amendment: PENDING** — ask only for necessary return definition, direction, horizon and observation timing; defer position entry/exit/notional questions until a research-position simulation is requested. This amendment cannot upgrade the failed historical case or broaden the unchanged compiler.
+
+### Proposed live allowance, scores and stop rule — approval PENDING
+
+Propose **five additional inference calls, eight cumulatively**: A-T, A-I, A-N, A-U in frozen order, then one clarification follow-up using that run's passing A-I as turn one. Count every POST, including failures, uncertainty and the follow-up. There is no separate smoke test, judge, repair call, retry or model escalation. The unspent calls in the stopped previous recovery are not permission. This proposal uses all remaining A01 request slots; it leaves no model-request allocation for checkpoint 2 without a separately approved budget amendment.
+
+Retain pinned Hermes commit `54bc5e509c985f37265c3d416bd2c64b10fc77ba`, `openai/gpt-6-luna`, no reasoning, no tools/private context and no fallback. Keep 1,024 response tokens, 90-second request deadline, 48,000 cumulative input and 8,000 cumulative output tokens, USD 0.10 working cap and USD 0.30 absolute maximum. Prior consumption must remain three requests and USD 0.001063765, not reset to the original one-call baseline.
+
+Offline byte-based input upper estimates for the five prepared requests are 13,598 / 12,286 / 14,229 / 12,258 / 14,364, respectively. At the retained prompt/completion price ceilings and 1,024 response tokens, their summed illustrative reservation is **USD 0.0092335**; including prior actual cost, USD 0.010297265. These are estimates, not provider counts or a hard account cap. The follow-up estimate uses an authored prior packet; genuine questions may change its size, so recalculate and reserve the exact request before dispatch. Actual cached-provider charges must settle from reported usage. An unknown charge keeps its reservation and stops further requests.
+
+The sum of pessimistic input estimates is 66,735, exceeding the remaining 41,115 input tokens. Thus five calls cannot be promised under a simultaneous worst-case token reservation. Use existing sequential admission against actual settled counts plus the next conservative bound. Stop if it exceeds 48,000; do not loosen the cap. Five full output reservations total 5,120 tokens; with 1,077 prior outputs, 6,197 stays below 8,000. Cost/token limits can stop the run before all proposed calls complete.
+
+**Before any separately approved dispatch:** persist the revised allowance and both actual journals as the three-request baseline; give the follow-up a distinct attempt identity; verify five admissions and exhaustion/unknown-charge denials offline through the normal gate. The current four-call recovery profile is historical and cannot authorize this sequence. Both live preparation and dispatch are explicitly disabled in the repaired adapter pending that approval/activation. Do not inspect a key merely to prepare approval.
+
+| Independent score | PASS requirement | Failure / unavailable evidence |
+|---|---|---|
+| Contract validity | Complete strict-schema packet, correct case identity, supported representations. | Format/refusal/truncation failure; retain exact packet/error. |
+| Meaning preservation | Raw request, supported fields, restrictions, timing/units/comparison and explanation agree. | Any unrequested/default/substituted meaning fails; no manual repair. |
+| Clarification completeness | All necessary gap IDs with one substantive question each; supplied meaning not requested again. | Missing direction or an ID with an irrelevant question fails. Enum coverage alone is insufficient. |
+| Unsupported / unavailable evidence | Correct original domain/capabilities and actual evidence gap; no substituted strategy or fabricated winner. | Wrong outcome, erased scope or invented evidence fails. |
+| Compilation / canonical reload | Required for A-T and completed follow-up; exact independent expected meaning, stable reload and permissions. | Compiler/round-trip mismatch fails. Otherwise `NOT_APPLICABLE`, not a fictitious compilation pass. |
+
+Review human question meaning and narrative consistency explicitly; deterministic structured scores alone cannot award overall live PASS. A-I/A-N/A-U must contain no strategy. Useful complete clarification, unresolved evidence or unsupported scope can pass their own case. Label incomplete evidence `UNRESOLVED`, rather than assuming a pass. Keep the existing first-unexpected-failure stop rule: retain outputs/usage, stop later calls, and return failed/unresolved cases as observed. No dispatch after a code/contract change without a fresh full offline check. Only a separately reviewed successful complete 1B run plus preserved 1A mechanics can establish checkpoint 1; it still proves no historical research or full Probe A claim.
+
+
+## 12. Five-call offline preflight — live approval PENDING
+
+Date: 2026-10-02. Identity: `1B-preflight-01`. **OFFLINE PREFLIGHT BLOCKED.** The complete offline suite passed 47/47 checks, exit 0. Accounting and follow-up controls passed. Reliable completion of all five calls under the current input admission bounds remains blocked. This task made no provider requests, inference calls or credential reads. All earlier results remain preserved. Complete 1B, checkpoint 1, Probe A and the Compass gate remain unpassed.
+
+This section records the preflight for section 11. It does not grant inference approval. The prepared sequence is A-T, A-I, A-N, A-U, then `A-I-followup`. The follow-up uses A-I as its model case ID and has its own accounting attempt identity. The profile is `PENDING`, for offline accounting fixtures only. Live preparation and dispatch still raise `LIVE_RECOVERY_NOT_AUTHORIZED` before credential access.
+
+### Accounting and clarification controls
+
+The existing journal reader and reservation path now support this separate five-call profile. Both actual journals are hash-checked and their own settlements counted once. Cumulative prior usage remains **three requests, 6,885 input tokens, 1,077 output tokens and USD 0.001063765**, with no unresolved charge. Neither historical journal was changed. A new process reloads the same profile; a new directory cannot supply a fresh allowance for that profile.
+
+Five sequential fresh processes completed actual Hermes conversations against authored provider fixtures through the normal transport/admission gate. Each dispatched fixture consumed one slot. The sixth attempt was denied before transport at eight cumulative requests. An invalid output consumed its slot; the next attempt was denied by the first-failure stop. Malformed accounting denied dispatch. An unknown-charge fixture retained its USD 0.0018718 reservation across restart and denied the next request. Offline usage remains separate from provider usage.
+
+The follow-up reads the fresh saved A-I request, captured response and successful Hermes final response. Their identities must agree with the journal. It validates the packet again and requires a passing question-meaning review tied to that packet's hash. Missing or mismatched review denies the follow-up. Offline review records are labeled authored fixtures. They cannot approve a future live response. The test used different saved questions from the canned fixture and retained them unchanged in the follow-up. Actual future A-I questions and explicit human review remain mandatory; valid gap IDs alone cannot establish useful clarification.
+
+### Request-size evidence and feasibility
+
+The first four request bodies, prompt, contract and schema are unchanged from section 11. No context shortening was applied. The updated follow-up below uses the fresh authored A-I questions from this preflight, so its size differs from section 11's earlier illustration.
+
+| Attempt | Canonical request bytes | Input admission bound | Reserved USD cost |
+|---|---:|---:|---:|
+| A-T | 13,086 | 13,598 | 0.0018718 |
+| A-I | 11,774 | 12,286 | 0.0017406 |
+| A-N | 13,717 | 14,229 | 0.0019349 |
+| A-U | 11,746 | 12,258 | 0.0017378 |
+| A-I-followup, authored first turn | 13,867 | 14,379 | 0.0019499 |
+| Total | 64,190 | 66,750 | 0.0092350 |
+
+The retained admission formula counts the entire canonical request, including JSON Schema, plus 256 bytes per message: two messages add 512. It is a conservative local policy estimate, not a qualified Luna tokenizer or provider schema-processing bound. Cost reservation uses that input bound at USD 0.10/million plus 1,024 output tokens at USD 0.50/million. Routing ceilings do not impose an aggregate provider account cap.
+
+Actual historical counts leave **41,115 input tokens**. The prepared bounds exceed that by **25,635**. Each request contains 3,261 system-text bytes and a 7,736-byte response-format object. Hypothetically deleting only schema title annotations reduces the total bounds to 60,545, still 19,430 over the allowance; this request change was not applied. Case-specific instructions, schema and restrictions were retained.
+
+Recent historical token/byte ratios give an illustrative estimate of about 12,740–12,855 input tokens for these five bodies. Those are local extrapolations from two different historical requests, not provider counts or safe admission bounds. They cannot justify smaller reservations. The genuine future A-I packet changes the follow-up size; recompute its exact body before dispatch.
+
+All five maximum output reservations plus prior usage total 6,197, below 8,000. New cost bounds sum to USD 0.0092350; with prior actual cost, USD 0.010298765 is below both spending caps. These observations do not resolve input feasibility or establish a hard spending guarantee. A separate authored test settled 8,000 input tokens for each of the first four cases. The fifth was correctly denied: 38,885 settled plus its 14,379 bound equals 53,264, above 48,000. It made zero fixture POSTs and consumed no new slot.
+
+### Verification and next decision
+
+```sh
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage full-preflight-05
+```
+
+Exit 0; 47/47 checks. A repeated stage is denied; use a fresh stage identity for any later authorized offline rerun. Full test wall time: 41.149 seconds. Parent CPU: 13.687 seconds; parent peak observed RSS: 159,629,312 bytes. Aggregate child CPU and child peak RSS were not measured. Existing deadlines, watchdog, CPU, memory monitoring, input/tree/byte and output controls remain. No hard memory, CPU-affinity or OS sandbox qualification is claimed.
+
+Contract remains `probe-a-1b-output-v3`. Compiler SHA-256 remains `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`. Hermes pin, lockfile, runtime configuration and `openai/gpt-6-luna` remain unchanged. The adapter and focused tests changed; their executed snapshots and hashes are retained. All 2,776 prior evidence files remain unchanged. Earlier red checks and the corrected syntax error remain visible in the new evidence. No frozen assertion was relaxed.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/1B-preflight-01/`. `final-manifest.json` records commands, exits, identities and controls; `full-preflight-05/` retains complete offline paths; `request-feasibility.json` records exact request hashes and estimates. Previous evidence directories and journals remain historical authority.
+
+**Smallest proposed remedy, approval PENDING:** approve a conditional allowance of five additional calls, eight cumulatively, with unchanged sequential admission. The run may stop before all five if input admission fails. This preserves the limits and stop rule. If completing all five reliably is required before authorization, separately qualify a smaller model/provider-specific safe input bound. The exact pending question is how the pinned Luna route counts messages, strict JSON Schema and framing, including the largest accepted prior A-I packet. No documentation, provider or tokenizer qualification was performed here. Do not replace the bound with an empirical ratio or silently raise limits.
+
+Before any live dispatch, the builder must explicitly approve the chosen remedy and five-call recovery, persist that approval with both prior journals, and review the scoped live activation. Retain 48,000 input/8,000 output tokens, 1,024 output/call, USD 0.10 working/USD 0.30 absolute caps and existing deadlines. Unknown charges, unsupported parameters, truncation, unsuccessful completion, meaning failure or budget denial stop further dispatch. No retry, repair, auxiliary judge or model escalation is approved. Native v3 enforcement, live case accuracy and the clarification loop remain unproved. Stop for builder review.
+
+
+## 13. Authorized reporting-only-token 1B recovery
+
+Identity `1B-recovery-02`. The builder's latest instruction approves necessary scoped changes, offline checks and five additional live inference calls, eight cumulatively. This prospective amendment supersedes the pending token-feasibility decision in sections 11–12 for this recovery only. Historical protocols, failures, responses and charges remain preserved. No checkpoint 2, Probe B, production or financial authority is granted.
+
+Remove the 48,000 cumulative input, 8,000 cumulative output and 1,024 per-response probe token ceilings. Tokens remain reported from actual provider usage. Requests carry neither max_tokens nor max_completion_tokens. The prompt's 1,024-token wording is removed. The v3 schema, frozen inputs, expected meaning and 1A compiler remain unchanged. Provider-native context/output limits remain unavoidable. No replacement token gate or ratio-based admission is introduced.
+
+Keep five new attempt identities in order: A-T, A-I, A-N, A-U, A-I-followup. The follow-up uses the fresh eligible genuine A-I packet and the existing authored test-user reply. If that first turn is ineligible, retain it and mark the follow-up NOT_RUN. Do not create questions or repair the model's first turn. Each independent interpretation/format failure is retained and does not stop other independent cases. Safety, isolation, transport, unknown-charge and spending failures stop dispatch. There are no retries, automatic repair calls, auxiliary judge calls or model escalation.
+
+Explicit agent semantic review prospectively replaces the human-review pause for this controlled synthetic test only. Record reviewer identity, packet hash, criteria, findings and outcome. IDs alone cannot establish meaningful questions. Require every original and reply-added restriction, exact comparison, threshold, timing, units, sizing and compiler round trip where applicable. The review grants no production or financial authority.
+
+OpenRouter's public model and endpoint metadata were checked without authentication or inference. The same Luna model has a native 128,000 output maximum. Restrict this recovery to the published `openai/flex` endpoint. Keep price ceilings, require_parameters and fallback disabled. The endpoint lists 922,000 prompt and 128,000 completion maxima. Maximum published tier/cache input rate is USD 0.000000125/token and completion rate is USD 0.000000375/token. Reserve USD 0.163250000 per dispatched request from those native maxima, without sending them as request caps. This avoids a tokenizer qualification dependency. Unknown charges retain the full reservation and stop further dispatch. Counts alone do not deny settlement.
+
+The USD 0.10 working allowance cannot admit that native reservation. Under the builder's explicit backup authorization, activate USD 0.30 before dispatch and retain USD 0.30 as the absolute maximum. Count prior actual spending and outstanding reservations. This is local reservation/accounting, not a provider-enforced account cap. Both historical journals remain included exactly once: three requests, 6,885 prompt and 1,077 completion tokens, USD 0.001063765, no unresolved charge. The provider route is narrower, while the model and pinned Hermes environment are unchanged.
+
+The amended complete offline suite passed 48/48 checks, exit 0. It includes the normal gate, actual fresh processes, five additions/eight cumulative slots, reporting-only high token usage, spending denial, unknown-charge retention, malformed accounting denial, distinct follow-up identity, saved first-turn review, independent-case continuation, packet restrictions and compiler reload. Red/green evidence for removal of token gates is retained. Existing tests were prospectively changed only where this approval changes token, review and independent-failure policy. Earlier suites and source snapshots remain preserved.
+
+Command: `.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage full-amendment`.
+
+Compiler SHA-256 remains `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`. Contract remains `probe-a-1b-output-v3`, with unchanged schema and a recorded instruction revision. Hermes remains pinned to `54bc5e509c985f37265c3d416bd2c64b10fc77ba`; model remains `openai/gpt-6-luna`. Empty tools, isolated packet/context construction, no private context/memory/soul/review/compression/fallback/recovery, one Hermes attempt, zero SDK/transport retries, single-threaded calls, deadline and resource controls remain. A selected-route error is a transport stop, not permission to switch providers.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/1B-recovery-02/`. Retain public model/endpoint metadata, prospective amendment, offline red/green/full records, executed source snapshots, prior preservation inventory and a source-bound persisted authorization/journal before dispatch. Actual live responses, completion states, agent semantic reviews and outcomes follow in the result record. No live result is presumed by this approval or offline pass.
+
+
+### Observed recovery outcome and terminal stop
+
+`1B-recovery-02`: **REJECT — HERMES INTERPRETATION**. All four independent live cases completed Hermes with one inference POST each. A-T failed strict parsing because two objects were returned. A-I returned clarification without strategy/defaults, but omitted direction confirmation and failed scope/evidence checks. A-N recognized missing historical data and preserved the finite search, but returned two objects plus markup. A-U faithfully preserved the unsupported wallet-label/X/LP request and passed agent meaning review, yet failed the fixed evidence-gap coverage check. No original response was repaired. The unchanged check may require historical gaps too early for an already unsupported capability; this limitation is recorded without changing the result.
+
+A-I-followup is NOT_RUN because the fresh first turn is ineligible. No authored or historical packet replaced it, and the test-user reply was not sent. There were no retries, repair calls, model escalation, historical-data requests or financial actions. Complete 1B and checkpoint 1 remain unpassed. Earlier genuine A-T compilation and 1A recovery remain preserved and do not repair this batch. Probe A and the Compass gate remain unpassed.
+
+New actual provider usage: four requests, 9,474 prompt/2,194 completion tokens, USD 0.0007815025. Cumulative actual usage: seven requests, 16,359 prompt/3,271 completion tokens, USD 0.0018452675. All charges settled; no unresolved reservation remains. Two public unauthenticated metadata requests were separate from inference. The USD 0.30 backup allowance was persisted before dispatch; actual spending stayed below the original USD 0.10. No provider-enforced account cap was established.
+
+Commands and exits, original packets, actual Hermes completion, deterministic failures, separate agent reviews and resource usage are retained in `recovery-manifest.json` and case directories under the private evidence path above. The complete amended suite passed 48/48 before dispatch. No code changed after that run. All 3,666 earlier evidence files, both historical usage journals, compiler, schema, Hermes pin, lockfile and original runtime configuration remain unchanged. The model and frozen inputs remain unchanged; the instruction revision removes only the output-token instruction. A terminal dispatch-stop record prevents further calls from this run. Unspent allowance is not retry permission. Stop for controller review.
+
+
+## 14. Prospective 1B meaning-contract recovery
+
+Identity: `1B-recovery-03`. APPROVED by the builder's scoped recovery instruction. This amendment applies to interpretation only. Earlier failures and protocols remain visible. No historical investigation, deployment or financial authority is added.
+
+Contract `probe-a-1b-meaning-v4` separates model interpretation from trusted application facts. The model extracts domain, action, required inputs, direction and its provenance, supplied signal/timing/sizing, restrictions and uncertainty. The application attaches case identity, requested market `MARKET_A`, distinct dataset binding `SYNTHETIC_FIXTURE/MARKET_A`, pinned identities, known historical blockers and an already-approved bounded search. Assembly must never insert a user trading decision. Numeric strings and separate units remain required by the unchanged compiler.
+
+Unknown direction is explicit; upward capability does not select upward meaning. Tested application questions derive from unknown or conflicting fields. At association intake A-I needs strong-move definition, direction, response horizon and observation timing. Simulation entry/exit and sizing are requested only when preparing that simulation, including the clarification follow-up. This prospectively removes the stage-inappropriate unconditional sizing requirement, without changing the historical failed verdict. The complete authored reply supplies all simulation decisions itself. Partial replies remain incomplete; conflicts require confirmation; unavailable operations remain unsupported.
+
+Outcome requirements: COMPILED retains supplied supported rules through the unchanged compiler and canonical reload. NEEDS_CLARIFICATION withholds a strategy and requests necessary unknown meaning without defaults. UNRESOLVED retains the finite declared research scope and exposes unavailable evidence without a winner. UNSUPPORTED preserves LP/wallet-label/X meaning and explains missing capability without substitution. Historical qualification remains unresolved for every case, but historical-price fields are not required from the model for a capability refusal. Evaluation measures each outcome separately and includes agent semantic review of explanation and restrictions.
+
+One shared machine-readable schema supplies both request generation and strict local validation. The full provider content must be exactly one JSON object, with successful Hermes completion, one API call and unchanged final content. No object selection, repair, response-healing or retry is permitted. Previous strict-schema requests produced multiple objects in the actual provider packet. Current official OpenRouter documentation describes `json_schema` and `require_parameters`; these request support, not evidence that this route enforced conformance. Local validation remains mandatory. Plain/compressed fixtures prove integration, not actual model accuracy.
+
+Two read-only reviewers assess contract/meaning and integration/verification. Resolve concrete findings before dispatch. Freeze the contract and instructions before the first batch; keep them unchanged between batches. Each batch contains original A-T/A-I/A-N/A-U and one eligible fresh A-I clarification. Use the unchanged authored user reply. Agent semantic review replaces the human pause for this controlled test only and grants no financial authority.
+
+Approval: at most ten new inference calls across two fixed GPT batches, seventeen cumulatively if all slots are used. Baseline journals verify seven settled requests, 16,359 input/3,271 output tokens and USD 0.0018452675. Keep three journals included exactly once. Token counts are reporting data; no probe token caps or byte-derived admission gates are allowed. Native provider limits remain. Reserve conservative provider-native cost before each dispatch, persist settlement or retain an unknown charge. USD 0.10 is the working allowance; activate the already-approved USD 0.30 backup because Luna's native reservation is USD 0.16325. Cumulative spending/reservations must stay below USD 0.30. No provider-enforced account cap is claimed.
+
+The first batch uses pinned Hermes and `openai/gpt-6-luna` at OpenRouter's `openai/flex` route, reasoning none, empty tools, disabled context/memory/review/compression/fallback/recovery, one API attempt, zero SDK/transport retries and existing safeguards. Public qualification of stronger GPT-6 Sol lists a USD 3.265 native reservation, beyond the absolute allowance; do not dispatch that route. No stronger comparison may run without verified capability, affordability and a fixed recorded configuration. Independent interpretation failures do not stop other cases; spending, unknown-charge, isolation and transport-safety failures do. If A-I is ineligible, its follow-up is NOT_RUN.
+
+PASS for 1B requires all four outcomes and the clarification follow-up under one frozen candidate, successful required compilation/reload and agent review. It proves bounded interpretation and compiler compatibility only. Checkpoint 2, complete Probe A and the Compass gate remain unpassed. Stop after the observed result report.
+
+### Observed meaning-contract recovery and terminal stop
+
+`1B-recovery-03`: **REJECT — HERMES INTERPRETATION**. Two independent reviews passed after known-value, follow-up stage, conflicting comparison and fixture-review admission corrections. Offline runs passed 26/26 before Luna and 27/27 after the explicit Pro route extension. The v4 contract, schema, instructions and input context stayed unchanged across batches; paired actual requests differ only in model. The compiler remained unchanged.
+
+Luna and Luna Pro each failed A-T (multiple objects and needless direction confirmation) and A-I (partial nullable signal accepted by schema but denied by the frozen intake evaluator). Both passed A-N with missing evidence/no strategy and A-U with preserved LP/wallet-label/X refusal/no substitution. Every actual Hermes conversation completed with one POST. Neither fresh A-I was eligible; both follow-ups are NOT_RUN. No packet was repaired. No native schema-conformance claim is supported by strict:true or advertised support. Cause of the provider's invalid multi-object content remains unresolved.
+
+The explicitly qualified second model was `openai/gpt-6-luna-pro`, the same underlying model in its advertised deeper pro mode. Official documentation describes direct pro alias selection independently of effort. Reasoning effort remained none; the route remained `openai/flex`. Native reservation USD 0.16325 fits the approved backup. Higher-end Sol required USD 3.265 and was not dispatched. Both batches have separate configuration/source evidence and share the same cumulative journal.
+
+New usage: eight calls, 31,057 prompt/4,006 completion tokens, USD 0.0018182575. Cumulative usage: fifteen calls, 47,416 prompt/7,277 completion tokens, USD 0.0036635250. All settled; no unresolved reservation. Six public unauthenticated qualification requests were separate from inference. No token ceiling, retry, repair call, unrecorded inference, historical collection or financial action was added.
+
+Measured live case wall time totals 149.739 seconds; aggregate process CPU 10.231 seconds; maximum observed RSS 179,798,016 bytes. Existing safeguards remain; no hard memory/affinity/OS sandbox claim. All 4,389 prior evidence files remain unchanged. The compiler hash remains `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`; contract hash remains `95ba80752d3e0d8b2d8043f76c354baabf0b4cb6bc94b45d4054d31795913acb`.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/1B-recovery-03/recovery-manifest.json`. Original packets, completion states, separate agent reviews, offline red/green checks, request/cost journal, commands/exits, source snapshots and preserved earlier identities are retained. Sanitized detail is in the shared result report.
+
+Checkpoint 1, full Probe A and the Compass gate remain unpassed. Historical checkpoint 2 was not started; A01/A02 remain blockers. The terminal stop closes this recovery. Controller review is next. Further nullable-signal contract/evaluator repair or provider qualification needs a separate scoped task and fresh inference authorization; do not run a third batch or reuse unused calls automatically.
+
+## 15. Luna versus GPT-6.1 Sol comparison amendment
+
+Identity `1B-comparison-04`. The builder authorizes at most ten new inference requests: four original cases and one eligible clarification follow-up per model, twenty-five cumulative if all requests become admissible. Models are exactly `openai/gpt-6-luna` and `openai/gpt-6.1-sol` with supported low reasoning. No Luna Pro substitute, retries, repair calls or other model escalation. Approval remains subject to spending admission within the unchanged cumulative USD 0.30 maximum. The USD 0.10 working allowance and authorized backup policy remain. Preserve all prior charges and unknown reservations.
+
+Before comparison, contract v5 resolves the reproduced nullable-signal mismatch. First-turn intuition can contain no signal or a parameterless unknown signal object. NET_RETURN in that object is only a proposed family label requiring definition confirmation; it is never a user-selected measurement or compiled rule. Numeric lookback, threshold, units, horizon, strict comparison, timing and sizing defaults remain denied. The definition question includes strict/inclusive comparison; do not ask a second equality-conflict question for an entirely unknown definition. A genuine conflict with otherwise known values still needs separate confirmation. Raw model content and every historical failed verdict remain unchanged.
+
+Both read-only reviewers passed this focused repair. Two red checks reproduce the earlier denial. The final unchanged-source suite passed 31/31, exit 0, through actual offline Hermes completion, validation, compilation and canonical reload where applicable. Captured Luna/Pro model content is replayed unchanged inside explicitly labeled fixtures with synthetic id/usage envelopes. Those are offline integration checks, not new model inference or retroactive live passes. Intermediate green evidence has a source-identity limitation explicitly recorded; final `full-frozen-03` is authoritative.
+
+Freeze `probe-a-1b-meaning-v5`, shared instructions, schema, original user inputs, authored clarification reply, evaluator and unchanged compiler before any paid dispatch. Keep each model's conversation separate. Never include the other model's answers. A follow-up requires that model's own fresh passing A-I plus agent semantic review. Each model passes only when all four cases and its own follow-up pass. Do not combine partial outcomes. This comparison measures these cases, not general superiority.
+
+New stop policy: a format or transport failure stops the affected route. The other route may continue only if independently qualified and spending is reconciled. Unknown charges retain reservations and prevent unreconciled dispatch. Shared isolation, credential or spending failures stop calls. Any prospective route implementation must enforce this policy before inference; the closed historical adapter is not newly enabled by this amendment.
+
+### Current qualification and cost blocker
+
+Three unauthenticated public metadata GETs verified both exact model listings and endpoint constraints. Context7 was resolved first to `/openrouterteam/docs`, then queried for reasoning, structured output and routing. Model metadata lists mandatory reasoning and supported `low` for Sol; optional reasoning and `none` for Luna. Proposed settings are Sol `enabled=true, effort=low`, Luna `enabled=false, effort=none`. Both use a fixed qualified OpenAI route, strict json_schema, require_parameters, empty tools, no fallback/retry or probe token caps. The live Sol SDK wire and actual effort behavior remain untested because cost admission failed. Advertised structured-output support does not prove native conformance.
+
+The cheapest fully bounded captured endpoint is `openai/flex`. Both models list 922,000 native prompt and 128,000 native completion maxima. Proposed routing price ceilings differ: Luna USD 0.10/0.50 per million prompt/completion; Sol USD 2.00/7.50. Those are price ceilings, not aggregate spending caps. Cost reservation additionally covers the maximum listed cache-write rate.
+
+| Model | Maximum prompt/cache rate per million | Maximum completion rate per million | Native cost reservation per call | Sum of five native bounds |
+|---|---:|---:|---:|---:|
+| GPT-6 Luna | USD 0.125 | USD 0.375 | USD 0.16325 | USD 0.81625 |
+| GPT-6.1 Sol | USD 2.50 | USD 7.50 | USD 3.265 | USD 16.325 |
+
+Ten native bounds sum to USD 17.14125, or USD 17.144913525 including settled history. This is a conservative upper bound, not a predicted actual bill. Sequential admission releases settled reservations; nevertheless one Sol reservation already exceeds the available USD 0.296336475. Even its base flex maximum output charge is USD 0.64 before input. No reliable expected bill for Sol low was qualified. No token or byte gate was introduced to lower this bound.
+
+Four unchanged journals independently reconcile fifteen settled inference requests, 47,416 prompt/7,277 completion tokens and USD 0.003663525. Unknown reservations: none. **No new inference, charge or credential access occurred.** Both requested models have separate `NOT_RUN — COST_PREFLIGHT_BLOCKED` verdicts; format, meaning, clarification, compiler, reload and latency results are unavailable. No new request allowance or live adapter authorization was activated. The earlier executed rejection, 1A pass and unpassed larger gates remain.
+
+Command: `.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage full-frozen-03`. Final wall time 14.760 seconds, parent CPU 12.729 seconds, peak observed RSS 142,868,480 bytes. Existing resource safeguards remain; no new hard isolation claim. All 5,803 earlier evidence files remain unchanged.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/1B-comparison-04/`. `cost-preflight.json` retains public pricing/effort identities, each model's settings and separate unrun dimensions; `repair-manifest.json` retains command, hashes, reviews and checks. The compiler hash remains `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`. The new contract hash is `15a3258907caa5117df7a02e21d116a55ee4dd688e43c8056903fbf9a909ac48`.
+
+Stop for builder review of cost-control feasibility. A separately approved monetary reservation policy that can enforce USD 0.30 without token caps, or verified same-model native constraints that fit it, is needed before dispatch. Do not weaken admission, increase spending, substitute models or run only Luna to bypass the blocked comparison. Historical checkpoint 2, Probe B and production remain outside scope.
+
+
+## 16. Prepared-request cost qualification, 1B-cost-05
+
+The builder authorized correcting cost qualification without raising USD 0.30, adding token/byte limits, changing models or billing settings. This amendment preserves Section 15's ten-call comparison authorization subject to safe admission. None of those ten slots was used. No live allowance, credential or route was activated. The closed historical adapter remains closed.
+
+`OFFLINE COST CHECKS PASS — LIVE COMPARISON BLOCKED`.
+
+The old reservation used the model's entire 922,000-token input capacity. That is not the prepared input. The new read-only `Accounting.qualify_prepared` measures the complete prepared JSON, including messages, schema and wire wrappers. It reports those measurements separately from model capacity. It does not write reservations or authorize dispatch. The frozen legacy reservation remains for historical and isolated offline profiles; it is not a qualified replacement live admission path.
+
+Prepared requests measure 8,125–10,168 UTF-8 bytes. The local estimate, ceil(bytes/4), is 2,032–2,542 input tokens. This estimate has no admission authority. Exact GPT encoding and upstream schema/chat framing were not qualified; total financial exposure remains explicitly unknown. No tokenizer installation or qualification project was started. Sol packets are proposed model/settings mappings from the actual offline Luna wire, not proof of Sol SDK delivery. The follow-up measurement uses an authored offline first-turn fixture, never a replacement live first turn.
+
+Two fresh unauthenticated endpoint GETs confirm `openai/flex` rates and the native 128,000-token completion maximum. At base prices, native output exposure is USD 0.032 for Luna and USD 0.64 for Sol. Across published tiers it is USD 0.048 and USD 0.96. Input/cache charges are additional. Billable reasoning is output; low effort does not impose a numerical ceiling. Native tools/plugins/images are excluded from the text-only packet. A reviewer found that the exclusion claim lacked a message-type guard; its failing fixture and repaired string-only guard are retained.
+
+An illustrative calculation using each local input estimate plus 1,000 total billable output tokens sums to USD 0.0019676875 for Luna and USD 0.03935375 for Sol, USD 0.0413214375 together. This is neither a prediction nor a financial bound. It does not justify dispatch. No request's full input capacity or five simultaneous worst-case reservations is required by the new analysis. Existing sequential settlement releases each reservation before the next request; unknown charges retain reservations and stop admission.
+
+Context7 was resolved to `/openrouterteam/docs` before three documentation queries. Current official [limits documentation](https://openrouter.ai/docs/api_reference/limits) uses actual input plus an internally capped completion estimate for its credit hold, then settles actual charges. It does not establish a cutoff for this run's USD 0.30 allowance. [Workspace budgets](https://openrouter.ai/docs/guides/features/workspaces/workspace-budgets) explicitly let dispatched requests complete and can overshoot. Existing key preflight had no per-key cap. No documented per-request monetary cutoff was qualified for this route. No account/key/billing setting was changed. A direct `.md` archive fetch returned HTTP 403; current official web pages and Context7 supplied the inspected documentation.
+
+### Verification and retained boundary
+
+Seven focused checks passed through existing accounting persistence: prepared request versus capacity, sequential reservation/settlement, restart, retained unknown charge, malformed journal denial, measurement without an input gate, preserved actual journal and text-only cost scope. Accounting fixtures retain their isolated seven-call historical profile; they do not reset or replace the fifteen actual requests. Four actual journals independently reconcile fifteen unique settled responses, 47,416 prompt/7,277 completion tokens and USD 0.003663525. Unknown reservations are empty. Remaining absolute allowance is USD 0.296336475. New inference and charge are zero.
+
+The complete Hermes suite passed 31/31 after the final guard. Plain/compressed completion, full-response validation, v5 meaning checks, unchanged compiler, canonical reload and clarification fixtures remain working offline. Both independent read-only reviewers passed the final changes; the prior v5 meaning reviews remain applicable. Fixtures do not establish live accuracy or native schema enforcement. The compiler and contract source hashes remain unchanged from Section 15.
+
+```sh
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/test_cost_1b.py --stage final-cost-05
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage final-meaning-02
+```
+
+Both exit 0. Cost checks: 0.425 seconds wall, observed peak RSS 44,548,096 bytes. Hermes checks: 14.894 seconds wall, parent CPU 13.399 seconds, observed peak RSS 170,229,760 bytes. Existing resource controls remain; no hard memory or OS isolation claim was added.
+
+### Stop and controller decision
+
+Both models' four cases and clarification follow-up are `NOT_RUN — COST_PREFLIGHT_BLOCKED`. Format, meaning, clarification, compilation, reload and live latency are unavailable. Neither model passes 1B. Checkpoint 1, Probe A and the Compass gate remain unpassed. Earlier failures and successful component results remain unchanged.
+
+The concrete controller decision is to close this uncapped comparison as financially blocked under the unchanged USD 0.30 ceiling. One Sol response alone needs at least USD 0.643663525 cumulative exposure including history, before input: USD 0.343663525 above the ceiling. Covering its higher-tier output alone would need USD 0.963663525 cumulative exposure, again before input. These are exposure figures, not proposed charges or newly approved allowances. Any future instruction to resume must explicitly change the conflicting financial policy or supply a qualified existing monetary cutoff; ordinary live permission alone cannot fix admission. No second interpretation repair batch or historical checkpoint starts automatically.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/1B-cost-05/`. `prepared-cost-qualification.json`, `history-reconciliation.json`, `documentation-findings.json`, final reviewer records, `manifest.json` and `dispatch-stop.json` retain the measurements, sources, commands, tests, limitations and stop. All earlier evidence remains preserved.
+
+## 17. Approved generated-output allowance, 1B-capped-06
+
+The latest builder instruction prospectively approves **4,096 total generated tokens per inference response**, including billable reasoning and visible output. This supersedes the earlier prohibition on a probe response-token cap. Cumulative input/output quotas remain removed; no byte-based usage gate is added. Native provider constraints remain. The output setting does not change the user's rules, contract v5, evaluator, original four inputs, authored clarification reply or unchanged 1A compiler.
+
+The existing comparison authorization remains at most ten new calls, four cases plus one eligible fresh A-I clarification follow-up per exact model: `openai/gpt-6-luna` with disabled/none reasoning and `openai/gpt-6.1-sol` with enabled/low reasoning. Twenty-five cumulative calls would result if all ten become admissible. Keep conversations separate, agent semantic review, empty tools, strict schema, required-parameter routing and no fallback. No retries, repair calls, substitution or additional experiment is approved. USD 0.10 working allowance and USD 0.30 cumulative absolute maximum remain; previously authorized backup activation requires a recorded reason and persisted amendment before dispatch.
+
+The adapter transmits `max_tokens=4096`. Current official documentation and public endpoint metadata support that parameter; authored fixtures through actual Hermes SDK execution confirm delivery for both selected models with their correct reasoning settings. `require_parameters=true` remains. Output and reasoning share the allowance. `length` means **OUTPUT_TRUNCATION — interpretation unmeasured**, not a failed assessment of the user's meaning. Retain that response and usage, stop the affected route, and do not increase the allowance or retry. Invalid JSON/schema or transport failure also stops the affected route. Shared safety, spending or unknown-charge failures stop both routes.
+
+### Observed offline verification and stop
+
+`OFFLINE BOUNDARY PASS — LIVE COMPARISON BLOCKED`.
+
+Twelve focused boundary checks and the existing 31 interpretation checks pass against the final candidate. Both read-only reviewers pass. The integration reviewer found an unreachable length classification behind an earlier stop guard; a new red regression reproduced it. Moving that classification into the shared handoff resolved the defect without changing meaning checks. Complete fixtures still reach validation, compilation, serialization and canonical reload; capped/nonfinal or unsuccessful conversations cannot pass.
+
+The authored fixture usage envelope now records 1,000 rather than 10,000 completion tokens, consistent with the approved response cap. Fixture content and frozen meaning assertions are unchanged. No historical provider response or charge changed. Offline fixtures do not establish live accuracy or native schema enforcement.
+
+```sh
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/test_cost_1b.py --stage final-boundary-07
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage final-meaning-02
+```
+
+Both exit 0. Focused checks take 7.467 seconds with peak observed RSS 153,698,304 bytes. Interpretation checks take 24.056 seconds with 20.152 parent CPU seconds and peak observed RSS 156,418,048 bytes. Runtime watchdog, CPU limit, observed memory guard and output controls remain. No hard memory, affinity or OS-isolation claim is added. The old `RESOURCE_LIMIT` audit failure came from passing an oversized evidence inventory to the strategy JSON parser. Its reproduced denial is correct; standard-library JSON handles that trusted inventory. No guard was removed.
+
+Three unauthenticated public endpoint/catalog GETs confirm current selected models, prices and capability metadata. Context7 resolution preceded documentation queries. Maximum captured completion rates bound output exposure at USD 0.001536 for Luna and USD 0.03072 for Sol. The previous uncapped output-only blocker is resolved. Maximum captured prompt/cache rates remain USD 0.125 and USD 2.50 per million respectively; total input exposure remains unqualified.
+
+Prepared request measurements include messages, schema and wire wrappers: 8,143–10,186 UTF-8 bytes, local ceil(bytes/4) estimates 2,036–2,547 tokens. These are estimates, not financial bounds or quotas. Both A-T wires are actual authored Hermes SDK requests; other Sol measurements are labeled proposed mappings. The offline follow-up uses an authored first turn and cannot replace that model's fresh live clarification.
+
+No provider-qualified full-input token count or framing upper bound was established for the existing OpenRouter/OpenAI Flex chat/schema route. The native OpenAI Responses counting endpoint was not qualified for this route/authentication. The read-only qualification therefore denies dispatch and creates no reservation. The closed historical live admission path remains frozen; no new live profile or authorization file was activated. Sequential settlement, restart persistence, unknown-charge retention, malformed-record denial and insufficient-money denial remain verified through isolated existing accounting fixtures.
+
+Four unchanged actual journals reconcile fifteen requests, 47,416 prompt/7,277 completion tokens and USD 0.003663525. No unresolved reservation, new inference or credential access. Remaining absolute allowance: USD 0.296336475. All ten new slots remain unused. Both models' five live cases are **NOT_RUN — COST_PREFLIGHT_BLOCKED**; all live assessment dimensions and latency are unavailable. Neither model passes 1B; checkpoint 1, Probe A and the Compass gate remain unpassed.
+
+The one concrete remedy is a provider-qualified complete-input count or upper bound for these exact saved packets on the existing route. No increased allowance or input quota is proposed. For the first Sol request, USD 0.265616475 remains for input/cache after maximum capped output: enough for 106,246 complete input tokens at the maximum captured rate. This affordability arithmetic does not qualify a count or impose a token gate. Stop before inference under the builder's financial-bound exception; preserve ordinary live approval once admission is genuinely qualified.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/1B-capped-06/`. Retain final commands/results, both reviews, prepared request qualifications, source identities, history, dispatch stop and every earlier red/green result. Compiler SHA remains `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`; v5 contract SHA remains `15a3258907caa5117df7a02e21d116a55ee4dd688e43c8056903fbf9a909ac48`. All 6,768 previous evidence files remain unchanged. Historical checkpoint 2, Probe B, production work and Git publication remain outside scope.
+
+## 18. Working-budget comparison authorization, 1B-comparison-07
+
+The latest builder instruction explicitly changes USD 0.30 from a guaranteed absolute ceiling to a **cumulative working budget**. The builder accepts that a dispatched request may exceed its conservative estimate. This resolves Section 17's financial-policy blocker prospectively; it does not qualify the earlier input estimate or erase earlier stops. This is not permission to spend the reported USD 2 balance.
+
+Keep `max_tokens=4096` for total reasoning plus visible output. Ten new comparison calls remain authorized: four original cases plus an eligible own fresh A-I follow-up for each exact model, Luna none and GPT-6.1 Sol low. Prior fifteen requests and USD 0.003663525 remain included, twenty-five cumulative if every slot is used. Keep v5, frozen inputs/reply, evaluator, compiler, empty tools, strict schema, fixed OpenAI Flex routing, one API attempt, zero SDK retries and context exclusions unchanged.
+
+Use the existing persistence code with a distinct working-budget profile. Before dispatch, reserve a conservative request-specific estimate: complete prepared UTF-8 byte count treated as one token per byte, plus 2,048 estimated framing tokens, priced at maximum captured prompt/cache rates, plus all 4,096 output tokens at maximum captured completion rates. This is an estimate, not a verified input bound, financial guarantee or input-size restriction. Cumulative input/output quotas stay removed. Save exact request, pricing source and estimate.
+
+Run sequentially. Settle the actual provider charge before admitting another request, including a known charge exceeding its estimate. Unknown charges retain reservations and stop both routes. Stop further dispatch when settled cumulative spending reaches USD 0.30; also deny a request whose conservative estimate cannot fit the remaining working budget. No automatic retry, repair call, substitution, extra judge or additional experiment. A provider-reported response-cap violation is retained with its known charge and stops both routes.
+
+Format, truncation or unsuccessful Hermes completion stops the affected route. The other model can continue only with settled spending and independently qualified settings. Setup, credential, isolation and shared safety failures stop both. Each model's follow-up requires its own saved passing first turn and explicit agent semantic review. A failed or ineligible first turn cannot be replaced. Interpretation failures are preserved; do not change the frozen contract between cases or models.
+
+Record focused offline checks and independent reviews before activation, then dispatch under this existing approval without another routine permission pause. Private identity: `prototypes/edge-os/probe-a/evidence/A01/1B-comparison-07/`. This authorization adds no historical investigation, production or financial-execution scope. Stop after the observed comparison report.
+
+### Observed working-budget comparison and terminal stop
+
+**REJECT — COMPLETE 1B UNPASSED**. The final frozen candidate passes 16/16 focused offline checks and 31/31 interpretation checks, with both read-only reviews passed. Review exposed inconsistent saved stop flags, setup/failed-Hermes safety classification and an unhandled provider-reported response-cap violation. Retained red checks reproduce them. The corrected path settles known charges, records accurate stops and denies further dispatch on shared safety or cap violations. Only final frozen records qualify activation; intermediate passes do not qualify later source revisions.
+
+The unchanged v5 contract, schema, user inputs, authored reply, evaluator and compiler were frozen across both models. Two fresh public endpoint GETs confirm selected OpenAI Flex pricing and parameter support. Luna sends disabled/none reasoning; Sol sends enabled/low. Both actual wires include `max_tokens=4096`, strict JSON Schema, required-parameter routing, empty tools and no fallback. All six attempted Hermes conversations complete with one POST and finish reason `stop`. No output is truncated, retried, selected from multiple objects or repaired.
+
+| Model | A-T | A-I | A-N | A-U | Own clarification | Model verdict |
+|---|---|---|---|---|---|---|
+| openai/gpt-6-luna | FAIL — multiple objects/extra text | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | REJECT; format route stop |
+| openai/gpt-6.1-sol | PASS; compile/reload | PASS; useful questions/no strategy | FAIL — frozen unresolved-field guard | PASS; preserved unsupported request | PASS; compile/reload | REJECT; four of five pass |
+
+Sol A-T preserves the complete supported thesis and matches the verified 1A canonical control. Sol A-I retains UNKNOWN direction and parameters; application-generated questions are reviewed for necessary meaning, not IDs alone. Its own saved passing first turn and the authored user reply produce the follow-up. It preserves original and reply-added restrictions, supplied upward direction, strict `>0.02`, three contiguous five-minute bars, 30-minute horizon, all declared times and 5 MON notional through compilation and reload. Reviews are agent review, not human approval or financial authority.
+
+Sol A-N is schema-valid and useful in meaning: no signal, winner or fabricated history. It preserves the bounded research request and copies the user-adopted timing and sizing. The frozen assembly guard requires both fields null for `UNRESOLVED`, and rejects the packet as `INVENTED_STRATEGY`. The copied values are declared research configuration, not invented decisions. Preserve this failed handoff and its contract/assembly ambiguity; do not claim that the model fabricated a winner or retroactively relax the guard. Luna's invalid whole response is retained, including the visible threshold discrepancy `1` versus supplied dimensionless `0.01`; no valid selected packet or compilation is claimed.
+
+Conservative five-call estimates were Luna USD 0.014712375 and Sol USD 0.294235, USD 0.308947375 together. They are request estimates, not predicted charges or simultaneous reservations. Each of the six actual charges settled before the next call. New usage: 10,552 prompt/2,360 completion tokens, including 364 reported reasoning tokens, **USD 0.0136746375**. Cumulative: twenty-one requests, 57,968 prompt/9,637 completion tokens, **USD 0.0173381625**. Unknown charges and unresolved reservations: none. Four unused slots are on the stopped Luna route and do not authorize retries.
+
+Exact offline commands:
+
+```sh
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/test_cost_1b.py --stage working-green-03
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage working-final-03
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py working-prepare
+```
+
+All exit 0. Live command: `.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py working-case --batch MODEL_BATCH --case CASE_ID`, with `luna/A-T`, then `sol/A-T`, `sol/A-I`, `sol/A-N`, `sol/A-U`, `sol/A-I-followup` sequentially. Luna exits 2 for the route stop; Sol exits 0 for each case, including the retained independent A-N FAIL. The shared result report retains every expanded command, actual charge and case latency. Live case wall time totals 70.160 seconds; aggregate parent CPU 10.586 seconds; maximum observed RSS 184,156,160 bytes. Existing resource controls remain; no hard memory/affinity or production-isolation claim is added.
+
+Compiler SHA remains `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`; v5 SHA remains `15a3258907caa5117df7a02e21d116a55ee4dd688e43c8056903fbf9a909ac48`. A-T canonical control SHA is `75fdc936cae0b43d21e17b266e3eec4582e3fe782a57f86a8a379dda73af091b`; the supplied clarification rule SHA is `a38e7cf1a1b566b76cbba4e6e7fcd31804f41d2d6709102c8b7e58044619aa64`. Hermes pin, lockfile and isolated configuration remain unchanged. All 7,539 preceding evidence files are preserved.
+
+Next controller decision: review the A-N boundary between preserved declared research configuration and a selected strategy. Any repair or new inference must be prospective and separately scoped; this failed comparison is not replaced. Neither model passes complete 1B, checkpoint 1, Probe A or the Compass gate. Successful components prove bounded interpretation and compiler compatibility only. No general model-superiority, historical-research, profitability or persistent-execution claim follows. Stop after the report; no automatic repair batch, historical checkpoint 2, Probe B or production work.
+
+## 19. Offline no-thesis contract correction, 1B-no-thesis-repair-08
+
+The builder approves a scoped offline repair only. Live inference approval is **PENDING**. Contract `probe-a-1b-meaning-v6` prospectively separates user-adopted research configuration from a selected strategy. Section 18's v5 failure and all historical results remain unchanged.
+
+The frozen A-N request explicitly adopts the plan's decision/trade-reference timing, sizing and cost cases. The application records that adoption from trusted context. For `UNRESOLVED` declared research, signal remains null and direction remains unknown. Model timing and sizing may be null or exact copies of the adopted values. The application retains the adopted configuration in a separate research field either way. Changed or unapproved settings fail. Unsupported and clarification outcomes retain their existing restrictions. No selected strategy, winner, simulation result, paper readiness or execution authority follows from copied settings.
+
+The shared contract defines this rule for instructions, schema description and contextual validation. Structural schema conformance alone does not establish trusted-context equality or truthful prose. Whole-response validation and explicit agent semantic review remain required. Ordinary interpretation can be explained; consequential unknowns remain unknown. This amendment adds no strategy family or hypothesis-generation engine.
+
+Verify the unchanged saved Sol A-N content through an offline provider fixture and actual Hermes completion. Retain the failing regression, new tests and replay evidence separately under BUILDER-ONLY REFERENCE `prototypes/edge-os/probe-a/evidence/A01/1B-no-thesis-repair-08/`. Preserve the compiler, pinned runtime, model settings, resource controls, spending policy and historical journals. Run no inference and read no credentials.
+
+A proposed next live task is one focused Sol A-N recheck under v6, with its own new identity and one additional request, twenty-two cumulative if executed. Approval is **PENDING**. Preserve historical twenty-one requests and USD 0.0173381625; settle and reserve through the existing working-budget policy. Keep Sol low reasoning, 4,096 total generated tokens, empty tools, fixed routing, no fallback and no retries. Existing stopped-route slots are not permission. This single recheck would test the amended no-thesis boundary; it cannot retroactively replace v5's failure or alone pass complete 1B under one candidate configuration.
+
+
+### Observed offline repair and stop
+
+**OFFLINE NO-THESIS REPAIR PASS — LIVE 1B UNPROVED**. Contract v6, final 35/35 interpretation checks and 16/16 boundary checks pass, exit 0. Both independent read-only reviewers pass. The original saved Sol A-N failure is reproduced first with exit 1; the unchanged complete content then passes plain and compressed actual Hermes fixture conversations under the corrected contract. A separate failing provenance assertion leads to accurate captured-replay labels. No live interpretation or paid request occurred.
+
+Approved timing/sizing remain separate research configuration whether the model copies them exactly or leaves them empty. Changed or unapproved settings, invented signal/direction, unsupported scope, lost restrictions and structured winner/readiness/authority claims fail. Existing supported thesis, intuition, unsupported request, clarification, compiler/canonical reload, transport, format, truncation and accounting protections pass. An authored false winner/readiness/trading explanation receives agent semantic-review FAIL despite valid structured fields. Whole-response structure does not establish truthful prose; explicit semantic review remains required.
+
+Exact final commands: `.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage an-final-03` and `.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/test_cost_1b.py --stage an-boundary-final-02`. Both exit 0. Retain the command record and earlier red/green evidence. A later rerun must use a fresh stage name.
+
+Compiler SHA remains `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`; v6 SHA is `2c50a2d94a7061eec83349ec4650e769d8479df78f0f52348c4497a8fbdcfb69`. V5 and every historical verdict remain preserved. Fifteen specifically inspected protected artifacts match their prior hashes; no complete archive audit is claimed. Hermes source/lock/configuration, financial logic and native/model transport settings remain unchanged. Existing resource safeguards remain. Final suite times are 26.080 and 11.260 seconds; peak RSS 179,912,704 and 189,399,040 bytes respectively.
+
+Actual usage remains twenty-one requests and USD 0.0173381625, with no outstanding reservation. New cost is zero. The prepared single Sol A-N recheck is **PENDING**, with a conservative request-specific estimate of USD 0.0652050 and current working-budget remainder USD 0.2826618375. This estimate uses existing captured pricing and policy; it is not a guaranteed financial bound. Require new approval, a fresh live identity/admission and reconciliation of retained charges. Do not reopen the old comparison. Complete 1B, checkpoint 1, Probe A and Compass remain unpassed. Stop for controller review.
+
+## 20. Approved Sol v6 live recovery, 1B-sol-an-recheck-09
+
+The builder first approves the prepared single Sol A-N live recheck, then prospectively approves up to four additional calls: A-T, A-I, A-U and an eligible clarification follow-up using that run's fresh passing A-I. A-N has not been dispatched at the amendment. Keep it once, then run the remaining independent cases sequentially. Maximum five new inference requests, twenty-six cumulative if all five dispatch. Preserve all twenty-one earlier requests and USD 0.0173381625. Do not reuse stopped Luna slots, repeat A-N or start another comparison batch.
+
+Freeze `probe-a-1b-meaning-v6`, schema, case text, clarification reply, meaning checks, unchanged 1A compiler, pinned Hermes and Sol low reasoning. Keep `max_tokens=4096`, USD 0.30 cumulative working budget, conservative request-specific reservations, actual charge settlement, no fallback/retry and empty tools. No new token quotas or financial-control framework. The necessary run-profile change reuses the existing Accounting class, reads the previous settled journals by pinned identity and permits exactly this five-attempt order: A-N, A-T, A-I, A-U, A-I-followup. A follow-up requires the fresh A-I packet and explicit agent review of its questions and explanation.
+
+Independent interpretation or representation failures remain visible and do not prevent other approved cases when charges are settled and the transport boundary remains safe. Unknown charges, credential/isolation violations, provider output-cap violations and exhausted spending stop dispatch. No automatic repair or retry. A failed or ineligible A-I makes the follow-up NOT_RUN. Do not supply another model's answer or an authored first-turn substitute.
+
+Assess format, meaning, missing information, bounded research, unsupported capabilities, compilation and canonical reload separately. Historical evidence remains unavailable. No selected strategy or test result follows from unresolved research configuration. Preserve all prior verdicts. Record a new observed result, without claiming that earlier v5 cases ran live under v6. Complete 1B requires all five applicable outcomes under the recorded v6 candidate; historical checkpoint 2, Probe B, production work and publication remain outside scope. Stop for controller review after the report.
+
+
+### Observed complete Sol v6 recovery and terminal stop
+
+**PASS — BOUNDED INTERPRETATION AND COMPILER COMPATIBILITY**. All five fresh live cases pass under the same frozen v6 candidate: A-N unresolved research, A-T compile/reload, A-I useful clarification with no defaults, A-U preserved unsupported LP/wallet/X request, and its own fresh A-I clarification follow-up with compilation/reload. A-N ran once. All five genuine Hermes conversations completed with one POST, one valid whole object and finish reason `stop`. No truncation, manual repair, fragment selection, retry, fallback or Luna call occurred.
+
+The no-thesis packet keeps exact adopted timing/sizing as research configuration and selects no signal, strategy, winner or test result. Missing historical evidence stays unresolved. The actual explanations receive agent semantic-review PASS without readiness or execution claims. Fresh A-I questions receive meaning review before the follow-up. The frozen authored user reply supplies all decisions; earlier and reply-added restrictions remain intact. A-T and follow-up canonical identities are `75fdc936cae0b43d21e17b266e3eec4582e3fe782a57f86a8a379dda73af091b` and `a38e7cf1a1b566b76cbba4e6e7fcd31804f41d2d6709102c8b7e58044619aa64`. No synthetic input label is presented as model provenance.
+
+The existing Accounting class now admits this five-call profile using the pinned prior twenty-one settled requests. Initial single-case red checks and the prospective five-call allowance red check remain. Final 19/19 boundary and 35/35 interpretation checks pass, exit 0; both read-only reviews pass. V6 interpretation functions, schema/instructions/evaluator and compiler remain unchanged from repair-08. Only necessary live-profile wiring and isolated tests change. No new financial framework or token quota is introduced.
+
+Actual model is `openai/gpt-6.1-sol`, provider reports OpenAI via OpenRouter, only `openai/flex` requested; reasoning low, `max_tokens=4096`, empty tools, strict schema/required parameters and disabled fallback remain. Five new calls cost USD 0.0135487 and use 9,973 input/1,687 output tokens, including 212 reported reasoning tokens. Cumulative usage: twenty-six requests, USD 0.0308868625, 67,941 input/11,324 output tokens. All charges settled sequentially; unknown charges and outstanding reservations are zero. USD 0.30 remains the approved working budget with accepted in-flight estimate uncertainty. No other metadata/provider requests occurred.
+
+Exact final offline commands are `.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/test_cost_1b.py --stage amended-five-green-01` and `.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/interpret_1b.py offline --stage v6-recovery-final-01`. Preparation uses `interpret_1b.py an-recheck-prepare`; live execution uses `interpret_1b.py an-recheck --batch sol --case CASE`, in order A-N, A-T, A-I, A-U, A-I-followup. Every listed command exits 0. The full result report retains expanded commands, per-case costs and latencies. These recorded commands do not permit repetition. `closed.json` seals the run; the final admission check denies dispatch before credential access.
+
+Live case wall time totals 76.857 seconds; aggregate parent CPU 8.227 seconds; peak RSS 187,940,864 bytes. Existing resource safeguards remain. Compiler SHA is `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`, v6 SHA `2c50a2d94a7061eec83349ec4650e769d8479df78f0f52348c4497a8fbdcfb69`, adapter SHA `a15ae4f71e1f6c815ec37160116d7960ca7c9cd7caaf58e05a9e16da73043594`. Twenty targeted protected artifacts match prior hashes; earlier results/charges and unrelated changes remain preserved.
+
+The existing complete 1B acceptance requirements are met for this candidate. With retained 1A recovery's 81 passing mechanics checks and the unchanged compiler, checkpoint 1 passes for the approved subset. Earlier v5 comparisons retain their rejections; offline fixtures/replays retain their offline labels. These fresh passes are not combined from different contracts or models. No required 1B case remains unproved here. General interpretation reliability and historical research, profitability, execution readiness and persistent trading remain unproved. A01/A02 still block historical investigation; checkpoint 2, complete Probe A and Compass remain unpassed. No broader design approval follows.
+
+BUILDER-ONLY REFERENCE `prototypes/edge-os/probe-a/evidence/A01/1B-sol-an-recheck-09/` retains actual packets, completions, decisions, agent reviews, revision, source identities, ledger, usage, commands and terminal verdict. Controller review is next. Stop; do not run another call, historical checkpoint 2, Probe B, production work or Git publication.

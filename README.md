@@ -94,7 +94,7 @@ A public page could show the associated strategy, actual evidence status, operat
 
 Association or operating funding does not grant ownership of trading assets, redemption rights, profit entitlement or wallet authority. Those rights are not selected. Token holders cannot directly expand a strategy's risk limits or execution mandate. Operating revenue does not automatically become trading capital.
 
-The token extension can be built after the agreed core works, including during the hackathon if its own decisions, tests, funding approvals and remaining time permit it. No token model, fee split or issuance terms are settled by this README. The [product design](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md) records the core boundaries. The detailed conditional extension contract is awaiting publication and requires separate implementation and activation approval.
+The token extension can be built after the agreed core works, including during the hackathon if its own decisions, tests, funding approvals and remaining time permit it. No token model, fee split or issuance terms are settled by this README. The [product design](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#conditional-publication-token-and-funding-extensions) records the conditional extension requirements. They remain proposed and require separate implementation and activation approval.
 
 Longer-term possibilities include strategy forks and exports, licensing, marketplaces, broader hypothesis search, additional venues and portfolio-level research. A fork needs its own identity, evidence and mandate. These possibilities are outside the current core. Public pooled capital, profit distribution and autonomous treasuries need separate designs and approvals. Copy trading is outside the selected product direction.
 
@@ -103,11 +103,12 @@ Longer-term possibilities include strategy forks and exports, licensing, marketp
 Edge OS is in design and scoped prototyping. Probe A has started:
 
 - Part 1A recovery passed the deterministic compiler, timing, leakage and accounting checks: 81/81 checks passed.
-- Part 1B's offline repair passed 25/25 checks with authored fixtures. In live recovery, one concrete thesis passed interpretation, compilation and canonical reload. The loose-intuition case failed clarification coverage and exposed a schema/validator mismatch. The no-thesis and unsupported cases were not run after the failure stop. The live 1B verdict remains rejected.
-- The later offline contract repair passed 41/41 checks with authored fixtures. Live testing of the revised contract and clarification conversation remains unproved and pending approval.
-- The historical investigation and complete Probe A gate remain unpassed. Probe B, delegated Monad–Kuru execution, has not started.
+- Part 1B passed all five fresh live GPT-6.1 Sol cases under contract v6: a concrete thesis, loose intuition, bounded no-thesis request, unsupported request and clarification follow-up. The concrete thesis and clarified rules compiled, saved and reloaded without changing their tested meaning. Unclear requests produced questions; missing evidence remained unresolved; unsupported requests were not replaced with another strategy.
+- The final offline suites passed 35 interpretation checks and 19 boundary checks. Earlier model failures and contract defects remain in the report. Both the model choice and corrections to our instructions/checker contributed to the recovery.
+- Checkpoint 1 passes for this bounded interpretation, compiler and known-invalid-input experiment. This is not proof of reliable interpretation of every arbitrary strategy.
+- The historical investigation has not run. Complete Probe A and the Compass prototype gate remain unpassed. Probe B, delegated Monad–Kuru execution, has not started.
 
-See the [published probe result report](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) for the earlier evidence and limitations. Detailed later recovery results are awaiting publication. Offline fixtures do not prove model accuracy or historical research quality.
+See the [probe result report](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) for the latest live result, retained failures and limitations. The next step is to qualify one exact market and its historical data before approving the bounded research investigation. No further inference is authorized by this README.
 
 Research results, profitable strategies and autonomous execution are not established capabilities. A passing test or completed transaction does not prove a trading edge.
 
