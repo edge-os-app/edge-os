@@ -6,13 +6,13 @@ Status: `DRAFT FOR BUILDER REVIEW`
 
 Date: 2026-09-29, Africa/Kinshasa
 
-Last updated: 2026-10-02, Africa/Kinshasa
+Last updated: 2026-10-03, Africa/Kinshasa
 
 Revision scope: two-domain product framing, explicit LP research proof, locked strategy semantics, immutable revision publication, shared tool outcomes and regression checks derived from the Keel/GT reviews and amended compiler verification. Existing delegation, recovery and research contracts remain in force. The builder authorized documentation changes, not design approval or implementation. Compass remains Phase 3. Nansen qualification is `NOT_STARTED`; Monad–Kuru delegated execution remains unproved.
 
 2026-10-02 amendment: name the optional Hermes research and Jev assessment roles while keeping their contracts independent of the selected runtime or model. This amendment does not adopt either dependency, start implementation or change execution authority.
 
-2026-10-02 scoped-probe amendment: propose separate research/compiler/rejection and Monad–Kuru delegation probes before final production planning. Their detailed conditions are in [the shared probe plan](../../prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). Documentation changes are authorized; both probes remain `NOT_STARTED` and await their own approved boundaries. The two-domain product, full acceptance checks and execution-authority limits remain unchanged.
+Historical setup record, 2026-10-02 scoped-probe amendment: proposed separate research/compiler/rejection and Monad–Kuru delegation probes before final production planning. At that setup point both probes were `NOT_STARTED` and awaited their own approved boundaries. Later approvals and execution supersede that status; consult [the shared probe plan](../../prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md) and [result report](../../prototypes/EDGE_OS_PROBE_A_RESULT.md) for current findings. The two-domain product, full acceptance checks and execution-authority limits remain unchanged.
 
 ## 1. Purpose
 

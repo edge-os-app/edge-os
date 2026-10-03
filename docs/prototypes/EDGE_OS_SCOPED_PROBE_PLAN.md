@@ -516,7 +516,7 @@ A-T cost USD 0.000583925; A-I cost USD 0.00015534. New usage: two POSTs, 5,915 p
 
 Both received gzip responses now reached successful Hermes completion. The exact original live failure's compression attribution remains unconfirmed. The strict-schema endpoint accepted these requests; local validation and frozen meaning checks remained mandatory. The compiler, contract, source pin, lockfile, configuration and model are unchanged. All 761 prior evidence files remained unchanged. No post-dispatch code changes occurred.
 
-Commands, exit codes, actual packets/conversation states, canonical meaning, per-case resources and persisted accounting are in private `prototypes/edge-os/probe-a/evidence/A01/1B-recovery-01/`; see `recovery-manifest.json`. [The result report](EDGE_OS_PROBE_A_RESULT.md) records the remaining contract issue and substantive clarification omission. Two new calls were unspent, but the failure stop requires controller review before further dispatch. Next proposed task: a separately scoped offline clarification-contract review/repair, then review any explicit inference recovery. Historical checkpoint 2, Probe B, production implementation and financial permissions remain unchanged. Stop for controller review.
+Commands, exit codes, actual packets/conversation states, canonical meaning, per-case resources and persisted accounting are in BUILDER-ONLY REFERENCE `prototypes/edge-os/probe-a/evidence/A01/1B-recovery-01/`; see `recovery-manifest.json`. [The result report](EDGE_OS_PROBE_A_RESULT.md) records the remaining contract issue and substantive clarification omission. Two new calls were unspent, but the failure stop requires controller review before further dispatch. Next proposed task: a separately scoped offline clarification-contract review/repair, then review any explicit inference recovery. Historical checkpoint 2, Probe B, production implementation and financial permissions remain unchanged. Stop for controller review.
 
 
 ## 11. Offline interpretation-contract repair and prospective clarification loop
@@ -852,7 +852,7 @@ Run sequentially. Settle the actual provider charge before admitting another req
 
 Format, truncation or unsuccessful Hermes completion stops the affected route. The other model can continue only with settled spending and independently qualified settings. Setup, credential, isolation and shared safety failures stop both. Each model's follow-up requires its own saved passing first turn and explicit agent semantic review. A failed or ineligible first turn cannot be replaced. Interpretation failures are preserved; do not change the frozen contract between cases or models.
 
-Record focused offline checks and independent reviews before activation, then dispatch under this existing approval without another routine permission pause. Private identity: `prototypes/edge-os/probe-a/evidence/A01/1B-comparison-07/`. This authorization adds no historical investigation, production or financial-execution scope. Stop after the observed comparison report.
+Record focused offline checks and independent reviews before activation, then dispatch under this existing approval without another routine permission pause. BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/1B-comparison-07/`. This authorization adds no historical investigation, production or financial-execution scope. Stop after the observed comparison report.
 
 ### Observed working-budget comparison and terminal stop
 
