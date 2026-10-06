@@ -17,7 +17,7 @@ Preserve the approved design's tokens and styles. The builder permits CSS or Tai
 The [P01 profile](../implementation/P01_APPLICATION_AUTH_STORAGE_PROFILE.md) owns the detail, versions, reasons and verification requirements. It is a proposed profile. P03 implements it and runs its checks. Nothing in it has run. P01 proposes these choices inside this ADR. They take effect only when the builder accepts this change:
 
 - The browser sends the Privy access token as an `Authorization: Bearer` header directly to FastAPI. No cookie session and no development-auth bypass.
-- FastAPI verifies the token with PyJWT: `ES256` only, required `exp`, `iat`, `iss`, `aud` and `sub`, issuer `privy.io`, audience equal to the configured Privy app ID.
+- FastAPI verifies the token with PyJWT: `ES256` only, with the claim, issuer, audience and token-class policy rules in the profile's [Verifier profile](../implementation/P01_APPLICATION_AUTH_STORAGE_PROFILE.md#verifier-profile), which is authoritative. Real access-token acceptance and identity-token rejection checks stay separately authorized and unperformed.
 - The verification key is a static public key from configuration, with an optional previous key for rotation. The Privy documentation pages reviewed name no JWKS endpoint for access tokens. SDK source suggests one exists. The profile does not adopt it.
 - The API holds no Privy app secret. Login creates a user row and no wallet, signer or trading permission.
 - Storage is PostgreSQL 18 through SQLAlchemy 2.0 and psycopg 3. Alembic applies migrations in a separate step before the API starts.
