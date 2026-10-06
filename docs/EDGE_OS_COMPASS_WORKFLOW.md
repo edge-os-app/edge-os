@@ -2,11 +2,21 @@
 
 Private source pointers are marked `BUILDER-ONLY REFERENCE`. They are not included in a teammate's clone. Follow the [reference rules](agents/domain.md#shared-documents-and-private-evidence). Source labels preserve provenance, not new verification.
 
-Last updated: 2026-10-03, Africa/Kinshasa
+Last updated: 2026-10-06, Africa/Kinshasa
+
+Current controller setup, 2026-10-06: prepare a local exact-commit documentation freeze and proposed ticket graph under the builder's request. Complete tracker labels and isolated lanes through the [controller procedure](agents/controller-workflow.md). Decomposition readiness does not approve the proposed breakdown, testing boundary, implementation dispatch or publication. Probe A, frontend participant verdicts, Probe B and full Compass proof retain their existing limits. Matt Step 7 can draft now; publication and ready assignments follow review of the actual graph.
+
+Current specification decision: the builder approved product scope and requested `to-spec` on 2026-10-05. The [canonical synthesis](superpowers/specs/2026-09-29-edge-os-hackathon-design.md) records user stories, test coverage and unresolved dependencies. Local review comes before publication, as explicitly requested. Matt workflow Step 6 is in progress toward ticket handoff. This approval does not pass missing Compass challenge, participant, execution or implementation checks. Earlier full-scope-approval-pending statements below are historical.
+
+Build-handoff consolidation: the builder authorized a [draft first-release brief](EDGE_OS_BUILD_BRIEF.md) and reconciliation of the existing specification. Both are prepared for review. The reported completed walkthrough is recorded as [assisted general feedback](prototypes/EDGE_OS_FRONTEND_INTERACTION_RESULT.md#builder-walkthrough-and-build-handoff-2026-10-05), not new task-level or unfamiliar-trader passes. This pass starts no implementation or tickets and advances no gate by itself.
 
 This repository document is authoritative for team workflow. The workspace path redirects here. The builder owns all prototypes; teammate ownership below refers to accepted implementation work. Private evidence follows the [reference rules](agents/domain.md#shared-documents-and-private-evidence).
 
+Current frontend status, 2026-10-05: the single local prototype is v0.12.2, with separate agent wallets, funding/withdrawal, Funds and the two controller defects repaired. Scoped functional checks and both independent repair confirmations pass; builder closure remains pending. [Findings](prototypes/EDGE_OS_FRONTEND_INTERACTION_RESULT.md#controller-verification-and-repair-v0122-2026-10-05) control actual history. Older frontend “unstarted” or future-approval paragraphs below are historical; Research comprehension remains REVISE and the other four tasks UNRESOLVED. Full design/build-brief acceptance and real execution remain separate. Probe A stays closed and Probe B unstarted.
+
 ## 1. Purpose
+
+Current wallet decision, 2026-10-05: the builder accepted [separate user-owned agent wallets and funding](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-agent-wallet-ownership-and-funding). [ADR 0007](adr/0007-separate-user-owned-agent-wallets.md) supersedes the cross-agent shared-wallet direction. The [single frontend packet](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md#one-frontend-interaction-prototype) covers the completed local wallet repair and v0.12.2 follow-up. Eight new regression cases, 49 existing checks and 123 assertions pass. Fresh post-repair browser confirmation was unavailable. Earlier shared-wallet approvals remain historical. Per-wallet isolation, funding/withdrawal reconciliation and owner access/removal need qualification before affected live use. No new broad grilling session, Wayfinder map or extra prototype phase is selected. Documentation approval is not production or financial authorization.
 
 This document controls the remaining Edge OS hackathon workflow.
 
@@ -49,17 +59,18 @@ Do not use `p.md`, BUILDER-ONLY REFERENCE `p.md` as a product specification. It 
 | Contest entry decision | Accepted with recorded conditions |
 | Selected product | Edge OS |
 | Governing workflow | Hackathon Winning Compass |
-| Current Compass phase | Phase 3, frame the product |
-| Product design | Drafted for builder review |
+| Current Compass phase | Phase 3, finalize the product frame after the accepted bounded research probe; challenge/build-brief gates remain open |
+| Product design | Product scope approved 2026-10-05; local to-spec synthesis under review. Dependent engineering choices and qualification remain open. |
 | Research contracts | Drafted in `docs/EDGE_OS_RESEARCH_CONTRACTS.md`; review with the design |
 | Nansen data qualification | `NOT_STARTED`; token/venue, feature, access costs and budget require separate approval |
-| Execution direction | User-owned Privy wallet with a restricted, revocable signer; documentation revision authorized |
+| Execution direction | Kuru Flow fixed-input swaps with a restricted, revocable Privy signer; design direction accepted, actual route/policy unqualified |
 | Existing delegation proof | Assensus X Layer testnet spike passed; see Privy research for scope and sources |
 | Monad–Kuru delegated execution | Unproved; no Edge OS spike or runtime gate marked complete |
-| Dangerous-claim prototype | Scoped experiments in progress; complete prototype gate unpassed |
+| Dangerous-claim prototype | Probe A accepted and closed for its revised research-process claim; complete prototype gate unpassed |
 | Scoped probe plan | Individual approvals and closed live recovery recorded at `docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md`; complete product design remains a draft |
-| Probe A, research/compiler/rejection | `IN_PROGRESS`; 1A passed 81 mechanics checks; 1B passed all five fresh live Sol v6 cases; checkpoint 1 passes for its bounded scope; historical investigation has not run; owner is the builder |
-| Probe B, Monad–Kuru delegation | `NOT_STARTED`; owner is the builder |
+| Probe A, research/compiler/rejection | `ACCEPTED AND CLOSED — BOUNDED RESEARCH PROCESS ONLY`, builder decision 2026-10-03; checkpoint 1 and reconstructed MOE checkpoint 2 accepted; strategy `UNRESOLVED`, zero supported candidates; owner is the builder |
+| Probe B, Monad–Kuru delegation | `NOT_STARTED`; exact configuration and permissions pending; owner is the builder |
+| Single frontend interaction prototype | v0.12.2 built; wallet/two-defect repair functionally checked and independently approved; bounded closure pending; human Research REVISE and other tasks UNRESOLVED; owner is the builder |
 | Optional post-core extensions and demo revision | Proposed; scope/economics and revised recording contract remain unapproved |
 | Product code | Not started under this workflow |
 | Main execution domains | Monad meme-token spot trading and LP strategy management |
@@ -69,7 +80,13 @@ Do not use `p.md`, BUILDER-ONLY REFERENCE `p.md` as a product specification. It 
 
 Checkpoint 1 now passes for its bounded meaning, compilation and known-invalid-input scope. Part 1A passed 81/81 mechanics checks; part 1B `1B-sol-an-recheck-09` passed all five fresh live Sol cases under one v6 candidate. Final offline suites passed 35/35 interpretation and 19/19 boundary checks. Earlier failures remain in [the result report](prototypes/EDGE_OS_PROBE_A_RESULT.md). Both model behavior and contract/checker defects contributed to those failures. This evidence does not establish arbitrary-language reliability, historical research quality or profitability.
 
-The next action is to prepare checkpoint 2 data qualification using [the shared scoped probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). It still needs an exact market and qualified historical dataset. The live interpretation run is closed: 26 cumulative requests, USD 0.0308868625, all charges settled. Probe B remains independently scoped and unstarted. Current Compass Phase 3 remains in progress; complete Probe A and the full prototype gate remain unpassed. The full build needs accepted product/design and build-brief boundaries. This synchronization adds no execution, spending, market or dataset approval.
+The builder accepted and closed Probe A on 2026-10-03. Checkpoint 2's actual two-call Hermes investigation retained one hypothesis, four declared variants and all contrary results from reconstructed MOE/WMON history. Its strategy result is `UNRESOLVED`; the sample floor could not be met in the approved window and the holdout stays unopened. Original historical delivery/finality, realistic execution effects and a deployable real-market compiler binding remain unproved. Read [the accepted result and its limits](prototypes/EDGE_OS_PROBE_A_RESULT.md#builder-acceptance-and-closure-2026-10-03); this is a process pass, not a trading-edge finding.
+
+The [focused core product choices](#post-probe-a-focused-decision-session) are complete through Q31 with named qualification gaps. The builder confirmed shared understanding and closed grilling on 2026-10-03. Review the updated single frontend packet and separate Probe B configuration/permissions. Probe B remains separately scoped and unstarted; the frontend is built through v0.12.2, with wallet/two-defect repair checks passing and human acceptance pending. Full-design/build-brief acceptance and the complete Compass prototype gate remain open. The completed model runs are closed, with 28 cumulative requests/USD 0.0814978625 and no unresolved reservations. This synchronization grants no new inference, data collection, wallet, implementation or publishing approval.
+
+For intake and task scoping, follow the design's [bounded-request intake](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#no-thesis-bounded-request), [pool/route binding](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-research-market-binding-and-data-route) and [first research completion boundary](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-first-research-journey). Carry forward accepted compiler policies into implementation checks. Pending verification does not reopen those decisions, and research completion does not mark the remaining product capabilities complete.
+
+Builder-authorized amendment, clarified 2026-10-03: [observational research](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#research-mode-and-observational-investigations) can finish without a strategy or backtest. [Live trading](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#live-trading-optional-trials-and-forward-learning) is one workflow with an optional trial; ongoing operation may start directly or continue after a trial without compulsory graduation, favorable historical results or paper trading. Carry forward the [accepted live user journey](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-live-user-journey-and-display). Evidence, operating purpose and permissions remain separate. Exact live configuration, additional research tools and provider enforcement remain focused decisions, not newly proved capabilities or financial permissions.
 
 ### Engineering execution
 
@@ -106,23 +123,23 @@ Edge OS is an edge-generation, validation, deployment, and monitoring system for
 It helps a user move through this complete job:
 
 ```text
-find or state a possible edge
+bring an observation, question or possible edge
         ->
-make the economic hypothesis explicit
+investigate and save observations, explanations and unknowns
         ->
-test whether the effect exists
+optionally define a hypothesis and test the claims data can address
         ->
-compile the simplest capture rules
+compile supported capture rules when a strategy is requested
         ->
-simulate realistic execution
+simulate where feasible or define a forward learning experiment
         ->
-reject, defer, paper test, or approve
+preserve evidence status and review the requested next action
         ->
-execute within hard risk limits
+execute only after separate qualification and an explicit bounded mandate
         ->
 record what happened
         ->
-monitor whether the edge and implementation remain valid
+monitor and record learning without silently changing strategy or authority
 ```
 
 ### First users
@@ -146,7 +163,7 @@ Both domains accept the same three starting states:
 | Loose intuition | Funny memes with organic attention seem to keep running. | Providing liquidity during calmer periods seems safer. |
 | No thesis | Find a defensible short-horizon edge in a bounded Monad meme universe. | Find a defensible LP opportunity under a fixed capital and risk budget. |
 
-Copying or inspecting a profitable wallet can supply observations for hypothesis generation. Direct trade mirroring is not the Edge OS product.
+Copying or inspecting a profitable wallet can supply observations for hypothesis generation. Direct trade mirroring is not the Edge OS product. Runner/creator comparisons remain within these starting states; use the [research-mode scope](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#research-mode-and-observational-investigations) to distinguish the broader vision from first-build capability.
 
 ### Canonical flow
 
@@ -157,34 +174,35 @@ USER OR RESEARCHER
         v
 INPUT CLASSIFICATION AND CLARIFICATION
         v
-EDGE DISCOVERY
+SUPPORTED RESEARCH INVESTIGATION
         |
-        | human observation, agent investigation, or bounded quant search
+        | observations, hypotheses, competing explanations and unknowns
         v
-EdgeSpec
+SAVED RESEARCH RESULT
+        | may finish here without a strategy or backtest
+        | when a strategy is requested
         v
-QUANT EDGE VALIDATION
-        |
-        | evidence, costs, capacity, controls, and statistical tests
-        v
-REJECTED / UNRESOLVED / VALIDATED EDGE
+SUPPORTED MEANING AND CLAIM-SPECIFIC EVIDENCE
+        | EdgeSpec, evidence package and ledger; status retained
         v
 STRATEGY COMPILER
         v
 versioned StrategySpec
         v
-DOMAIN SIMULATION
+HISTORICAL/SIMULATION TESTS WHERE FEASIBLE
         |---------------------------|
         v                           v
 Meme spot backtester          LP simulator
         |                           |
         |---------------------------|
                     v
-ROBUSTNESS AND TEMPORAL VALIDATION
-                    v
 USER REVIEW OF STRATEGY AND EVIDENCE
                     v
-PAPER OR FORWARD VALIDATION
+USER SELECTS LIVE TRADING
+        | optional trial or ongoing purpose
+        | evidence status shown independently; no graduation
+                    v
+EXECUTION QUALIFICATION, CURRENT INPUTS AND RECOVERY PROOF
                     v
 USER APPROVES EXECUTION MANDATE AND RESTRICTED SIGNER
                     v
@@ -204,6 +222,8 @@ TRANSACTION, ORDER, FILL, OR POSITION RECEIPT
                     v
 EDGE AND STRATEGY HEALTH MONITORING
 ```
+
+This diagram shows possible continuations, not a mandatory sequence through backtests or paper trading. Historical tests may be absent for either a trial or ongoing operation. The design's [readiness requirements](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-claim-specific-support-and-readiness-gates) and [live-trading contract](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#live-trading-optional-trials-and-forward-learning) control eligibility; financial consent never rewrites failed evidence or supplies missing execution proof. Continuation follows that contract without automatic permission expansion or accounting resets.
 
 Monad does not create the edge, validate profitability, or prove demand. Monad supplies the bounded market, inspectable state, settlement, execution, and transaction proof. Edge quality comes from research and validation.
 
@@ -237,7 +257,7 @@ Assensus's completed X Layer test proves restricted signing, owner removal, and 
 
 Before claiming deployed autonomy, prove one permitted Kuru action without a second user signature, an independent wallet-policy denial, restart reconciliation without duplication, and verified signer removal. Preserve denial records and distinguish accepted orders from fills.
 
-Pause or removal stops new actions. It cannot undo broadcast transactions or automatically cancel venue orders. The interface must show remaining exposure and the separate cancellation route. A timeout requires recovery of the original attempt, not a new order.
+Apply the accepted [scoped stop boundaries](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#pause-revoke-and-pending-exposure). Stop new entries may retain approved exit rules; Halt all swaps and expired/revoked authority permit no new swaps in scope. Neither mode closes positions or undoes broadcasts. Show residual exposure and queue delays. A timeout requires reconciliation of the original attempt before another action. The initial Flow adapter has no resting-order action.
 
 Every social record used by research must preserve:
 
@@ -321,11 +341,11 @@ The two domains prove that Edge OS is a financial-strategy runtime rather than a
 
 The first prototype must be narrower than the product MVP.
 
-Its current proposed claim is:
+Its broader product claim is:
 
 > Given a bounded onchain-market research request, Edge OS can generate or formalize inspectable hypotheses, preserve every tested variant, reject plausible false edges without silently inventing assumptions, and compile only supported survivors into typed strategy specifications.
 
-The recommended first domain is Monad meme spot. The recommended first family is short-horizon momentum and reversal. A scoped approval may freeze these for Probe A without approving the complete idea card. Read [the shared probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md) for the exact configuration, frozen cases and claim-specific verdicts. Probe B independently tests the still-unproved delegated action, denial, recovery and revocation boundary; one successful component cannot pass the other.
+The first approved probe domain was Monad meme spot, using a predeclared continuation family. The builder accepted its narrower interpretation/reconstructed-research process claim, including a useful unresolved result and known leakage rejection. It did not establish general alpha generation or the broader product claim above. Read [the shared probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md#24-builder-acceptance-and-probe-a-closure-2026-10-03) for closure and retained limits. Probe B independently tests the still-unproved delegated action, denial, recovery and revocation boundary; one component cannot pass the other.
 
 ### Second proof of generality
 
@@ -457,6 +477,32 @@ Exit gate:
 - every unresolved claim is labeled;
 - a listener can identify the user, failure, product action, Monad role, and visible proof.
 
+#### Post-Probe A focused decision session
+
+Status: `FOCUSED GRILLING CLOSED; BUILDER-CONFIRMED UNDERSTANDING; QUALIFICATION UNRUN`. The builder accepted the [loose-intuition starting scenario](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-main-starting-scenario), [journey's steps, finished result and failure path](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-first-research-journey), and [price/volume input scope](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-initial-research-inputs) on 2026-10-03. The builder also accepted the [typed language, scheduled-history and three-valued Boolean policies](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-strategy-language-and-missing-data-policies), with [focused unrun fixtures](EDGE_OS_RESEARCH_CONTRACTS.md#typed-language-and-missing-data-acceptance-fixtures). The [calculation conventions](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-calculation-conventions) and their [authored unrun checks](EDGE_OS_RESEARCH_CONTRACTS.md#calculation-convention-acceptance-fixtures) are also accepted. The [operator registry](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-initial-operator-registry), [pool binding/data route](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-research-market-binding-and-data-route), [claim-specific readiness gates](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-claim-specific-support-and-readiness-gates) and [focused unrun requirements](EDGE_OS_RESEARCH_CONTRACTS.md#operator-binding-and-readiness-acceptance-fixtures) are accepted. The [effect outcome/control definitions](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-effect-outcomes-and-comparisons) and [authored unrun checks](EDGE_OS_RESEARCH_CONTRACTS.md#effect-outcome-and-control-acceptance-fixtures) are accepted. The [statistical-support policy](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-statistical-support-policy) is accepted; [STAT-Q01](EDGE_OS_RESEARCH_CONTRACTS.md#stat-q01-method-profile-and-qualification) has a selected candidate for qualification, currently unqualified and optional for the core build. This governs evidence claims and does not force historical tests, paper trading or graduation before the accepted live flow. The [persistent independent display and one frontend prototype](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-independent-status-display-and-one-frontend-prototype) and [Flow fixed-input swap direction](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#exact-monad-operation) are accepted. The [grouped activation review, multiple positions, finite allocation/cumulative allowances and guarded temporary recovery](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-activation-positions-and-shared-wallet-accounting) are accepted through Q21, amended Q22 and conditional Q23. [Focused wallet checks](EDGE_OS_RESEARCH_CONTRACTS.md#live-wallet-accounting-acceptance-checks) are unrun. Q24–Q27 accept [scoped stops](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#pause-revoke-and-pending-exposure), [asset-specific allowances/full-inventory exit reservations and an initial wallet queue](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-allowance-units-and-exit-capacity), plus explicitly permitted additions for supported strategies. Q28–Q30 accept cumulative renewal accounting, original signed-transaction/hash resend boundaries and weighted average position cost, preserving realized/unrealized results and external flows. Q31 A selects preapproved position-inventory-based sell permission as the initial direction. [EXIT-CAP-Q01](EDGE_OS_RESEARCH_CONTRACTS.md#exit-cap-q01-permission-model-qualification) must qualify attribution, agent-wallet/asset coordination, sufficient exit capacity and the distinction between application checks and independent wallet restrictions. Inventory enforcement/capacity, route/provider behavior, accounting/queue qualification, exact profiles and measured resource bounds remain open with named unrun checks. Broader research extensions remain unselected. The [single frontend packet](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md#one-frontend-interaction-prototype) records built v0.12.2 and the completed local repair checks. The accepted [separate-agent-wallet amendment](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-agent-wallet-ownership-and-funding) supersedes the earlier cross-agent shared-wallet assumptions. Runtime wallet qualification and human comprehension remain unproved. Probe B remains unstarted; its [exact outstanding configuration/permissions](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md#probe-b-outstanding-configuration-and-permissions) remain unset/unqualified. If qualification needs another approver or authority architecture, present alternatives and obtain a builder decision before adoption. The builder accepted the bounded research-process result and authorized synchronization on 2026-10-03. This session settles the production route, not whether to keep searching until a backtest wins. The builder confirmed the closing understanding and accepted the [direct account/contextual-conversation amendment](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-account-views-and-contextual-conversation) on 2026-10-03. The existing single frontend packet prioritizes unresolved research, live permission, positions through both channels, stop/close behavior and continuation. Prototype leads; Impeccable Operate supports layout/clarity. The builder owns product decisions and all prototyping.
+
+Use the existing draft design, [research contracts](EDGE_OS_RESEARCH_CONTRACTS.md#interpretation-classification-and-field-level-evidence) and [accepted probe report](prototypes/EDGE_OS_PROBE_A_RESULT.md#builder-acceptance-and-closure-2026-10-03). The following core choices are recorded. Use their authoritative specification sections and named qualification checks; implementation details belong in the accepted build brief, not a new competing spec.
+
+| Decision | What to settle | Current boundary |
+|---|---|---|
+| First complete user journey | Exact first trader, starting question, useful end state and understandable failure path | Meme spot first; an explained unresolved result is useful. LP remains the separate second proof unless the builder explicitly changes scope. |
+| Supported strategy meaning | Initial grammar/features, units, timing, missing-data behavior and unsupported actions | Reuse verified probe lessons. Its four variants and thresholds are experiment limits, not permanent product rules. Bind production artifacts to real market/asset identity. |
+| Classification and clarification | Starting-state names, requested job, field source/origin/uncertainty, preserved restrictions and changed-field display | Record these in the first intake ticket. Ask only for stage-required meaning. High model confidence cannot grant readiness; ranking scores wait for multiple investigations. |
+| Data and simulation claim | First provider/dataset route, availability assumptions, gaps, fill/cost coverage, sample feasibility and displayed limits | Envio history and QuickNode state/reconciliation are the existing route. MOE reconstruction does not prove live fillability, delivery or net tradability. Keep unsupported claims unresolved. |
+| Evidence and readiness | Required run outputs, lineage, decision reasons and gates for compilation, research, paper and execution | Draft saving and compilation are not evidence support. Unresolved adopted settings remain configuration, not a selected strategy. Keep holdout/trial history intact. |
+| Observational research scope | Which runner/creator or participant investigation, if any, belongs in the hackathon build; tools, data and useful report | First rule/evaluation slice remains one pool with price/volume. Findings need not compile. Broader attribution/accounting capabilities must be qualified rather than assumed from Hermes. |
+| Live trading and continuation | Exact consent, supported operation, capital/action/duration limits, optional trial stop, current permissions and forward records | Carry the accepted single live flow and user journey into implementation. Trial/ongoing purpose does not change evidence status. Continuing under active authority differs from renewing or expanding permissions. No live action is approved by discussion. |
+| Monad execution and demo | Intended Kuru interface/operation, remaining authority/recovery proof, and distinction between research and execution cases | MOE used an external pool indexed by Kuru Flow, not a Kuru CLOB. The initial Flow fixed-input direction is accepted; the deployed route and enforceable restrictions remain unqualified. Probe B must pass before autonomous-execution claims. No wallet action is approved here. |
+| Frontend and team handoff | Which states the interaction prototype must communicate; schemas, sanitized examples and API expectations | Use the real unresolved investigation and labeled fixtures for other states. The builder owns backend/prototypes; teammates implement accepted UI and gated token-extension tickets. |
+
+Test the one-minute explanation with a target user and technically strong teammate inside the separately approved single frontend prototype, applying Phase 4 below. Keep human observations separate from technical results. Missing target-user participation leaves comprehension and demand gaps; discussion does not satisfy them.
+
+Completion requires an agreed smallest path, a closed decision list or named blockers/owners, explicit limits, and enough state/contract detail to scope the interaction prototype. Then approve that small prototype separately, review whether a non-technical viewer understands the decision, accept the design/build brief, and publish implementation tickets. Do not create ready tickets from pending choices.
+
+Keep all interaction and comprehension checks inside one frontend prototype; do not create a separate interaction-prototype phase. Scope that same prototype around the accepted [live user journey](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-live-user-journey-and-display): include the real unresolved research report plus labeled fixtures for direct ongoing start, optional trial, favorable limited observations, continuation within active permission and continuation requiring changed permission. Test whether a viewer understands that both operating purposes use real money, that running can coexist with unproven evidence, and that continuation does not grant unlimited authority. Show "Continue trading", "Review and adjust limits", "Revise strategy" and "Pause trading" without graduation language. Preserve the real MOE report as unresolved and unpermitted; these fixtures supply no wallet proof. Approve the scope before starting this builder-owned prototype.
+
+Use Wayfinder only if unresolved dependent decisions cannot fit this session. The builder selects that route; its map covers remaining core blockers, not settled product selection or optional-token economics. If the session resolves them, skip the map. This route follows the Compass's challenge, dangerous-claim and completed-user-job rules while retaining the earlier experiment's approved out-of-order placement.
+
 ### Phase 4: challenge the idea
 
 Status: `NOT STARTED`
@@ -480,7 +526,7 @@ If direct users are unavailable within one day, record the limitation and contin
 
 ### Phase 5: write the build brief
 
-Status: `NOT STARTED`
+Status: `DRAFT PREPARED FOR BUILDER REVIEW`, 2026-10-05. [First-release brief](EDGE_OS_BUILD_BRIEF.md). The builder authorized preparation before full scope acceptance; unresolved contracts and qualification are named. This is not a completed exit gate.
 
 Required output:
 
@@ -488,7 +534,7 @@ Required output:
 
 This is the full-build brief, not a prerequisite for either narrow experiment. The builder may approve [the shared probe plan](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md) as the sufficient scoped design/plan before this phase passes. Do not mark the full brief or challenge complete merely because an experiment starts.
 
-The brief must freeze:
+Before the relevant work becomes ready, the brief must identify and link the frozen contracts for:
 
 - one primary user path;
 - one failure path;
@@ -500,7 +546,12 @@ The brief must freeze:
 - proof or receipt;
 - non-goals;
 - team ownership;
-- prototype acceptance tests.
+- prototype acceptance tests;
+- the [approved per-agent add-ons catalog](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-agent-add-ons-catalog), including exact entries, versions, tool access, authentication/cost display, isolation and enable/disable lifecycle. Qualify required research/account tools before exposing them through the catalog; broader custom plugins remain outside MVP scope.
+
+The catalog is builder-approved direction from 2026-10-04, not an installed integration or implementation approval. Its [acceptance checks](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#agent-add-ons-acceptance-checks) are unrun. It does not reopen Probe A or expand the existing five-task frontend prototype. Freeze catalog details in the build brief and assign accepted implementation tickets; keep wallet authority and the separate execution gate unchanged.
+
+The [OpenBB assessment](research/OPENBB_RESEARCH_REUSE_AND_PRODUCT_DIFFERENCES_2026-10-04.md) supplies optional research-component and UI-context lessons. It is not a new dependency or stage gate. If an accepted ticket selects a component, freeze its release, supported calculation/tool semantics, provenance, access/costs and focused checks in the build brief under the [candidate boundary](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#openbb-research-reuse-candidate). Keep Envio/QuickNode roles and the core runnable without OpenBB. Continue existing frontend tasks; do not start another broad prototype or copy a terminal layout merely to adopt this reference.
 
 Exit gate:
 
@@ -512,13 +563,13 @@ Exit gate:
 
 ### Phase 6: prototype the dangerous claim
 
-Status: `SCOPED EXPERIMENTS IN PROGRESS; FULL PHASE GATE UNPASSED`
+Status: `PROBE A ACCEPTED AND CLOSED; FULL PHASE GATE UNPASSED`
 
-The [result report](prototypes/EDGE_OS_PROBE_A_RESULT.md) records the passing 1A recovery, all five passing fresh live Sol v6 cases and the bounded checkpoint 1 pass. It preserves earlier failures and the remaining historical investigation. These narrow experiments do not pass complete Probe A, complete the earlier challenge/build-brief gates or move the current Compass stage past Phase 3.
+The [result report](prototypes/EDGE_OS_PROBE_A_RESULT.md) records the passing 1A recovery, all five fresh live Sol v6 cases, the reconstructed MOE investigation and the builder's accepted Probe A closure. Earlier failures and historical-delivery uncertainty remain preserved. This closes the revised bounded research-process question, not the earlier challenge/build-brief gates or full prototype gate. No supported strategy exists. Probe B and viewer-understanding evidence remain unproved; the current full-product stage remains Phase 3.
 
 The prototype must test the research and rejection engine before building the full application.
 
-The immediate proposed route separates Probe A and Probe B under [EDGE_OS_SCOPED_PROBE_PLAN.md](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). That plan owns their inputs, owners, budgets, acceptance conditions and result paths. Each needs approval before code; financial and provider permissions remain separate. Record `PASS`, `NARROW`, `REJECT` or `UNRESOLVED` for each actual claim. A compiler/fixture pass and a real execution pass cannot stand in for one another. The checks below govern the assembled dangerous-claim prototype, not permission to build all of it in either small probe.
+The route separates Probe A and Probe B under [EDGE_OS_SCOPED_PROBE_PLAN.md](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). Probe A is closed; further research needs a new declared question, not an extension to manufacture a survivor. The plan owns Probe B's pending inputs, approval and result path. Financial and provider permissions remain separate. Record `PASS`, `NARROW`, `REJECT` or `UNRESOLVED` for each actual claim. A compiler/fixture pass and a real execution pass cannot stand in for one another. The checks below govern the assembled dangerous-claim prototype, not permission to build all of it in either small probe.
 
 Minimum prototype:
 
@@ -990,9 +1041,11 @@ Do not revive Funnel phase gates, candidate ranking, or product selection. Edge 
 
 ## 15. Current next action
 
-Checkpoint 1 passed its bounded interpretation/compiler experiment. Review [EDGE_OS_PROBE_A_RESULT.md](prototypes/EDGE_OS_PROBE_A_RESULT.md) for the accepted evidence and limits, then prepare historical checkpoint 2 data qualification under [EDGE_OS_SCOPED_PROBE_PLAN.md](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md). Select an exact market and assess coverage, gaps, price/amount units, availability provenance and usable trade-reference observations before asking the builder to approve that dataset and investigation.
+Review the [draft build brief](EDGE_OS_BUILD_BRIEF.md) and reconciled specification. Approve, revise or narrow the release scope, with a separate decision on bounded frontend closure. Then resolve the first slice's technical choices and publish accepted contracts/fixtures before dependent tickets. Include the small runtime-verification setup with the first runnable path. The v0.12.2 repairs are complete within their source/state checks; no broad UI repair or new grilling session is pending. This replaces older instructions to dispatch that repair.
 
-Do not repeat passed 1A or 1B merely to restart the workflow. The live 1B pass establishes interpretation and compiler compatibility for five frozen cases, not alpha generation or persistent trading. All inference profiles for this recovery are closed. Exact market/data and applicable provider-cost approval remain necessary for checkpoint 2. Probe B remains unstarted with separate execution permissions. This documentation update authorizes no new experiment or financial action.
+Probe A is accepted and closed for the revised bounded research-process claim. Carry forward [the acceptance and limits](prototypes/EDGE_OS_PROBE_A_RESULT.md#builder-acceptance-and-closure-2026-10-03). The [focused core product choices](#post-probe-a-focused-decision-session) are complete through Q31 with explicit qualification gaps. Carry forward accepted research and live journeys, input/language/calculation policies and outcome/control definitions. The 2026-10-05 [separate-agent-wallet amendment](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-agent-wallet-ownership-and-funding) supersedes pooled cross-agent funds and authority. Preserve multiple positions, cumulative allowances, inventory attribution, queues, renewal and weighted cost within each agent wallet. Funding, withdrawal, ownership and signer isolation remain unqualified runtime requirements. Focused grilling is closed; no broad interview is needed for the accepted amendment. The frontend is built at v0.12.2; the wallet-flow and controller repairs pass scoped checks, while human comprehension and explicit bounded closure remain pending. Use the [updated prototype scopes and approval checklist](prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md#remaining-approval-and-qualification-checklist). Probe B execution approval remains separate. The initial preapproved inventory-based permission direction is selected; enforcement/capacity and factual tests remain open. Another approver or authority architecture requires alternatives and a builder decision before adoption. Live trial/ongoing choice and absence of compulsory graduation are recorded requirements, not questions to reopen. Research/UI implementation need not wait for every execution gate once its own design/build brief and task are approved. No profitable strategy was established or required for this process closure.
+
+Do not repeat passed 1A/1B, open the MOE holdout or extend the closed investigation merely to obtain a survivor. Original delivery/finality and omitted execution effects remain unresolved. Probe B is unstarted and requires its own configuration and permissions. This update records acceptance and design rules; it authorizes no new experiment, implementation, publishing or financial action.
 
 Review:
 
@@ -1000,9 +1053,9 @@ Review:
 
 The revised draft records Privy delegation, mandate limits, persistent recovery, independent policy denial, and revocation with pending exposure. It preserves the Kuru, QuickNode, and Envio boundaries and the JEV Trader semantic-drift test. The Privy research note records Assensus's completed narrow proof and its limits. Monad–Kuru delegated execution remains unproved.
 
-Review `docs/EDGE_OS_RESEARCH_CONTRACTS.md` with the design. The full research contracts have not been implemented or qualified; the result report identifies the limited mechanics and live interpretation/clarification checks already tested. `NANSEN-Q01` remains `NOT_STARTED`; the builder must select its token/venue and feature, approve account costs and a numeric budget, and preserve historical-versus-forward limits before a separate authorized run. Do not create a completed qualification report before evidence exists.
+Review `docs/EDGE_OS_RESEARCH_CONTRACTS.md` with the design. The full production contracts are not implemented; the report identifies the tested interpretation, compilation and reconstructed evidence-preservation subset. `NANSEN-Q01` remains `NOT_STARTED`; its coverage/access approval is separate and does not block the current onchain-only decision session.
 
-The full design still needs `APPROVE`, `REVISE`, or `NARROW`. The immediate proposed route uses the two independently approved experiments to resolve the dangerous assumptions before final production planning. Carry their evidence into the short challenge and design decision. Preserve unknown user demand. Use Wayfinder only for remaining dependent core decisions, then approve the production design/build brief and tickets. Full product implementation remains blocked until those boundaries are approved.
+The full design still needs `APPROVE`, `REVISE`, or `NARROW`, or explicit approval of a narrower production slice. Preserve unknown demand and the missing independent user/teammate challenge. Use Wayfinder only for dependent choices that cannot fit one session. Record bounded frontend closure separately without inventing participant passes. Approve the relevant design/build scope before ready tickets. Research/UI implementation may start after those approvals without claiming delegated execution is proved; Probe B gates that claim separately.
 
 The builder authorized the documentation revisions and replacement Compass session prompt on 2026-09-30. Those authorizations do not approve the complete design, advance a Compass stage or run a prototype.
 

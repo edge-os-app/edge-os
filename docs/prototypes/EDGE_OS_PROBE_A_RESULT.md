@@ -1,3 +1,151 @@
+# Probe A checkpoint 2 reconstructed MOE investigation
+
+`C2-moe-investigation-04`: **PASS — APPROVED RECONSTRUCTED RESEARCH PROCESS**. The strategy result is **UNRESOLVED**. No candidate passes the frozen sample floor; no finalist is selected and holdout outcomes remain unopened. Checkpoint 1's pass and all earlier failures remain preserved. This run answers the revised bounded Probe A process question. The builder accepted and closed Probe A for that claim on 2026-10-03. The full Compass prototype gate and production-design approval remain unpassed.
+
+## Builder acceptance and closure, 2026-10-03
+
+Status: **ACCEPTED AND CLOSED — BOUNDED RESEARCH PROCESS ONLY**. The builder explicitly authorized acceptance and the corresponding design, handoff and workflow updates. Controller review checked the report, recorded verdict, focused checks, reconciliation records and compiler/source identities. No tests or provider calls were repeated during acceptance.
+
+Acceptance combines the retained bounded checkpoint 1 pass with this approved reconstructed investigation. It establishes tested interpretation/clarification, template compilation and reload, evidence/attempt preservation, deterministic evaluation, a useful unresolved conclusion and rejection of the deliberately invalid future inputs. It does not establish arbitrary strategy support, general false-edge detection, a profitable candidate, historically attainable execution, user demand or unattended trading.
+
+The original historical-delivery/finality claim remains unresolved. The sample floor was mathematically unattainable in the two-day partition before evaluation; this run demonstrates honest insufficient-evidence handling, not successful strategy qualification. Missing reference trades, illustrative costs and omitted transfer/reflection/routing/gas/capacity effects remain explicit. Synthetic compiler identity remains separate from MOE/WMON research bindings. Holdout outcomes stay unopened. The private run verdict and manifests remain unchanged as execution evidence; this section records the later acceptance decision.
+
+Close the research prototype at this claim. A new support test, forward collection or changed sampling rule would require a separate question and approval, not a recovery needed to close Probe A. Next is the [focused core decision session](../EDGE_OS_COMPASS_WORKFLOW.md#post-probe-a-focused-decision-session), followed by a separately scoped interaction prototype and full-design/build-brief acceptance. Probe B, implementation, optional extensions, publishing and financial actions are not authorized by this closure.
+
+The tested claim is whether an actual bounded Hermes investigation of real pool history can retain supporting and contrary evidence, record every proposal, connect its rules to deterministic evaluation and reject future information. It uses assumed historical delivery delays. It does not establish historically attainable trading, profitability, significance, causal mechanism, persistent execution or deployment readiness.
+
+## Data and frozen configuration
+
+The approved pool is MOE/WMON `0x97199b34564911936bc850ac45ede785892b5aad` on Monad. Token0 is WMON `0x3bd359c1119da7da1d913d1c4d2b7c461115433a`; token1 is MOE `0xd8e004acba279417c04c0633cb5a21ceca207777`. Current and window-end historical calls corroborate 18 decimals for both. Four start-boundary calls return historical-state-unavailable errors, so continuous historical unit/contract immutability is not claimed.
+
+Twenty-six retained HyperSync pages contain **26,146 ordinary two-sided V2-compatible Swaps** from Sep 24 23:45 warm-up through Oct 2 exclusive. Raw payloads decode to reported WMON/MOE amount ratios, rounded once to 20 significant digits, half-even; deterministic calculations use precision 50. All identities, timestamps, ordering and block hashes match the prior metadata export; no duplicate, extra or missing identities are observed. Four prior complete event samples match QuickNode receipts. Those checks do not establish independent full-archive completeness or historical finality.
+
+The sealed price bundle is 9,780,508 bytes. Research Sep 25–28 includes warm-up and 6,279 records; validation Sep 28–30 has 11,393; sealed holdout Sep 30–Oct 2 has 8,474. Dataset manifest SHA-256 is `b8f5cb332025ebcb56ac5f4efc5c9a049636572432321d0aa0ac43b4dbe4261a`. Partition hashes, raw amounts, page hashes and source queries remain in private evidence. Collection time is Oct 3; it does not establish historical availability. The collector qualified and hashed prices before outcome calculations. Investigator access is logged and excludes holdout outcomes.
+
+Availability is reconstructed at the later of event time or bucket end plus 180 seconds, with 60/600-second sensitivities. The frozen hourly decision remains minute 10, feature close minute 5, first one-minute entry reference at minute 15 and exit reference at minute 45. Missing references are not filled. Pool-gross ratios omit transfer/reflection, wrapping, routing, gas, price impact and capacity effects. Cost haircuts are illustrative. Kuru Flow is the intended execution interface; a routing quote is not required for this experiment. Current-volume market selection has hindsight and survivorship limits.
+
+Before outcomes, the plan records that each two-day partition has at most 48 hourly opportunities and cannot contain both 30 triggered and 30 control outcomes. The floor and schedule remain unchanged. Correctly unresolved support can pass this process test.
+
+## Actual investigation and every attempted variant
+
+The first actual Hermes conversation inspects only research observations. It proposes **one hypothesis H1**, conditional upward continuation versus no-entry opportunities, across the four predeclared variants. It cites positive examples alongside reversals, positive controls and missing observations. These are proposed associations within an existing family, not newly discovered strategies. Participant identities, incentives, mechanism and persistence remain unknown.
+
+Each proposal enters the ledger before compilation and evaluation. All four rule templates compile, serialize and canonically reload through the unchanged 1A compiler. Twenty-four research/validation/delay records retain every opportunity, gross mean/median/positive fraction, cost sensitivities, daily contributions, missing observations and paper-account denials. No duplicate, abandoned or compiler-rejected proposal actually occurs in this run. Offline checks verify those rejection and completeness boundaries; they are not additional historical trials.
+
+The table reports gross triggered-minus-control mean differences at the assumed 180-second delay. Counts are triggered/control. Percent values are rounded for display.
+
+| Attempt / rule | Research counts | Research difference | Validation counts | Validation difference | Validation triggered mean with 50 bps per side |
+|---|---:|---:|---:|---:|---:|
+| 1: one bar, strict >0.01 | 13/21 | +3.4506% | 10/37 | -0.2978% | -1.0127% |
+| 2: one bar, strict >0.02 | 8/26 | +5.9342% | 8/39 | +0.3835% | -0.4628% |
+| 3: three bars, strict >0.01 | 13/21 | +0.4436% | 14/33 | -0.5948% | -1.1949% |
+| 4: three bars, strict >0.02 | 11/23 | +2.5145% | 8/39 | +0.1424% | -0.6618% |
+
+**Every variant is INSUFFICIENT_SAMPLE.** Attempts 1 and 3 also have contrary validation signs. Attempts 2 and 4 retain positive gross contrasts but cannot become supported candidates. All validation triggered means become negative under both nonzero cost cases. Research gains concentrate on Sep 25; every variant has a negative triggered daily sum on Sep 27. Both three-bar research medians are negative despite positive means. All these contrary results remain in the final model explanation and full artifacts.
+
+Only 34 of 72 research opportunities have both references. Raw gaps are 24 missing entries and 20 missing exits, with six overlapping. The evaluator's disjoint rejection counts are 24 missing-entry and 14 missing-exit cases. Validation has 47 usable outcomes and one missing entry. Missing-exit exposure freezes later paper entries; partial known balances are not complete realized PnL. Association summaries remain separate from paper-position accounting.
+
+The 60-second results exactly match the 180-second measurements. This is not independent replication. At 600 seconds, feature availability is minute 15, after the minute-10 decision. Every opportunity is rejected as `FUTURE_INFORMATION`, not recorded as a zero return. No rule meets finalist requirements, so the holdout stays sealed and untested.
+
+The second actual Hermes conversation receives permitted research/validation summaries and reconciles the exact first hypothesis, all four attempts and all 24 evaluation evidence IDs. It concludes **UNRESOLVED**, retaining negative cost/day/sign results, missingness, competing explanations and unknown mechanisms. Full-response agent semantic review and numerical checks pass. Agent review is not human approval or financial authority. No fabricated winner, test result, paper-readiness or execution claim is accepted.
+
+## Leakage, compiler boundary and verification
+
+The deliberately modified synthetic L1 fixture passes through the same `research_c2.signal_for` and unchanged compiler availability gate used by the actual investigation. Both `F1.exit` and `F2.exit` are rejected as `FUTURE_INFORMATION`, with decision, source and availability times retained. This verifies the known leakage rejection. It does not prove general overfitting detection or successful edge discovery.
+
+Compiler SHA-256 remains `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`. Its market/quote identity is synthetic/native MON. Four canonical templates link to separate inspected MOE/WMON research bindings; none is labeled a deployable MOE StrategySpec. `strategy.json` is a useful unresolved record with no selected strategy, no paper readiness and empty execution permissions. Linked `package.json`, `edge.json`, ledger and raw result references preserve provenance. The EdgeSpec is assembled from the exact pre-evaluation hypothesis, not a post-result replacement.
+
+Focused offline verification finishes **14/14 PASS**. It covers whole plain/compressed Hermes delivery, completion/truncation/JSON failures, strict comparison, missing bars/references, future availability, rule-template reload, evidence/attempt reconciliation, persisted accounting and evidence collisions. An independent rational calculation verifies 2,904 opportunity/feature/response checks, 144 group counts, 424 aggregate/daily checks and 792 missing/availability classifications. All 24 result hashes reconcile with the four ledger proposals; holdout outcome access is zero. Unchanged compiler and all six protected historical journals match their pins.
+
+Preserved local failures are explicit. The collector initially fails on omitted `topic3`; the corrected run reuses the saved first page. An initial syntax error is corrected before tests. The first 13-check run has five missing-`jsonschema` errors; installed Pydantic is reused without installation, and subsequent checks pass. A local second-conversation attempt fails before any POST or reservation because the inherited transport applies the compiler's 32 KiB strategy limit to a research packet. A separate strict research decoder fixes that demonstrated boundary; strategy limits and numerical functions remain unchanged. Fourteen offline checks precede the remaining second paid dispatch. No paid request is repeated or model response repaired.
+
+The second input is compacted only before dispatch, with equivalence proofs and full exact source results retained. It preserves every required statistic, negative day, evidence ID, missing count and rejection. Its conservative reservation is USD 0.1211500 after first-charge settlement, within the new allowance. Display rounding does not alter authoritative values or thresholds. No cumulative token/local-read quotas are introduced.
+
+## Calls, cost and stop
+
+Both conversations use pinned Hermes commit `54bc5e509c985f37265c3d416bd2c64b10fc77ba`, `openai/gpt-6.1-sol`, OpenAI via OpenRouter, requested route `openai/flex`, low reasoning and transmitted `max_tokens=4096`. Strict JSON schema, required parameters, empty tools, private-context exclusions, disabled fallbacks, SDK retries zero and one API attempt remain. This is a controlled local experiment, not an OS sandbox.
+
+| Call | Complete / finish | Input / output tokens | USD actual charge | Seconds |
+|---|---|---:|---:|---:|
+| R1, propose | yes / stop | 9,511 / 1,957 | 0.021673 | 26.104 |
+| R2, reconcile | yes / stop | 9,903 / 3,312 | 0.028938 | 40.088 |
+
+New usage is **two calls, USD 0.050611**, 19,414 input and 5,269 output tokens, including 36 reported reasoning tokens. Historical spending stays separate at 26 calls/USD 0.0308868625. Overall retained usage is 28 calls/USD 0.0814978625. Both reservations settle before closure; no unknown charge or outstanding reservation remains. No provider invoice or hard account ceiling is claimed. New allowance is USD 0.15.
+
+Raw acquisition makes 26 read-only HyperSync requests across the failed/corrected collector, with the saved first page reused. Unit corroboration makes eight read-only QuickNode calls, four successful and four historical-state-unavailable. One public endpoint-metadata request qualifies the route; documentation-tool fetches are separate. No new service, billing setting, trade or wallet action occurs.
+
+Collector runtime is 108.854 seconds with observed peak RSS 84,754,432 bytes. Live conversation wall time totals 66.192 seconds and observed peak RSS is 171,278,336 bytes. Existing CPU/watchdog/observed-memory/output controls remain. No hard memory, CPU-affinity or whole-session aggregate resource guarantee is added. The output inventory is about 33.3 MB. Active work is not independently metered; configuration-to-closure elapsed time is retained, not represented as CPU or active work.
+
+Executed focused commands, all exit 0 after the preserved failures:
+
+```sh
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/test_research_c2.py --stage transport-repair-final-04
+python3 prototypes/edge-os/probe-a/evidence/A01/C2-moe-investigation-04/independent-final-check.py
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/evidence/A01/C2-moe-investigation-04/finalize-evidence.py
+.tools/hermes-agent/.venv/bin/python prototypes/edge-os/probe-a/research_c2.py usage
+```
+
+Preparation/R1/evaluation use `research_c2.py prepare`, `research_c2.py R1` and `research_c2.py evaluate`. R2 uses the retained final packet with `execute_call('R2', ..., evidence=RUN/'R2-dispatch-01')`. `commands.json` records exit codes, failed attempts and the gap in verbatim auxiliary inline shell wrappers. Actual wire packets, source snapshots and decisions remain. These commands document execution, not permission to repeat. `closed.json` denies further dispatch before credential access.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/C2-moe-investigation-04/`. See `manifest.json`, `configuration.json`, `inputs.json`, `sources.json`, `interpretations.json`, `package.json`, `edge.json`, `strategy.json`, `checks.json`, `verdict.json`, `comparison.json`, `ledger.jsonl`, `access.jsonl` and `requests.jsonl`. Shared changes are this report and the [approved plan section 23](EDGE_OS_SCOPED_PROBE_PLAN.md#23-approved-reconstructed-moe-investigation-c2-moe-investigation-04). Earlier findings follow unchanged as historical entries.
+
+The execution stopped for controller review. The later builder acceptance is recorded above. No supported strategy is available. Testing strategy support would require a separately approved feasible window with fresh selection/validation rules; this run's floor and unopened holdout remain unchanged. The original historically delivered-information claim remains unresolved. No Probe B, production implementation, wallet action, trading or Git publication follows from acceptance.
+
+---
+
+# Probe A checkpoint 2 data qualification
+
+**UNRESOLVED — investigation and revised configuration approval pending.** No historical research-model call, return evaluation or strategy test ran. Checkpoint 1 remains passed for its bounded scope; checkpoint 2, full Probe A and Compass remain unpassed. The earlier 1A/1B results and charges below remain unchanged.
+
+The builder asks for a high-volume **meme**, traded through Kuru, and supplies existing QuickNode RPC and Envio access. Major/stablecoin pairs are excluded. The original CHOG Kuru CLOB has no returned events in the frozen Sep 18–Oct 2 window, including a complete address-only query. That qualification failure remains preserved. A scan of all 553 native-MON-quoted markets in the captured Kuru Router registry returns only three Trade records in that window. Those three EMO records match QuickNode receipts, but supply no validation/holdout observations. This does not characterize all liquidity accessible through Kuru Flow.
+
+### High-volume meme candidate
+
+**MOE** is the highest-volume meme candidate in the inspected live Monad pair ranking: reported **USD 203,721.01 and 2,427 transactions over 24 hours**. This is one mutable pair snapshot, not an exhaustive cross-pool token ranking. The [project site](https://monadmoe.com) identifies the contract and community mascot/reflection-reward design; meme classification is inferred from that branding. The [volume-ranked Monad list](https://dexscreener.com/monad?rankBy=volume&order=desc) places it behind major/stablecoin pairs. Current activity selection has hindsight/survivorship limits because it occurs after the proposed historical window.
+
+| Qualification | Observed result |
+|---|---|
+| Token | MOE `0xd8e004acba279417c04c0633cb5a21ceca207777` |
+| Pool | nad.fun `0x97199b34564911936bc850ac45ede785892b5aad`; exact pool indexed by Kuru's aggregated market API |
+| Intended demo interface | [Kuru Flow](https://docs.kuru.io/kuru-flow/flow-overview), which aggregates underlying pools. This pool is not a Kuru CLOB; a live route quote has not been verified. |
+| Units | RPC confirms token0 WMON `0x3bd359c1119da7da1d913d1c4d2b7c461115433a`, token1 MOE, 18 decimals each. WMON/MOE pool-gross measurement proposed; no native-MON or trader-net equivalence claimed. |
+| Pool inception / first observed Swap | Sep 24 03:53:04 / 04:26:51 UTC; registry, creation receipt/block and first Swap sample agree. The original Sep 18 start cannot be covered by this pool. |
+| Complete returned metadata scan | 29 pages, 29,357 V2-compatible Swaps from inception through Oct 2 exclusive. No returns calculated. |
+| Proposed Sep 25–Oct 2 plus warm-up | 26,146 swaps; 2,019/2,019 five-minute buckets occupied. This does not establish one-minute reference fills or historical delivery. |
+| Two-provider verification | Four predetermined full raw Swap samples match QuickNode/Envio identities, block hashes, ordering, topics and data. This is sampled verification, not independent complete-history proof. |
+| Remaining qualification | Full price-payload export not sealed; fork fee/reflection semantics, historical delivery/finality and successful Kuru route quote remain unqualified. |
+
+Metadata SHA-256: `492cb7795392c63049e7bb726f4201ffa2fc83f28ad4cc9e697899407764891a`. Four-sample check SHA-256: `9129eca9df5112ea870c304e0317ed3659bb8ef3d01243dbf71b9cc6bf35c38d`. Private evidence identity: `C2-meme-flow-selection-03`. A separately retained CHOG nad.fun pool export has 4,649 Swap identities in the original window, with 2,703 missing five-minute buckets; it is not silently selected instead.
+
+The initial MOE query used the standard V3 Swap topic and returned zero. Address-only discovery found V2-compatible events. The corrected signature/layout matches the canonical V2 interface and four raw on-chain samples. Published nad.fun documentation describes V3; it does not establish this fork's fees. The first corrected scan stops on an HTTP error after 24 successful pages. Its status/body were not captured, so the precise cause remains unknown; dispatch exceeded the observed 15/minute plan rate. A distinct, paced manual resume finishes the remaining five pages. Its assembly fails on hex-encoded timestamps. Offline assembly then parses those values explicitly and reproduces the full counts without repeating collection. All failed commands and raw pages remain retained. These failures concern collection/processing, not live interpretation or measured strategy performance.
+
+Executed qualification commands:
+
+```sh
+python3 prototypes/edge-os/probe-a/evidence/A01/C2-qualification-01/qualify-window.py
+python3 prototypes/edge-os/probe-a/evidence/A01/C2-meme-flow-selection-03/check-pool.py
+python3 prototypes/edge-os/probe-a/evidence/A01/C2-meme-flow-selection-03/qualify-moe-v2-metadata.py
+python3 prototypes/edge-os/probe-a/evidence/A01/C2-meme-flow-selection-03/resume-moe-v2-metadata.py
+python3 prototypes/edge-os/probe-a/evidence/A01/C2-meme-flow-selection-03/assemble-moe-metadata.py
+python3 prototypes/edge-os/probe-a/evidence/A01/C2-meme-flow-selection-03/cross-check-moe.py
+```
+
+Exit codes in order: 0, 0, 1, 1, 0, 0. The two failed commands are preserved; do not rerun them against their existing output names. Offline assembly checks pagination continuity, range membership, unique identities and ordering. The cross-provider command validates four raw samples, asset ordering/decimals and creation evidence. These are source/data checks, not the required investigation/evaluator verification. L1 through the actual research evaluator, variants, contrary-result reconciliation and holdout selection are **NOT_RUN**. Existing CPU/watchdog/output safeguards remain; no hard-memory/CPU-affinity or historical-finality guarantee is added.
+
+### Single controller approval packet
+
+[Shared plan section 22](EDGE_OS_SCOPED_PROBE_PLAN.md#22-meme-volume-selection-and-combined-checkpoint-2-proposal) proposes this exact pool, research Sep 25–28, validation Sep 28–30 and holdout Sep 30–Oct 2, with 15-minute warm-up. It proposes reconstructed availability with 180-second delay after the later of event time/bucket end, plus 60/600-second sensitivity. Missing features are rejected/skipped at the frozen decision time; delays are assumptions, not observed delivery. The narrower claim is retrospective pool-price association and research-process preservation, not historically attainable execution.
+
+Keep the four continuation variants, zero to two hypotheses, all-attempt ledger, supporting/contrary evidence, missing-data policy, sample/validation/finalist rules, locked holdout and 0/50/100-bps sensitivities. Reuse the unchanged compiler only as an explicitly labeled logical rule-template check; actual MOE/WMON dataset bindings remain separate. A synthetic/native-MON canonical identity is not a real-market StrategySpec. Pool-gross ratios exclude unqualified transfer/reflection/wrapping/routing/capacity effects. Source qualification and focused new handoff/evaluator checks must precede outcomes.
+
+Proposed new checkpoint 2 authorization is **two sequential Sol-low research calls, USD 0.15 working budget, PENDING**. Illustrative estimate is USD 0.10944 at retained rates for 24,000 input and 8,192 generated tokens total; exact prepared requests/current pricing must qualify before dispatch. Keep 4,096 generated tokens per call, empty tools, isolated research packets and no retries/fallback. There are no new cumulative token or local-read quotas. The 1B profiles are closed. New C2 inference/cost is zero; historical usage remains **26 requests, USD 0.0308868625**, with no outstanding reservation. Acquisition uses the builder-confirmed QuickNode Build/existing Envio access; no invoice guarantee is inferred and no further entitlement check is requested.
+
+This packet requires one builder decision on the revised market/interface, window, reconstructed claim, compiler-template limitation and new research spending. It does not pass checkpoint 2. No hypothesis, supporting/contrary strategy result or leakage-evaluator verdict exists yet. Stop for that review; no Probe B, production implementation, financial action or Git publication follows.
+
+BUILDER-ONLY REFERENCE: `prototypes/edge-os/probe-a/evidence/A01/C2-qualification-01/`, `C2-activity-selection-02/` and `C2-meme-flow-selection-03/`, including the candidate packet, hashed metadata pages, independent RPC samples and qualification manifest. Earlier executed results follow unchanged.
+
+The final inventory records 123 QuickNode RPC attempts, 49 HyperSync query attempts and 14 public source/metadata requests across those directories, including failures; browser/documentation-tool fetches are separate. Eleven protected file identities match, including all six historical journals and unchanged compiler SHA `ebeb11a454662204726b6607c42913c1aa737c31213cad706e95b84541a3325b`. Independent raw-page recount matches the metadata coverage. Four-sample verification takes 14.072 seconds; offline assembly observes peak RSS 83,066,880 bytes. A scoped scan finds zero supplied QuickNode/HyperSync credentials in the inspected evidence/documents. `git diff --check` passes. No inference, invoice audit or complete historical-archive audit is claimed.
+
 # Probe A 1B Sol v6 live recovery
 
 `1B-sol-an-recheck-09`: **PASS — BOUNDED INTERPRETATION AND COMPILER COMPATIBILITY**.

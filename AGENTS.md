@@ -30,7 +30,7 @@ The builder selected a manual merge gate on 2026-10-02. GitHub-enforced approval
 
 Paid services, wallet changes, delegation and financial transactions require explicit task-level authorization. Keep credentials outside source control and model inputs.
 
-For implementation and review, follow `playbooks/MATT_POCOCK_PROJECT_WORKFLOW.md`. Use actual repository scripts for verification. Report checks that could not run.
+For implementation and review, follow `playbooks/MATT_POCOCK_PROJECT_WORKFLOW.md`. For isolated lanes and exact-candidate handoffs, follow `docs/agents/controller-workflow.md`. Use actual repository scripts for verification. Report checks that could not run.
 
 For current library, framework, SDK, API, CLI and cloud-service documentation, use Context7. Resolve the library ID first, then query documentation with the complete technical question.
 
