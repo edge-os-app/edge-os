@@ -397,6 +397,8 @@ def parse_utc_timestamp(value: object) -> tuple[datetime, Decimal]:
     match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z", value) if isinstance(value, str) else None
     if match is None:
         raise Invalid("timestamp must be RFC 3339 UTC")
+    if int(match.group(1)[11:13]) > 23:
+        raise Invalid("timestamp must be a valid RFC 3339 UTC instant")
     try:
         seconds = datetime.fromisoformat(match.group(1) + "+00:00")
         fraction = Decimal("0." + match.group(2)) if match.group(2) else Decimal(0)
@@ -1117,6 +1119,7 @@ def main() -> int:
     bad_envelope = copy.deepcopy(FIXTURES["persisted_examples"][0])
     bad_envelope["created_at"] = "2026-99-99T99:99:99Z"
     must_reject_action("impossible persisted timestamp", lambda: validate_envelope(bad_envelope))
+    must_reject_action("24-hour persisted timestamp", lambda: parse_utc_timestamp("2026-10-06T24:00:00Z"))
     assert parse_utc_timestamp("2026-10-06T10:00:01Z") < parse_utc_timestamp("2026-10-06T10:00:01.1Z")
     assert parse_utc_timestamp("2026-10-06T10:00:01.0000001Z") < parse_utc_timestamp("2026-10-06T10:00:01.0000002Z")
     bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
