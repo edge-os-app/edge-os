@@ -1,0 +1,64 @@
+{
+  "schema_version": "p02.contract/1",
+  "canonical_profile": "p02-json-decimal-string/1",
+  "limits": {
+    "input_bytes": 65536,
+    "expression_nodes": 2048,
+    "expression_depth": 64,
+    "lookback_buckets": 288,
+    "manifest_entries": 256
+  },
+  "identity": {
+    "hash": "sha256",
+    "strategy_schema": "p02.strategy/1",
+    "manifest_components": {
+      "language": "edge-strategy/1",
+      "operator_registry": "edge-operators/1",
+      "history": "scheduled-5m-no-fill/1",
+      "boolean": "kleene-whole-tree/1",
+      "numeric": "decimal-50-half-even/1",
+      "serialization": "p02-json-decimal-string/1",
+      "compiler": "edge-compiler/1"
+    }
+  },
+  "input_classes": ["CONCRETE_THESIS", "LOOSE_INTUITION", "BOUNDED_NO_THESIS"],
+  "requested_jobs": ["COMPARE", "INVESTIGATE_EFFECT", "CREATE_STRATEGY", "SIMULATE", "OBSERVE_FORWARD", "REQUEST_LIVE"],
+  "field_states": ["KNOWN", "MISSING", "CONFLICTING"],
+  "field_origins": ["USER_STATED", "USER_CONFIRMED", "APPLICATION_CONFIGURED", "AGENT_PROPOSED"],
+  "outcomes": ["NEEDS_CLARIFICATION", "UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT", "COMPILED"],
+  "operators": ["constant", "price", "quote_volume", "price_return", "lag", "sum", "mean", "gt", "gte", "lt", "lte", "and", "or", "not"],
+  "operator_signatures": {
+    "constant": {"shape": ["op", "value", "unit"], "result": "numeric:declared-unit"},
+    "price": {"shape": ["op"], "result": "numeric:quote-per-base"},
+    "quote_volume": {"shape": ["op"], "result": "numeric:declared-quote-asset"},
+    "price_return": {"shape": ["op", "lookback_buckets"], "result": "numeric:dimensionless", "history": "qualified-endpoints; retain-intermediate-gaps"},
+    "lag": {"shape": ["op", "value", "buckets"], "result": "numeric:input-unit", "history": "one-scheduled-position"},
+    "sum": {"shape": ["op", "value", "buckets"], "result": "numeric:input-unit", "history": "all-scheduled-values-required"},
+    "mean": {"shape": ["op", "value", "buckets"], "result": "numeric:input-unit", "history": "all-scheduled-values-required"},
+    "gt": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "same-numeric-unit"},
+    "gte": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "same-numeric-unit"},
+    "lt": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "same-numeric-unit"},
+    "lte": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "same-numeric-unit"},
+    "and": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "boolean-operands", "truth": "kleene-whole-tree"},
+    "or": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "boolean-operands", "truth": "kleene-whole-tree"},
+    "not": {"shape": ["op", "value"], "result": "boolean", "requires": "boolean-operand", "truth": "kleene-whole-tree"}
+  },
+  "record_fields": {
+    "IntakeRequest": ["record_id", "original_request", "restrictions", "requested_job"],
+    "FieldEvidence": ["field_name", "state", "origin", "source_ref", "interpretation_revision"],
+    "Clarification": ["previous_revision_id", "question_id", "question", "answer_ref", "changed_fields", "preserved_restrictions"],
+    "Outcome": ["operation_id", "stage", "outcome", "findings", "retry"],
+    "StrategyDraft": ["draft_id", "original_request", "interpretation_revision_id", "source_syntax", "validation_findings", "state"],
+    "StrategySpec": ["schema_version", "strategy_id", "domain", "market", "decision_interval_seconds", "data_inputs", "entry", "exit", "invalidation", "sizing", "additions", "partial_exits", "cost_assumptions", "risk_limits", "action_scope", "execution_permission", "warmup_buckets", "semantic_manifest"],
+    "ResearchBinding": ["chain_id", "underlying_venue", "pool_address", "token_order", "base_asset", "quote_asset", "orientation", "base_decimals", "quote_decimals", "event_schema_version", "amount_conversion_version", "data_route", "evidence_class", "qualification"],
+    "PublicationRequest": ["operation_id", "idempotency_key", "expected_parent_revision_id", "draft_id", "strategy"],
+    "PublicationResult": ["operation_id", "publication_id", "revision_id", "content_sha256", "manifest_sha256", "created_at", "outcome"]
+  },
+  "http_errors": {
+    "401": ["auth_required", "auth_invalid", "auth_expired"],
+    "404": ["not_found"],
+    "409": ["idempotency_key_reused", "parent_revision_conflict"],
+    "422": ["validation_error"],
+    "503": ["auth_unavailable", "service_unavailable"]
+  }
+}

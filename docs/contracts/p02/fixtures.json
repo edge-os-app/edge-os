@@ -1,0 +1,27 @@
+{
+  "schema_version": "p02.fixtures/1",
+  "cases": [
+    {"id": "route-complete", "kind": "route", "input": {"meaning": "supported", "complete": true, "syntax_valid": true, "evidence_ready": true}, "expected": "COMPILED"},
+    {"id": "route-clarification", "kind": "route", "input": {"meaning": "supported", "complete": false, "missing": ["entry_threshold"], "syntax_valid": true, "evidence_ready": true}, "expected": "NEEDS_CLARIFICATION"},
+    {"id": "route-unsupported", "kind": "route", "input": {"meaning": "unsupported", "original_request": "sell half, then rebalance an LP range", "missing_capability": "partial_exit_and_lp_rebalance"}, "expected": "UNSUPPORTED"},
+    {"id": "route-malformed", "kind": "route", "input": {"meaning": "supported", "complete": true, "syntax_valid": false, "evidence_ready": true}, "expected": "INVALID_INPUT"},
+    {"id": "route-unresolved", "kind": "route", "input": {"meaning": "supported", "complete": true, "syntax_valid": true, "evidence_ready": false, "missing_dependency": "qualified_endpoint_price"}, "expected": "UNRESOLVED"},
+    {"id": "return-keeps-gap", "kind": "return", "input": {"scheduled_prices": ["100", null, "110"], "intervals": 2}, "expected": {"value": "0.1", "unknown_reasons": ["missing_bucket:1"]}},
+    {"id": "return-missing-endpoint", "kind": "return", "input": {"scheduled_prices": ["100", null, "110"], "intervals": 1}, "expected": {"value": null, "unknown_reasons": ["missing_endpoint"]}},
+    {"id": "rolling-requires-every-bucket", "kind": "rolling_mean", "input": {"scheduled_prices": ["100", null, "110"], "buckets": 3}, "expected": {"value": null, "unknown_reasons": ["missing_bucket:1"]}},
+    {"id": "decimal-half-even", "kind": "decimal", "input": {"left": "1", "right": "6", "operation": "divide"}, "expected": {"precision": 50, "rounding": "ROUND_HALF_EVEN", "prefix": "0.16666666666666666666666666666666666666666666666667"}},
+    {"id": "boolean-false-and-unknown", "kind": "boolean", "input": {"operator": "and", "values": ["FALSE", "UNKNOWN"], "reasons": ["missing_volume"]}, "expected": {"value": "FALSE", "reasons": ["missing_volume"]}},
+    {"id": "boolean-true-or-unknown", "kind": "boolean", "input": {"operator": "or", "values": ["TRUE", "UNKNOWN"], "reasons": ["future_bucket"]}, "expected": {"value": "TRUE", "reasons": ["future_bucket"]}},
+    {"id": "boolean-complete-truth-table", "kind": "boolean_truth_table", "input": {"rows": [["TRUE", "TRUE", "TRUE", "TRUE"], ["TRUE", "FALSE", "FALSE", "TRUE"], ["TRUE", "UNKNOWN", "UNKNOWN", "TRUE"], ["FALSE", "TRUE", "FALSE", "TRUE"], ["FALSE", "FALSE", "FALSE", "FALSE"], ["FALSE", "UNKNOWN", "FALSE", "UNKNOWN"], ["UNKNOWN", "TRUE", "UNKNOWN", "TRUE"], ["UNKNOWN", "FALSE", "FALSE", "UNKNOWN"], ["UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN"]], "not": [["TRUE", "FALSE"], ["FALSE", "TRUE"], ["UNKNOWN", "UNKNOWN"]]}, "expected": true},
+    {"id": "clarification-preserves-restrictions", "kind": "clarification", "input": {"previous_revision": "interp-1", "original_restrictions": ["no leverage", "quote asset is USDC"], "next_restrictions": ["no leverage", "quote asset is USDC"], "missing_field": "entry_threshold", "questions": ["What entry threshold should apply?"]}, "expected": "NEEDS_CLARIFICATION"},
+    {"id": "unsupported-retains-request", "kind": "unsupported", "input": {"original_request": "sell half, then rebalance an LP range", "missing_capability": "partial_exit_and_lp_rebalance"}, "expected": "UNSUPPORTED"},
+    {"id": "unresolved-keeps-strategy-absent", "kind": "unresolved", "input": {"missing_dependency": "qualified_endpoint_price", "adopted_configuration": {"decision_interval_seconds": 300}, "strategy": null}, "expected": "UNRESOLVED"},
+    {"id": "draft-has-no-authority", "kind": "draft", "input": {"state": "DRAFT", "published_revision_id": null, "execution_permission": {"state": "NOT_GRANTED", "mandate_ref": null}}, "expected": true},
+    {"id": "cross-owner-is-not-found", "kind": "owner_error", "input": {"owner_matches": false, "http": 404, "code": "not_found"}, "expected": true},
+    {"id": "idempotent-retry-keeps-identity", "kind": "idempotency", "input": {"first_key": "key-a", "retry_key": "key-a", "first_fingerprint": "fp-1", "retry_fingerprint": "fp-1", "first_revision": "rev-a", "retry_revision": "rev-a", "acknowledgement": "UNKNOWN"}, "expected": "rev-a"},
+    {"id": "idempotency-key-collision", "kind": "idempotency_collision", "input": {"first_key": "key-a", "retry_key": "key-a", "first_fingerprint": "fp-1", "retry_fingerprint": "fp-2"}, "expected": 409},
+    {"id": "independent-publications-are-siblings", "kind": "concurrent_publications", "input": {"parent": "rev-parent", "first_key": "key-a", "second_key": "key-b", "first_revision": "rev-a", "second_revision": "rev-b"}, "expected": true},
+    {"id": "dimension-mismatch-is-invalid", "kind": "typed_expression", "input": {"quote_unit": "QUOTE:asset-q", "expression": {"op": "gt", "args": [{"op": "price_return", "lookback_buckets": 1}, {"op": "constant", "value": "1", "unit": "QUOTE:asset-q"}]}}, "expected": "INVALID_INPUT"},
+    {"id": "canonical-reload", "kind": "canonical_roundtrip", "input": {"b": [1, "x"], "a": {"z": true}}, "expected": true}
+  ]
+}

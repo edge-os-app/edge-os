@@ -1,5 +1,7 @@
 # Edge OS research contracts
 
+The P02 first-slice record, canonical identity, publication, owner/error, and fixture proposal is indexed in [P02 first-slice records](contracts/P02_FIRST_SLICE_RECORDS.md); its portable compiler source mapping is in [P02 compiler requirements](research/P02_COMPILER_REQUIREMENTS.md). These are scoped ticket outputs, not accepted changes to this draft or runtime qualification.
+
 Private source pointers are marked `BUILDER-ONLY REFERENCE`. They are not included in a teammate's clone. Follow the [reference rules](agents/domain.md#shared-documents-and-private-evidence). Source labels preserve provenance, not new verification.
 
 Last updated: 2026-10-05, Africa/Kinshasa

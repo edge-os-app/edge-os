@@ -1,0 +1,53 @@
+{
+  "schema_version": "p02.strategy/1",
+  "strategy_id": "fixture-spot-return-volume-v1",
+  "domain": "SPOT",
+  "market": {
+    "network": "MONAD",
+    "research_binding": {
+      "chain_id": null,
+      "underlying_venue": "fixture-underlying-venue/1",
+      "pool_address": "0x3333333333333333333333333333333333333333",
+      "token_order": ["0x1111111111111111111111111111111111111111", "0x2222222222222222222222222222222222222222"],
+      "base_asset": "0x1111111111111111111111111111111111111111",
+      "quote_asset": "0x2222222222222222222222222222222222222222",
+      "orientation": "QUOTE_PER_BASE",
+      "base_decimals": 18,
+      "quote_decimals": 6,
+      "event_schema_version": "fixture-events/1",
+      "amount_conversion_version": "fixture-amounts/1",
+      "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+      "evidence_class": "SYNTHETIC_FIXTURE",
+      "qualification": "UNQUALIFIED"
+    },
+    "execution_route": {
+      "adapter": "KURU_FLOW_FIXED_INPUT",
+      "identity_state": "UNKNOWN",
+      "identity": null,
+      "qualification": "UNQUALIFIED"
+    },
+    "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+  },
+  "decision_interval_seconds": 300,
+  "data_inputs": ["price", "quote_volume"],
+  "entry": {"op": "gt", "args": [{"op": "price_return", "lookback_buckets": 3}, {"op": "constant", "value": "0.01", "unit": "DIMENSIONLESS"}]},
+  "exit": {"op": "lt", "args": [{"op": "price_return", "lookback_buckets": 1}, {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}]},
+  "invalidation": {"state": "NOT_REQUESTED", "source_ref": "synthetic:adopted-no-invalidation"},
+  "sizing": {"kind": "FIXED_QUOTE_AMOUNT", "amount": "100", "unit": "QUOTE:0x2222222222222222222222222222222222222222"},
+  "additions": false,
+  "partial_exits": false,
+  "cost_assumptions": {"fee_rate": "0.003", "slippage_rate": "0.005", "source_ref": "synthetic:adopted-cost-profile"},
+  "risk_limits": {"max_quote_notional": "100", "max_open_positions": 1},
+  "action_scope": ["SPOT_BUY", "SPOT_SELL_ALL_ATTRIBUTABLE"],
+  "execution_permission": {"state": "NOT_GRANTED", "mandate_ref": null},
+  "warmup_buckets": 3,
+  "semantic_manifest": {
+    "language": "edge-strategy/1",
+    "operator_registry": "edge-operators/1",
+    "history": "scheduled-5m-no-fill/1",
+    "boolean": "kleene-whole-tree/1",
+    "numeric": "decimal-50-half-even/1",
+    "serialization": "p02-json-decimal-string/1",
+    "compiler": "edge-compiler/1"
+  }
+}
