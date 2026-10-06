@@ -8,35 +8,35 @@ Ticket: [P01](https://github.com/edge-os-app/edge-os/issues/6). Prepared 2026-10
 
 ## Summary
 
-1. The browser calls `getAccessToken()` for each API request and sends the result as `Authorization: Bearer <token>`. FastAPI verifies it. No cookie and no dev bypass exists.
-2. FastAPI verifies the Privy access token with PyJWT. It accepts only `ES256`. It requires `exp`, `iat`, `iss`, `aud` and `sub`. It checks `iss == "privy.io"` and `aud ==` the configured Privy app ID.
-3. The verification key is a static PEM from configuration (Privy Dashboard, "Verify with key instead"). The official docs name no JWKS endpoint and no rotation overlap. Rotation is a manual two-key procedure (see [Key retrieval and rotation](#key-retrieval-and-rotation)).
+1. The browser calls `getAccessToken()` for each API request and sends the result as `Authorization: Bearer <token>`. FastAPI verifies it. The design uses no cookie and no dev bypass.
+2. FastAPI verifies the Privy access token with PyJWT. It accepts only `ES256`. It requires `exp`, `iat`, `iss`, `aud` and `sub`. It checks `iss == "privy.io"` and requires `aud` to be the configured Privy app ID as a plain string.
+3. The verification key is a static PEM from configuration (Privy Dashboard, "Verify with key instead"). The official docs pages name no JWKS endpoint and no rotation overlap. Public SDK source suggests a per-app JWKS endpoint, which this profile does not adopt. Rotation is a manual two-key procedure (see [Key retrieval and rotation](#key-retrieval-and-rotation)).
 4. The verified `sub` (a Privy DID) maps to an internal `users.id`. Every owner-scoped query takes that internal ID from the verified principal. A request body never supplies an owner.
 5. Storage is PostgreSQL 18 through SQLAlchemy 2.0 (sync) with psycopg 3. Alembic applies schema changes in a separate step before the API starts.
-6. Tests run against a separate Postgres container, database, ports and test key. Cleanup touches only resources the run created.
+6. Tests run against a separate Postgres container, database, OS-assigned ports and test key. Cleanup touches only resources the run created, found by run label and exact name.
 7. The API never holds a Privy app secret. Login creates a `users` row and nothing else. It creates no wallet, signer, mandate or transaction.
 
 ## Decision table
 
-"Verify" names the check P03 must run. Rows marked *proposed* need the builder's or P02's confirmation, listed in [Remaining bounded questions](#remaining-bounded-questions).
+"Verify" names the check P03 must run. Rows D6 and D15 are *proposed* to P02. Every row still needs the builder's confirmation when this change merges. Open items are in [Remaining bounded questions](#remaining-bounded-questions).
 
 | # | Choice | Reason | Source | Consumer | Verification requirement |
 |---|---|---|---|---|---|
 | D1 | Python 3.14 (`>=3.14,<3.15`), managed with `uv` and a committed `uv.lock` | Local 3.14.4 and `uv` 0.12.16 exist. Each pinned package except `httpx` lists 3.14 in its PyPI classifiers (2026-10-06). `httpx` is pure Python and lists no 3.14 classifier. No interpreter install needed for the first slice | PyPI JSON, accessed 2026-10-06 | P03 | Lock resolves on 3.14. Test suite runs on 3.14. If a wheel is missing, fall back to 3.13 and record why |
 | D2 | FastAPI 0.142.2 with Pydantic 2.13.5, pydantic-settings 2.15.0, Uvicorn 0.54.0 | Accepted stack. Current stable releases | PyPI; Context7 `/websites/fastapi_tiangolo` | P03 | `uv lock` result matches or P03 records the new pins |
-| D3 | Token verification with PyJWT 2.15.1 (`pyjwt[crypto]`), `ES256` only | Privy documents ES256 tokens and third-party libraries. Its Python SDK docs show no verify method. A small PyJWT verifier avoids the Privy app secret | Privy access-tokens page; Context7 `/jpadilla/pyjwt`; Privy Python setup page | P03 | Failure matrix rows A1-A13 and A20 pass with fixture tokens. Real-token check R1 passes (see [Evidence classes](#evidence-classes)) |
-| D4 | Static verification key from configuration, up to two keys (current, previous) | Docs describe the Dashboard key. They publish no JWKS URL and no rotation rule. Two keys avoid a forced logout during rotation | Privy access-tokens and "Optimize your setup" pages | P03, operator | Startup rejects a missing or non-P-256 key. Rotation test R2 |
+| D3 | Token verification with PyJWT 2.15.1 (`pyjwt[crypto]`), `ES256` only | Privy documents ES256 tokens and third-party libraries. Its Python SDK docs show no verify method. A small PyJWT verifier avoids the Privy app secret | Privy access-tokens page; Context7 `/jpadilla/pyjwt`; Privy Python setup page; `@privy-io/node` source | P03 | Failure matrix rows A1-A13, A20, A24 and A25 pass with fixture tokens. Real-token check R1 passes when the builder authorizes a Privy app (Q1). See [Evidence classes](#evidence-classes) |
+| D4 | Static verification key from configuration, up to two keys (current, previous) | Docs describe the Dashboard key. The docs pages publish no JWKS URL and no rotation rule. SDK source suggests a per-app JWKS endpoint, but it is undocumented and not adopted. Two keys avoid a forced logout during rotation | Privy access-tokens and "Optimize your setup" pages; `@privy-io/node` source | P03, operator | Startup rejects a missing or non-P-256 key. Row A20. R2 when the builder authorizes a Privy app (Q1) |
 | D5 | Token delivery: `Authorization: Bearer` header, browser to FastAPI directly, explicit CORS allow-list | Privy's default local-storage mode uses this header. Cookie mode needs a custom domain and adds CSRF handling. A proxy hop adds a failure point for streams | Privy access-tokens page; Next.js docs v16.2.9 | P03, P43 | CORS test: allowed origin passes, other origin gets no CORS headers, no `*` |
-| D6 | Ownership: internal `users.id` UUID, created on first verified request from the Privy DID in `sub` | Verified identity must derive ownership. An internal ID keeps P02 records independent of the provider | ADR 0008; spec "Records and durable identity" | P02, P03 | Cross-owner cases A15-A19. *Interface proposed to P02* |
+| D6 | *Proposed.* Ownership: internal `users.id` UUID, created on first verified request from the Privy DID in `sub` | Verified identity must derive ownership. An internal ID keeps P02 records independent of the provider | ADR 0008; spec "Records and durable identity" | P02, P03 | Cross-owner cases A15-A19 and A22-A23. T3 |
 | D7 | SQLAlchemy 2.0.54 (sync ORM) + psycopg 3.3.6 (`postgresql+psycopg://`) | Smallest typed access layer that Alembic can check. Sync endpoints run in FastAPI's threadpool. psycopg 3 also supports async later without a driver change | Context7 `/websites/sqlalchemy_en_20`; PyPI | P02, P03 | Request-to-record test T1 |
 | D8 | Alembic 1.20.0, run explicitly before the API starts. No auto-migrate at startup | A separate step keeps schema change visible and repeatable. The API refuses to start on a revision mismatch | Context7 `/websites/alembic_sqlalchemy` | P03, deploy | M1-M4 below |
 | D9 | PostgreSQL 18.6 (`postgres:18.6-trixie`, pin digest at first pull) | Current stable major. PostgreSQL 19 is beta on Docker Hub (`19beta4`) | Docker Hub tags API, 2026-10-06 | P03, deploy | `SHOW server_version` recorded in evidence |
 | D10 | Next.js 16.3.8, React 19.3.0, Node 24.x, `npm` with `package-lock.json` | Local Node 24.13.1 and npm 11.8.0 exist. Next requires Node `>=20.9.0`. npm needs no extra tool | npm registry, 2026-10-06; Context7 `/vercel/next.js` v16.2.9 | P03, P43 | `npm ci` and `next build` pass in P03 |
-| D11 | `@privy-io/react-auth` 3.47.0 with `embeddedWallets.ethereum.createOnLogin: "off"` set explicitly | Login must create no wallet. The docs list `off` as the default. Setting it explicitly makes the intent testable | Privy "Automatic wallet creation" page | P03, P43 | Browser check B2: new login leaves the user with no embedded wallet |
+| D11 | `@privy-io/react-auth` 3.47.0 with `embeddedWallets.ethereum.createOnLogin: "off"` set explicitly | Login must create no wallet. The docs list `off` as the default. Setting it explicitly makes the intent testable | Privy "Automatic wallet creation" page | P03, P43 | T12 checks the config value only. R3 observes real Privy behavior when the builder authorizes a Privy app (Q1) |
 | D12 | Styling: keep exported CSS tokens as plain CSS variables. Add Tailwind (4.3.3 on 2026-10-06) only if the P43 export needs it | ADR 0008 and the spec leave this to the actual export. P01 has no export to judge | ADR 0008; spec "Accepted application stack" | P03, P43 | P03 records the choice with the export it translated |
 | D13 | No Privy app secret in the API. No dev-auth bypass flag | Token verification needs the app ID and a public key only. The secret grants server API power that login must not have | Privy docs; reference package pattern 3 | P03 | Config test: `PRIVY_APP_SECRET` is not a setting. Source check: no auth-disabling flag |
-| D14 | Test isolation: dedicated Postgres container, per-run database, separate ports, test-only signing key | Cleanup must touch only test state. Fixture keys must never be trusted by a real process | FastAPI testing-dependencies docs; reference cases | P03 | T2-T6 below |
-| D15 | Error taxonomy: 401 `auth_required` / `auth_invalid` / `auth_expired`; 503 `auth_unavailable`; 404 for another owner's record | Lets the client refresh once on expiry. Hides record existence. Separates operator failure from bad input | Reference input; Privy "tokens" page | P02 (error shape), P03 | Failure matrix |
+| D14 | Test isolation: dedicated Postgres container, per-run database, per-run volume, OS-assigned ports, test-only signing key | Cleanup must touch only test state. Fixture keys must never be trusted by a real process | FastAPI testing-dependencies docs; reference cases | P03 | T2, T3, T6, T11 |
+| D15 | *Proposed.* Error taxonomy: 401 `auth_required` / `auth_invalid` / `auth_expired`; 503 `auth_unavailable` (verifier cannot run) and `service_unavailable` (database); 422 `validation_error`; 404 for another owner's record | Lets the client refresh once on expiry. Hides record existence. Separates operator failure from bad input | Reference input; Privy "tokens" page | P02 (error shape), P03 | Failure matrix, T4 |
 | D16 | Verification skill and its feature map are P03's deliverable | Issue #6 and the reference map assign it to P03 | Issue #6; reference map | P03 | Not part of P01 |
 
 ## Pinned versions
@@ -92,11 +92,11 @@ Web variables: `NEXT_PUBLIC_PRIVY_APP_ID` and `NEXT_PUBLIC_API_BASE_URL`. Next.j
 
 | Service | Dev | Test |
 |---|---|---|
-| Web | 3000 | 13000 |
-| API | 8000 | 18000 |
-| Postgres (loopback only) | 15432 | 25432 |
+| Web | 3000 | Free loopback port, chosen by the harness |
+| API | 8000 | Free loopback port, chosen by the harness |
+| Postgres (loopback only) | 15432 | Docker-assigned loopback port (`docker port` reports it) |
 
-A busy port stops the run. A run never kills a process it did not start and never reuses a database it did not create.
+Test runs use no fixed port, so parallel lanes cannot collide. A busy dev port stops the run. A run never kills a process it did not start and never reuses a database it did not create.
 
 ## Startup, health and build identity
 
@@ -106,7 +106,7 @@ A busy port stops the run. A run never kills a process it did not start and neve
 
 | Route | Meaning | Body |
 |---|---|---|
-| `GET /healthz` | Process is up. No database call | `status`, `env`, `build_sha`, `python`, `started_at` |
+| `GET /healthz` | Process is up. No database call | `status`, `build_sha`, `started_at` |
 | `GET /readyz` | Database reachable, revision equals head, key loaded | `status`, `schema_revision` |
 
 `/readyz` returns 503 when any check fails. These routes expose no key, URL, app ID or user data.
@@ -125,7 +125,7 @@ docker run -d --name edge-os-dev-pg --label edge-os.dev=1 \
 cd apps/api && uv sync --frozen
 uv run alembic upgrade head                       # migration step
 uv run uvicorn edge_os_api.main:app --host 127.0.0.1 --port 8000
-cd ../web && npm ci && npm run dev -- --port 3000
+cd ../web && npm ci && npm run dev -- --hostname 127.0.0.1 --port 3000
 ```
 
 The volume path above follows the official image's PostgreSQL 18 layout. P03 confirms it against the image documentation before use.
@@ -136,7 +136,7 @@ The volume path above follows the official image's PostgreSQL 18 layout. P03 con
 |---|---|---|
 | M1 | `alembic upgrade head` on an empty test database | Exit 0. Revision equals script head |
 | M2 | `alembic check` after M1 | "No new upgrade operations detected" (models and migrations agree) |
-| M3 | Start the API against a database one revision behind | Process exits non-zero with a revision-mismatch message |
+| M3 | Start the API against an empty (unmigrated) database | Process exits non-zero with a revision-mismatch message |
 | M4 | Once a second revision exists: build the database at revision N-1, insert rows, upgrade to head | Rows survive. Constraints hold |
 
 Policy: forward-only migrations for the MVP. No downgrade is promised. A new migration ships with its model change in one PR.
@@ -171,21 +171,39 @@ PyJWT `decode` with these settings:
 | `leeway` | 10 seconds, a code constant |
 | Signature | Verified before any claim is read |
 
-After decode, the verifier also requires `sub` to be a string starting `did:privy:` and at most 255 characters. It rejects a token longer than 4096 characters before parsing. It does not require `sid`.
+After decode, the verifier also requires `aud` to be a string equal to the app ID (PyJWT alone accepts a list that contains it) and `sub` to be a string starting `did:privy:` and at most 255 characters. The `did:privy:` prefix and length cap come from the DID examples in the docs, not from a stated rule. It rejects a token longer than 4096 characters before parsing. It does not require `sid` or check the `typ` header. The Privy Node SDK requires a string `sid` and `typ: JWT` (see [Key retrieval and rotation](#key-retrieval-and-rotation)). This profile has no use for `sid` and leaves it optional.
 
 Privy's docs list these claims: `sid`, `sub` (Privy DID), `iss` (`privy.io`), `aud` (app ID), `iat`, `exp` (generally 1 hour after issue). The default lifetime is configurable in the Dashboard.
 
-Exception mapping: `ExpiredSignatureError` gives `auth_expired`. Every other `jwt.InvalidTokenError` gives `auth_invalid`. Because PyJWT checks the signature first, an expired token with a bad signature gives `auth_invalid`. Any other exception gives `auth_unavailable` and a log line. The log line never contains the token.
+Exception mapping. The `try` block wraps only the `jwt.decode` call and the post-decode checks. Database errors never map to an auth code.
+
+- `ExpiredSignatureError` gives `auth_expired`.
+- `jwt.InvalidKeyError` gives `auth_unavailable`. It describes the key, not the token. Startup loading makes it unreachable in normal operation.
+- Every other exception from decode gives `auth_invalid`. This includes `InvalidTokenError` subclasses and unexpected types that malformed claims can raise (for example `TypeError` for a null or list `exp`). A non-`InvalidTokenError` exception also logs `auth.verifier_error` with the exception class name only.
+- Before decode, a verifier or key list missing from application state gives `auth_unavailable`.
+- The log never contains the token.
+
+PyJWT checks the signature before claims, so an expired token with a bad signature gives `auth_invalid`. A validly signed token with several claim defects gets the code of PyJWT's first failing check, which is `auth_expired` when `exp` is among them. Tests assert single-defect rows only. An `iat` more than 10 seconds in the future gives `auth_invalid`, so the API host clock must stay within 10 seconds of Privy's. P03 confirms each PyJWT behavior above by test; P01 ran none.
 
 ### Key retrieval and rotation
 
 What the official docs say, and what they do not:
 
 - Documented: the key comes from the Dashboard (Configuration > App settings, "Verify with key instead"). The Node SDK otherwise fetches it from Privy's API and caches it. After a rotation, a copied key must be updated by hand.
-- Not documented: a JWKS URL for Privy-issued tokens, a `kid` header, whether the old key stays valid after rotation. The only JWKS pages describe a custom auth provider's keys that Privy fetches.
+- Not documented on the pages P01 read: a JWKS URL for Privy-issued tokens, a `kid` header, whether the old key stays valid after rotation. The JWKS pages describe a custom auth provider's keys that Privy fetches.
 - Inconsistent in the docs: the key is called "Ed25519", while the token algorithm is ES256 and the JS example calls `importSPKI(key, "ES256")`. Ed25519 and ES256 (ECDSA P-256) are different. P03 must load the real Dashboard key and confirm its type. The startup check rejects any key that is not EC P-256.
 
-Chosen mechanism: static key(s) from configuration. No runtime key fetch, so key retrieval cannot fail per request.
+Package-source evidence (not documentation pages). The official `@privy-io/node` SDK source, read as search excerpts on unpkg (0.28.0) and jsDelivr (0.34.0) on 2026-10-06, shows:
+
+- It fixes `ES256` and issuer `privy.io`, checks `typ: 'JWT'` and sets `audience` to the app ID.
+- It imports a supplied key with `importSPKI(key, 'ES256')`. That implies an SPKI EC P-256 key, so "Ed25519" in the docs is probably an error.
+- It requires a string `sid` and `sub` and numeric `iat` and `exp`.
+- Without a supplied key it builds a JWKS URL `${apiUrl}/v1/apps/${appId}/jwks.json` with a 60-minute cache and a 10-minute cooldown. The excerpts do not show the default `apiUrl`.
+- Its type notes say a verification key or a JWKS endpoint is available in the Dashboard.
+
+P01 read excerpts, not the full package, and an unpkg `@latest` lookup returned version 0.16.0, which conflicts with the 0.28.0 and 0.34.0 excerpts. Treat this as a lead for Q2 and Q3, not as a documented contract.
+
+Chosen mechanism: static key(s) from configuration. No runtime key fetch, so key retrieval cannot fail per request. A JWKS fetch is a possible later change (see below).
 
 Rotation procedure (UNEXECUTED, operator):
 
@@ -194,9 +212,9 @@ Rotation procedure (UNEXECUTED, operator):
 3. The verifier tries the current key, then the previous key. Only a signature failure moves to the next key.
 4. After the configured access-token lifetime has passed (1 hour by default), remove the previous key. Restart.
 
-Risk: if the Dashboard invalidates the old key at once, tokens signed by it fail until clients refresh. If an operator forgets step 2, every login fails with `auth_invalid`. A log counter `auth.signature_failure` exists so an operator can see a spike.
+Risk: if the Dashboard invalidates the old key at once, tokens signed by it fail until clients refresh. If an operator forgets step 2, every login fails with `auth_invalid`. P03 adds two log counters: `auth.signature_failure`, so an operator can see a spike, and `auth.previous_key_accepted`, so an operator can see when removing the previous key is safe. The previous key has no automatic expiry.
 
-If Privy later documents a JWKS endpoint, replace the static key with a cached JWKS fetch in a new decision. Do not guess a URL.
+If P03 confirms the JWKS endpoint against a real app (Q3), a cached JWKS fetch can replace the static key in a new decision. Do not use an unconfirmed URL.
 
 ### Logout limit
 
@@ -223,37 +241,43 @@ Rules:
 
 1. A FastAPI dependency `require_principal` verifies the token, then runs `INSERT ... ON CONFLICT (privy_did) DO NOTHING` and selects the row. Two first requests from one user create one row.
 2. Repository functions take a `Principal`. They add `WHERE owner_id = :principal.user_id` to every read, update and delete. They set `owner_id` from the principal on every insert.
-3. Request models forbid extra fields (`extra="forbid"`). A body that carries `owner_id` returns 422 and changes nothing. No code reads an owner from a body, query string or header.
+3. Every request model inherits one base model with `extra="forbid"`. This covers nested models and partial-update bodies. A body that carries `owner_id` at any depth returns 422 and changes nothing. No code reads an owner from a body, query string or header.
 4. A record owned by someone else returns 404, the same response as a missing record. A denied mutation changes no row.
-5. Every route except `/healthz` and `/readyz` carries `require_principal` at router level. Default deny.
+5. Every route except `/healthz` and `/readyz` carries `require_principal`. Default deny. Router-level dependencies do not cover `/docs`, `/openapi.json`, `/redoc`, mounted sub-apps or WebSocket routes. Outside `EDGE_OS_ENV=local`, the app disables the docs routes. T4 walks mounts and WebSocket routes too.
 6. A connected wallet address is not an identity. Only the verified `sub` identifies a user.
+7. References. A record that points to another owned record stores `owner_id` and the parent ID. A composite foreign key `(owner_id, parent_id)` references the parent's `(owner_id, id)`. The repository also looks the parent up under the principal's scope before the insert and returns 404 when it is missing. Another owner's parent ID and a random ID give the same 404.
+8. Uniqueness. Every unique constraint on a value a user can choose or supply (natural key, idempotency key, canonical hash) includes `owner_id`. Two owners can hold the same value as separate rows. A global constraint would return 409 to a second owner and reveal that the first owner's value exists. If P02 needs a shared immutable record, P02 defines it as an explicit exception (Q8).
+9. Background work. A worker takes `owner_id` from the persisted job row that the API wrote under a verified principal. It never takes an owner from a message body, a token or a request field. The worker's design is a later ticket. This rule fixes the boundary.
 
 Not chosen: PostgreSQL row-level security. It would add a second layer, but also session-variable plumbing. Add it only if the builder wants defense in depth (bounded question Q6).
 
 ## Test boundary
 
-The test boundary matches the spec's accepted seam: an authenticated application request, then persisted records, then retrieval. A browser check confirms the UI reads and acts on those same records. Pure calculation and compiler tests stay separate and are not authentication evidence.
+The test boundary is an authenticated application request, then persisted records, then retrieval. Issue #6 records that the builder accepted this boundary. The spec's Testing Decisions section still calls the seam unconfirmed. That spec text is stale, so P01 follows the issue. A browser check confirms the UI reads and acts on those same records. Pure calculation and compiler tests stay separate and are not authentication evidence.
 
 ### Isolated instance (proposed, UNEXECUTED)
 
 | Item | Rule |
 |---|---|
-| Database server | Container `edge-os-test-pg-<run_id>`, image `postgres:18.6-trixie`, labels `edge-os.test=1` and `edge-os.test.run=<run_id>`, bound to `127.0.0.1:25432` |
-| Database | One database per run, named `edge_os_test_<run_id>`. Settings refuse any other name or a non-loopback host in `test` |
-| API | Uvicorn on `127.0.0.1:18000`, started by the run, PID recorded |
-| Web (browser checks only) | `127.0.0.1:13000` |
-| Config | `EDGE_OS_ENV=test`. Test app ID `edge-os-test-app`. Test signing key generated in memory per session. Its public half is the only key the test API trusts |
-| Cleanup | Stop only the recorded PID. Remove only the container and volume that carry this run's label. Drop only this run's database. Keep the evidence directory |
+| Database server | Container `edge-os-test-pg-<run_id>`, image `postgres:18.6-trixie`, labels `edge-os.test=1` and `edge-os.test.run=<run_id>`, published as `127.0.0.1::5432` (Docker picks the host port) |
+| Data volume | Explicit named volume `edge-os-test-pg-<run_id>` created with the same labels and mounted at `/var/lib/postgresql`. The run never relies on the image's anonymous volume |
+| Database | One database per run, named `edge_os_test_<run_id>` |
+| API | Uvicorn on `127.0.0.1` at a free port chosen by the harness. The harness starts it as a child process and keeps the process handle |
+| Web (browser checks only) | Free loopback port chosen by the harness |
+| Config | The harness builds the child's environment from scratch. It ignores ambient `EDGE_OS_*` variables and any `.env` file and builds its own database URL. `EDGE_OS_ENV=test`. Test app ID `edge-os-test-app`. Test signing key generated in memory per session. Its public half is the only key the test API trusts |
+| Guard | Before any DDL or `DROP`, the harness runs `SELECT current_database()` and asserts it equals `edge_os_test_<run_id>`. It asserts the container's labels with `docker inspect`. Settings also refuse a non-loopback host or another database name in `test` |
+| Cleanup | Stop only the child through its process handle. There is no PID file and no signal to a PID read from disk. Run `docker rm -f -v` on the container, then `docker volume rm` on the volume, each found by this run's label and exact name. Drop only this run's database. Keep the evidence directory |
 | Cleanup on failure | Same steps in a `finally` or fixture teardown. A failed run still cleans its own state and still keeps evidence |
+| Orphans | A crashed run can leave labeled resources. An orphan report lists resources with `edge-os.test=1` whose run ID differs from the current run. Removing one needs explicit confirmation naming its run ID. No label-wide force removal |
 
-Port conflict, an unexpected existing database or a label mismatch stops the run. Cleanup never matches on name patterns alone.
+Any label mismatch, an unexpected existing database or a failed guard stops the run. Cleanup never matches on name patterns alone.
 
 ### Deterministic auth fixtures
 
 - The fixture signs tokens with a per-session test P-256 key. It sets explicit `iss`, `aud`, `sub`, `iat` and `exp` relative to the current time. It runs through the production verifier. It does not use a fake verifier.
 - Fixed identities: owner A `did:privy:test-owner-a`, owner B `did:privy:test-owner-b`.
 - No private key is committed. The tests never read a real token or a real Dashboard key.
-- The settings loader rejects the app ID `edge-os-test-app` when `EDGE_OS_ENV=production`. A test checks this. A process trusts only the key in its configuration, so a test key cannot authenticate against a real deployment.
+- The settings loader rejects the app ID `edge-os-test-app` when `EDGE_OS_ENV=production`. T10 checks this. A process trusts only the key in its configuration, so a test key cannot authenticate against a real deployment.
 
 ### Evidence classes
 
@@ -261,35 +285,42 @@ Port conflict, an unexpected existing database or a label mismatch stops the run
 |---|---|---|---|
 | **Mocked auth** (`app.dependency_overrides` replaces `require_principal`) | Route wiring and owner scoping given a principal | Any signature, claim or Privy behavior | Test code only. A source check fails the build if `dependency_overrides` appears under `src/` |
 | **Fixture-signed token** (real verifier, test key) | Our verifier code rejects and accepts the right inputs | That Privy's real tokens match our assumptions | Tests only |
+| **Mocked web auth** (browser test injects a token provider that returns a fixture-signed token) | That the UI and API read the same records through the test API | Any Privy login, `getAccessToken()` or wallet behavior | Test builds only. The production entry point wires Privy's `getAccessToken` and must not import the fixture provider (T12) |
 | **Real provider** (token from a real Privy app, verified with its Dashboard key) | Real claims, algorithm, key type and app binding | Production hosting, rotation behavior | Only with builder authority for a Privy app. Not available to P01 |
 
 Real-provider checks, all needing builder authority and all UNEXECUTED:
 
-- **R1.** Log in through the browser on a builder-authorized Privy development app. Verify the resulting access token with the configured Dashboard key through the same verifier. Record only metadata: `alg`, `iss`, `aud` equals app ID, `sub` hashed, `exp - iat`, key type and curve. Never record the token.
+- **R1.** Run the web and API on a non-test instance (`EDGE_OS_ENV=local`, the real app ID and Dashboard key). Log in through the browser on a builder-authorized Privy development app and make an API call that returns the owner's records. Verify the resulting access token with the configured Dashboard key through the same verifier. Record only metadata: `alg`, `iss`, `aud` equals app ID, `sub` hashed, `exp - iat`, key type and curve. Never record the token.
 - **R2.** If the Dashboard offers rotation on that app: rotate, run the two-key procedure, confirm old and new tokens behave as designed. Record what Privy actually did.
-- **R3.** Confirm a first login leaves the Privy user with no embedded wallet (also covers B2).
+- **R3.** Confirm a first login leaves the Privy user with no embedded wallet. This is the only check that observes Privy's wallet behavior.
 
 Until R1 passes, the claim is "verifier correct against fixtures." It is not "Privy integration works."
 
 ### What P03 must execute
 
-| ID | Check (all UNEXECUTED) |
+This list is the minimum. Every check is UNEXECUTED.
+
+| ID | Check |
 |---|---|
 | T1 | Request-to-record: owner A creates a record through the API. Read the row directly in Postgres. Retrieve through the API. Compare |
-| T2 | Restart: stop the test API process, start it again on the same test database, read A's record as A, confirm B is denied |
-| T3 | Concurrency: two first requests for a new DID create exactly one `users` row |
-| T4 | Route walk: every non-allowlisted route has `require_principal`. No `dependency_overrides` under `src/`. No setting or code path disables auth |
+| T2 | Restart: stop the test API child, start it again on the same test database, read A's record as A, confirm B is denied |
+| T3 | Concurrency: release N concurrent first requests (N at least 8) for one new DID behind a barrier. Assert every response is 2xx, every response returns the same `user_id`, and exactly one `users` row exists. Sequential calls do not count. A plain insert without conflict handling must fail this check |
+| T4 | Route walk, including mounts and WebSocket routes: every non-allowlisted route has `require_principal`. No `dependency_overrides` under `src/`. No setting or code path disables auth. Docs routes are absent outside `local` |
 | T5 | Log capture: run the full failure matrix. The captured logs contain no token substring |
-| T6 | Cleanup: after the run, no labeled container, volume or `edge_os_test_*` database from this run remains. An unrelated container, database and process is untouched |
+| T6 | Cleanup: list containers, volumes and databases before and after. Nothing carrying this run's label or name remains. Every unrelated resource is unchanged. Repeat after a forced failure |
 | T7 | Settings: each missing or invalid variable stops startup with a field name and no value |
 | T8 | Config: the Privy app secret is not a recognized setting |
-| B1 | Browser: login, `getAccessToken()`, API call returns the owner's records |
-| B2 | Browser: new login creates no wallet and the UI offers no trading action from login alone |
+| T9 | CORS: an allowed origin gets CORS headers, another origin gets none, `*` is rejected |
+| T10 | Production settings reject `edge-os-test-app` and `http://` CORS origins |
+| T11 | Health: `/healthz` returns no configuration values. `/readyz` returns 200 when ready and 503 for an unmigrated database and for a stopped database |
+| T12 | Web: the `PrivyProvider` config object has `createOnLogin: "off"`, and the production entry point does not import the fixture token provider. This checks configuration only and is not Privy evidence |
+| T13 | Build: `uv sync --frozen` and the Python test suite on 3.14. `npm ci` and `next build`. Record the resolved versions |
+| B1 | Browser, mocked web auth: with the injected fixture provider, an API call through the UI returns the owner's records, and they match T1's rows |
 | R1-R3 | Real-provider checks above, when the builder authorizes a Privy app |
 
 ## Failure matrix
 
-Rows A1-A13 and A20 use fixture-signed tokens through the real verifier (class: fixture). Rows A14-A19 and A21 need Postgres. Every rejection happens before any owner-scoped read or write.
+Rows A1-A13, A20, A24 and A25 use fixture-signed tokens through the real verifier (class: fixture). Rows A14-A19 and A21-A23 need Postgres. Every rejection happens before any owner-scoped read or write.
 
 | ID | Input | Response | Notes |
 |---|---|---|---|
@@ -302,18 +333,22 @@ Rows A1-A13 and A20 use fixture-signed tokens through the real verifier (class: 
 | A7 | Valid signature, `exp` in the past (beyond 10 s leeway) | 401 `auth_expired` | Client refreshes once |
 | A8 | Valid signature, wrong `aud` (another app) | 401 `auth_invalid` | |
 | A9 | Valid signature, wrong `iss` | 401 `auth_invalid` | |
-| A10 | Valid signature, `sub`, `exp`, `iat`, `iss` or `aud` missing | 401 `auth_invalid` | |
+| A10 | Valid signature, `sub`, `exp`, `iat`, `iss` or `aud` missing, or `exp`/`iat` with a wrong type (null, list, string) | 401 `auth_invalid` | Never a 500 |
 | A11 | Valid signature, `sub` empty, not a string or without `did:privy:` | 401 `auth_invalid` | A body-supplied owner is never a fallback |
 | A12 | Expired token with a bad signature | 401 `auth_invalid` | Does not reveal expiry to an unsigned caller |
-| A13 | Verifier cannot run: no key loaded at request time, or an unexpected internal exception | 503 `auth_unavailable` | No owner access. Reachable only by damaged app state, so the test injects it. Startup with no valid key never reaches serving |
+| A13 | Verifier cannot run: verifier or key list missing from application state before decode, or `InvalidKeyError` from decode | 503 `auth_unavailable` | No owner access. Reachable only by damaged app state, so the test injects it. Startup with no valid key never reaches serving. Malformed token input never maps here |
 | A14 | Database down during principal lookup | 503 `service_unavailable` | No partial write |
-| A15 | Owner A token, body carries `owner_id` of B | 422 | Nothing changes. A's own scope applies to any accepted call |
+| A15 | Owner A token, body carries `owner_id` of B, at top level or nested | 422 `validation_error` | Nothing changes. P03 replaces FastAPI's default 422 body with the error envelope |
 | A16 | Owner A reads B's record by ID | 404 | Same body as a missing record |
 | A17 | Owner A updates or deletes B's record | 404 | B's row unchanged (check in Postgres) |
 | A18 | Owner A lists records | A's records only | B's absent. Counts match direct SQL |
 | A19 | Owner A requests a stream, resume or cancel on B's job (when such routes exist) | 404 | Applies from the first ticket that adds them |
 | A20 | Rotation: token signed by the previous key | Accepted while the previous key is configured. 401 after removal | Fixture version of R2 |
-| A21 | Login | No wallet, signer, mandate or transaction record exists | Covers B2 on the API side |
+| A21 | First request from a new DID | Exactly one row is added, in `users` only | Once wallet, signer or mandate tables exist, their row counts stay unchanged. The Privy-side wallet check is R3 |
+| A22 | Owner A inserts a child record whose parent ID belongs to B | 404, same body as a random parent ID | No row inserted. Applies from the first ticket with a parent reference |
+| A23 | Owners A and B submit the same natural, idempotency or canonical key | Both succeed as separate rows | No cross-owner 409. Applies from the first ticket with such a key |
+| A24 | Valid signature, `iat` more than 10 s in the future | 401 `auth_invalid` | Documents the clock-skew assumption |
+| A25 | Valid signature, `aud` is a list that contains the app ID | 401 `auth_invalid` | Requires a plain string |
 
 **Error body shape.** P03 uses `{"error": {"code": "<id>", "message": "<text>"}}` unless P02 supplies a frozen shape. The status and code choices above are this profile's. P02 confirms the body shape.
 
@@ -351,15 +386,16 @@ None of these reopens a settled product decision.
 | ID | Question | Owner | Blocks |
 |---|---|---|---|
 | Q1 | Does the builder authorize a Privy development app and its Dashboard verification key for R1-R3 and the manual browser run? | Builder | Any claim that Privy integration works |
-| Q2 | Is the Dashboard key Ed25519 or EC P-256? The docs say both. P03's startup check enforces P-256 | P03 with Q1 | D3, D4 |
-| Q3 | Does Privy publish a JWKS URL or a `kid` for access tokens, and does the old key stay valid after rotation? Official docs reviewed on 2026-10-06 say nothing | P03 with Q1 | D4 refinement |
-| Q4 | Does a Dashboard setting, besides the SDK flag, also create wallets at login? The reviewed page covers the SDK flag only | P03 with Q1 | D11, B2 |
+| Q2 | Is the Dashboard key Ed25519 or EC P-256? The docs say both. SDK source imports it as ES256 (P-256). P03's startup check enforces P-256 and R1 confirms it | P03 with Q1 | D3, D4 |
+| Q3 | Is the per-app JWKS endpoint seen in SDK source real and supported for a Python verifier, does the token carry a `kid`, and does the old key stay valid after rotation? The docs pages P01 read say nothing | P03 with Q1 | D4 refinement |
+| Q4 | Does a Dashboard setting, besides the SDK flag, also create wallets at login? The reviewed page covers the SDK flag only | P03 with Q1 | D11, R3 |
 | Q5 | Which Privy login methods does the product offer? A connected wallet is not an identity (Ownership rule 6) | Builder, P43 | P03 login UI |
 | Q6 | Should PostgreSQL row-level security back the application owner filter? | Builder | Defense in depth, not P03 start |
 | Q7 | Access-token lifetime, now 1 hour by default. A shorter value narrows the post-logout window | Builder | None |
-| Q8 | `owner_id` shape and error body shape. Proposed: internal UUID `users.id` and the body above | P02 | P02 contracts |
+| Q8 | `owner_id` shape, error body shape and any shared immutable record that needs a cross-owner unique key. Proposed: internal UUID `users.id`, the body above and owner-scoped uniqueness | P02 | P02 contracts |
 | Q9 | Production install of `psycopg`: binary wheel or source build | Hosting decision | Deploy |
 | Q10 | Hosting for API, web, database and the persistent worker | Builder | Deploy only |
+| Q11 | TypeScript pin. The registry shows 7.0.2. P01 did not check it against Next 16.3.8. P03 pins the version that `next build` accepts and records it | P03 | P03 web build |
 
 ## Claims this profile cannot verify
 
@@ -368,6 +404,11 @@ None of these reopens a settled product decision.
 - That all pinned versions install and interoperate, including `httpx` on Python 3.14. Only P03's lock and tests show this. P01 read package metadata only.
 - That Next.js 16.3.8 and `@privy-io/react-auth` 3.47.0 run together. P01 checked peer ranges, not behavior.
 - That `postgres:18.6-trixie` accepts the volume path shown. P03 checks the image documentation.
+- That real tokens carry `aud` as a plain string, a `sub` that starts `did:privy:` and fits 255 characters, and an `iat` consistent with the 10-second leeway. These come from doc examples and SDK source excerpts.
+- That Privy never reuses or merges a DID after a user is deleted.
+- That `createOnLogin: "off"` is the only wallet-creation path.
+- That the API host clock stays within 10 seconds of Privy's.
+- That the SDK source excerpts match the current SDK. P01 read excerpts of two versions and did not fetch the package.
 - Any wallet isolation. This profile creates no wallet and does not qualify wallet enforcement.
 
 ## Sources
@@ -379,6 +420,8 @@ Accessed 2026-10-06. Context7 library IDs are in parentheses.
 - Privy, [Optimize your setup](https://docs.privy.io/recipes/dashboard/optimizing): static `jwtVerificationKey`, manual update after rotation.
 - Privy, [Automatic wallet creation](https://docs.privy.io/basics/react/advanced/automatic-wallet-creation): `createOnLogin` values, default `off`.
 - Privy, [Python setup](https://docs.privy.io/basics/python/setup) and [llms.txt index](https://docs.privy.io/llms.txt): Python SDK pages. No token-verification method found.
+- Privy Node SDK source, as search excerpts: [unpkg `@privy-io/node@0.28.0` `src/lib/auth.ts`](https://app.unpkg.com/@privy-io/node@0.28.0/files/src/lib/auth.ts) and [jsDelivr `@privy-io/node@0.34.0` `src/lib/auth.ts`](https://cdn.jsdelivr.net/npm/@privy-io/node@0.34.0/src/lib/auth.ts). Package-source evidence, not documentation.
+- Issue [#6](https://github.com/edge-os-app/edge-os/issues/6): builder acceptance of the request-to-record test boundary.
 - PyJWT (`/jpadilla/pyjwt`, 2.15.1): ES256 decode, `algorithms`, `require`, `leeway`, exception classes.
 - FastAPI (`/websites/fastapi_tiangolo`): `HTTPBearer`, dependency overrides, lifespan, `TestClient`.
 - SQLAlchemy 2.0 (`/websites/sqlalchemy_en_20`): `postgresql+psycopg://` URL, sessions.
