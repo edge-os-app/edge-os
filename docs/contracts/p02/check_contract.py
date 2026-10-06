@@ -123,6 +123,8 @@ def expression_type(node: object, quote_unit: str, depth: int = 1,
             if set(node) != {"op", "value", "buckets"}:
                 raise Invalid(f"{op} requires value and buckets")
             value_type = expression_type(node["value"], quote_unit, depth + 1, budget)
+            if value_type == "BOOLEAN":
+                raise Invalid(f"{op} requires a numeric operand")
             lookback = node["buckets"]
         if isinstance(lookback, bool) or not isinstance(lookback, int):
             raise Invalid("lookback must be an integer bucket count")
@@ -154,6 +156,21 @@ def expression_type(node: object, quote_unit: str, depth: int = 1,
     raise Invalid(f"operator has no contract: {op}")
 
 
+def required_history(node: object) -> int:
+    """Maximum scheduled offset from the decision bucket to an input bucket."""
+    op = node["op"]
+    if op in {"price", "quote_volume", "constant"}:
+        return 0
+    if op == "price_return":
+        return node["lookback_buckets"]
+    if op == "lag":
+        return required_history(node["value"]) + node["buckets"]
+    if op in {"sum", "mean"}:
+        return required_history(node["value"]) + node["buckets"] - 1
+    children = node.get("args", []) if op in {"and", "or", "gt", "gte", "lt", "lte"} else [node["value"]]
+    return max((required_history(child) for child in children), default=0)
+
+
 def used_operators(node: object) -> set[str]:
     if not isinstance(node, dict):
         return set()
@@ -170,7 +187,7 @@ def used_operators(node: object) -> set[str]:
 def validate_strategy(strategy: object) -> None:
     if not isinstance(strategy, dict):
         raise Invalid("strategy must be an object")
-    required = set(CONTRACT["record_fields"]["StrategySpec"])
+    required = set(CONTRACT["record_schemas"]["StrategySpec"]["required"])
     if set(strategy) != required:
         missing, extra = required - set(strategy), set(strategy) - required
         raise Invalid(f"strategy keys differ; missing={sorted(missing)}, extra={sorted(extra)}")
@@ -182,7 +199,7 @@ def validate_strategy(strategy: object) -> None:
     if not isinstance(market, dict) or set(market) != {"network", "research_binding", "execution_route", "quote_unit"}:
         raise Invalid("market requires separate research and execution identities")
     research = market["research_binding"]
-    research_keys = set(CONTRACT["record_fields"]["ResearchBinding"])
+    research_keys = set(CONTRACT["record_schemas"]["ResearchBinding"]["required"])
     if not isinstance(research, dict) or set(research) != research_keys or market["network"] != "MONAD":
         raise Invalid("research binding is incomplete")
     for asset in (research["pool_address"], research["base_asset"], research["quote_asset"]):
@@ -254,9 +271,15 @@ def validate_strategy(strategy: object) -> None:
         raise Invalid("action scope is outside the minimum P02 subset")
     if strategy["execution_permission"] != {"state": "NOT_GRANTED", "mandate_ref": None}:
         raise Invalid("a strategy record cannot grant execution permission")
+    expressions = [strategy["entry"], strategy["exit"]]
+    if not (isinstance(invalidation, dict) and invalidation.get("state") == "NOT_REQUESTED"):
+        expressions.append(invalidation)
+    required = max(required_history(expression) for expression in expressions)
     warmup = strategy["warmup_buckets"]
-    if isinstance(warmup, bool) or not isinstance(warmup, int) or not 1 <= warmup <= CONTRACT["limits"]["lookback_buckets"]:
+    if isinstance(warmup, bool) or not isinstance(warmup, int) or not 0 <= warmup <= CONTRACT["limits"]["lookback_buckets"]:
         raise Invalid("warmup_buckets is outside the supported range")
+    if warmup != required:
+        raise Invalid(f"warmup_buckets must equal derived history requirement {required}")
     manifest = strategy["semantic_manifest"]
     if manifest != CONTRACT["identity"]["manifest_components"]:
         raise Invalid("semantic manifest is incomplete or changed")
@@ -266,16 +289,161 @@ def validate_strategy(strategy: object) -> None:
         raise Invalid("strategy input byte limit exceeded")
 
 
+def validate_record(name: str, value: object) -> None:
+    if name == "StrategySpec":
+        validate_strategy(value)
+        return
+    schema = CONTRACT["record_schemas"][name]
+    if not isinstance(value, dict):
+        raise Invalid(f"{name} must be an object")
+    required, optional = schema["required"], schema["optional"]
+    keys = set(value)
+    if not set(required) <= keys or keys - set(required) - set(optional):
+        raise Invalid(f"{name} has missing or additional properties")
+    for key, descriptor in {**required, **optional}.items():
+        if key in value:
+            validate_typed_value(value[key], descriptor, f"{name}.{key}")
+    if name in {"Outcome", "PublicationResult"}:
+        allowed_codes = CONTRACT["result_codes"].get(value["outcome"])
+        if allowed_codes is not None:
+            if isinstance(allowed_codes, str):
+                allowed_codes = [allowed_codes]
+            if value["code"] not in allowed_codes:
+                raise Invalid(f"{name} code does not match outcome")
+    if name == "Outcome":
+        expected_findings = CONTRACT["outcome_findings"].get(value["outcome"], [])
+        codes = {finding["code"] for finding in value["findings"]}
+        if expected_findings and not set(expected_findings) & codes:
+            raise Invalid(f"{value['outcome']} outcome is missing its required finding")
+        if value["outcome"] == "INVALID_INPUT":
+            if not value["findings"] or any(not finding["path"].startswith("/") for finding in value["findings"]):
+                raise Invalid("INVALID_INPUT needs a stable finding code and JSON Pointer path")
+    if name == "PromptInterpretation":
+        for item in value["field_evidence"]:
+            state, origin = item["state"], item["origin"]
+            if item["interpretation_revision"] != value["interpretation_revision_id"]:
+                raise Invalid("field evidence must bind to its interpretation revision")
+            if state == "KNOWN" and "value" not in item:
+                raise Invalid("KNOWN evidence requires value")
+            if state != "KNOWN" and "value" in item:
+                raise Invalid(f"{state} evidence cannot contain value")
+            if state == "CONFLICTING" and len(item.get("conflicts", [])) < 2:
+                raise Invalid("CONFLICTING evidence requires two conflict entries")
+            if state == "CONFLICTING" and item.get("adoption") == "ADOPTED":
+                raise Invalid("CONFLICTING evidence cannot be adopted")
+            consequential = item["field_name"] in CONTRACT["field_evidence_rules"]["consequential_fields"]
+            if origin in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"} and consequential and item.get("adoption") not in {"ADOPTED", "PENDING"}:
+                raise Invalid("consequential proposed evidence requires adoption state")
+    if name == "PublicationResult" and value["outcome"] == "PUBLISHED":
+        if any(value[field] is None for field in ("publication_id", "revision_id", "content_sha256", "manifest_sha256")):
+            raise Invalid("PUBLISHED result requires exact publication identity")
+        for field in ("content_sha256", "manifest_sha256"):
+            if not re.fullmatch(r"[0-9a-f]{64}", value[field]):
+                raise Invalid(f"{field} must be a lowercase SHA-256 digest")
+    elif name == "PublicationResult" and any(value[field] is not None for field in ("publication_id", "revision_id", "content_sha256", "manifest_sha256")):
+        raise Invalid("non-success publication result cannot carry publication identity")
+    if len(canonical_bytes(value)) > CONTRACT["limits"]["input_bytes"]:
+        raise Invalid(f"{name} input byte limit exceeded")
+
+
+def _is_json_value(value: object) -> bool:
+    if value is None or isinstance(value, (str, int, bool)):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    return False
+
+
+def validate_typed_value(value: object, descriptor: dict[str, object], path: str) -> None:
+    kind = descriptor["type"]
+    types = {
+        "string": lambda v: isinstance(v, str),
+        "nonempty_string": lambda v: isinstance(v, str) and bool(v),
+        "nullable_string": lambda v: v is None or isinstance(v, str),
+        "null": lambda v: v is None,
+        "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+        "nullable_integer": lambda v: v is None or isinstance(v, int) and not isinstance(v, bool),
+        "boolean": lambda v: isinstance(v, bool),
+        "object": lambda v: isinstance(v, dict),
+        "json_value": lambda v: _is_json_value(v),
+        "expression_object": lambda v: isinstance(v, dict),
+        "expression_or_not_requested": lambda v: isinstance(v, dict),
+        "string_map": lambda v: isinstance(v, dict) and all(isinstance(k, str) and isinstance(x, str) for k, x in v.items()),
+        "string_array": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+        "object_array": lambda v: isinstance(v, list) and all(isinstance(x, dict) for x in v),
+        "finding_array": lambda v: isinstance(v, list) and all(isinstance(x, dict) and set(x) == {"code", "path", "detail"} and all(isinstance(x[k], str) for k in x) for x in v),
+        "field_evidence_array": lambda v: isinstance(v, list) and all(isinstance(x, dict) for x in v),
+        "clarification_array": lambda v: isinstance(v, list) and all(isinstance(x, dict) for x in v),
+        "address": lambda v: isinstance(v, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", v) is not None,
+        "address_array": lambda v: isinstance(v, list) and all(isinstance(x, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", x) for x in v),
+        "decimal_string": lambda v: isinstance(v, str) and DECIMAL.fullmatch(v) is not None,
+    }
+    if kind.startswith("shape:"):
+        validate_shape(kind.split(":", 1)[1], value)
+        return
+    if kind.startswith("shape_array:"):
+        shape_name = kind.split(":", 1)[1]
+        if not isinstance(value, list):
+            raise Invalid(f"{path} must be an array")
+        for item in value:
+            validate_shape(shape_name, item)
+        return
+    if kind.startswith("record:"):
+        validate_record(kind.split(":", 1)[1], value)
+        return
+    if kind not in types or not types[kind](value):
+        raise Invalid(f"{path} must have type {kind}")
+    if "enum" in descriptor and value not in descriptor["enum"]:
+        raise Invalid(f"{path} has an unknown enum value")
+    if kind == "field_evidence_array":
+        for item in value:
+            validate_record("FieldEvidence", item)
+    elif kind == "clarification_array":
+        for item in value:
+            validate_record("Clarification", item)
+
+
+def validate_shape(name: str, value: object) -> None:
+    schema = CONTRACT["nested_shapes"][name]
+    if not isinstance(value, dict):
+        raise Invalid(f"{name} must be an object")
+    required, optional = schema["required"], schema["optional"]
+    keys = set(value)
+    if not set(required) <= keys or keys - set(required) - set(optional):
+        raise Invalid(f"{name} has missing or additional properties")
+    for key, descriptor in {**required, **optional}.items():
+        if key in value:
+            validate_typed_value(value[key], descriptor, f"{name}.{key}")
+
+
+def validate_http_error(value: object) -> None:
+    schema = CONTRACT["http_error_body"]
+    if not isinstance(value, dict) or set(value) != set(schema["required"]):
+        raise Invalid("HTTP error body has missing or additional properties")
+    for key, descriptor in schema["required"].items():
+        validate_typed_value(value[key], descriptor, f"HttpError.{key}")
+
+
 def route(case: dict[str, object]) -> str:
     data = case["input"]
-    if data.get("meaning") == "unsupported":
-        return "UNSUPPORTED"
-    if data.get("syntax_valid") is False:
+    try:
+        validate_record("PromptInterpretation", data)
+    except (Invalid, KeyError, TypeError):
         return "INVALID_INPUT"
-    if data.get("complete") is False:
+    if data["syntax_status"] == "INVALID":
+        return "INVALID_INPUT"
+    if data["meaning_status"] == "UNSUPPORTED":
+        return "UNSUPPORTED"
+    if any(item["state"] in {"MISSING", "CONFLICTING"} for item in data["field_evidence"]):
         return "NEEDS_CLARIFICATION"
-    if data.get("evidence_ready") is False:
+    if data["evidence_readiness"] == "UNRESOLVED":
         return "UNRESOLVED"
+    if any(item.get("origin") in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"}
+           and item.get("field_name") in CONTRACT["field_evidence_rules"]["consequential_fields"]
+           and item.get("adoption") != "ADOPTED" for item in data["field_evidence"]):
+        return "NEEDS_CLARIFICATION"
     return "COMPILED"
 
 
@@ -334,8 +502,17 @@ def check_fixture(case: dict[str, object]) -> None:
                 raise AssertionError(f"bad NOT truth row: {value}")
         actual = True
     elif kind == "clarification":
-        valid = (data["previous_revision"] and data["missing_field"] and data["questions"]
-                 and set(data["original_restrictions"]) <= set(data["next_restrictions"]))
+        clarification = data["clarification"]
+        validate_record("Clarification", clarification)
+        if clarification["previous_revision_id"] not in data["known_revision_ids"]:
+            actual = "INVALID_INPUT"
+            if actual != expected:
+                raise AssertionError(f"{case['id']}: expected {expected!r}, got {actual!r}")
+            return
+        valid = (clarification["previous_revision_id"] and clarification["question"]
+                 and set(data["original_restrictions"]) <= set(data["next_restrictions"])
+                 and set(data["original_restrictions"]) <= set(clarification["preserved_restrictions"])
+                 and set(data["next_restrictions"]) == set(clarification["preserved_restrictions"]))
         actual = "NEEDS_CLARIFICATION" if valid else "INVALID_INPUT"
     elif kind == "unsupported":
         actual = "UNSUPPORTED" if data["original_request"] and data["missing_capability"] else "INVALID_INPUT"
@@ -346,32 +523,110 @@ def check_fixture(case: dict[str, object]) -> None:
         actual = (data["state"] == "DRAFT" and data["published_revision_id"] is None
                  and data["execution_permission"] == {"state": "NOT_GRANTED", "mandate_ref": None})
     elif kind == "owner_error":
-        actual = data["http"] == 404 and data["code"] == "not_found" if not data["owner_matches"] else False
+        def hidden_not_found(operation_id: str) -> dict[str, object]:
+            return {"http": 404, "body": {"operation_id": operation_id, "stage": "READ", "outcome": "NOT_FOUND",
+                    "code": "not_found", "findings": [], "retry": "NOT_RETRYABLE"}}
+        def owner_scoped_lookup(principal: str, stored_owner: str | None) -> dict[str, object]:
+            if stored_owner is None or stored_owner != principal:
+                return hidden_not_found(data["operation_id"])
+            return {"http": 200, "body": {"record_id": data["requested_id"]}}
+        denied = owner_scoped_lookup(data["owner_id"], data["record_owner_id"])
+        absent = owner_scoped_lookup(data["owner_id"], None)
+        validate_http_error(denied["body"])
+        actual = denied if denied == absent else None
     elif kind == "idempotency":
-        valid_retry = (data["first_key"] == data["retry_key"]
-                       and data["first_fingerprint"] == data["retry_fingerprint"]
-                       and data["acknowledgement"] == "UNKNOWN")
-        actual = data["first_revision"] if valid_retry and data["first_revision"] == data["retry_revision"] else None
+        first = {"owner_id": data["owner_id"], "method": data["method"], "path": data["path"],
+                 "expected_parent_revision_id": data["expected_parent_revision_id"], "draft_id": data["draft_id"],
+                 "strategy": STRATEGY}
+        retry = {"owner_id": data["retry_owner_id"], "method": data["retry_method"], "path": data["retry_path"],
+                 "expected_parent_revision_id": data["retry_expected_parent_revision_id"], "draft_id": data["retry_draft_id"],
+                 "strategy": STRATEGY}
+        valid_retry = (data["idempotency_key"] == data["retry_idempotency_key"]
+                       and sha256(first) == sha256(retry) and data["acknowledgement"] == "UNKNOWN")
+        # Stored idempotency results replay before draft/parent revalidation.
+        actual = data["first_revision"] if valid_retry and not data["retry_parent_still_valid"] and data["first_revision"] == data["retry_revision"] else None
     elif kind == "idempotency_collision":
-        actual = (409 if data["first_key"] == data["retry_key"]
-                  and data["first_fingerprint"] != data["retry_fingerprint"] else 200)
+        first = {"owner_id": data["owner_id"], "method": data["method"], "path": data["path"],
+                 "expected_parent_revision_id": data["parent"], "draft_id": data["draft_id"], "strategy": STRATEGY}
+        retry = {"owner_id": data["retry_owner_id"], "method": data["retry_method"], "path": data["retry_path"],
+                 "expected_parent_revision_id": data["retry_parent"], "draft_id": data["retry_draft_id"], "strategy": STRATEGY}
+        if data["mutate_strategy_threshold"]:
+            retry["strategy"] = copy.deepcopy(STRATEGY)
+            retry["strategy"]["entry"]["args"][1]["value"] = "0.02"
+        actual = (409 if data["idempotency_key"] == data["retry_idempotency_key"]
+                  and (data["owner_id"], data["method"], data["path"]) == (data["retry_owner_id"], data["retry_method"], data["retry_path"])
+                  and sha256(first) != sha256(retry) else 200)
+    elif kind == "idempotency_scope":
+        first_key = (data["first_owner_id"], data["first_method"], data["first_path"], data["first_key"])
+        second_key = (data["second_owner_id"], data["second_method"], data["second_path"], data["second_key"])
+        actual = "INDEPENDENT" if first_key != second_key else "COLLISION"
     elif kind == "concurrent_publications":
         actual = (data["first_revision"] != data["second_revision"]
                   and data["first_key"] != data["second_key"]
-                  and data["parent"] == "rev-parent")
+                  and data["parent"] == "rev-parent"
+                  and data["owner"] and data["strategy"] == data["first_draft_strategy"] == data["second_draft_strategy"]
+                  and data["latest_at_first"] == data["parent"]
+                  and data["latest_at_second"] != data["parent"])
+    elif kind == "publication_parent":
+        valid = (data["owner_id"] == data["draft_owner_id"]
+                 and data["strategy_id"] == data["draft_strategy_id"]
+                 and data["expected_parent_revision_id"] == data["draft_base_revision_id"])
+        if data["expected_parent_revision_id"] is None:
+            valid = valid and data["is_first_revision"] and not data["parent_exists"]
+        else:
+            valid = valid and data["parent_exists"] and data["parent_owner_id"] == data["owner_id"] and data["parent_strategy_id"] == data["strategy_id"]
+        actual = "ACCEPT" if valid else "parent_revision_conflict"
     elif kind == "typed_expression":
         try:
-            expression_type(data["expression"], data["quote_unit"])
+            actual = expression_type(data["expression"], data["quote_unit"])
         except Invalid:
             actual = "INVALID_INPUT"
-        else:
-            actual = "COMPILED"
     elif kind == "canonical_roundtrip":
         actual = strict_loads(canonical_bytes(data).decode("utf-8")) == data
     else:
         raise Invalid(f"unknown fixture kind: {kind}")
     if actual != expected:
         raise AssertionError(f"{case['id']}: expected {expected!r}, got {actual!r}")
+
+
+def check_record_examples() -> None:
+    examples = FIXTURES["record_examples"]
+    if set(examples) != set(CONTRACT["record_schemas"]):
+        raise AssertionError("each record schema needs one concrete content example")
+    for name, example in examples.items():
+        validate_record(name, example)
+    for variant in FIXTURES.get("record_variants", []):
+        validate_record(variant["type"], variant["value"])
+    validate_record_bundle(FIXTURES.get("persisted_examples", []))
+
+
+def validate_record_bundle(envelopes: list[dict[str, object]]) -> None:
+    for envelope in envelopes:
+        validate_envelope(envelope)
+    intake_records = {e["record_id"]: e for e in envelopes if e["record_type"] == "IntakeRequest"}
+    for envelope in envelopes:
+        if envelope["record_type"] == "PromptInterpretation":
+            intake = intake_records.get(envelope["content"]["intake_record_id"])
+            if intake is None or intake["owner_id"] != envelope["owner_id"]:
+                raise Invalid("interpretation must link to an intake owned by the same principal")
+
+
+def validate_envelope(envelope: object) -> None:
+    required = set(CONTRACT["record_envelope"]["required"])
+    if not isinstance(envelope, dict) or set(envelope) != required:
+        raise Invalid("persisted record envelope has missing or additional properties")
+    record_type = envelope["record_type"]
+    if record_type not in CONTRACT["record_schemas"]:
+        raise Invalid("unknown record type")
+    if envelope["schema_version"] != CONTRACT["schema_versions"][record_type]:
+        raise Invalid("record schema version does not match type")
+    uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    for field in ("record_id", "owner_id", "operation_id"):
+        if not isinstance(envelope[field], str) or not re.fullmatch(uuid_pattern, envelope[field]):
+            raise Invalid(f"{field} must be a UUID")
+    if not isinstance(envelope["created_at"], str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", envelope["created_at"]):
+        raise Invalid("created_at must be RFC 3339 UTC")
+    validate_record(record_type, envelope["content"])
 
 
 def must_reject(label: str, strategy: dict[str, object]) -> None:
@@ -382,13 +637,18 @@ def must_reject(label: str, strategy: dict[str, object]) -> None:
     raise AssertionError(f"invalid mutation was accepted: {label}")
 
 
+def must_reject_record(label: str, name: str, record: object) -> None:
+    try:
+        validate_record(name, record)
+    except (Invalid, TypeError, KeyError):
+        return
+    raise AssertionError(f"invalid record mutation was accepted: {label}")
+
+
 def main() -> int:
     if set(CONTRACT["operator_signatures"]) != set(CONTRACT["operators"]):
         raise AssertionError("operator names and machine signatures differ")
-    if set(CONTRACT["record_fields"]["PublicationResult"]) != {
-        "operation_id", "publication_id", "revision_id", "content_sha256", "manifest_sha256", "created_at", "outcome"
-    }:
-        raise AssertionError("publication result fields changed without checker review")
+    check_record_examples()
     for case in FIXTURES["cases"]:
         check_fixture(case)
     validate_strategy(STRATEGY)
@@ -414,6 +674,12 @@ def main() -> int:
         STRATEGY["entry"],
     ]}
     must_reject("invalid whole-tree Boolean type", hidden_invalid)
+    hidden_history_type = copy.deepcopy(STRATEGY)
+    hidden_history_type["entry"] = {"op": "and", "args": [
+        STRATEGY["entry"],
+        {"op": "lag", "value": STRATEGY["entry"], "buckets": 1}]}
+    hidden_history_type["warmup_buckets"] = 4
+    must_reject("Boolean history operator hidden inside Boolean tree", hidden_history_type)
     unsupported_branch = copy.deepcopy(STRATEGY)
     unsupported_branch["entry"]["args"][0] = {"op": "future_price", "lookback_buckets": 1}
     must_reject("unsupported hidden operation", unsupported_branch)
@@ -438,7 +704,74 @@ def main() -> int:
     observation_as_exit["exit"] = {"op": "observation_period", "buckets": 12}
     must_reject("observation period is not an exit rule", observation_as_exit)
 
-    print(f"PASS: {len(FIXTURES['cases'])} independent fixtures, valid strategy, canonical identity, and 9 rejection mutations")
+    nested_history = copy.deepcopy(STRATEGY)
+    nested_history["entry"] = {"op": "gt", "args": [
+        {"op": "lag", "value": {"op": "price_return", "lookback_buckets": 3}, "buckets": 2},
+        {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}]}
+    nested_history["warmup_buckets"] = 4
+    must_reject("nested dependency underdeclares warmup", nested_history)
+    nested_history["warmup_buckets"] = 5
+    validate_strategy(nested_history)
+    nested_history["exit"] = {"op": "gt", "args": [
+        {"op": "mean", "value": {"op": "price_return", "lookback_buckets": 2}, "buckets": 4},
+        {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}]}
+    nested_history["invalidation"] = {"op": "gt", "args": [
+        {"op": "sum", "value": {"op": "price_return", "lookback_buckets": 1}, "buckets": 3},
+        {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}]}
+    validate_strategy(nested_history)
+    nested_history["warmup_buckets"] = 4
+    must_reject("warmup omits history required by exit", nested_history)
+    oversized_history = copy.deepcopy(STRATEGY)
+    oversized_history["entry"] = {"op": "gt", "args": [
+        {"op": "lag", "value": {"op": "price_return", "lookback_buckets": 288}, "buckets": 1},
+        {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}]}
+    oversized_history["warmup_buckets"] = 288
+    must_reject("nested dependency exceeds maximum warmup", oversized_history)
+
+    bad_evidence = copy.deepcopy(FIXTURES["record_examples"]["PromptInterpretation"])
+    bad_evidence["field_evidence"][0]["state"] = "MISSING"
+    must_reject_record("MISSING evidence carries a guessed value", "PromptInterpretation", bad_evidence)
+    bad_evidence = copy.deepcopy(FIXTURES["record_examples"]["PromptInterpretation"])
+    bad_evidence["field_evidence"][0]["state"] = "CONFLICTING"
+    bad_evidence["field_evidence"][0]["conflicts"] = [
+        {"value": "0.01", "source_ref": "source-a"}, {"value": "0.02", "source_ref": "source-b"}]
+    must_reject_record("CONFLICTING evidence carries a selected value", "PromptInterpretation", bad_evidence)
+    bad_evidence = copy.deepcopy(FIXTURES["record_examples"]["PromptInterpretation"])
+    bad_evidence["field_evidence"][0]["state"] = "CONFLICTING"
+    bad_evidence["field_evidence"][0].pop("value")
+    bad_evidence["field_evidence"][0]["conflicts"] = [{"value": "0.01", "source_ref": "source-a"}]
+    must_reject_record("CONFLICTING evidence lacks competing sources", "PromptInterpretation", bad_evidence)
+    bad_evidence = copy.deepcopy(FIXTURES["record_examples"]["PromptInterpretation"])
+    bad_evidence["field_evidence"][0]["origin"] = "AGENT_PROPOSED"
+    bad_evidence["field_evidence"][0].pop("adoption", None)
+    must_reject_record("proposed consequential field lacks adoption", "PromptInterpretation", bad_evidence)
+    bad_evidence = copy.deepcopy(FIXTURES["record_examples"]["PromptInterpretation"])
+    bad_evidence["owner_id"] = "caller-owner"
+    must_reject_record("client interpretation cannot set owner", "PromptInterpretation", bad_evidence)
+    bad_request = copy.deepcopy(FIXTURES["record_examples"]["IntakeRequest"])
+    bad_request["owner_id"] = "caller-owner"
+    must_reject_record("client intake cannot set owner authority", "IntakeRequest", bad_request)
+    bad_result = copy.deepcopy(FIXTURES["record_examples"]["Outcome"])
+    del bad_result["code"]
+    must_reject_record("result requires stable code", "Outcome", bad_result)
+    bad_envelope = copy.deepcopy(FIXTURES["persisted_examples"][0])
+    bad_envelope["schema_version"] = "p02.unknown/99"
+    try:
+        validate_envelope(bad_envelope)
+    except Invalid:
+        pass
+    else:
+        raise AssertionError("unknown record schema version was accepted")
+    bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
+    bad_links[-1]["content"]["intake_record_id"] = "40000000-0000-4000-8000-000000000004"
+    try:
+        validate_record_bundle(bad_links)
+    except Invalid:
+        pass
+    else:
+        raise AssertionError("interpretation with an unknown intake revision link was accepted")
+
+    print(f"PASS: {len(FIXTURES['cases'])} fixtures, {len(FIXTURES['record_examples'])} record examples, valid strategy, canonical identity, and record/strategy rejection mutations")
     print("LIMIT: in-memory contract checks only; no server, storage, concurrency, provider, or production-cost claim")
     return 0
 

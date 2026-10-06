@@ -8,6 +8,8 @@ The assigned source extract is `p02-controller-inputs@1`, SHA256 `8090a89af5b7fd
 
 Source claim IDs refer to the extract's prior report. C05-C09 cover parsing, validation, and serialization. C15/C29 cover history and windows. C18-C21 cover typing and Boolean branches. C33 separates signals from complete strategies. C38-C44 cover identity, resources, and typed generation. These are selected evidence pointers. They do not mean that every source claim was reverified.
 
+The supplied extract records the private source audit SHA256 `aced30eac6f977507eca736aeed720dfa9599670e32d5a8d089ba25be3447b60`, verification report SHA256 `71ae49d3a9fc23ac4e4b0e1f46200638460a408905fb5932d7c6fa3d8a4a8413`, and distillation SHA256 `2110382f5c1fe94fff1a41972960da8660fe74bb7dd4f31323e797b717b92365`. Referenced snapshots are QT301 S13 archive `4e9217105b44a6e9e23ed2ae58a6c069d6f030c757ce45d1fb51c4eb1ccf6893`, QT301 S15 archive `262eaff473c52b6c557c578e88657a8cffbeae0f0219d0d29b50db2a34c2f039`, and QT401 S16 archive `f7ca61ae368cb423e0f435aaaed34f9b5fd777e2507d0a44a71c07a8ee172201`. The cited S16 members are `quantlab/primitives.py` SHA256 `2b0d0c3cafc779fbc3ae9638173c7bd62a42e89e3c7c3c5b3453576a6f7b3b84` and `quantlab/gene.py` SHA256 `abd6261af4a370334e1d238b4529107de495a5e2cf648a730248a6a20966979c`. These are supplied prior-verification identities, not fresh archive checks or runtime evidence.
+
 ## Requirement and check mapping
 
 | Requirement | Edge OS authority | Adaptation from inspected source | P02 check |

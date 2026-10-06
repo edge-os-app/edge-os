@@ -21,44 +21,1010 @@
       "compiler": "edge-compiler/1"
     }
   },
-  "input_classes": ["CONCRETE_THESIS", "LOOSE_INTUITION", "BOUNDED_NO_THESIS"],
-  "requested_jobs": ["COMPARE", "INVESTIGATE_EFFECT", "CREATE_STRATEGY", "SIMULATE", "OBSERVE_FORWARD", "REQUEST_LIVE"],
-  "field_states": ["KNOWN", "MISSING", "CONFLICTING"],
-  "field_origins": ["USER_STATED", "USER_CONFIRMED", "APPLICATION_CONFIGURED", "AGENT_PROPOSED"],
-  "outcomes": ["NEEDS_CLARIFICATION", "UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT", "COMPILED"],
-  "operators": ["constant", "price", "quote_volume", "price_return", "lag", "sum", "mean", "gt", "gte", "lt", "lte", "and", "or", "not"],
+  "input_classes": [
+    "CONCRETE_THESIS",
+    "LOOSE_INTUITION",
+    "BOUNDED_NO_THESIS"
+  ],
+  "requested_jobs": [
+    "COMPARE",
+    "INVESTIGATE_EFFECT",
+    "CREATE_STRATEGY",
+    "SIMULATE",
+    "OBSERVE_FORWARD",
+    "REQUEST_LIVE"
+  ],
+  "field_states": [
+    "KNOWN",
+    "MISSING",
+    "CONFLICTING"
+  ],
+  "field_origins": [
+    "USER_STATED",
+    "USER_CONFIRMED",
+    "APPLICATION_CONFIGURED",
+    "AGENT_PROPOSED"
+  ],
+  "outcomes": [
+    "NEEDS_CLARIFICATION",
+    "UNSUPPORTED",
+    "UNRESOLVED",
+    "INVALID_INPUT",
+    "COMPILED",
+    "CONFLICTED"
+  ],
+  "operators": [
+    "constant",
+    "price",
+    "quote_volume",
+    "price_return",
+    "lag",
+    "sum",
+    "mean",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "and",
+    "or",
+    "not"
+  ],
   "operator_signatures": {
-    "constant": {"shape": ["op", "value", "unit"], "result": "numeric:declared-unit"},
-    "price": {"shape": ["op"], "result": "numeric:quote-per-base"},
-    "quote_volume": {"shape": ["op"], "result": "numeric:declared-quote-asset"},
-    "price_return": {"shape": ["op", "lookback_buckets"], "result": "numeric:dimensionless", "history": "qualified-endpoints; retain-intermediate-gaps"},
-    "lag": {"shape": ["op", "value", "buckets"], "result": "numeric:input-unit", "history": "one-scheduled-position"},
-    "sum": {"shape": ["op", "value", "buckets"], "result": "numeric:input-unit", "history": "all-scheduled-values-required"},
-    "mean": {"shape": ["op", "value", "buckets"], "result": "numeric:input-unit", "history": "all-scheduled-values-required"},
-    "gt": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "same-numeric-unit"},
-    "gte": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "same-numeric-unit"},
-    "lt": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "same-numeric-unit"},
-    "lte": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "same-numeric-unit"},
-    "and": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "boolean-operands", "truth": "kleene-whole-tree"},
-    "or": {"shape": ["op", "args[2]"], "result": "boolean", "requires": "boolean-operands", "truth": "kleene-whole-tree"},
-    "not": {"shape": ["op", "value"], "result": "boolean", "requires": "boolean-operand", "truth": "kleene-whole-tree"}
-  },
-  "record_fields": {
-    "IntakeRequest": ["record_id", "original_request", "restrictions", "requested_job"],
-    "FieldEvidence": ["field_name", "state", "origin", "source_ref", "interpretation_revision"],
-    "Clarification": ["previous_revision_id", "question_id", "question", "answer_ref", "changed_fields", "preserved_restrictions"],
-    "Outcome": ["operation_id", "stage", "outcome", "findings", "retry"],
-    "StrategyDraft": ["draft_id", "original_request", "interpretation_revision_id", "source_syntax", "validation_findings", "state"],
-    "StrategySpec": ["schema_version", "strategy_id", "domain", "market", "decision_interval_seconds", "data_inputs", "entry", "exit", "invalidation", "sizing", "additions", "partial_exits", "cost_assumptions", "risk_limits", "action_scope", "execution_permission", "warmup_buckets", "semantic_manifest"],
-    "ResearchBinding": ["chain_id", "underlying_venue", "pool_address", "token_order", "base_asset", "quote_asset", "orientation", "base_decimals", "quote_decimals", "event_schema_version", "amount_conversion_version", "data_route", "evidence_class", "qualification"],
-    "PublicationRequest": ["operation_id", "idempotency_key", "expected_parent_revision_id", "draft_id", "strategy"],
-    "PublicationResult": ["operation_id", "publication_id", "revision_id", "content_sha256", "manifest_sha256", "created_at", "outcome"]
+    "constant": {
+      "shape": [
+        "op",
+        "value",
+        "unit"
+      ],
+      "result": "numeric:declared-unit"
+    },
+    "price": {
+      "shape": [
+        "op"
+      ],
+      "result": "numeric:quote-per-base"
+    },
+    "quote_volume": {
+      "shape": [
+        "op"
+      ],
+      "result": "numeric:declared-quote-asset"
+    },
+    "price_return": {
+      "shape": [
+        "op",
+        "lookback_buckets"
+      ],
+      "result": "numeric:dimensionless",
+      "history": "qualified-endpoints; retain-intermediate-gaps"
+    },
+    "lag": {
+      "shape": [
+        "op",
+        "value",
+        "buckets"
+      ],
+      "result": "numeric:input-unit",
+      "history": "one-scheduled-position"
+    },
+    "sum": {
+      "shape": [
+        "op",
+        "value",
+        "buckets"
+      ],
+      "result": "numeric:input-unit",
+      "history": "all-scheduled-values-required"
+    },
+    "mean": {
+      "shape": [
+        "op",
+        "value",
+        "buckets"
+      ],
+      "result": "numeric:input-unit",
+      "history": "all-scheduled-values-required"
+    },
+    "gt": {
+      "shape": [
+        "op",
+        "args[2]"
+      ],
+      "result": "boolean",
+      "requires": "same-numeric-unit"
+    },
+    "gte": {
+      "shape": [
+        "op",
+        "args[2]"
+      ],
+      "result": "boolean",
+      "requires": "same-numeric-unit"
+    },
+    "lt": {
+      "shape": [
+        "op",
+        "args[2]"
+      ],
+      "result": "boolean",
+      "requires": "same-numeric-unit"
+    },
+    "lte": {
+      "shape": [
+        "op",
+        "args[2]"
+      ],
+      "result": "boolean",
+      "requires": "same-numeric-unit"
+    },
+    "and": {
+      "shape": [
+        "op",
+        "args[2]"
+      ],
+      "result": "boolean",
+      "requires": "boolean-operands",
+      "truth": "kleene-whole-tree"
+    },
+    "or": {
+      "shape": [
+        "op",
+        "args[2]"
+      ],
+      "result": "boolean",
+      "requires": "boolean-operands",
+      "truth": "kleene-whole-tree"
+    },
+    "not": {
+      "shape": [
+        "op",
+        "value"
+      ],
+      "result": "boolean",
+      "requires": "boolean-operand",
+      "truth": "kleene-whole-tree"
+    }
   },
   "http_errors": {
-    "401": ["auth_required", "auth_invalid", "auth_expired"],
-    "404": ["not_found"],
-    "409": ["idempotency_key_reused", "parent_revision_conflict"],
-    "422": ["validation_error"],
-    "503": ["auth_unavailable", "service_unavailable"]
+    "401": [
+      "auth_required",
+      "auth_invalid",
+      "auth_expired"
+    ],
+    "404": [
+      "not_found"
+    ],
+    "409": [
+      "idempotency_key_reused",
+      "parent_revision_conflict"
+    ],
+    "422": [
+      "validation_error"
+    ],
+    "503": [
+      "auth_unavailable",
+      "service_unavailable"
+    ]
+  },
+  "record_schemas": {
+    "IntakeRequest": {
+      "required": {
+        "original_request": {
+          "type": "nonempty_string"
+        },
+        "restrictions": {
+          "type": "string_array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requested_job": {
+          "type": "string",
+          "enum": [
+            "COMPARE",
+            "INVESTIGATE_EFFECT",
+            "CREATE_STRATEGY",
+            "SIMULATE",
+            "OBSERVE_FORWARD",
+            "REQUEST_LIVE"
+          ]
+        },
+        "input_class": {
+          "type": "string",
+          "enum": [
+            "CONCRETE_THESIS",
+            "LOOSE_INTUITION",
+            "BOUNDED_NO_THESIS"
+          ]
+        }
+      },
+      "optional": {
+        "declared_market": {
+          "type": "shape:DeclaredMarket"
+        }
+      },
+      "additional_properties": false
+    },
+    "FieldEvidence": {
+      "required": {
+        "field_name": {
+          "type": "nonempty_string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "KNOWN",
+            "MISSING",
+            "CONFLICTING"
+          ]
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "USER_STATED",
+            "USER_CONFIRMED",
+            "APPLICATION_CONFIGURED",
+            "AGENT_PROPOSED"
+          ]
+        },
+        "source_ref": {
+          "type": "nonempty_string"
+        },
+        "interpretation_revision": {
+          "type": "nonempty_string"
+        },
+        "evidence_status": {
+          "type": "string",
+          "enum": [
+            "VERIFIED_FACT",
+            "INFERENCE",
+            "HYPOTHESIS",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "optional": {
+        "value": {
+          "type": "json_value"
+        },
+        "unit": {
+          "type": "nonempty_string"
+        },
+        "uncertainty": {
+          "type": "nonempty_string"
+        },
+        "adoption": {
+          "type": "string",
+          "enum": [
+            "ADOPTED",
+            "PENDING"
+          ]
+        },
+        "conflicts": {
+          "type": "shape_array:FieldConflict"
+        }
+      },
+      "additional_properties": false
+    },
+    "Clarification": {
+      "required": {
+        "previous_revision_id": {
+          "type": "nonempty_string"
+        },
+        "question_id": {
+          "type": "nonempty_string"
+        },
+        "question": {
+          "type": "nonempty_string"
+        },
+        "answer_ref": {
+          "type": "nonempty_string"
+        },
+        "changed_fields": {
+          "type": "string_array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "preserved_restrictions": {
+          "type": "string_array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "PromptInterpretation": {
+      "required": {
+        "intake_record_id": {
+          "type": "nonempty_string"
+        },
+        "interpretation_revision_id": {
+          "type": "nonempty_string"
+        },
+        "input_class": {
+          "type": "string",
+          "enum": [
+            "CONCRETE_THESIS",
+            "LOOSE_INTUITION",
+            "BOUNDED_NO_THESIS"
+          ]
+        },
+        "requested_job": {
+          "type": "string",
+          "enum": [
+            "COMPARE",
+            "INVESTIGATE_EFFECT",
+            "CREATE_STRATEGY",
+            "SIMULATE",
+            "OBSERVE_FORWARD",
+            "REQUEST_LIVE"
+          ]
+        },
+        "field_evidence": {
+          "type": "field_evidence_array"
+        },
+        "clarification_history": {
+          "type": "clarification_array"
+        },
+        "preserved_restrictions": {
+          "type": "string_array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "meaning_status": {
+          "type": "string",
+          "enum": [
+            "SUPPORTED",
+            "UNSUPPORTED"
+          ]
+        },
+        "syntax_status": {
+          "type": "string",
+          "enum": [
+            "VALID",
+            "INVALID"
+          ]
+        },
+        "evidence_readiness": {
+          "type": "string",
+          "enum": [
+            "READY",
+            "UNRESOLVED"
+          ]
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "Outcome": {
+      "required": {
+        "operation_id": {
+          "type": "nonempty_string"
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "INTERPRETATION",
+            "VALIDATION",
+            "COMPILATION",
+            "PUBLICATION"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "NEEDS_CLARIFICATION",
+            "UNSUPPORTED",
+            "UNRESOLVED",
+            "INVALID_INPUT",
+            "COMPILED",
+            "CONFLICTED",
+            "PUBLISHED"
+          ]
+        },
+        "code": {
+          "type": "nonempty_string"
+        },
+        "findings": {
+          "type": "shape_array:Finding"
+        },
+        "retry": {
+          "type": "string",
+          "enum": [
+            "SAFE_SAME_KEY",
+            "RECONCILE",
+            "NOT_RETRYABLE"
+          ]
+        }
+      },
+      "optional": {
+        "artifact_id": {
+          "type": "nullable_string"
+        },
+        "revision_id": {
+          "type": "nullable_string"
+        }
+      },
+      "additional_properties": false
+    },
+    "StrategyDraft": {
+      "required": {
+        "draft_id": {
+          "type": "nonempty_string"
+        },
+        "original_request": {
+          "type": "nonempty_string"
+        },
+        "interpretation_revision_id": {
+          "type": "nonempty_string"
+        },
+        "source_syntax": {
+          "type": "object"
+        },
+        "validation_findings": {
+          "type": "shape_array:Finding"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "DRAFT"
+          ]
+        },
+        "published_revision_id": {
+          "type": "null"
+        },
+        "strategy_id": {
+          "type": "nonempty_string"
+        },
+        "base_revision_id": {
+          "type": "nullable_string"
+        }
+      },
+      "optional": {
+        "proposed_fields": {
+          "type": "object"
+        }
+      },
+      "additional_properties": false
+    },
+    "StrategySpec": {
+      "required": {
+        "schema_version": {
+          "type": "string"
+        },
+        "strategy_id": {
+          "type": "nonempty_string"
+        },
+        "domain": {
+          "type": "string",
+          "enum": [
+            "SPOT"
+          ]
+        },
+        "market": {
+          "type": "shape:StrategyMarket"
+        },
+        "decision_interval_seconds": {
+          "type": "integer"
+        },
+        "data_inputs": {
+          "type": "string_array"
+        },
+        "entry": {
+          "type": "expression_object"
+        },
+        "exit": {
+          "type": "expression_object"
+        },
+        "invalidation": {
+          "type": "expression_or_not_requested"
+        },
+        "sizing": {
+          "type": "shape:Sizing"
+        },
+        "additions": {
+          "type": "boolean"
+        },
+        "partial_exits": {
+          "type": "boolean"
+        },
+        "cost_assumptions": {
+          "type": "shape:CostAssumptions"
+        },
+        "risk_limits": {
+          "type": "shape:RiskLimits"
+        },
+        "action_scope": {
+          "type": "string_array"
+        },
+        "execution_permission": {
+          "type": "shape:ExecutionPermission"
+        },
+        "warmup_buckets": {
+          "type": "integer"
+        },
+        "semantic_manifest": {
+          "type": "string_map"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "ResearchBinding": {
+      "required": {
+        "chain_id": {
+          "type": "nullable_integer"
+        },
+        "underlying_venue": {
+          "type": "nonempty_string"
+        },
+        "pool_address": {
+          "type": "address"
+        },
+        "token_order": {
+          "type": "address_array"
+        },
+        "base_asset": {
+          "type": "address"
+        },
+        "quote_asset": {
+          "type": "address"
+        },
+        "orientation": {
+          "type": "string",
+          "enum": [
+            "QUOTE_PER_BASE"
+          ]
+        },
+        "base_decimals": {
+          "type": "integer"
+        },
+        "quote_decimals": {
+          "type": "integer"
+        },
+        "event_schema_version": {
+          "type": "nonempty_string"
+        },
+        "amount_conversion_version": {
+          "type": "nonempty_string"
+        },
+        "data_route": {
+          "type": "nonempty_string"
+        },
+        "evidence_class": {
+          "type": "string",
+          "enum": [
+            "SYNTHETIC_FIXTURE",
+            "QUALIFIED_SOURCE"
+          ]
+        },
+        "qualification": {
+          "type": "string",
+          "enum": [
+            "QUALIFIED",
+            "UNQUALIFIED"
+          ]
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "PublicationRequest": {
+      "required": {
+        "operation_id": {
+          "type": "nonempty_string"
+        },
+        "idempotency_key": {
+          "type": "nonempty_string"
+        },
+        "expected_parent_revision_id": {
+          "type": "nullable_string"
+        },
+        "draft_id": {
+          "type": "nonempty_string"
+        },
+        "strategy": {
+          "type": "record:StrategySpec"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "PublicationResult": {
+      "required": {
+        "operation_id": {
+          "type": "nonempty_string"
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "PUBLICATION"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "PUBLISHED",
+            "INVALID_INPUT",
+            "UNRESOLVED",
+            "CONFLICTED"
+          ]
+        },
+        "code": {
+          "type": "nonempty_string"
+        },
+        "findings": {
+          "type": "shape_array:Finding"
+        },
+        "retry": {
+          "type": "string",
+          "enum": [
+            "SAFE_SAME_KEY",
+            "RECONCILE",
+            "NOT_RETRYABLE"
+          ]
+        },
+        "publication_id": {
+          "type": "nullable_string"
+        },
+        "revision_id": {
+          "type": "nullable_string"
+        },
+        "content_sha256": {
+          "type": "nullable_string"
+        },
+        "manifest_sha256": {
+          "type": "nullable_string"
+        },
+        "created_at": {
+          "type": "nonempty_string"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    }
+  },
+  "field_evidence_rules": {
+    "KNOWN": "value required",
+    "MISSING": "value forbidden",
+    "CONFLICTING": "value forbidden; at least two conflicts required",
+    "consequential_origins": [
+      "APPLICATION_CONFIGURED",
+      "AGENT_PROPOSED"
+    ],
+    "consequential_adoption": "ADOPTED required for compilation; PENDING blocks compilation",
+    "owner_id": "server-authenticated only; forbidden in client request",
+    "consequential_fields": [
+      "market",
+      "network",
+      "quote_asset",
+      "decision_interval_seconds",
+      "entry",
+      "exit",
+      "invalidation",
+      "sizing",
+      "additions",
+      "partial_exits",
+      "cost_assumptions",
+      "risk_limits",
+      "action_scope",
+      "data_route",
+      "entry_threshold"
+    ]
+  },
+  "result_codes": {
+    "NEEDS_CLARIFICATION": "needs_clarification",
+    "UNSUPPORTED": "unsupported",
+    "UNRESOLVED": "unresolved",
+    "INVALID_INPUT": "validation_error",
+    "COMPILED": "compiled",
+    "PUBLISHED": "published",
+    "CONFLICTED": [
+      "parent_revision_conflict",
+      "idempotency_key_reused"
+    ]
+  },
+  "nested_shapes": {
+    "Finding": {
+      "required": {
+        "code": {
+          "type": "nonempty_string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "FieldConflict": {
+      "required": {
+        "value": {
+          "type": "json_value"
+        },
+        "source_ref": {
+          "type": "nonempty_string"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "ExecutionRoute": {
+      "required": {
+        "adapter": {
+          "type": "string",
+          "enum": [
+            "KURU_FLOW_FIXED_INPUT"
+          ]
+        },
+        "identity_state": {
+          "type": "string",
+          "enum": [
+            "KNOWN",
+            "UNKNOWN"
+          ]
+        },
+        "identity": {
+          "type": "nullable_string"
+        },
+        "qualification": {
+          "type": "string",
+          "enum": [
+            "QUALIFIED",
+            "UNQUALIFIED"
+          ]
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "StrategyMarket": {
+      "required": {
+        "network": {
+          "type": "string",
+          "enum": [
+            "MONAD"
+          ]
+        },
+        "research_binding": {
+          "type": "record:ResearchBinding"
+        },
+        "execution_route": {
+          "type": "shape:ExecutionRoute"
+        },
+        "quote_unit": {
+          "type": "nonempty_string"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "Sizing": {
+      "required": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "FIXED_QUOTE_AMOUNT"
+          ]
+        },
+        "amount": {
+          "type": "decimal_string"
+        },
+        "unit": {
+          "type": "nonempty_string"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "CostAssumptions": {
+      "required": {
+        "fee_rate": {
+          "type": "decimal_string"
+        },
+        "slippage_rate": {
+          "type": "decimal_string"
+        },
+        "source_ref": {
+          "type": "nonempty_string"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "RiskLimits": {
+      "required": {
+        "max_quote_notional": {
+          "type": "decimal_string"
+        },
+        "max_open_positions": {
+          "type": "integer"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "ExecutionPermission": {
+      "required": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "NOT_GRANTED"
+          ]
+        },
+        "mandate_ref": {
+          "type": "null"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "NotRequestedInvalidation": {
+      "required": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "NOT_REQUESTED"
+          ]
+        },
+        "source_ref": {
+          "type": "nonempty_string"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    },
+    "DeclaredMarket": {
+      "required": {
+        "network": {
+          "type": "string",
+          "enum": [
+            "MONAD"
+          ]
+        },
+        "base_asset": {
+          "type": "address"
+        },
+        "quote_asset": {
+          "type": "address"
+        }
+      },
+      "optional": {},
+      "additional_properties": false
+    }
+  },
+  "publication_rules": {
+    "retry_lookup_order": [
+      "owner_id",
+      "method",
+      "path",
+      "idempotency_key",
+      "fingerprint"
+    ],
+    "fingerprint_fields": [
+      "owner_id",
+      "method",
+      "path",
+      "expected_parent_revision_id",
+      "draft_id",
+      "canonical_strategy_bytes"
+    ],
+    "draft_binding": [
+      "authenticated_owner_id",
+      "strategy_id",
+      "base_revision_id"
+    ],
+    "parent_rule": "nullable only for first revision; otherwise immutable revision must exist and match owner and strategy",
+    "latest_parent_required": false,
+    "parent_mismatch_outcome": "parent_revision_conflict"
+  },
+  "schema_versions": {
+    "IntakeRequest": "p02.intake_request/1",
+    "FieldEvidence": "p02.field_evidence/1",
+    "Clarification": "p02.clarification/1",
+    "PromptInterpretation": "p02.prompt_interpretation/1",
+    "Outcome": "p02.outcome/1",
+    "StrategyDraft": "p02.strategy_draft/1",
+    "StrategySpec": "p02.strategy/1",
+    "ResearchBinding": "p02.research_binding/1",
+    "PublicationRequest": "p02.publication_request/1",
+    "PublicationResult": "p02.publication_result/1"
+  },
+  "record_envelope": {
+    "required": {
+      "schema_version": "version-for-record_type",
+      "record_type": {
+        "enum": [
+          "IntakeRequest",
+          "FieldEvidence",
+          "Clarification",
+          "PromptInterpretation",
+          "Outcome",
+          "StrategyDraft",
+          "StrategySpec",
+          "ResearchBinding",
+          "PublicationRequest",
+          "PublicationResult"
+        ]
+      },
+      "record_id": "uuid",
+      "owner_id": "uuid",
+      "operation_id": "uuid",
+      "created_at": "rfc3339-utc",
+      "content": "record-content"
+    },
+    "additional_properties": false
+  },
+  "http_error_body": {
+    "required": {
+      "operation_id": {
+        "type": "nonempty_string"
+      },
+      "stage": {
+        "type": "string",
+        "enum": [
+          "AUTHENTICATION",
+          "READ",
+          "VALIDATION",
+          "PUBLICATION"
+        ]
+      },
+      "outcome": {
+        "type": "string",
+        "enum": [
+          "NOT_FOUND",
+          "INVALID_INPUT",
+          "CONFLICTED",
+          "UNAUTHORIZED",
+          "UNAVAILABLE"
+        ]
+      },
+      "code": {
+        "type": "string",
+        "enum": [
+          "not_found",
+          "validation_error",
+          "parent_revision_conflict",
+          "idempotency_key_reused",
+          "auth_required",
+          "auth_invalid",
+          "auth_expired",
+          "auth_unavailable",
+          "service_unavailable"
+        ]
+      },
+      "findings": {
+        "type": "shape_array:Finding"
+      },
+      "retry": {
+        "type": "string",
+        "enum": [
+          "SAFE_SAME_KEY",
+          "RECONCILE",
+          "NOT_RETRYABLE"
+        ]
+      }
+    },
+    "additional_properties": false
+  },
+  "outcome_findings": {
+    "NEEDS_CLARIFICATION": [
+      "missing_field",
+      "conflicting_field"
+    ],
+    "UNSUPPORTED": [
+      "missing_capability"
+    ],
+    "UNRESOLVED": [
+      "missing_dependency"
+    ],
+    "INVALID_INPUT": []
   }
 }

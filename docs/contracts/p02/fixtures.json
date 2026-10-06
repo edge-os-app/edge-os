@@ -1,27 +1,1279 @@
 {
   "schema_version": "p02.fixtures/1",
   "cases": [
-    {"id": "route-complete", "kind": "route", "input": {"meaning": "supported", "complete": true, "syntax_valid": true, "evidence_ready": true}, "expected": "COMPILED"},
-    {"id": "route-clarification", "kind": "route", "input": {"meaning": "supported", "complete": false, "missing": ["entry_threshold"], "syntax_valid": true, "evidence_ready": true}, "expected": "NEEDS_CLARIFICATION"},
-    {"id": "route-unsupported", "kind": "route", "input": {"meaning": "unsupported", "original_request": "sell half, then rebalance an LP range", "missing_capability": "partial_exit_and_lp_rebalance"}, "expected": "UNSUPPORTED"},
-    {"id": "route-malformed", "kind": "route", "input": {"meaning": "supported", "complete": true, "syntax_valid": false, "evidence_ready": true}, "expected": "INVALID_INPUT"},
-    {"id": "route-unresolved", "kind": "route", "input": {"meaning": "supported", "complete": true, "syntax_valid": true, "evidence_ready": false, "missing_dependency": "qualified_endpoint_price"}, "expected": "UNRESOLVED"},
-    {"id": "return-keeps-gap", "kind": "return", "input": {"scheduled_prices": ["100", null, "110"], "intervals": 2}, "expected": {"value": "0.1", "unknown_reasons": ["missing_bucket:1"]}},
-    {"id": "return-missing-endpoint", "kind": "return", "input": {"scheduled_prices": ["100", null, "110"], "intervals": 1}, "expected": {"value": null, "unknown_reasons": ["missing_endpoint"]}},
-    {"id": "rolling-requires-every-bucket", "kind": "rolling_mean", "input": {"scheduled_prices": ["100", null, "110"], "buckets": 3}, "expected": {"value": null, "unknown_reasons": ["missing_bucket:1"]}},
-    {"id": "decimal-half-even", "kind": "decimal", "input": {"left": "1", "right": "6", "operation": "divide"}, "expected": {"precision": 50, "rounding": "ROUND_HALF_EVEN", "prefix": "0.16666666666666666666666666666666666666666666666667"}},
-    {"id": "boolean-false-and-unknown", "kind": "boolean", "input": {"operator": "and", "values": ["FALSE", "UNKNOWN"], "reasons": ["missing_volume"]}, "expected": {"value": "FALSE", "reasons": ["missing_volume"]}},
-    {"id": "boolean-true-or-unknown", "kind": "boolean", "input": {"operator": "or", "values": ["TRUE", "UNKNOWN"], "reasons": ["future_bucket"]}, "expected": {"value": "TRUE", "reasons": ["future_bucket"]}},
-    {"id": "boolean-complete-truth-table", "kind": "boolean_truth_table", "input": {"rows": [["TRUE", "TRUE", "TRUE", "TRUE"], ["TRUE", "FALSE", "FALSE", "TRUE"], ["TRUE", "UNKNOWN", "UNKNOWN", "TRUE"], ["FALSE", "TRUE", "FALSE", "TRUE"], ["FALSE", "FALSE", "FALSE", "FALSE"], ["FALSE", "UNKNOWN", "FALSE", "UNKNOWN"], ["UNKNOWN", "TRUE", "UNKNOWN", "TRUE"], ["UNKNOWN", "FALSE", "FALSE", "UNKNOWN"], ["UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN"]], "not": [["TRUE", "FALSE"], ["FALSE", "TRUE"], ["UNKNOWN", "UNKNOWN"]]}, "expected": true},
-    {"id": "clarification-preserves-restrictions", "kind": "clarification", "input": {"previous_revision": "interp-1", "original_restrictions": ["no leverage", "quote asset is USDC"], "next_restrictions": ["no leverage", "quote asset is USDC"], "missing_field": "entry_threshold", "questions": ["What entry threshold should apply?"]}, "expected": "NEEDS_CLARIFICATION"},
-    {"id": "unsupported-retains-request", "kind": "unsupported", "input": {"original_request": "sell half, then rebalance an LP range", "missing_capability": "partial_exit_and_lp_rebalance"}, "expected": "UNSUPPORTED"},
-    {"id": "unresolved-keeps-strategy-absent", "kind": "unresolved", "input": {"missing_dependency": "qualified_endpoint_price", "adopted_configuration": {"decision_interval_seconds": 300}, "strategy": null}, "expected": "UNRESOLVED"},
-    {"id": "draft-has-no-authority", "kind": "draft", "input": {"state": "DRAFT", "published_revision_id": null, "execution_permission": {"state": "NOT_GRANTED", "mandate_ref": null}}, "expected": true},
-    {"id": "cross-owner-is-not-found", "kind": "owner_error", "input": {"owner_matches": false, "http": 404, "code": "not_found"}, "expected": true},
-    {"id": "idempotent-retry-keeps-identity", "kind": "idempotency", "input": {"first_key": "key-a", "retry_key": "key-a", "first_fingerprint": "fp-1", "retry_fingerprint": "fp-1", "first_revision": "rev-a", "retry_revision": "rev-a", "acknowledgement": "UNKNOWN"}, "expected": "rev-a"},
-    {"id": "idempotency-key-collision", "kind": "idempotency_collision", "input": {"first_key": "key-a", "retry_key": "key-a", "first_fingerprint": "fp-1", "retry_fingerprint": "fp-2"}, "expected": 409},
-    {"id": "independent-publications-are-siblings", "kind": "concurrent_publications", "input": {"parent": "rev-parent", "first_key": "key-a", "second_key": "key-b", "first_revision": "rev-a", "second_revision": "rev-b"}, "expected": true},
-    {"id": "dimension-mismatch-is-invalid", "kind": "typed_expression", "input": {"quote_unit": "QUOTE:asset-q", "expression": {"op": "gt", "args": [{"op": "price_return", "lookback_buckets": 1}, {"op": "constant", "value": "1", "unit": "QUOTE:asset-q"}]}}, "expected": "INVALID_INPUT"},
-    {"id": "canonical-reload", "kind": "canonical_roundtrip", "input": {"b": [1, "x"], "a": {"z": true}}, "expected": true}
+    {
+      "id": "route-complete",
+      "kind": "route",
+      "input": {
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "interpretation_revision_id": "interp-fixture-1",
+        "input_class": "CONCRETE_THESIS",
+        "requested_job": "CREATE_STRATEGY",
+        "meaning_status": "SUPPORTED",
+        "syntax_status": "VALID",
+        "evidence_readiness": "READY",
+        "preserved_restrictions": [
+          "no leverage"
+        ],
+        "clarification_history": [],
+        "field_evidence": [
+          {
+            "field_name": "entry_threshold",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "intake-fixture-1",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "VERIFIED_FACT",
+            "value": "0.01",
+            "unit": "DIMENSIONLESS"
+          }
+        ]
+      },
+      "expected": "COMPILED"
+    },
+    {
+      "id": "route-clarification",
+      "kind": "route",
+      "input": {
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "interpretation_revision_id": "interp-fixture-1",
+        "input_class": "CONCRETE_THESIS",
+        "requested_job": "CREATE_STRATEGY",
+        "meaning_status": "SUPPORTED",
+        "syntax_status": "VALID",
+        "evidence_readiness": "READY",
+        "preserved_restrictions": [
+          "no leverage"
+        ],
+        "clarification_history": [],
+        "field_evidence": [
+          {
+            "field_name": "entry_threshold",
+            "state": "MISSING",
+            "origin": "USER_STATED",
+            "source_ref": "intake-fixture-1",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "VERIFIED_FACT"
+          }
+        ]
+      },
+      "expected": "NEEDS_CLARIFICATION"
+    },
+    {
+      "id": "route-unsupported",
+      "kind": "route",
+      "input": {
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "interpretation_revision_id": "interp-fixture-1",
+        "input_class": "CONCRETE_THESIS",
+        "requested_job": "CREATE_STRATEGY",
+        "meaning_status": "UNSUPPORTED",
+        "syntax_status": "VALID",
+        "evidence_readiness": "READY",
+        "preserved_restrictions": [
+          "no leverage"
+        ],
+        "clarification_history": [],
+        "field_evidence": [
+          {
+            "field_name": "entry_threshold",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "intake-fixture-1",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "VERIFIED_FACT",
+            "value": "0.01",
+            "unit": "DIMENSIONLESS"
+          }
+        ]
+      },
+      "expected": "UNSUPPORTED"
+    },
+    {
+      "id": "route-malformed",
+      "kind": "route",
+      "input": {
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "interpretation_revision_id": "interp-fixture-1",
+        "input_class": "CONCRETE_THESIS",
+        "requested_job": "CREATE_STRATEGY",
+        "meaning_status": "SUPPORTED",
+        "syntax_status": "INVALID",
+        "evidence_readiness": "READY",
+        "preserved_restrictions": [
+          "no leverage"
+        ],
+        "clarification_history": [],
+        "field_evidence": [
+          {
+            "field_name": "entry_threshold",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "intake-fixture-1",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "VERIFIED_FACT",
+            "value": "0.01",
+            "unit": "DIMENSIONLESS"
+          }
+        ]
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "route-unresolved",
+      "kind": "route",
+      "input": {
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "interpretation_revision_id": "interp-fixture-1",
+        "input_class": "CONCRETE_THESIS",
+        "requested_job": "CREATE_STRATEGY",
+        "meaning_status": "SUPPORTED",
+        "syntax_status": "VALID",
+        "evidence_readiness": "UNRESOLVED",
+        "preserved_restrictions": [
+          "no leverage"
+        ],
+        "clarification_history": [],
+        "field_evidence": [
+          {
+            "field_name": "entry_threshold",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "intake-fixture-1",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "VERIFIED_FACT",
+            "value": "0.01",
+            "unit": "DIMENSIONLESS"
+          }
+        ]
+      },
+      "expected": "UNRESOLVED"
+    },
+    {
+      "id": "return-keeps-gap",
+      "kind": "return",
+      "input": {
+        "scheduled_prices": [
+          "100",
+          null,
+          "110"
+        ],
+        "intervals": 2
+      },
+      "expected": {
+        "value": "0.1",
+        "unknown_reasons": [
+          "missing_bucket:1"
+        ]
+      }
+    },
+    {
+      "id": "return-missing-endpoint",
+      "kind": "return",
+      "input": {
+        "scheduled_prices": [
+          "100",
+          null,
+          "110"
+        ],
+        "intervals": 1
+      },
+      "expected": {
+        "value": null,
+        "unknown_reasons": [
+          "missing_endpoint"
+        ]
+      }
+    },
+    {
+      "id": "rolling-requires-every-bucket",
+      "kind": "rolling_mean",
+      "input": {
+        "scheduled_prices": [
+          "100",
+          null,
+          "110"
+        ],
+        "buckets": 3
+      },
+      "expected": {
+        "value": null,
+        "unknown_reasons": [
+          "missing_bucket:1"
+        ]
+      }
+    },
+    {
+      "id": "decimal-half-even",
+      "kind": "decimal",
+      "input": {
+        "left": "1",
+        "right": "6",
+        "operation": "divide"
+      },
+      "expected": {
+        "precision": 50,
+        "rounding": "ROUND_HALF_EVEN",
+        "prefix": "0.16666666666666666666666666666666666666666666666667"
+      }
+    },
+    {
+      "id": "boolean-false-and-unknown",
+      "kind": "boolean",
+      "input": {
+        "operator": "and",
+        "values": [
+          "FALSE",
+          "UNKNOWN"
+        ],
+        "reasons": [
+          "missing_volume"
+        ]
+      },
+      "expected": {
+        "value": "FALSE",
+        "reasons": [
+          "missing_volume"
+        ]
+      }
+    },
+    {
+      "id": "boolean-true-or-unknown",
+      "kind": "boolean",
+      "input": {
+        "operator": "or",
+        "values": [
+          "TRUE",
+          "UNKNOWN"
+        ],
+        "reasons": [
+          "future_bucket"
+        ]
+      },
+      "expected": {
+        "value": "TRUE",
+        "reasons": [
+          "future_bucket"
+        ]
+      }
+    },
+    {
+      "id": "boolean-complete-truth-table",
+      "kind": "boolean_truth_table",
+      "input": {
+        "rows": [
+          [
+            "TRUE",
+            "TRUE",
+            "TRUE",
+            "TRUE"
+          ],
+          [
+            "TRUE",
+            "FALSE",
+            "FALSE",
+            "TRUE"
+          ],
+          [
+            "TRUE",
+            "UNKNOWN",
+            "UNKNOWN",
+            "TRUE"
+          ],
+          [
+            "FALSE",
+            "TRUE",
+            "FALSE",
+            "TRUE"
+          ],
+          [
+            "FALSE",
+            "FALSE",
+            "FALSE",
+            "FALSE"
+          ],
+          [
+            "FALSE",
+            "UNKNOWN",
+            "FALSE",
+            "UNKNOWN"
+          ],
+          [
+            "UNKNOWN",
+            "TRUE",
+            "UNKNOWN",
+            "TRUE"
+          ],
+          [
+            "UNKNOWN",
+            "FALSE",
+            "FALSE",
+            "UNKNOWN"
+          ],
+          [
+            "UNKNOWN",
+            "UNKNOWN",
+            "UNKNOWN",
+            "UNKNOWN"
+          ]
+        ],
+        "not": [
+          [
+            "TRUE",
+            "FALSE"
+          ],
+          [
+            "FALSE",
+            "TRUE"
+          ],
+          [
+            "UNKNOWN",
+            "UNKNOWN"
+          ]
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "clarification-preserves-restrictions",
+      "kind": "clarification",
+      "input": {
+        "original_restrictions": [
+          "no leverage",
+          "quote asset is USDC"
+        ],
+        "next_restrictions": [
+          "no leverage",
+          "quote asset is USDC"
+        ],
+        "clarification": {
+          "previous_revision_id": "interp-old",
+          "question_id": "q-entry",
+          "question": "What entry threshold should apply?",
+          "answer_ref": "answer-fixture",
+          "changed_fields": [
+            "entry_threshold"
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "quote asset is USDC"
+          ]
+        },
+        "known_revision_ids": [
+          "interp-old"
+        ]
+      },
+      "expected": "NEEDS_CLARIFICATION"
+    },
+    {
+      "id": "unsupported-retains-request",
+      "kind": "unsupported",
+      "input": {
+        "original_request": "sell half, then rebalance an LP range",
+        "missing_capability": "partial_exit_and_lp_rebalance"
+      },
+      "expected": "UNSUPPORTED"
+    },
+    {
+      "id": "unresolved-keeps-strategy-absent",
+      "kind": "unresolved",
+      "input": {
+        "missing_dependency": "qualified_endpoint_price",
+        "adopted_configuration": {
+          "decision_interval_seconds": 300
+        },
+        "strategy": null
+      },
+      "expected": "UNRESOLVED"
+    },
+    {
+      "id": "draft-has-no-authority",
+      "kind": "draft",
+      "input": {
+        "state": "DRAFT",
+        "published_revision_id": null,
+        "execution_permission": {
+          "state": "NOT_GRANTED",
+          "mandate_ref": null
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "cross-owner-is-not-found",
+      "kind": "owner_error",
+      "input": {
+        "owner_id": "owner-a",
+        "operation_id": "op-read",
+        "requested_id": "record-1",
+        "record_owner_id": "owner-b",
+        "unknown_record_id": "record-missing"
+      },
+      "expected": {
+        "http": 404,
+        "body": {
+          "operation_id": "op-read",
+          "stage": "READ",
+          "outcome": "NOT_FOUND",
+          "code": "not_found",
+          "findings": [],
+          "retry": "NOT_RETRYABLE"
+        }
+      }
+    },
+    {
+      "id": "idempotent-retry-keeps-identity",
+      "kind": "idempotency",
+      "input": {
+        "owner_id": "owner-a",
+        "method": "POST",
+        "path": "/v1/strategies/strat-a/revisions",
+        "idempotency_key": "key-a",
+        "expected_parent_revision_id": "rev-parent",
+        "draft_id": "draft-a",
+        "strategy_fixture": "complete-strategy",
+        "retry_owner_id": "owner-a",
+        "retry_method": "POST",
+        "retry_path": "/v1/strategies/strat-a/revisions",
+        "retry_idempotency_key": "key-a",
+        "retry_expected_parent_revision_id": "rev-parent",
+        "retry_draft_id": "draft-a",
+        "retry_strategy_fixture": "complete-strategy",
+        "retry_parent_still_valid": false,
+        "first_revision": "rev-a",
+        "retry_revision": "rev-a",
+        "acknowledgement": "UNKNOWN"
+      },
+      "expected": "rev-a"
+    },
+    {
+      "id": "idempotency-key-collision",
+      "kind": "idempotency_collision",
+      "input": {
+        "owner_id": "owner-a",
+        "method": "POST",
+        "path": "/v1/strategies/strat-a/revisions",
+        "idempotency_key": "key-a",
+        "parent": "rev-parent",
+        "draft_id": "draft-a",
+        "retry_owner_id": "owner-a",
+        "retry_method": "POST",
+        "retry_path": "/v1/strategies/strat-a/revisions",
+        "retry_idempotency_key": "key-a",
+        "retry_parent": "rev-parent",
+        "retry_draft_id": "draft-a",
+        "strategy_fixture": "complete-strategy",
+        "mutate_strategy_threshold": true
+      },
+      "expected": 409
+    },
+    {
+      "id": "independent-publications-are-siblings",
+      "kind": "concurrent_publications",
+      "input": {
+        "owner": "owner-a",
+        "strategy": "strat-a",
+        "parent": "rev-parent",
+        "latest_at_first": "rev-parent",
+        "latest_at_second": "rev-a",
+        "first_key": "key-a",
+        "second_key": "key-b",
+        "first_draft_strategy": "strat-a",
+        "second_draft_strategy": "strat-a",
+        "first_revision": "rev-a",
+        "second_revision": "rev-b"
+      },
+      "expected": true
+    },
+    {
+      "id": "dimension-mismatch-is-invalid",
+      "kind": "typed_expression",
+      "input": {
+        "quote_unit": "QUOTE:asset-q",
+        "expression": {
+          "op": "gt",
+          "args": [
+            {
+              "op": "price_return",
+              "lookback_buckets": 1
+            },
+            {
+              "op": "constant",
+              "value": "1",
+              "unit": "QUOTE:asset-q"
+            }
+          ]
+        }
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "canonical-reload",
+      "kind": "canonical_roundtrip",
+      "input": {
+        "b": [
+          1,
+          "x"
+        ],
+        "a": {
+          "z": true
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "lag-rejects-boolean",
+      "kind": "typed_expression",
+      "input": {
+        "quote_unit": "QUOTE:asset-q",
+        "expression": {
+          "op": "lag",
+          "buckets": 1,
+          "value": {
+            "op": "gt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 1
+              },
+              {
+                "op": "constant",
+                "value": "0",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          }
+        }
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "sum-rejects-boolean",
+      "kind": "typed_expression",
+      "input": {
+        "quote_unit": "QUOTE:asset-q",
+        "expression": {
+          "op": "sum",
+          "buckets": 2,
+          "value": {
+            "op": "gt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 1
+              },
+              {
+                "op": "constant",
+                "value": "0",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          }
+        }
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "mean-rejects-boolean",
+      "kind": "typed_expression",
+      "input": {
+        "quote_unit": "QUOTE:asset-q",
+        "expression": {
+          "op": "mean",
+          "buckets": 2,
+          "value": {
+            "op": "gt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 1
+              },
+              {
+                "op": "constant",
+                "value": "0",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          }
+        }
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "publication-root-parent",
+      "kind": "publication_parent",
+      "input": {
+        "owner_id": "owner-a",
+        "strategy_id": "strat-a",
+        "draft_owner_id": "owner-a",
+        "draft_strategy_id": "strat-a",
+        "draft_base_revision_id": null,
+        "expected_parent_revision_id": null,
+        "parent_owner_id": null,
+        "parent_strategy_id": null,
+        "parent_exists": false,
+        "is_first_revision": true,
+        "latest_revision_id": null
+      },
+      "expected": "ACCEPT"
+    },
+    {
+      "id": "publication-sibling-parent-after-newer-child",
+      "kind": "publication_parent",
+      "input": {
+        "owner_id": "owner-a",
+        "strategy_id": "strat-a",
+        "draft_owner_id": "owner-a",
+        "draft_strategy_id": "strat-a",
+        "draft_base_revision_id": "rev-parent",
+        "expected_parent_revision_id": "rev-parent",
+        "parent_owner_id": "owner-a",
+        "parent_strategy_id": "strat-a",
+        "parent_exists": true,
+        "is_first_revision": false,
+        "latest_revision_id": "rev-sibling-a"
+      },
+      "expected": "ACCEPT"
+    },
+    {
+      "id": "publication-draft-parent-mismatch",
+      "kind": "publication_parent",
+      "input": {
+        "owner_id": "owner-a",
+        "strategy_id": "strat-a",
+        "draft_owner_id": "owner-a",
+        "draft_strategy_id": "strat-a",
+        "draft_base_revision_id": "rev-a",
+        "expected_parent_revision_id": "rev-b",
+        "parent_owner_id": "owner-a",
+        "parent_strategy_id": "strat-a",
+        "parent_exists": true,
+        "is_first_revision": false,
+        "latest_revision_id": "rev-b"
+      },
+      "expected": "parent_revision_conflict"
+    },
+    {
+      "id": "publication-foreign-parent",
+      "kind": "publication_parent",
+      "input": {
+        "owner_id": "owner-a",
+        "strategy_id": "strat-a",
+        "draft_owner_id": "owner-a",
+        "draft_strategy_id": "strat-a",
+        "draft_base_revision_id": "rev-foreign",
+        "expected_parent_revision_id": "rev-foreign",
+        "parent_owner_id": "owner-b",
+        "parent_strategy_id": "strat-a",
+        "parent_exists": true,
+        "is_first_revision": false,
+        "latest_revision_id": "rev-foreign"
+      },
+      "expected": "parent_revision_conflict"
+    },
+    {
+      "id": "route-rejects-incomplete-evidence-metadata",
+      "kind": "route",
+      "input": {
+        "meaning_status": "SUPPORTED",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "route-pending-proposal-needs-adoption",
+      "kind": "route",
+      "input": {
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "interpretation_revision_id": "interp-fixture-1",
+        "input_class": "CONCRETE_THESIS",
+        "requested_job": "CREATE_STRATEGY",
+        "meaning_status": "SUPPORTED",
+        "syntax_status": "VALID",
+        "evidence_readiness": "READY",
+        "preserved_restrictions": [
+          "no leverage"
+        ],
+        "clarification_history": [],
+        "field_evidence": [
+          {
+            "field_name": "entry_threshold",
+            "state": "KNOWN",
+            "origin": "AGENT_PROPOSED",
+            "source_ref": "intake-fixture-1",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "VERIFIED_FACT",
+            "value": "0.01",
+            "unit": "DIMENSIONLESS",
+            "adoption": "PENDING"
+          }
+        ]
+      },
+      "expected": "NEEDS_CLARIFICATION"
+    },
+    {
+      "id": "clarification-rejects-unknown-revision-link",
+      "kind": "clarification",
+      "input": {
+        "original_restrictions": [
+          "no leverage",
+          "quote asset is USDC"
+        ],
+        "next_restrictions": [
+          "no leverage",
+          "quote asset is USDC"
+        ],
+        "clarification": {
+          "previous_revision_id": "interp-old",
+          "question_id": "q-entry",
+          "question": "What entry threshold should apply?",
+          "answer_ref": "answer-fixture",
+          "changed_fields": [
+            "entry_threshold"
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "quote asset is USDC"
+          ]
+        },
+        "known_revision_ids": [
+          "different-revision"
+        ]
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "idempotency-key-is-owner-and-route-scoped",
+      "kind": "idempotency_scope",
+      "input": {
+        "first_owner_id": "owner-a",
+        "second_owner_id": "owner-b",
+        "first_path": "/v1/strategies/strat-a/revisions",
+        "second_path": "/v1/strategies/strat-b/revisions",
+        "first_method": "POST",
+        "second_method": "POST",
+        "first_key": "shared-key",
+        "second_key": "shared-key"
+      },
+      "expected": "INDEPENDENT"
+    },
+    {
+      "id": "lag-accepts-numeric-series",
+      "kind": "typed_expression",
+      "input": {
+        "quote_unit": "QUOTE:asset-q",
+        "expression": {
+          "op": "lag",
+          "value": {
+            "op": "price_return",
+            "lookback_buckets": 2
+          },
+          "buckets": 3
+        }
+      },
+      "expected": "DIMENSIONLESS"
+    }
+  ],
+  "record_examples": {
+    "IntakeRequest": {
+      "original_request": "Buy after a positive three-bucket return; exit below zero.",
+      "restrictions": [
+        "no leverage"
+      ],
+      "requested_job": "CREATE_STRATEGY",
+      "input_class": "CONCRETE_THESIS",
+      "declared_market": {
+        "network": "MONAD",
+        "base_asset": "0x1111111111111111111111111111111111111111",
+        "quote_asset": "0x2222222222222222222222222222222222222222"
+      }
+    },
+    "PromptInterpretation": {
+      "intake_record_id": "10000000-0000-4000-8000-000000000001",
+      "interpretation_revision_id": "interp-fixture-1",
+      "input_class": "CONCRETE_THESIS",
+      "requested_job": "CREATE_STRATEGY",
+      "meaning_status": "SUPPORTED",
+      "syntax_status": "VALID",
+      "evidence_readiness": "READY",
+      "preserved_restrictions": [
+        "no leverage"
+      ],
+      "clarification_history": [],
+      "field_evidence": [
+        {
+          "field_name": "entry_threshold",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "intake-fixture-1",
+          "interpretation_revision": "interp-fixture-1",
+          "evidence_status": "VERIFIED_FACT",
+          "value": "0.01",
+          "unit": "DIMENSIONLESS"
+        }
+      ]
+    },
+    "Clarification": {
+      "previous_revision_id": "interp-old",
+      "question_id": "q-entry",
+      "question": "What entry threshold should apply?",
+      "answer_ref": "answer-fixture",
+      "changed_fields": [
+        "entry_threshold"
+      ],
+      "preserved_restrictions": [
+        "no leverage",
+        "quote asset is USDC"
+      ]
+    },
+    "Outcome": {
+      "operation_id": "op-fixture",
+      "stage": "COMPILATION",
+      "outcome": "COMPILED",
+      "code": "compiled",
+      "findings": [],
+      "retry": "NOT_RETRYABLE"
+    },
+    "StrategyDraft": {
+      "draft_id": "draft-fixture",
+      "original_request": "synthetic request",
+      "interpretation_revision_id": "interp-fixture-1",
+      "source_syntax": {
+        "kind": "supported-rule"
+      },
+      "validation_findings": [],
+      "state": "DRAFT",
+      "published_revision_id": null,
+      "strategy_id": "strategy-fixture",
+      "base_revision_id": null
+    },
+    "StrategySpec": {
+      "schema_version": "p02.strategy/1",
+      "strategy_id": "fixture-spot-return-volume-v1",
+      "domain": "SPOT",
+      "market": {
+        "network": "MONAD",
+        "research_binding": {
+          "chain_id": null,
+          "underlying_venue": "fixture-underlying-venue/1",
+          "pool_address": "0x3333333333333333333333333333333333333333",
+          "token_order": [
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222"
+          ],
+          "base_asset": "0x1111111111111111111111111111111111111111",
+          "quote_asset": "0x2222222222222222222222222222222222222222",
+          "orientation": "QUOTE_PER_BASE",
+          "base_decimals": 18,
+          "quote_decimals": 6,
+          "event_schema_version": "fixture-events/1",
+          "amount_conversion_version": "fixture-amounts/1",
+          "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+          "evidence_class": "SYNTHETIC_FIXTURE",
+          "qualification": "UNQUALIFIED"
+        },
+        "execution_route": {
+          "adapter": "KURU_FLOW_FIXED_INPUT",
+          "identity_state": "UNKNOWN",
+          "identity": null,
+          "qualification": "UNQUALIFIED"
+        },
+        "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+      },
+      "decision_interval_seconds": 300,
+      "data_inputs": [
+        "price",
+        "quote_volume"
+      ],
+      "entry": {
+        "op": "gt",
+        "args": [
+          {
+            "op": "price_return",
+            "lookback_buckets": 3
+          },
+          {
+            "op": "constant",
+            "value": "0.01",
+            "unit": "DIMENSIONLESS"
+          }
+        ]
+      },
+      "exit": {
+        "op": "lt",
+        "args": [
+          {
+            "op": "price_return",
+            "lookback_buckets": 1
+          },
+          {
+            "op": "constant",
+            "value": "0",
+            "unit": "DIMENSIONLESS"
+          }
+        ]
+      },
+      "invalidation": {
+        "state": "NOT_REQUESTED",
+        "source_ref": "synthetic:adopted-no-invalidation"
+      },
+      "sizing": {
+        "kind": "FIXED_QUOTE_AMOUNT",
+        "amount": "100",
+        "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+      },
+      "additions": false,
+      "partial_exits": false,
+      "cost_assumptions": {
+        "fee_rate": "0.003",
+        "slippage_rate": "0.005",
+        "source_ref": "synthetic:adopted-cost-profile"
+      },
+      "risk_limits": {
+        "max_quote_notional": "100",
+        "max_open_positions": 1
+      },
+      "action_scope": [
+        "SPOT_BUY",
+        "SPOT_SELL_ALL_ATTRIBUTABLE"
+      ],
+      "execution_permission": {
+        "state": "NOT_GRANTED",
+        "mandate_ref": null
+      },
+      "warmup_buckets": 3,
+      "semantic_manifest": {
+        "language": "edge-strategy/1",
+        "operator_registry": "edge-operators/1",
+        "history": "scheduled-5m-no-fill/1",
+        "boolean": "kleene-whole-tree/1",
+        "numeric": "decimal-50-half-even/1",
+        "serialization": "p02-json-decimal-string/1",
+        "compiler": "edge-compiler/1"
+      }
+    },
+    "PublicationRequest": {
+      "operation_id": "op-fixture",
+      "idempotency_key": "key-fixture",
+      "expected_parent_revision_id": null,
+      "draft_id": "draft-fixture",
+      "strategy": {
+        "schema_version": "p02.strategy/1",
+        "strategy_id": "fixture-spot-return-volume-v1",
+        "domain": "SPOT",
+        "market": {
+          "network": "MONAD",
+          "research_binding": {
+            "chain_id": null,
+            "underlying_venue": "fixture-underlying-venue/1",
+            "pool_address": "0x3333333333333333333333333333333333333333",
+            "token_order": [
+              "0x1111111111111111111111111111111111111111",
+              "0x2222222222222222222222222222222222222222"
+            ],
+            "base_asset": "0x1111111111111111111111111111111111111111",
+            "quote_asset": "0x2222222222222222222222222222222222222222",
+            "orientation": "QUOTE_PER_BASE",
+            "base_decimals": 18,
+            "quote_decimals": 6,
+            "event_schema_version": "fixture-events/1",
+            "amount_conversion_version": "fixture-amounts/1",
+            "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+            "evidence_class": "SYNTHETIC_FIXTURE",
+            "qualification": "UNQUALIFIED"
+          },
+          "execution_route": {
+            "adapter": "KURU_FLOW_FIXED_INPUT",
+            "identity_state": "UNKNOWN",
+            "identity": null,
+            "qualification": "UNQUALIFIED"
+          },
+          "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+        },
+        "decision_interval_seconds": 300,
+        "data_inputs": [
+          "price",
+          "quote_volume"
+        ],
+        "entry": {
+          "op": "gt",
+          "args": [
+            {
+              "op": "price_return",
+              "lookback_buckets": 3
+            },
+            {
+              "op": "constant",
+              "value": "0.01",
+              "unit": "DIMENSIONLESS"
+            }
+          ]
+        },
+        "exit": {
+          "op": "lt",
+          "args": [
+            {
+              "op": "price_return",
+              "lookback_buckets": 1
+            },
+            {
+              "op": "constant",
+              "value": "0",
+              "unit": "DIMENSIONLESS"
+            }
+          ]
+        },
+        "invalidation": {
+          "state": "NOT_REQUESTED",
+          "source_ref": "synthetic:adopted-no-invalidation"
+        },
+        "sizing": {
+          "kind": "FIXED_QUOTE_AMOUNT",
+          "amount": "100",
+          "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+        },
+        "additions": false,
+        "partial_exits": false,
+        "cost_assumptions": {
+          "fee_rate": "0.003",
+          "slippage_rate": "0.005",
+          "source_ref": "synthetic:adopted-cost-profile"
+        },
+        "risk_limits": {
+          "max_quote_notional": "100",
+          "max_open_positions": 1
+        },
+        "action_scope": [
+          "SPOT_BUY",
+          "SPOT_SELL_ALL_ATTRIBUTABLE"
+        ],
+        "execution_permission": {
+          "state": "NOT_GRANTED",
+          "mandate_ref": null
+        },
+        "warmup_buckets": 3,
+        "semantic_manifest": {
+          "language": "edge-strategy/1",
+          "operator_registry": "edge-operators/1",
+          "history": "scheduled-5m-no-fill/1",
+          "boolean": "kleene-whole-tree/1",
+          "numeric": "decimal-50-half-even/1",
+          "serialization": "p02-json-decimal-string/1",
+          "compiler": "edge-compiler/1"
+        }
+      }
+    },
+    "PublicationResult": {
+      "operation_id": "op-fixture",
+      "stage": "PUBLICATION",
+      "outcome": "PUBLISHED",
+      "code": "published",
+      "findings": [],
+      "retry": "SAFE_SAME_KEY",
+      "publication_id": "pub-fixture",
+      "revision_id": "rev-fixture",
+      "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "created_at": "2026-10-06T00:00:00Z"
+    },
+    "ResearchBinding": {
+      "chain_id": null,
+      "underlying_venue": "fixture-underlying-venue/1",
+      "pool_address": "0x3333333333333333333333333333333333333333",
+      "token_order": [
+        "0x1111111111111111111111111111111111111111",
+        "0x2222222222222222222222222222222222222222"
+      ],
+      "base_asset": "0x1111111111111111111111111111111111111111",
+      "quote_asset": "0x2222222222222222222222222222222222222222",
+      "orientation": "QUOTE_PER_BASE",
+      "base_decimals": 18,
+      "quote_decimals": 6,
+      "event_schema_version": "fixture-events/1",
+      "amount_conversion_version": "fixture-amounts/1",
+      "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+      "evidence_class": "SYNTHETIC_FIXTURE",
+      "qualification": "UNQUALIFIED"
+    },
+    "FieldEvidence": {
+      "field_name": "entry_threshold",
+      "state": "KNOWN",
+      "origin": "USER_STATED",
+      "source_ref": "intake-fixture-1",
+      "interpretation_revision": "interp-fixture-1",
+      "evidence_status": "VERIFIED_FACT",
+      "value": "0.01",
+      "unit": "DIMENSIONLESS"
+    }
+  },
+  "record_variants": [
+    {
+      "type": "PublicationResult",
+      "value": {
+        "operation_id": "op-rejected",
+        "stage": "PUBLICATION",
+        "outcome": "INVALID_INPUT",
+        "code": "validation_error",
+        "findings": [
+          {
+            "code": "invalid_parent",
+            "path": "/expected_parent_revision_id",
+            "detail": "parent does not match draft base"
+          }
+        ],
+        "retry": "NOT_RETRYABLE",
+        "publication_id": null,
+        "revision_id": null,
+        "content_sha256": null,
+        "manifest_sha256": null,
+        "created_at": "2026-10-06T00:00:01Z"
+      }
+    },
+    {
+      "type": "PublicationResult",
+      "value": {
+        "operation_id": "op-conflict",
+        "stage": "PUBLICATION",
+        "outcome": "CONFLICTED",
+        "code": "parent_revision_conflict",
+        "findings": [
+          {
+            "code": "parent_revision_conflict",
+            "path": "/expected_parent_revision_id",
+            "detail": "parent does not match draft base"
+          }
+        ],
+        "retry": "NOT_RETRYABLE",
+        "publication_id": null,
+        "revision_id": null,
+        "content_sha256": null,
+        "manifest_sha256": null,
+        "created_at": "2026-10-06T10:00:02Z"
+      }
+    },
+    {
+      "type": "Outcome",
+      "value": {
+        "operation_id": "op-needs_clarification",
+        "stage": "INTERPRETATION",
+        "outcome": "NEEDS_CLARIFICATION",
+        "code": "needs_clarification",
+        "findings": [
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/entry_threshold",
+            "detail": "Ask which entry threshold applies."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
+    },
+    {
+      "type": "Outcome",
+      "value": {
+        "operation_id": "op-unsupported",
+        "stage": "VALIDATION",
+        "outcome": "UNSUPPORTED",
+        "code": "unsupported",
+        "findings": [
+          {
+            "code": "missing_capability",
+            "path": "/original_request",
+            "detail": "partial exits are outside the supported subset."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
+    },
+    {
+      "type": "Outcome",
+      "value": {
+        "operation_id": "op-unresolved",
+        "stage": "VALIDATION",
+        "outcome": "UNRESOLVED",
+        "code": "unresolved",
+        "findings": [
+          {
+            "code": "missing_dependency",
+            "path": "/market/research_binding",
+            "detail": "qualified endpoint prices are unavailable."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
+    },
+    {
+      "type": "Outcome",
+      "value": {
+        "operation_id": "op-invalid_input",
+        "stage": "COMPILATION",
+        "outcome": "INVALID_INPUT",
+        "code": "validation_error",
+        "findings": [
+          {
+            "code": "unit_mismatch",
+            "path": "/entry/args/0/unit",
+            "detail": "comparison units do not match."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
+    }
+  ],
+  "persisted_examples": [
+    {
+      "schema_version": "p02.intake_request/1",
+      "record_type": "IntakeRequest",
+      "record_id": "10000000-0000-4000-8000-000000000001",
+      "owner_id": "20000000-0000-4000-8000-000000000002",
+      "operation_id": "30000000-0000-4000-8000-000000000003",
+      "created_at": "2026-10-06T10:00:00Z",
+      "content": {
+        "original_request": "Buy after a positive three-bucket return; exit below zero.",
+        "restrictions": [
+          "no leverage"
+        ],
+        "requested_job": "CREATE_STRATEGY",
+        "input_class": "CONCRETE_THESIS",
+        "declared_market": {
+          "network": "MONAD",
+          "base_asset": "0x1111111111111111111111111111111111111111",
+          "quote_asset": "0x2222222222222222222222222222222222222222"
+        }
+      }
+    },
+    {
+      "schema_version": "p02.prompt_interpretation/1",
+      "record_type": "PromptInterpretation",
+      "record_id": "10000000-0000-4000-8000-000000000001",
+      "owner_id": "20000000-0000-4000-8000-000000000002",
+      "operation_id": "30000000-0000-4000-8000-000000000003",
+      "created_at": "2026-10-06T10:00:00Z",
+      "content": {
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "interpretation_revision_id": "interp-fixture-1",
+        "input_class": "CONCRETE_THESIS",
+        "requested_job": "CREATE_STRATEGY",
+        "meaning_status": "SUPPORTED",
+        "syntax_status": "VALID",
+        "evidence_readiness": "READY",
+        "preserved_restrictions": [
+          "no leverage"
+        ],
+        "clarification_history": [],
+        "field_evidence": [
+          {
+            "field_name": "entry_threshold",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "intake-fixture-1",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "VERIFIED_FACT",
+            "value": "0.01",
+            "unit": "DIMENSIONLESS"
+          }
+        ]
+      }
+    }
   ]
 }
