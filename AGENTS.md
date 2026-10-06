@@ -30,7 +30,9 @@ The builder selected a manual merge gate on 2026-10-02. GitHub-enforced approval
 
 Paid services, wallet changes, delegation and financial transactions require explicit task-level authorization. Keep credentials outside source control and model inputs.
 
-For implementation and review, follow `playbooks/MATT_POCOCK_PROJECT_WORKFLOW.md`. Use actual repository scripts for verification. Report checks that could not run.
+For implementation and review, follow `playbooks/MATT_POCOCK_PROJECT_WORKFLOW.md`. For isolated lanes and exact-candidate handoffs, follow `docs/agents/controller-workflow.md`. Use actual repository scripts for verification. Report checks that could not run.
+
+For pane coordination, use `coordinating-parallel-workers` and Smux under the messaging rules in `docs/agents/controller-workflow.md`. Requests and replies must reach their recorded panes. After sending, await an incoming Smux reply rather than polling panes, branches or background thread status. Every assignment names its reply destination; unavailable delivery requires an explicit alternative route.
 
 For current library, framework, SDK, API, CLI and cloud-service documentation, use Context7. Resolve the library ID first, then query documentation with the complete technical question.
 

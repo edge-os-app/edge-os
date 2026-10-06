@@ -118,22 +118,29 @@ The repository configuration is the source of truth for commands and paths. Do n
 
 ## Approved model policy
 
-Builder approved on 2026-10-01. These choices control engineering roles in this workspace. They are operating defaults, not benchmark results.
+Builder approved the Codex route on 2026-10-01 and added the Claude route on 2026-10-06. Choose the worker host according to available subscription capacity. These are operating defaults, not benchmark results. This section is the authoritative model-routing policy.
 
-| Role | Model | Model ID | Reasoning effort | Review assignment |
+| Host and role | Model | Model selection | Effort | Assignment |
 |---|---|---|---|---|
-| Gate/controller | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Check scope, dependencies, evidence, unresolved findings, and acceptance. |
-| Implementer | GPT-6 Luna | `gpt-6-luna` | `high` | Implement one approved, bounded ticket with its tests and runtime evidence. |
-| Internal reviewer 1 | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Check specification compliance, correctness, tests, and integration. |
-| Internal reviewer 2 | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Challenge assumptions, missing failures, permissions, and recovery. Check statistical validity when relevant. |
+| Codex controller and independent gate | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Check scope, dependencies, candidate evidence, verified defects and acceptance. The gate remains independent of the worker and its two internal reviewers. |
+| Codex implementer | GPT-6 Luna | `gpt-6-luna` | `high` | Implement one accepted bounded ticket with tests and runtime evidence. |
+| Codex internal reviewer 1 | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Check specification compliance, correctness, tests and integration. |
+| Codex internal reviewer 2 | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Challenge assumptions, missing failures, permissions and recovery. Check statistical validity when relevant. |
+| Claude implementer | Sonnet | Explicitly select account-available Sonnet and record its exact version | Record actual host-supported effort | Implement the same accepted ticket and verification requirements. |
+| Claude internal reviewer 1 | Sonnet | Explicit Sonnet selection in a native reviewer context | Record actual host-supported effort | Check specification compliance, correctness, tests and integration. |
+| Claude internal reviewer 2 | Sonnet | Explicit Sonnet selection in a separate native reviewer context | Record actual host-supported effort | Challenge assumptions, missing failures, permissions and recovery. Check statistical validity when relevant. |
 
-Use Standard speed by default. Use GPT-6.1 Sol for both internal reviewers. Luna is not the default reviewer.
+Use Standard speed for Codex by default. Luna is not a default reviewer. Claude reviewers must select Sonnet explicitly rather than inherit a possibly different implementer model. Confirm the actual model before accepting a review. Account aliases can change versions.
+
+For a very difficult Claude ticket, use Opus for one internal reviewer when complex cross-module behavior, consequential ambiguity or repeated failed repairs justify it. Record the reason, bounded review question, available model and review budget before invoking it. Opus is not automatic for every financial ticket or for cosmetic work. The independent Codex gate still checks financial/security boundaries and required qualification evidence. A gate or stronger model cannot substitute for tests or actual provider enforcement.
+
+Use native internal reviewers on the active host, followed by the separate Codex gate. Keep OMC disabled for this workflow. The existing tmux lanes and handoff packets are sufficient; this policy installs no orchestrator or cross-provider bridge.
 
 ### Implementation and review boundaries
 
-- Give Luna explicit inputs, outputs, constraints, acceptance behavior, and required checks.
+- Give either implementer explicit inputs, outputs, constraints, acceptance behavior and required checks.
 - Return missing product decisions to the controller. An implementer must not invent accepted behavior.
-- Escalate implementation to GPT-6.1 Sol when semantic ambiguity or repeated failed repairs prevent completion.
+- For Codex implementation, escalate to GPT-6.1 Sol when semantic ambiguity or repeated failed repairs prevent completion. For Claude implementation, return a blocker to the controller before changing the implementer model. The approved difficult-ticket exception above concerns review, not an automatic Opus implementer switch.
 - Record the reason and actual model before the escalated attempt.
 - Run each internal review in a separate context from the implementer and the other reviewer.
 - Give both reviewers the approved behavior, relevant contracts, exact change, and verification evidence.
@@ -142,7 +149,10 @@ Use Standard speed by default. Use GPT-6.1 Sol for both internal reviewers. Luna
 - Keep the other reviewer's findings hidden until each reviewer finishes its initial assessment.
 - Record each verdict against the exact reviewed revision.
 - After a fix, review the changed scope and affected invariants again. Earlier approval does not cover the replacement revision.
-- Two Sol reviews can share blind spots. Require reproducible tests and inspectable evidence before acceptance.
+- Two reviewers using the same model can share blind spots. Require reproducible tests and inspectable evidence before acceptance.
+- After both internal reviews pass, send the same candidate and evidence to the independent Codex gate. Gate approval cannot replace a missing internal review.
+- When switching worker hosts, stop the old worker first. Preserve its task, worktree, branch, base, changes, checks and remaining work. The replacement verifies those records before editing. One lane has one active writer.
+- Record the new worker host and review route. The replacement candidate needs both internal reviews under that route and the gate's assessment. Preserve earlier reviews as historical evidence.
 
 ### Optional escalation and authority
 
@@ -470,7 +480,10 @@ Required checks and runtime evidence:
 Review owner, scope, budget, and escalation condition:
 Actual models, reasoning effort, speed, and approved overrides:
 Return format and completion route:
+Controller/reply pane and worker/gate destinations:
 ```
+
+For pane-based work, use the [Smux messaging and standby rules](../docs/agents/controller-workflow.md#messaging-integration-and-handoff). Return results to the recorded recipient pane. After sending, await its incoming message; background thread-status loops are not a substitute. Durable candidate/report records remain the completion evidence.
 
 Parallel writers need disjoint owned surfaces and isolated worktrees. Serialize changes to shared contracts or files. Record who may merge or publish. After integration, verify the combined behavior before recording the ticket as integrated.
 
