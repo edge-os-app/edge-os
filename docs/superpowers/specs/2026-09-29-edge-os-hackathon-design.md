@@ -6,9 +6,11 @@ Status: `PRODUCT SCOPE APPROVED; TO-SPEC HANDOFF; DEPENDENT TECHNICAL CHOICES OP
 
 Date: 2026-09-29, Africa/Kinshasa
 
-Last updated: 2026-10-05, Africa/Kinshasa
+Last updated: 2026-10-06, Africa/Kinshasa
 
 Approval record, 2026-10-05: the builder stated, "okay I approve the spec, run to-spec" and requested a detailed synthesis of the relevant workspace sources. This accepts the recorded product scope and authorizes this specification handoff. It does not resolve the named technical choices, approve implementation dispatch, pass an unrun check, or authorize spending or financial execution. Earlier statements that full product-scope approval is pending are historical. Explicitly proposed extensions and unresolved engineering choices remain proposed.
+
+Memory approval, 2026-10-06: the builder accepted the [thin per-agent memory contract](#accepted-thin-per-agent-memory-contract) below. This refines the existing persistent-agent and contextual-conversation requirements. Storage encoding and runtime qualification remain open; no implementation, ticket publication or financial action is authorized by this approval.
 
 Revision scope: preserve the accepted research/live decisions through Q31, separate agent wallets, v0.12.2 interaction requirements and the research-first build order with agent deployment in the intended release. Add user stories, testing boundaries, source adaptations and dependency coverage for ticket decomposition. Existing numbered sections retain their anchors and detailed requirements. Probe A remains closed at its bounded claim. Probe B and Nansen qualification remain unstarted. The complete Compass gates and participant checks do not pass through document approval.
 
@@ -156,6 +158,34 @@ Story numbers are stable handoff references, not implementation tickets. Each st
 
 These are behavioral boundaries. They do not select an unapproved framework, database, queue package, API route name or deployment address. Existing detailed sections own field meanings.
 
+### Accepted application stack
+
+Builder decision, 2026-10-06, for proposed P01: Python/FastAPI backend, PostgreSQL durable application storage, Next.js frontend and Privy user authentication. [ADR 0008](../../adr/0008-python-api-postgresql-nextjs-privy-auth.md) records the boundary and trade-offs. This resolves the framework/database/auth-provider choices, not every P01 detail or implementation readiness.
+
+The frontend uses the approved design's tokens and components. CSS and Tailwind are both permitted; retain compatible exported CSS and use Tailwind where it reduces implementation work. Do not substitute a component kit's default appearance for the approved design. Pin compatible dependency/runtime versions in the actual implementation.
+
+FastAPI verifies Privy authentication before deriving the requesting user from signed claims. Validate the signature, adopted algorithm/key handling, issuer, app audience, expiration and required subject; reject missing, invalid or misbound tokens and another user's record access. Determine the actual verification-key/rotation and token-delivery mechanism using current official Privy docs through Context7 and Exa. Authentication is separate from wallet creation, funding, restricted signer delegation and trading permission. Client-supplied identity or a connected wallet cannot bypass application ownership.
+
+P01 still supplies startup/configuration, database access and migrations, the authenticated ownership boundary, isolated test data/cleanup, version choices and the first local runnable profile. Hosting and the persistent worker's production lifecycle need explicit handoffs before deployment; no cloud vendor, ORM, queue framework or paid service is selected here. Relevant TX Odds/OKX sources are comparison inputs, not code or authorization to copy wholesale. Teammates receive portable required inputs before dispatch.
+
+### Accepted research declaration and agent monitoring handoff
+
+Builder approval, 2026-10-06: make these existing research, persistent-deployment and monitoring requirements explicit in the proposed tickets. This approves the focused requirements below, not the whole ticket graph, implementation, publication or financial actions. All new acceptance checks remain unrun.
+
+Before an evaluation reads its outcome labels, save the candidate `EdgeSpec` revision, claim and falsification criteria, adopted budget, declared trial identities and evaluation configuration in the research records. The configuration identifies variants, direction, horizon, comparisons, data partitions and permitted access. Bind each attempt and result to those saved identities. Reject an unregistered trial or an attempt to overwrite the declaration after outcomes. A revised candidate has new lineage and retains its prior access history; previously inspected data cannot become unseen evidence. Observational exploration may still produce descriptive findings, with its actual access order visible. It cannot retrospectively present a discovered pattern as a prediction declared beforehand.
+
+A persistent trading worker evaluates the approved `StrategySpec` revision on its declared decision schedule using qualified available inputs and the compiler's semantics. Persist the decision time, input and semantic identities, signal/no-signal/ineligible result and reason before admitting a `TradeIntent`. A no-signal decision is useful work, not a failed trade. Missing, stale or insufficient history preserves the applicable reason and prevents affected action. Restart must retain decisions and reconcile unresolved actions before new submission. Replaying a decision cannot create a duplicate economic action. Models and memory cannot silently change the adopted rules, schedule or authority.
+
+Direct agent views and contextual answers use the same records to distinguish:
+
+- **Worker health:** last attempted and completed evaluation, latest input/update time, next scheduled work or waiting/stopped/fault reason, and pending reconciliation. Show timestamps and deployment/revision scope. A process label or heartbeat alone does not prove strategy evaluation or submission.
+- **Trading results:** per-agent realized results, separately dated unrealized estimates, qualified costs and separately identified deposits/withdrawals. Aggregate reconciled attributable positions and receipts. Unknown marks, costs, conversions and transaction outcomes remain unknown; they cannot become zero or proven profit. Native gas remains separately recorded unless conversion into the reported unit is qualified.
+- **Edge evidence:** revision-linked historical and forward findings, attempted comparisons, contrary results and unresolved assumptions. Positive account results alone do not establish a repeatable edge, and evidence status cannot grant or remove financial permission by itself.
+
+Before displaying a new return, account-value or drawdown metric, adopt a versioned calculation profile. Define the reporting unit and period, cost and valuation inputs, treatment of external cash flows, sampling and high-water-mark rules where applicable, and missing-data behavior. Retain small independently calculated examples and the exact profile identity with results. A supported raw gain/loss display need not wait for an additional percentage-return metric. These requirements do not select an annualization or cash-flow-adjustment convention.
+
+Required worker inputs are task-specific and portable under the [implementation reference map](../../research/EDGE_OS_IMPLEMENTATION_REFERENCE_MAP.md). P02/P06 supply the selected compiler requirements, source/version provenance, adaptation exclusions and independently authored applicable fixtures before dependent consumers start. Private course archives and unrelated project folders are not mandatory teammate inputs. The controller checks rights and provides permitted extracts in the clone or issue; links to unavailable private originals alone cannot satisfy readiness.
+
 ### Modules and interfaces
 
 | Boundary | Receives | Produces and preserves | May not do |
@@ -186,7 +216,7 @@ Use the definitions in [section 7](#7-core-product-objects) and the [research co
 - A durable deployment owns state and references. Each `TradeIntent`, reservation, attempt, transaction and receipt retains exact agent/wallet/position lineage.
 - Funding and withdrawal records remain distinct from trade results. Saved simulation records remain distinct from both.
 
-Schema encoding and database technology remain open. Required relationships and ownership checks do not. Ticket authors must freeze versioned machine contracts before parallel consumers implement them. Do not copy the frontend's in-memory representation into the production schema as an assumed decision.
+Schema encoding remains open; PostgreSQL is the selected database under the accepted application stack. Required relationships and ownership checks remain authoritative. Ticket authors must freeze versioned machine contracts before parallel consumers implement them. Do not copy the frontend's in-memory representation into the production schema as an assumed decision.
 
 ### State, timing and authority
 
@@ -285,7 +315,7 @@ This task creates no implementation tickets, production code, wallets, paid requ
 | STAT-Q01 qualification | Tested method profile and failure criteria | Formal statistical support claims | Descriptive research, simulator or independently qualified live operation |
 | Numerical resource and commercial settings | Measured runtime limits and explicit provider/research budgets | Runs requiring those values | Interface/schema work that rejects absent limits |
 
-Resolve a consequential implementation choice in its assigned decision work, then update the existing ADR if it changes an accepted boundary. Do not create an ADR to invent a choice. Accepted ADRs 0001–0007 remain authoritative within their recorded scope.
+Resolve a consequential implementation choice in its assigned decision work, then update the existing ADR if it changes an accepted boundary. Do not create an ADR to invent a choice. Accepted ADRs 0001–0008 remain authoritative within their recorded scope.
 
 ### Ticket handoff rule
 
@@ -736,6 +766,33 @@ Evaluate Jev against a declared deterministic or simpler-model baseline before t
 The persistent worker owns scheduling, durable records, recovery and order reconciliation. Hermes conversation memory and Jev outputs do not replace that state. Separate agent services are optional and remain outside the first proof. The build brief must select and version any adopted runtime/model and qualify its actual outputs; these roles are not implemented by this amendment.
 
 The cloned JEV Trader application is a Kuru execution/proof reference described in the JEV review, BUILDER-ONLY REFERENCE `docs/research/06_JEV_TRADER_ALCHEMY_ENVIO_REVIEW.md#7-what-edge-os-should-take-from-jev-trader`. It is distinct from the proposed Jev assessment role. Edge OS does not adopt its trading loop, local-key signing or forced direction choice.
+
+### Accepted thin per-agent memory contract
+
+Builder approved on 2026-10-06. Use one small, versioned context record per agent in the application store selected for production. Existing application storage owns this context; the MVP requires no separate vector database, whole-chat replay or full Hermes feature parity.
+
+| Concern | Accepted requirement |
+|---|---|
+| Stored context | User-adopted preferences, corrections and source-linked research lessons. Generated lessons remain labeled suggestions until adopted. |
+| Task retrieval | At task start, the backend authenticates the owner and agent, supplies only that agent's authorized context and records the memory version used. An unscoped task receives no private agent memory. |
+| User control | The owner can inspect, correct, disable or clear the agent's context. Corrections create a new version for subsequent tasks. |
+| Isolation | Agent A cannot read or change B's private memory, even under the same owner. Cross-user reads and changes are denied. Source links receive the same ownership checks as the context record. |
+| Financial authority | Strategy rules, mandates, balances, positions and pending actions come from authoritative saved records. A memory note or suggested lesson cannot change those records, grant tool access or expand financial permission. A proposed strategy change uses the existing revision and approval flow. |
+| Clearing and disabling | Future tasks stop using cleared or disabled context. Financial history, pending records and permission remain unchanged. This does not promise erasure of context already supplied to an in-flight task or provider. |
+
+Keep the owner/agent binding, context version, adopted content and source references in the memory contract. Retain the version used with each applicable task. Credentials and signing secrets stay outside memory. Storage encoding, resource limits and version-history retention need definition before affected implementation; this approval selects no database or new service.
+
+The following requirements are **unrun**. Authored checks and document approval do not qualify Hermes isolation or production behavior.
+
+| Check | Required evidence |
+|---|---|
+| MEM-Q01: persistence | Save context, restart the application/runtime and retrieve the same owner/agent context and version. |
+| MEM-Q02: correction and retrieval | Correct adopted context; the next applicable task uses the new version and records it. Generated lessons remain suggestions until adoption. |
+| MEM-Q03: isolation | Deny A-to-B and cross-user reads, edits and source-link retrieval. Check API, task tools and runtime files/caches, not only visible UI filtering. |
+| MEM-Q04: authority | A note requesting different rules, spending, credentials or tool access changes no authority. Current saved account records prevail over a stale note. |
+| MEM-Q05: owner control | Inspect, disable and clear context through the owner path. Later tasks omit disabled/cleared context while financial records, reservations, pending actions and permission remain unchanged. |
+
+This contract follows the existing [model/execution boundary](../../adr/0005-model-and-execution-authority-boundary.md). It supplies continuity for explanations and investigation, not execution state or automatic strategy modification.
 
 ### Accepted agent add-ons catalog
 

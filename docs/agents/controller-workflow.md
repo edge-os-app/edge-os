@@ -29,23 +29,80 @@ Only the controller prepares a persistent lane for its next ticket. Check cleanl
 
 Each worker receives one accepted ticket, its observable result and exclusions, blockers and evidence, exact base SHA, branch/worktree, owned/shared changes, verification commands, required skills, actual model settings and review budget. Shared schemas, migrations, lockfiles and configuration cannot have concurrent owners. Start fewer workers when those dependencies prevent safe parallel work.
 
+Every pane assignment also names the task identity, controller/reply pane and worker/gate destinations. Carry those destinations into replacement sessions. Use the message envelope's actual sender pane as the reply route unless the packet explicitly assigns another recipient. A missing reply destination is an incomplete handoff.
+
+Include a task-specific required-input list using the [implementation reference map](../research/EDGE_OS_IMPLEMENTATION_REFERENCE_MAP.md), accepted specification/ADRs, contracts, fixture/source versions and runtime-verification recipe. The builder's controller checks relevant private workspace references before dispatch and supplies the permitted verified extracts or independently authored examples. Teammate workers use checkout-relative files or issue attachments; missing private inputs block the affected claim rather than trigger guessing. For Privy/auth work, require current official docs through Context7 and Exa, with the selected key/session assumptions recorded. Avoid assigning every course or unrelated project to every task.
+
+### Worker activation packet
+
+Adapt the inspected OKX/TX Odds input, authority, preflight and proof patterns through this one template. The controller fills every field before dispatch; template placeholders are not a ready assignment.
+
+```text
+Implement only accepted ticket <issue> from specification <revision>.
+Use the assigned worktree <absolute path>, branch <branch> and base <SHA>.
+Read AGENTS.md, the current handoff, linked ADRs and these required inputs: <paths/versions>.
+Read the applicable implementation-reference-map rows; missing mandatory input blocks that claim.
+State briefly what changes, what stays unchanged and what observable result proves completion.
+Use /implement and task-relevant skills <names>; use current Context7 docs and Exa where required.
+Owned changes: <surfaces>. Shared/forbidden changes: <surfaces>. Coordinate before crossing them.
+Implement the accepted success and failure behavior; use TDD at <agreed seams>.
+Run <actual tests and runtime recipe>; inspect <saved records and side effects>.
+Retain evidence under <path>, including exact build/fixture identities and unavailable checks.
+Update the verification recipe/feature map when the implemented path changes.
+Produce a clean candidate and run the two native internal reviews under the approved host policy.
+Send <gate pane> the candidate SHA, checks, evidence and limitations. Await acceptance.
+Reply through Smux to <controller/reply pane>; blockers go to <assigned recipient>.
+Save the report first, relay its path and exact candidate identity, then return to standby.
+After submission, await an incoming Smux message. Do not poll panes, branches or background thread status.
+Task authority: <explicit allowed operations/budgets>. No main merge or unrelated external action.
+```
+
 The controller schedules and integrates. The worker implements and commits. Reviewers remain read-only. The builder retains acceptance and main-branch merge control. A controller cannot supply the independent approval for its own change.
 
 1. The worker produces a clean candidate commit and records checks and limits.
 2. Pause the worker while reviewers inspect its worktree. Alternatively use a separate read-only checkout of the exact commit.
 3. Confirm candidate ancestry and scope against the assigned base.
-4. Run two independent reviewer contexts using the project's Sol/high policy. Give both the same base, candidate and acceptance packet.
+4. Run two independent native reviewer contexts under the [worker-host model policy](../../playbooks/MATT_POCOCK_PROJECT_WORKFLOW.md#approved-model-policy). Give both the same base, candidate and acceptance packet. Record actual models and effort.
 5. Keep their initial findings hidden from each other. Use General Review Protocol for evidenced defects and task-relevant domain checks.
 6. Return verified blockers to the worker in one batch. A fix requires a replacement commit and both reviewers' assessment of the changed behavior and affected invariants.
 7. Record each verdict with the exact candidate SHA. An earlier PASS never approves later edits.
+8. Send the internally reviewed candidate to the separate Codex gate. Record its independent verdict against that same candidate. The builder accepts and merges under the manual policy.
 
 Use at most three review/fix cycles for a dispatched unit unless the builder approves another budget. At the limit, report unresolved blockers and choose a scoped escalation, proposed narrowing or deferral. The builder must approve a product-scope change. A cycle limit cannot turn a failure into a PASS.
 
-The gate pane can coordinate the two reviews. One pane, one model or two sequential passes in the same context cannot replace two independent contexts. Do not repeat release-wide review for every small replacement.
+The worker owns its two native internal review contexts. The Codex gate reviews separately after their completion. One pane, one model or two sequential passes in the same context cannot replace two independent contexts. Do not repeat release-wide review for every small replacement.
+
+When switching between Claude and Codex workers, preserve the lane and task state, stop the prior writer, and verify path/branch/base before resuming. Use the new host's approved review route. Keep OMC disabled and use the existing panes; no new coordination layer is required. A subscription limit does not waive a required review or authorize extra paid usage.
 
 ## Messaging, integration and handoff
 
-Read the destination pane before messaging. Preserve drafts and active commands. Send the packet, read once to confirm arrival, submit it, then stop polling. A gate waits for the exact candidate packet. It does not inspect a worker's changing tree or wake repeatedly to ask for status.
+Use Smux and `tmux-bridge` for cross-pane requests and replies. Load the Smux skill and follow this delivery sequence:
+
+1. Read the destination pane before sending.
+2. Preserve an unsent draft or active command; do not overwrite it or submit it accidentally.
+3. Use `tmux-bridge message` to enter the packet or reply.
+4. Read once to confirm the complete message reached the input.
+5. Send `Enter` to submit that message.
+6. Return to standby or do independent authorized work. Resume on the recipient's incoming Smux reply.
+
+### No polling while another pane works
+
+After dispatch, do not repeatedly read/capture a pane, inspect its changing branch, call background thread status/read/wait APIs, launch watcher subagents or run sleep/retry loops to discover progress or completion. A completion notice comes from the assigned agent through Smux. Do not replace pane delivery with a background-thread message or status-wait loop merely because that tool is available. The pre-send read and one delivery-confirmation read are transport checks, not a progress-monitoring loop.
+
+A gate receiving an advance review packet remains in standby until its worker sends the exact candidate. It must not monitor the worker or wait for the worker's internal reviewers. The gate starts its own assigned review only after candidate delivery. Native internal reviewers may use their host's completion notifications; that is separate from watching another tmux lane. Read an interactive non-agent process only when its assigned task requires that interaction.
+
+### Required return delivery
+
+Every controller, worker and gate relays requests, results and blockers through its assigned pane using the same read/message/read/Enter sequence. Writing a final answer in the sender's own pane or saving a report is not delivery to the recipient.
+
+| Sender and event | Required destination and contents |
+|---|---|
+| Worker has a reviewed candidate | Assigned gate: task, exact base/candidate, checks, evidence path and limits. |
+| Gate finds blockers | Assigned worker: evidenced findings and reviewed candidate; notify the controller of a decision/dependency blocker or exhausted review budget. |
+| Gate completes PASS, REVISE or an unresolved review | Recorded controller/reply pane: verdict, exact candidate, report path, checks, blockers and next required decision. |
+| Controller accepts or returns direction | Assigned gate/worker panes: exact accepted candidate or scoped next action and authority. |
+
+Resolve and verify actual pane identity before sending; never invent a sender ID or retarget a request silently. If Smux or the recorded pane is unavailable, or its draft prevents safe delivery, preserve the packet/report and report delivery as blocked. Ask for an explicit alternative route. Do not silently switch to background thread APIs or start polling. After a reply arrives, verify its durable record and candidate identity before changing task status; a notification alone is not completion evidence.
 
 Integrate accepted candidates serially under the project's authorization. Run the affected integration checks after each change. Reassess waiting assignments against the new base. Do not mark a task integrated from an issue status alone. No automatic main merge is authorized.
 

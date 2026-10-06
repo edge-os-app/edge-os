@@ -8,6 +8,8 @@ This brief explains the intended release, user journeys, component responsibilit
 
 Read sections 1–4 for product scope and journeys, section 5 for historical simulation, section 6 for records and runtime boundaries, and sections 7–10 for verification, decisions, the demo and ticket handoff.
 
+Focused handoff requirements approved, 2026-10-06: the [canonical amendment](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-research-declaration-and-agent-monitoring-handoff) requires candidate/falsification/trial records before outcomes, actual scheduled strategy evaluation before intents, explicit persistent deployment and per-agent health, reconciled results and evidence checks. New return/account-value/drawdown displays need a versioned calculation profile with independent examples. P02/P06 provide selected portable requirements and fixtures before consumers; task packets require relevant inputs rather than every private source. The proposed graph incorporates these requirements without new ticket IDs or dependency edges. Checks remain unrun; this acceptance does not approve the full graph, its testing boundary, publication or implementation.
+
 ## 1. First useful result
 
 An onchain meme trader brings a clear idea, a rough hunch or a bounded market question. Edge OS preserves the request, asks for necessary missing meaning, proposes a bounded investigation and returns a saved answer with supporting and contrary evidence. A completed investigation may have no supported strategy.
@@ -84,6 +86,10 @@ Defer broad strategy search, custom code/plugins/MCP endpoints, perpetuals, cros
 - **Presentation:** plain labels, one clear primary action and expandable detail. Evidence, operating state and permission stay separate. Reviewer controls stay outside customer navigation; authored data keeps its demo label.
 
 These choices follow the [accepted account interaction contract](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-account-views-and-contextual-conversation). Competitor observations support record-plus-chat and direct account access; they do not establish equal usability, synchronization or wallet security. No competitor transaction test is required to build our accepted behavior.
+
+### Visual design handoff
+
+Builder decision, 2026-10-06: prepare a scoped customer-design handoff using the v0.12.2 HTML interaction reference and Organic as the starting Claude Design system. The prototype's existing styling is not the approved final design. Establish the app shell, first request/clarification/saved-result journey and reusable component language before the matching frontend implementation. Subsequent UI slices extend that system with their account, simulation, memory/add-on and LP states; do not delay unrelated backend decisions or qualification until every screen is designed. The builder approves actual rendered outputs. Preserve evidence/permission and wallet/action distinctions, accessible controls and explicit fixture labels. Publish reviewed sanitized exports before teammates depend on them. No design upload, generation or production work is performed by recording this decision.
 
 ### Research and strategy review
 
@@ -257,6 +263,8 @@ Inference/API costs, compute credits, provider data charges, native gas and trad
 
 A deployed trading agent consists of reviewed rules, its own wallet, an execution mandate and durable operating state. It is not an indefinitely running Hermes conversation.
 
+Builder-approved memory, 2026-10-06: implement the [thin per-agent memory contract and MEM-Q01–05 checks](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-thin-per-agent-memory-contract). Context lives in the selected application store. Qualify isolated task retrieval and provide owner inspection/correction/disable/clear controls. This requirement does not adopt full Hermes feature parity, change financial authority or prove any unrun check.
+
 | Component | Responsibility |
 |---|---|
 | Authenticated application and API | Own records, access control, user reviews and shared UI/tool contracts. |
@@ -351,10 +359,12 @@ For UI acceptance, record what a participant understood before explaining the sc
 
 ## 8. Decisions before work becomes ready
 
+P01 stack direction accepted, 2026-10-06: use the [canonical application stack](superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-application-stack) and [ADR 0008](adr/0008-python-api-postgresql-nextjs-privy-auth.md). Python/FastAPI, PostgreSQL, Next.js and Privy authentication are selected. Preserve the approved visual export using CSS/Tailwind as appropriate. P01 remains responsible for versions, startup/configuration, migrations, verified owner identity and isolated verification; hosting and worker lifecycle require their applicable handoffs. Login is not execution authority.
+
 | Decision or evidence | Needed before | Current handling |
 |---|---|---|
 | Review the to-spec synthesis and confirm testing boundaries; record bounded frontend closure separately | Ready implementation assignments | Product scope approved 2026-10-05. Local synthesis review and testing-seam confirmation remain open. Prior participant verdicts are unchanged. |
-| App startup/deployment, authenticated ownership and persistence choice | First runnable production ticket | No application or dependency manifest found in the shared checkout; choose the smallest suitable setup with reasons, not an invented existing stack |
+| App startup/deployment, authenticated ownership and persistence profile | First runnable production ticket | Stack selected under the linked P01 decision; no application exists yet. Freeze compatible versions, startup/configuration, database/migration and Privy verification mechanisms, test isolation and the applicable hosting handoff |
 | First-slice schemas, canonical revision encoding and shared sanitized fixtures | Dependent frontend/backend tickets | Accepted meanings exist; machine contracts and applicable production checks remain to be delivered |
 | Research runtime/model configuration, provider access, measured resource profile and per-run cost policy | New live research runs | Probe settings and costs are historical evidence, not a fresh allowance; propose settings that fit the task without reinstating arbitrary probe caps |
 | Exact supported simulation profile and dataset availability | Working backtest ticket | Freeze timing, sizing, costs, missing-data behavior and calculation checks; qualify required coverage |
