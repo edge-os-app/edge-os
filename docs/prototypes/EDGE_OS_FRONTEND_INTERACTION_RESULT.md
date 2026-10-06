@@ -73,8 +73,8 @@ The research repeat was requested after navigation assistance. B1 could not answ
 - [Actual Probe A findings](EDGE_OS_PROBE_A_RESULT.md)
 - [Accepted product decisions](../superpowers/specs/2026-09-29-edge-os-hackathon-design.md)
 - [Research and accounting contracts](../EDGE_OS_RESEARCH_CONTRACTS.md)
-- [Competitor observations](../../../docs/research/EDGE_OS_COMPETITOR_UX_AND_ACCOUNT_CONTROL_2026-10-03.md)
-- [Curated screenshot index](../../../docs/research/assets/competitor-ux-2026-10-03/README.md)
+- Competitor observations: BUILDER-ONLY REFERENCE `docs/research/EDGE_OS_COMPETITOR_UX_AND_ACCOUNT_CONTROL_2026-10-03.md`.
+- Curated screenshot index: BUILDER-ONLY REFERENCE `docs/research/assets/competitor-ux-2026-10-03/README.md`. Private screenshots are not shared implementation inputs. This report preserves the relevant observations and their limits.
 
 SHA-256 for historical v0.3.1 HTML: `ac3695f42762ee80faf3302088ec97d31341b638757dc88e042b4e892d571eb6`.
 
@@ -127,7 +127,7 @@ Verify desktop and narrow mobile together, plus keyboard operation and the exist
 
 Artifact SHA-256: `f9d4bcba11bc403243de92c41073070a0aa49b63a23227db4b6ee84be7ebf9ab`. The earlier v0.3.1 hash and all participant feedback above remain historical evidence. This version revises the existing single inline HTML in the private workspace. No production implementation or specification change was accepted by this edit.
 
-The supplied [controller critique](../../../.impeccable/critique/2026-10-04T08-02-01Z__prototypes-edge-os-frontend-interaction-index-html.md) and the builder's five-issue approval governed this pass. Prototype's logic/state branch preserved the experiment. Impeccable Operate guided the layout, progressive detail and focus. Karpathy Guidelines limited changes to the existing artifact. Unslop and No AI Slop guided screen copy. Existing Keel/Almanak contextual conversation, Minara/Horizon account views, GT action disclosures and Clawpump funding distinctions remain the layout references. No competitor website research or archive scan was repeated.
+The supplied controller critique, BUILDER-ONLY REFERENCE `.impeccable/critique/2026-10-04T08-02-01Z__prototypes-edge-os-frontend-interaction-index-html.md`, and the builder's five-issue approval governed this pass. Prototype's logic/state branch preserved the experiment. Impeccable Operate guided the layout, progressive detail and focus. Karpathy Guidelines limited changes to the existing artifact. Unslop and No AI Slop guided screen copy. Existing Keel/Almanak contextual conversation, Minara/Horizon account views, GT action disclosures and Clawpump funding distinctions remain the layout references. No competitor website research or archive scan was repeated.
 
 ### Implemented changes
 
@@ -323,7 +323,7 @@ The revised customer report was reopened in Safari with empty example conversati
 
 ## Builder-approved five-controller repair, 2026-10-05
 
-The builder explicitly approved all five findings from the [v0.6.0 controller critique](../../../.impeccable/critique/2026-10-04T21-50-01Z__prototypes-edge-os-frontend-interaction-index-html.md) and selected a fresh first-activation example. Approval covers local repairs and bounded browser verification of the existing single-file experiment. It grants no model/provider call, wallet action, production implementation, commit, push, merge or publication.
+The builder explicitly approved all five findings from the v0.6.0 controller critique, BUILDER-ONLY REFERENCE `.impeccable/critique/2026-10-04T21-50-01Z__prototypes-edge-os-frontend-interaction-index-html.md`, and selected a fresh first-activation example. Approval covers local repairs and bounded browser verification of the existing single-file experiment. It grants no model/provider call, wallet action, production implementation, commit, push, merge or publication.
 
 Approved repairs: restore compact independent status; bind conversation entries, drafts and return links to their named context; expose guided-step outcomes and task-specific scenario controls; separate empty first activation from existing-account continuation; return useful keyboard focus after cancelling a sale preview. Preserve real MOE evidence, prior feedback, five tasks and Customer/Reviewer separation. Advancing a step does not count as comprehension. This paragraph records the repair approval; completion and evidence follow separately.
 
@@ -423,7 +423,7 @@ Evidence origin: controller-operated native Safari screenshots/accessibility tre
 
 ### Independent critique and limits
 
-[Impeccable critique snapshot](../../../.impeccable/critique/2026-10-05T09-59-08Z__prototypes-edge-os-frontend-interaction-index-html.md) assesses the exact v0.8.0 bytes named above, before the correction batch. A `/root/context_review_a` assessed design and comprehension; B `/root/context_review_b` ran detector/browser evidence. They had separate prompts and new native tabs, neither saw the other's assessment, and A finished before B output entered controller synthesis. Neither edited project files.
+The Impeccable critique snapshot, BUILDER-ONLY REFERENCE `.impeccable/critique/2026-10-05T09-59-08Z__prototypes-edge-os-frontend-interaction-index-html.md`, assesses the exact v0.8.0 bytes named above, before the correction batch. A `/root/context_review_a` assessed design and comprehension; B `/root/context_review_b` ran detector/browser evidence. They had separate prompts and new native tabs, neither saw the other's assessment, and A finished before B output entered controller synthesis. Neither edited project files.
 
 A scored 28/40, with four P2 issues and no P0/P1. B's exact-file detector exited 0 with `[]`, zero findings, no rule locations or false positives. The detector missed interaction confusion; a clean scan is not a passing UX verdict. B also observed mismatched before-start questions and nested conversation scrolling, addressed in the same correction batch. A used Safari 1512 × 859; B used Chrome 1512 × 861. Neither performed narrow review; root supplied it separately. The score belongs to assessed v0.8.0 and was not re-scored for v0.8.1.
 
@@ -447,7 +447,7 @@ The builder approved one scoped repair of all five issues from the v0.8.1 indepe
 
 Baseline v0.8.1 SHA256: `76d5f57b5de4ac02ab17be4012b7103a8c5ab0a05e9dfb13be46c1de367c250c`; it matched the supplied review, with no newer work to replace. Assessed first-build v0.9.0: `acd2a4a9e434446f0ae26378aef2ff14a106ec549466d416b6c29917580a94fd`. Final v0.9.1: `e45247f922ffa30333ce19844f2658d9fcb55bf9e93c7eacebeb47e10217db66`. Artifact remains the private workspace file `prototypes/edge-os/frontend-interaction/index.html`. A recovery copy of v0.8.1 remains outside the repository. Earlier versions, participant words and failure evidence above are preserved.
 
-The supplied [v0.8.1 critique](../../../.impeccable/critique/2026-10-05T11-27-07Z__prototypes-edge-os-frontend-interaction-index-html.md) supersedes the earlier limited claim that no blocker was observed. Its target/feedback failures were valid despite earlier happy-path checks. The new inspection included the renderer and UI bindings as well as pure state transitions.
+The supplied v0.8.1 critique, BUILDER-ONLY REFERENCE `.impeccable/critique/2026-10-05T11-27-07Z__prototypes-edge-os-frontend-interaction-index-html.md`, supersedes the earlier limited claim that no blocker was observed. Its target/feedback failures were valid despite earlier happy-path checks. The new inspection included the renderer and UI bindings as well as pure state transitions.
 
 ### What changed and why
 
@@ -487,7 +487,7 @@ Evidence origin: controller-operated native Safari AX/screenshots; isolated read
 
 ### Independent review and disposition
 
-[Archived v0.9.0 critique](../../../.impeccable/critique/2026-10-05T12-10-37Z__prototypes-edge-os-frontend-interaction-index-html.md) fingerprints the assessed bytes before correction. A `/root/v09_review_a` assessed design/comprehension and source/callers; B `/root/v09_review_b` ran detector, code/state checks and browser evidence. Both applied General Review Protocol, review-verification-protocol, code-reviewer and code-review-excellence. No Go-specific review applies. They were isolated, read-only, with no cross-assessment findings before completion; A finished before B detector output entered synthesis.
+The archived v0.9.0 critique, BUILDER-ONLY REFERENCE `.impeccable/critique/2026-10-05T12-10-37Z__prototypes-edge-os-frontend-interaction-index-html.md`, fingerprints the assessed bytes before correction. A `/root/v09_review_a` assessed design/comprehension and source/callers; B `/root/v09_review_b` ran detector, code/state checks and browser evidence. Both applied General Review Protocol, review-verification-protocol, code-reviewer and code-review-excellence. No Go-specific review applies. They were isolated, read-only, with no cross-assessment findings before completion; A finished before B detector output entered synthesis.
 
 A scored 24/40. This score is not a final v0.9.1 score. Both found the populated Positions crash and inconsistent 90-versus-70 test consumption. A also found disappearing saves and overbroad exact references; B found stale approval success. The same correction batch fixed all five. A's bounded confirmation of v0.9.1 passed the corrected renderer, save/retrieval, adoption, spending, target binding, focus, ambiguity, stop/expiry/renewal and narrow paths. Root separately confirmed full sale and both-agent activation. No score-chasing second review or cosmetic loop ran.
 
@@ -566,7 +566,7 @@ Remaining limits: scripted language patterns and memory-only records; no real si
 
 ## Approved controller repairs v0.11.0, 2026-10-05
 
-The builder approved all five findings and three smaller corrections from the [v0.10.1 controller review](../../../.impeccable/critique/2026-10-05T13-32-01Z__prototypes-edge-os-frontend-interaction-index-html.md), including stacked mobile position rows. This approval covers one local repair batch. It supplies no new comprehension answer or production authority.
+The builder approved all five findings and three smaller corrections from the v0.10.1 controller review, BUILDER-ONLY REFERENCE `.impeccable/critique/2026-10-05T13-32-01Z__prototypes-edge-os-frontend-interaction-index-html.md`, including stacked mobile position rows. This approval covers one local repair batch. It supplies no new comprehension answer or production authority.
 
 Artifact: `prototypes/edge-os/frontend-interaction/index.html`, v0.11.0. SHA-256: `329f7ec8224caf4802d38771c60c4babc457ef63820381e749c648e6b4347c7d`.
 
