@@ -1118,5 +1118,15 @@
       "UNSUPPORTED",
       "UNRESOLVED"
     ]
+  },
+  "publication_failure_rules": {
+    "parent_revision_conflict": {
+      "finding_code": "parent_revision_conflict",
+      "retry": "NOT_RETRYABLE"
+    },
+    "idempotency_key_reused": {
+      "finding_code": "idempotency_key_reused",
+      "retry": "NOT_RETRYABLE"
+    }
   }
 }

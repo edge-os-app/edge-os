@@ -565,8 +565,8 @@
         "findings": [
           {
             "code": "missing_field",
-            "path": "/field_evidence",
-            "detail": "Ask which supported value applies before compiling."
+            "path": "/field_evidence/exit",
+            "detail": "What exit rule should the strategy use?"
           }
         ],
         "retry": "NOT_RETRYABLE"
@@ -622,8 +622,8 @@
         "findings": [
           {
             "code": "missing_field",
-            "path": "/field_evidence",
-            "detail": "Ask which supported value applies before compiling."
+            "path": "/field_evidence/exit",
+            "detail": "What exit rule should the strategy use?"
           }
         ],
         "retry": "NOT_RETRYABLE"
@@ -1603,8 +1603,8 @@
         "findings": [
           {
             "code": "missing_field",
-            "path": "/field_evidence",
-            "detail": "Ask which supported value applies before compiling."
+            "path": "/field_evidence/exit",
+            "detail": "Do you adopt the proposed exit rule of a one-bucket return below zero?"
           }
         ],
         "retry": "NOT_RETRYABLE"
@@ -3977,7 +3977,7 @@
           {
             "code": "missing_field",
             "path": "/field_evidence/entry_threshold",
-            "detail": "Ask which entry threshold applies."
+            "detail": "Which entry threshold should apply?"
           }
         ],
         "retry": "NOT_RETRYABLE",

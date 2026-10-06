@@ -9,16 +9,13 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import unicodedata
 from decimal import Context, Decimal, ROUND_HALF_EVEN, localcontext
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-CONTRACT = json.loads((ROOT / "contract.json").read_text(encoding="utf-8"))
-FIXTURES = json.loads((ROOT / "fixtures.json").read_text(encoding="utf-8"))
-STRATEGY = json.loads((ROOT / "fixtures/complete-strategy.json").read_text(encoding="utf-8"))
-STRATEGY_FIXTURES = {"complete-strategy": STRATEGY}
 DECIMAL = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z")
 
 
@@ -42,6 +39,16 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 def strict_loads(data: str) -> object:
     return json.loads(data, object_pairs_hook=unique_object, parse_float=reject_float,
                       parse_constant=reject_float)
+
+
+def load_json(path: Path) -> object:
+    return strict_loads(path.read_text(encoding="utf-8"))
+
+
+CONTRACT = load_json(ROOT / "contract.json")
+FIXTURES = load_json(ROOT / "fixtures.json")
+STRATEGY = load_json(ROOT / "fixtures/complete-strategy.json")
+STRATEGY_FIXTURES = {"complete-strategy": STRATEGY}
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -330,12 +337,26 @@ def validate_record(name: str, value: object) -> None:
             raise Invalid(f"{value['outcome']} outcome requires actionable findings")
         if expected_findings and (not value["findings"] or not set(expected_findings) & codes):
             raise Invalid(f"{value['outcome']} outcome is missing its required finding")
+        if name == "Outcome" and value["outcome"] == "NEEDS_CLARIFICATION":
+            for finding in value["findings"]:
+                prefix = "/field_evidence/"
+                field_name = finding["path"][len(prefix):] if finding["path"].startswith(prefix) else ""
+                field_label = field_name.replace("_", " ").casefold()
+                if (not field_name or "/" in field_name or not finding["detail"].strip().endswith("?")
+                        or field_label not in finding["detail"].casefold()):
+                    raise Invalid("clarification finding must name its field and ask a specific question")
         if name == "Outcome" and value["outcome"] in CONTRACT["outcome_requirements"]["intake_record_required"]:
             if not value.get("intake_record_id"):
                 raise Invalid(f"{value['outcome']} outcome must link to its intake record")
         if value["outcome"] == "INVALID_INPUT":
             if not value["findings"] or any(not finding["path"].startswith("/") for finding in value["findings"]):
                 raise Invalid("INVALID_INPUT needs a stable finding code and JSON Pointer path")
+    if name == "PublicationResult" and value["outcome"] == "CONFLICTED":
+        rules = CONTRACT["publication_failure_rules"]
+        if value["code"] in rules:
+            rule = rules[value["code"]]
+            if value["retry"] != rule["retry"] or len(value["findings"]) != 1 or value["findings"][0]["code"] != rule["finding_code"]:
+                raise Invalid("conflicted publication code, finding, and retry policy must match")
     if name == "PromptInterpretation":
         names = [item["field_name"] for item in value["field_evidence"]]
         if len(set(names)) != len(names):
@@ -581,6 +602,25 @@ def _validate_route_result(case: dict[str, object], expected: str) -> None:
     interpretation = case["input"].get("interpretation")
     if isinstance(interpretation, dict) and result.get("intake_record_id") != interpretation.get("intake_record_id"):
         raise Invalid("route outcome must link to its intake record")
+    if expected == "NEEDS_CLARIFICATION":
+        required = set(CONTRACT["required_strategy_fields"][interpretation["requested_job"]])
+        evidence = {item["field_name"]: item for item in interpretation["field_evidence"]}
+        targets = {name for name, item in evidence.items()
+                   if item["state"] in {"MISSING", "CONFLICTING"}
+                   or item.get("origin") in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"}
+                   and item.get("adoption") != "ADOPTED"}
+        absent = required - set(evidence)
+        if absent and not targets:
+            history = interpretation.get("clarification_history", [])
+            prior_targets = {name for item in history for name in item["changed_fields"] if name in absent}
+            targets.update(prior_targets or absent)
+        for field_name in targets:
+            path = f"/field_evidence/{field_name}"
+            findings = [finding for finding in result["findings"] if finding["path"] == path]
+            field_label = field_name.replace("_", " ")
+            if not findings or any(not finding["detail"].strip().endswith("?")
+                                   or field_label not in finding["detail"].casefold() for finding in findings):
+                raise Invalid("clarification finding must name its field and ask a specific question")
     if expected == "UNRESOLVED" and case["input"].get("candidate_strategy") is not None:
         raise Invalid("UNRESOLVED route cannot carry a strategy")
 
@@ -1010,13 +1050,23 @@ def main() -> int:
     decimal_variant = copy.deepcopy(STRATEGY)
     decimal_variant["sizing"]["amount"] = 100.0
     must_reject("JSON float in decimal field", decimal_variant)
-    duplicate_key = '{"revision_id":"a","revision_id":"b"}'
-    try:
-        strict_loads(duplicate_key)
-    except Invalid:
-        pass
-    else:
-        raise AssertionError("duplicate JSON keys were accepted")
+    strategy_path = ROOT / "fixtures/complete-strategy.json"
+    assert load_json(strategy_path) == STRATEGY
+    duplicate_strategy = strategy_path.read_text(encoding="utf-8").replace(
+        "{", '{"strategy_id":"HIDDEN-INVALID-ID",', 1)
+    with tempfile.TemporaryDirectory() as directory:
+        duplicate_path = Path(directory) / "complete-strategy.json"
+        duplicate_path.write_text(duplicate_strategy, encoding="utf-8")
+        must_reject_action("duplicate strategy_id through fixture file loader",
+                           lambda: load_json(duplicate_path))
+
+    for case_id in ("route-clarification", "route-empty-meaning", "route-pending-exit-proposal"):
+        bad_case = copy.deepcopy(next(case for case in FIXTURES["cases"] if case["id"] == case_id))
+        bad_case["result"]["findings"][0]["detail"] = "Continue."
+        must_reject_action(f"{case_id} generic clarification is not a question", lambda case=bad_case: route(case))
+        bad_case = copy.deepcopy(next(case for case in FIXTURES["cases"] if case["id"] == case_id))
+        bad_case["result"]["findings"][0]["path"] = "/field_evidence"
+        must_reject_action(f"{case_id} clarification field is unbound", lambda case=bad_case: route(case))
 
     observation_as_exit = copy.deepcopy(STRATEGY)
     observation_as_exit["exit"] = {"op": "observation_period", "buckets": 12}
@@ -1085,6 +1135,17 @@ def main() -> int:
     bad_publication = copy.deepcopy(FIXTURES["record_examples"]["PublicationResult"])
     bad_publication["revision_id"] = ""
     must_reject_record("published result requires nonempty revision ID", "PublicationResult", bad_publication)
+    parent_conflict = copy.deepcopy(next(v["value"] for v in FIXTURES["record_variants"]
+                                         if v["type"] == "PublicationResult"
+                                         and v["value"]["code"] == "parent_revision_conflict"))
+    validate_record("PublicationResult", parent_conflict)
+    validate_record("PublicationResult", FIXTURES["record_examples"]["PublicationResult"])
+    bad_publication = copy.deepcopy(parent_conflict)
+    bad_publication["retry"] = "SAFE_SAME_KEY"
+    must_reject_record("parent conflict cannot be safe to retry", "PublicationResult", bad_publication)
+    bad_publication = copy.deepcopy(parent_conflict)
+    bad_publication["findings"][0]["code"] = "idempotency_key_reused"
+    must_reject_record("parent conflict finding must match its result code", "PublicationResult", bad_publication)
     for outcome_name in ("NEEDS_CLARIFICATION", "UNSUPPORTED", "UNRESOLVED"):
         bad_outcome = copy.deepcopy(next(v["value"] for v in FIXTURES["record_variants"]
                                          if v["type"] == "Outcome" and v["value"]["outcome"] == outcome_name))
@@ -1096,6 +1157,14 @@ def main() -> int:
         bad_outcome["findings"][0]["detail"] = "Actionable detail."
         bad_outcome["intake_record_id"] = None
         must_reject_record(f"{outcome_name} outcome links to intake", "Outcome", bad_outcome)
+        if outcome_name == "NEEDS_CLARIFICATION":
+            bad_outcome = copy.deepcopy(next(v["value"] for v in FIXTURES["record_variants"]
+                                             if v["type"] == "Outcome" and v["value"]["outcome"] == outcome_name))
+            bad_outcome["findings"][0]["detail"] = "Continue."
+            must_reject_record("clarification Outcome rejects generic Continue", "Outcome", bad_outcome)
+            bad_outcome["findings"][0]["detail"] = "Which entry threshold should apply?"
+            bad_outcome["findings"][0]["path"] = "/field_evidence"
+            must_reject_record("clarification Outcome requires a bound field path", "Outcome", bad_outcome)
     bad_publication = copy.deepcopy(next(v["value"] for v in FIXTURES["record_variants"]
                                          if v["type"] == "PublicationResult" and v["value"]["outcome"] == "INVALID_INPUT"))
     bad_publication["findings"] = []
