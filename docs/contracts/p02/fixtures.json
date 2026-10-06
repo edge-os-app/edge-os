@@ -523,6 +523,20 @@
               "source_ref": "10000000-0000-4000-8000-000000000001",
               "interpretation_revision": "interp-fixture-2",
               "evidence_status": "UNKNOWN"
+            },
+            {
+              "field_name": "restrictions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
             }
           ],
           "clarification_history": [
@@ -622,8 +636,68 @@
         "findings": [
           {
             "code": "missing_field",
+            "path": "/field_evidence/market",
+            "detail": "Which market and research pool should the strategy use?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/decision_interval_seconds",
+            "detail": "What decision interval seconds should the strategy use?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/data_inputs",
+            "detail": "Which data inputs should the strategy use?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/entry",
+            "detail": "What entry rule should the strategy use?"
+          },
+          {
+            "code": "missing_field",
             "path": "/field_evidence/exit",
             "detail": "What exit rule should the strategy use?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/invalidation",
+            "detail": "What invalidation rule should apply, or is invalidation not requested?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/sizing",
+            "detail": "What quote-asset amount should sizing use?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/additions",
+            "detail": "Should the strategy permit additions to an open position?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/partial_exits",
+            "detail": "Should the strategy permit partial exits?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/cost_assumptions",
+            "detail": "What fee and slippage rates should the cost assumptions use, and from which source?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/risk_limits",
+            "detail": "What maximum quote notional and position count should the risk limits use?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/action_scope",
+            "detail": "Which actions should the action scope permit?"
+          },
+          {
+            "code": "missing_field",
+            "path": "/field_evidence/restrictions",
+            "detail": "What source reference binds the retained restrictions to this interpretation revision?"
           }
         ],
         "retry": "NOT_RETRYABLE"

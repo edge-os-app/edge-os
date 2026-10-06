@@ -544,6 +544,12 @@ def route(case: dict[str, object]) -> str:
         actual = "INVALID_INPUT"
         _validate_route_result(case, actual)
         return actual
+    restrictions_item = by_name.get("restrictions")
+    if (restrictions_item and restrictions_item["state"] == "KNOWN"
+            and restrictions_item["value"] != interpretation["preserved_restrictions"]):
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     if required - set(by_name) or any(item["state"] in {"MISSING", "CONFLICTING"} for item in evidence):
         actual = "NEEDS_CLARIFICATION"
         _validate_route_result(case, actual)
@@ -554,10 +560,6 @@ def route(case: dict[str, object]) -> str:
         _validate_route_result(case, actual)
         return actual
     restrictions = by_name["restrictions"]["value"]
-    if restrictions != interpretation["preserved_restrictions"]:
-        actual = "INVALID_INPUT"
-        _validate_route_result(case, actual)
-        return actual
     supported_restrictions = CONTRACT["supported_restrictions"]
     if any(item not in supported_restrictions for item in restrictions):
         actual = "UNSUPPORTED"
@@ -605,15 +607,12 @@ def _validate_route_result(case: dict[str, object], expected: str) -> None:
     if expected == "NEEDS_CLARIFICATION":
         required = set(CONTRACT["required_strategy_fields"][interpretation["requested_job"]])
         evidence = {item["field_name"]: item for item in interpretation["field_evidence"]}
-        targets = {name for name, item in evidence.items()
+        targets = required - set(evidence)
+        targets.update(name for name, item in evidence.items()
                    if item["state"] in {"MISSING", "CONFLICTING"}
                    or item.get("origin") in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"}
-                   and item.get("adoption") != "ADOPTED"}
-        absent = required - set(evidence)
-        if absent and not targets:
-            history = interpretation.get("clarification_history", [])
-            prior_targets = {name for item in history for name in item["changed_fields"] if name in absent}
-            targets.update(prior_targets or absent)
+                   and name in CONTRACT["field_evidence_rules"]["consequential_fields"]
+                   and item.get("adoption") != "ADOPTED")
         for field_name in targets:
             path = f"/field_evidence/{field_name}"
             findings = [finding for finding in result["findings"] if finding["path"] == path]
@@ -974,12 +973,82 @@ def must_reject_action(label: str, action: object) -> None:
     raise AssertionError(f"invalid mutation was accepted: {label}")
 
 
+def check_clarification_coverage() -> None:
+    cases = {case["id"]: case for case in FIXTURES["cases"]}
+    empty = cases["route-empty-meaning"]
+    fields = {"market", "decision_interval_seconds", "data_inputs", "entry", "exit", "invalidation",
+              "sizing", "additions", "partial_exits", "cost_assumptions", "risk_limits", "action_scope", "restrictions"}
+    assert empty["input"]["interpretation"]["field_evidence"] == []
+    assert {finding["path"] for finding in empty["result"]["findings"]} == {
+        f"/field_evidence/{name}" for name in fields}
+    for keep_history in (True, False):
+        current = copy.deepcopy(empty)
+        if not keep_history:
+            current["input"]["interpretation"]["clarification_history"] = []
+        assert route(current) == "NEEDS_CLARIFICATION"
+        for field in sorted(fields):
+            incomplete = copy.deepcopy(current)
+            incomplete["result"]["findings"] = [finding for finding in incomplete["result"]["findings"]
+                                                if finding["path"] != f"/field_evidence/{field}"]
+            must_reject_action(f"empty meaning omits {field}, history={keep_history}", lambda: route(incomplete))
+        current["result"]["findings"] = [finding for finding in current["result"]["findings"]
+                                         if finding["path"] == "/field_evidence/exit"]
+        must_reject_action(f"empty meaning exit-only, history={keep_history}", lambda: route(current))
+
+    pending = cases["route-pending-exit-proposal"]
+    assert route(pending) == "NEEDS_CLARIFICATION"
+    for state in ("KNOWN", "MISSING", "CONFLICTING"):
+        mixed = copy.deepcopy(pending)
+        interpretation = mixed["input"]["interpretation"]
+        interpretation["field_evidence"] = [item for item in interpretation["field_evidence"]
+                                             if item["field_name"] != "sizing"]
+        exit_item = next(item for item in interpretation["field_evidence"] if item["field_name"] == "exit")
+        if state != "KNOWN":
+            value = exit_item.pop("value")
+            exit_item.update(state=state, origin="USER_STATED")
+            exit_item.pop("adoption")
+            mixed["result"]["findings"][0]["detail"] = "What exit rule should the strategy use?"
+            if state == "CONFLICTING":
+                exit_item["conflicts"] = [{"value": value, "source_ref": "answer-a"},
+                                          {"value": STRATEGY["entry"], "source_ref": "answer-b"}]
+        must_reject_action(f"{state} exit hides absent sizing", lambda: route(mixed))
+        mixed["result"]["findings"].append({"code": "missing_field", "path": "/field_evidence/sizing",
+                                              "detail": "What quote-asset amount should sizing use?"})
+        assert route(mixed) == "NEEDS_CLARIFICATION"
+
+    single = cases["route-clarification"]
+    assert route(single) == "NEEDS_CLARIFICATION"
+    restrictions = next(item for item in single["input"]["interpretation"]["field_evidence"]
+                        if item["field_name"] == "restrictions")
+    assert restrictions["state"] == "KNOWN"
+    assert restrictions["value"] == single["input"]["interpretation"]["preserved_restrictions"]
+    incomplete = copy.deepcopy(single)
+    interpretation = incomplete["input"]["interpretation"]
+    interpretation["field_evidence"] = [item for item in interpretation["field_evidence"]
+                                         if item["field_name"] != "restrictions"]
+    must_reject_action("exit question hides absent restrictions binding", lambda: route(incomplete))
+    inconsistent = copy.deepcopy(pending)
+    next(item for item in inconsistent["input"]["interpretation"]["field_evidence"]
+         if item["field_name"] == "restrictions")["value"] = []
+    must_reject_action("pending exit hides inconsistent saved restrictions", lambda: route(inconsistent))
+    inconsistent["result"] = copy.deepcopy(cases["route-malformed"]["result"])
+    assert route(inconsistent) == "INVALID_INPUT"
+
+    assert route(cases["route-complete"]) == "COMPILED"
+    adopted = copy.deepcopy(pending)
+    adopted["input"]["candidate_strategy"] = copy.deepcopy(STRATEGY)
+    next(item for item in adopted["input"]["interpretation"]["field_evidence"]
+         if item["field_name"] == "exit")["adoption"] = "ADOPTED"
+    assert route(adopted) == "COMPILED"
+
+
 def main() -> int:
     if set(CONTRACT["operator_signatures"]) != set(CONTRACT["operators"]):
         raise AssertionError("operator names and machine signatures differ")
     check_record_examples()
     for case in FIXTURES["cases"]:
         check_fixture(case)
+    check_clarification_coverage()
     validate_strategy(STRATEGY)
 
     changed_rule = copy.deepcopy(STRATEGY)

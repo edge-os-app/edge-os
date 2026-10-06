@@ -44,6 +44,10 @@ The deterministic router returns one of:
 | `COMPILED` | Every job-required field is present and adopted, its exact values match the validated complete `StrategySpec`, and the whole tree passes validation. This is reviewable syntax, not evidence support, readiness, or permission. |
 | `CONFLICTED` | A publication parent or idempotency key conflicts with an existing immutable record. Return HTTP 409 and the stable conflict code. |
 
+Clarification targets include every currently absent required field, every `MISSING` or `CONFLICTING` field, and every consequential proposed field awaiting adoption. Another pending field or historical `changed_fields` cannot remove a current target. Each target needs its bound question in the result. P03 may present these questions progressively. Empty `field_evidence` leaves all 13 required fields unresolved.
+
+Preserve known, adopted values and their source/revision bindings. Bind saved restrictions as current `KNOWN` evidence matching `preserved_restrictions`. A mismatch is invalid even while another field needs clarification. An absent binding needs a question about that binding, without asking the user to restate saved restrictions.
+
 `StrategyDraft` stores `draft_id`, original request, current interpretation revision, source syntax, validation findings, and optional proposed fields. It also stores the immutable `strategy_id` and `base_revision_id` selected when the draft starts. It has `state: DRAFT` and no published revision identity. A draft cannot set validation eligibility, paper/live readiness, or an execution mandate.
 
 ## Minimum supported strategy proposal
