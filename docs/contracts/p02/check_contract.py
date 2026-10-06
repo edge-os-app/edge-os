@@ -185,6 +185,10 @@ def used_operators(node: object) -> set[str]:
 
 
 def validate_strategy(strategy: object) -> None:
+    validate_record("StrategySpec", strategy)
+
+
+def _validate_strategy_semantics(strategy: object) -> None:
     if not isinstance(strategy, dict):
         raise Invalid("strategy must be an object")
     required = set(CONTRACT["record_schemas"]["StrategySpec"]["required"])
@@ -290,9 +294,6 @@ def validate_strategy(strategy: object) -> None:
 
 
 def validate_record(name: str, value: object) -> None:
-    if name == "StrategySpec":
-        validate_strategy(value)
-        return
     schema = CONTRACT["record_schemas"][name]
     if not isinstance(value, dict):
         raise Invalid(f"{name} must be an object")
@@ -310,6 +311,30 @@ def validate_record(name: str, value: object) -> None:
                 allowed_codes = [allowed_codes]
             if value["code"] not in allowed_codes:
                 raise Invalid(f"{name} code does not match outcome")
+    if name == "StrategySpec":
+        _validate_strategy_semantics(value)
+    if name == "FieldEvidence":
+        state, origin = value["state"], value["origin"]
+        if state == "KNOWN" and "value" not in value:
+            raise Invalid("KNOWN evidence requires value")
+        if state != "KNOWN" and "value" in value:
+            raise Invalid(f"{state} evidence cannot contain value")
+        if state == "CONFLICTING":
+            conflicts = value.get("conflicts", [])
+            if len(conflicts) < 2 or len({item["source_ref"] for item in conflicts}) < 2:
+                raise Invalid("CONFLICTING evidence requires two source-linked alternatives")
+            if value.get("adoption") == "ADOPTED":
+                raise Invalid("CONFLICTING evidence cannot be adopted")
+        consequential = value["field_name"] in CONTRACT["field_evidence_rules"]["consequential_fields"]
+        if origin in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"} and consequential and value.get("adoption") not in {"ADOPTED", "PENDING"}:
+            raise Invalid("consequential proposed evidence requires adoption state")
+    if name == "Clarification":
+        if not value["changed_fields"] or len(set(value["changed_fields"])) != len(value["changed_fields"]):
+            raise Invalid("Clarification requires a unique changed-field list")
+        if len(set(value["preserved_restrictions"])) != len(value["preserved_restrictions"]):
+            raise Invalid("Clarification restrictions cannot contain duplicates")
+    if name == "IntakeRequest" and len(set(value["restrictions"])) != len(value["restrictions"]):
+        raise Invalid("intake restrictions cannot contain duplicates")
     if name == "Outcome":
         expected_findings = CONTRACT["outcome_findings"].get(value["outcome"], [])
         codes = {finding["code"] for finding in value["findings"]}
@@ -319,23 +344,19 @@ def validate_record(name: str, value: object) -> None:
             if not value["findings"] or any(not finding["path"].startswith("/") for finding in value["findings"]):
                 raise Invalid("INVALID_INPUT needs a stable finding code and JSON Pointer path")
     if name == "PromptInterpretation":
+        names = [item["field_name"] for item in value["field_evidence"]]
+        if len(set(names)) != len(names):
+            raise Invalid("interpretation field names must be unique")
+        if len(set(value["preserved_restrictions"])) != len(value["preserved_restrictions"]):
+            raise Invalid("interpretation restrictions cannot contain duplicates")
         for item in value["field_evidence"]:
-            state, origin = item["state"], item["origin"]
+            validate_record("FieldEvidence", item)
             if item["interpretation_revision"] != value["interpretation_revision_id"]:
                 raise Invalid("field evidence must bind to its interpretation revision")
-            if state == "KNOWN" and "value" not in item:
-                raise Invalid("KNOWN evidence requires value")
-            if state != "KNOWN" and "value" in item:
-                raise Invalid(f"{state} evidence cannot contain value")
-            if state == "CONFLICTING" and len(item.get("conflicts", [])) < 2:
-                raise Invalid("CONFLICTING evidence requires two conflict entries")
-            if state == "CONFLICTING" and item.get("adoption") == "ADOPTED":
-                raise Invalid("CONFLICTING evidence cannot be adopted")
-            consequential = item["field_name"] in CONTRACT["field_evidence_rules"]["consequential_fields"]
-            if origin in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"} and consequential and item.get("adoption") not in {"ADOPTED", "PENDING"}:
-                raise Invalid("consequential proposed evidence requires adoption state")
     if name == "PublicationResult" and value["outcome"] == "PUBLISHED":
-        if any(value[field] is None for field in ("publication_id", "revision_id", "content_sha256", "manifest_sha256")):
+        if any(not isinstance(value[field], str) or not value[field] for field in ("publication_id", "revision_id")):
+            raise Invalid("PUBLISHED result requires nonempty publication and revision IDs")
+        if any(value[field] is None for field in ("content_sha256", "manifest_sha256")):
             raise Invalid("PUBLISHED result requires exact publication identity")
         for field in ("content_sha256", "manifest_sha256"):
             if not re.fullmatch(r"[0-9a-f]{64}", value[field]):
@@ -379,6 +400,7 @@ def validate_typed_value(value: object, descriptor: dict[str, object], path: str
         "address": lambda v: isinstance(v, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", v) is not None,
         "address_array": lambda v: isinstance(v, list) and all(isinstance(x, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", x) for x in v),
         "decimal_string": lambda v: isinstance(v, str) and DECIMAL.fullmatch(v) is not None,
+        "rfc3339_utc": lambda v: isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", v) is not None,
     }
     if kind.startswith("shape:"):
         validate_shape(kind.split(":", 1)[1], value)
@@ -392,6 +414,9 @@ def validate_typed_value(value: object, descriptor: dict[str, object], path: str
         return
     if kind.startswith("record:"):
         validate_record(kind.split(":", 1)[1], value)
+        return
+    if kind == "expression_or_not_requested" and isinstance(value, dict) and value.get("state") == "NOT_REQUESTED":
+        validate_shape("NotRequestedInvalidation", value)
         return
     if kind not in types or not types[kind](value):
         raise Invalid(f"{path} must have type {kind}")
@@ -428,22 +453,55 @@ def validate_http_error(value: object) -> None:
 
 def route(case: dict[str, object]) -> str:
     data = case["input"]
+    interpretation = data.get("interpretation")
     try:
-        validate_record("PromptInterpretation", data)
+        validate_record("PromptInterpretation", interpretation)
     except (Invalid, KeyError, TypeError):
         return "INVALID_INPUT"
-    if data["syntax_status"] == "INVALID":
+    if interpretation["syntax_status"] == "INVALID":
         return "INVALID_INPUT"
-    if data["meaning_status"] == "UNSUPPORTED":
-        return "UNSUPPORTED"
-    if any(item["state"] in {"MISSING", "CONFLICTING"} for item in data["field_evidence"]):
-        return "NEEDS_CLARIFICATION"
-    if data["evidence_readiness"] == "UNRESOLVED":
+    if interpretation["meaning_status"] == "UNSUPPORTED":
+        return "UNSUPPORTED" if data.get("original_request") and data.get("missing_capability") else "INVALID_INPUT"
+    if interpretation["requested_job"] not in CONTRACT["required_strategy_fields"]:
+        return "HANDOFF"
+    if interpretation["evidence_readiness"] == "UNRESOLVED":
         return "UNRESOLVED"
-    if any(item.get("origin") in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"}
-           and item.get("field_name") in CONTRACT["field_evidence_rules"]["consequential_fields"]
-           and item.get("adoption") != "ADOPTED" for item in data["field_evidence"]):
+    required = set(CONTRACT["required_strategy_fields"][interpretation["requested_job"]])
+    evidence = interpretation["field_evidence"]
+    if any(item["field_name"] not in required for item in evidence):
+        return "INVALID_INPUT"
+    by_name = {item["field_name"]: item for item in evidence}
+    if len(by_name) != len(evidence):
+        return "INVALID_INPUT"
+    if required - set(by_name) or any(item["state"] in {"MISSING", "CONFLICTING"} for item in evidence):
         return "NEEDS_CLARIFICATION"
+    if any(item.get("origin") in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"}
+           and item.get("field_name") in required and item.get("adoption") != "ADOPTED" for item in evidence):
+        return "NEEDS_CLARIFICATION"
+    restrictions = by_name["restrictions"]["value"]
+    if restrictions != interpretation["preserved_restrictions"]:
+        return "INVALID_INPUT"
+    supported_restrictions = CONTRACT["supported_restrictions"]
+    if any(item not in supported_restrictions for item in restrictions):
+        return "UNSUPPORTED"
+    strategy = data.get("candidate_strategy")
+    if not isinstance(strategy, dict):
+        return "INVALID_INPUT"
+    try:
+        validate_strategy(strategy)
+    except (Invalid, KeyError, TypeError):
+        return "INVALID_INPUT"
+    if any(canonical_bytes(by_name[name]["value"]) != canonical_bytes(strategy[name])
+           for name in required if name != "restrictions"):
+        return "INVALID_INPUT"
+    for restriction in restrictions:
+        rule = supported_restrictions[restriction]
+        path = rule["field"].split(".")
+        actual = strategy
+        for part in path:
+            actual = actual[part]
+        if actual != rule["equals"]:
+            return "INVALID_INPUT"
     return "COMPILED"
 
 
@@ -572,7 +630,7 @@ def check_fixture(case: dict[str, object]) -> None:
                  and data["strategy_id"] == data["draft_strategy_id"]
                  and data["expected_parent_revision_id"] == data["draft_base_revision_id"])
         if data["expected_parent_revision_id"] is None:
-            valid = valid and data["is_first_revision"] and not data["parent_exists"]
+            valid = valid and data["is_first_revision"] and data["root_slot_available"] and not data["parent_exists"]
         else:
             valid = valid and data["parent_exists"] and data["parent_owner_id"] == data["owner_id"] and data["parent_strategy_id"] == data["strategy_id"]
         actual = "ACCEPT" if valid else "parent_revision_conflict"
@@ -598,17 +656,100 @@ def check_record_examples() -> None:
     for variant in FIXTURES.get("record_variants", []):
         validate_record(variant["type"], variant["value"])
     validate_record_bundle(FIXTURES.get("persisted_examples", []))
+    check_lifecycle_links()
 
 
 def validate_record_bundle(envelopes: list[dict[str, object]]) -> None:
     for envelope in envelopes:
         validate_envelope(envelope)
     intake_records = {e["record_id"]: e for e in envelopes if e["record_type"] == "IntakeRequest"}
+    interpretations = {e["content"]["interpretation_revision_id"]: e for e in envelopes
+                       if e["record_type"] == "PromptInterpretation"}
+    clarifications = {e["record_id"]: e for e in envelopes if e["record_type"] == "Clarification"}
     for envelope in envelopes:
         if envelope["record_type"] == "PromptInterpretation":
-            intake = intake_records.get(envelope["content"]["intake_record_id"])
+            content = envelope["content"]
+            intake = intake_records.get(content["intake_record_id"])
             if intake is None or intake["owner_id"] != envelope["owner_id"]:
                 raise Invalid("interpretation must link to an intake owned by the same principal")
+            intake_restrictions = set(intake["content"]["restrictions"])
+            if not intake_restrictions <= set(content["preserved_restrictions"]):
+                raise Invalid("interpretation cannot remove intake restrictions")
+            if content["requested_job"] == "CREATE_STRATEGY":
+                restriction_items = [item for item in content["field_evidence"] if item["field_name"] == "restrictions"]
+                if len(restriction_items) != 1 or restriction_items[0].get("state") != "KNOWN" or restriction_items[0].get("value") != content["preserved_restrictions"]:
+                    raise Invalid("strategy interpretation must bind its preserved restrictions as known evidence")
+            for item in content["clarification_history"]:
+                previous = interpretations.get(item["previous_revision_id"])
+                if previous is None or previous["owner_id"] != envelope["owner_id"]:
+                    raise Invalid("clarification must link to a prior interpretation owned by the same principal")
+                if item["resulting_revision_id"] != content["interpretation_revision_id"]:
+                    raise Invalid("clarification resulting revision must match its interpretation")
+                if not set(previous["content"]["preserved_restrictions"]) <= set(content["preserved_restrictions"]):
+                    raise Invalid("clarification cannot remove prior interpretation restrictions")
+                if set(item["preserved_restrictions"]) != set(content["preserved_restrictions"]):
+                    raise Invalid("clarification restriction snapshot must match its resulting interpretation")
+                prior_fields = {field["field_name"]: field for field in previous["content"]["field_evidence"]}
+                current_fields = {field["field_name"]: field for field in content["field_evidence"]}
+                changed = set(item["changed_fields"])
+                actual_changes = set()
+                for field_name in set(prior_fields) | set(current_fields):
+                    old, new = prior_fields.get(field_name), current_fields.get(field_name)
+                    old_meaning = {k: v for k, v in old.items() if k != "interpretation_revision"} if old else None
+                    new_meaning = {k: v for k, v in new.items() if k != "interpretation_revision"} if new else None
+                    if old_meaning != new_meaning:
+                        actual_changes.add(field_name)
+                if not actual_changes <= changed or not changed <= set(current_fields):
+                    raise Invalid("clarification changed_fields must identify every changed field")
+                linked = next((c for c in clarifications.values() if c["content"] == item), None)
+                if linked is None:
+                    raise Invalid("clarification history must link to a persisted clarification record")
+                if not previous["created_at"] < linked["created_at"] <= envelope["created_at"]:
+                    raise Invalid("clarification revisions must follow their predecessor in record time")
+    for envelope in envelopes:
+        if envelope["record_type"] == "Clarification":
+            content = envelope["content"]
+            previous = interpretations.get(content["previous_revision_id"])
+            resulting = interpretations.get(content["resulting_revision_id"])
+            if previous is None or resulting is None or previous["owner_id"] != envelope["owner_id"] or resulting["owner_id"] != envelope["owner_id"]:
+                raise Invalid("clarification revision links must resolve under the same owner")
+
+
+def check_lifecycle_links() -> None:
+    links = FIXTURES["lifecycle_links"]
+    examples = FIXTURES["record_examples"]
+    intake = next(e for e in FIXTURES["persisted_examples"]
+                  if e["record_type"] == "IntakeRequest" and e["record_id"] == links["intake_record_id"])
+    revisions = {e["content"]["interpretation_revision_id"]: e for e in FIXTURES["persisted_examples"]
+                 if e["record_type"] == "PromptInterpretation"}
+    if set(links["interpretation_revision_ids"]) != set(revisions):
+        raise Invalid("lifecycle must link every interpretation revision")
+    final_interpretation = revisions[links["interpretation_revision_ids"][-1]]["content"]
+    if not any(e["record_type"] == "Clarification" and e["record_id"] == links["clarification_record_id"]
+               for e in FIXTURES["persisted_examples"]):
+        raise Invalid("lifecycle must link its persisted clarification record")
+    draft, request, result, strategy = (examples["StrategyDraft"], examples["PublicationRequest"],
+                                       examples["PublicationResult"], examples["StrategySpec"])
+    if draft["original_request"] != intake["content"]["original_request"] or draft["interpretation_revision_id"] != final_interpretation["interpretation_revision_id"]:
+        raise Invalid("draft must link to the intake request and final interpretation")
+    if draft["draft_id"] != request["draft_id"] or draft["strategy_id"] != strategy["strategy_id"] or request["strategy"]["strategy_id"] != strategy["strategy_id"]:
+        raise Invalid("draft, publication request, and strategy IDs must agree")
+    if links["path_strategy_id"] != strategy["strategy_id"]:
+        raise Invalid("publication strategy ID must match the route path")
+    if request["expected_parent_revision_id"] != draft["base_revision_id"] or request["expected_parent_revision_id"] != links["parent_revision_id"]:
+        raise Invalid("publication parent must match its draft base")
+    if links["first_revision"] != (request["expected_parent_revision_id"] is None):
+        raise Invalid("null publication parent is only valid for the first revision")
+    if request["operation_id"] != result["operation_id"] or result["outcome"] != "PUBLISHED":
+        raise Invalid("publication result must acknowledge the exact request")
+    if result["content_sha256"] != sha256(request["strategy"]):
+        raise Invalid("publication content hash must match the requested StrategySpec")
+    if result["manifest_sha256"] != sha256(request["strategy"]["semantic_manifest"]):
+        raise Invalid("publication manifest hash must match the requested manifest")
+    if request["strategy"] != strategy:
+        raise Invalid("publication request must carry the linked strategy example")
+    if route({"input": {"interpretation": final_interpretation, "candidate_strategy": strategy}}) != "COMPILED":
+        raise Invalid("linked lifecycle interpretation does not validate as the published strategy")
 
 
 def validate_envelope(envelope: object) -> None:
@@ -686,6 +827,20 @@ def main() -> int:
     bad_history = copy.deepcopy(STRATEGY)
     bad_history["entry"]["args"][0]["lookback_buckets"] = 289
     must_reject("lookback over contract bound", bad_history)
+    bad_identity = copy.deepcopy(STRATEGY)
+    bad_identity["strategy_id"] = ""
+    must_reject("empty strategy identity", bad_identity)
+    bad_identity["strategy_id"] = None
+    must_reject("non-string strategy identity", bad_identity)
+    bad_binding = copy.deepcopy(STRATEGY)
+    bad_binding["market"]["research_binding"]["evidence_class"] = "MADE_UP"
+    must_reject("nested research binding enum", bad_binding)
+    bad_binding_record = copy.deepcopy(FIXTURES["record_examples"]["ResearchBinding"])
+    bad_binding_record["evidence_class"] = "MADE_UP"
+    must_reject_record("standalone research binding enum", "ResearchBinding", bad_binding_record)
+    bad_invalidation = copy.deepcopy(STRATEGY)
+    bad_invalidation["invalidation"]["source_ref"] = {"untrusted": "source"}
+    must_reject("not-requested invalidation requires source reference string", bad_invalidation)
     authority = copy.deepcopy(STRATEGY)
     authority["execution_permission"] = {"state": "GRANTED", "mandate_ref": "fixture-mandate"}
     must_reject("draft compiler cannot grant permission", authority)
@@ -741,6 +896,16 @@ def main() -> int:
     bad_evidence["field_evidence"][0].pop("value")
     bad_evidence["field_evidence"][0]["conflicts"] = [{"value": "0.01", "source_ref": "source-a"}]
     must_reject_record("CONFLICTING evidence lacks competing sources", "PromptInterpretation", bad_evidence)
+    standalone = copy.deepcopy(FIXTURES["record_examples"]["FieldEvidence"])
+    standalone["state"] = "MISSING"
+    must_reject_record("standalone MISSING evidence cannot retain value", "FieldEvidence", standalone)
+    standalone = copy.deepcopy(FIXTURES["record_examples"]["FieldEvidence"])
+    standalone.pop("value")
+    must_reject_record("standalone KNOWN evidence requires value", "FieldEvidence", standalone)
+    standalone = copy.deepcopy(FIXTURES["record_examples"]["FieldEvidence"])
+    standalone["state"] = "CONFLICTING"
+    standalone.pop("value")
+    must_reject_record("standalone CONFLICTING evidence requires alternatives", "FieldEvidence", standalone)
     bad_evidence = copy.deepcopy(FIXTURES["record_examples"]["PromptInterpretation"])
     bad_evidence["field_evidence"][0]["origin"] = "AGENT_PROPOSED"
     bad_evidence["field_evidence"][0].pop("adoption", None)
@@ -754,6 +919,9 @@ def main() -> int:
     bad_result = copy.deepcopy(FIXTURES["record_examples"]["Outcome"])
     del bad_result["code"]
     must_reject_record("result requires stable code", "Outcome", bad_result)
+    bad_publication = copy.deepcopy(FIXTURES["record_examples"]["PublicationResult"])
+    bad_publication["revision_id"] = ""
+    must_reject_record("published result requires nonempty revision ID", "PublicationResult", bad_publication)
     bad_envelope = copy.deepcopy(FIXTURES["persisted_examples"][0])
     bad_envelope["schema_version"] = "p02.unknown/99"
     try:
@@ -770,6 +938,26 @@ def main() -> int:
         pass
     else:
         raise AssertionError("interpretation with an unknown intake revision link was accepted")
+    bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
+    bad_links[-1]["content"]["preserved_restrictions"] = []
+    try:
+        validate_record_bundle(bad_links)
+    except Invalid:
+        pass
+    else:
+        raise AssertionError("persisted interpretation removed intake restrictions")
+    bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
+    for envelope in bad_links:
+        if envelope["record_type"] == "Clarification":
+            envelope["content"]["previous_revision_id"] = "does-not-exist"
+        elif envelope["record_type"] == "PromptInterpretation" and envelope["content"]["interpretation_revision_id"] == "interp-fixture-2":
+            envelope["content"]["clarification_history"][0]["previous_revision_id"] = "does-not-exist"
+    try:
+        validate_record_bundle(bad_links)
+    except Invalid:
+        pass
+    else:
+        raise AssertionError("persisted clarification accepted an unknown prior revision")
 
     print(f"PASS: {len(FIXTURES['cases'])} fixtures, {len(FIXTURES['record_examples'])} record examples, valid strategy, canonical identity, and record/strategy rejection mutations")
     print("LIMIT: in-memory contract checks only; no server, storage, concurrency, provider, or production-cost claim")

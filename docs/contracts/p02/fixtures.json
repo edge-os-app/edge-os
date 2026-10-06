@@ -5,29 +5,343 @@
       "id": "route-complete",
       "kind": "route",
       "input": {
-        "intake_record_id": "10000000-0000-4000-8000-000000000001",
-        "interpretation_revision_id": "interp-fixture-1",
-        "input_class": "CONCRETE_THESIS",
-        "requested_job": "CREATE_STRATEGY",
-        "meaning_status": "SUPPORTED",
-        "syntax_status": "VALID",
-        "evidence_readiness": "READY",
-        "preserved_restrictions": [
-          "no leverage"
-        ],
-        "clarification_history": [],
-        "field_evidence": [
-          {
-            "field_name": "entry_threshold",
-            "state": "KNOWN",
-            "origin": "USER_STATED",
-            "source_ref": "intake-fixture-1",
-            "interpretation_revision": "interp-fixture-1",
-            "evidence_status": "VERIFIED_FACT",
-            "value": "0.01",
-            "unit": "DIMENSIONLESS"
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "exit",
+              "state": "KNOWN",
+              "origin": "USER_CONFIRMED",
+              "source_ref": "synthetic:answer-exit",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "lt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 1
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            },
+            {
+              "field_name": "restrictions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": {
+          "schema_version": "p02.strategy/1",
+          "strategy_id": "fixture-spot-return-volume-v1",
+          "domain": "SPOT",
+          "market": {
+            "network": "MONAD",
+            "research_binding": {
+              "chain_id": null,
+              "underlying_venue": "fixture-underlying-venue/1",
+              "pool_address": "0x3333333333333333333333333333333333333333",
+              "token_order": [
+                "0x1111111111111111111111111111111111111111",
+                "0x2222222222222222222222222222222222222222"
+              ],
+              "base_asset": "0x1111111111111111111111111111111111111111",
+              "quote_asset": "0x2222222222222222222222222222222222222222",
+              "orientation": "QUOTE_PER_BASE",
+              "base_decimals": 18,
+              "quote_decimals": 6,
+              "event_schema_version": "fixture-events/1",
+              "amount_conversion_version": "fixture-amounts/1",
+              "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+              "evidence_class": "SYNTHETIC_FIXTURE",
+              "qualification": "UNQUALIFIED"
+            },
+            "execution_route": {
+              "adapter": "KURU_FLOW_FIXED_INPUT",
+              "identity_state": "UNKNOWN",
+              "identity": null,
+              "qualification": "UNQUALIFIED"
+            },
+            "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "decision_interval_seconds": 300,
+          "data_inputs": [
+            "price",
+            "quote_volume"
+          ],
+          "entry": {
+            "op": "gt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 3
+              },
+              {
+                "op": "constant",
+                "value": "0.01",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          },
+          "exit": {
+            "op": "lt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 1
+              },
+              {
+                "op": "constant",
+                "value": "0",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          },
+          "invalidation": {
+            "state": "NOT_REQUESTED",
+            "source_ref": "synthetic:adopted-no-invalidation"
+          },
+          "sizing": {
+            "kind": "FIXED_QUOTE_AMOUNT",
+            "amount": "100",
+            "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "additions": false,
+          "partial_exits": false,
+          "cost_assumptions": {
+            "fee_rate": "0.003",
+            "slippage_rate": "0.005",
+            "source_ref": "synthetic:adopted-cost-profile"
+          },
+          "risk_limits": {
+            "max_quote_notional": "100",
+            "max_open_positions": 1
+          },
+          "action_scope": [
+            "SPOT_BUY",
+            "SPOT_SELL_ALL_ATTRIBUTABLE"
+          ],
+          "execution_permission": {
+            "state": "NOT_GRANTED",
+            "mandate_ref": null
+          },
+          "warmup_buckets": 3,
+          "semantic_manifest": {
+            "language": "edge-strategy/1",
+            "operator_registry": "edge-operators/1",
+            "history": "scheduled-5m-no-fill/1",
+            "boolean": "kleene-whole-tree/1",
+            "numeric": "decimal-50-half-even/1",
+            "serialization": "p02-json-decimal-string/1",
+            "compiler": "edge-compiler/1"
           }
-        ]
+        }
       },
       "expected": "COMPILED"
     },
@@ -35,27 +349,253 @@
       "id": "route-clarification",
       "kind": "route",
       "input": {
-        "intake_record_id": "10000000-0000-4000-8000-000000000001",
-        "interpretation_revision_id": "interp-fixture-1",
-        "input_class": "CONCRETE_THESIS",
-        "requested_job": "CREATE_STRATEGY",
-        "meaning_status": "SUPPORTED",
-        "syntax_status": "VALID",
-        "evidence_readiness": "READY",
-        "preserved_restrictions": [
-          "no leverage"
-        ],
-        "clarification_history": [],
-        "field_evidence": [
-          {
-            "field_name": "entry_threshold",
-            "state": "MISSING",
-            "origin": "USER_STATED",
-            "source_ref": "intake-fixture-1",
-            "interpretation_revision": "interp-fixture-1",
-            "evidence_status": "VERIFIED_FACT"
-          }
-        ]
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            },
+            {
+              "field_name": "exit",
+              "state": "MISSING",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "UNKNOWN"
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": null
+      },
+      "expected": "NEEDS_CLARIFICATION"
+    },
+    {
+      "id": "route-empty-meaning",
+      "kind": "route",
+      "input": {
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": null
       },
       "expected": "NEEDS_CLARIFICATION"
     },
@@ -63,29 +603,227 @@
       "id": "route-unsupported",
       "kind": "route",
       "input": {
-        "intake_record_id": "10000000-0000-4000-8000-000000000001",
-        "interpretation_revision_id": "interp-fixture-1",
-        "input_class": "CONCRETE_THESIS",
-        "requested_job": "CREATE_STRATEGY",
-        "meaning_status": "UNSUPPORTED",
-        "syntax_status": "VALID",
-        "evidence_readiness": "READY",
-        "preserved_restrictions": [
-          "no leverage"
-        ],
-        "clarification_history": [],
-        "field_evidence": [
-          {
-            "field_name": "entry_threshold",
-            "state": "KNOWN",
-            "origin": "USER_STATED",
-            "source_ref": "intake-fixture-1",
-            "interpretation_revision": "interp-fixture-1",
-            "evidence_status": "VERIFIED_FACT",
-            "value": "0.01",
-            "unit": "DIMENSIONLESS"
-          }
-        ]
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "exit",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "lt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 1
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "UNSUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": null,
+        "original_request": "Sell half of the position, then rebalance the liquidity range.",
+        "missing_capability": "partial_exit_and_lp_rebalance"
       },
       "expected": "UNSUPPORTED"
     },
@@ -93,29 +831,225 @@
       "id": "route-malformed",
       "kind": "route",
       "input": {
-        "intake_record_id": "10000000-0000-4000-8000-000000000001",
-        "interpretation_revision_id": "interp-fixture-1",
-        "input_class": "CONCRETE_THESIS",
-        "requested_job": "CREATE_STRATEGY",
-        "meaning_status": "SUPPORTED",
-        "syntax_status": "INVALID",
-        "evidence_readiness": "READY",
-        "preserved_restrictions": [
-          "no leverage"
-        ],
-        "clarification_history": [],
-        "field_evidence": [
-          {
-            "field_name": "entry_threshold",
-            "state": "KNOWN",
-            "origin": "USER_STATED",
-            "source_ref": "intake-fixture-1",
-            "interpretation_revision": "interp-fixture-1",
-            "evidence_status": "VERIFIED_FACT",
-            "value": "0.01",
-            "unit": "DIMENSIONLESS"
-          }
-        ]
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "exit",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "lt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 1
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "INVALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": null
       },
       "expected": "INVALID_INPUT"
     },
@@ -123,31 +1057,479 @@
       "id": "route-unresolved",
       "kind": "route",
       "input": {
-        "intake_record_id": "10000000-0000-4000-8000-000000000001",
-        "interpretation_revision_id": "interp-fixture-1",
-        "input_class": "CONCRETE_THESIS",
-        "requested_job": "CREATE_STRATEGY",
-        "meaning_status": "SUPPORTED",
-        "syntax_status": "VALID",
-        "evidence_readiness": "UNRESOLVED",
-        "preserved_restrictions": [
-          "no leverage"
-        ],
-        "clarification_history": [],
-        "field_evidence": [
-          {
-            "field_name": "entry_threshold",
-            "state": "KNOWN",
-            "origin": "USER_STATED",
-            "source_ref": "intake-fixture-1",
-            "interpretation_revision": "interp-fixture-1",
-            "evidence_status": "VERIFIED_FACT",
-            "value": "0.01",
-            "unit": "DIMENSIONLESS"
-          }
-        ]
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "exit",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "lt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 1
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "UNRESOLVED"
+        },
+        "candidate_strategy": null
       },
       "expected": "UNRESOLVED"
+    },
+    {
+      "id": "route-pending-exit-proposal",
+      "kind": "route",
+      "input": {
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "exit",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:answer-exit",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "lt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 1
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              },
+              "adoption": "PENDING"
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            },
+            {
+              "field_name": "restrictions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": null
+      },
+      "expected": "NEEDS_CLARIFICATION"
+    },
+    {
+      "id": "route-rejects-incomplete-evidence-metadata",
+      "kind": "route",
+      "input": {
+        "interpretation": {
+          "meaning_status": "SUPPORTED"
+        },
+        "candidate_strategy": null
+      },
+      "expected": "INVALID_INPUT"
     },
     {
       "id": "return-keeps-gap",
@@ -340,28 +1722,35 @@
       "input": {
         "original_restrictions": [
           "no leverage",
-          "quote asset is USDC"
+          "no additions",
+          "no partial exits",
+          "one open position maximum"
         ],
         "next_restrictions": [
           "no leverage",
-          "quote asset is USDC"
+          "no additions",
+          "no partial exits",
+          "one open position maximum"
+        ],
+        "known_revision_ids": [
+          "interp-fixture-1"
         ],
         "clarification": {
-          "previous_revision_id": "interp-old",
-          "question_id": "q-entry",
-          "question": "What entry threshold should apply?",
-          "answer_ref": "answer-fixture",
+          "previous_revision_id": "interp-fixture-1",
+          "resulting_revision_id": "interp-fixture-2",
+          "question_id": "q-exit",
+          "question": "Should the exit rule be a one-bucket return below zero?",
+          "answer_ref": "synthetic:answer-exit",
           "changed_fields": [
-            "entry_threshold"
+            "exit"
           ],
           "preserved_restrictions": [
             "no leverage",
-            "quote asset is USDC"
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
           ]
-        },
-        "known_revision_ids": [
-          "interp-old"
-        ]
+        }
       },
       "expected": "NEEDS_CLARIFICATION"
     },
@@ -613,7 +2002,8 @@
         "parent_strategy_id": null,
         "parent_exists": false,
         "is_first_revision": true,
-        "latest_revision_id": null
+        "latest_revision_id": null,
+        "root_slot_available": true
       },
       "expected": "ACCEPT"
     },
@@ -631,7 +2021,8 @@
         "parent_strategy_id": "strat-a",
         "parent_exists": true,
         "is_first_revision": false,
-        "latest_revision_id": "rev-sibling-a"
+        "latest_revision_id": "rev-sibling-a",
+        "root_slot_available": false
       },
       "expected": "ACCEPT"
     },
@@ -649,7 +2040,8 @@
         "parent_strategy_id": "strat-a",
         "parent_exists": true,
         "is_first_revision": false,
-        "latest_revision_id": "rev-b"
+        "latest_revision_id": "rev-b",
+        "root_slot_available": false
       },
       "expected": "parent_revision_conflict"
     },
@@ -667,49 +2059,10 @@
         "parent_strategy_id": "strat-a",
         "parent_exists": true,
         "is_first_revision": false,
-        "latest_revision_id": "rev-foreign"
+        "latest_revision_id": "rev-foreign",
+        "root_slot_available": false
       },
       "expected": "parent_revision_conflict"
-    },
-    {
-      "id": "route-rejects-incomplete-evidence-metadata",
-      "kind": "route",
-      "input": {
-        "meaning_status": "SUPPORTED",
-        "intake_record_id": "10000000-0000-4000-8000-000000000001"
-      },
-      "expected": "INVALID_INPUT"
-    },
-    {
-      "id": "route-pending-proposal-needs-adoption",
-      "kind": "route",
-      "input": {
-        "intake_record_id": "10000000-0000-4000-8000-000000000001",
-        "interpretation_revision_id": "interp-fixture-1",
-        "input_class": "CONCRETE_THESIS",
-        "requested_job": "CREATE_STRATEGY",
-        "meaning_status": "SUPPORTED",
-        "syntax_status": "VALID",
-        "evidence_readiness": "READY",
-        "preserved_restrictions": [
-          "no leverage"
-        ],
-        "clarification_history": [],
-        "field_evidence": [
-          {
-            "field_name": "entry_threshold",
-            "state": "KNOWN",
-            "origin": "AGENT_PROPOSED",
-            "source_ref": "intake-fixture-1",
-            "interpretation_revision": "interp-fixture-1",
-            "evidence_status": "VERIFIED_FACT",
-            "value": "0.01",
-            "unit": "DIMENSIONLESS",
-            "adoption": "PENDING"
-          }
-        ]
-      },
-      "expected": "NEEDS_CLARIFICATION"
     },
     {
       "id": "clarification-rejects-unknown-revision-link",
@@ -717,28 +2070,35 @@
       "input": {
         "original_restrictions": [
           "no leverage",
-          "quote asset is USDC"
+          "no additions",
+          "no partial exits",
+          "one open position maximum"
         ],
         "next_restrictions": [
           "no leverage",
-          "quote asset is USDC"
+          "no additions",
+          "no partial exits",
+          "one open position maximum"
+        ],
+        "known_revision_ids": [
+          "different-revision"
         ],
         "clarification": {
-          "previous_revision_id": "interp-old",
-          "question_id": "q-entry",
-          "question": "What entry threshold should apply?",
-          "answer_ref": "answer-fixture",
+          "previous_revision_id": "interp-fixture-1",
+          "resulting_revision_id": "interp-fixture-2",
+          "question_id": "q-exit",
+          "question": "Should the exit rule be a one-bucket return below zero?",
+          "answer_ref": "synthetic:answer-exit",
           "changed_fields": [
-            "entry_threshold"
+            "exit"
           ],
           "preserved_restrictions": [
             "no leverage",
-            "quote asset is USDC"
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
           ]
-        },
-        "known_revision_ids": [
-          "different-revision"
-        ]
+        }
       },
       "expected": "INVALID_INPUT"
     },
@@ -772,13 +2132,1078 @@
         }
       },
       "expected": "DIMENSIONLESS"
+    },
+    {
+      "id": "publication-concurrent-root-loser-conflicts",
+      "kind": "publication_parent",
+      "input": {
+        "owner_id": "owner-a",
+        "strategy_id": "strat-a",
+        "draft_owner_id": "owner-a",
+        "draft_strategy_id": "strat-a",
+        "draft_base_revision_id": null,
+        "expected_parent_revision_id": null,
+        "parent_owner_id": null,
+        "parent_strategy_id": null,
+        "parent_exists": false,
+        "is_first_revision": false,
+        "latest_revision_id": "rev-root",
+        "root_slot_available": false
+      },
+      "expected": "parent_revision_conflict"
+    },
+    {
+      "id": "route-rejects-unknown-exit-field",
+      "kind": "route",
+      "input": {
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "exit",
+              "state": "KNOWN",
+              "origin": "USER_CONFIRMED",
+              "source_ref": "synthetic:answer-exit",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "lt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 1
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            },
+            {
+              "field_name": "restrictions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            },
+            {
+              "field_name": "exit_threshold",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "fixture",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": "0"
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": {
+          "schema_version": "p02.strategy/1",
+          "strategy_id": "fixture-spot-return-volume-v1",
+          "domain": "SPOT",
+          "market": {
+            "network": "MONAD",
+            "research_binding": {
+              "chain_id": null,
+              "underlying_venue": "fixture-underlying-venue/1",
+              "pool_address": "0x3333333333333333333333333333333333333333",
+              "token_order": [
+                "0x1111111111111111111111111111111111111111",
+                "0x2222222222222222222222222222222222222222"
+              ],
+              "base_asset": "0x1111111111111111111111111111111111111111",
+              "quote_asset": "0x2222222222222222222222222222222222222222",
+              "orientation": "QUOTE_PER_BASE",
+              "base_decimals": 18,
+              "quote_decimals": 6,
+              "event_schema_version": "fixture-events/1",
+              "amount_conversion_version": "fixture-amounts/1",
+              "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+              "evidence_class": "SYNTHETIC_FIXTURE",
+              "qualification": "UNQUALIFIED"
+            },
+            "execution_route": {
+              "adapter": "KURU_FLOW_FIXED_INPUT",
+              "identity_state": "UNKNOWN",
+              "identity": null,
+              "qualification": "UNQUALIFIED"
+            },
+            "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "decision_interval_seconds": 300,
+          "data_inputs": [
+            "price",
+            "quote_volume"
+          ],
+          "entry": {
+            "op": "gt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 3
+              },
+              {
+                "op": "constant",
+                "value": "0.01",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          },
+          "exit": {
+            "op": "lt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 1
+              },
+              {
+                "op": "constant",
+                "value": "0",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          },
+          "invalidation": {
+            "state": "NOT_REQUESTED",
+            "source_ref": "synthetic:adopted-no-invalidation"
+          },
+          "sizing": {
+            "kind": "FIXED_QUOTE_AMOUNT",
+            "amount": "100",
+            "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "additions": false,
+          "partial_exits": false,
+          "cost_assumptions": {
+            "fee_rate": "0.003",
+            "slippage_rate": "0.005",
+            "source_ref": "synthetic:adopted-cost-profile"
+          },
+          "risk_limits": {
+            "max_quote_notional": "100",
+            "max_open_positions": 1
+          },
+          "action_scope": [
+            "SPOT_BUY",
+            "SPOT_SELL_ALL_ATTRIBUTABLE"
+          ],
+          "execution_permission": {
+            "state": "NOT_GRANTED",
+            "mandate_ref": null
+          },
+          "warmup_buckets": 3,
+          "semantic_manifest": {
+            "language": "edge-strategy/1",
+            "operator_registry": "edge-operators/1",
+            "history": "scheduled-5m-no-fill/1",
+            "boolean": "kleene-whole-tree/1",
+            "numeric": "decimal-50-half-even/1",
+            "serialization": "p02-json-decimal-string/1",
+            "compiler": "edge-compiler/1"
+          }
+        }
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "route-rejects-strategy-meaning-mismatch",
+      "kind": "route",
+      "input": {
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "exit",
+              "state": "KNOWN",
+              "origin": "USER_CONFIRMED",
+              "source_ref": "synthetic:answer-exit",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "lt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 1
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            },
+            {
+              "field_name": "restrictions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": {
+          "schema_version": "p02.strategy/1",
+          "strategy_id": "fixture-spot-return-volume-v1",
+          "domain": "SPOT",
+          "market": {
+            "network": "MONAD",
+            "research_binding": {
+              "chain_id": null,
+              "underlying_venue": "fixture-underlying-venue/1",
+              "pool_address": "0x3333333333333333333333333333333333333333",
+              "token_order": [
+                "0x1111111111111111111111111111111111111111",
+                "0x2222222222222222222222222222222222222222"
+              ],
+              "base_asset": "0x1111111111111111111111111111111111111111",
+              "quote_asset": "0x2222222222222222222222222222222222222222",
+              "orientation": "QUOTE_PER_BASE",
+              "base_decimals": 18,
+              "quote_decimals": 6,
+              "event_schema_version": "fixture-events/1",
+              "amount_conversion_version": "fixture-amounts/1",
+              "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+              "evidence_class": "SYNTHETIC_FIXTURE",
+              "qualification": "UNQUALIFIED"
+            },
+            "execution_route": {
+              "adapter": "KURU_FLOW_FIXED_INPUT",
+              "identity_state": "UNKNOWN",
+              "identity": null,
+              "qualification": "UNQUALIFIED"
+            },
+            "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "decision_interval_seconds": 300,
+          "data_inputs": [
+            "price",
+            "quote_volume"
+          ],
+          "entry": {
+            "op": "gt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 3
+              },
+              {
+                "op": "constant",
+                "value": "0.02",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          },
+          "exit": {
+            "op": "lt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 1
+              },
+              {
+                "op": "constant",
+                "value": "0",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          },
+          "invalidation": {
+            "state": "NOT_REQUESTED",
+            "source_ref": "synthetic:adopted-no-invalidation"
+          },
+          "sizing": {
+            "kind": "FIXED_QUOTE_AMOUNT",
+            "amount": "100",
+            "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "additions": false,
+          "partial_exits": false,
+          "cost_assumptions": {
+            "fee_rate": "0.003",
+            "slippage_rate": "0.005",
+            "source_ref": "synthetic:adopted-cost-profile"
+          },
+          "risk_limits": {
+            "max_quote_notional": "100",
+            "max_open_positions": 1
+          },
+          "action_scope": [
+            "SPOT_BUY",
+            "SPOT_SELL_ALL_ATTRIBUTABLE"
+          ],
+          "execution_permission": {
+            "state": "NOT_GRANTED",
+            "mandate_ref": null
+          },
+          "warmup_buckets": 3,
+          "semantic_manifest": {
+            "language": "edge-strategy/1",
+            "operator_registry": "edge-operators/1",
+            "history": "scheduled-5m-no-fill/1",
+            "boolean": "kleene-whole-tree/1",
+            "numeric": "decimal-50-half-even/1",
+            "serialization": "p02-json-decimal-string/1",
+            "compiler": "edge-compiler/1"
+          }
+        }
+      },
+      "expected": "INVALID_INPUT"
+    },
+    {
+      "id": "route-rejects-unsupported-restriction",
+      "kind": "route",
+      "input": {
+        "interpretation": {
+          "intake_record_id": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision_id": "interp-fixture-2",
+          "input_class": "CONCRETE_THESIS",
+          "requested_job": "CREATE_STRATEGY",
+          "field_evidence": [
+            {
+              "field_name": "market",
+              "state": "KNOWN",
+              "origin": "AGENT_PROPOSED",
+              "source_ref": "synthetic:adopted-market",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "HYPOTHESIS",
+              "value": {
+                "network": "MONAD",
+                "research_binding": {
+                  "chain_id": null,
+                  "underlying_venue": "fixture-underlying-venue/1",
+                  "pool_address": "0x3333333333333333333333333333333333333333",
+                  "token_order": [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222"
+                  ],
+                  "base_asset": "0x1111111111111111111111111111111111111111",
+                  "quote_asset": "0x2222222222222222222222222222222222222222",
+                  "orientation": "QUOTE_PER_BASE",
+                  "base_decimals": 18,
+                  "quote_decimals": 6,
+                  "event_schema_version": "fixture-events/1",
+                  "amount_conversion_version": "fixture-amounts/1",
+                  "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                  "evidence_class": "SYNTHETIC_FIXTURE",
+                  "qualification": "UNQUALIFIED"
+                },
+                "execution_route": {
+                  "adapter": "KURU_FLOW_FIXED_INPUT",
+                  "identity_state": "UNKNOWN",
+                  "identity": null,
+                  "qualification": "UNQUALIFIED"
+                },
+                "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              },
+              "adoption": "ADOPTED"
+            },
+            {
+              "field_name": "decision_interval_seconds",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": 300
+            },
+            {
+              "field_name": "data_inputs",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "price",
+                "quote_volume"
+              ]
+            },
+            {
+              "field_name": "entry",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "gt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 3
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0.01",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "exit",
+              "state": "KNOWN",
+              "origin": "USER_CONFIRMED",
+              "source_ref": "synthetic:answer-exit",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "op": "lt",
+                "args": [
+                  {
+                    "op": "price_return",
+                    "lookback_buckets": 1
+                  },
+                  {
+                    "op": "constant",
+                    "value": "0",
+                    "unit": "DIMENSIONLESS"
+                  }
+                ]
+              }
+            },
+            {
+              "field_name": "invalidation",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "state": "NOT_REQUESTED",
+                "source_ref": "synthetic:adopted-no-invalidation"
+              }
+            },
+            {
+              "field_name": "sizing",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "kind": "FIXED_QUOTE_AMOUNT",
+                "amount": "100",
+                "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "field_name": "additions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "partial_exits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": false
+            },
+            {
+              "field_name": "cost_assumptions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "fee_rate": "0.003",
+                "slippage_rate": "0.005",
+                "source_ref": "synthetic:adopted-cost-profile"
+              }
+            },
+            {
+              "field_name": "risk_limits",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": {
+                "max_quote_notional": "100",
+                "max_open_positions": 1
+              }
+            },
+            {
+              "field_name": "action_scope",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "SPOT_BUY",
+                "SPOT_SELL_ALL_ATTRIBUTABLE"
+              ]
+            },
+            {
+              "field_name": "restrictions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum",
+                "no market orders"
+              ]
+            }
+          ],
+          "clarification_history": [
+            {
+              "previous_revision_id": "interp-fixture-1",
+              "resulting_revision_id": "interp-fixture-2",
+              "question_id": "q-exit",
+              "question": "Should the exit rule be a one-bucket return below zero?",
+              "answer_ref": "synthetic:answer-exit",
+              "changed_fields": [
+                "exit"
+              ],
+              "preserved_restrictions": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
+            }
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum",
+            "no market orders"
+          ],
+          "meaning_status": "SUPPORTED",
+          "syntax_status": "VALID",
+          "evidence_readiness": "READY"
+        },
+        "candidate_strategy": {
+          "schema_version": "p02.strategy/1",
+          "strategy_id": "fixture-spot-return-volume-v1",
+          "domain": "SPOT",
+          "market": {
+            "network": "MONAD",
+            "research_binding": {
+              "chain_id": null,
+              "underlying_venue": "fixture-underlying-venue/1",
+              "pool_address": "0x3333333333333333333333333333333333333333",
+              "token_order": [
+                "0x1111111111111111111111111111111111111111",
+                "0x2222222222222222222222222222222222222222"
+              ],
+              "base_asset": "0x1111111111111111111111111111111111111111",
+              "quote_asset": "0x2222222222222222222222222222222222222222",
+              "orientation": "QUOTE_PER_BASE",
+              "base_decimals": 18,
+              "quote_decimals": 6,
+              "event_schema_version": "fixture-events/1",
+              "amount_conversion_version": "fixture-amounts/1",
+              "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+              "evidence_class": "SYNTHETIC_FIXTURE",
+              "qualification": "UNQUALIFIED"
+            },
+            "execution_route": {
+              "adapter": "KURU_FLOW_FIXED_INPUT",
+              "identity_state": "UNKNOWN",
+              "identity": null,
+              "qualification": "UNQUALIFIED"
+            },
+            "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "decision_interval_seconds": 300,
+          "data_inputs": [
+            "price",
+            "quote_volume"
+          ],
+          "entry": {
+            "op": "gt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 3
+              },
+              {
+                "op": "constant",
+                "value": "0.01",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          },
+          "exit": {
+            "op": "lt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 1
+              },
+              {
+                "op": "constant",
+                "value": "0",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          },
+          "invalidation": {
+            "state": "NOT_REQUESTED",
+            "source_ref": "synthetic:adopted-no-invalidation"
+          },
+          "sizing": {
+            "kind": "FIXED_QUOTE_AMOUNT",
+            "amount": "100",
+            "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "additions": false,
+          "partial_exits": false,
+          "cost_assumptions": {
+            "fee_rate": "0.003",
+            "slippage_rate": "0.005",
+            "source_ref": "synthetic:adopted-cost-profile"
+          },
+          "risk_limits": {
+            "max_quote_notional": "100",
+            "max_open_positions": 1
+          },
+          "action_scope": [
+            "SPOT_BUY",
+            "SPOT_SELL_ALL_ATTRIBUTABLE"
+          ],
+          "execution_permission": {
+            "state": "NOT_GRANTED",
+            "mandate_ref": null
+          },
+          "warmup_buckets": 3,
+          "semantic_manifest": {
+            "language": "edge-strategy/1",
+            "operator_registry": "edge-operators/1",
+            "history": "scheduled-5m-no-fill/1",
+            "boolean": "kleene-whole-tree/1",
+            "numeric": "decimal-50-half-even/1",
+            "serialization": "p02-json-decimal-string/1",
+            "compiler": "edge-compiler/1"
+          }
+        }
+      },
+      "expected": "UNSUPPORTED"
     }
   ],
   "record_examples": {
     "IntakeRequest": {
-      "original_request": "Buy after a positive three-bucket return; exit below zero.",
+      "original_request": "Use the synthetic Monad spot fixture with price and quote-volume inputs on five-minute buckets. Enter when three-bucket price return is greater than 0.01. Exit when price turns down. Use a fixed 100 quote-unit amount, fee 0.003 and slippage 0.005. Allow one open position, with no leverage, additions, or partial exits. Do not request invalidation.",
       "restrictions": [
-        "no leverage"
+        "no leverage",
+        "no additions",
+        "no partial exits",
+        "one open position maximum"
       ],
       "requested_job": "CREATE_STRATEGY",
       "input_class": "CONCRETE_THESIS",
@@ -790,40 +3215,250 @@
     },
     "PromptInterpretation": {
       "intake_record_id": "10000000-0000-4000-8000-000000000001",
-      "interpretation_revision_id": "interp-fixture-1",
+      "interpretation_revision_id": "interp-fixture-2",
       "input_class": "CONCRETE_THESIS",
       "requested_job": "CREATE_STRATEGY",
-      "meaning_status": "SUPPORTED",
-      "syntax_status": "VALID",
-      "evidence_readiness": "READY",
-      "preserved_restrictions": [
-        "no leverage"
-      ],
-      "clarification_history": [],
       "field_evidence": [
         {
-          "field_name": "entry_threshold",
+          "field_name": "market",
+          "state": "KNOWN",
+          "origin": "AGENT_PROPOSED",
+          "source_ref": "synthetic:adopted-market",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "HYPOTHESIS",
+          "value": {
+            "network": "MONAD",
+            "research_binding": {
+              "chain_id": null,
+              "underlying_venue": "fixture-underlying-venue/1",
+              "pool_address": "0x3333333333333333333333333333333333333333",
+              "token_order": [
+                "0x1111111111111111111111111111111111111111",
+                "0x2222222222222222222222222222222222222222"
+              ],
+              "base_asset": "0x1111111111111111111111111111111111111111",
+              "quote_asset": "0x2222222222222222222222222222222222222222",
+              "orientation": "QUOTE_PER_BASE",
+              "base_decimals": 18,
+              "quote_decimals": 6,
+              "event_schema_version": "fixture-events/1",
+              "amount_conversion_version": "fixture-amounts/1",
+              "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+              "evidence_class": "SYNTHETIC_FIXTURE",
+              "qualification": "UNQUALIFIED"
+            },
+            "execution_route": {
+              "adapter": "KURU_FLOW_FIXED_INPUT",
+              "identity_state": "UNKNOWN",
+              "identity": null,
+              "qualification": "UNQUALIFIED"
+            },
+            "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          },
+          "adoption": "ADOPTED"
+        },
+        {
+          "field_name": "decision_interval_seconds",
           "state": "KNOWN",
           "origin": "USER_STATED",
-          "source_ref": "intake-fixture-1",
-          "interpretation_revision": "interp-fixture-1",
-          "evidence_status": "VERIFIED_FACT",
-          "value": "0.01",
-          "unit": "DIMENSIONLESS"
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": 300
+        },
+        {
+          "field_name": "data_inputs",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": [
+            "price",
+            "quote_volume"
+          ]
+        },
+        {
+          "field_name": "entry",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": {
+            "op": "gt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 3
+              },
+              {
+                "op": "constant",
+                "value": "0.01",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          }
+        },
+        {
+          "field_name": "exit",
+          "state": "KNOWN",
+          "origin": "USER_CONFIRMED",
+          "source_ref": "synthetic:answer-exit",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": {
+            "op": "lt",
+            "args": [
+              {
+                "op": "price_return",
+                "lookback_buckets": 1
+              },
+              {
+                "op": "constant",
+                "value": "0",
+                "unit": "DIMENSIONLESS"
+              }
+            ]
+          }
+        },
+        {
+          "field_name": "invalidation",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": {
+            "state": "NOT_REQUESTED",
+            "source_ref": "synthetic:adopted-no-invalidation"
+          }
+        },
+        {
+          "field_name": "sizing",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": {
+            "kind": "FIXED_QUOTE_AMOUNT",
+            "amount": "100",
+            "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+          }
+        },
+        {
+          "field_name": "additions",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": false
+        },
+        {
+          "field_name": "partial_exits",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": false
+        },
+        {
+          "field_name": "cost_assumptions",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": {
+            "fee_rate": "0.003",
+            "slippage_rate": "0.005",
+            "source_ref": "synthetic:adopted-cost-profile"
+          }
+        },
+        {
+          "field_name": "risk_limits",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": {
+            "max_quote_notional": "100",
+            "max_open_positions": 1
+          }
+        },
+        {
+          "field_name": "action_scope",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": [
+            "SPOT_BUY",
+            "SPOT_SELL_ALL_ATTRIBUTABLE"
+          ]
+        },
+        {
+          "field_name": "restrictions",
+          "state": "KNOWN",
+          "origin": "USER_STATED",
+          "source_ref": "10000000-0000-4000-8000-000000000001",
+          "interpretation_revision": "interp-fixture-2",
+          "evidence_status": "INFERENCE",
+          "value": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ]
         }
-      ]
-    },
-    "Clarification": {
-      "previous_revision_id": "interp-old",
-      "question_id": "q-entry",
-      "question": "What entry threshold should apply?",
-      "answer_ref": "answer-fixture",
-      "changed_fields": [
-        "entry_threshold"
+      ],
+      "clarification_history": [
+        {
+          "previous_revision_id": "interp-fixture-1",
+          "resulting_revision_id": "interp-fixture-2",
+          "question_id": "q-exit",
+          "question": "Should the exit rule be a one-bucket return below zero?",
+          "answer_ref": "synthetic:answer-exit",
+          "changed_fields": [
+            "exit"
+          ],
+          "preserved_restrictions": [
+            "no leverage",
+            "no additions",
+            "no partial exits",
+            "one open position maximum"
+          ]
+        }
       ],
       "preserved_restrictions": [
         "no leverage",
-        "quote asset is USDC"
+        "no additions",
+        "no partial exits",
+        "one open position maximum"
+      ],
+      "meaning_status": "SUPPORTED",
+      "syntax_status": "VALID",
+      "evidence_readiness": "READY"
+    },
+    "Clarification": {
+      "previous_revision_id": "interp-fixture-1",
+      "resulting_revision_id": "interp-fixture-2",
+      "question_id": "q-exit",
+      "question": "Should the exit rule be a one-bucket return below zero?",
+      "answer_ref": "synthetic:answer-exit",
+      "changed_fields": [
+        "exit"
+      ],
+      "preserved_restrictions": [
+        "no leverage",
+        "no additions",
+        "no partial exits",
+        "one open position maximum"
       ]
     },
     "Outcome": {
@@ -836,15 +3471,15 @@
     },
     "StrategyDraft": {
       "draft_id": "draft-fixture",
-      "original_request": "synthetic request",
-      "interpretation_revision_id": "interp-fixture-1",
+      "original_request": "Use the synthetic Monad spot fixture with price and quote-volume inputs on five-minute buckets. Enter when three-bucket price return is greater than 0.01. Exit when price turns down. Use a fixed 100 quote-unit amount, fee 0.003 and slippage 0.005. Allow one open position, with no leverage, additions, or partial exits. Do not request invalidation.",
+      "interpretation_revision_id": "interp-fixture-2",
       "source_syntax": {
         "kind": "supported-rule"
       },
       "validation_findings": [],
       "state": "DRAFT",
       "published_revision_id": null,
-      "strategy_id": "strategy-fixture",
+      "strategy_id": "fixture-spot-return-volume-v1",
       "base_revision_id": null
     },
     "StrategySpec": {
@@ -1072,9 +3707,9 @@
       "retry": "SAFE_SAME_KEY",
       "publication_id": "pub-fixture",
       "revision_id": "rev-fixture",
-      "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "created_at": "2026-10-06T00:00:00Z"
+      "content_sha256": "b9dcf5d9d94e0c9adee16a4f9f22aaa0f51efe08e2596206ffffd0c691d0f125",
+      "manifest_sha256": "e80a9918e14321716f9ce231ada91dc788275b95f0142830d2a7ec4c6f74aff7",
+      "created_at": "2026-10-06T10:00:00Z"
     },
     "ResearchBinding": {
       "chain_id": null,
@@ -1096,14 +3731,42 @@
       "qualification": "UNQUALIFIED"
     },
     "FieldEvidence": {
-      "field_name": "entry_threshold",
+      "field_name": "market",
       "state": "KNOWN",
-      "origin": "USER_STATED",
-      "source_ref": "intake-fixture-1",
-      "interpretation_revision": "interp-fixture-1",
-      "evidence_status": "VERIFIED_FACT",
-      "value": "0.01",
-      "unit": "DIMENSIONLESS"
+      "origin": "AGENT_PROPOSED",
+      "source_ref": "synthetic:adopted-market",
+      "interpretation_revision": "interp-fixture-2",
+      "evidence_status": "HYPOTHESIS",
+      "value": {
+        "network": "MONAD",
+        "research_binding": {
+          "chain_id": null,
+          "underlying_venue": "fixture-underlying-venue/1",
+          "pool_address": "0x3333333333333333333333333333333333333333",
+          "token_order": [
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222"
+          ],
+          "base_asset": "0x1111111111111111111111111111111111111111",
+          "quote_asset": "0x2222222222222222222222222222222222222222",
+          "orientation": "QUOTE_PER_BASE",
+          "base_decimals": 18,
+          "quote_decimals": 6,
+          "event_schema_version": "fixture-events/1",
+          "amount_conversion_version": "fixture-amounts/1",
+          "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+          "evidence_class": "SYNTHETIC_FIXTURE",
+          "qualification": "UNQUALIFIED"
+        },
+        "execution_route": {
+          "adapter": "KURU_FLOW_FIXED_INPUT",
+          "identity_state": "UNKNOWN",
+          "identity": null,
+          "qualification": "UNQUALIFIED"
+        },
+        "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+      },
+      "adoption": "ADOPTED"
     }
   },
   "record_variants": [
@@ -1116,9 +3779,9 @@
         "code": "validation_error",
         "findings": [
           {
-            "code": "invalid_parent",
-            "path": "/expected_parent_revision_id",
-            "detail": "parent does not match draft base"
+            "code": "unit_mismatch",
+            "path": "/strategy/entry/args/0/unit",
+            "detail": "comparison units do not match."
           }
         ],
         "retry": "NOT_RETRYABLE",
@@ -1229,9 +3892,12 @@
       "operation_id": "30000000-0000-4000-8000-000000000003",
       "created_at": "2026-10-06T10:00:00Z",
       "content": {
-        "original_request": "Buy after a positive three-bucket return; exit below zero.",
+        "original_request": "Use the synthetic Monad spot fixture with price and quote-volume inputs on five-minute buckets. Enter when three-bucket price return is greater than 0.01. Exit when price turns down. Use a fixed 100 quote-unit amount, fee 0.003 and slippage 0.005. Allow one open position, with no leverage, additions, or partial exits. Do not request invalidation.",
         "restrictions": [
-          "no leverage"
+          "no leverage",
+          "no additions",
+          "no partial exits",
+          "one open position maximum"
         ],
         "requested_job": "CREATE_STRATEGY",
         "input_class": "CONCRETE_THESIS",
@@ -1245,35 +3911,487 @@
     {
       "schema_version": "p02.prompt_interpretation/1",
       "record_type": "PromptInterpretation",
-      "record_id": "10000000-0000-4000-8000-000000000001",
+      "record_id": "11000000-0000-4000-8000-000000000001",
       "owner_id": "20000000-0000-4000-8000-000000000002",
       "operation_id": "30000000-0000-4000-8000-000000000003",
-      "created_at": "2026-10-06T10:00:00Z",
+      "created_at": "2026-10-06T10:00:01Z",
       "content": {
         "intake_record_id": "10000000-0000-4000-8000-000000000001",
         "interpretation_revision_id": "interp-fixture-1",
         "input_class": "CONCRETE_THESIS",
         "requested_job": "CREATE_STRATEGY",
-        "meaning_status": "SUPPORTED",
-        "syntax_status": "VALID",
-        "evidence_readiness": "READY",
-        "preserved_restrictions": [
-          "no leverage"
-        ],
-        "clarification_history": [],
         "field_evidence": [
           {
-            "field_name": "entry_threshold",
+            "field_name": "market",
+            "state": "KNOWN",
+            "origin": "AGENT_PROPOSED",
+            "source_ref": "synthetic:adopted-market",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "HYPOTHESIS",
+            "value": {
+              "network": "MONAD",
+              "research_binding": {
+                "chain_id": null,
+                "underlying_venue": "fixture-underlying-venue/1",
+                "pool_address": "0x3333333333333333333333333333333333333333",
+                "token_order": [
+                  "0x1111111111111111111111111111111111111111",
+                  "0x2222222222222222222222222222222222222222"
+                ],
+                "base_asset": "0x1111111111111111111111111111111111111111",
+                "quote_asset": "0x2222222222222222222222222222222222222222",
+                "orientation": "QUOTE_PER_BASE",
+                "base_decimals": 18,
+                "quote_decimals": 6,
+                "event_schema_version": "fixture-events/1",
+                "amount_conversion_version": "fixture-amounts/1",
+                "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                "evidence_class": "SYNTHETIC_FIXTURE",
+                "qualification": "UNQUALIFIED"
+              },
+              "execution_route": {
+                "adapter": "KURU_FLOW_FIXED_INPUT",
+                "identity_state": "UNKNOWN",
+                "identity": null,
+                "qualification": "UNQUALIFIED"
+              },
+              "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+            },
+            "adoption": "ADOPTED"
+          },
+          {
+            "field_name": "decision_interval_seconds",
             "state": "KNOWN",
             "origin": "USER_STATED",
-            "source_ref": "intake-fixture-1",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
             "interpretation_revision": "interp-fixture-1",
-            "evidence_status": "VERIFIED_FACT",
-            "value": "0.01",
-            "unit": "DIMENSIONLESS"
+            "evidence_status": "INFERENCE",
+            "value": 300
+          },
+          {
+            "field_name": "data_inputs",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": [
+              "price",
+              "quote_volume"
+            ]
+          },
+          {
+            "field_name": "entry",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "op": "gt",
+              "args": [
+                {
+                  "op": "price_return",
+                  "lookback_buckets": 3
+                },
+                {
+                  "op": "constant",
+                  "value": "0.01",
+                  "unit": "DIMENSIONLESS"
+                }
+              ]
+            }
+          },
+          {
+            "field_name": "invalidation",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "state": "NOT_REQUESTED",
+              "source_ref": "synthetic:adopted-no-invalidation"
+            }
+          },
+          {
+            "field_name": "sizing",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "kind": "FIXED_QUOTE_AMOUNT",
+              "amount": "100",
+              "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+            }
+          },
+          {
+            "field_name": "additions",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": false
+          },
+          {
+            "field_name": "partial_exits",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": false
+          },
+          {
+            "field_name": "cost_assumptions",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "fee_rate": "0.003",
+              "slippage_rate": "0.005",
+              "source_ref": "synthetic:adopted-cost-profile"
+            }
+          },
+          {
+            "field_name": "risk_limits",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "max_quote_notional": "100",
+              "max_open_positions": 1
+            }
+          },
+          {
+            "field_name": "action_scope",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": [
+              "SPOT_BUY",
+              "SPOT_SELL_ALL_ATTRIBUTABLE"
+            ]
+          },
+          {
+            "field_name": "restrictions",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "INFERENCE",
+            "value": [
+              "no leverage",
+              "no additions",
+              "no partial exits",
+              "one open position maximum"
+            ]
+          },
+          {
+            "field_name": "exit",
+            "state": "MISSING",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-1",
+            "evidence_status": "UNKNOWN"
           }
+        ],
+        "clarification_history": [],
+        "preserved_restrictions": [
+          "no leverage",
+          "no additions",
+          "no partial exits",
+          "one open position maximum"
+        ],
+        "meaning_status": "SUPPORTED",
+        "syntax_status": "VALID",
+        "evidence_readiness": "READY"
+      }
+    },
+    {
+      "schema_version": "p02.clarification/1",
+      "record_type": "Clarification",
+      "record_id": "12000000-0000-4000-8000-000000000001",
+      "owner_id": "20000000-0000-4000-8000-000000000002",
+      "operation_id": "30000000-0000-4000-8000-000000000003",
+      "created_at": "2026-10-06T10:00:02Z",
+      "content": {
+        "previous_revision_id": "interp-fixture-1",
+        "resulting_revision_id": "interp-fixture-2",
+        "question_id": "q-exit",
+        "question": "Should the exit rule be a one-bucket return below zero?",
+        "answer_ref": "synthetic:answer-exit",
+        "changed_fields": [
+          "exit"
+        ],
+        "preserved_restrictions": [
+          "no leverage",
+          "no additions",
+          "no partial exits",
+          "one open position maximum"
         ]
       }
+    },
+    {
+      "schema_version": "p02.prompt_interpretation/1",
+      "record_type": "PromptInterpretation",
+      "record_id": "13000000-0000-4000-8000-000000000001",
+      "owner_id": "20000000-0000-4000-8000-000000000002",
+      "operation_id": "30000000-0000-4000-8000-000000000003",
+      "created_at": "2026-10-06T10:00:03Z",
+      "content": {
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "interpretation_revision_id": "interp-fixture-2",
+        "input_class": "CONCRETE_THESIS",
+        "requested_job": "CREATE_STRATEGY",
+        "field_evidence": [
+          {
+            "field_name": "market",
+            "state": "KNOWN",
+            "origin": "AGENT_PROPOSED",
+            "source_ref": "synthetic:adopted-market",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "HYPOTHESIS",
+            "value": {
+              "network": "MONAD",
+              "research_binding": {
+                "chain_id": null,
+                "underlying_venue": "fixture-underlying-venue/1",
+                "pool_address": "0x3333333333333333333333333333333333333333",
+                "token_order": [
+                  "0x1111111111111111111111111111111111111111",
+                  "0x2222222222222222222222222222222222222222"
+                ],
+                "base_asset": "0x1111111111111111111111111111111111111111",
+                "quote_asset": "0x2222222222222222222222222222222222222222",
+                "orientation": "QUOTE_PER_BASE",
+                "base_decimals": 18,
+                "quote_decimals": 6,
+                "event_schema_version": "fixture-events/1",
+                "amount_conversion_version": "fixture-amounts/1",
+                "data_route": "ENVIO_QUICKNODE_CORROBORATED",
+                "evidence_class": "SYNTHETIC_FIXTURE",
+                "qualification": "UNQUALIFIED"
+              },
+              "execution_route": {
+                "adapter": "KURU_FLOW_FIXED_INPUT",
+                "identity_state": "UNKNOWN",
+                "identity": null,
+                "qualification": "UNQUALIFIED"
+              },
+              "quote_unit": "QUOTE:0x2222222222222222222222222222222222222222"
+            },
+            "adoption": "ADOPTED"
+          },
+          {
+            "field_name": "decision_interval_seconds",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": 300
+          },
+          {
+            "field_name": "data_inputs",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": [
+              "price",
+              "quote_volume"
+            ]
+          },
+          {
+            "field_name": "entry",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "op": "gt",
+              "args": [
+                {
+                  "op": "price_return",
+                  "lookback_buckets": 3
+                },
+                {
+                  "op": "constant",
+                  "value": "0.01",
+                  "unit": "DIMENSIONLESS"
+                }
+              ]
+            }
+          },
+          {
+            "field_name": "exit",
+            "state": "KNOWN",
+            "origin": "USER_CONFIRMED",
+            "source_ref": "synthetic:answer-exit",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "op": "lt",
+              "args": [
+                {
+                  "op": "price_return",
+                  "lookback_buckets": 1
+                },
+                {
+                  "op": "constant",
+                  "value": "0",
+                  "unit": "DIMENSIONLESS"
+                }
+              ]
+            }
+          },
+          {
+            "field_name": "invalidation",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "state": "NOT_REQUESTED",
+              "source_ref": "synthetic:adopted-no-invalidation"
+            }
+          },
+          {
+            "field_name": "sizing",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "kind": "FIXED_QUOTE_AMOUNT",
+              "amount": "100",
+              "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+            }
+          },
+          {
+            "field_name": "additions",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": false
+          },
+          {
+            "field_name": "partial_exits",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": false
+          },
+          {
+            "field_name": "cost_assumptions",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "fee_rate": "0.003",
+              "slippage_rate": "0.005",
+              "source_ref": "synthetic:adopted-cost-profile"
+            }
+          },
+          {
+            "field_name": "risk_limits",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": {
+              "max_quote_notional": "100",
+              "max_open_positions": 1
+            }
+          },
+          {
+            "field_name": "action_scope",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": [
+              "SPOT_BUY",
+              "SPOT_SELL_ALL_ATTRIBUTABLE"
+            ]
+          },
+          {
+            "field_name": "restrictions",
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "source_ref": "10000000-0000-4000-8000-000000000001",
+            "interpretation_revision": "interp-fixture-2",
+            "evidence_status": "INFERENCE",
+            "value": [
+              "no leverage",
+              "no additions",
+              "no partial exits",
+              "one open position maximum"
+            ]
+          }
+        ],
+        "clarification_history": [
+          {
+            "previous_revision_id": "interp-fixture-1",
+            "resulting_revision_id": "interp-fixture-2",
+            "question_id": "q-exit",
+            "question": "Should the exit rule be a one-bucket return below zero?",
+            "answer_ref": "synthetic:answer-exit",
+            "changed_fields": [
+              "exit"
+            ],
+            "preserved_restrictions": [
+              "no leverage",
+              "no additions",
+              "no partial exits",
+              "one open position maximum"
+            ]
+          }
+        ],
+        "preserved_restrictions": [
+          "no leverage",
+          "no additions",
+          "no partial exits",
+          "one open position maximum"
+        ],
+        "meaning_status": "SUPPORTED",
+        "syntax_status": "VALID",
+        "evidence_readiness": "READY"
+      }
     }
-  ]
+  ],
+  "lifecycle_links": {
+    "intake_record_id": "10000000-0000-4000-8000-000000000001",
+    "interpretation_revision_ids": [
+      "interp-fixture-1",
+      "interp-fixture-2"
+    ],
+    "clarification_record_id": "12000000-0000-4000-8000-000000000001",
+    "draft_id": "draft-fixture",
+    "path_strategy_id": "fixture-spot-return-volume-v1",
+    "parent_revision_id": null,
+    "first_revision": true
+  }
 }

@@ -331,6 +331,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "resulting_revision_id": {
+          "type": "nonempty_string"
         }
       },
       "optional": {},
@@ -681,7 +684,7 @@
           "type": "nullable_string"
         },
         "created_at": {
-          "type": "nonempty_string"
+          "type": "rfc3339_utc"
         }
       },
       "optional": {},
@@ -700,9 +703,8 @@
     "owner_id": "server-authenticated only; forbidden in client request",
     "consequential_fields": [
       "market",
-      "network",
-      "quote_asset",
       "decision_interval_seconds",
+      "data_inputs",
       "entry",
       "exit",
       "invalidation",
@@ -712,8 +714,7 @@
       "cost_assumptions",
       "risk_limits",
       "action_scope",
-      "data_route",
-      "entry_threshold"
+      "restrictions"
     ]
   },
   "result_codes": {
@@ -923,7 +924,8 @@
     ],
     "parent_rule": "nullable only for first revision; otherwise immutable revision must exist and match owner and strategy",
     "latest_parent_required": false,
-    "parent_mismatch_outcome": "parent_revision_conflict"
+    "parent_mismatch_outcome": "parent_revision_conflict",
+    "root_uniqueness": "One root revision per strategy; concurrent null-parent requests compete for an atomic unique root slot, and all but one return parent_revision_conflict."
   },
   "schema_versions": {
     "IntakeRequest": "p02.intake_request/1",
@@ -1026,5 +1028,60 @@
       "missing_dependency"
     ],
     "INVALID_INPUT": []
+  },
+  "required_strategy_fields": {
+    "CREATE_STRATEGY": [
+      "market",
+      "decision_interval_seconds",
+      "data_inputs",
+      "entry",
+      "exit",
+      "invalidation",
+      "sizing",
+      "additions",
+      "partial_exits",
+      "cost_assumptions",
+      "risk_limits",
+      "action_scope",
+      "restrictions"
+    ]
+  },
+  "router_scope": {
+    "supported_compilation_jobs": [
+      "CREATE_STRATEGY"
+    ],
+    "other_requested_jobs": "Persist intent and pass to their owning workflow; this contract does not mark them unsupported or COMPILED."
+  },
+  "publication_result_variants": {
+    "PUBLISHED": {
+      "publication_id": "nonempty_string",
+      "revision_id": "nonempty_string",
+      "content_sha256": "lowercase-sha256",
+      "manifest_sha256": "lowercase-sha256"
+    },
+    "non_success": {
+      "publication_id": "null",
+      "revision_id": "null",
+      "content_sha256": "null",
+      "manifest_sha256": "null"
+    }
+  },
+  "supported_restrictions": {
+    "no leverage": {
+      "field": "domain",
+      "equals": "SPOT"
+    },
+    "no additions": {
+      "field": "additions",
+      "equals": false
+    },
+    "no partial exits": {
+      "field": "partial_exits",
+      "equals": false
+    },
+    "one open position maximum": {
+      "field": "risk_limits.max_open_positions",
+      "equals": 1
+    }
   }
 }
