@@ -9,7 +9,7 @@ Ticket: [P01](https://github.com/edge-os-app/edge-os/issues/6). Prepared 2026-10
 ## Summary
 
 1. The browser calls `getAccessToken()` for each API request and sends the result as `Authorization: Bearer <token>`. FastAPI verifies it. The design uses no cookie and no dev bypass.
-2. FastAPI verifies the Privy access token with PyJWT. It accepts only `ES256`. It requires `exp`, `iat`, `iss`, `aud` and `sub`. It checks `iss == "privy.io"` and requires `aud` to be the configured Privy app ID as a plain string.
+2. FastAPI verifies the Privy access token with PyJWT. It accepts only `ES256`. It requires `exp`, `iat`, `iss`, `aud`, `sub` and `sid`. It checks `iss == "privy.io"` and requires `aud` to be the configured Privy app ID as a plain string. The required `sid` separates an access token from a Privy identity token, which shares the other claims.
 3. The verification key is a static PEM from configuration (Privy Dashboard, "Verify with key instead"). The official docs pages name no JWKS endpoint and no rotation overlap. Public SDK source suggests a per-app JWKS endpoint, which this profile does not adopt. Rotation is a manual two-key procedure (see [Key retrieval and rotation](#key-retrieval-and-rotation)).
 4. The verified `sub` (a Privy DID) maps to an internal `users.id`. Every owner-scoped query takes that internal ID from the verified principal. A request body never supplies an owner.
 5. Storage is PostgreSQL 18 through SQLAlchemy 2.0 (sync) with psycopg 3. Alembic applies schema changes in a separate step before the API starts.
@@ -24,7 +24,7 @@ Ticket: [P01](https://github.com/edge-os-app/edge-os/issues/6). Prepared 2026-10
 |---|---|---|---|---|---|
 | D1 | Python 3.14 (`>=3.14,<3.15`), managed with `uv` and a committed `uv.lock` | Local 3.14.4 and `uv` 0.12.16 exist. Each pinned package except `httpx` lists 3.14 in its PyPI classifiers (2026-10-06). `httpx` is pure Python and lists no 3.14 classifier. No interpreter install needed for the first slice | PyPI JSON, accessed 2026-10-06 | P03 | Lock resolves on 3.14. Test suite runs on 3.14. If a wheel is missing, fall back to 3.13 and record why |
 | D2 | FastAPI 0.142.2 with Pydantic 2.13.5, pydantic-settings 2.15.0, Uvicorn 0.54.0 | Accepted stack. Current stable releases | PyPI; Context7 `/websites/fastapi_tiangolo` | P03 | T13: the lock result matches or P03 records the new pins |
-| D3 | Token verification with PyJWT 2.15.1 (`pyjwt[crypto]`), `ES256` only | Privy documents ES256 tokens and third-party libraries. Its Python SDK docs show no verify method. A small PyJWT verifier avoids the Privy app secret | Privy access-tokens page; Context7 `/jpadilla/pyjwt`; Privy Python setup page; `@privy-io/node` source | P03 | Failure matrix rows A1-A13, A20, A24 and A25 pass with fixture tokens. Real-token check R1 passes when the builder authorizes a Privy app (Q1). See [Evidence classes](#evidence-classes) |
+| D3 | Token verification with PyJWT 2.15.1 (`pyjwt[crypto]`), `ES256` only | Privy documents ES256 tokens and third-party libraries. Its Python SDK docs show no verify method. A small PyJWT verifier avoids the Privy app secret | Privy access-tokens page; Context7 `/jpadilla/pyjwt`; Privy Python setup page; `@privy-io/node` source | P03 | Failure matrix rows A1-A13, A20 and A24-A27 pass with fixture tokens. Real-token check R1 passes when the builder authorizes a Privy app (Q1). See [Evidence classes](#evidence-classes) |
 | D4 | Static verification key from configuration, up to two keys (current, previous) | Docs describe the Dashboard key. The docs pages publish no JWKS URL and no rotation rule. SDK source suggests a per-app JWKS endpoint, but it is undocumented and not adopted. Two keys avoid a forced logout during rotation | Privy access-tokens and "Optimize your setup" pages; `@privy-io/node` source | P03, operator | Startup rejects a missing or non-P-256 key. Row A20. R2 when the builder authorizes a Privy app (Q1) |
 | D5 | Token delivery: `Authorization: Bearer` header, browser to FastAPI directly, explicit CORS allow-list | Privy's default local-storage mode uses this header. Cookie mode needs a custom domain and adds CSRF handling. A proxy hop adds a failure point for streams | Privy access-tokens page; Next.js docs v16.2.9 | P03, P43 | T9: allowed origin passes, other origin gets no CORS headers, no `*` |
 | D6 | *Proposed.* Ownership: internal `users.id` UUID, created on first verified request from the Privy DID in `sub` | Verified identity must derive ownership. An internal ID keeps P02 records independent of the provider | ADR 0008; spec "Records and durable identity" | P02, P03 | Cross-owner cases A15-A19 and A22-A23. T3 |
@@ -167,11 +167,13 @@ PyJWT `decode` with these settings:
 | Key | Preloaded EC P-256 public key object(s) |
 | `issuer` | `"privy.io"` |
 | `audience` | `EDGE_OS_PRIVY_APP_ID` |
-| `options.require` | `["exp", "iat", "iss", "aud", "sub"]` |
+| `options.require` | `["exp", "iat", "iss", "aud", "sub", "sid"]` |
 | `leeway` | 10 seconds, a code constant |
 | Signature | Verified before any claim is read |
 
-After decode, the verifier also requires `exp` and `iat` to be an `int` or `float` and not a `bool` (PyJWT converts a numeric string or a bool with `int()` and would accept it), requires `aud` to be a string equal to the app ID (PyJWT alone accepts a list that contains it) and `sub` to be a string starting `did:privy:` and at most 255 characters. The `did:privy:` prefix and length cap come from the DID examples in the docs, not from a stated rule. It rejects a token longer than 4096 characters before parsing. It does not require `sid` or check the `typ` header. The Privy Node SDK requires a string `sid` and `typ: JWT` (see [Key retrieval and rotation](#key-retrieval-and-rotation)). This profile has no use for `sid` and leaves it optional.
+After decode, the verifier also requires `exp` and `iat` to be an `int` or `float` and not a `bool` (PyJWT converts a numeric string or a bool with `int()` and would accept it), requires `aud` to be a string equal to the app ID (PyJWT alone accepts a list that contains it) and `sub` to be a string starting `did:privy:` and at most 255 characters. The `did:privy:` prefix and length cap come from the DID examples in the docs, not from a stated rule. It rejects a token longer than 4096 characters before parsing. It does not check the `typ` header.
+
+**Access-token discriminator.** The verifier also requires `sid` to be a non-empty string of at most 255 characters. A Privy identity token is signed by the same key and carries the same issuer, app audience, subject and time claims. The identity-token docs list no session ID claim, and the access-token docs list `sid`. In the Node SDK source, the access-token function requires a string `sid` and the identity-token function does not. So `sid` is the source-backed rule that rejects an identity token at this API. `typ: JWT` cannot discriminate, because the SDK applies it to both token types. Identity tokens are off unless the Dashboard enables them, but the API must reject one anyway, because a client can send any credential directly to FastAPI. The rule rests on documents and SDK excerpts, not a real-token test (see R1 and R4).
 
 Privy's docs list these claims: `sid`, `sub` (Privy DID), `iss` (`privy.io`), `aud` (app ID), `iat`, `exp` (generally 1 hour after issue). The default lifetime is configurable in the Dashboard.
 
@@ -290,9 +292,10 @@ Any label mismatch, an unexpected existing database or a failed guard stops the 
 
 Real-provider checks, all needing builder authority and all UNEXECUTED:
 
-- **R1.** Run the web and API on a non-test instance (`EDGE_OS_ENV=local`, the real app ID and Dashboard key). Log in through the browser on a builder-authorized Privy development app and make an API call that returns the owner's records. Verify the resulting access token with the configured Dashboard key through the same verifier. Record only metadata: `alg`, `iss`, `aud` equals app ID, `sub` hashed, `exp - iat`, key type and curve. Never record the token.
+- **R1.** Run the web and API on a non-test instance (`EDGE_OS_ENV=local`, the real app ID and Dashboard key). Log in through the browser on a builder-authorized Privy development app and make an API call that returns the owner's records. Verify the resulting access token with the configured Dashboard key through the same verifier. Record only metadata: `alg`, `iss`, `aud` equals app ID, `sub` hashed, `sid` present and its type, `exp - iat`, key type and curve. Never record the token.
 - **R2.** If the Dashboard offers rotation on that app: rotate, run the two-key procedure, confirm old and new tokens behave as designed. Record what Privy actually did.
 - **R3.** Confirm a first login leaves the Privy user with no embedded wallet. This is the only check that observes Privy's wallet behavior.
+- **R4.** If identity tokens are enabled in the Dashboard (a separate Dashboard setting and builder choice), send a real identity token for the same app to the API and confirm it returns 401. If they stay disabled, record that R4 was not run. Fixture row A26 is then the only evidence for the discriminator.
 
 Until R1 passes, the claim is "verifier correct against fixtures." It is not "Privy integration works."
 
@@ -312,16 +315,16 @@ This list is the minimum. Every check is UNEXECUTED.
 | T8 | Config: the Privy app secret is not a recognized setting |
 | T9 | CORS: an allowed origin gets CORS headers, another origin gets none, `*` is rejected |
 | T10 | Production settings reject `edge-os-test-app` and `http://` CORS origins |
-| T11 | Health: `/healthz` returns no configuration values. `/readyz` returns 200 when ready and 503 for an unmigrated database and for a stopped database |
+| T11 | Health: `/healthz` returns no configuration values. After a successful startup, `/readyz` returns 200, then returns 503 after each post-startup failure injection: a stopped database, and schema-revision drift (for example the test changes `alembic_version`). Startup against an unmigrated database is M3, not T11 |
 | T12 | Web: the `PrivyProvider` config object has `createOnLogin: "off"`, and neither the production entry point nor the production build output contains the fixture token provider. This checks configuration only and is not Privy evidence |
 | T13 | Build: `uv sync --frozen` and the Python test suite on 3.14. `npm ci` and `next build`. Record the resolved versions |
 | T14 | Fuzz: a set of crafted tokens (wrong claim types, oversized claims, odd headers, truncated parts) never returns 5xx except the injected A13 state |
 | B1 | Browser, mocked web auth: with the injected fixture provider, an API call through the UI returns the owner's records, and they match T1's rows |
-| R1-R3 | Real-provider checks above, when the builder authorizes a Privy app |
+| R1-R4 | Real-provider checks above, when the builder authorizes a Privy app |
 
 ## Failure matrix
 
-Rows A1-A13, A20, A24 and A25 use fixture-signed tokens through the real verifier (class: fixture). Rows A14-A19 and A21-A23 need Postgres. Every rejection happens before any owner-scoped read or write.
+Rows A1-A13, A20 and A24-A27 use fixture-signed tokens through the real verifier (class: fixture). Rows A14-A19 and A21-A23 need Postgres. Every rejection happens before any owner-scoped read or write.
 
 | ID | Input | Response | Notes |
 |---|---|---|---|
@@ -350,6 +353,8 @@ Rows A1-A13, A20, A24 and A25 use fixture-signed tokens through the real verifie
 | A23 | Owners A and B submit the same natural, idempotency or canonical key | Both succeed as separate rows | No cross-owner 409. Applies from the first ticket with such a key |
 | A24 | Valid signature, `iat` more than 10 s in the future | 401 `auth_invalid` | Documents the clock-skew assumption |
 | A25 | Valid signature, `aud` is a list that contains the app ID | 401 `auth_invalid` | Requires a plain string |
+| A26 | Identity-shaped token: same test key, same app ID, valid `iss`, `sub`, `iat` and `exp`, with `linked_accounts` and `custom_metadata` claims and no `sid` | 401 `auth_invalid` | Shows the API rejects the other Privy token class. Fixture shape comes from the identity-token docs |
+| A27 | Valid signature and every other claim, `sid` missing, empty, longer than 255 characters or not a string | 401 `auth_invalid` | A valid access-token fixture with a good `sid` passes |
 
 **Error body shape.** P03 uses `{"error": {"code": "<id>", "message": "<text>"}}` unless P02 supplies a frozen shape. The status and code choices above are this profile's. P02 confirms the body shape.
 
@@ -406,6 +411,7 @@ None of these reopens a settled product decision.
 - That Next.js 16.3.8 and `@privy-io/react-auth` 3.47.0 run together. P01 checked peer ranges, not behavior.
 - That `postgres:18.6-trixie` accepts the volume path shown. P03 checks the image documentation.
 - That real tokens carry `aud` as a plain string, a `sub` that starts `did:privy:` and fits 255 characters, and an `iat` consistent with the 10-second leeway. These come from doc examples and SDK source excerpts.
+- That real access tokens always carry a non-empty string `sid` and that real identity tokens never do. This rests on the docs claim lists and SDK source excerpts. Only R1 and R4 test it.
 - That Privy never reuses or merges a DID after a user is deleted.
 - That `createOnLogin: "off"` is the only wallet-creation path.
 - That the API host clock stays within 10 seconds of Privy's.
@@ -421,6 +427,7 @@ Accessed 2026-10-06. Context7 library IDs are in parentheses.
 - Privy, [Optimize your setup](https://docs.privy.io/recipes/dashboard/optimizing): static `jwtVerificationKey`, manual update after rotation.
 - Privy, [Automatic wallet creation](https://docs.privy.io/basics/react/advanced/automatic-wallet-creation): `createOnLogin` values, default `off`.
 - Privy, [Python setup](https://docs.privy.io/basics/python/setup) and [llms.txt index](https://docs.privy.io/llms.txt): Python SDK pages. No token-verification method found.
+- Privy, [Identity tokens](https://docs.privy.io/user-management/users/identity-tokens): identity-token claims (no session ID), used for the access-token discriminator.
 - Privy Node SDK source, as search excerpts: [unpkg `@privy-io/node@0.28.0` `src/lib/auth.ts`](https://app.unpkg.com/@privy-io/node@0.28.0/files/src/lib/auth.ts) and [jsDelivr `@privy-io/node@0.34.0` `src/lib/auth.ts`](https://cdn.jsdelivr.net/npm/@privy-io/node@0.34.0/src/lib/auth.ts). Package-source evidence, not documentation.
 - Issue [#6](https://github.com/edge-os-app/edge-os/issues/6): builder acceptance of the request-to-record test boundary.
 - PyJWT (`/jpadilla/pyjwt`, 2.15.1): ES256 decode, `algorithms`, `require`, `leeway`, exception classes.
