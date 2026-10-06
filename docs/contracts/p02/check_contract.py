@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 import hashlib
 import json
 import re
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parent
 CONTRACT = json.loads((ROOT / "contract.json").read_text(encoding="utf-8"))
 FIXTURES = json.loads((ROOT / "fixtures.json").read_text(encoding="utf-8"))
 STRATEGY = json.loads((ROOT / "fixtures/complete-strategy.json").read_text(encoding="utf-8"))
+STRATEGY_FIXTURES = {"complete-strategy": STRATEGY}
 DECIMAL = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z")
 
 
@@ -203,28 +205,8 @@ def _validate_strategy_semantics(strategy: object) -> None:
     if not isinstance(market, dict) or set(market) != {"network", "research_binding", "execution_route", "quote_unit"}:
         raise Invalid("market requires separate research and execution identities")
     research = market["research_binding"]
-    research_keys = set(CONTRACT["record_schemas"]["ResearchBinding"]["required"])
-    if not isinstance(research, dict) or set(research) != research_keys or market["network"] != "MONAD":
-        raise Invalid("research binding is incomplete")
-    for asset in (research["pool_address"], research["base_asset"], research["quote_asset"]):
-        if not isinstance(asset, str) or not re.fullmatch(r"0x[0-9a-fA-F]{40}", asset):
-            raise Invalid("pool and asset identities must be 20-byte hexadecimal addresses")
-    if research["token_order"] != [research["base_asset"], research["quote_asset"]]:
-        raise Invalid("token order must preserve the declared base/quote orientation")
-    if research["orientation"] != "QUOTE_PER_BASE":
-        raise Invalid("price orientation must be quote per base")
-    for decimals in (research["base_decimals"], research["quote_decimals"]):
-        if isinstance(decimals, bool) or not isinstance(decimals, int) or not 0 <= decimals <= 255:
-            raise Invalid("asset decimals must be explicit integers")
-    for name in ("underlying_venue", "event_schema_version", "amount_conversion_version", "data_route"):
-        if not isinstance(research[name], str) or not research[name]:
-            raise Invalid(f"research binding requires {name}")
-    if research["qualification"] not in {"QUALIFIED", "UNQUALIFIED"}:
-        raise Invalid("research qualification must be explicit")
-    if research["chain_id"] is None and not (research["evidence_class"] == "SYNTHETIC_FIXTURE" and research["qualification"] == "UNQUALIFIED"):
-        raise Invalid("unknown chain ID is allowed only for an unqualified synthetic fixture")
-    if research["chain_id"] is not None and (isinstance(research["chain_id"], bool) or not isinstance(research["chain_id"], int)):
-        raise Invalid("chain ID must be an integer or explicit null")
+    if market["network"] != "MONAD":
+        raise Invalid("market network is outside the P02 subset")
     route = market["execution_route"]
     if route != {"adapter": "KURU_FLOW_FIXED_INPUT", "identity_state": "UNKNOWN", "identity": None, "qualification": "UNQUALIFIED"}:
         raise Invalid("unknown or unqualified execution route must remain explicit")
@@ -313,6 +295,8 @@ def validate_record(name: str, value: object) -> None:
                 raise Invalid(f"{name} code does not match outcome")
     if name == "StrategySpec":
         _validate_strategy_semantics(value)
+    if name == "ResearchBinding":
+        _validate_research_binding(value)
     if name == "FieldEvidence":
         state, origin = value["state"], value["origin"]
         if state == "KNOWN" and "value" not in value:
@@ -335,11 +319,20 @@ def validate_record(name: str, value: object) -> None:
             raise Invalid("Clarification restrictions cannot contain duplicates")
     if name == "IntakeRequest" and len(set(value["restrictions"])) != len(value["restrictions"]):
         raise Invalid("intake restrictions cannot contain duplicates")
-    if name == "Outcome":
+    if name in {"Outcome", "PublicationResult"}:
+        if CONTRACT["outcome_requirements"]["finding_path_format"] == "JSON_POINTER" and any(
+            not _is_json_pointer(finding["path"]) for finding in value["findings"]
+        ):
+            raise Invalid("failure findings require a JSON Pointer path")
         expected_findings = CONTRACT["outcome_findings"].get(value["outcome"], [])
         codes = {finding["code"] for finding in value["findings"]}
-        if expected_findings and not set(expected_findings) & codes:
+        if value["outcome"] in CONTRACT["outcome_requirements"]["finding_required"] and not value["findings"]:
+            raise Invalid(f"{value['outcome']} outcome requires actionable findings")
+        if expected_findings and (not value["findings"] or not set(expected_findings) & codes):
             raise Invalid(f"{value['outcome']} outcome is missing its required finding")
+        if name == "Outcome" and value["outcome"] in CONTRACT["outcome_requirements"]["intake_record_required"]:
+            if not value.get("intake_record_id"):
+                raise Invalid(f"{value['outcome']} outcome must link to its intake record")
         if value["outcome"] == "INVALID_INPUT":
             if not value["findings"] or any(not finding["path"].startswith("/") for finding in value["findings"]):
                 raise Invalid("INVALID_INPUT needs a stable finding code and JSON Pointer path")
@@ -377,6 +370,49 @@ def _is_json_value(value: object) -> bool:
     return False
 
 
+def _is_json_pointer(value: object) -> bool:
+    return isinstance(value, str) and value.startswith("/") and re.search(r"~(?![01])", value) is None
+
+
+def _validate_research_binding(binding: object) -> None:
+    rules = CONTRACT["research_binding_rules"]
+    if not isinstance(binding, dict):
+        raise Invalid("ResearchBinding must be an object")
+    if binding["token_order"] != [binding[key] for key in rules["token_order"]]:
+        raise Invalid("token order must preserve the declared base/quote orientation")
+    if binding["orientation"] != rules["orientation"]:
+        raise Invalid("price orientation must be quote per base")
+    low, high = rules["decimal_range"]
+    for key in ("base_decimals", "quote_decimals"):
+        if isinstance(binding[key], bool) or not low <= binding[key] <= high:
+            raise Invalid("asset decimals must be explicit integers in the supported range")
+    if binding["chain_id"] is None and not (
+        binding["evidence_class"] == rules["null_chain_evidence_class"]
+        and binding["qualification"] == rules["null_chain_qualification"]
+    ):
+        raise Invalid("unknown chain ID is allowed only for an unqualified synthetic fixture")
+
+
+def parse_utc_timestamp(value: object) -> tuple[datetime, Decimal]:
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z", value) if isinstance(value, str) else None
+    if match is None:
+        raise Invalid("timestamp must be RFC 3339 UTC")
+    try:
+        seconds = datetime.fromisoformat(match.group(1) + "+00:00")
+        fraction = Decimal("0." + match.group(2)) if match.group(2) else Decimal(0)
+        return seconds, fraction
+    except ValueError as error:
+        raise Invalid("timestamp must be a valid RFC 3339 UTC instant") from error
+
+
+def _is_utc_timestamp(value: object) -> bool:
+    try:
+        parse_utc_timestamp(value)
+    except Invalid:
+        return False
+    return True
+
+
 def validate_typed_value(value: object, descriptor: dict[str, object], path: str) -> None:
     kind = descriptor["type"]
     types = {
@@ -400,7 +436,7 @@ def validate_typed_value(value: object, descriptor: dict[str, object], path: str
         "address": lambda v: isinstance(v, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", v) is not None,
         "address_array": lambda v: isinstance(v, list) and all(isinstance(x, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", x) for x in v),
         "decimal_string": lambda v: isinstance(v, str) and DECIMAL.fullmatch(v) is not None,
-        "rfc3339_utc": lambda v: isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", v) is not None,
+        "rfc3339_utc": lambda v: _is_utc_timestamp(v),
     }
     if kind.startswith("shape:"):
         validate_shape(kind.split(":", 1)[1], value)
@@ -457,43 +493,69 @@ def route(case: dict[str, object]) -> str:
     try:
         validate_record("PromptInterpretation", interpretation)
     except (Invalid, KeyError, TypeError):
-        return "INVALID_INPUT"
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     if interpretation["syntax_status"] == "INVALID":
-        return "INVALID_INPUT"
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     if interpretation["meaning_status"] == "UNSUPPORTED":
-        return "UNSUPPORTED" if data.get("original_request") and data.get("missing_capability") else "INVALID_INPUT"
+        actual = "UNSUPPORTED" if data.get("original_request") and data.get("missing_capability") else "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     if interpretation["requested_job"] not in CONTRACT["required_strategy_fields"]:
         return "HANDOFF"
     if interpretation["evidence_readiness"] == "UNRESOLVED":
-        return "UNRESOLVED"
+        actual = "UNRESOLVED"
+        _validate_route_result(case, actual)
+        return actual
     required = set(CONTRACT["required_strategy_fields"][interpretation["requested_job"]])
     evidence = interpretation["field_evidence"]
     if any(item["field_name"] not in required for item in evidence):
-        return "INVALID_INPUT"
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     by_name = {item["field_name"]: item for item in evidence}
     if len(by_name) != len(evidence):
-        return "INVALID_INPUT"
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     if required - set(by_name) or any(item["state"] in {"MISSING", "CONFLICTING"} for item in evidence):
-        return "NEEDS_CLARIFICATION"
+        actual = "NEEDS_CLARIFICATION"
+        _validate_route_result(case, actual)
+        return actual
     if any(item.get("origin") in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"}
            and item.get("field_name") in required and item.get("adoption") != "ADOPTED" for item in evidence):
-        return "NEEDS_CLARIFICATION"
+        actual = "NEEDS_CLARIFICATION"
+        _validate_route_result(case, actual)
+        return actual
     restrictions = by_name["restrictions"]["value"]
     if restrictions != interpretation["preserved_restrictions"]:
-        return "INVALID_INPUT"
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     supported_restrictions = CONTRACT["supported_restrictions"]
     if any(item not in supported_restrictions for item in restrictions):
-        return "UNSUPPORTED"
+        actual = "UNSUPPORTED"
+        _validate_route_result(case, actual)
+        return actual
     strategy = data.get("candidate_strategy")
     if not isinstance(strategy, dict):
-        return "INVALID_INPUT"
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     try:
         validate_strategy(strategy)
     except (Invalid, KeyError, TypeError):
-        return "INVALID_INPUT"
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     if any(canonical_bytes(by_name[name]["value"]) != canonical_bytes(strategy[name])
            for name in required if name != "restrictions"):
-        return "INVALID_INPUT"
+        actual = "INVALID_INPUT"
+        _validate_route_result(case, actual)
+        return actual
     for restriction in restrictions:
         rule = supported_restrictions[restriction]
         path = rule["field"].split(".")
@@ -501,8 +563,24 @@ def route(case: dict[str, object]) -> str:
         for part in path:
             actual = actual[part]
         if actual != rule["equals"]:
-            return "INVALID_INPUT"
+            outcome = "INVALID_INPUT"
+            _validate_route_result(case, outcome)
+            return outcome
     return "COMPILED"
+
+
+def _validate_route_result(case: dict[str, object], expected: str) -> None:
+    result = case.get("result")
+    if not isinstance(result, dict):
+        raise Invalid(f"{expected} route fixture requires a detailed Outcome")
+    validate_record("Outcome", result)
+    if result["outcome"] != expected:
+        raise Invalid("route result details must match the routed outcome")
+    interpretation = case["input"].get("interpretation")
+    if isinstance(interpretation, dict) and result.get("intake_record_id") != interpretation.get("intake_record_id"):
+        raise Invalid("route outcome must link to its intake record")
+    if expected == "UNRESOLVED" and case["input"].get("candidate_strategy") is not None:
+        raise Invalid("UNRESOLVED route cannot carry a strategy")
 
 
 def boolean(op: str, values: list[str], reasons: list[str]) -> dict[str, object]:
@@ -593,23 +671,31 @@ def check_fixture(case: dict[str, object]) -> None:
         validate_http_error(denied["body"])
         actual = denied if denied == absent else None
     elif kind == "idempotency":
+        first_strategy = _strategy_fixture(data["strategy_fixture"])
+        retry_strategy = _strategy_fixture(data["retry_strategy_fixture"])
+        _validate_strategy_path(data["path"], first_strategy)
+        _validate_strategy_path(data["retry_path"], retry_strategy)
         first = {"owner_id": data["owner_id"], "method": data["method"], "path": data["path"],
                  "expected_parent_revision_id": data["expected_parent_revision_id"], "draft_id": data["draft_id"],
-                 "strategy": STRATEGY}
+                 "strategy": first_strategy}
         retry = {"owner_id": data["retry_owner_id"], "method": data["retry_method"], "path": data["retry_path"],
                  "expected_parent_revision_id": data["retry_expected_parent_revision_id"], "draft_id": data["retry_draft_id"],
-                 "strategy": STRATEGY}
+                 "strategy": retry_strategy}
         valid_retry = (data["idempotency_key"] == data["retry_idempotency_key"]
                        and sha256(first) == sha256(retry) and data["acknowledgement"] == "UNKNOWN")
         # Stored idempotency results replay before draft/parent revalidation.
         actual = data["first_revision"] if valid_retry and not data["retry_parent_still_valid"] and data["first_revision"] == data["retry_revision"] else None
     elif kind == "idempotency_collision":
+        first_strategy = _strategy_fixture(data["strategy_fixture"])
+        retry_strategy = _strategy_fixture(data["retry_strategy_fixture"])
+        _validate_strategy_path(data["path"], first_strategy)
+        _validate_strategy_path(data["retry_path"], retry_strategy)
         first = {"owner_id": data["owner_id"], "method": data["method"], "path": data["path"],
-                 "expected_parent_revision_id": data["parent"], "draft_id": data["draft_id"], "strategy": STRATEGY}
+                 "expected_parent_revision_id": data["parent"], "draft_id": data["draft_id"], "strategy": first_strategy}
         retry = {"owner_id": data["retry_owner_id"], "method": data["retry_method"], "path": data["retry_path"],
-                 "expected_parent_revision_id": data["retry_parent"], "draft_id": data["retry_draft_id"], "strategy": STRATEGY}
+                 "expected_parent_revision_id": data["retry_parent"], "draft_id": data["retry_draft_id"], "strategy": retry_strategy}
         if data["mutate_strategy_threshold"]:
-            retry["strategy"] = copy.deepcopy(STRATEGY)
+            retry["strategy"] = copy.deepcopy(retry_strategy)
             retry["strategy"]["entry"]["args"][1]["value"] = "0.02"
         actual = (409 if data["idempotency_key"] == data["retry_idempotency_key"]
                   and (data["owner_id"], data["method"], data["path"]) == (data["retry_owner_id"], data["retry_method"], data["retry_path"])
@@ -647,6 +733,18 @@ def check_fixture(case: dict[str, object]) -> None:
         raise AssertionError(f"{case['id']}: expected {expected!r}, got {actual!r}")
 
 
+def _strategy_fixture(name: object) -> dict[str, object]:
+    if not isinstance(name, str) or name not in STRATEGY_FIXTURES:
+        raise Invalid("publication fixture names an unknown StrategySpec")
+    return STRATEGY_FIXTURES[name]
+
+
+def _validate_strategy_path(path: object, strategy: dict[str, object]) -> None:
+    match = re.fullmatch(r"/v1/strategies/([^/]+)/revisions", path) if isinstance(path, str) else None
+    if match is None or match.group(1) != strategy["strategy_id"]:
+        raise Invalid("publication strategy ID must match the strategy path")
+
+
 def check_record_examples() -> None:
     examples = FIXTURES["record_examples"]
     if set(examples) != set(CONTRACT["record_schemas"]):
@@ -659,19 +757,60 @@ def check_record_examples() -> None:
     check_lifecycle_links()
 
 
+def _validate_clarification_transition(previous: dict[str, object], resulting: dict[str, object],
+                                      clarification: dict[str, object]) -> None:
+    prior_content, result_content, content = previous["content"], resulting["content"], clarification["content"]
+    if previous["owner_id"] != resulting["owner_id"] or previous["owner_id"] != clarification["owner_id"]:
+        raise Invalid("clarification revision links must resolve under the same owner")
+    if prior_content["intake_record_id"] != result_content["intake_record_id"]:
+        raise Invalid("clarification revisions must remain in one intake lineage")
+    if prior_content["requested_job"] != result_content["requested_job"]:
+        raise Invalid("clarification cannot change the requested job")
+    if content["resulting_revision_id"] != result_content["interpretation_revision_id"]:
+        raise Invalid("clarification resulting revision must match its interpretation")
+    if not set(prior_content["preserved_restrictions"]) <= set(result_content["preserved_restrictions"]):
+        raise Invalid("clarification cannot remove prior interpretation restrictions")
+    if set(content["preserved_restrictions"]) != set(result_content["preserved_restrictions"]):
+        raise Invalid("clarification restriction snapshot must match its resulting interpretation")
+    prior_fields = {field["field_name"]: field for field in prior_content["field_evidence"]}
+    result_fields = {field["field_name"]: field for field in result_content["field_evidence"]}
+    actual_changes = set()
+    for field_name in set(prior_fields) | set(result_fields):
+        old, new = prior_fields.get(field_name), result_fields.get(field_name)
+        old_meaning = {k: v for k, v in old.items() if k != "interpretation_revision"} if old else None
+        new_meaning = {k: v for k, v in new.items() if k != "interpretation_revision"} if new else None
+        if old_meaning != new_meaning:
+            actual_changes.add(field_name)
+    if actual_changes != set(content["changed_fields"]):
+        raise Invalid("clarification changed_fields must exactly match changed evidence fields")
+
+
 def validate_record_bundle(envelopes: list[dict[str, object]]) -> None:
     for envelope in envelopes:
         validate_envelope(envelope)
-    intake_records = {e["record_id"]: e for e in envelopes if e["record_type"] == "IntakeRequest"}
-    interpretations = {e["content"]["interpretation_revision_id"]: e for e in envelopes
-                       if e["record_type"] == "PromptInterpretation"}
-    clarifications = {e["record_id"]: e for e in envelopes if e["record_type"] == "Clarification"}
+    by_type = {}
+    for envelope in envelopes:
+        kind = envelope["record_type"]
+        by_type.setdefault(kind, []).append(envelope)
+    record_ids = [e["record_id"] for e in envelopes]
+    if len(record_ids) != len(set(record_ids)):
+        raise Invalid("persisted record IDs must be unique")
+    intake_records = {e["record_id"]: e for e in by_type.get("IntakeRequest", [])}
+    interpretation_list = by_type.get("PromptInterpretation", [])
+    revision_ids = [e["content"]["interpretation_revision_id"] for e in interpretation_list]
+    if len(revision_ids) != len(set(revision_ids)):
+        raise Invalid("interpretation revision IDs must be unique")
+    interpretations = {e["content"]["interpretation_revision_id"]: e for e in interpretation_list}
+    clarifications = by_type.get("Clarification", [])
+    linked_clarification_ids = set()
     for envelope in envelopes:
         if envelope["record_type"] == "PromptInterpretation":
             content = envelope["content"]
             intake = intake_records.get(content["intake_record_id"])
             if intake is None or intake["owner_id"] != envelope["owner_id"]:
                 raise Invalid("interpretation must link to an intake owned by the same principal")
+            if content["requested_job"] != intake["content"]["requested_job"]:
+                raise Invalid("interpretation job must match its intake request")
             intake_restrictions = set(intake["content"]["restrictions"])
             if not intake_restrictions <= set(content["preserved_restrictions"]):
                 raise Invalid("interpretation cannot remove intake restrictions")
@@ -680,39 +819,39 @@ def validate_record_bundle(envelopes: list[dict[str, object]]) -> None:
                 if len(restriction_items) != 1 or restriction_items[0].get("state") != "KNOWN" or restriction_items[0].get("value") != content["preserved_restrictions"]:
                     raise Invalid("strategy interpretation must bind its preserved restrictions as known evidence")
             for item in content["clarification_history"]:
+                if sum(item == c["content"] for c in clarifications) != 1:
+                    raise Invalid("clarification history must reference one persisted clarification")
                 previous = interpretations.get(item["previous_revision_id"])
                 if previous is None or previous["owner_id"] != envelope["owner_id"]:
                     raise Invalid("clarification must link to a prior interpretation owned by the same principal")
-                if item["resulting_revision_id"] != content["interpretation_revision_id"]:
-                    raise Invalid("clarification resulting revision must match its interpretation")
-                if not set(previous["content"]["preserved_restrictions"]) <= set(content["preserved_restrictions"]):
-                    raise Invalid("clarification cannot remove prior interpretation restrictions")
-                if set(item["preserved_restrictions"]) != set(content["preserved_restrictions"]):
-                    raise Invalid("clarification restriction snapshot must match its resulting interpretation")
-                prior_fields = {field["field_name"]: field for field in previous["content"]["field_evidence"]}
-                current_fields = {field["field_name"]: field for field in content["field_evidence"]}
-                changed = set(item["changed_fields"])
-                actual_changes = set()
-                for field_name in set(prior_fields) | set(current_fields):
-                    old, new = prior_fields.get(field_name), current_fields.get(field_name)
-                    old_meaning = {k: v for k, v in old.items() if k != "interpretation_revision"} if old else None
-                    new_meaning = {k: v for k, v in new.items() if k != "interpretation_revision"} if new else None
-                    if old_meaning != new_meaning:
-                        actual_changes.add(field_name)
-                if not actual_changes <= changed or not changed <= set(current_fields):
-                    raise Invalid("clarification changed_fields must identify every changed field")
-                linked = next((c for c in clarifications.values() if c["content"] == item), None)
-                if linked is None:
+                previous_content = previous["content"]
+                linked = [c for c in clarifications if c["content"] == item]
+                if len(linked) != 1:
                     raise Invalid("clarification history must link to a persisted clarification record")
-                if not previous["created_at"] < linked["created_at"] <= envelope["created_at"]:
+                _validate_clarification_transition(previous, envelope, linked[0])
+                linked_clarification_ids.add(linked[0]["record_id"])
+                previous_time = parse_utc_timestamp(previous["created_at"])
+                clarification_time = parse_utc_timestamp(linked[0]["created_at"])
+                result_time = parse_utc_timestamp(envelope["created_at"])
+                if not previous_time < clarification_time <= result_time:
                     raise Invalid("clarification revisions must follow their predecessor in record time")
-    for envelope in envelopes:
-        if envelope["record_type"] == "Clarification":
-            content = envelope["content"]
-            previous = interpretations.get(content["previous_revision_id"])
-            resulting = interpretations.get(content["resulting_revision_id"])
-            if previous is None or resulting is None or previous["owner_id"] != envelope["owner_id"] or resulting["owner_id"] != envelope["owner_id"]:
-                raise Invalid("clarification revision links must resolve under the same owner")
+    if linked_clarification_ids != {c["record_id"] for c in clarifications}:
+        raise Invalid("every persisted clarification must appear in its resulting interpretation history")
+    for envelope in clarifications:
+        content = envelope["content"]
+        previous = interpretations.get(content["previous_revision_id"])
+        resulting = interpretations.get(content["resulting_revision_id"])
+        if previous is None or resulting is None or previous["owner_id"] != envelope["owner_id"] or resulting["owner_id"] != envelope["owner_id"]:
+            raise Invalid("clarification revision links must resolve under the same owner")
+        _validate_clarification_transition(previous, resulting, envelope)
+        intake = intake_records.get(previous["content"]["intake_record_id"])
+        if intake is None or intake["owner_id"] != envelope["owner_id"]:
+            raise Invalid("clarification must resolve to its owner's intake")
+        if previous["content"]["requested_job"] != intake["content"]["requested_job"]:
+            raise Invalid("clarification job must match its intake request")
+        history_count = sum(item == content for item in resulting["content"]["clarification_history"])
+        if history_count != 1:
+            raise Invalid("persisted clarification must appear exactly once in its resulting history")
 
 
 def check_lifecycle_links() -> None:
@@ -765,8 +904,7 @@ def validate_envelope(envelope: object) -> None:
     for field in ("record_id", "owner_id", "operation_id"):
         if not isinstance(envelope[field], str) or not re.fullmatch(uuid_pattern, envelope[field]):
             raise Invalid(f"{field} must be a UUID")
-    if not isinstance(envelope["created_at"], str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", envelope["created_at"]):
-        raise Invalid("created_at must be RFC 3339 UTC")
+    parse_utc_timestamp(envelope["created_at"])
     validate_record(record_type, envelope["content"])
 
 
@@ -784,6 +922,14 @@ def must_reject_record(label: str, name: str, record: object) -> None:
     except (Invalid, TypeError, KeyError):
         return
     raise AssertionError(f"invalid record mutation was accepted: {label}")
+
+
+def must_reject_action(label: str, action: object) -> None:
+    try:
+        action()
+    except (Invalid, TypeError, KeyError, IndexError):
+        return
+    raise AssertionError(f"invalid mutation was accepted: {label}")
 
 
 def main() -> int:
@@ -838,6 +984,21 @@ def main() -> int:
     bad_binding_record = copy.deepcopy(FIXTURES["record_examples"]["ResearchBinding"])
     bad_binding_record["evidence_class"] = "MADE_UP"
     must_reject_record("standalone research binding enum", "ResearchBinding", bad_binding_record)
+    for field, invalid_value in (("base_decimals", -1), ("quote_decimals", 256),
+                                 ("token_order", []), ("qualification", "QUALIFIED")):
+        bad_binding_record = copy.deepcopy(FIXTURES["record_examples"]["ResearchBinding"])
+        bad_binding_record[field] = invalid_value
+        must_reject_record(f"standalone research binding {field}", "ResearchBinding", bad_binding_record)
+        bad_binding_strategy = copy.deepcopy(STRATEGY)
+        bad_binding_strategy["market"]["research_binding"] = bad_binding_record
+        must_reject(f"nested research binding {field}", bad_binding_strategy)
+    bad_binding_record = copy.deepcopy(FIXTURES["record_examples"]["ResearchBinding"])
+    bad_binding_record.update(chain_id=None, evidence_class="QUALIFIED_SOURCE", qualification="QUALIFIED")
+    must_reject_record("standalone null-chain research binding cannot be qualified",
+                       "ResearchBinding", bad_binding_record)
+    bad_binding_strategy = copy.deepcopy(STRATEGY)
+    bad_binding_strategy["market"]["research_binding"] = bad_binding_record
+    must_reject("nested null-chain research binding cannot be qualified", bad_binding_strategy)
     bad_invalidation = copy.deepcopy(STRATEGY)
     bad_invalidation["invalidation"]["source_ref"] = {"untrusted": "source"}
     must_reject("not-requested invalidation requires source reference string", bad_invalidation)
@@ -922,6 +1083,29 @@ def main() -> int:
     bad_publication = copy.deepcopy(FIXTURES["record_examples"]["PublicationResult"])
     bad_publication["revision_id"] = ""
     must_reject_record("published result requires nonempty revision ID", "PublicationResult", bad_publication)
+    for outcome_name in ("NEEDS_CLARIFICATION", "UNSUPPORTED", "UNRESOLVED"):
+        bad_outcome = copy.deepcopy(next(v["value"] for v in FIXTURES["record_variants"]
+                                         if v["type"] == "Outcome" and v["value"]["outcome"] == outcome_name))
+        bad_outcome["findings"][0]["path"] = ""
+        must_reject_record(f"{outcome_name} outcome needs a finding path", "Outcome", bad_outcome)
+        bad_outcome["findings"][0]["path"] = "/field_evidence/entry"
+        bad_outcome["findings"][0]["detail"] = ""
+        must_reject_record(f"{outcome_name} outcome needs a finding detail", "Outcome", bad_outcome)
+        bad_outcome["findings"][0]["detail"] = "Actionable detail."
+        bad_outcome["intake_record_id"] = None
+        must_reject_record(f"{outcome_name} outcome links to intake", "Outcome", bad_outcome)
+    bad_publication = copy.deepcopy(next(v["value"] for v in FIXTURES["record_variants"]
+                                         if v["type"] == "PublicationResult" and v["value"]["outcome"] == "INVALID_INPUT"))
+    bad_publication["findings"] = []
+    must_reject_record("publication error requires a finding", "PublicationResult", bad_publication)
+    bad_publication["findings"] = [{"code": "unit_mismatch", "path": "", "detail": "Invalid unit."}]
+    must_reject_record("publication error finding needs JSON Pointer", "PublicationResult", bad_publication)
+    bad_publication["findings"][0]["path"] = "/strategy/~2"
+    must_reject_record("publication error finding needs a valid JSON Pointer", "PublicationResult", bad_publication)
+    bad_publication = copy.deepcopy(next(v["value"] for v in FIXTURES["record_variants"]
+                                         if v["type"] == "PublicationResult" and v["value"]["outcome"] == "UNRESOLVED"))
+    bad_publication["findings"] = []
+    must_reject_record("unresolved publication requires a dependency finding", "PublicationResult", bad_publication)
     bad_envelope = copy.deepcopy(FIXTURES["persisted_examples"][0])
     bad_envelope["schema_version"] = "p02.unknown/99"
     try:
@@ -930,6 +1114,11 @@ def main() -> int:
         pass
     else:
         raise AssertionError("unknown record schema version was accepted")
+    bad_envelope = copy.deepcopy(FIXTURES["persisted_examples"][0])
+    bad_envelope["created_at"] = "2026-99-99T99:99:99Z"
+    must_reject_action("impossible persisted timestamp", lambda: validate_envelope(bad_envelope))
+    assert parse_utc_timestamp("2026-10-06T10:00:01Z") < parse_utc_timestamp("2026-10-06T10:00:01.1Z")
+    assert parse_utc_timestamp("2026-10-06T10:00:01.0000001Z") < parse_utc_timestamp("2026-10-06T10:00:01.0000002Z")
     bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
     bad_links[-1]["content"]["intake_record_id"] = "40000000-0000-4000-8000-000000000004"
     try:
@@ -947,6 +1136,24 @@ def main() -> int:
     else:
         raise AssertionError("persisted interpretation removed intake restrictions")
     bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
+    bad_links[0]["content"]["requested_job"] = "OBSERVE_FORWARD"
+    must_reject_action("interpretation cannot change the intake's requested job",
+                       lambda: validate_record_bundle(bad_links))
+    bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
+    clarification = next(e for e in bad_links if e["record_type"] == "Clarification")
+    clarification["content"]["changed_fields"] = ["entry"]
+    resulting = next(e for e in bad_links if e["record_type"] == "PromptInterpretation"
+                     and e["content"]["interpretation_revision_id"] == clarification["content"]["resulting_revision_id"])
+    resulting["content"]["clarification_history"][0]["changed_fields"] = ["entry"]
+    must_reject_action("clarification changed_fields must match persisted evidence changes",
+                       lambda: validate_record_bundle(bad_links))
+    bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
+    resulting = next(e for e in bad_links if e["record_type"] == "PromptInterpretation"
+                     and e["content"]["interpretation_revision_id"] == "interp-fixture-2")
+    item = resulting["content"]["clarification_history"][0]
+    resulting["content"]["clarification_history"].append(copy.deepcopy(item))
+    must_reject_action("persisted clarification must appear exactly once", lambda: validate_record_bundle(bad_links))
+    bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
     for envelope in bad_links:
         if envelope["record_type"] == "Clarification":
             envelope["content"]["previous_revision_id"] = "does-not-exist"
@@ -958,6 +1165,53 @@ def main() -> int:
         pass
     else:
         raise AssertionError("persisted clarification accepted an unknown prior revision")
+    bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
+    prior = next(e for e in bad_links if e["record_type"] == "PromptInterpretation"
+                 and e["content"]["interpretation_revision_id"] == "interp-fixture-1")["content"]
+    prior["preserved_restrictions"].append("no market orders")
+    next(f for f in prior["field_evidence"] if f["field_name"] == "restrictions")["value"].append("no market orders")
+    final = next(e for e in bad_links if e["record_type"] == "PromptInterpretation"
+                 and e["content"]["interpretation_revision_id"] == "interp-fixture-2")["content"]
+    final["clarification_history"] = []
+    must_reject_action("clarification history cannot be omitted to drop a restriction",
+                       lambda: validate_record_bundle(bad_links))
+    bad_links = copy.deepcopy(FIXTURES["persisted_examples"])
+    other_intake = copy.deepcopy(bad_links[0])
+    other_intake["record_id"] = "90000000-0000-4000-8000-000000000001"
+    other_intake["content"]["requested_job"] = "OBSERVE_FORWARD"
+    other_intake["content"]["original_request"] = "Observe forward only. Do not create a strategy."
+    bad_links.append(other_intake)
+    final = next(e for e in bad_links if e["record_type"] == "PromptInterpretation"
+                 and e["content"]["interpretation_revision_id"] == "interp-fixture-2")["content"]
+    final["intake_record_id"] = other_intake["record_id"]
+    must_reject_action("clarification cannot switch intake lineage or requested job",
+                       lambda: validate_record_bundle(bad_links))
+    unresolved_route = copy.deepcopy(next(c for c in FIXTURES["cases"] if c["id"] == "route-unresolved"))
+    unresolved_route.pop("result")
+    must_reject_action("unresolved route requires a detailed outcome", lambda: route(unresolved_route))
+    unresolved_route = copy.deepcopy(next(c for c in FIXTURES["cases"] if c["id"] == "route-unresolved"))
+    unresolved_route["result"]["findings"][0]["detail"] = ""
+    must_reject_action("unresolved route requires a dependency detail", lambda: route(unresolved_route))
+    unresolved_route = copy.deepcopy(next(c for c in FIXTURES["cases"] if c["id"] == "route-unresolved"))
+    unresolved_route["result"]["intake_record_id"] = "40000000-0000-4000-8000-000000000004"
+    must_reject_action("unresolved route preserves request linkage", lambda: route(unresolved_route))
+    unresolved_route = copy.deepcopy(next(c for c in FIXTURES["cases"] if c["id"] == "route-unresolved"))
+    unresolved_route["input"]["candidate_strategy"] = copy.deepcopy(STRATEGY)
+    must_reject_action("unresolved route omits an unavailable strategy", lambda: route(unresolved_route))
+    unknown_strategy = copy.deepcopy(next(c for c in FIXTURES["cases"] if c["kind"] == "idempotency"))
+    unknown_strategy["input"]["retry_strategy_fixture"] = "does-not-exist"
+    must_reject_action("idempotency retry resolves declared strategy fixture",
+                       lambda: check_fixture(unknown_strategy))
+    unknown_strategy = copy.deepcopy(next(c for c in FIXTURES["cases"] if c["kind"] == "idempotency"))
+    unknown_strategy["input"]["strategy_fixture"] = "does-not-exist"
+    must_reject_action("idempotency first request resolves declared strategy fixture",
+                       lambda: check_fixture(unknown_strategy))
+    wrong_path = copy.deepcopy(next(c for c in FIXTURES["cases"] if c["kind"] == "idempotency"))
+    wrong_path["input"]["path"] = "/v1/strategies/other/revisions"
+    must_reject_action("idempotency strategy matches first request path", lambda: check_fixture(wrong_path))
+    wrong_path = copy.deepcopy(next(c for c in FIXTURES["cases"] if c["kind"] == "idempotency"))
+    wrong_path["input"]["retry_path"] = "/v1/strategies/other/revisions"
+    must_reject_action("idempotency strategy matches retry path", lambda: check_fixture(wrong_path))
 
     print(f"PASS: {len(FIXTURES['cases'])} fixtures, {len(FIXTURES['record_examples'])} record examples, valid strategy, canonical identity, and record/strategy rejection mutations")
     print("LIMIT: in-memory contract checks only; no server, storage, concurrency, provider, or production-cost claim")

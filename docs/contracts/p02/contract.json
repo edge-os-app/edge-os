@@ -442,6 +442,9 @@
             "RECONCILE",
             "NOT_RETRYABLE"
           ]
+        },
+        "intake_record_id": {
+          "type": "nullable_string"
         }
       },
       "optional": {
@@ -736,10 +739,10 @@
           "type": "nonempty_string"
         },
         "path": {
-          "type": "string"
+          "type": "nonempty_string"
         },
         "detail": {
-          "type": "string"
+          "type": "nonempty_string"
         }
       },
       "optional": {},
@@ -1027,7 +1030,11 @@
     "UNRESOLVED": [
       "missing_dependency"
     ],
-    "INVALID_INPUT": []
+    "INVALID_INPUT": [],
+    "CONFLICTED": [
+      "parent_revision_conflict",
+      "idempotency_key_reused"
+    ]
   },
   "required_strategy_fields": {
     "CREATE_STRATEGY": [
@@ -1083,5 +1090,33 @@
       "field": "risk_limits.max_open_positions",
       "equals": 1
     }
+  },
+  "research_binding_rules": {
+    "orientation": "QUOTE_PER_BASE",
+    "decimal_range": [
+      0,
+      255
+    ],
+    "token_order": [
+      "base_asset",
+      "quote_asset"
+    ],
+    "null_chain_evidence_class": "SYNTHETIC_FIXTURE",
+    "null_chain_qualification": "UNQUALIFIED"
+  },
+  "outcome_requirements": {
+    "finding_path_format": "JSON_POINTER",
+    "finding_required": [
+      "NEEDS_CLARIFICATION",
+      "UNSUPPORTED",
+      "UNRESOLVED",
+      "INVALID_INPUT",
+      "CONFLICTED"
+    ],
+    "intake_record_required": [
+      "NEEDS_CLARIFICATION",
+      "UNSUPPORTED",
+      "UNRESOLVED"
+    ]
   }
 }

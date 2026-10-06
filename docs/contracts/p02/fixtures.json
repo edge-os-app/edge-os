@@ -555,7 +555,22 @@
         },
         "candidate_strategy": null
       },
-      "expected": "NEEDS_CLARIFICATION"
+      "expected": "NEEDS_CLARIFICATION",
+      "result": {
+        "operation_id": "op-route-clarification",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "INTERPRETATION",
+        "outcome": "NEEDS_CLARIFICATION",
+        "code": "needs_clarification",
+        "findings": [
+          {
+            "code": "missing_field",
+            "path": "/field_evidence",
+            "detail": "Ask which supported value applies before compiling."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "route-empty-meaning",
@@ -597,7 +612,22 @@
         },
         "candidate_strategy": null
       },
-      "expected": "NEEDS_CLARIFICATION"
+      "expected": "NEEDS_CLARIFICATION",
+      "result": {
+        "operation_id": "op-route-empty-meaning",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "INTERPRETATION",
+        "outcome": "NEEDS_CLARIFICATION",
+        "code": "needs_clarification",
+        "findings": [
+          {
+            "code": "missing_field",
+            "path": "/field_evidence",
+            "detail": "Ask which supported value applies before compiling."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "route-unsupported",
@@ -825,7 +855,22 @@
         "original_request": "Sell half of the position, then rebalance the liquidity range.",
         "missing_capability": "partial_exit_and_lp_rebalance"
       },
-      "expected": "UNSUPPORTED"
+      "expected": "UNSUPPORTED",
+      "result": {
+        "operation_id": "op-route-unsupported",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "VALIDATION",
+        "outcome": "UNSUPPORTED",
+        "code": "unsupported",
+        "findings": [
+          {
+            "code": "missing_capability",
+            "path": "/original_request",
+            "detail": "The request needs a capability outside the P02 subset."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "route-malformed",
@@ -1051,7 +1096,22 @@
         },
         "candidate_strategy": null
       },
-      "expected": "INVALID_INPUT"
+      "expected": "INVALID_INPUT",
+      "result": {
+        "operation_id": "op-route-malformed",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "COMPILATION",
+        "outcome": "INVALID_INPUT",
+        "code": "validation_error",
+        "findings": [
+          {
+            "code": "invalid_input",
+            "path": "/interpretation",
+            "detail": "The supplied record does not match the contract."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "route-unresolved",
@@ -1277,7 +1337,22 @@
         },
         "candidate_strategy": null
       },
-      "expected": "UNRESOLVED"
+      "expected": "UNRESOLVED",
+      "result": {
+        "operation_id": "op-route-unresolved",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "VALIDATION",
+        "outcome": "UNRESOLVED",
+        "code": "unresolved",
+        "findings": [
+          {
+            "code": "missing_dependency",
+            "path": "/market/research_binding",
+            "detail": "A qualified research dependency is not available."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "route-pending-exit-proposal",
@@ -1518,7 +1593,22 @@
         },
         "candidate_strategy": null
       },
-      "expected": "NEEDS_CLARIFICATION"
+      "expected": "NEEDS_CLARIFICATION",
+      "result": {
+        "operation_id": "op-route-pending-exit-proposal",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "INTERPRETATION",
+        "outcome": "NEEDS_CLARIFICATION",
+        "code": "needs_clarification",
+        "findings": [
+          {
+            "code": "missing_field",
+            "path": "/field_evidence",
+            "detail": "Ask which supported value applies before compiling."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "route-rejects-incomplete-evidence-metadata",
@@ -1529,7 +1619,22 @@
         },
         "candidate_strategy": null
       },
-      "expected": "INVALID_INPUT"
+      "expected": "INVALID_INPUT",
+      "result": {
+        "operation_id": "op-route-rejects-incomplete-evidence-metadata",
+        "intake_record_id": null,
+        "stage": "COMPILATION",
+        "outcome": "INVALID_INPUT",
+        "code": "validation_error",
+        "findings": [
+          {
+            "code": "invalid_input",
+            "path": "/interpretation",
+            "detail": "The supplied record does not match the contract."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "return-keeps-gap",
@@ -1816,14 +1921,14 @@
       "input": {
         "owner_id": "owner-a",
         "method": "POST",
-        "path": "/v1/strategies/strat-a/revisions",
+        "path": "/v1/strategies/fixture-spot-return-volume-v1/revisions",
         "idempotency_key": "key-a",
         "expected_parent_revision_id": "rev-parent",
         "draft_id": "draft-a",
         "strategy_fixture": "complete-strategy",
         "retry_owner_id": "owner-a",
         "retry_method": "POST",
-        "retry_path": "/v1/strategies/strat-a/revisions",
+        "retry_path": "/v1/strategies/fixture-spot-return-volume-v1/revisions",
         "retry_idempotency_key": "key-a",
         "retry_expected_parent_revision_id": "rev-parent",
         "retry_draft_id": "draft-a",
@@ -1841,18 +1946,19 @@
       "input": {
         "owner_id": "owner-a",
         "method": "POST",
-        "path": "/v1/strategies/strat-a/revisions",
+        "path": "/v1/strategies/fixture-spot-return-volume-v1/revisions",
         "idempotency_key": "key-a",
         "parent": "rev-parent",
         "draft_id": "draft-a",
         "retry_owner_id": "owner-a",
         "retry_method": "POST",
-        "retry_path": "/v1/strategies/strat-a/revisions",
+        "retry_path": "/v1/strategies/fixture-spot-return-volume-v1/revisions",
         "retry_idempotency_key": "key-a",
         "retry_parent": "rev-parent",
         "retry_draft_id": "draft-a",
         "strategy_fixture": "complete-strategy",
-        "mutate_strategy_threshold": true
+        "mutate_strategy_threshold": true,
+        "retry_strategy_fixture": "complete-strategy"
       },
       "expected": 409
     },
@@ -2503,7 +2609,22 @@
           }
         }
       },
-      "expected": "INVALID_INPUT"
+      "expected": "INVALID_INPUT",
+      "result": {
+        "operation_id": "op-route-rejects-unknown-exit-field",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "COMPILATION",
+        "outcome": "INVALID_INPUT",
+        "code": "validation_error",
+        "findings": [
+          {
+            "code": "invalid_input",
+            "path": "/interpretation",
+            "detail": "The supplied record does not match the contract."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "route-rejects-strategy-meaning-mismatch",
@@ -2847,7 +2968,22 @@
           }
         }
       },
-      "expected": "INVALID_INPUT"
+      "expected": "INVALID_INPUT",
+      "result": {
+        "operation_id": "op-route-rejects-strategy-meaning-mismatch",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "COMPILATION",
+        "outcome": "INVALID_INPUT",
+        "code": "validation_error",
+        "findings": [
+          {
+            "code": "invalid_input",
+            "path": "/interpretation",
+            "detail": "The supplied record does not match the contract."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     },
     {
       "id": "route-rejects-unsupported-restriction",
@@ -3193,7 +3329,22 @@
           }
         }
       },
-      "expected": "UNSUPPORTED"
+      "expected": "UNSUPPORTED",
+      "result": {
+        "operation_id": "op-route-rejects-unsupported-restriction",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001",
+        "stage": "VALIDATION",
+        "outcome": "UNSUPPORTED",
+        "code": "unsupported",
+        "findings": [
+          {
+            "code": "missing_capability",
+            "path": "/original_request",
+            "detail": "The request needs a capability outside the P02 subset."
+          }
+        ],
+        "retry": "NOT_RETRYABLE"
+      }
     }
   ],
   "record_examples": {
@@ -3467,7 +3618,8 @@
       "outcome": "COMPILED",
       "code": "compiled",
       "findings": [],
-      "retry": "NOT_RETRYABLE"
+      "retry": "NOT_RETRYABLE",
+      "intake_record_id": null
     },
     "StrategyDraft": {
       "draft_id": "draft-fixture",
@@ -3828,7 +3980,8 @@
             "detail": "Ask which entry threshold applies."
           }
         ],
-        "retry": "NOT_RETRYABLE"
+        "retry": "NOT_RETRYABLE",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001"
       }
     },
     {
@@ -3845,7 +3998,8 @@
             "detail": "partial exits are outside the supported subset."
           }
         ],
-        "retry": "NOT_RETRYABLE"
+        "retry": "NOT_RETRYABLE",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001"
       }
     },
     {
@@ -3862,7 +4016,8 @@
             "detail": "qualified endpoint prices are unavailable."
           }
         ],
-        "retry": "NOT_RETRYABLE"
+        "retry": "NOT_RETRYABLE",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001"
       }
     },
     {
@@ -3879,7 +4034,30 @@
             "detail": "comparison units do not match."
           }
         ],
-        "retry": "NOT_RETRYABLE"
+        "retry": "NOT_RETRYABLE",
+        "intake_record_id": "10000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "type": "PublicationResult",
+      "value": {
+        "operation_id": "op-publication-unresolved",
+        "stage": "PUBLICATION",
+        "outcome": "UNRESOLVED",
+        "code": "unresolved",
+        "findings": [
+          {
+            "code": "missing_dependency",
+            "path": "/strategy/market/research_binding",
+            "detail": "Qualified market data is unavailable."
+          }
+        ],
+        "retry": "RECONCILE",
+        "publication_id": null,
+        "revision_id": null,
+        "content_sha256": null,
+        "manifest_sha256": null,
+        "created_at": "2026-10-06T00:00:03Z"
       }
     }
   ],
@@ -4123,7 +4301,7 @@
       "record_id": "12000000-0000-4000-8000-000000000001",
       "owner_id": "20000000-0000-4000-8000-000000000002",
       "operation_id": "30000000-0000-4000-8000-000000000003",
-      "created_at": "2026-10-06T10:00:02Z",
+      "created_at": "2026-10-06T10:00:01.1Z",
       "content": {
         "previous_revision_id": "interp-fixture-1",
         "resulting_revision_id": "interp-fixture-2",
@@ -4147,7 +4325,7 @@
       "record_id": "13000000-0000-4000-8000-000000000001",
       "owner_id": "20000000-0000-4000-8000-000000000002",
       "operation_id": "30000000-0000-4000-8000-000000000003",
-      "created_at": "2026-10-06T10:00:03Z",
+      "created_at": "2026-10-06T10:00:01.2Z",
       "content": {
         "intake_record_id": "10000000-0000-4000-8000-000000000001",
         "interpretation_revision_id": "interp-fixture-2",
