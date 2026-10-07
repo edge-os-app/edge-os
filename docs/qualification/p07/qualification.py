@@ -524,6 +524,9 @@ def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, A
     for trade in result.trades:
         for index, seg in enumerate(segments):
             if seg["first_block"] <= trade.block_number < seg["end_block_exclusive"]:
+                stated_for = {value: block for block, kind, value in seg.get("edge_facts", ()) if kind == "hash"}
+                if stated_for.get(trade.block_hash, trade.block_number) != trade.block_number:
+                    bad_segments[index].add("TRADE_CONTRADICTS_PAGE_HASH")
                 if not seg["first_ts"] <= trade.block_timestamp <= seg["last_ts"]:
                     bad_segments[index].add("TRADE_CONTRADICTS_PAGE_TIMES")
                 for block, kind, value in seg.get("edge_facts", ()):
@@ -1220,8 +1223,6 @@ def _check_bucket_counts(claim: "_Claim", profile: Mapping[str, Any], observatio
             claim.add("MISSING_EVIDENCE", "RECORDS_SEEN_NOT_REPORTED")
         elif seen != rows:
             claim.add("FAILED_CHECK", "RECORDS_DO_NOT_MATCH_MANIFEST", f"{seen} records seen, {rows} rows declared")
-        if trades is not None and (not _is_int(rows) or rows < trades):
-            claim.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "the retained pages hold fewer rows than trades")
     dataset = _look(profile, "dataset")
     if isinstance(dataset, Mapping) and dataset.get("pages") and not profile_problems(profile):
         try:
@@ -1325,6 +1326,12 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
             history.add("MISSING_EVIDENCE", "REJECTED_TOTAL_NOT_REPORTED")
         elif total != sum(codes.values()):
             history.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "rejected total differs from its codes")
+    parts = [_count(_look(observations, "ingest", k)) for k in ("duplicate_copies", "rejected", "removed", "foreign")]
+    seen_total = _count(_look(observations, "ingest", "records_seen"))
+    if seen_total is not None and trades is not None and conflicts is not None and None not in parts:
+        needed = trades + sum(parts)  # type: ignore[arg-type]
+        if seen_total < needed or (conflicts == 0 and seen_total != needed):
+            history.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "records seen do not match the counts that account for them")
     for field_name, label in (("unlocated_rejections", "UNLOCATED"), ("removed", "REMOVED"), ("foreign", "FOREIGN")):
         seen = _count(_look(observations, "ingest", field_name))
         if seen is None:
@@ -1392,14 +1399,12 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
     schedule = claims["SCHEDULE_FEASIBILITY"]
     status = _look(observations, "feasibility", "status")
     shown = _look(observations, "feasibility", "partitions")
-    if status == "FEASIBLE":
-        verdict_rows = _feasibility_rows(shown)
-        if verdict_rows is not None:
-            schedule.add(*verdict_rows)
-            status = "ROWS_REJECTED"
+    rows_problem = _feasibility_rows(shown) if status == "FEASIBLE" else None
+    if rows_problem is not None:
+        schedule.add(*rows_problem)
     if status == "INFEASIBLE":
         schedule.add("FAILED_CHECK", "INFEASIBLE_BEFORE_OUTCOMES", "declared sample floors cannot be met")
-    elif status not in ("FEASIBLE", "ROWS_REJECTED"):
+    elif status != "FEASIBLE":
         schedule.add("MISSING_EVIDENCE", "SCHEDULE_OR_SAMPLE_FLOOR_UNDECLARED" if status in (None, "UNDECLARED")
                      else "FEASIBILITY_UNKNOWN")
 

@@ -6035,6 +6035,81 @@
    "note": "Block 101 is inside the scanned range but its time is before the first scanned block. The pages state no fact for block 101, yet the range alone rules this time out."
   },
   {
+   "id": "K24-log-carries-the-hash-the-pages-give-another-block",
+   "profile": "SYN_Q0",
+   "coverage_case": "C01-three-pages-tile-the-scan",
+   "window": {
+    "start_utc": "2026-09-25T09:55:00Z",
+    "end_utc": "2026-09-25T10:15:00Z"
+   },
+   "logs": [
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002dc6c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 101,
+     "block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "block_timestamp": "1790330399",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a102774",
+     "transaction_index": 0,
+     "log_index": 0
+    }
+   ],
+   "expect": {
+    "buckets": [
+     {
+      "start": "2026-09-25T09:55:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:00:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "TRADE_CONTRADICTS_PAGE_HASH"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:05:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "TRADE_CONTRADICTS_PAGE_HASH"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:10:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     }
+    ]
+   },
+   "note": "The pages say hash 0x11..11 belongs to block 103. The only log in the data puts it on block 101. No block-103 log exists to expose it."
+  },
+  {
    "id": "K10-trade-from-an-unscanned-block",
    "profile": "SYN_Q0",
    "coverage_case": "C01-three-pages-tile-the-scan",
@@ -9768,6 +9843,12 @@
      "ingest",
      "rejected",
      2
+    ],
+    [
+     "observations",
+     "ingest",
+     "records_seen",
+     22
     ]
    ],
    "expect": {
@@ -9786,6 +9867,12 @@
      "ingest",
      "foreign",
      3
+    ],
+    [
+     "observations",
+     "ingest",
+     "records_seen",
+     23
     ]
    ],
    "expect": {
@@ -10347,6 +10434,12 @@
      "ingest",
      "rejected",
      50
+    ],
+    [
+     "observations",
+     "ingest",
+     "records_seen",
+     70
     ]
    ],
    "expect": {
@@ -10383,6 +10476,12 @@
      "ingest",
      "removed",
      9
+    ],
+    [
+     "observations",
+     "ingest",
+     "records_seen",
+     29
     ]
    ],
    "expect": {
@@ -10517,6 +10616,12 @@
      "observations",
      "ingest",
      "trades",
+     5
+    ],
+    [
+     "observations",
+     "ingest",
+     "records_seen",
      5
     ],
     [
@@ -11032,6 +11137,12 @@
     ],
     [
      "observations",
+     "ingest",
+     "records_seen",
+     1
+    ],
+    [
+     "observations",
      "corroboration",
      {
       "class": "COMPLETE",
@@ -11067,6 +11178,12 @@
      "observations",
      "ingest",
      "trades",
+     1
+    ],
+    [
+     "observations",
+     "ingest",
+     "records_seen",
      1
     ],
     [
@@ -11529,6 +11646,62 @@
     "overall": "UNRESOLVED"
    },
    "note": ""
+  },
+  {
+   "id": "Q83-internal-sentinel-as-feasibility-status",
+   "set": [
+    [
+     "observations",
+     "feasibility",
+     {
+      "status": "ROWS_REJECTED",
+      "partitions": []
+     }
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "SCHEDULE_FEASIBILITY": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": ""
+  },
+  {
+   "id": "Q84-records-seen-below-what-the-counts-need",
+   "set": [
+    [
+     "observations",
+     "ingest",
+     "records_seen",
+     15
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "HISTORY_COMPLETENESS_AND_ORDER": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": "20 trades plus 0 duplicates cannot come from 15 records."
+  },
+  {
+   "id": "Q85-records-seen-above-what-the-counts-account-for",
+   "set": [
+    [
+     "observations",
+     "ingest",
+     "records_seen",
+     25
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "HISTORY_COMPLETENESS_AND_ORDER": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": "With no conflict, 25 records must be 20 trades plus duplicates, rejected, removed and foreign rows. Five are unaccounted for."
   },
   {
    "id": "Q48-population-larger-than-trades-is-fine",

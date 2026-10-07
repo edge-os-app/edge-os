@@ -527,6 +527,24 @@ class PerClaimQualification(unittest.TestCase):
         reasons = got["claims"]["BINDING_IDENTITY"]["reasons"]
         self.assertEqual([(r["code"], r["kind"]) for r in reasons], [("CHAIN_ID_FROM_DOCUMENTATION_ONLY", "ASSUMPTION")])
 
+    def test_no_unrecognized_feasibility_status_can_pass(self) -> None:
+        base = FIXTURES["qualification_base"]["observations"]
+        for status in ("ROWS_REJECTED", "UNVERIFIED", "UNDECLARED", "feasible", "", "x", True, 1, [], {}, None):
+            with self.subTest(status=status):
+                evidence = copy.deepcopy(base)
+                evidence["feasibility"] = {"status": status, "partitions": copy.deepcopy(base["feasibility"]["partitions"])}
+                got = qualify(base_profile(), evidence)
+                self.assertEqual(got["claims"]["SCHEDULE_FEASIBILITY"]["verdict"], "UNRESOLVED")
+
+    def test_records_seen_below_the_counts_is_named_even_with_conflicts(self) -> None:
+        root = {"profile": base_profile(), "observations": copy.deepcopy(FIXTURES["qualification_base"]["observations"])}
+        apply_changes(root, [["observations", "ingest", "conflicts", 2], ["observations", "ingest", "records_seen", 15]])
+        reasons = qualify(root["profile"], root["observations"])["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]
+        self.assertIn(("INGEST_COUNTS_INCONSISTENT", "FAILED_CHECK"), {(r["code"], r["kind"]) for r in reasons})
+        apply_changes(root, [["observations", "ingest", "records_seen", 25]])
+        reasons = qualify(root["profile"], root["observations"])["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]
+        self.assertNotIn("INGEST_COUNTS_INCONSISTENT", {r["code"] for r in reasons})
+
     def test_inputs_are_not_modified(self) -> None:
         profile, obs = base_profile(), copy.deepcopy(FIXTURES["qualification_base"]["observations"])
         before = copy.deepcopy((profile, obs))
