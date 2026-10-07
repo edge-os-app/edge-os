@@ -234,12 +234,14 @@ class IngestResult:
     rejected: list[dict[str, Any]] = field(default_factory=list)
     removed: int = 0
     foreign: int = 0
+    records: int = 0
 
     def identities(self) -> list[str]:
         return [trade_identity(self.profile, trade) for trade in self.trades]
 
     def summary(self) -> dict[str, Any]:
         return {
+            "records_seen": self.records,
             "trades": len(self.trades),
             "duplicate_copies": sum(item["copies"] - 1 for item in self.duplicates),
             "conflicts": len(self.conflicts),
@@ -258,7 +260,7 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     A failed record is retained with its code and never stops the batch.
     A conflicting record is held out. No version of a conflict is chosen.
     """
-    result = IngestResult(profile=profile, trades=())
+    result = IngestResult(profile=profile, trades=(), records=len(logs))
     decoded: list[Trade] = []
     for position, log in enumerate(logs):
         if not isinstance(log, Mapping):
@@ -421,6 +423,13 @@ def _untrusted_pages(pages: Sequence[Mapping[str, Any]]) -> dict[int, str]:
     for block, kind, _, i in claims:
         if len(by_block[(block, kind)]) > 1:
             dropped.setdefault(i, "REORG_BETWEEN_PAGES" if kind == "hash" else "TIMESTAMP_ORDER")
+    blocks_of_hash: dict[Any, set[int]] = defaultdict(set)
+    for block, kind, value, _ in claims:
+        if kind == "hash":
+            blocks_of_hash[value].add(block)
+    for block, kind, value, i in claims:
+        if kind == "hash" and len(blocks_of_hash[value]) > 1:
+            dropped.setdefault(i, "REORG_BETWEEN_PAGES")
     times = sorted((block, value, i) for block, kind, value, i in claims if kind == "ts")
     running_max = None
     for _, value, i in times:
@@ -483,7 +492,8 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
         "segments": [
             {"first_block": group[0]["from_block"], "end_block_exclusive": group[-1]["next_block"],
              "first_ts": group[0]["first_block_timestamp"], "last_ts": group[-1]["last_block_timestamp"],
-             "page_ids": [p["page_id"] for p in group]}
+             "page_ids": [p["page_id"] for p in group],
+             "edge_facts": sorted({(block, kind, value) for p in group for block, kind, value in _page_claims(p)})}
             for group in segments
         ],
         "breaks": breaks,
@@ -502,19 +512,27 @@ def window_covered(segments: Sequence[Mapping[str, Any]], start: int, end: int) 
     return covering_segment(segments, start, end) is not None
 
 
-def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, Any]]) -> tuple[list[tuple[int, str]], set[int]]:
+def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, Any]]) -> tuple[list[tuple[int, str]], dict[int, set[str]]]:
     """Trades that disagree with the page record.
 
     A trade from a block no segment scanned spoils the bucket of its timestamp.
-    A trade inside a segment but outside its first and last block times spoils the whole segment.
+    A trade inside a segment spoils the whole segment when its time falls outside the segment's first and last
+    block times, or when it disagrees with what the pages state about its own block (hash or time).
     """
     outside: list[tuple[int, str]] = []
-    bad_segments: set[int] = set()
+    bad_segments: dict[int, set[str]] = defaultdict(set)
     for trade in result.trades:
         for index, seg in enumerate(segments):
             if seg["first_block"] <= trade.block_number < seg["end_block_exclusive"]:
                 if not seg["first_ts"] <= trade.block_timestamp <= seg["last_ts"]:
-                    bad_segments.add(index)
+                    bad_segments[index].add("TRADE_CONTRADICTS_PAGE_TIMES")
+                for block, kind, value in seg.get("edge_facts", ()):
+                    if block != trade.block_number:
+                        continue
+                    if kind == "ts" and value != trade.block_timestamp:
+                        bad_segments[index].add("TRADE_CONTRADICTS_PAGE_TIMES")
+                    if kind == "hash" and value != trade.block_hash:
+                        bad_segments[index].add("TRADE_CONTRADICTS_PAGE_HASH")
                 break
         else:
             outside.append((trade.block_timestamp, "TRADE_OUTSIDE_SCANNED_BLOCKS"))
@@ -566,8 +584,7 @@ def bucketize(profile: Mapping[str, Any], result: IngestResult, segments: Sequen
         reasons = ([] if covered else ["COVERAGE_NOT_PROVEN"]) + sorted(spoiled.get(first, ()))
         if covered:
             reasons += sorted(page_spoiled.get(first, ()))
-            if cover in bad_segments:
-                reasons.append("TRADE_CONTRADICTS_PAGE_TIMES")
+            reasons += sorted(bad_segments.get(cover, ()))
         if unlocated:
             reasons.append("UNLOCATED_REJECTED_RECORDS")
         members = trades.get(first, [])
@@ -1151,6 +1168,26 @@ class _Claim:
         return {"verdict": self.verdict(), "reasons": self.reasons}
 
 
+def _feasibility_rows(rows: Any) -> tuple[str, str, str] | None:
+    """A FEASIBLE claim must carry one consistent row per declared partition. None means the rows are usable."""
+    if not (isinstance(rows, list) and rows):
+        return ("MISSING_EVIDENCE", "FEASIBILITY_ROWS_INVALID", "no partition rows")
+    for row in rows:
+        if not (isinstance(row, Mapping) and isinstance(row.get("name"), str) and row["name"]):
+            return ("MISSING_EVIDENCE", "FEASIBILITY_ROWS_INVALID", "each row needs a name")
+        usable, required, shortfall = (_count(row.get(k)) for k in ("usable", "required_total", "shortfall"))
+        if usable is None or required is None or required < 1 or shortfall is None:
+            return ("MISSING_EVIDENCE", "FEASIBILITY_ROWS_INVALID", "usable, required_total and shortfall must be counts")
+        if shortfall != max(0, required - usable) or shortfall:
+            return ("FAILED_CHECK", "FEASIBILITY_ROWS_CONTRADICT", "shortfall must equal required_total minus usable, and be 0")
+        parts = ("excluded_outcome_window", "excluded_outcome_coverage", "excluded_availability", "excluded_warmup")
+        if "schedule_slots" in row or any(k in row for k in parts):
+            slots, counts = _count(row.get("schedule_slots")), [_count(row.get(k)) for k in parts]
+            if slots is None or None in counts or usable + sum(counts) != slots:  # type: ignore[arg-type]
+                return ("FAILED_CHECK", "FEASIBILITY_ROWS_CONTRADICT", "slots must equal usable plus every exclusion")
+    return None
+
+
 def _check_bucket_counts(claim: "_Claim", profile: Mapping[str, Any], observations: Any, counts: Mapping[str, int],
                          trades: int | None) -> None:
     """Tie the bucket counts to the profile window, the trade count and the retained pages."""
@@ -1174,9 +1211,14 @@ def _check_bucket_counts(claim: "_Claim", profile: Mapping[str, Any], observatio
     if trades is not None and counts["COMPLETE_OCCUPIED"] > trades:
         claim.add("FAILED_CHECK", "BUCKET_COUNTS_INCONSISTENT", "more occupied buckets than trades")
     rows = _look(profile, "dataset", "dataset_revision", "row_count")
-    if trades is not None and _look(profile, "dataset", "dataset_revision", "basis") == "PAGE_DIGESTS" and (
-            not _is_int(rows) or rows < trades):
-        claim.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "the retained pages hold fewer rows than trades")
+    if _look(profile, "dataset", "dataset_revision", "basis") == "PAGE_DIGESTS":
+        seen = _count(_look(observations, "ingest", "records_seen"))
+        if seen is None:
+            claim.add("MISSING_EVIDENCE", "RECORDS_SEEN_NOT_REPORTED")
+        elif seen != rows:
+            claim.add("FAILED_CHECK", "RECORDS_DO_NOT_MATCH_MANIFEST", f"{seen} records seen, {rows} rows declared")
+        if trades is not None and (not _is_int(rows) or rows < trades):
+            claim.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "the retained pages hold fewer rows than trades")
     dataset = _look(profile, "dataset")
     if isinstance(dataset, Mapping) and dataset.get("pages") and not profile_problems(profile):
         try:
@@ -1347,12 +1389,14 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
     schedule = claims["SCHEDULE_FEASIBILITY"]
     status = _look(observations, "feasibility", "status")
     shown = _look(observations, "feasibility", "partitions")
-    if status == "FEASIBLE" and not (isinstance(shown, list) and shown and all(
-            isinstance(row, Mapping) and _count(row.get("shortfall")) == 0 for row in shown)):
-        status = "UNVERIFIED"
+    if status == "FEASIBLE":
+        verdict_rows = _feasibility_rows(shown)
+        if verdict_rows is not None:
+            schedule.add(*verdict_rows)
+            status = "ROWS_REJECTED"
     if status == "INFEASIBLE":
         schedule.add("FAILED_CHECK", "INFEASIBLE_BEFORE_OUTCOMES", "declared sample floors cannot be met")
-    elif status != "FEASIBLE":
+    elif status not in ("FEASIBLE", "ROWS_REJECTED"):
         schedule.add("MISSING_EVIDENCE", "SCHEDULE_OR_SAMPLE_FLOOR_UNDECLARED" if status in (None, "UNDECLARED")
                      else "FEASIBILITY_UNKNOWN")
 

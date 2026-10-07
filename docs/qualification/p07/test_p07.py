@@ -151,14 +151,16 @@ class Coverage(unittest.TestCase):
             with self.subTest(case["id"]):
                 got = assemble_segments(PROFILES[case["profile"]], case["scan_request"], case["pages"],
                                         case["archive_height"])
-                self.assertEqual(got["segments"], case["expect"]["segments"])
+                self.assertEqual([{k: v for k, v in seg.items() if k != "edge_facts"} for seg in got["segments"]],
+                                 case["expect"]["segments"])
                 self.assertEqual([b["code"] for b in got["breaks"]], case["expect"]["break_codes"])
 
     def test_page_order_in_the_input_does_not_matter(self) -> None:
         case = FIXTURES["coverage_cases"][0]
         got = assemble_segments(PROFILES[case["profile"]], case["scan_request"], list(reversed(case["pages"])),
                                 case["archive_height"])
-        self.assertEqual(got["segments"], case["expect"]["segments"])
+        self.assertEqual([{k: v for k, v in seg.items() if k != "edge_facts"} for seg in got["segments"]],
+                         case["expect"]["segments"])
 
 
 def _coverage_shape(result: dict) -> tuple:
@@ -421,7 +423,7 @@ def base_profile() -> dict:
 def pages_observations() -> dict:
     """Complete evidence for the two buckets that the SYN_Q0_PAGES pages prove: 10:00 to 10:10."""
     evidence = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
-    evidence["ingest"]["trades"] = 6
+    evidence["ingest"].update(trades=6, records_seen=6)
     evidence["corroboration"].update(sample_size=6, population_size=6)
     evidence["bucket_status_counts"] = {"COMPLETE_OCCUPIED": 2, "COMPLETE_EMPTY": 0, "INCOMPLETE": 0, "UNQUALIFIED": 0}
     evidence["bucket_window"] = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
@@ -565,6 +567,38 @@ class PerClaimQualification(unittest.TestCase):
                 self.assertEqual(history["verdict"], verdict)
                 if code:
                     self.assertIn(code, {r["code"] for r in history["reasons"]})
+
+    def test_rows_missing_from_the_manifest_block_complete_history(self) -> None:
+        """Gate control: two of six declared rows survive, both pool sides and both buckets still show."""
+        profile = real_pages_profile(narrow=True)
+        logs = next(c for c in FIXTURES["bucket_cases"] if c["id"] == "K01-boundaries-close-and-volume")["logs"]
+        kept = [logs[1], logs[4]]
+        observed = history_observations(profile, kept)
+        self.assertEqual(observed["ingest"]["pool_sides"], ["BASE_IN_QUOTE_OUT", "QUOTE_IN_BASE_OUT"])
+        self.assertEqual(observed["bucket_status_counts"]["COMPLETE_OCCUPIED"], 2)
+        evidence = pages_observations()
+        evidence.update(ingest=observed["ingest"], bucket_status_counts=observed["bucket_status_counts"],
+                        bucket_window=observed["bucket_window"])
+        evidence["corroboration"].update(sample_size=2, population_size=2)
+        got = qualify(profile, evidence)
+        history = got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]
+        self.assertEqual(history["verdict"], "UNRESOLVED")
+        self.assertIn("RECORDS_DO_NOT_MATCH_MANIFEST", {r["code"] for r in history["reasons"]})
+        with self.assertRaises(BindingNotEmittable):
+            to_p02_binding(profile, got)
+
+    def test_exact_duplicate_copies_are_accounted_for(self) -> None:
+        profile = real_pages_profile(narrow=True)
+        profile["dataset"]["dataset_revision"]["row_count"] = 7
+        logs = next(c for c in FIXTURES["bucket_cases"] if c["id"] == "K01-boundaries-close-and-volume")["logs"]
+        observed = history_observations(profile, logs + [logs[1]])
+        self.assertEqual((observed["ingest"]["records_seen"], observed["ingest"]["duplicate_copies"]), (7, 1))
+        evidence = pages_observations()
+        evidence.update(ingest=observed["ingest"], bucket_status_counts=observed["bucket_status_counts"],
+                        bucket_window=observed["bucket_window"])
+        got = qualify(profile, evidence)
+        self.assertEqual(got["overall"], "QUALIFIED")
+        to_p02_binding(profile, got)
 
     def test_status_counts_cover_every_status(self) -> None:
         counts = bucket_status_counts([{"status": "COMPLETE_EMPTY"}, {"status": "INCOMPLETE"}, {"status": "INCOMPLETE"}])
