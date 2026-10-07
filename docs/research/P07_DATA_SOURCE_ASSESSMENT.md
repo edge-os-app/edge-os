@@ -19,13 +19,13 @@ No GitHub example was executed or copied. The Monad state limit is consistent wi
 
 | Item | Status | Evidence and limit |
 |---|---|---|
-| MOE/WMON pool, token order, 18 decimals at the window end and now | Real, retained | Probe A report. Not re-read here. Chain id `143` is from documentation. |
+| MOE/WMON pool, token order, 18 decimals at the window end and now | Real, retained | Probe A report. Not re-read here. The report gives no read count for token order. Chain id `143` is from documentation. |
 | 26 pages, 26,146 two-sided V2-compatible swaps, no duplicate, extra or missing identity | Real, retained | Probe A report. The page table is private and is not in this checkout. |
 | Four full samples match between Envio and QuickNode | Real, retained, sampled | Four of 26,146 records. This is not complete corroboration. |
 | Start-boundary decimals | Real failure, retained | Four calls returned historical-state errors. Immutability stays an assumption. |
 | Original delivery time and finality | Unknown | Collection was later than the window. |
 | Fork fee and reflection mechanics | Unqualified | Published nad.fun documentation describes V3 and does not fix this fork. |
-| Decode, both directions, decimals, tie rounding | Run offline | 47 synthetic tests. Hand-computed expectations. |
+| Decode, both directions, decimals, tie rounding | Run offline | Synthetic fixtures with hand-computed expectations. 50 tests run in total. |
 | Order, duplicates, conflicts, reorg signatures | Run offline | Synthetic fixtures. |
 | Complete-empty versus incomplete, boundaries, close, volume | Run offline | Synthetic fixtures. |
 | Availability, late input, schedule and floor feasibility | Run offline | Synthetic fixtures. |
@@ -52,7 +52,7 @@ This is a request for a builder decision. It authorizes nothing. The Probe A all
 
 | Access | Purpose | Cap | Basis |
 |---|---|---|---|
-| Envio HyperSync token already held | Re-query one declared window | 60 requests | Probe A kept 26 pages for this window. Probe A saw an Envio rate of about 15 requests per minute, so 60 requests take about 4 minutes. |
+| Envio HyperSync token already held | Re-query one declared window | 60 requests | Probe A kept 26 pages for this window. The scoped probe plan (`docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md`) records an observed Envio rate of about 15 requests per minute, and the Probe A scan exceeded it once. 60 requests take about 4 minutes at that rate. |
 | QuickNode on the current plan, identity reads | `eth_chainId`, pool `token0`/`token1`, token `decimals` at window start, window end and latest | 20 calls | 1 + 2 + 6 reads plus retries. Start reads may fail by design. |
 | QuickNode, sampled tier | Full-log comparison on chosen blocks, as Probe A did | 40 calls | Probe A compared four samples. The report does not give its call count, so 40 is a cap, not a measurement. |
 | QuickNode, complete tier | `eth_getLogs` over the whole window in ranges of at most 10,000 blocks | 260 calls | The Probe A window is 605,700 s. At the documented 300 ms block time that is about 2.02 million blocks, so 202 calls. At 400 ms it is 152. The cap adds retries. On a 5-block limit the tier needs about 404,000 calls and is not feasible. |
@@ -80,7 +80,7 @@ Schedule arithmetic for one two-day partition, 30-minute outcome horizon, 60-sec
 | 1800 s | 96 | 95 | 60 | feasible |
 | 900 s | 192 | 190 | 60 | feasible |
 
-A 30-minute period with a 30-minute horizon makes consecutive outcome windows touch. Dependence between them is a STAT-Q01 matter and is not settled here.
+The counts are an upper bound on opportunities, not on independent observations. A 30-minute period with a 30-minute horizon makes one opportunity's end reference window the next one's start window. A 15-minute period makes responses overlap by half. Dependence between them is a STAT-Q01 matter and is not settled here. The counts also ignore unqualified buckets.
 
 ## Claim declarations
 

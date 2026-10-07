@@ -34,7 +34,7 @@ Event time is the block timestamp. Collection time is stored on the dataset. Ava
 
 ## Trade meaning and conversion
 
-The event is the Uniswap V2 pair `Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)`. The decoder takes three topics and four 32-byte words. It supports one shape: exactly one input leg, exactly one output leg, on opposite tokens, both nonzero. Every other shape raises `Unsupported` with a stable code: `BOTH_INPUTS`, `BOTH_OUTPUTS`, `ZERO_INPUT`, `ZERO_OUTPUT`, `SAME_TOKEN_IN_OUT`, `TOPIC0_MISMATCH`, `TOPIC_COUNT`, `DATA_LENGTH`, `WRONG_POOL`, `REMOVED_BY_REORG`, `ORDER_FIELD_MISSING`, `IDENTITY_FIELD_MISSING`, `TIME_FIELD_MISSING`, `FIELD_NOT_UINT`. Nothing is guessed or repaired.
+The event is the Uniswap V2 pair `Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)`. The decoder takes three topics and four 32-byte words. It supports one shape: exactly one input leg, exactly one output leg, on opposite tokens, both nonzero. Every other shape raises `Unsupported` with a stable code: `BOTH_INPUTS`, `BOTH_OUTPUTS`, `ZERO_INPUT`, `ZERO_OUTPUT`, `SAME_TOKEN_IN_OUT`, `TOPIC0_MISMATCH`, `TOPIC_COUNT`, `TOPIC_FORMAT`, `DATA_LENGTH`, `WRONG_POOL`, `REMOVED_BY_REORG`, `ORDER_FIELD_MISSING`, `IDENTITY_FIELD_MISSING`, `TIME_FIELD_MISSING`, `FIELD_NOT_UINT`, `FIELD_NOT_BOOL`. A missing or malformed address is `IDENTITY_FIELD_MISSING`, never `WRONG_POOL`. `removed` must be a real boolean. Nothing is guessed or repaired.
 
 - Pool side is `QUOTE_IN_BASE_OUT` or `BASE_IN_QUOTE_OUT`. It describes the pool, not a trader.
 - `quote_raw` and `base_raw` are exact integers from the quote and base legs. Amount text is exact (`2^256-1` keeps 78 digits).
@@ -52,13 +52,14 @@ Trade identity is `chain:block:transaction_index:log_index`. Hashes are kept. Or
 `ingest()` collects, it does not stop:
 
 - Exact duplicate copies count once. The copy count is kept.
-- Same position with different content is a conflict (`POSITION_PAYLOAD`). Neither version is used.
-- One block number with two hashes or times (`BLOCK_FACTS`), one transaction hash at two positions (`TX_POSITION`), and a later block with an earlier time (`TIMESTAMP_ORDER`) are conflicts. Involved trades are held out.
-- Removed (reorged) logs, foreign-pool logs and unsupported shapes are counted by code. A rejected record without a timestamp is counted as unlocated.
+- Same position with different content is a conflict (`POSITION_PAYLOAD`). That includes different sender or recipient topics, and a readable trade that shares its position with an unreadable record. No version is used.
+- One block number with two hashes or times, or one block hash on two block numbers (`BLOCK_FACTS`), and one transaction hash at two positions (`TX_POSITION`) are conflicts.
+- Block times never fall as block numbers rise. Any trade that is part of an inversion with any other trade, adjacent or not, is a `TIMESTAMP_ORDER` conflict. Involved trades are held out.
+- Removed (reorged) logs, foreign-pool logs and unsupported shapes are counted by code. A rejected record without a timestamp is counted as unlocated. A row that is not an object is rejected as `NOT_AN_OBJECT` and the batch continues.
 
 ## Buckets, coverage and the close
 
-Coverage comes from retained query pages. `assemble_segments()` keeps pages that tile a contiguous block range, are at least the documented finality depth below the archive height at collection, do not overlap, keep timestamps non-decreasing and, where both parent and last hashes exist, agree on the hash chain. Each dropped page gets a break code (`NOT_FINAL_AT_COLLECTION`, `OVERLAP`, `BLOCK_GAP`, `REORG_BETWEEN_PAGES`, `OUTSIDE_REQUEST`, `TIMESTAMP_ORDER`).
+Coverage comes from retained query pages. `assemble_segments()` keeps pages that tile a contiguous block range, are at least the documented finality depth below the archive height at collection, do not overlap, keep timestamps non-decreasing and, where both parent and last hashes exist, agree on the hash chain. Adjacent pages that carry no hashes merge on range and finality depth alone. Each dropped page gets a break code (`NOT_FINAL_AT_COLLECTION`, `OVERLAP`, `BLOCK_GAP`, `REORG_BETWEEN_PAGES`, `OUTSIDE_REQUEST`, `TIMESTAMP_ORDER`).
 
 A bucket `[s,e)` is covered when one segment has `first_ts < s` and `e <= last_ts`. Reason: block timestamps never fall with block number, so unscanned blocks before the segment are at or below `first_ts` and unscanned blocks after it are at or above `last_ts`. The strict start is deliberate because blocks share seconds.
 
@@ -67,7 +68,9 @@ A bucket `[s,e)` is covered when one segment has `first_ts < s` and `e <= last_t
 | `COMPLETE_OCCUPIED` | covered, at least one qualified trade | last trade by chain order, with identity, size and time | exact sum of quote legs |
 | `COMPLETE_EMPTY` | covered, no trade | none. No carry, no interpolation | `0` |
 | `INCOMPLETE` | coverage not proven | none | unknown |
-| `UNQUALIFIED` | covered, but a conflict, an unsupported event or an unlocated record touches it | none | unknown |
+| `UNQUALIFIED` | covered, but a conflict, an unsupported event, an unlocated record or a page disagreement touches it | none | unknown |
+
+A trade must also agree with the page record. A trade from a block no segment scanned spoils the bucket of its timestamp (`TRADE_OUTSIDE_SCANNED_BLOCKS`). A trade inside a segment whose time falls outside that segment's first and last block times spoils every bucket the segment covers (`TRADE_CONTRADICTS_PAGE_TIMES`). Reference windows apply the same rule.
 
 The close is the last qualified trade. It is not VWAP and not a promised fill. A tiny last trade can set it, so its size is kept.
 
@@ -79,17 +82,17 @@ Reconstructed availability is an assumption. It limits the claim and does not be
 
 ## Schedule, warm-up and feasibility
 
-A decision schedule is an anchor, a period and the offset between a decision and the end of its feature bucket. All three must sit on the five-minute grid. `feasibility()` counts, per partition, the slots that can still produce an opportunity before any outcome is read. It excludes a slot when its outcome windows cross the partition end, when a reference window is not covered, or when warm-up buckets are not covered. The caller declares the floors for triggered and control groups. There is no default floor. With none declared the result is `UNDECLARED`. Reference lookups (`reference_trade()`) take the first qualified trade by chain order in `[start,end)` and return a missing outcome with a reason (`COMPLETE_EMPTY_WINDOW`, `COVERAGE_NOT_PROVEN`, `UNQUALIFIED_RECORDS`). They never widen the window.
+A decision schedule is an anchor, a period and the offset between a decision and the end of its feature bucket. All three must sit on the five-minute grid. `feasibility(claim, segments, availability)` counts, per partition, the slots that can still produce an opportunity before any outcome is read. It excludes a slot when its outcome windows would pass the partition end, when a reference window is not covered, when the feature bucket is not available by the decision (assumed delay longer than the offset, or unknown model), or when the warm-up buckets are not covered (a lookback of `n` needs `n+1` buckets). The caller declares the floors for triggered and control groups as integers of at least 1. Partitions must be ordered and must not overlap. There is no default floor. With none declared the result is `UNDECLARED`. The count is an upper bound on opportunities. It does not look at unqualified buckets, treats observed delivery as ready at bucket end, and does not discount overlapping outcome windows. With a period equal to the horizon, one opportunity's end reference window is the next one's start window, so dependence is high. STAT-Q01 owns that. Reference lookups (`reference_trade()`) take the first qualified trade by chain order in `[start,end)` and return a missing outcome with a reason (`COMPLETE_EMPTY_WINDOW`, `COVERAGE_NOT_PROVEN`, `UNQUALIFIED_RECORDS`). They never widen the window.
 
 ## Claims and verdicts
 
-`qualify(profile, observations)` returns one verdict per claim and an overall verdict. `QUALIFIED` needs direct evidence. `LIMITED` names an assumption or limit. `UNRESOLVED` names a failed check or missing evidence. A missing or unknown fact never passes. The overall verdict is the worst claim. The result states `scope: OFFLINE_CONTRACT_ONLY` and lists what it does not assess.
+`qualify(profile, observations)` returns one verdict per claim and an overall verdict. `QUALIFIED` needs direct evidence. `LIMITED` names an assumption or limit. `UNRESOLVED` names a failed check or missing evidence. A missing, malformed or unknown fact never passes. Counts must be real non-negative integers. The overall verdict is the worst claim. `qualify()` trusts the observation values it is given. It checks types, consistency between them and agreement with the profile, and it binds the result to the profile and observations by hash. It cannot check where a value came from. For a real or retained profile it also requires the pages and their revision to travel with the profile. The result states `scope: OFFLINE_CONTRACT_ONLY` and lists what it does not assess.
 
 | Claim | Qualified needs | Limited when | Unresolved when |
 |---|---|---|---|
-| `BINDING_IDENTITY` | valid profile, chain id read from a provider, pool tokens and venue corroborated | chain id from documentation only, tokens or venue from one read or source | profile invalid, chain id unknown, tokens or venue unverified |
+| `BINDING_IDENTITY` | valid profile, chain id read from a provider, pool tokens and venue corroborated | chain id from documentation only, tokens or venue from one read or source, a retained report | profile invalid, chain id unknown, tokens or venue unverified, profile and observation name different chain id sources |
 | `EVENT_AND_AMOUNT_MEANING` | events decoded, both pool sides seen, decimals read at the window start, token mechanics qualified | decimals read only later, one pool side, mechanics unqualified | no event sample, no pool side reported, decimals never read |
-| `HISTORY_COMPLETENESS_AND_ORDER` | no conflict, no unsupported event, every bucket proven, complete corroboration with no mismatch | unsupported events, foreign rows, bucket gaps, sampled corroboration | conflict, missing order fields, any corroboration mismatch, no corroboration, no coverage proof, an inconsistent "complete" claim |
+| `HISTORY_COMPLETENESS_AND_ORDER` | no conflict, no unsupported event, every bucket proven, complete corroboration (every record compared, at least as many records as trades, no mismatch) | unsupported events, foreign or removed rows, bucket gaps, sampled corroboration, a retained report | conflict, missing order or identity fields, unlocated records, any mismatch, no corroboration, no coverage proof, no portable pages for a real or retained profile, inconsistent counts or an inconsistent "complete" claim |
 | `POINT_IN_TIME_AVAILABILITY` | observed delivery and observed finality | assumed delay, finality inferred at collection | model unknown, observed delivery without finality |
 | `SCHEDULE_FEASIBILITY` | declared floors fit the schedule | none | floors undeclared or not met |
 
@@ -104,11 +107,11 @@ P02 is reused, not changed. Two findings need an owner decision:
 
 ## Retained MOE/WMON profile
 
-`fixtures.json` holds the Probe A pool as a profile of class `RETAINED_REPORT`. It uses only published report figures: pool `0x97199b34…5aad`, token0 WMON `0x3bd359c1…433a` (quote), token1 MOE `0xd8e004ac…7777` (base), 18 decimals each, 26 pages, 26,146 swaps, four full samples matched against QuickNode, assumed delay 180 seconds, private manifest `b8f5cb33…261a`. Chain id 143 comes from Monad documentation, not from the report. The verdicts are in the table below. They are limits of what the portable record shows, not findings about the market.
+`fixtures.json` holds the Probe A pool as a profile of class `RETAINED_REPORT`. It uses only published report figures: pool `0x97199b34…5aad`, token0 WMON `0x3bd359c1…433a` (quote), token1 MOE `0xd8e004ac…7777` (base), 18 decimals each, 26 pages, 26,146 swaps, four full samples matched against QuickNode, assumed delay 180 seconds, private manifest `b8f5cb33…261a`. Chain id 143 comes from Monad documentation, not from the report. A conflict count of 0 is inferred from "no duplicate, extra or missing identities". The report states no such count. The verdicts are in the table below. They are limits of what the portable record shows, not findings about the market.
 
 | Claim | Verdict | Why |
 |---|---|---|
-| `BINDING_IDENTITY` | LIMITED | chain id from documentation, token order from one RPC read, venue label from one source |
+| `BINDING_IDENTITY` | LIMITED | chain id from documentation, token order and venue label counted as single reads because the report gives no read count |
 | `EVENT_AND_AMOUNT_MEANING` | UNRESOLVED | the report does not state that both pool sides were observed. Decimals not readable at the window start. Fork mechanics unqualified |
 | `HISTORY_COMPLETENESS_AND_ORDER` | UNRESOLVED | no portable page table or coverage proof, no count of unsupported events. Corroboration is four samples of 26,146 |
 | `POINT_IN_TIME_AVAILABILITY` | LIMITED | assumed 180-second delay. Original delivery and finality unknown |
@@ -118,7 +121,7 @@ Reusing MOE for the first real qualification is a proposal. It is not a selectio
 
 ## Verification and limits
 
-Run from `docs/qualification/p07`: `python3 -B -m unittest -v test_p07`. The README lists the recipe and the evidence. Seams under test: decode and convert, ingest, coverage assembly, bucketize, reference windows, availability and eligibility, schedule and feasibility, profile validation, binding comparison, qualification, and P02 projection. Fixtures were authored by `author_fixtures.py`, which does not import the module and writes hand-computed literals. A mutation script breaks 29 rules one at a time. All 29 break a test.
+Run from `docs/qualification/p07`: `python3 -B -m unittest -v test_p07`. The README lists the recipe and the evidence. Seams under test: decode and convert, ingest, coverage assembly, bucketize, reference windows, availability and eligibility, schedule and feasibility, profile validation, binding comparison, qualification, and P02 projection. Fixtures were authored by `author_fixtures.py`, which does not import the module and writes hand-computed literals. Synthetic profiles use the invented chain id 999001, not a real one. A mutation script breaks 64 rules one at a time. All 64 break a test. Two internal reviews found defects in the first candidate. The repairs and their tests are in the evidence folder.
 
 Not verified: any real provider behavior, the retained pages, the type checker (`mypy`, `ruff` and `pytest` are not installed and nothing was installed), Python versions other than 3.14.4, runtime cost, and anything about execution or profit.
 

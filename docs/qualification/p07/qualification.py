@@ -93,6 +93,8 @@ class Trade:
     quote_amount: str
     base_amount: str
     price: str
+    sender_topic: str
+    recipient_topic: str
 
     @property
     def order_key(self) -> tuple[int, int, int]:
@@ -141,15 +143,23 @@ def decode_swap_log(profile: Mapping[str, Any], log: Mapping[str, Any]) -> Trade
 
     Raises Unsupported with a stable code for every shape the profile does not define.
     """
-    if log.get("removed"):
+    removed = log.get("removed", False)
+    if not isinstance(removed, bool):
+        raise Unsupported("FIELD_NOT_BOOL", "removed must be true or false")
+    if removed:
         raise Unsupported("REMOVED_BY_REORG", "node marked this log removed")
-    if str(log.get("address", "")).lower() != profile["venue"]["pool_address"].lower():
+    address = log.get("address")
+    if not isinstance(address, str) or not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
+        raise Unsupported("IDENTITY_FIELD_MISSING", "address is absent or not 40 hex digits")
+    if address.lower() != profile["venue"]["pool_address"].lower():
         raise Unsupported("WRONG_POOL", "log address is not the profile pool")
     topics = log.get("topics")
     if not isinstance(topics, list) or not topics or str(topics[0]).lower() != profile["event"]["topic0"].lower():
         raise Unsupported("TOPIC0_MISMATCH", "first topic is not the profile Swap topic")
     if len(topics) != 3:
         raise Unsupported("TOPIC_COUNT", f"expected 3 topics, got {len(topics)}")
+    if not all(isinstance(t, str) and _HEX_WORD.fullmatch(t) for t in topics[1:]):
+        raise Unsupported("TOPIC_FORMAT", "indexed topics must be 32-byte hex words")
     data = log.get("data")
     if not isinstance(data, str) or not re.fullmatch(r"0x[0-9a-fA-F]{256}", data):
         raise Unsupported("DATA_LENGTH", "data must be exactly four 32-byte words")
@@ -190,8 +200,20 @@ def decode_swap_log(profile: Mapping[str, Any], log: Mapping[str, Any]) -> Trade
         pool_side="QUOTE_IN_BASE_OUT" if inputs[0] == quote_index else "BASE_IN_QUOTE_OUT",
         quote_raw=quote_raw, base_raw=base_raw,
         quote_amount=scale_down(quote_raw, quote_decimals), base_amount=scale_down(base_raw, base_decimals),
-        price=_plain(price),
+        price=_plain(price), sender_topic=topics[1].lower(), recipient_topic=topics[2].lower(),
     )
+
+
+def _try_uint(log: Mapping[str, Any], field_name: str) -> int | None:
+    try:
+        return parse_uint(log[field_name], field_name)
+    except (KeyError, Unsupported):
+        return None
+
+
+def _try_key(log: Mapping[str, Any]) -> tuple[int, int, int] | None:
+    keys = [_try_uint(log, f) for f in ("block_number", "transaction_index", "log_index")]
+    return None if any(k is None for k in keys) else (keys[0], keys[1], keys[2])  # type: ignore[return-value]
 
 
 def trade_identity(profile: Mapping[str, Any], trade: Trade) -> str:
@@ -238,6 +260,10 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     result = IngestResult(profile=profile, trades=())
     decoded: list[Trade] = []
     for position, log in enumerate(logs):
+        if not isinstance(log, Mapping):
+            result.rejected.append({"code": "NOT_AN_OBJECT", "detail": "record is not an object", "position": position,
+                                    "block_timestamp": None, "key": None})
+            continue
         try:
             decoded.append(decode_swap_log(profile, log))
         except Unsupported as error:
@@ -246,29 +272,27 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
             elif error.code == "WRONG_POOL":
                 result.foreign += 1
             else:
-                try:
-                    located: int | None = parse_uint(log["block_timestamp"], "block_timestamp")
-                except (KeyError, Unsupported):
-                    located = None
                 result.rejected.append({"code": error.code, "detail": error.detail, "position": position,
-                                        "block_timestamp": located})
+                                        "block_timestamp": _try_uint(log, "block_timestamp"),
+                                        "key": _try_key(log)})
 
     def name(trade: Trade) -> str:
         return trade_identity(profile, trade)
 
-    def hold_out(kind: str, members: Sequence[Trade]) -> None:
+    def hold_out(kind: str, members: Sequence[Trade], extra_times: Sequence[int] = ()) -> None:
         result.conflicts.append({"kind": kind, "identities": sorted({name(t) for t in members}),
-                                 "timestamps": sorted({t.block_timestamp for t in members})})
+                                 "timestamps": sorted({t.block_timestamp for t in members} | set(extra_times))})
 
+    unreadable = {item["key"]: item["block_timestamp"] for item in result.rejected if item["key"] is not None}
     by_position: dict[tuple[int, int, int], list[Trade]] = defaultdict(list)
     for trade in decoded:
         by_position[trade.order_key].append(trade)
     kept: list[Trade] = []
     for key in sorted(by_position):
         versions = by_position[key]
-        distinct = set(versions)
-        if len(distinct) > 1:
-            hold_out("POSITION_PAYLOAD", versions)
+        if len(set(versions)) > 1 or key in unreadable:
+            twin = unreadable.get(key)
+            hold_out("POSITION_PAYLOAD", versions, () if twin is None else (twin,))
             continue
         if len(versions) > 1:
             result.duplicates.append({"identity": name(versions[0]), "copies": len(versions)})
@@ -284,14 +308,25 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
         return [t for t in trades if group_key(t) not in bad]
 
     kept = drop_inconsistent("BLOCK_FACTS", kept, lambda t: t.block_number, lambda t: (t.block_hash, t.block_timestamp))
+    kept = drop_inconsistent("BLOCK_FACTS", kept, lambda t: t.block_hash, lambda t: t.block_number)
     kept = drop_inconsistent("TX_POSITION", kept, lambda t: t.transaction_hash,
                              lambda t: (t.block_number, t.transaction_index))
     kept.sort(key=lambda t: t.order_key)
-    reversed_pairs = [(a, b) for a, b in zip(kept, kept[1:]) if b.block_timestamp < a.block_timestamp]
-    flagged = {t for pair in reversed_pairs for t in pair}
-    for pair in reversed_pairs:
-        hold_out("TIMESTAMP_ORDER", pair)
-    result.trades = tuple(t for t in kept if t not in flagged)
+    # Block times never fall as block numbers rise. Hold out every trade that is part of any inversion.
+    flagged: set[int] = set()
+    running_max = -1
+    for i, trade in enumerate(kept):
+        if trade.block_timestamp < running_max:
+            flagged.add(i)
+        running_max = max(running_max, trade.block_timestamp)
+    running_min = None
+    for i in range(len(kept) - 1, -1, -1):
+        if running_min is not None and kept[i].block_timestamp > running_min:
+            flagged.add(i)
+        running_min = kept[i].block_timestamp if running_min is None else min(running_min, kept[i].block_timestamp)
+    if flagged:
+        hold_out("TIMESTAMP_ORDER", [kept[i] for i in sorted(flagged)])
+    result.trades = tuple(t for i, t in enumerate(kept) if i not in flagged)
     return result
 
 
@@ -308,7 +343,7 @@ class InvalidInput(ValueError):
 
 def epoch(text: str) -> int:
     """Whole-second UTC timestamp. Block timestamps have second precision."""
-    if not isinstance(text, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", text):
+    if not isinstance(text, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:[0-5]\dZ", text):
         raise InvalidInput("TIMESTAMP_FORMAT", "expected YYYY-MM-DDTHH:MM:SSZ")
     try:
         return calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))
@@ -371,9 +406,35 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
     }
 
 
+def covering_segment(segments: Sequence[Mapping[str, Any]], start: int, end: int) -> int | None:
+    """Index of a proven segment that holds every block with a timestamp in [start, end), or None."""
+    for index, seg in enumerate(segments):
+        if seg["first_ts"] < start and end <= seg["last_ts"]:
+            return index
+    return None
+
+
 def window_covered(segments: Sequence[Mapping[str, Any]], start: int, end: int) -> bool:
-    """Every block with a timestamp in [start, end) lies inside one proven segment."""
-    return any(seg["first_ts"] < start and end <= seg["last_ts"] for seg in segments)
+    return covering_segment(segments, start, end) is not None
+
+
+def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, Any]]) -> tuple[list[tuple[int, str]], set[int]]:
+    """Trades that disagree with the page record.
+
+    A trade from a block no segment scanned spoils the bucket of its timestamp.
+    A trade inside a segment but outside its first and last block times spoils the whole segment.
+    """
+    outside: list[tuple[int, str]] = []
+    bad_segments: set[int] = set()
+    for trade in result.trades:
+        for index, seg in enumerate(segments):
+            if seg["first_block"] <= trade.block_number < seg["end_block_exclusive"]:
+                if not seg["first_ts"] <= trade.block_timestamp <= seg["last_ts"]:
+                    bad_segments.add(index)
+                break
+        else:
+            outside.append((trade.block_timestamp, "TRADE_OUTSIDE_SCANNED_BLOCKS"))
+    return outside, bad_segments
 
 
 def _contamination(result: IngestResult) -> tuple[list[tuple[int, str]], bool]:
@@ -398,16 +459,25 @@ def bucketize(profile: Mapping[str, Any], result: IngestResult, segments: Sequen
         raise InvalidInput("WINDOW_NOT_BUCKET_ALIGNED", "window must hold whole five-minute buckets")
     quote_decimals = next(t["decimals"] for t in profile["pool_tokens"] if t["role"] == "QUOTE")
     located, unlocated = _contamination(result)
+    outside, bad_segments = _page_contradictions(result, segments)
     spoiled: dict[int, set[str]] = defaultdict(set)
     for ts, reason in located:
         spoiled[ts - ts % BUCKET_SECONDS].add(reason)
+    page_spoiled: dict[int, set[str]] = defaultdict(set)
+    for ts, reason in outside:
+        page_spoiled[ts - ts % BUCKET_SECONDS].add(reason)
     trades: dict[int, list[Trade]] = defaultdict(list)
     for trade in result.trades:
         trades[trade.block_timestamp - trade.block_timestamp % BUCKET_SECONDS].append(trade)
     buckets = []
     for first in range(start, end, BUCKET_SECONDS):
-        covered = window_covered(segments, first, first + BUCKET_SECONDS)
+        cover = covering_segment(segments, first, first + BUCKET_SECONDS)
+        covered = cover is not None
         reasons = ([] if covered else ["COVERAGE_NOT_PROVEN"]) + sorted(spoiled.get(first, ()))
+        if covered:
+            reasons += sorted(page_spoiled.get(first, ()))
+            if cover in bad_segments:
+                reasons.append("TRADE_CONTRADICTS_PAGE_TIMES")
         if unlocated:
             reasons.append("UNLOCATED_REJECTED_RECORDS")
         members = trades.get(first, [])
@@ -435,7 +505,9 @@ def reference_trade(profile: Mapping[str, Any], result: IngestResult, segments: 
     if not window_covered(segments, start, end):
         return {"status": "MISSING_OUTCOME", "reason": "COVERAGE_NOT_PROVEN"}
     located, unlocated = _contamination(result)
-    if unlocated or any(start <= ts < end for ts, _ in located):
+    outside, bad_segments = _page_contradictions(result, segments)
+    if (unlocated or any(start <= ts < end for ts, _ in located + outside)
+            or covering_segment(segments, start, end) in bad_segments):
         return {"status": "MISSING_OUTCOME", "reason": "UNQUALIFIED_RECORDS"}
     for trade in result.trades:
         if start <= trade.block_timestamp < end:
@@ -468,6 +540,8 @@ def bucket_available_at(availability: Mapping[str, Any], bucket: Mapping[str, An
                         delivered: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Earliest time a bucket close or volume may be used. Unknown stays unknown."""
     check_availability_model(availability)
+    if bucket["status"] not in _STATUSES:
+        raise InvalidInput("BUCKET_STATUS", f"unknown bucket status {bucket['status']!r}")
     unknown = {"at": None, "basis": "UNKNOWN"}
     if bucket["status"] == "INCOMPLETE":
         return {**unknown, "reason": "BUCKET_INCOMPLETE"}
@@ -497,6 +571,8 @@ def opportunity_eligibility(decision_utc: str, requirements: Sequence[tuple[str,
             raise InvalidInput("SERIES", f"unsupported series {series}")
         bucket = by_start.get(start)
         code: str | None
+        if bucket is not None and bucket["status"] not in _STATUSES:
+            raise InvalidInput("BUCKET_STATUS", f"unknown bucket status {bucket['status']!r}")
         if bucket is None:
             code = "BUCKET_NOT_IN_WINDOW"
         elif bucket["status"] == "INCOMPLETE":
@@ -530,31 +606,47 @@ def decision_times(schedule: Mapping[str, Any], start_utc: str, end_utc: str) ->
     return list(range(first, end, period))
 
 
-def feasibility(claim: Mapping[str, Any], segments: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def feasibility(claim: Mapping[str, Any], segments: Sequence[Mapping[str, Any]],
+                availability: Mapping[str, Any]) -> dict[str, Any]:
     """Most opportunities each partition can hold, counted before any outcome is read.
 
-    The caller declares the sample floors. There is no default floor.
+    This is an upper bound on opportunities, not on independent observations. It does not look at which
+    buckets are unqualified, and overlapping outcome windows are not discounted. The caller declares the
+    sample floors. There is no default floor. Observed delivery is treated as ready at bucket end here,
+    so only an assumed delay or an unknown model can exclude a slot on availability.
     """
     _, _, offset = validate_schedule(claim["schedule"])
+    check_availability_model(availability)
     horizon, window, warmup = claim["horizon_seconds"], claim["reference_window_seconds"], claim["warmup_buckets"]
     if not (_is_int(horizon) and horizon > 0 and _is_int(window) and window > 0 and _is_int(warmup) and warmup >= 0):
         raise InvalidInput("CLAIM_VALUE", "horizon and reference window must be positive, warm-up non-negative integers")
-    declared = [(p.get("required_triggered"), p.get("required_control")) for p in claim["partitions"]]
+    parts = claim["partitions"]
+    declared = [(p.get("required_triggered"), p.get("required_control")) for p in parts]
     if any((a is None) != (b is None) for a, b in declared):
         raise InvalidInput("FLOOR_INCOMPLETE", "declare both the triggered and the control floor, or neither")
+    if any(a is not None and not (_is_int(a) and a >= 1 and _is_int(b) and b >= 1) for a, b in declared):
+        raise InvalidInput("FLOOR_VALUE", "floors must be integers of at least 1")
+    spans = sorted((epoch(p["start_utc"]), epoch(p["end_utc"])) for p in parts)
+    if any(a >= b for a, b in spans):
+        raise InvalidInput("PARTITION_ORDER", "each partition must start before it ends")
+    if any(spans[i + 1][0] < spans[i][1] for i in range(len(spans) - 1)):
+        raise InvalidInput("PARTITIONS_OVERLAP", "partitions must not overlap")
     if all(a is None for a, _ in declared):
         return {"status": "UNDECLARED", "partitions": []}
+    delay = availability.get("delay_seconds", 0) if availability["model"] == "ASSUMED_DELAY" else 0
     report = []
-    for partition, (triggered, control) in zip(claim["partitions"], declared):
+    for partition, (triggered, control) in zip(parts, declared):
         slots = decision_times(claim["schedule"], partition["start_utc"], partition["end_utc"])
         end = epoch(partition["end_utc"])
-        counts = {"outcome_window": 0, "outcome_coverage": 0, "warmup": 0}
+        counts = {"outcome_window": 0, "outcome_coverage": 0, "availability": 0, "warmup": 0}
         usable = 0
         for d in slots:
             if d + horizon + window > end:
                 counts["outcome_window"] += 1
             elif not (window_covered(segments, d, d + window) and window_covered(segments, d + horizon, d + horizon + window)):
                 counts["outcome_coverage"] += 1
+            elif availability["model"] == "UNKNOWN" or d - offset + delay > d:
+                counts["availability"] += 1
             elif not window_covered(segments, d - offset - BUCKET_SECONDS * (warmup + 1), d - offset):
                 counts["warmup"] += 1
             else:
@@ -564,7 +656,7 @@ def feasibility(claim: Mapping[str, Any], segments: Sequence[Mapping[str, Any]])
             "name": partition["name"], "schedule_slots": len(slots), "usable": usable, "required_total": required,
             "shortfall": None if required is None else max(0, required - usable),
             "excluded_outcome_window": counts["outcome_window"], "excluded_outcome_coverage": counts["outcome_coverage"],
-            "excluded_warmup": counts["warmup"],
+            "excluded_availability": counts["availability"], "excluded_warmup": counts["warmup"],
         })
     short = any(item["shortfall"] for item in report)
     return {"status": "INFEASIBLE" if short else "FEASIBLE", "partitions": report}
@@ -787,7 +879,8 @@ def _dataset_problems(profile: Mapping[str, Any], pool: object, bad: Any, closed
     needed = ("page_id", "from_block", "next_block", "sha256", "first_block_timestamp", "last_block_timestamp")
     if len(ids) != len(pages) or len(set(ids)) != len(ids) or any(
             any(k not in pg for k in needed) or not _is_int(pg["from_block"]) or not _is_int(pg["next_block"])
-            or not (isinstance(pg["sha256"], str) and _SHA256.fullmatch(pg["sha256"])) for pg in pages):
+            or not (isinstance(pg["sha256"], str) and _SHA256.fullmatch(pg["sha256"]))
+            or not _is_int(pg["first_block_timestamp"]) or not _is_int(pg["last_block_timestamp"]) for pg in pages):
         bad("PAGE_RECORD", "/dataset/pages", "pages need unique ids, integer ranges and sha256 digests")
         return
     if closed(revision, {"basis", "manifest_sha256", "page_count", "row_count"}, "/dataset/dataset_revision"):
@@ -907,6 +1000,11 @@ def history_observations(profile: Mapping[str, Any], logs: Sequence[Mapping[str,
             "segment_breaks": [item["code"] for item in assembled["breaks"]]}
 
 
+def _count(value: object, minimum: int = 0) -> int | None:
+    """A count is a real integer at or above its minimum. Booleans and text are not counts."""
+    return value if _is_int(value) and value >= minimum else None  # type: ignore[return-value]
+
+
 def _look(observations: Any, *path: str) -> Any:
     for key in path:
         if not isinstance(observations, Mapping) or key not in observations:
@@ -920,7 +1018,8 @@ class _Claim:
         self.reasons: list[dict[str, str]] = []
 
     def add(self, kind: str, code: str, detail: str = "") -> None:
-        self.reasons.append({"code": code, "kind": kind, "detail": detail})
+        if not any(r["code"] == code and r["kind"] == kind for r in self.reasons):
+            self.reasons.append({"code": code, "kind": kind, "detail": detail})
 
     def verdict(self) -> str:
         kinds = {reason["kind"] for reason in self.reasons}
@@ -952,6 +1051,10 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
         binding.add("FAILED_CHECK", f"PROFILE_INVALID:{problem['code']}", problem["path"])
     chain = _look(profile, "network", "chain_id")
     source = _look(observations, "binding", "chain_id")
+    if profile.get("evidence_class") == "RETAINED_REPORT":
+        binding.add("LIMIT", "RETAINED_REPORT_NOT_REVERIFIED", "figures come from a report, not a fresh read")
+    if source in ("PROVIDER_READ", "DOCUMENTATION") and source != _look(profile, "network", "chain_id_source"):
+        binding.add("FAILED_CHECK", "CHAIN_ID_SOURCE_CONTRADICTION", "profile and observation name different sources")
     if chain is None:
         binding.add("MISSING_EVIDENCE", "CHAIN_ID_UNKNOWN")
     elif source == "DOCUMENTATION":
@@ -967,7 +1070,8 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
             binding.add("MISSING_EVIDENCE", f"{label}_UNVERIFIED")
 
     event = claims["EVENT_AND_AMOUNT_MEANING"]
-    if not _look(observations, "ingest", "trades"):
+    trades = _count(_look(observations, "ingest", "trades"), 1)
+    if trades is None:
         event.add("MISSING_EVIDENCE", "NO_EVENT_SAMPLE")
     sides = _look(observations, "ingest", "pool_sides")
     if not sides:
@@ -987,40 +1091,58 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
         event.add("LIMIT", "TOKEN_MECHANICS_UNQUALIFIED", "amounts are pool-gross only")
 
     history = claims["HISTORY_COMPLETENESS_AND_ORDER"]
-    conflicts = _look(observations, "ingest", "conflicts")
-    codes = _look(observations, "ingest", "rejected_codes")
+    if trades is None:
+        history.add("MISSING_EVIDENCE", "INGEST_COUNTS_MALFORMED")
+    conflicts = _count(_look(observations, "ingest", "conflicts"))
     if conflicts is None:
         history.add("MISSING_EVIDENCE", "CONFLICT_COUNT_NOT_REPORTED")
     elif conflicts:
         history.add("FAILED_CHECK", "CONFLICTING_RECORDS", f"{conflicts} held out")
-    if not isinstance(codes, Mapping):
+    codes = _look(observations, "ingest", "rejected_codes")
+    if not isinstance(codes, Mapping) or any(_count(n) is None for n in codes.values()):
         history.add("MISSING_EVIDENCE", "UNSUPPORTED_EVENT_COUNT_NOT_REPORTED")
     else:
-        if _ORDER_CODES & {code for code, count in codes.items() if count}:
+        if _ORDER_CODES & {code for code, n in codes.items() if n}:
             history.add("FAILED_CHECK", "ORDER_OR_IDENTITY_FIELDS_MISSING")
-        if sum(count for code, count in codes.items() if code not in _ORDER_CODES):
+        if sum(n for code, n in codes.items() if code not in _ORDER_CODES):
             history.add("LIMIT", "UNSUPPORTED_EVENTS_PRESENT")
-    if (_look(observations, "ingest", "foreign") or 0) > 0:
+        total = _look(observations, "ingest", "rejected")
+        if total is not None and total != sum(codes.values()):
+            history.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "rejected total differs from its codes")
+    if _count(_look(observations, "ingest", "unlocated_rejections")):
+        history.add("FAILED_CHECK", "UNLOCATED_RECORDS", "a rejected record has no timestamp")
+    if _count(_look(observations, "ingest", "removed")):
+        history.add("LIMIT", "REMOVED_LOGS_PRESENT")
+    if _count(_look(observations, "ingest", "foreign")):
         history.add("LIMIT", "FOREIGN_RECORDS_IN_QUERY_RESULT")
+    if profile.get("evidence_class") in ("REAL_SOURCE", "RETAINED_REPORT") and _look(
+            profile, "dataset", "dataset_revision", "basis") != "PAGE_DIGESTS":
+        history.add("MISSING_EVIDENCE", "COVERAGE_PROOF_NOT_PORTABLE", "pages and their revision must travel with the profile")
+    if profile.get("evidence_class") == "RETAINED_REPORT":
+        history.add("LIMIT", "RETAINED_REPORT_NOT_REVERIFIED")
     counts = _look(observations, "bucket_status_counts")
-    if not isinstance(counts, Mapping):
+    if not isinstance(counts, Mapping) or any(_count(counts.get(status)) is None for status in _STATUSES):
         history.add("MISSING_EVIDENCE", "COVERAGE_PROOF_NOT_PORTABLE")
-    elif counts.get("COMPLETE_OCCUPIED", 0) + counts.get("COMPLETE_EMPTY", 0) == 0:
+    elif counts["COMPLETE_OCCUPIED"] + counts["COMPLETE_EMPTY"] == 0:
         history.add("MISSING_EVIDENCE", "NO_PROVEN_BUCKET")
-    elif counts.get("INCOMPLETE", 0) + counts.get("UNQUALIFIED", 0):
-        history.add("LIMIT", f"BUCKET_GAPS:{counts.get('INCOMPLETE', 0) + counts.get('UNQUALIFIED', 0)}")
+    elif counts["INCOMPLETE"] + counts["UNQUALIFIED"]:
+        history.add("LIMIT", f"BUCKET_GAPS:{counts['INCOMPLETE'] + counts['UNQUALIFIED']}")
     check = _look(observations, "corroboration")
     kind = _look(check, "class")
+    mismatches = _count(_look(check, "mismatches"))
+    sample, population = _count(_look(check, "sample_size"), 1), _count(_look(check, "population_size"), 1)
     if kind not in ("COMPLETE", "SAMPLED"):
         history.add("MISSING_EVIDENCE", "NO_CORROBORATION")
-    elif _look(check, "mismatches") is None:
+    elif mismatches is None:
         history.add("MISSING_EVIDENCE", "CORROBORATION_RESULT_NOT_REPORTED")
-    elif check["mismatches"]:
-        history.add("FAILED_CHECK", "CORROBORATION_MISMATCH", f"{check['mismatches']} differ")
-    elif kind == "COMPLETE" and (check.get("sample_size") is None or check.get("sample_size") != check.get("population_size")):
-        history.add("FAILED_CHECK", "CORROBORATION_CLASS_INCONSISTENT", "complete needs every record compared")
+    elif mismatches:
+        history.add("FAILED_CHECK", "CORROBORATION_MISMATCH", f"{mismatches} differ")
+    elif sample is None or population is None or sample > population or (
+            kind == "COMPLETE" and (sample != population or (trades is not None and population < trades))):
+        history.add("FAILED_CHECK", "CORROBORATION_CLASS_INCONSISTENT",
+                    "complete needs every record compared, and at least as many records as trades")
     elif kind == "SAMPLED":
-        history.add("LIMIT", "CORROBORATION_SAMPLED_ONLY", f"{check.get('sample_size')} of {check.get('population_size')}")
+        history.add("LIMIT", "CORROBORATION_SAMPLED_ONLY", f"{sample} of {population}")
 
     timing = claims["POINT_IN_TIME_AVAILABILITY"]
     model = None

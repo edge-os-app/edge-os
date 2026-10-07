@@ -18,6 +18,7 @@ from qualification import (
     decode_swap_log,
     decision_times,
     dataset_revision,
+    epoch,
     feasibility,
     history_observations,
     ingest,
@@ -55,7 +56,7 @@ class KeccakIdentity(unittest.TestCase):
 class DecodeAndConvert(unittest.TestCase):
     def test_positive_cases_match_hand_written_expectations(self) -> None:
         cases = [c for c in FIXTURES["decode_cases"] if "trade" in c["expect"]]
-        self.assertGreaterEqual(len(cases), 11)
+        self.assertGreaterEqual(len(cases), 12)
         for case in cases:
             with self.subTest(case["id"]):
                 got = decode_swap_log(PROFILES[case["profile"]], case["log"])
@@ -66,13 +67,13 @@ class DecodeAndConvert(unittest.TestCase):
                 self.assertEqual(got.quote_amount, want["quote_amount"])
                 self.assertEqual(got.base_amount, want["base_amount"])
                 self.assertEqual(got.price, want["price"])
-                for key in ("block_number", "log_index", "block_timestamp"):
+                for key in ("block_number", "log_index", "block_timestamp", "block_hash"):
                     if key in case["expect"]:
                         self.assertEqual(getattr(got, key), case["expect"][key])
 
     def test_unsupported_cases_raise_their_named_code(self) -> None:
         cases = [c for c in FIXTURES["decode_cases"] if "unsupported" in c["expect"]]
-        self.assertGreaterEqual(len(cases), 16)
+        self.assertGreaterEqual(len(cases), 22)
         for case in cases:
             with self.subTest(case["id"]):
                 with self.assertRaises(Unsupported) as caught:
@@ -125,12 +126,12 @@ class Ingest(unittest.TestCase):
     def test_conflicting_versions_are_held_out_not_chosen(self) -> None:
         case = next(c for c in FIXTURES["ingest_cases"] if c["id"] == "I03-conflicting-duplicate")
         got = self.run_case(case)
-        self.assertNotIn("143:103:0:7", got.identities())
+        self.assertNotIn("999001:103:0:7", got.identities())
         self.assertEqual(got.summary()["conflicts"], 1)
 
     def test_failed_record_does_not_stop_the_batch(self) -> None:
         case = next(c for c in FIXTURES["ingest_cases"] if c["id"] == "I07-rejected-records-are-counted")
-        self.assertEqual(self.run_case(case).identities(), ["143:101:0:0"])
+        self.assertEqual(self.run_case(case).identities(), ["999001:101:0:0"])
 
 
 def coverage_for(case_id: str) -> list[dict]:
@@ -184,7 +185,7 @@ class Buckets(unittest.TestCase):
             logs = rng.sample(case["logs"], len(case["logs"]))
             got = self.run_case(case, logs)
             self.assertEqual([b["close"]["identity"] if b["close"] else None for b in got],
-                             [None, "143:106:0:0", "143:108:0:0", None])
+                             [None, "999001:106:0:0", "999001:108:0:0", None])
 
     def test_no_bucket_invents_a_price_or_volume_without_proof(self) -> None:
         for case in FIXTURES["bucket_cases"]:
@@ -243,6 +244,19 @@ class Availability(unittest.TestCase):
                     bucket_available_at(case["availability"], case["bucket"], case.get("delivered"))
                 self.assertEqual(caught.exception.code, case["code"])
 
+    def test_unknown_bucket_status_is_rejected_by_eligibility_too(self) -> None:
+        weird = {"start": "2026-09-25T10:00:00Z", "end": "2026-09-25T10:05:00Z", "status": "WEIRD"}
+        with self.assertRaises(InvalidInput) as caught:
+            opportunity_eligibility("2026-09-25T10:20:00Z", [("price", weird["start"])], [weird],
+                                    {"model": "ASSUMED_DELAY", "delay_seconds": 180})
+        self.assertEqual(caught.exception.code, "BUCKET_STATUS")
+
+    def test_leap_second_text_is_not_a_timestamp(self) -> None:
+        for text in ("2026-09-25T10:00:60Z", "2026-09-25T23:59:60Z", "2026-09-25 10:00:00Z", "2026-09-25T10:00:00"):
+            with self.assertRaises(InvalidInput):
+                epoch(text)
+        self.assertEqual(epoch("2026-09-25T10:00:59Z") + 1, epoch("2026-09-25T10:01:00Z"))
+
     def test_eligibility_keeps_every_reason_and_never_moves_the_decision(self) -> None:
         for case in FIXTURES["eligibility_cases"]:
             with self.subTest(case["id"]):
@@ -257,12 +271,20 @@ class ScheduleFeasibility(unittest.TestCase):
     def test_every_case_matches_hand_written_expectations(self) -> None:
         for case in FIXTURES["feasibility_cases"]:
             with self.subTest(case["id"]):
-                got = feasibility(case["claim"], case["segments"])
+                got = feasibility(case["claim"], case["segments"], case["availability"])
                 self.assertEqual(got["status"], case["expect"]["status"])
                 self.assertEqual(len(got["partitions"]), len(case["expect"]["partitions"]))
                 for actual, wanted in zip(got["partitions"], case["expect"]["partitions"]):
                     for key, value in wanted.items():
                         self.assertEqual(actual[key], value, key)
+
+    def test_unusable_floors_and_partitions_are_rejected(self) -> None:
+        for case in FIXTURES["claim_errors"]:
+            with self.subTest(case["id"]):
+                with self.assertRaises(InvalidInput) as caught:
+                    feasibility(case["claim"], FIXTURES["feasibility_cases"][0]["segments"],
+                                FIXTURES["feasibility_cases"][0]["availability"])
+                self.assertEqual(caught.exception.code, case["code"])
 
     def test_schedule_off_the_bucket_grid_is_rejected(self) -> None:
         for case in FIXTURES["schedule_errors"]:
@@ -295,6 +317,14 @@ def apply_changes(root: dict, changes: list) -> dict:
 def base_profile() -> dict:
     profile = copy.deepcopy(PROFILES[FIXTURES["qualification_base"]["profile"]])
     profile["availability"] = copy.deepcopy(FIXTURES["qualification_base"]["profile_availability"])
+    return profile
+
+
+def real_pages_profile() -> dict:
+    """A fixture profile with portable pages, labeled REAL_SOURCE only to exercise the projection rule."""
+    profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
+    profile["availability"] = copy.deepcopy(FIXTURES["qualification_base"]["profile_availability"])
+    profile["evidence_class"] = "REAL_SOURCE"
     return profile
 
 
@@ -467,13 +497,13 @@ class FailClosed(unittest.TestCase):
         half = copy.deepcopy(claim)
         half["partitions"][0]["required_control"] = None
         with self.assertRaises(InvalidInput) as caught:
-            feasibility(half, segments)
+            feasibility(half, segments, FIXTURES["feasibility_cases"][0]["availability"])
         self.assertEqual(caught.exception.code, "FLOOR_INCOMPLETE")
         for key in ("horizon_seconds", "reference_window_seconds"):
             bad = copy.deepcopy(claim)
             bad[key] = 0
             with self.assertRaises(InvalidInput) as caught:
-                feasibility(bad, segments)
+                feasibility(bad, segments, FIXTURES["feasibility_cases"][0]["availability"])
             self.assertEqual(caught.exception.code, "CLAIM_VALUE")
 
 
@@ -486,8 +516,7 @@ class P02Projection(unittest.TestCase):
         self.assertEqual(binding["token_order"], [binding["base_asset"], binding["quote_asset"]])
 
     def test_only_a_fully_qualified_real_profile_projects_as_qualified(self) -> None:
-        profile = base_profile()
-        profile["evidence_class"] = "REAL_SOURCE"
+        profile = real_pages_profile()
         result = qualify(profile, copy.deepcopy(FIXTURES["qualification_base"]["observations"]))
         self.assertEqual(result["overall"], "QUALIFIED")
         binding = to_p02_binding(profile, result)
@@ -499,8 +528,8 @@ class P02Projection(unittest.TestCase):
         with self.assertRaises(BindingNotEmittable) as caught:
             to_p02_binding(report["profile"], qualify(report["profile"], report["observations"]))
         self.assertEqual(caught.exception.code, "VERDICT_UNRESOLVED")
-        profile = base_profile()
-        profile["evidence_class"] = "REAL_SOURCE"
+        profile = real_pages_profile()
+        profile["network"]["chain_id_source"] = "DOCUMENTATION"
         limited = qualify(profile, apply_changes({"o": copy.deepcopy(FIXTURES["qualification_base"]["observations"])},
                                                  [["o", "binding", "chain_id", "DOCUMENTATION"]])["o"])
         with self.assertRaises(BindingNotEmittable) as caught:
