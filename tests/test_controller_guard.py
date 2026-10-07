@@ -204,6 +204,32 @@ class CheckedSendTests(unittest.TestCase):
         )
         self.assertTrue(_has_active_draft(capture, "%9", text))
 
+    def test_claude_native_split_plugin_quota_footer_and_foreign_input(self):
+        text = "Reply only ACK-r14-footer. Do not run tools."
+        own_header = (
+            "[tmux-bridge from:claude pane:%9 at:work:0.1 — "
+            "load the smux skill to reply] "
+        )
+        separator = "────────────────────────────────────────────────────────────\n"
+        update = "  [OMC#4.15.0L] -> 4.15.7 omc update\n"
+        quota = "  5h:0%* wk:19%*(~6d10h) extra:0%*($0.00/$30.00) | session:191m\n"
+        footer = (
+            separator +
+            "  🤖 Sonnet 5.5 (medium) | 💰 $0.19 session / $0.00 today / "
+            "No active block | 🧠 49,514 (5%)\n" +
+            update + quota +
+            "  ⏸ manual mode on · ← for agents"
+        )
+        idle = "❯\n" + footer
+        own = "❯ " + own_header + "\n  " + text + "\n" + footer
+        foreign = own.replace("\n" + separator, "\n  foreign unsent addition\n" + separator)
+        self.assertFalse(_has_partial_input(idle))
+        self.assertTrue(_has_active_draft(own, "%9", text))
+        self.assertFalse(_has_active_draft(foreign, "%9", text))
+        self.assertTrue(_has_partial_input(foreign))
+        self.assertTrue(_has_partial_input(idle.replace(quota, quota.rstrip() + " extra\n")))
+        self.assertTrue(_has_partial_input(idle.replace(update, update.rstrip() + " extra\n")))
+
     def test_native_foreign_draft_with_footer_stays_partial(self):
         capture = (
             "❯ [tmux-bridge from:other pane:%9 at:work:0.1 — load the smux skill to reply] foreign text\n"
