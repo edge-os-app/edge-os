@@ -1119,6 +1119,16 @@
       "UNRESOLVED"
     ]
   },
+  "compile_value_rules": {
+    "validation": "Before UNRESOLVED routing, validate every supplied complete/adopted compile-field value with the same StrategySpec descriptors and semantic checks, including whole-tree operators, units, dependencies and derived history bounds. Do not construct a StrategySpec or supply missing market data.",
+    "invalid_value_outcome": "INVALID_INPUT"
+  },
+  "interpretation_lineage_rules": {
+    "bundle_scope": "Supply the complete interpretation lineage for each owner/intake, including every predecessor and persisted direct clarification.",
+    "root": "Exactly one interpretation per owner/intake has empty clarification_history. Every other interpretation has exactly one direct clarification to its predecessor. Bundle order and timestamps do not select the root.",
+    "ancestry": "All predecessor links resolve within the same owner/intake and follow strict record chronology. Each transition preserves prior restrictions and binds the resulting restriction snapshot as current evidence. Missing both a turn and its history cannot create a second root.",
+    "qualification": "This validates supplied complete bundles in memory. It does not establish storage completeness, immutable persistence or server enforcement."
+  },
   "publication_failure_rules": {
     "parent_revision_conflict": {
       "finding_code": "parent_revision_conflict",

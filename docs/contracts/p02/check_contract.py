@@ -206,8 +206,34 @@ def _validate_strategy_semantics(strategy: object) -> None:
         raise Invalid(f"strategy keys differ; missing={sorted(missing)}, extra={sorted(extra)}")
     if strategy["schema_version"] != CONTRACT["identity"]["strategy_schema"]:
         raise Invalid("unsupported strategy schema")
-    if strategy["domain"] != "SPOT" or strategy["decision_interval_seconds"] != 300:
-        raise Invalid("P02 supports spot strategies on five-minute buckets")
+    if strategy["domain"] != "SPOT":
+        raise Invalid("P02 supports spot strategies")
+    required = _validate_compile_fields(strategy)
+    if strategy["execution_permission"] != {"state": "NOT_GRANTED", "mandate_ref": None}:
+        raise Invalid("a strategy record cannot grant execution permission")
+    warmup = strategy["warmup_buckets"]
+    if isinstance(warmup, bool) or not isinstance(warmup, int) or not 0 <= warmup <= CONTRACT["limits"]["lookback_buckets"]:
+        raise Invalid("warmup_buckets is outside the supported range")
+    if warmup != required:
+        raise Invalid(f"warmup_buckets must equal derived history requirement {required}")
+    manifest = strategy["semantic_manifest"]
+    if manifest != CONTRACT["identity"]["manifest_components"]:
+        raise Invalid("semantic manifest is incomplete or changed")
+    if len(manifest) > CONTRACT["limits"]["manifest_entries"]:
+        raise Invalid("manifest entry limit exceeded")
+    if len(canonical_bytes(strategy)) > CONTRACT["limits"]["input_bytes"]:
+        raise Invalid("strategy input byte limit exceeded")
+
+
+def _validate_compile_fields(strategy: dict[str, object]) -> int:
+    """Validate supplied complete meaning without constructing a StrategySpec."""
+    fields = CONTRACT["required_strategy_fields"]["CREATE_STRATEGY"]
+    descriptors = CONTRACT["record_schemas"]["StrategySpec"]["required"]
+    for name in fields:
+        if name != "restrictions":
+            validate_typed_value(strategy[name], descriptors[name], f"compile_fields.{name}")
+    if strategy["decision_interval_seconds"] != 300:
+        raise Invalid("P02 supports five-minute decision buckets")
     market = strategy["market"]
     if not isinstance(market, dict) or set(market) != {"network", "research_binding", "execution_route", "quote_unit"}:
         raise Invalid("market requires separate research and execution identities")
@@ -262,24 +288,13 @@ def _validate_strategy_semantics(strategy: object) -> None:
         raise Invalid("risk limits must cover size and cap the instance at one position")
     if strategy["action_scope"] != ["SPOT_BUY", "SPOT_SELL_ALL_ATTRIBUTABLE"]:
         raise Invalid("action scope is outside the minimum P02 subset")
-    if strategy["execution_permission"] != {"state": "NOT_GRANTED", "mandate_ref": None}:
-        raise Invalid("a strategy record cannot grant execution permission")
     expressions = [strategy["entry"], strategy["exit"]]
     if not (isinstance(invalidation, dict) and invalidation.get("state") == "NOT_REQUESTED"):
         expressions.append(invalidation)
     required = max(required_history(expression) for expression in expressions)
-    warmup = strategy["warmup_buckets"]
-    if isinstance(warmup, bool) or not isinstance(warmup, int) or not 0 <= warmup <= CONTRACT["limits"]["lookback_buckets"]:
-        raise Invalid("warmup_buckets is outside the supported range")
-    if warmup != required:
-        raise Invalid(f"warmup_buckets must equal derived history requirement {required}")
-    manifest = strategy["semantic_manifest"]
-    if manifest != CONTRACT["identity"]["manifest_components"]:
-        raise Invalid("semantic manifest is incomplete or changed")
-    if len(manifest) > CONTRACT["limits"]["manifest_entries"]:
-        raise Invalid("manifest entry limit exceeded")
-    if len(canonical_bytes(strategy)) > CONTRACT["limits"]["input_bytes"]:
-        raise Invalid("strategy input byte limit exceeded")
+    if required > CONTRACT["limits"]["lookback_buckets"]:
+        raise Invalid("derived history requirement exceeds the supported range")
+    return required
 
 
 def validate_record(name: str, value: object) -> None:
@@ -553,6 +568,13 @@ def route(case: dict[str, object]) -> str:
     if any(item.get("origin") in {"AGENT_PROPOSED", "APPLICATION_CONFIGURED"}
            and item.get("field_name") in required and item.get("adoption") != "ADOPTED" for item in evidence):
         actual = "NEEDS_CLARIFICATION"
+        _validate_route_result(case, actual)
+        return actual
+    try:
+        _validate_compile_fields({name: item["value"] for name, item in by_name.items()})
+        validate_typed_value(by_name["restrictions"]["value"], {"type": "string_array"}, "compile_fields.restrictions")
+    except (Invalid, KeyError, TypeError):
+        actual = "INVALID_INPUT"
         _validate_route_result(case, actual)
         return actual
     restrictions = by_name["restrictions"]["value"]
@@ -843,6 +865,17 @@ def validate_record_bundle(envelopes: list[dict[str, object]]) -> None:
         raise Invalid("interpretation revision IDs must be unique")
     interpretations = {e["content"]["interpretation_revision_id"]: e for e in interpretation_list}
     clarifications = by_type.get("Clarification", [])
+    lineages = {}
+    for envelope in interpretation_list:
+        content = envelope["content"]
+        lineage = (envelope["owner_id"], content["intake_record_id"])
+        lineages.setdefault(lineage, []).append(content)
+    for revisions in lineages.values():
+        roots = [content for content in revisions if not content["clarification_history"]]
+        if len(roots) != 1:
+            raise Invalid("an intake lineage requires exactly one root interpretation")
+        if any(len(content["clarification_history"]) > 1 for content in revisions):
+            raise Invalid("each non-root interpretation requires exactly one direct clarification")
     linked_clarification_ids = set()
     for envelope in envelopes:
         if envelope["record_type"] == "PromptInterpretation":
@@ -1094,6 +1127,105 @@ def check_unresolved_route_coverage() -> None:
                     raise AssertionError(f"unresolved evidence hides question {finding['path']}")
 
 
+def check_supplied_value_coverage() -> None:
+    cases = {case["id"]: case for case in FIXTURES["cases"]}
+    assert route(copy.deepcopy(cases["route-unresolved"])) == "UNRESOLVED"
+    assert route(copy.deepcopy(cases["route-complete"])) == "COMPILED"
+    mutations = [
+        ("exit", {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}),
+        ("exit", {"op": "future_price", "lookback_buckets": 1}),
+        ("entry", {"op": "and", "args": [STRATEGY["entry"], {"op": "future_price"}]}),
+        ("invalidation", {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}),
+        ("market", {}),
+        ("decision_interval_seconds", True),
+        ("decision_interval_seconds", 60),
+        ("data_inputs", ["future_price"]),
+        ("sizing", {"kind": "FIXED_QUOTE_AMOUNT", "amount": "-1", "unit": STRATEGY["market"]["quote_unit"]}),
+        ("additions", True),
+        ("partial_exits", "false"),
+        ("cost_assumptions", {"fee_rate": "2", "slippage_rate": "0", "source_ref": "synthetic:cost"}),
+        ("risk_limits", {"max_quote_notional": "0", "max_open_positions": 1}),
+        ("action_scope", ["LP_ADD"]),
+        ("restrictions", "no additions"),
+    ]
+    for readiness in ("READY", "UNRESOLVED"):
+        for field, value in mutations:
+            current = copy.deepcopy(cases["route-unresolved"])
+            current["input"]["interpretation"]["evidence_readiness"] = readiness
+            next(item for item in current["input"]["interpretation"]["field_evidence"]
+                 if item["field_name"] == field)["value"] = value
+            if readiness == "READY":
+                current["input"]["candidate_strategy"] = copy.deepcopy(STRATEGY)
+                if field != "restrictions":
+                    current["input"]["candidate_strategy"][field] = value
+            must_reject_action(f"{readiness} cannot hide invalid {field}", lambda: route(current))
+            current["result"] = copy.deepcopy(cases["route-malformed"]["result"])
+            assert route(current) == "INVALID_INPUT", (readiness, field)
+
+
+def check_interpretation_lineage_coverage() -> None:
+    bundle = copy.deepcopy(FIXTURES["persisted_examples"])
+    for envelope in bundle:
+        content = envelope["content"]
+        if envelope["record_type"] == "PromptInterpretation":
+            content["preserved_restrictions"].append("no market orders")
+            evidence = next(item for item in content["field_evidence"] if item["field_name"] == "restrictions")
+            evidence["value"].append("no market orders")
+            evidence.update(source_ref="synthetic:adopted-restriction", origin="USER_CONFIRMED")
+            for turn in content["clarification_history"]:
+                turn["preserved_restrictions"].append("no market orders")
+        elif envelope["record_type"] == "Clarification":
+            content["preserved_restrictions"].append("no market orders")
+    validate_record_bundle(bundle)
+    dropped = copy.deepcopy(bundle)
+    final = next(e["content"] for e in dropped if e["record_type"] == "PromptInterpretation"
+                 and e["content"]["interpretation_revision_id"] == "interp-fixture-2")
+    final["clarification_history"] = []
+    final["preserved_restrictions"].remove("no market orders")
+    next(item for item in final["field_evidence"] if item["field_name"] == "restrictions")["value"].remove("no market orders")
+    must_reject_action("lost earlier restriction with history removed", lambda: validate_record_bundle(dropped))
+    dropped = [e for e in dropped if e["record_type"] != "Clarification"]
+    must_reject_action("lost earlier restriction with both turn and history removed", lambda: validate_record_bundle(dropped))
+    validate_record_bundle(bundle)
+    validate_record_bundle(list(reversed(bundle)))
+    root = next(e for e in bundle if e["record_type"] == "PromptInterpretation"
+                and not e["content"]["clarification_history"])
+    final = next(e for e in bundle if e["record_type"] == "PromptInterpretation"
+                 and e["content"]["clarification_history"])
+    turn = next(e for e in bundle if e["record_type"] == "Clarification")
+    must_reject_action("missing root interpretation", lambda: validate_record_bundle([e for e in bundle if e != root]))
+    complete = copy.deepcopy(bundle)
+    third, next_turn = copy.deepcopy(final), copy.deepcopy(turn)
+    third.update(record_id="90000000-0000-4000-8000-000000000003", created_at="2026-10-06T10:00:05Z")
+    next_turn.update(record_id="90000000-0000-4000-8000-000000000004", created_at="2026-10-06T10:00:04Z")
+    third["content"]["interpretation_revision_id"] = "interp-fixture-3"
+    for item in third["content"]["field_evidence"]:
+        item["interpretation_revision"] = "interp-fixture-3"
+        if item["field_name"] == "exit":
+            item["source_ref"] = "synthetic:answer-3"
+    next_turn["content"].update(previous_revision_id="interp-fixture-2", resulting_revision_id="interp-fixture-3",
+                                 question_id="question-fixture-3", answer_ref="synthetic:answer-3", changed_fields=["exit"])
+    third["content"]["clarification_history"] = [copy.deepcopy(next_turn["content"])]
+    complete.extend([third, next_turn])
+    validate_record_bundle(complete)
+    validate_record_bundle(list(reversed(complete)))
+    incomplete = [e for e in complete if e != final]
+    must_reject_action("missing intermediate interpretation", lambda: validate_record_bundle(incomplete))
+    incomplete = copy.deepcopy(complete)
+    next(e["content"] for e in incomplete if e["record_type"] == "PromptInterpretation"
+         and e["content"]["interpretation_revision_id"] == "interp-fixture-3")["clarification_history"] = []
+    incomplete = [e for e in incomplete if e["record_id"] != next_turn["record_id"]]
+    must_reject_action("later revision cannot become a second root", lambda: validate_record_bundle(incomplete))
+    other_intake = copy.deepcopy(next(e for e in bundle if e["record_type"] == "IntakeRequest"))
+    other_intake["record_id"] = "90000000-0000-4000-8000-000000000005"
+    other_root = copy.deepcopy(root)
+    other_root["record_id"] = "90000000-0000-4000-8000-000000000006"
+    other_root["content"].update(intake_record_id=other_intake["record_id"], interpretation_revision_id="interp-other-root")
+    for item in other_root["content"]["field_evidence"]:
+        item["interpretation_revision"] = "interp-other-root"
+    validate_record_bundle(bundle + [other_intake, other_root])
+
+
 def main() -> int:
     if set(CONTRACT["operator_signatures"]) != set(CONTRACT["operators"]):
         raise AssertionError("operator names and machine signatures differ")
@@ -1102,6 +1234,8 @@ def main() -> int:
         check_fixture(case)
     check_clarification_coverage()
     check_unresolved_route_coverage()
+    check_supplied_value_coverage()
+    check_interpretation_lineage_coverage()
     validate_strategy(STRATEGY)
 
     changed_rule = copy.deepcopy(STRATEGY)

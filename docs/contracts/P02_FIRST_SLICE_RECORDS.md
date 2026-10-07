@@ -31,6 +31,8 @@ Origins are `USER_STATED`, `USER_CONFIRMED`, `APPLICATION_CONFIGURED`, and `AGEN
 
 Clarifications append a new immutable interpretation revision. They carry `previous_revision_id`, `question_id`, `question`, `answer_ref`, `changed_fields`, and `preserved_restrictions`. A persisted clarification must resolve to its exact predecessor and resulting revision and appear exactly once in the result's `clarification_history`. Both revisions must resolve to the same intake and owner. Earlier restrictions cannot be removed by a clarification. An unresolved conflict remains `CONFLICTING` until the user resolves it.
 
+Bundle validation requires the complete lineage for each owner and intake, with every predecessor and persisted direct clarification. Exactly one interpretation has empty `clarification_history` and is the root. Every later revision has exactly one direct turn to its predecessor. The root does not depend on bundle order or timestamps. Existing owner, intake, chronological and transition checks connect every revision to that root. Deleting both a later turn and its history creates a rejected second root, including when the later snapshot removes an earlier adopted restriction.
+
 ## Outcome and draft
 
 The deterministic router returns one of:
@@ -48,7 +50,9 @@ Clarification targets include every currently absent required field, every `MISS
 
 Preserve known, adopted values and their source/revision bindings. Bind saved restrictions as current `KNOWN` evidence matching `preserved_restrictions`. A mismatch is invalid even while another field needs clarification. An absent binding needs a question about that binding, without asking the user to restate saved restrictions.
 
-Validate required meaning and saved restriction bindings before evidence-readiness routing. Missing, conflicting or consequential pending meaning returns `NEEDS_CLARIFICATION` even when evidence is unavailable. Complete, adopted, supported meaning with unavailable essential evidence returns `UNRESOLVED`.
+Validate required meaning and saved restriction bindings before evidence-readiness routing. Missing, conflicting or consequential pending meaning returns `NEEDS_CLARIFICATION` even when evidence is unavailable.
+
+Before returning `UNRESOLVED`, validate every supplied complete, adopted compile-field value through the same types and semantic checks as `StrategySpec`. Check whole expression trees, operator support, units, parameters, declared inputs, sizing, costs, risk limits and derived history bounds. Malformed or unsupported supplied representations return `INVALID_INPUT` under both readiness states. This check neither constructs a strategy nor supplies missing market data. Complete, adopted, supported meaning with unavailable essential evidence returns `UNRESOLVED`.
 
 `StrategyDraft` stores `draft_id`, original request, current interpretation revision, source syntax, validation findings, and optional proposed fields. It also stores the immutable `strategy_id` and `base_revision_id` selected when the draft starts. It has `state: DRAFT` and no published revision identity. A draft cannot set validation eligibility, paper/live readiness, or an execution mandate.
 
@@ -101,6 +105,8 @@ The immutable `expected_parent_revision_id` names the exact parent of a new chil
 Persisted envelope timestamps must be valid RFC 3339 UTC instants. Clarification chronology compares parsed instants, including timestamps with different fractional-second precision.
 
 The checker tests serialization, sample records, fixture semantics, and rejection mutations in memory. It does not test authenticated server ownership, atomic storage, unique constraints, transaction isolation, concurrent writes, retry persistence, provider behavior, runtime limits, or live execution. P03 verifies a running application. P06 owns broader compiler checks. P02 made no provider or model calls.
+
+Complete-bundle validation cannot prove that storage supplied every retained record. That guarantee needs later server and persistence checks.
 
 Run from the repository root:
 
