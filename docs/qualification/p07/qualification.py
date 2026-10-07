@@ -334,37 +334,34 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     result.trades = tuple(t for i, t in enumerate(kept) if i not in flagged)
     # A held-out trade has an unreliable time. When the claimed times disagree, its real time can be anywhere
     # between its qualified neighbours, so every bucket in that interval is unreliable too.
-    keys = [t.order_key for t in result.trades]
+    blocks = [t.block_number for t in result.trades]
     times = [t.block_timestamp for t in result.trades]
 
-    def neighbours(key: tuple[int, int, int]) -> tuple[int, int]:
-        i = bisect.bisect_left(keys, key)
-        return (times[i - 1] if i > 0 else 0, times[i] if i < len(times) else _FAR_FUTURE)
+    def neighbours(block: int) -> tuple[int, int]:
+        """Times a record in this block can have. Qualified trades in the same block fix it exactly."""
+        i, j = bisect.bisect_left(blocks, block), bisect.bisect_right(blocks, block)
+        if i < j:
+            return times[i], times[i]
+        return (times[i - 1] if i > 0 else 0), (times[j] if j < len(times) else _FAR_FUTURE)
 
     for kind, members, extra in held:
         claimed = sorted({t.block_timestamp for t in members} | set(extra))
         ranges: list[tuple[int, int]] = []
         for member in members:
-            lo, hi = neighbours(member.order_key)
+            lo, hi = neighbours(member.block_number)
             if kind == "TIMESTAMP_ORDER" or len(claimed) > 1 or not lo <= member.block_timestamp <= hi:
                 ranges.append((lo, hi))
         result.conflicts.append({"kind": kind, "identities": sorted({name(t) for t in members}),
                                  "timestamps": claimed, "ranges": sorted(set(ranges))})
-    blocks = [t.block_number for t in result.trades]
     for item in result.rejected:
         item["ranges"] = []
         ts = item["block_timestamp"]
         if ts is None:
             continue
-        if item["key"] is not None:
-            lo, hi = neighbours(item["key"])
-        elif item["block"] is not None:
-            i, j = bisect.bisect_left(blocks, item["block"]), bisect.bisect_right(blocks, item["block"])
-            lo, hi = (times[i - 1] if i > 0 else 0), (times[j] if j < len(times) else _FAR_FUTURE)
-        else:
-            lo, hi = 0, _FAR_FUTURE
-            item["ranges"].append((lo, hi))
+        if item["block"] is None:
+            item["ranges"].append((0, _FAR_FUTURE))
             continue
+        lo, hi = neighbours(item["block"])
         if not lo <= ts <= hi:
             item["ranges"].append((lo, hi))
     return result
@@ -396,16 +393,55 @@ def iso_utc(seconds: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
 
 
-def _boundary_conflict(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
-    """Two pages that share a boundary must agree on what happened there."""
-    def differ(key: str) -> bool:
-        return bool(a.get(key)) and bool(b.get(key)) and str(a[key]).lower() != str(b[key]).lower()
+def _page_claims(page: Mapping[str, Any]) -> list[tuple[int, str, Any]]:
+    """What one page says about the blocks at its edges: (block, kind, value)."""
+    claims: list[tuple[int, str, Any]] = [
+        (page["from_block"], "ts", page["first_block_timestamp"]),
+        (page["next_block"] - 1, "ts", page["last_block_timestamp"]),
+    ]
+    if page.get("last_block_hash"):
+        claims.append((page["next_block"] - 1, "hash", str(page["last_block_hash"]).lower()))
+    if page.get("first_parent_hash"):
+        claims.append((page["from_block"] - 1, "hash", str(page["first_parent_hash"]).lower()))
+    return claims
 
-    same_start = a["from_block"] == b["from_block"] and (
-        differ("first_parent_hash") or a["first_block_timestamp"] != b["first_block_timestamp"])
-    same_end = a["next_block"] == b["next_block"] and (
-        differ("last_block_hash") or a["last_block_timestamp"] != b["last_block_timestamp"])
-    return same_start or same_end
+
+def _untrusted_pages(pages: Sequence[Mapping[str, Any]]) -> dict[int, str]:
+    """Indexes of pages that contradict other pages, with the break code for each.
+
+    Every page that speaks about a block with two different hashes or two different times is dropped,
+    including pages that repeat one side. Block times must also never fall as block numbers rise.
+    A page that chains to a dropped page is dropped. The result does not depend on page ids or page order.
+    """
+    claims = [(block, kind, value, i) for i, page in enumerate(pages) for block, kind, value in _page_claims(page)]
+    dropped: dict[int, str] = {}
+    by_block: dict[tuple[int, str], set[Any]] = defaultdict(set)
+    for block, kind, value, _ in claims:
+        by_block[(block, kind)].add(value)
+    for block, kind, _, i in claims:
+        if len(by_block[(block, kind)]) > 1:
+            dropped.setdefault(i, "REORG_BETWEEN_PAGES" if kind == "hash" else "TIMESTAMP_ORDER")
+    times = sorted((block, value, i) for block, kind, value, i in claims if kind == "ts")
+    running_max = None
+    for _, value, i in times:
+        if running_max is not None and value < running_max:
+            dropped.setdefault(i, "TIMESTAMP_ORDER")
+        running_max = value if running_max is None else max(running_max, value)
+    running_min = None
+    for _, value, i in reversed(times):
+        if running_min is not None and value > running_min:
+            dropped.setdefault(i, "TIMESTAMP_ORDER")
+        running_min = value if running_min is None else min(running_min, value)
+    changed = True
+    while changed:
+        changed = False
+        bad_hashes = {str(pages[i]["last_block_hash"]).lower() for i in dropped if pages[i].get("last_block_hash")}
+        for i, page in enumerate(pages):
+            parent = str(page.get("first_parent_hash") or "").lower()
+            if i not in dropped and parent and parent in bad_hashes:
+                dropped[i] = "CHAINED_TO_DROPPED_PAGE"
+                changed = True
+    return dropped
 
 
 def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int],
@@ -415,52 +451,30 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
     A segment starts at its first scanned block and ends at its last scanned block.
     Block timestamps never decrease with block number. So every block before the segment has a
     timestamp at or below first_ts, and every block after it has one at or above last_ts.
-    Pages the node could still reorg, pages that overlap, and pages after a hash mismatch are not used.
+    Pages the node could still reorg, pages that repeat other pages and pages that contradict other pages
+    are not used. Page ids only label the output.
     """
     last_final = archive_height - profile["finality"]["depth_blocks"]
     low, high = scan_request["from_block"], scan_request["to_block_exclusive"]
+    order = sorted(range(len(pages)), key=lambda i: (pages[i]["from_block"], pages[i]["next_block"], pages[i]["page_id"]))
+    dropped = _untrusted_pages(pages)
     segments: list[list[Mapping[str, Any]]] = []
     breaks: list[dict[str, Any]] = []
-    untrusted: set[str] = set()
-    for page in sorted(pages, key=lambda p: (p["from_block"], p["page_id"])):
+    for i in order:
+        page = pages[i]
         pid = page["page_id"]
         current = segments[-1] if segments else None
         end = current[-1]["next_block"] if current else None
-        parent = (page.get("first_parent_hash") or "").lower()
-        if page["from_block"] < low or page["next_block"] > high or page["next_block"] <= page["from_block"]:
+        if i in dropped:
+            breaks.append({"code": dropped[i], "page_id": pid})
+        elif page["from_block"] < low or page["next_block"] > high or page["next_block"] <= page["from_block"]:
             breaks.append({"code": "OUTSIDE_REQUEST", "page_id": pid})
-        elif parent and parent in untrusted:
-            breaks.append({"code": "CHAINED_TO_DROPPED_PAGE", "page_id": pid})
-            if page.get("last_block_hash"):
-                untrusted.add(page["last_block_hash"].lower())
         elif page["next_block"] - 1 > last_final:
             breaks.append({"code": "NOT_FINAL_AT_COLLECTION", "page_id": pid})
         elif current is not None and page["from_block"] < end:
-            clash = next((i for i in range(len(current) - 1, -1, -1)
-                          if current[i]["from_block"] < page["next_block"] and page["from_block"] < current[i]["next_block"]
-                          and _boundary_conflict(current[i], page)), None)
-            if clash is None:
-                breaks.append({"code": "OVERLAP", "page_id": pid})
-            else:
-                breaks.append({"code": "OVERLAP_CONFLICT", "page_id": pid})
-                dropped = current[clash:]
-                untrusted.update(h.lower() for g in dropped + [page] for h in (g.get("last_block_hash"),) if h)
-                del current[clash:]
-                if not current:
-                    segments.pop()
-        elif page["last_block_timestamp"] < page["first_block_timestamp"] or (
-                current is not None and page["first_block_timestamp"] < current[-1]["last_block_timestamp"]):
-            breaks.append({"code": "TIMESTAMP_ORDER", "page_id": pid})
+            breaks.append({"code": "OVERLAP", "page_id": pid})
         elif current is not None and page["from_block"] == end:
-            parent, previous = page.get("first_parent_hash"), current[-1].get("last_block_hash")
-            if parent and previous and parent.lower() != previous.lower():
-                breaks.append({"code": "REORG_BETWEEN_PAGES", "page_id": pid})
-                untrusted.update(h.lower() for h in (current[-1].get("last_block_hash"), page.get("last_block_hash")) if h)
-                current.pop()
-                if not current:
-                    segments.pop()
-            else:
-                current.append(page)
+            current.append(page)
         else:
             if current is not None:
                 breaks.append({"code": "BLOCK_GAP", "page_id": pid})

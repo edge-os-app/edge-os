@@ -161,6 +161,90 @@ class Coverage(unittest.TestCase):
         self.assertEqual(got["segments"], case["expect"]["segments"])
 
 
+def _coverage_shape(result: dict) -> tuple:
+    """Everything about an assembly result that must not depend on page ids."""
+    return (sorted((s["first_block"], s["end_block_exclusive"], s["first_ts"], s["last_ts"]) for s in result["segments"]),
+            sorted(b["code"] for b in result["breaks"]))
+
+
+class PageIdsNeverChangeTheCoverage(unittest.TestCase):
+    def relabel(self, pages: list, rng: random.Random) -> list:
+        names = [f"x{n:03d}" for n in rng.sample(range(500), len(pages))]
+        return [{**page, "page_id": name} for page, name in zip(pages, names)]
+
+    def test_every_coverage_case_gives_the_same_coverage_under_relabeling(self) -> None:
+        rng = random.Random(5)
+        for case in FIXTURES["coverage_cases"]:
+            profile = PROFILES[case["profile"]]
+            want = _coverage_shape(assemble_segments(profile, case["scan_request"], case["pages"], case["archive_height"]))
+            for _ in range(12):
+                pages = self.relabel(case["pages"], rng)
+                rng.shuffle(pages)
+                got = _coverage_shape(assemble_segments(profile, case["scan_request"], pages, case["archive_height"]))
+                self.assertEqual(got, want, case["id"])
+
+    def test_random_pages_keep_only_pages_that_agree_and_do_not_depend_on_ids(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        rng = random.Random(23)
+        request = {"from_block": 100, "to_block_exclusive": 160}
+        base_ts = epoch("2026-09-25T10:00:00Z")
+
+        def block_ts(b: int) -> int:
+            return base_ts + (b - 100) * 7
+
+        def block_hash(b: int) -> str:
+            return "0x" + format(0xabc000 + b, "064x")
+
+        def page(pid: str, lo: int, hi: int) -> dict:
+            return {"page_id": pid, "from_block": lo, "next_block": hi, "sha256": format(lo * 1000 + hi, "064x"),
+                    "first_block_timestamp": block_ts(lo), "last_block_timestamp": block_ts(hi - 1),
+                    "first_parent_hash": block_hash(lo - 1), "last_block_hash": block_hash(hi - 1)}
+
+        forks = 0
+        for draw in range(600):
+            cuts = sorted(rng.sample(range(101, 159), rng.randrange(1, 6)))
+            edges = [100] + cuts + [160]
+            pages = [page(f"p{i}", lo, hi) for i, (lo, hi) in enumerate(zip(edges, edges[1:]))]
+            for extra in range(rng.randrange(0, 3)):
+                lo = rng.randrange(100, 158)
+                pages.append(page(f"e{extra}", lo, rng.randrange(lo + 1, 161)))
+            victim = rng.randrange(len(pages))
+            fault = rng.choice(["none", "hash_end", "hash_start", "time_first", "time_last"])
+            if fault == "hash_end":
+                pages[victim]["last_block_hash"] = "0x" + "ee" * 32
+            elif fault == "hash_start":
+                pages[victim]["first_parent_hash"] = "0x" + "ee" * 32
+            elif fault == "time_first":
+                pages[victim]["first_block_timestamp"] += rng.choice([-500, -3, 3, 500])
+            elif fault == "time_last":
+                pages[victim]["last_block_timestamp"] += rng.choice([-500, -3, 3, 500])
+            forks += fault != "none"
+            result = assemble_segments(profile, request, pages, 1_000_000)
+            kept = {pid for seg in result["segments"] for pid in seg["page_ids"]}
+            claims: dict = {}
+            for pg in pages:
+                if pg["page_id"] not in kept:
+                    continue
+                for block, ts, hash_ in ((pg["from_block"], pg["first_block_timestamp"], None),
+                                         (pg["next_block"] - 1, pg["last_block_timestamp"], pg["last_block_hash"]),
+                                         (pg["from_block"] - 1, None, pg["first_parent_hash"])):
+                    entry = claims.setdefault(block, {"ts": set(), "hash": set()})
+                    if ts is not None:
+                        entry["ts"].add(ts)
+                    if hash_ is not None:
+                        entry["hash"].add(hash_)
+            for entry in claims.values():
+                self.assertLessEqual(len(entry["ts"]), 1, draw)
+                self.assertLessEqual(len(entry["hash"]), 1, draw)
+            ordered = [(b, next(iter(e["ts"]))) for b, e in sorted(claims.items()) if e["ts"]]
+            self.assertEqual([t for _, t in ordered], sorted(t for _, t in ordered), draw)
+            relabeled = self.relabel(pages, rng)
+            rng.shuffle(relabeled)
+            self.assertEqual(_coverage_shape(assemble_segments(profile, request, relabeled, 1_000_000)),
+                             _coverage_shape(result), draw)
+        self.assertGreater(forks, 300)
+
+
 class Buckets(unittest.TestCase):
     def run_case(self, case: dict, logs: list | None = None) -> list[dict]:
         profile = PROFILES[case["profile"]]

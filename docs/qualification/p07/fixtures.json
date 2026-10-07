@@ -2682,6 +2682,7 @@
     "segments": [],
     "break_codes": [
      "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES",
      "CHAINED_TO_DROPPED_PAGE"
     ]
    },
@@ -3020,32 +3021,14 @@
     }
    ],
    "expect": {
-    "segments": [
-     {
-      "first_block": 100,
-      "end_block_exclusive": 104,
-      "first_ts": 1790330398,
-      "last_ts": 1790330400,
-      "page_ids": [
-       "p1"
-      ]
-     },
-     {
-      "first_block": 108,
-      "end_block_exclusive": 111,
-      "first_ts": 1790330999,
-      "last_ts": 1790331120,
-      "page_ids": [
-       "p3"
-      ]
-     }
-    ],
+    "segments": [],
     "break_codes": [
      "TIMESTAMP_ORDER",
-     "BLOCK_GAP"
+     "TIMESTAMP_ORDER",
+     "CHAINED_TO_DROPPED_PAGE"
     ]
    },
-   "note": "Block times cannot fall from page to page."
+   "note": "Block times cannot fall from page to page. Pages p1 and p2 contradict each other. Page p3 chains to p2."
   },
   {
    "id": "C08-page-ends-before-it-starts",
@@ -3087,32 +3070,14 @@
     }
    ],
    "expect": {
-    "segments": [
-     {
-      "first_block": 100,
-      "end_block_exclusive": 104,
-      "first_ts": 1790330398,
-      "last_ts": 1790330400,
-      "page_ids": [
-       "p1"
-      ]
-     },
-     {
-      "first_block": 108,
-      "end_block_exclusive": 111,
-      "first_ts": 1790330999,
-      "last_ts": 1790331120,
-      "page_ids": [
-       "p3"
-      ]
-     }
-    ],
+    "segments": [],
     "break_codes": [
      "TIMESTAMP_ORDER",
-     "BLOCK_GAP"
+     "TIMESTAMP_ORDER",
+     "CHAINED_TO_DROPPED_PAGE"
     ]
    },
-   "note": "A page whose last block is earlier than its first."
+   "note": "A page whose last block is earlier than its first contradicts every earlier block time. Page p3 chains to it."
   },
   {
    "id": "C11-chain-of-two-pages-after-a-mismatch",
@@ -3166,6 +3131,7 @@
    "expect": {
     "segments": [],
     "break_codes": [
+     "REORG_BETWEEN_PAGES",
      "REORG_BETWEEN_PAGES",
      "CHAINED_TO_DROPPED_PAGE",
      "CHAINED_TO_DROPPED_PAGE"
@@ -3235,11 +3201,12 @@
      }
     ],
     "break_codes": [
-     "OVERLAP_CONFLICT",
-     "CHAINED_TO_DROPPED_PAGE"
+     "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES"
     ]
    },
-   "note": "Two pages claim blocks 104 to 107 and end on different hashes. Neither can be trusted. Page p3 chained to one of them."
+   "note": "Two pages claim blocks 104 to 107 and end on different hashes for block 107. Page p3 also names a hash for block 107, so all three pages that speak about that block are dropped."
   },
   {
    "id": "C13-overlapping-page-with-another-hash-sorts-before",
@@ -3303,8 +3270,9 @@
      }
     ],
     "break_codes": [
-     "OVERLAP_CONFLICT",
-     "CHAINED_TO_DROPPED_PAGE"
+     "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES"
     ]
    },
    "note": "Same pages as the case before with another id. The result must not depend on the id."
@@ -3359,6 +3327,112 @@
     }
    ],
    "expect": {
+    "segments": [],
+    "break_codes": [
+     "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES",
+     "CHAINED_TO_DROPPED_PAGE"
+    ]
+   },
+   "note": "Same blocks and same last hash, but p2c names another parent for block 103. Pages p1, p2 and p2c all speak about block 103, so all are dropped. Page p3 chains to p2."
+  },
+  {
+   "id": "C16-three-pages-over-one-range",
+   "profile": "SYN_Q0",
+   "scan_request": {
+    "from_block": 100,
+    "to_block_exclusive": 111
+   },
+   "archive_height": 1000000,
+   "pages": [
+    {
+     "page_id": "pa",
+     "from_block": 100,
+     "next_block": 111,
+     "sha256": "9513229d435978263d82902c59d4e0fb86c941a9bf09b605cd8a6643f40149a8",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790331120,
+     "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "page_id": "pb",
+     "from_block": 100,
+     "next_block": 111,
+     "sha256": "3315f44da4a7aaaf8d84382c7583233f697787f5871294ed49cd41207f7375a0",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790331120,
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "page_id": "pc",
+     "from_block": 100,
+     "next_block": 111,
+     "sha256": "d8463bd3ba4b10e5916f65fa7b0c1f9f91f67ca40cc25b48810fb2f5a3340488",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790331120,
+     "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    }
+   ],
+   "expect": {
+    "segments": [],
+    "break_codes": [
+     "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES",
+     "REORG_BETWEEN_PAGES"
+    ]
+   },
+   "note": "Two pages say one thing about block 110 and one says another. All three are dropped in every id order."
+  },
+  {
+   "id": "C17-another-time-for-the-same-block",
+   "profile": "SYN_Q0",
+   "scan_request": {
+    "from_block": 100,
+    "to_block_exclusive": 111
+   },
+   "archive_height": 1000000,
+   "pages": [
+    {
+     "page_id": "p1",
+     "from_block": 100,
+     "next_block": 104,
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790330400,
+     "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "page_id": "p2",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "page_id": "p3",
+     "from_block": 108,
+     "next_block": 111,
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
+     "first_block_timestamp": 1790330999,
+     "last_block_timestamp": 1790331120,
+     "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+     "last_block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+     "page_id": "p4",
+     "from_block": 107,
+     "next_block": 110,
+     "sha256": "ab71fc4c8a1c4d62b9202b36ee7c07dd398a0907a37037bd8c3959d6af573608",
+     "first_block_timestamp": 1790330650,
+     "last_block_timestamp": 1790331000,
+     "last_block_hash": "0x4444444444444444444444444444444444444444444444444444444444444444"
+    }
+   ],
+   "expect": {
     "segments": [
      {
       "first_block": 100,
@@ -3371,11 +3445,12 @@
      }
     ],
     "break_codes": [
-     "OVERLAP_CONFLICT",
+     "TIMESTAMP_ORDER",
+     "TIMESTAMP_ORDER",
      "CHAINED_TO_DROPPED_PAGE"
     ]
    },
-   "note": "Same blocks and same last hash, but the two pages start from different parents. That alone is a fork signal."
+   "note": "Page p4 gives block 107 a time 50 seconds before page p2 does."
   },
   {
    "id": "C14-identical-page-fetched-twice",
@@ -5459,6 +5534,111 @@
     ]
    },
    "note": "Same boundary rule for an unreadable record."
+  },
+  {
+   "id": "K20-unreadable-record-in-a-block-with-a-known-time",
+   "profile": "SYN_Q0",
+   "coverage_case": "C01-three-pages-tile-the-scan",
+   "window": {
+    "start_utc": "2026-09-25T09:55:00Z",
+    "end_utc": "2026-09-25T10:15:00Z"
+   },
+   "logs": [
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002dc6c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 101,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100065",
+     "block_timestamp": "1790330500",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a102774",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+     "block_number": 101,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100065",
+     "block_timestamp": "1790330760",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a102774",
+     "transaction_index": 0,
+     "log_index": 1
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x000000000000000000000000000000000000000000000000000000000030d400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 103,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100067",
+     "block_timestamp": "1790330800",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a10283c",
+     "transaction_index": 0,
+     "log_index": 0
+    }
+   ],
+   "expect": {
+    "buckets": [
+     {
+      "start": "2026-09-25T09:55:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:00:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "UNSUPPORTED_EVENT_IN_BUCKET:BOTH_INPUTS"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:05:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "UNSUPPORTED_EVENT_IN_BUCKET:BOTH_INPUTS"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:10:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     }
+    ]
+   },
+   "note": "Block 101 has a qualified trade at 10:01:40. Every record in that block has that time. The record claims 10:06:00."
   },
   {
    "id": "K10-trade-from-an-unscanned-block",
@@ -10354,6 +10534,53 @@
     "overall": "UNRESOLVED"
    },
    "note": "One trade has one side."
+  },
+  {
+   "id": "Q71-one-side-from-one-trade",
+   "set": [
+    [
+     "observations",
+     "ingest",
+     "trades",
+     1
+    ],
+    [
+     "observations",
+     "ingest",
+     "pool_sides",
+     [
+      "QUOTE_IN_BASE_OUT"
+     ]
+    ],
+    [
+     "observations",
+     "corroboration",
+     {
+      "class": "COMPLETE",
+      "provider": "QUICKNODE_JSON_RPC",
+      "sample_size": 1,
+      "population_size": 1,
+      "mismatches": 0
+     }
+    ],
+    [
+     "observations",
+     "bucket_status_counts",
+     {
+      "COMPLETE_OCCUPIED": 1,
+      "COMPLETE_EMPTY": 11,
+      "INCOMPLETE": 0,
+      "UNQUALIFIED": 0
+     }
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "EVENT_AND_AMOUNT_MEANING": "LIMITED"
+    },
+    "overall": "LIMITED"
+   },
+   "note": "One trade shows one side. That is a limit, not a failure."
   },
   {
    "id": "Q48-population-larger-than-trades-is-fine",
