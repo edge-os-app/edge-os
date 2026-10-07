@@ -149,7 +149,7 @@ class CheckedSendTests(unittest.TestCase):
             "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
             "⏸ manual mode on · ← for agents"
         ))
-        self.assertFalse(_has_partial_input("❯ Try …\n? for shortcuts"))
+        self.assertFalse(_has_partial_input("❯ Try …\n\n? for shortcuts"))
 
     def test_observed_claude_fix_lint_placeholder_is_idle_but_added_text_is_partial(self):
         footer = (
@@ -168,6 +168,7 @@ class CheckedSendTests(unittest.TestCase):
                "load the smux skill to reply] " + self.request["text"])
         capture = (
             "› " + own + "\n"
+            "\n"
             "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
             "← for agents · ? for shortcuts\n"
             "+ Show details"
@@ -203,6 +204,103 @@ class CheckedSendTests(unittest.TestCase):
             "  ⏸ manual mode on"
         )
         self.assertTrue(_has_active_draft(capture, "%9", text))
+
+    def test_footer_looking_composer_suffix_stays_visible_above_native_boundary(self):
+        text = "Reply only ACK-footer-boundary. Do not run tools."
+        own_header = (
+            "[tmux-bridge from:claude pane:%9 at:work:0.1 — "
+            "load the smux skill to reply] "
+        )
+        separator = "─" * 120
+        claude_footer = (
+            separator + "\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.19 session / $0.00 today\n"
+            "⏸ manual mode on"
+        )
+        for suffix in (
+            "  ⏸ manual mode on",
+            "  GPT-UNKNOWN · foreign unsent addition",
+            "  🤖 unknown | 💰 foreign unsent addition",
+        ):
+            with self.subTest(suffix=suffix):
+                capture = "❯ " + own_header + text + "\n" + suffix + "\n" + claude_footer
+                self.assertFalse(_has_active_draft(capture, "%9", text))
+                self.assertTrue(_has_partial_input(capture))
+
+        empty_with_foreign = "❯\n  🤖 unknown | 💰 foreign unsent addition\n" + claude_footer
+        self.assertTrue(_has_partial_input(empty_with_foreign))
+
+    def test_codex_blank_boundary_keeps_footer_and_foreign_rows_separate(self):
+        own = (
+            "[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+            "load the smux skill to reply] "
+        )
+        footer = (
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts\n"
+            "+ Show details"
+        )
+        clean = "› " + own + "fixture text\n\n" + footer
+        self.assertTrue(_has_active_draft(clean, "%1", "fixture text"))
+        self.assertFalse(_has_partial_input("› Ask Codex to do anything\n\n" + footer))
+        foreign = "› " + own + "fixture text\n  GPT-UNKNOWN · foreign unsent addition\n\n" + footer
+        self.assertFalse(_has_active_draft(foreign, "%1", "fixture text"))
+        self.assertTrue(_has_partial_input(foreign))
+        unanchored = "› " + own + "fixture text\nGPT-UNKNOWN · foreign unsent addition"
+        self.assertFalse(_has_active_draft(unanchored, "%1", "fixture text"))
+        self.assertTrue(_has_partial_input(unanchored))
+        short_separator = (
+            "❯ " + own + "fixture text\n  ⏸ manual mode on\n─\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session"
+        )
+        self.assertFalse(_has_active_draft(short_separator, "%1", "fixture text"))
+        self.assertTrue(_has_partial_input(short_separator))
+        unanchored_empty = "› Ask Codex to do anything\n? for shortcuts"
+        self.assertTrue(_has_partial_input(unanchored_empty))
+
+    def test_footer_looking_suffix_blocks_fresh_send_and_typed_recovery(self):
+        own_header = (
+            "[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+            "load the smux skill to reply] "
+        )
+        separator = "─" * 120
+        footer = separator + "\nGPT-6.1-Sol high · ~/repo · lane-3 · Main [default]"
+        suffixes = (
+            "  ⏸ manual mode on",
+            "  GPT-UNKNOWN · foreign unsent addition",
+            "  🤖 unknown | 💰 foreign unsent addition",
+        )
+        for index, suffix in enumerate(suffixes):
+            with self.subTest(stage="fresh", suffix=suffix):
+                self.request["event_id"] = f"footer-fresh-{index}"
+
+                class ForeignAfterType(FakeBridge):
+                    def message(inner, target, text):
+                        inner.calls.append(("message", target, text))
+                        inner.capture = "› " + own_header + text + "\n" + suffix + "\n" + footer
+
+                initial = "› Ask Codex to do anything\n\n" + footer
+                self.bridge = ForeignAfterType(capture=initial)
+                self.request["preflight_sha256"] = hashlib.sha256(initial.encode()).hexdigest()
+                result = self.send()
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertEqual(sum(call[0] == "enter" for call in self.bridge.calls), 0)
+                self.assertIn(suffix, self.bridge.capture)
+
+            with self.subTest(stage="typed-recovery", suffix=suffix):
+                self.request["event_id"] = f"footer-recovery-{index}"
+                capture = "› " + own_header + self.request["text"] + "\n" + suffix + "\n" + footer
+                self.bridge = FakeBridge(capture=capture)
+                self.request["preflight_sha256"] = hashlib.sha256(capture.encode()).hexdigest()
+                self.store.put_record({
+                    **self.request,
+                    "status": "TYPED",
+                    "typed_sha256": hashlib.sha256(capture.encode()).hexdigest(),
+                })
+                result = self.send()
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertFalse(any(call[0] in {"message", "enter"} for call in self.bridge.calls))
+                self.assertIn(suffix, self.bridge.capture)
 
     def test_claude_native_split_plugin_quota_footer_and_foreign_input(self):
         text = "Reply only ACK-r14-footer. Do not run tools."
@@ -247,6 +345,7 @@ class CheckedSendTests(unittest.TestCase):
         header, body = own.split(" review ", 1)
         wrapped = (
             "› " + header + " review\n" + body + "\n"
+            "\n"
             "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
             "← for agents · ? for shortcuts\n"
             "+ Show details"
@@ -260,7 +359,7 @@ class CheckedSendTests(unittest.TestCase):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
                "load the smux skill to reply] " + self.request["text"])
         offset = own.index("candidate") + len("candi")
-        wrapped = "› " + own[:offset] + "\n" + own[offset:] + "\n+ Show details"
+        wrapped = "› " + own[:offset] + "\n" + own[offset:] + "\n\n+ Show details"
         self.assertTrue(_has_active_draft(wrapped, "%1", self.request["text"]))
 
     def test_native_claude_pointer_capture_reconstructs_mixed_word_wraps(self):

@@ -230,7 +230,7 @@ def _message_line(line: str, sender: str, text: str) -> bool:
 def _is_native_footer(line: str) -> bool:
     line = line.strip()
     return bool(
-        line and set(line) == {"─"}
+        len(line) >= 60 and set(line) == {"─"}
         or re.match(r"^(?:GPT-[^·]+|Claude [^·]+) · ", line)
         or re.match(r"^🤖 [^|]+ \| 💰 ", line)
         or re.match(r"^\[OMC#[^]]+\] -> .+ \| session:\S+$", line)
@@ -254,9 +254,19 @@ def _footer_start(lines: list[str]) -> int:
     while end and not lines[end - 1].strip():
         end -= 1
     start = end
-    while start and _is_native_footer(lines[start - 1]):
-        start -= 1
-    return start if start < end else len(lines)
+    while start:
+        previous = lines[start - 1].strip()
+        if len(previous) >= 60 and set(previous) == {"─"}:
+            return start - 1 if start < end else len(lines)
+        if _is_native_footer(lines[start - 1]):
+            start -= 1
+            continue
+        if not previous and start < end:
+            return start - 1
+        break
+    # Footer-shaped rows are chrome only when the capture includes a known
+    # structural boundary. Without one, keep them in the composer region.
+    return len(lines)
 
 
 def _input_region(capture: str) -> tuple[list[str], int, list[str]] | None:
