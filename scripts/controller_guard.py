@@ -417,7 +417,7 @@ def _valid_assignment(assignment: dict) -> bool:
                        or not isinstance(entry.get("status"), str) or entry["status"] not in
                        {"eligible", "pending", "in_progress", "complete"} for entry in work):
         return False
-    return any(entry["id"] == assignment["task_id"] for entry in work)
+    return all(entry["id"] == assignment["task_id"] for entry in work)
 
 
 def approve_assignment(state_file: Path, assignment: dict) -> dict:

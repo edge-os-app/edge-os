@@ -769,6 +769,18 @@ class SessionStartTests(unittest.TestCase):
         self.assertEqual(self.assign({**self.assignment, "approved": False})[0], 2)
         self.assertEqual(self.assign({**self.assignment, "task_id": "T-2"})[0], 2)
 
+    def test_assignment_with_foreign_task_obligation_is_rejected(self):
+        mixed = {
+            **self.assignment,
+            "approved_work": [
+                {"id": "T-1", "status": "complete"},
+                {"id": "T-old", "status": "pending"},
+            ],
+        }
+        self.assertEqual(self.assign(mixed)[0], 2)
+        self.assertEqual(self.start()[1], {})
+        self.assertFalse((self.state_root / "bindings.json").exists())
+
     def test_stale_assignment_cannot_register(self):
         self.assign(now=1000)
         self.assertEqual(self.start(now=1901)[1], {})

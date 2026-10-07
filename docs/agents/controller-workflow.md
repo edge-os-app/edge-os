@@ -31,7 +31,7 @@ The controller owns the pre-dispatch reset. The worker and gate do not clear the
 
 For CTRL-BIND-L3-01, the controller's recorded fresh activation, exact assignment, base, and task packet are the implementation bootstrap. The receipt produced by this change is acceptance evidence, not a prerequisite for implementing it. This narrow exception does not qualify the active worker session or permit managed task dispatch without a matching receipt. Future managed assignments require that receipt before the task packet is sent.
 
-Before each new ticket, the controller prepares an approved local binding assignment for the exact host, role, pane, worktree, reports, task, and approved work. Use the same state root as `bind`, `send`, and the Stop hook. The assignment expires after 15 minutes.
+Before each new ticket, the controller prepares an approved local binding assignment for the exact host, role, pane, worktree, reports, task, and approved work for that task only. Use the same state root as `bind`, `send`, and the Stop hook. The assignment expires after 15 minutes.
 
 The controller then checks that each destination is idle and draft-free, enters native `/clear` through keys, and reads once to confirm the reset. After the SessionStart hook returns, the controller verifies the receipt with `controller_guard.py receipt`. The receipt must match the new host session, pane, worktree, assignment ID, task, and assignment fingerprint. Do not send task activation until this check passes. An absent or mismatched receipt blocks dispatch.
 

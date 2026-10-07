@@ -43,7 +43,7 @@ The helper requires operator preflight confirmation because terminal captures do
 
 ## SessionStart binding
 
-The controller prepares one approved assignment in the same private state root used by `bind`, `send`, and the Stop hook. The assignment names the host, role, task, exact pane and worktree, required reports, and approved work. It expires after 15 minutes and cannot enroll a second session after use.
+The controller prepares one approved assignment in the same private state root used by `bind`, `send`, and the Stop hook. The assignment names the host, role, task, exact pane and worktree, required reports, and approved work for that task only. It expires after 15 minutes and cannot enroll a second session after use.
 
 ~~~json
 {
