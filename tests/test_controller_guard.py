@@ -661,6 +661,198 @@ class StopGuardTests(unittest.TestCase):
         self.assertEqual(registered["pane_id"], "%7")
 
 
+class SessionStartTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.state_root = self.root / "state"
+        self.assignment = {
+            "approved": True,
+            "assignment_id": "dispatch-1",
+            "host": "codex",
+            "role": "worker",
+            "task_id": "T-1",
+            "pane_id": "%5",
+            "cwd": str(self.root),
+            "required_reports": ["RESULT.md"],
+            "approved_work": [{"id": "T-1", "status": "in_progress"}],
+        }
+        self.event = {
+            "hook_event_name": "SessionStart",
+            "session_id": "s1",
+            "cwd": str(self.root),
+            "source": "clear",
+            "transcript_path": "/private/transcript.jsonl",
+        }
+
+    def run_cli(self, command, host="codex", payload=None, pane="%5", now=None):
+        output = io.StringIO()
+        patches = [patch("sys.stdin", io.StringIO(json.dumps(payload or {}))),
+                   contextlib.redirect_stdout(output)]
+        if command == "session-start":
+            patches.append(patch("scripts.controller_guard.TmuxBridge.id", return_value=pane))
+        if now is not None:
+            patches.append(patch("scripts.controller_guard.time.time", return_value=now))
+        with contextlib.ExitStack() as stack:
+            for context in patches:
+                stack.enter_context(context)
+            result = main(["--state-root", str(self.state_root), command, host])
+        return result, json.loads(output.getvalue()) if output.getvalue() else {}
+
+    def assign(self, assignment=None, now=1000, host="codex"):
+        return self.run_cli("assign", host=host, payload=assignment or self.assignment, now=now)
+
+    def start(self, event=None, host="codex", pane="%5", now=1001):
+        return self.run_cli("session-start", host=host, payload=event or self.event, pane=pane, now=now)
+
+    def state(self):
+        return json.loads((self.state_root / "bindings.json").read_text())
+
+    def receipt(self, host="codex", session_id="s1", assignment_id="dispatch-1"):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = main(["--state-root", str(self.state_root), "receipt", host, session_id, assignment_id])
+        return code, json.loads(output.getvalue())
+
+    def test_approved_assignment_registers_native_identity_and_matching_receipt(self):
+        self.assertEqual(self.assign()[0], 0)
+        code, receipt = self.start()
+        self.assertEqual(code, 0)
+        self.assertIn("hookSpecificOutput", receipt)
+        code, receipt = self.receipt()
+        self.assertEqual(code, 0)
+        self.assertEqual((receipt["host"], receipt["session_id"], receipt["agent_id"]),
+                         ("codex", "s1", "codex:s1"))
+        self.assertEqual((receipt["pane_id"], receipt["task_id"], receipt["assignment_id"]),
+                         ("%5", "T-1", "dispatch-1"))
+        self.assertEqual(len(receipt["assignment_sha256"]), 64)
+        self.assertNotIn("transcript", json.dumps(receipt))
+        self.assertEqual(self.state()["bindings"][0]["status"], "ACTIVE")
+        self.assertEqual(self.state()["receipts"][0], receipt)
+        self.assertNotIn("transcript_path", json.dumps(self.state()))
+
+    def test_receipt_verification_rejects_identity_or_fingerprint_tampering(self):
+        self.assign()
+        self.start()
+        state_path = self.state_root / "bindings.json"
+        original = self.state()
+        for field, value in (("role", "gate"), ("assignment_sha256", "0" * 64)):
+            with self.subTest(field=field):
+                state = json.loads(json.dumps(original))
+                state["receipts"][0][field] = value
+                state_path.write_text(json.dumps(state))
+                code, result = self.receipt()
+                self.assertEqual(code, 1)
+                self.assertEqual(result, {"registered": False})
+        state_path.write_text(json.dumps(original))
+
+    def test_claude_session_start_uses_native_session_identity(self):
+        self.assign({**self.assignment, "host": "claude"}, host="claude")
+        event = {**self.event, "session_id": "claude-session"}
+        code, output = self.start(event, host="claude")
+        self.assertEqual(code, 0)
+        self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        code, receipt = self.receipt(host="claude", session_id="claude-session")
+        self.assertEqual(code, 0)
+        self.assertEqual((receipt["host"], receipt["session_id"], receipt["task_id"]),
+                         ("claude", "claude-session", "T-1"))
+
+    def test_missing_foreign_and_malformed_assignments_do_not_enroll(self):
+        self.assertEqual(self.start()[1], {})
+        self.assign()
+        foreign_cwd = {**self.event, "cwd": str(self.root / "foreign")}
+        self.assertEqual(self.start(foreign_cwd)[1], {})
+        self.assertEqual(self.start(pane="%9")[1], {})
+        self.assertEqual(self.start(host="claude")[1], {})
+        self.assertEqual(self.state()["bindings"], [])
+        self.assertEqual(self.assign({**self.assignment, "approved": False})[0], 2)
+        self.assertEqual(self.assign({**self.assignment, "task_id": "T-2"})[0], 2)
+
+    def test_stale_assignment_cannot_register(self):
+        self.assign(now=1000)
+        self.assertEqual(self.start(now=1901)[1], {})
+        self.assertEqual(self.state()["bindings"], [])
+        self.assign({**self.assignment, "assignment_id": "dispatch-fresh"}, now=1902)
+        self.assertTrue(self.start(now=1903)[1])
+
+    def test_future_assignment_timestamp_cannot_register(self):
+        self.assign(now=1000)
+        state_path = self.state_root / "bindings.json"
+        state = self.state()
+        state["assignment"]["issued_at"] = 1002
+        state_path.write_text(json.dumps(state))
+        self.assertEqual(self.start(now=1001)[1], {})
+        self.assertEqual(self.state()["bindings"], [])
+
+    def test_duplicate_start_and_resume_preserve_same_ticket_state(self):
+        self.assign()
+        self.start()
+        _, original = self.receipt()
+        state = self.state()
+        state["bindings"][0]["status"] = "BLOCKED"
+        state["bindings"][0]["approved_work"][0]["status"] = "complete"
+        state["bindings"][0]["review_history"] = ["A:REVISE", "B:PASS"]
+        state["bindings"][0]["gate_verdicts"] = 2
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+        self.start()
+        _, duplicate = self.receipt()
+        self.assertEqual(duplicate, original)
+        for source in ("resume", "compact", "fork"):
+            with self.subTest(source=source):
+                self.start({**self.event, "source": source})
+                _, receipt = self.receipt()
+                self.assertEqual(receipt, original)
+        after = self.state()
+        self.assertEqual(len(after["bindings"]), 1)
+        self.assertEqual(after["bindings"][0]["status"], "BLOCKED")
+        self.assertEqual(after["bindings"][0]["review_history"], ["A:REVISE", "B:PASS"])
+        self.assertEqual(after["bindings"][0]["gate_verdicts"], 2)
+        self.assertEqual(len(after["receipts"]), 1)
+
+    def test_clear_with_new_session_registers_new_task_without_old_obligations(self):
+        self.assign()
+        self.start()
+        self.assertEqual(self.start({**self.event, "session_id": "s2"})[1], {})
+        next_assignment = {
+            **self.assignment,
+            "assignment_id": "dispatch-2",
+            "task_id": "T-2",
+            "required_reports": ["NEXT.md"],
+            "approved_work": [{"id": "T-2", "status": "pending"}],
+        }
+        self.assign(next_assignment, now=1002)
+        next_event = {**self.event, "session_id": "s2"}
+        self.start(next_event, now=1003)
+        _, receipt = self.receipt(session_id="s2", assignment_id="dispatch-2")
+        self.assertEqual(receipt["task_id"], "T-2")
+        state = self.state()
+        self.assertEqual([binding["approved_work"][0]["id"] for binding in state["bindings"]], ["T-1", "T-2"])
+        self.assertEqual(state["bindings"][0]["required_reports"], ["RESULT.md"])
+        self.assertEqual(state["bindings"][1]["required_reports"], ["NEXT.md"])
+
+    def test_gate_assignment_starts_in_awaiting_event(self):
+        self.assign({**self.assignment, "role": "gate", "approved_work": [{"id": "T-1", "status": "pending"}]})
+        self.start()
+        self.assertEqual(self.state()["bindings"][0]["status"], "AWAITING_EVENT")
+        code, output = self.run_cli("hook", payload=self.event)
+        self.assertEqual(code, 0)
+        self.assertEqual(output, {})
+
+    def test_session_start_receipt_and_stop_hook_share_state_root(self):
+        self.assign()
+        self.start()
+        hook_payload = {"session_id": "s1", "cwd": str(self.root), "stop_hook_active": False}
+        code, output = self.run_cli("hook", payload=hook_payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(output["decision"], "block")
+        other_root = self.root / "other-state"
+        neutral = io.StringIO()
+        with patch("sys.stdin", io.StringIO(json.dumps(hook_payload))), contextlib.redirect_stdout(neutral):
+            self.assertEqual(main(["--state-root", str(other_root), "hook", "codex"]), 0)
+        self.assertEqual(json.loads(neutral.getvalue()), {})
+
+
 @unittest.skipUnless(os.environ.get("RUN_LIVE_TMUX") == "1", "set RUN_LIVE_TMUX=1 to create an isolated tmux fixture")
 class LiveBridgeTests(unittest.TestCase):
     def test_actual_bridge_submission_duplicate_and_draft_preservation(self):

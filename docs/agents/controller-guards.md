@@ -41,6 +41,63 @@ The record stores delivery status, capture hashes, and a SHA-256 message fingerp
 
 The helper requires operator preflight confirmation because terminal captures do not identify an idle Codex or Claude prompt with enough certainty across versions. If the capture is unknown, partial, busy, or contains any draft, do not confirm it. This is not unattended sending.
 
+## SessionStart binding
+
+The controller prepares one approved assignment in the same private state root used by `bind`, `send`, and the Stop hook. The assignment names the host, role, task, exact pane and worktree, required reports, and approved work. It expires after 15 minutes and cannot enroll a second session after use.
+
+~~~json
+{
+  "approved": true,
+  "assignment_id": "dispatch-2026-10-07-01",
+  "host": "codex",
+  "role": "worker",
+  "task_id": "CTRL-BIND-L3-01",
+  "pane_id": "%5",
+  "cwd": "/path/to/assigned/worktree",
+  "required_reports": [".scratch/controller-guard-binding/RESULT.md"],
+  "approved_work": [{"id": "CTRL-BIND-L3-01", "status": "in_progress"}]
+}
+~~~
+
+Prepare it before the controller clears the selected worker or gate session:
+
+~~~sh
+python3 scripts/controller_guard.py --state-root "$GUARD_STATE_ROOT" assign codex < assignment.json
+~~~
+
+For CTRL-BIND-L3-01, the controller's recorded fresh activation, exact assignment, base, and task packet are the implementation bootstrap. The receipt produced by this SessionStart adapter is acceptance evidence; requiring it before implementing the adapter would block the task on its own output. This exception does not qualify the worker's current session or permit ordinary managed dispatch without a matching receipt. Once this tooling is accepted and enabled, future managed assignments require a verified receipt before their task packet is sent.
+
+The native `SessionStart` hook reads the host's actual `session_id`, `cwd`, and lifecycle `source`. It gets the pane ID from `tmux-bridge id`. It registers only a fresh `startup` or `clear` event that matches the approved host, pane, and worktree. A worker starts `ACTIVE`. A gate starts `AWAITING_EVENT`.
+
+Resume, compaction, fork, and duplicate events return the existing receipt and leave task status, reports, review history, gate counts, and delivery records unchanged. A session with no approved assignment stays unbound. A mismatched, expired, consumed, or malformed assignment produces no receipt and cannot replace an existing binding.
+
+The hook writes a receipt to `bindings.json` and returns a small native SessionStart result. The controller must verify the receipt before it sends task activation:
+
+~~~sh
+python3 scripts/controller_guard.py --state-root "$GUARD_STATE_ROOT" receipt codex SESSION_ID ASSIGNMENT_ID
+~~~
+
+Check that the result matches the host, session, role, task, pane, worktree, assignment ID, and assignment SHA-256. A missing or mismatched receipt blocks dispatch. The hook grants no task, merge, provider, or financial authority.
+
+The committed Codex and Claude hook commands use the helper's project-scoped default state root. If you set `CONTROLLER_GUARD_STATE_ROOT`, use the same value for SessionStart, `bind`, `send`, `assign`, `receipt`, and Stop. Do not commit a machine-specific state path.
+
+## Native lane checklist
+
+- Trust the project and hook through the client's normal controls. Confirm the command in `/hooks`.
+- For Claude, start from the repository root and confirm `/hooks` lists the project's SessionStart and Stop commands. A subdirectory session that shows only plugin hooks has not loaded these project hooks.
+- Set `GUARD_STATE_ROOT` to a private temporary directory and use it for every command in the check. Prepare a complete assignment, then run `python3 scripts/controller_guard.py --state-root "$GUARD_STATE_ROOT" assign codex < assignment.json` (use `claude` for Claude). The command must return an assignment fingerprint.
+- In the selected trusted native session, enter `/clear` through the host UI. The SessionStart hook must report the host's new session and assignment fingerprint. Verify with `python3 scripts/controller_guard.py --state-root "$GUARD_STATE_ROOT" receipt codex SESSION_ID ASSIGNMENT_ID`. The receipt must match task, role, pane, worktree, and fingerprint before activation. Workers start `ACTIVE`; gates start `AWAITING_EVENT`.
+- For a missed-delivery check, set `HOST`, `SESSION_ID`, `PANE_ID`, and `TASK_ID` from the verified receipt, then add one synthetic row. This writes no message and presses no key:
+
+~~~sh
+python3 -c 'import os; from pathlib import Path; from scripts.controller_guard import GuardStore; host=os.environ["HOST"]; session=os.environ["SESSION_ID"]; pane=os.environ["PANE_ID"]; GuardStore(Path(os.environ["GUARD_STATE_ROOT"])/"delivery.sqlite3").put_record({"host":host,"session_id":session,"agent_id":host+":"+session,"task_id":os.environ["TASK_ID"],"event_id":"synthetic-missed","candidate":"fixture","sender":pane,"destination":pane,"status":"UNCONFIRMED"})'
+~~~
+
+The next inert native prompt must produce one continuation. Set the same binding to `AWAITING_EVENT` and update it with `python3 scripts/controller_guard.py --state-root "$GUARD_STATE_ROOT" update "$HOST" < gate-waiting.json`; the next Stop must return `{}`.
+- Prepare a second assignment with a new task and assignment ID, then repeat native `/clear` and receipt verification. The new session must have only the new task's obligations; the first session keeps its reports and delivery rows.
+- Resume or compact the second session. The receipt, status, reports, review history, and gate count must remain unchanged.
+- Repeat on Codex and Claude. Both use `session-start` and the same SessionStart result shape. Codex emits `additionalContext`; Claude must show the project's SessionStart and Stop commands in `/hooks`. Do not use trust-bypass flags. An unavailable client, trust prompt, or native input is a gap, not a pass.
+
 ## Stop guard binding
 
 The hook does nothing for a session with no binding. Register each session explicitly. The binding must include the host, provider session ID, derived agent ID, actual sender pane ID, exact working directory, lifecycle status, required report paths, and approved work. The helper gets pane_id from tmux-bridge id when omitted. Codex can use CODEX_SESSION_ID when session_id is omitted. Claude requires the session ID in the input object. cwd defaults to the current directory, but pass it explicitly when the session uses another checkout.

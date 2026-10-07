@@ -25,6 +25,24 @@ Panes named `edge-os-controller`, `edge-os-controller-gate`, `edge-os-worker-lan
 
 Only the controller prepares a persistent lane for its next ticket. Check cleanliness and the previous candidate's integration state first. Never reset a lane, remove a worktree or rebase active work as routine cleanup. If its base becomes stale, pause and resolve the integration plan before changing it.
 
+## Fresh-session activation
+
+The controller owns the pre-dispatch reset. The worker and gate do not clear their own sessions after they receive an activation packet.
+
+For CTRL-BIND-L3-01, the controller's recorded fresh activation, exact assignment, base, and task packet are the implementation bootstrap. The receipt produced by this change is acceptance evidence, not a prerequisite for implementing it. This narrow exception does not qualify the active worker session or permit managed task dispatch without a matching receipt. Future managed assignments require that receipt before the task packet is sent.
+
+Before each new ticket, the controller prepares an approved local binding assignment for the exact host, role, pane, worktree, reports, task, and approved work. Use the same state root as `bind`, `send`, and the Stop hook. The assignment expires after 15 minutes.
+
+The controller then checks that each destination is idle and draft-free, enters native `/clear` through keys, and reads once to confirm the reset. After the SessionStart hook returns, the controller verifies the receipt with `controller_guard.py receipt`. The receipt must match the new host session, pane, worktree, assignment ID, task, and assignment fingerprint. Do not send task activation until this check passes. An absent or mismatched receipt blocks dispatch.
+
+After the reset, confirm each client's actual host, model, effort, and fresh context. Send the complete task packet through Smux, with one pre-send read, one input check, one Enter, and one post-Enter submission check. Record the receipt and delivery evidence in the private lane ledger. A same-ticket repair does not require `/clear` and preserves all task and review state.
+
+## Controller-guard coverage
+
+The checked-send helper and Stop guard passed native checks on Codex CLI 0.160.1 and Claude Code 2.1.292 under normal project trust. That evidence covers those client setups. A hook affects only a trusted project session with a matching binding; an unbound session remains unaffected. This branch adds native SessionStart assignment binding and remains under review. The active worker session is still unqualified until it has its own matching receipt.
+
+These hooks do not wake a stopped client, press Enter, or provide unattended batch authority. Client crashes, host sleep, and exhausted subscriptions remain operational limits. Continue to use checked delivery and the assigned event-driven lane procedure.
+
 ## Task and review packets
 
 Each worker receives one accepted ticket, its observable result and exclusions, blockers and evidence, exact base SHA, branch/worktree, owned/shared changes, verification commands, required skills, actual model settings and review budget. Shared schemas, migrations, lockfiles and configuration cannot have concurrent owners. Start fewer workers when those dependencies prevent safe parallel work.
@@ -44,6 +62,7 @@ Read AGENTS.md, the current handoff, linked ADRs and these required inputs: <pat
 Read the applicable implementation-reference-map rows; missing mandatory input blocks that claim.
 State briefly what changes, what stays unchanged and what observable result proves completion.
 Use /implement and task-relevant skills <names>; use current Context7 docs and Exa where required.
+Verified SessionStart receipt: host <host>, session <session ID>, role <role>, pane <pane ID>, task <task ID>, assignment <SHA-256>.
 Owned changes: <surfaces>. Shared/forbidden changes: <surfaces>. Coordinate before crossing them.
 Implement the accepted success and failure behavior; use TDD at <agreed seams>.
 Run <actual tests and runtime recipe>; inspect <saved records and side effects>.
@@ -68,7 +87,9 @@ The controller schedules and integrates. The worker implements and commits. Revi
 7. Record each verdict with the exact candidate SHA. An earlier PASS never approves later edits.
 8. Send the internally reviewed candidate to the separate Codex gate. Record its independent verdict against that same candidate. The builder accepts and merges under the manual policy.
 
-Use at most three review/fix cycles for a dispatched unit unless the builder approves another budget. At the limit, report unresolved blockers and choose a scoped escalation, proposed narrowing or deferral. The builder must approve a product-scope change. A cycle limit cannot turn a failure into a PASS.
+Internal repair and review rounds have no numeric cap. Repeat in-scope repairs and two independent original reviews until both PASS on the same exact candidate. Preserve each round's reports and candidate identity. Ordinary findings stay in this worker loop.
+
+Only independent gate verdicts have a three-review limit. Record the gate counter as `1/3`, `2/3`, or `3/3`. At `1/3` or `2/3`, the gate returns blockers to the worker. At unresolved `3/3`, the gate reports the blockers and next decision to the controller. An internal round count does not consume a gate verdict or justify an extension.
 
 The worker owns its two native internal review contexts. The Codex gate reviews separately after their completion. One pane, one model or two sequential passes in the same context cannot replace two independent contexts. Do not repeat release-wide review for every small replacement.
 

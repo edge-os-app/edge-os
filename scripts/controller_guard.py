@@ -21,6 +21,9 @@ STATUSES = {"PREPARED", "TYPED", "SUBMITTED", "UNCONFIRMED", "BLOCKED"}
 ALLOW_STOP = {"AWAITING_EVENT", "BLOCKED", "BUDGET_EXHAUSTED", "APPROVAL_REQUIRED", "INTERRUPTED", "RUN_LIMIT", "COMPLETE"}
 OPEN_DELIVERIES = ("PREPARED", "TYPED", "UNCONFIRMED", "BLOCKED")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+# ponytail: fixed 15-minute approval window; refresh the explicit assignment if dispatch takes longer.
+ASSIGNMENT_TTL_SECONDS = 900
+SESSION_START_SOURCES = {"startup", "resume", "clear", "compact", "fork"}
 
 
 def digest(value: str) -> str:
@@ -334,10 +337,14 @@ def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.s
 
 def _state_read(path: Path) -> dict:
     if not path.exists():
-        return {"version": 1, "bindings": []}
+        return {"version": 1, "bindings": [], "assignment": None, "receipts": []}
     state = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(state, dict) or state.get("version") != 1 or not isinstance(state.get("bindings"), list):
         raise ValueError("state must contain version 1 and a bindings list")
+    state.setdefault("assignment", None)
+    state.setdefault("receipts", [])
+    if not isinstance(state["receipts"], list):
+        raise ValueError("state receipts must be a list")
     return state
 
 
@@ -361,6 +368,208 @@ def _atomic_json(path: Path, value: dict) -> None:
             os.unlink(temp_name)
 
 
+@contextlib.contextmanager
+def _state_lock(state_file: Path):
+    lock_path = state_file.with_name(state_file.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _assignment_digest(assignment: dict) -> str:
+    fields = ("approved", "assignment_id", "host", "role", "task_id", "pane_id", "cwd",
+              "required_reports", "approved_work", "issued_at")
+    identity = {key: assignment[key] for key in fields}
+    return digest(json.dumps(identity, sort_keys=True, separators=(",", ":")))
+
+
+def _valid_assignment(assignment: dict) -> bool:
+    required = ("assignment_id", "host", "role", "task_id", "pane_id", "cwd")
+    if assignment.get("approved") is not True or any(
+        not isinstance(assignment.get(key), str) or not assignment[key]
+        or any(char in assignment[key] for char in "\0\r\n")
+        for key in required
+    ):
+        return False
+    if (
+        assignment["host"] not in {"codex", "claude"}
+        or assignment["role"] not in {"worker", "gate"}
+        or not re.fullmatch(r"%[0-9]+", assignment["pane_id"])
+        or not Path(assignment["cwd"]).is_absolute()
+        or not isinstance(assignment.get("issued_at"), (int, float))
+        or isinstance(assignment["issued_at"], bool)
+    ):
+        return False
+    if not isinstance(assignment.get("required_reports"), list) or not isinstance(assignment.get("approved_work"), list):
+        return False
+    if any(not isinstance(path, str) or not path or any(char in path for char in "\0\r\n")
+           or Path(path).is_absolute() or ".." in Path(path).parts
+           for path in assignment["required_reports"]):
+        return False
+    work = assignment["approved_work"]
+    if not work or any(not isinstance(entry, dict) or set(entry) != {"id", "status"}
+                       or not isinstance(entry.get("id"), str)
+                       or not entry["id"] or any(char in entry["id"] for char in "\0\r\n")
+                       or not isinstance(entry.get("status"), str) or entry["status"] not in
+                       {"eligible", "pending", "in_progress", "complete"} for entry in work):
+        return False
+    return any(entry["id"] == assignment["task_id"] for entry in work)
+
+
+def approve_assignment(state_file: Path, assignment: dict) -> dict:
+    allowed = {"approved", "assignment_id", "host", "role", "task_id", "pane_id", "cwd",
+               "required_reports", "approved_work"}
+    if not isinstance(assignment, dict) or set(assignment) - allowed:
+        raise ValueError("assignment contains unsupported fields")
+    issued_at = time.time()
+    if not _valid_assignment({**assignment, "issued_at": issued_at}):
+        raise ValueError("assignment must explicitly approve a valid host, role, task, pane, cwd, reports, and approved work")
+    prepared = {**assignment, "cwd": str(Path(assignment["cwd"]).resolve()), "issued_at": issued_at}
+    if not _valid_assignment(prepared):
+        raise ValueError("assignment cwd must resolve to a valid local directory")
+    try:
+        if not Path(prepared["cwd"]).is_dir():
+            raise ValueError("assignment cwd must be an existing directory")
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise ValueError("assignment cwd must resolve to a valid local directory") from exc
+    with _state_lock(state_file):
+        state = _state_read(state_file)
+        current = state.get("assignment")
+        current_age = time.time() - current["issued_at"] if isinstance(current, dict) and _valid_assignment(current) else None
+        if (isinstance(current, dict) and not current.get("consumed_by") and current_age is not None
+                and 0 <= current_age < ASSIGNMENT_TTL_SECONDS):
+            raise ValueError("an unconsumed approved assignment already exists")
+        state["assignment"] = prepared
+        _atomic_json(state_file, state)
+    return {"approved": True, "assignment_id": prepared["assignment_id"],
+            "assignment_sha256": _assignment_digest(prepared)}
+
+
+def _receipt_matches(state: dict, host: str, session_id: str, cwd: str, pane_id: str) -> dict | None:
+    receipts = [r for r in state["receipts"] if isinstance(r, dict)
+                and r.get("host") == host and r.get("session_id") == session_id]
+    bindings = [b for b in state["bindings"] if isinstance(b, dict)
+                and b.get("host") == host and b.get("session_id") == session_id]
+    if len(receipts) != 1 or len(bindings) != 1:
+        return None
+    receipt, binding = receipts[0], bindings[0]
+    if (
+        receipt.get("registered") is not True
+        or receipt.get("host") != host
+        or receipt.get("session_id") != session_id
+        or receipt.get("agent_id") != f"{host}:{session_id}"
+        or receipt.get("pane_id") != pane_id
+        or binding.get("pane_id") != pane_id
+        or receipt.get("cwd") != cwd
+        or binding.get("cwd") != cwd
+        or not _valid_binding(binding, host, session_id)
+        or binding.get("role") not in {"worker", "gate"}
+        or not isinstance(binding.get("task_id"), str)
+        or not binding.get("task_id")
+        or not isinstance(binding.get("assignment_id"), str)
+        or not binding.get("assignment_id")
+        or not isinstance(binding.get("assignment_sha256"), str)
+        or not HASH_RE.fullmatch(binding["assignment_sha256"])
+        or receipt.get("role") != binding.get("role")
+        or receipt.get("task_id") != binding.get("task_id")
+        or receipt.get("assignment_sha256") != binding.get("assignment_sha256")
+        or not isinstance(receipt.get("assignment_sha256"), str)
+        or not HASH_RE.fullmatch(receipt["assignment_sha256"])
+        or receipt.get("assignment_id") != binding.get("assignment_id")
+        or receipt.get("source") not in {"startup", "clear"}
+        or not isinstance(receipt.get("registered_at"), (int, float))
+    ):
+        return None
+    return receipt
+
+
+def register_session_start(host: str, payload: dict, state_file: Path, bridge: TmuxBridge) -> dict | None:
+    session_id, cwd, source = payload.get("session_id"), payload.get("cwd"), payload.get("source")
+    if (host not in {"codex", "claude"} or payload.get("hook_event_name") != "SessionStart"
+            or not isinstance(session_id, str) or not session_id or any(char in session_id for char in "\0\r\n")
+            or not isinstance(cwd, str) or not cwd or any(char in cwd for char in "\0\r\n") or not Path(cwd).is_absolute()
+            or source not in SESSION_START_SOURCES):
+        return None
+    try:
+        cwd = str(Path(cwd).resolve())
+        if not Path(cwd).is_dir():
+            return None
+        pane_id = bridge.id()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not re.fullmatch(r"%[0-9]+", pane_id):
+        return None
+
+    with _state_lock(state_file):
+        state = _state_read(state_file)
+        existing = _receipt_matches(state, host, session_id, cwd, pane_id)
+        if existing:
+            return existing
+        if any(isinstance(b, dict) and b.get("host") == host and b.get("session_id") == session_id
+               for b in state["bindings"]):
+            return None
+        if source not in {"startup", "clear"}:
+            return None
+        assignment = state.get("assignment")
+        if not isinstance(assignment, dict) or not _valid_assignment(assignment):
+            return None
+        assignment_age = time.time() - assignment["issued_at"]
+        if (assignment.get("consumed_by") or assignment["host"] != host
+                or assignment["cwd"] != cwd or assignment["pane_id"] != pane_id
+                or not 0 <= assignment_age < ASSIGNMENT_TTL_SECONDS):
+            return None
+
+        assignment_sha256 = _assignment_digest(assignment)
+        binding = {
+            "host": host,
+            "session_id": session_id,
+            "agent_id": f"{host}:{session_id}",
+            "pane_id": pane_id,
+            "cwd": cwd,
+            "role": assignment["role"],
+            "task_id": assignment["task_id"],
+            "assignment_id": assignment["assignment_id"],
+            "assignment_sha256": assignment_sha256,
+            "status": "ACTIVE" if assignment["role"] == "worker" else "AWAITING_EVENT",
+            "required_reports": assignment["required_reports"],
+            "approved_work": assignment["approved_work"],
+        }
+        receipt = {
+            "registered": True,
+            "host": host,
+            "session_id": session_id,
+            "agent_id": binding["agent_id"],
+            "role": binding["role"],
+            "task_id": binding["task_id"],
+            "assignment_id": binding["assignment_id"],
+            "assignment_sha256": assignment_sha256,
+            "pane_id": pane_id,
+            "cwd": cwd,
+            "source": source,
+            "registered_at": time.time(),
+        }
+        state["bindings"].append(binding)
+        state["receipts"].append(receipt)
+        assignment["consumed_by"] = session_id
+        _atomic_json(state_file, state)
+        return receipt
+
+
+def verify_receipt(state_file: Path, host: str, session_id: str, assignment_id: str) -> dict | None:
+    state = _state_read(state_file)
+    matches = [r for r in state["receipts"] if isinstance(r, dict)
+               and r.get("host") == host and r.get("session_id") == session_id
+               and r.get("assignment_id") == assignment_id]
+    if len(matches) != 1:
+        return None
+    receipt = matches[0]
+    return receipt if _receipt_matches(state, host, session_id, receipt.get("cwd"), receipt.get("pane_id")) == receipt else None
+
+
 def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None:
     required = ("host", "session_id", "agent_id", "pane_id", "cwd", "status")
     if any(not isinstance(binding.get(k), str) or not binding[k] or "\0" in binding[k] for k in required):
@@ -377,26 +586,20 @@ def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None
         raise ValueError("required report paths must stay inside the bound cwd")
     if any(not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("status"), str) for w in binding["approved_work"]):
         raise ValueError("approved work entries require id and status")
-    lock_path = state_file.with_name(state_file.name + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with lock_path.open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            state = _state_read(state_file)
-            entries = state["bindings"]
-            index = next((i for i, old in enumerate(entries) if old.get("host") == binding["host"] and old.get("session_id") == binding["session_id"]), None)
-            if index is not None and not replace:
-                raise ValueError("session binding already exists; use update")
-            if index is None:
-                entries.append(binding)
-            else:
-                old = entries[index]
-                if old.get("agent_id") != binding["agent_id"] or old.get("pane_id") != binding["pane_id"] or old.get("cwd") != binding["cwd"]:
-                    raise ValueError("update cannot change the bound agent, pane, or cwd identity")
-                entries[index] = binding
-            _atomic_json(state_file, state)
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+    with _state_lock(state_file):
+        state = _state_read(state_file)
+        entries = state["bindings"]
+        index = next((i for i, old in enumerate(entries) if old.get("host") == binding["host"] and old.get("session_id") == binding["session_id"]), None)
+        if index is not None and not replace:
+            raise ValueError("session binding already exists; use update")
+        if index is None:
+            entries.append(binding)
+        else:
+            old = entries[index]
+            if old.get("agent_id") != binding["agent_id"] or old.get("pane_id") != binding["pane_id"] or old.get("cwd") != binding["cwd"]:
+                raise ValueError("update cannot change the bound agent, pane, or cwd identity")
+            entries[index] = binding
+        _atomic_json(state_file, state)
 
 
 def _valid_binding(binding: dict, host: str, session_id: str) -> bool:
@@ -524,6 +727,26 @@ def _hook(host: str, root: Path) -> int:
     return 0
 
 
+def _session_start(host: str, root: Path) -> int:
+    try:
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("hook input must be an object")
+        receipt = register_session_start(host, payload, _binding_path(root), TmuxBridge())
+    except Exception:
+        receipt = None
+    if receipt:
+        context = ("Controller guard binding registered: "
+                   f"host={host} session={receipt['session_id']} task={receipt['task_id']} "
+                   f"assignment_sha256={receipt['assignment_sha256']}")
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": context,
+        }}, separators=(",", ":")))
+    else:
+        print('{}')
+    return 0
+
+
 def preflight(destination_name: str, bridge: TmuxBridge) -> dict:
     sender = bridge.id()
     destination_id = bridge.resolve(destination_name)
@@ -545,6 +768,14 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     hook = commands.add_parser("hook")
     hook.add_argument("host", choices=("codex", "claude"))
+    session_start = commands.add_parser("session-start")
+    session_start.add_argument("host", choices=("codex", "claude"))
+    assign = commands.add_parser("assign")
+    assign.add_argument("host", choices=("codex", "claude"))
+    receipt = commands.add_parser("receipt")
+    receipt.add_argument("host", choices=("codex", "claude"))
+    receipt.add_argument("session_id")
+    receipt.add_argument("assignment_id")
     for name in ("bind", "update"):
         cmd = commands.add_parser(name)
         cmd.add_argument("host", choices=("codex", "claude"))
@@ -555,6 +786,29 @@ def main(argv: list[str] | None = None) -> int:
     root = args.state_root.expanduser().resolve()
     if args.command == "hook":
         return _hook(args.host, root)
+    if args.command == "session-start":
+        return _session_start(args.host, root)
+    if args.command == "assign":
+        try:
+            assignment = json.load(sys.stdin)
+            if not isinstance(assignment, dict) or assignment.get("host") != args.host:
+                raise ValueError("stdin assignment host must match command host")
+            print(json.dumps(approve_assignment(_binding_path(root), assignment), separators=(",", ":")))
+            return 0
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 2
+    if args.command == "receipt":
+        try:
+            found = verify_receipt(_binding_path(root), args.host, args.session_id, args.assignment_id)
+            if not found:
+                print(json.dumps({"registered": False}, separators=(",", ":")))
+                return 1
+            print(json.dumps(found, separators=(",", ":")))
+            return 0
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 2
     if args.command == "preflight":
         try:
             print(json.dumps(preflight(args.destination, TmuxBridge()), separators=(",", ":")))
