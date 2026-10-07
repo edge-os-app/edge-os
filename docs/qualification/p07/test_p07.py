@@ -721,6 +721,62 @@ class HeldOutRecordsNeverLeaveAFalseCompleteBucket(unittest.TestCase):
         self.assertGreater(checked, 150)
 
 
+class RoundTenRepairs(unittest.TestCase):
+    def test_records_seen_must_be_reported_as_a_count(self) -> None:
+        for junk in ("__missing__", None, "7", True, -1, [], {}):
+            with self.subTest(junk=junk):
+                evidence = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+                if junk == "__missing__":
+                    del evidence["ingest"]["records_seen"]
+                else:
+                    evidence["ingest"]["records_seen"] = junk
+                got = qualify(base_profile(), evidence)
+                history = got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]
+                self.assertEqual(history["verdict"], "UNRESOLVED")
+                self.assertIn("RECORDS_SEEN_NOT_REPORTED", {r["code"] for r in history["reasons"]})
+
+    def swap(self, block: int, ts: int, **over: object) -> dict:
+        log = copy.deepcopy(FIXTURES["decode_cases"][0]["log"])
+        log.update(block_number=block, block_hash="0x" + format(0xb0000 + block, "064x"),
+                   transaction_hash="0x" + format(0xa0000 + block, "064x"), transaction_index=0, log_index=0,
+                   block_timestamp=ts)
+        log.update(over)
+        return log
+
+    def test_a_trade_the_pages_contradict_spoils_the_bucket_another_segment_proves(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        base = epoch("2026-09-25T10:00:00Z")
+        segments = [
+            {"first_block": 1000, "end_block_exclusive": 1070, "first_ts": base, "last_ts": base + 1380, "page_ids": ["a"]},
+            {"first_block": 1090, "end_block_exclusive": 1160, "first_ts": base + 1800, "last_ts": base + 3180, "page_ids": ["b"]},
+        ]
+        window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T11:00:00Z"}
+        # Block 1030 lies in segment a (times up to base+1380) but the log claims a time inside segment b's range.
+        moved = self.swap(1030, base + 2400)
+        got = {b["start"]: b for b in bucketize(profile, ingest(profile, [moved]), segments, window)}
+        bucket = got["2026-09-25T10:40:00Z"]
+        self.assertEqual(bucket["status"], "UNQUALIFIED")
+        self.assertIn("TRADE_CONTRADICTS_PAGE_TIMES", bucket["reasons"])
+        found = reference_trade(profile, ingest(profile, [moved]), segments,
+                                {"start_utc": "2026-09-25T10:40:00Z", "end_utc": "2026-09-25T10:40:10Z"})
+        self.assertNotEqual(found["status"], "FOUND")
+
+    def test_same_range_pages_that_differ_only_in_an_optional_hash_do_not_depend_on_ids(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        base = epoch("2026-09-25T10:00:00Z")
+        page = {"from_block": 100, "next_block": 110, "sha256": "11" * 32, "first_block_timestamp": base - 10,
+                "last_block_timestamp": base + 600, "first_parent_hash": None}
+        wrong = self.swap(109, base + 600, block_hash="0x" + "cd" * 32)
+        for plain_id, hashed_id in (("a", "b"), ("b", "a")):
+            pages = [{**page, "page_id": plain_id},
+                     {**page, "page_id": hashed_id, "last_block_hash": "0x" + "ee" * 32}]
+            built = assemble_segments(profile, {"from_block": 100, "to_block_exclusive": 110}, pages, 1000)
+            window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
+            buckets = bucketize(profile, ingest(profile, [wrong]), built["segments"], window)
+            self.assertEqual([b["status"] for b in buckets if b["start"] == "2026-09-25T10:00:00Z"], ["UNQUALIFIED"],
+                             (plain_id, hashed_id))
+
+
 class FailClosed(unittest.TestCase):
     JUNK = (None, [], "x", 1, True, {}, 1.5)
 

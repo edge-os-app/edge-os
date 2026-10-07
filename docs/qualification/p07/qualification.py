@@ -469,6 +469,7 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
     dropped = _untrusted_pages(pages)
     segments: list[list[Mapping[str, Any]]] = []
     breaks: list[dict[str, Any]] = []
+    repeats: dict[int, list[Mapping[str, Any]]] = defaultdict(list)  # exact same-range repeats add their edge facts
     for i in order:
         page = pages[i]
         pid = page["page_id"]
@@ -481,6 +482,8 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
         elif page["next_block"] - 1 > last_final:
             breaks.append({"code": "NOT_FINAL_AT_COLLECTION", "page_id": pid})
         elif current is not None and page["from_block"] < end:
+            if page["from_block"] == current[-1]["from_block"] and page["next_block"] == end:
+                repeats[len(segments) - 1].append(page)
             breaks.append({"code": "OVERLAP", "page_id": pid})
         elif current is not None and page["from_block"] == end:
             current.append(page)
@@ -493,8 +496,8 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
             {"first_block": group[0]["from_block"], "end_block_exclusive": group[-1]["next_block"],
              "first_ts": group[0]["first_block_timestamp"], "last_ts": group[-1]["last_block_timestamp"],
              "page_ids": [p["page_id"] for p in group],
-             "edge_facts": sorted({(block, kind, value) for p in group for block, kind, value in _page_claims(p)})}
-            for group in segments
+             "edge_facts": sorted({(block, kind, value) for p in group + repeats[n] for block, kind, value in _page_claims(p)})}
+            for n, group in enumerate(segments)
         ],
         "breaks": breaks,
     }
@@ -516,6 +519,7 @@ def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, A
     """Trades that disagree with the page record.
 
     A trade from a block no segment scanned spoils the bucket of its timestamp.
+    A trade whose time contradicts the pages also spoils the bucket of its claimed time, whichever segment proves that bucket.
     A trade inside a segment spoils the whole segment when its time falls outside the segment's first and last
     block times, or when it disagrees with what the pages state about its own block (hash or time).
     """
@@ -529,11 +533,13 @@ def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, A
                     bad_segments[index].add("TRADE_CONTRADICTS_PAGE_HASH")
                 if not seg["first_ts"] <= trade.block_timestamp <= seg["last_ts"]:
                     bad_segments[index].add("TRADE_CONTRADICTS_PAGE_TIMES")
+                    outside.append((trade.block_timestamp, "TRADE_CONTRADICTS_PAGE_TIMES"))
                 for block, kind, value in seg.get("edge_facts", ()):
                     if block != trade.block_number:
                         continue
                     if kind == "ts" and value != trade.block_timestamp:
                         bad_segments[index].add("TRADE_CONTRADICTS_PAGE_TIMES")
+                        outside.append((trade.block_timestamp, "TRADE_CONTRADICTS_PAGE_TIMES"))
                     if kind == "hash" and value != trade.block_hash:
                         bad_segments[index].add("TRADE_CONTRADICTS_PAGE_HASH")
                 break
@@ -586,8 +592,7 @@ def bucketize(profile: Mapping[str, Any], result: IngestResult, segments: Sequen
         covered = cover is not None
         reasons = ([] if covered else ["COVERAGE_NOT_PROVEN"]) + sorted(spoiled.get(first, ()))
         if covered:
-            reasons += sorted(page_spoiled.get(first, ()))
-            reasons += sorted(bad_segments.get(cover, ()))
+            reasons += sorted(page_spoiled.get(first, set()) | bad_segments.get(cover, set()))
         if unlocated:
             reasons.append("UNLOCATED_REJECTED_RECORDS")
         members = trades.get(first, [])
@@ -1228,9 +1233,7 @@ def _check_bucket_counts(claim: "_Claim", profile: Mapping[str, Any], observatio
     rows = _look(profile, "dataset", "dataset_revision", "row_count")
     if _look(profile, "dataset", "dataset_revision", "basis") == "PAGE_DIGESTS":
         seen = _count(_look(observations, "ingest", "records_seen"))
-        if seen is None:
-            claim.add("MISSING_EVIDENCE", "RECORDS_SEEN_NOT_REPORTED")
-        elif seen != rows:
+        if seen is not None and seen != rows:  # a missing count is reported once, by the ingest accounting
             claim.add("FAILED_CHECK", "RECORDS_DO_NOT_MATCH_MANIFEST", f"{seen} records seen, {rows} rows declared")
     dataset = _look(profile, "dataset")
     if isinstance(dataset, Mapping) and dataset.get("pages") and not profile_problems(profile):
@@ -1343,6 +1346,8 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
             history.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "records seen do not match the counts that account for them")
     if _count(_look(observations, "ingest", "duplicate_copies")) is None:
         history.add("MISSING_EVIDENCE", "DUPLICATE_COUNT_NOT_REPORTED")
+    if seen_total is None:
+        history.add("MISSING_EVIDENCE", "RECORDS_SEEN_NOT_REPORTED")
     for field_name, label in (("unlocated_rejections", "UNLOCATED"), ("removed", "REMOVED"), ("foreign", "FOREIGN")):
         seen = _count(_look(observations, "ingest", field_name))
         if seen is None:
