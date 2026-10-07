@@ -521,10 +521,10 @@ def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, A
     """
     outside: list[tuple[int, str]] = []
     bad_segments: dict[int, set[str]] = defaultdict(set)
+    stated_for = {value: block for seg in segments for block, kind, value in seg.get("edge_facts", ()) if kind == "hash"}
     for trade in result.trades:
         for index, seg in enumerate(segments):
             if seg["first_block"] <= trade.block_number < seg["end_block_exclusive"]:
-                stated_for = {value: block for block, kind, value in seg.get("edge_facts", ()) if kind == "hash"}
                 if stated_for.get(trade.block_hash, trade.block_number) != trade.block_number:
                     bad_segments[index].add("TRADE_CONTRADICTS_PAGE_HASH")
                 if not seg["first_ts"] <= trade.block_timestamp <= seg["last_ts"]:
@@ -677,7 +677,13 @@ def opportunity_eligibility(decision_utc: str, requirements: Sequence[tuple[str,
                             delivered: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Check each required series at the declared decision time. The decision time never moves."""
     decision = epoch(decision_utc)
-    by_start = {bucket["start"]: bucket for bucket in buckets}
+    by_start: dict[str, Mapping[str, Any]] = {}
+    for bucket in buckets:
+        if bucket.get("status") not in _STATUSES:
+            raise InvalidInput("BUCKET_STATUS", f"unknown bucket status {bucket.get('status')!r}")
+        if bucket["start"] in by_start:
+            raise InvalidInput("BUCKET_DUPLICATE", f"two buckets start at {bucket['start']}")
+        by_start[bucket["start"]] = bucket
     reasons: list[dict[str, str]] = []
     for series, start in requirements:
         if series not in ("price", "quote_volume"):
@@ -734,6 +740,9 @@ def feasibility(claim: Mapping[str, Any], segments: Sequence[Mapping[str, Any]],
     if not (_is_int(horizon) and horizon > 0 and _is_int(window) and window > 0 and _is_int(warmup) and warmup >= 0):
         raise InvalidInput("CLAIM_VALUE", "horizon and reference window must be positive, warm-up non-negative integers")
     parts = claim["partitions"]
+    names = [p.get("name") for p in parts]
+    if not all(isinstance(n, str) and n for n in names) or len(set(names)) != len(names):
+        raise InvalidInput("PARTITION_NAME", "each partition needs a unique non-empty text name")
     declared = [(p.get("required_triggered"), p.get("required_control")) for p in parts]
     if any((a is None) != (b is None) for a, b in declared) or (
             any(a is None for a, _ in declared) and any(a is not None for a, _ in declared)):
@@ -1332,6 +1341,8 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
         needed = trades + sum(parts)  # type: ignore[arg-type]
         if seen_total < needed or (conflicts == 0 and seen_total != needed):
             history.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "records seen do not match the counts that account for them")
+    if _count(_look(observations, "ingest", "duplicate_copies")) is None:
+        history.add("MISSING_EVIDENCE", "DUPLICATE_COUNT_NOT_REPORTED")
     for field_name, label in (("unlocated_rejections", "UNLOCATED"), ("removed", "REMOVED"), ("foreign", "FOREIGN")):
         seen = _count(_look(observations, "ingest", field_name))
         if seen is None:

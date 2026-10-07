@@ -8511,6 +8511,81 @@
  ],
  "claim_errors": [
   {
+   "id": "L09-partition-name-is-a-number",
+   "claim": {
+    "schedule": {
+     "anchor_utc": "2026-09-25T00:10:00Z",
+     "period_seconds": 3600,
+     "feature_end_offset_seconds": 300
+    },
+    "horizon_seconds": 1800,
+    "reference_window_seconds": 60,
+    "warmup_buckets": 3,
+    "partitions": [
+     {
+      "name": 5,
+      "start_utc": "2026-09-25T00:00:00Z",
+      "end_utc": "2026-09-27T00:00:00Z",
+      "required_triggered": 10,
+      "required_control": 10
+     }
+    ]
+   },
+   "code": "PARTITION_NAME"
+  },
+  {
+   "id": "L10-partition-has-no-name",
+   "claim": {
+    "schedule": {
+     "anchor_utc": "2026-09-25T00:10:00Z",
+     "period_seconds": 3600,
+     "feature_end_offset_seconds": 300
+    },
+    "horizon_seconds": 1800,
+    "reference_window_seconds": 60,
+    "warmup_buckets": 3,
+    "partitions": [
+     {
+      "start_utc": "2026-09-25T00:00:00Z",
+      "end_utc": "2026-09-27T00:00:00Z",
+      "required_triggered": 10,
+      "required_control": 10
+     }
+    ]
+   },
+   "code": "PARTITION_NAME"
+  },
+  {
+   "id": "L11-two-partitions-share-a-name",
+   "claim": {
+    "schedule": {
+     "anchor_utc": "2026-09-25T00:10:00Z",
+     "period_seconds": 3600,
+     "feature_end_offset_seconds": 300
+    },
+    "horizon_seconds": 1800,
+    "reference_window_seconds": 60,
+    "warmup_buckets": 3,
+    "partitions": [
+     {
+      "name": "two-day",
+      "start_utc": "2026-09-25T00:00:00Z",
+      "end_utc": "2026-09-27T00:00:00Z",
+      "required_triggered": 10,
+      "required_control": 10
+     },
+     {
+      "name": "two-day",
+      "start_utc": "2026-09-27T00:00:00Z",
+      "end_utc": "2026-09-29T00:00:00Z",
+      "required_triggered": 1,
+      "required_control": 1
+     }
+    ]
+   },
+   "code": "PARTITION_NAME"
+  },
+  {
    "id": "L08-floors-for-one-partition-only",
    "claim": {
     "schedule": {
@@ -11702,6 +11777,66 @@
     "overall": "UNRESOLVED"
    },
    "note": "With no conflict, 25 records must be 20 trades plus duplicates, rejected, removed and foreign rows. Five are unaccounted for."
+  },
+  {
+   "id": "Q86-duplicate-count-missing-while-trades-fall-short",
+   "set": [
+    [
+     "observations",
+     "ingest",
+     "trades",
+     19
+    ],
+    [
+     "observations",
+     "ingest",
+     "~delete",
+     "duplicate_copies"
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "HISTORY_COMPLETENESS_AND_ORDER": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": "19 trades from 20 records need one duplicate. The missing count must not hide that."
+  },
+  {
+   "id": "Q87-duplicate-count-is-text",
+   "set": [
+    [
+     "observations",
+     "ingest",
+     "duplicate_copies",
+     "0"
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "HISTORY_COMPLETENESS_AND_ORDER": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": ""
+  },
+  {
+   "id": "Q88-duplicate-count-is-boolean",
+   "set": [
+    [
+     "observations",
+     "ingest",
+     "duplicate_copies",
+     false
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "HISTORY_COMPLETENESS_AND_ORDER": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": ""
   },
   {
    "id": "Q48-population-larger-than-trades-is-fine",

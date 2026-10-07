@@ -247,6 +247,35 @@ class PageIdsNeverChangeTheCoverage(unittest.TestCase):
         self.assertGreater(forks, 300)
 
 
+class HandBuiltSegments(unittest.TestCase):
+    def test_a_hash_the_pages_give_a_block_in_another_segment_spoils_the_trade_segment(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        h = "0x" + "11" * 32
+        segments = [
+            {"first_block": 100, "end_block_exclusive": 111, "first_ts": epoch("2026-09-25T09:00:00Z"),
+             "last_ts": epoch("2026-09-25T09:30:00Z"), "page_ids": ["a"], "edge_facts": [(109, "hash", h)]},
+            {"first_block": 200, "end_block_exclusive": 211, "first_ts": epoch("2026-09-25T09:59:00Z"),
+             "last_ts": epoch("2026-09-25T10:06:00Z"), "page_ids": ["b"], "edge_facts": []},
+        ]
+        template = copy.deepcopy(FIXTURES["decode_cases"][0]["log"])
+        template.update(block_number=205, block_timestamp=epoch("2026-09-25T10:01:00Z"), block_hash=h)
+        window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:05:00Z"}
+        got = bucketize(profile, ingest(profile, [template]), segments, window)
+        self.assertEqual((got[0]["status"], got[0]["reasons"]), ("UNQUALIFIED", ["TRADE_CONTRADICTS_PAGE_HASH"]))
+        template["block_hash"] = "0x" + "77" * 32
+        got = bucketize(profile, ingest(profile, [template]), segments, window)
+        self.assertEqual(got[0]["status"], "COMPLETE_OCCUPIED")
+
+    def test_eligibility_rejects_buckets_it_cannot_read(self) -> None:
+        good = {"start": "2026-09-25T10:00:00Z", "end": "2026-09-25T10:05:00Z", "status": "COMPLETE_OCCUPIED"}
+        assumed = {"model": "ASSUMED_DELAY", "delay_seconds": 180}
+        for buckets, code in (([{"start": good["start"], "end": good["end"]}], "BUCKET_STATUS"),
+                              ([good, {**good, "status": "INCOMPLETE"}], "BUCKET_DUPLICATE")):
+            with self.assertRaises(InvalidInput) as caught:
+                opportunity_eligibility("2026-09-25T10:20:00Z", [("price", good["start"])], buckets, assumed)
+            self.assertEqual(caught.exception.code, code)
+
+
 class Buckets(unittest.TestCase):
     def run_case(self, case: dict, logs: list | None = None) -> list[dict]:
         profile = PROFILES[case["profile"]]
@@ -544,6 +573,17 @@ class PerClaimQualification(unittest.TestCase):
         apply_changes(root, [["observations", "ingest", "records_seen", 25]])
         reasons = qualify(root["profile"], root["observations"])["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]
         self.assertNotIn("INGEST_COUNTS_INCONSISTENT", {r["code"] for r in reasons})
+
+    def test_each_count_that_accounts_for_the_records_must_be_reported(self) -> None:
+        for key in ("duplicate_copies", "rejected", "removed", "foreign"):
+            for broken in ("~delete", None, "0", False, -1):
+                with self.subTest(key=key, broken=broken):
+                    root = {"profile": base_profile(),
+                            "observations": copy.deepcopy(FIXTURES["qualification_base"]["observations"])}
+                    apply_changes(root, [["observations", "ingest", "~delete", key]] if broken == "~delete"
+                                  else [["observations", "ingest", key, broken]])
+                    got = qualify(root["profile"], root["observations"])
+                    self.assertEqual(got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["verdict"], "UNRESOLVED")
 
     def test_inputs_are_not_modified(self) -> None:
         profile, obs = base_profile(), copy.deepcopy(FIXTURES["qualification_base"]["observations"])
