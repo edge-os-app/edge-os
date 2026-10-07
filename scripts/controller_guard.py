@@ -117,10 +117,20 @@ class GuardStore:
     def get_inherited_record(self, key: tuple[str, str, str, str, str, str, str, str],
                              inherited_session_ids: list[str]) -> dict | None:
         for session_id in reversed(inherited_session_ids):
-            inherited_key = (key[0], session_id, f"{key[0]}:{session_id}", *key[3:])
-            record = self.get_record(inherited_key)
-            if record:
-                return record
+            with self._db() as db:
+                rows = db.execute(
+                    "SELECT * FROM delivery WHERE host=? AND session_id=? AND agent_id=? "
+                    "AND task_id=? AND event_id=? AND candidate=? AND destination=? "
+                    "ORDER BY updated_at DESC",
+                    (key[0], session_id, f"{key[0]}:{session_id}", key[3], key[4], key[5], key[7]),
+                ).fetchall()
+            records = [dict(row) for row in rows]
+            terminal = next((record for record in records
+                             if record["status"] in {"SUBMITTED", "UNCONFIRMED", "BLOCKED"}), None)
+            if terminal:
+                return terminal
+            if records:
+                return records[0]
         return None
 
     def put_record(self, record: dict) -> None:
@@ -627,55 +637,59 @@ def verify_receipt(state_file: Path, host: str, session_id: str, assignment_id: 
 
 
 def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None:
-    required = ("host", "session_id", "agent_id", "pane_id", "cwd", "status")
-    if any(not isinstance(binding.get(k), str) or not binding[k] or "\0" in binding[k] for k in required):
-        raise ValueError("binding requires host, session_id, agent_id, pane_id, cwd, and status")
-    if (
-        binding["host"] not in {"codex", "claude"}
-        or binding["agent_id"] != f"{binding['host']}:{binding['session_id']}"
-        or not re.fullmatch(r"%[0-9]+", binding["pane_id"])
-    ):
-        raise ValueError("agent_id must equal '<host>:<session_id>' and pane_id must be a tmux pane ID")
-    if not isinstance(binding.get("required_reports"), list) or not isinstance(binding.get("approved_work"), list):
-        raise ValueError("required_reports and approved_work must be lists")
-    if any(not isinstance(p, str) or not p or "\0" in p or Path(p).is_absolute() or ".." in Path(p).parts for p in binding["required_reports"]):
-        raise ValueError("required report paths must stay inside the bound cwd")
-    if any(not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("status"), str) for w in binding["approved_work"]):
-        raise ValueError("approved work entries require id and status")
+    incoming = dict(binding)
     with _state_lock(state_file):
         state = _state_read(state_file)
         entries = state["bindings"]
-        index = next((i for i, old in enumerate(entries) if old.get("host") == binding["host"] and old.get("session_id") == binding["session_id"]), None)
+        index = next((i for i, old in enumerate(entries) if old.get("host") == incoming.get("host")
+                      and old.get("session_id") == incoming.get("session_id")), None)
         if index is not None and not replace:
             raise ValueError("session binding already exists; use update")
-        if index is None:
+        old = entries[index] if index is not None else None
+        binding = {**old, **incoming} if old is not None else incoming
+
+        required = ("host", "session_id", "agent_id", "pane_id", "cwd", "status")
+        if any(not isinstance(binding.get(k), str) or not binding[k] or "\0" in binding[k] for k in required):
+            raise ValueError("binding requires host, session_id, agent_id, pane_id, cwd, and status")
+        if (
+            binding["host"] not in {"codex", "claude"}
+            or binding["agent_id"] != f"{binding['host']}:{binding['session_id']}"
+            or not re.fullmatch(r"%[0-9]+", binding["pane_id"])
+        ):
+            raise ValueError("agent_id must equal '<host>:<session_id>' and pane_id must be a tmux pane ID")
+        if not isinstance(binding.get("required_reports"), list) or not isinstance(binding.get("approved_work"), list):
+            raise ValueError("required_reports and approved_work must be lists")
+        if any(not isinstance(p, str) or not p or "\0" in p or Path(p).is_absolute() or ".." in Path(p).parts for p in binding["required_reports"]):
+            raise ValueError("required report paths must stay inside the bound cwd")
+        if any(not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("status"), str) for w in binding["approved_work"]):
+            raise ValueError("approved work entries require id and status")
+        if old is None:
             entries.append(binding)
         else:
-            old = entries[index]
             if old.get("agent_id") != binding["agent_id"] or old.get("pane_id") != binding["pane_id"] or old.get("cwd") != binding["cwd"]:
                 raise ValueError("update cannot change the bound agent, pane, or cwd identity")
             for key in ("role", "task_id", "assignment_id", "assignment_sha256", "fork_parent_session_id",
                         "inherited_session_ids"):
-                if key in binding and binding[key] != old.get(key):
+                if key in incoming and incoming[key] != old.get(key):
                     raise ValueError("update cannot change the bound task assignment")
             if old.get("task_id") and any(work["id"] != old["task_id"] for work in binding["approved_work"]):
                 raise ValueError("update cannot add another task to an assigned session")
             if old.get("task_id") and not binding["approved_work"] and binding["status"] != "COMPLETE":
                 raise ValueError("update cannot remove assigned work before completion")
-            if "review_history" in binding and "review_history" in old:
-                previous, updated = old["review_history"], binding["review_history"]
+            if "review_history" in incoming and "review_history" in old:
+                previous, updated = old["review_history"], incoming["review_history"]
                 if (not isinstance(previous, list) or not isinstance(updated, list)
                         or updated[:len(previous)] != previous):
                     raise ValueError("update cannot remove or rewrite review history")
             if "gate_verdicts" in old:
                 previous = old["gate_verdicts"]
-                updated = binding.get("gate_verdicts", previous)
+                updated = incoming.get("gate_verdicts", previous)
                 if (not isinstance(previous, int) or isinstance(previous, bool)
                         or not isinstance(updated, int) or isinstance(updated, bool)
                         or updated < previous
                         or (old.get("role") == "gate" and updated > 3)):
                     raise ValueError("update cannot reset or exceed the gate verdict limit")
-            entries[index] = {**old, **binding}
+            entries[index] = binding
         _atomic_json(state_file, state)
 
 
@@ -927,9 +941,10 @@ def main(argv: list[str] | None = None) -> int:
             if "pane_id" not in binding:
                 binding["pane_id"] = TmuxBridge().id()
             binding.setdefault("cwd", os.getcwd())
-            binding.setdefault("status", "ACTIVE")
-            binding.setdefault("required_reports", [])
-            binding.setdefault("approved_work", [])
+            if args.command == "bind":
+                binding.setdefault("status", "ACTIVE")
+                binding.setdefault("required_reports", [])
+                binding.setdefault("approved_work", [])
             save_binding(_binding_path(root), binding, replace=args.command == "update")
             print(json.dumps({"registered": True, "host": args.host, "session_id": binding["session_id"]}))
             return 0

@@ -147,6 +147,24 @@ class CheckedSendTests(unittest.TestCase):
         self.assertIsNone(self.store.get_record(("codex", "s1", "codex:s1", "T-1", "dispatch-1",
                                                  "abc123", "%1", "%2")))
 
+    def test_different_pane_fork_cannot_resend_parent_terminal_event(self):
+        for status in ("SUBMITTED", "UNCONFIRMED"):
+            with self.subTest(status=status):
+                parent = {
+                    **self.request,
+                    "session_id": "parent-session",
+                    "agent_id": "codex:parent-session",
+                    "sender": "%5",
+                    "status": status,
+                }
+                self.store.put_record(parent)
+                request = {**self.request, "sender": "%6"}
+                bridge = FakeBridge(sender="%6")
+                result = checked_send(request, bridge, self.store, settle=lambda: None,
+                                      inherited_session_ids=["parent-session"])
+                self.assertEqual(result, {"status": status, "duplicate": True})
+                self.assertFalse(any(call[0] in {"message", "enter"} for call in bridge.calls))
+
     def test_prepared_event_cannot_change_its_message(self):
         self.store.put_record({
             **self.request,
@@ -991,6 +1009,25 @@ class SessionStartTests(unittest.TestCase):
         binding = self.state()["bindings"][0]
         self.assertEqual(binding["review_history"], ["A:REVISE"])
         self.assertEqual(binding["gate_verdicts"], 2)
+
+    def test_cli_update_preserves_omitted_status_reports_and_work(self):
+        self.assign({**self.assignment, "role": "gate", "required_reports": ["MISSING.md"]})
+        self.start()
+        state = self.state()
+        state["bindings"][0]["status"] = "BLOCKED"
+        previous_work = state["bindings"][0]["approved_work"]
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+
+        update = {
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1",
+            "pane_id": "%5", "cwd": str(self.root.resolve()),
+        }
+        code, _ = self.run_cli("update", payload=update)
+        self.assertEqual(code, 0)
+        binding = self.state()["bindings"][0]
+        self.assertEqual(binding["status"], "BLOCKED")
+        self.assertEqual(binding["required_reports"], ["MISSING.md"])
+        self.assertEqual(binding["approved_work"], previous_work)
 
     def test_clear_with_new_session_registers_new_task_without_old_obligations(self):
         self.assign()
