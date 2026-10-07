@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import shlex
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -65,6 +66,9 @@ class CheckedSendTests(unittest.TestCase):
         self.bridge = FakeBridge()
         self.request = {
             "task_id": "T-1",
+            "host": "codex",
+            "session_id": "s1",
+            "agent_id": "codex:s1",
             "event_id": "dispatch-1",
             "candidate": "abc123",
             "sender": "%1",
@@ -137,6 +141,23 @@ class CheckedSendTests(unittest.TestCase):
         result = self.send()
         self.assertEqual(result["status"], "BLOCKED")
         self.assertFalse(any(call[0] in {"message", "enter"} for call in self.bridge.calls))
+
+    def test_fresh_prepared_event_never_adopts_matching_existing_draft(self):
+        self.bridge.capture = "❯ [tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] " + self.request["text"]
+        self.request["preflight_sha256"] = hashlib.sha256(self.bridge.capture.encode()).hexdigest()
+        self.request["confirm_idle"] = False
+        self.request["confirm_no_draft"] = False
+        result = self.send()
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertFalse(any(call[0] == "enter" for call in self.bridge.calls))
+
+    def test_prepared_event_cannot_resume_matching_draft_even_if_preflight_confirmed(self):
+        self.bridge.capture = "❯ [tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] " + self.request["text"]
+        self.request["preflight_sha256"] = hashlib.sha256(self.bridge.capture.encode()).hexdigest()
+        self.store.put_record({**self.request, "status": "PREPARED"})
+        result = self.send()
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertFalse(any(call[0] == "enter" for call in self.bridge.calls))
 
     def test_lost_enter_is_unconfirmed_and_never_retried(self):
         self.bridge.fail.add("enter")
@@ -263,12 +284,37 @@ class StopGuardTests(unittest.TestCase):
     def test_unfinished_delivery_blocks_and_other_session_does_not_inherit(self):
         self.store.put_record({
             "task_id": "T-1", "event_id": "e1", "candidate": "abc123",
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1",
             "sender": "%1", "destination": "%2", "status": "TYPED",
         })
+        self.binding["approved_work"] = [{"id": "T-1", "status": "pending"}]
         self.write_state([self.binding])
         self.assertEqual(stop_decision("codex", self.payload, self.state, self.store)["decision"], "block")
         self.payload["session_id"] = "other"
         self.assertEqual(stop_decision("codex", self.payload, self.state, self.store)["decision"], "allow")
+
+    def test_registered_session_reusing_pane_does_not_inherit_other_binding_task(self):
+        self.store.put_record({
+            "task_id": "OLD-TASK", "event_id": "e1", "candidate": "abc123",
+            "host": "codex", "session_id": "old-session", "agent_id": "codex:old-session",
+            "sender": "%1", "destination": "%2", "status": "TYPED",
+        })
+        self.write_state([self.binding])
+        self.assertEqual(stop_decision("codex", self.payload, self.state, self.store)["decision"], "allow")
+
+    def test_legacy_delivery_rows_migrate_as_unbound_history(self):
+        path = self.root / "legacy.sqlite3"
+        with sqlite3.connect(path) as db:
+            db.execute("CREATE TABLE delivery (task_id TEXT,event_id TEXT,candidate TEXT,sender TEXT,destination TEXT,status TEXT NOT NULL,preflight_sha256 TEXT,typed_sha256 TEXT,text_sha256 TEXT,updated_at REAL NOT NULL,PRIMARY KEY(task_id,event_id,candidate,sender,destination))")
+            db.execute("INSERT INTO delivery VALUES ('T-old','e1','c1','%1','%2','TYPED',NULL,NULL,NULL,1)")
+            db.execute("CREATE TABLE stop_seen (session_id TEXT NOT NULL,reason_id TEXT NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(session_id,reason_id))")
+            db.execute("INSERT INTO stop_seen VALUES ('old-session','old-reason',1)")
+        migrated = GuardStore(path)
+        with sqlite3.connect(path) as db:
+            row = db.execute("SELECT host,session_id,agent_id,task_id FROM delivery").fetchone()
+            self.assertEqual(row, ("", "", "", "T-old"))
+            self.assertEqual(db.execute("SELECT host,session_id,reason_id FROM stop_seen").fetchone(), ("", "old-session", "old-reason"))
+        self.assertEqual(migrated.open_for_binding("codex", "new-session", "codex:new-session", ["T-old"]), [])
 
     def test_malformed_state_and_bad_identity_fail_closed_for_registered_session(self):
         self.state.write_text("{")
@@ -283,6 +329,26 @@ class StopGuardTests(unittest.TestCase):
         self.write_state([{**self.binding, "status": "UNKNOWN"}])
         self.assertEqual(stop_decision("codex", self.payload, self.state, self.store)["decision"], "block")
         self.assertEqual(stop_decision("codex", self.payload, self.state, self.store)["decision"], "allow")
+
+    def test_actual_hook_cli_malformed_identity_and_type_block_once(self):
+        cli_root = self.root / "malformed-state"
+        cli_root.mkdir()
+        for malformed in (
+            {k: v for k, v in self.binding.items() if k != "pane_id"},
+            {**self.binding, "session_id": "s2", "agent_id": "codex:s2", "status": {"unexpected": "object"}},
+        ):
+            payload = {**self.payload, "session_id": malformed["session_id"]}
+            with self.subTest(malformed=malformed):
+                (cli_root / "bindings.json").write_text(json.dumps({"version": 1, "bindings": [malformed]}))
+                outputs = []
+                for _ in range(2):
+                    out = io.StringIO()
+                    with patch("sys.stdin", io.StringIO(json.dumps(payload))), contextlib.redirect_stdout(out):
+                        self.assertEqual(main(["--state-root", str(cli_root), "hook", "codex"]), 0)
+                    outputs.append(json.loads(out.getvalue()))
+                self.assertEqual(outputs[0].get("decision"), "block")
+                self.assertIn("malformed", outputs[0].get("reason", ""))
+                self.assertEqual(outputs[1], {})
 
     def test_stop_hook_active_always_allows_without_second_block(self):
         self.binding["required_reports"] = ["reports/final.md"]
@@ -307,7 +373,19 @@ class StopGuardTests(unittest.TestCase):
         payload = {"session_id": "claude-session", "cwd": str(self.root), "stop_hook_active": False}
         with patch("sys.stdin", io.StringIO(json.dumps(payload))), contextlib.redirect_stdout(out):
             self.assertEqual(main(["--state-root", str(self.root / "none"), "hook", "claude"]), 0)
-        self.assertEqual(json.loads(out.getvalue()), {"continue": False})
+        self.assertEqual(json.loads(out.getvalue()), {})
+
+    def test_allowed_hook_paths_emit_neutral_json(self):
+        cli_root = self.root / "allowed-state"
+        cli_root.mkdir()
+        self.write_state([self.binding])
+        for status in ("AWAITING_EVENT", "BLOCKED", "BUDGET_EXHAUSTED", "APPROVAL_REQUIRED", "INTERRUPTED", "RUN_LIMIT", "COMPLETE"):
+            self.binding["status"] = status
+            (cli_root / "bindings.json").write_text(json.dumps({"version": 1, "bindings": [self.binding]}))
+            out = io.StringIO()
+            with patch("sys.stdin", io.StringIO(json.dumps(self.payload))), contextlib.redirect_stdout(out):
+                self.assertEqual(main(["--state-root", str(cli_root), "hook", "codex"]), 0)
+            self.assertEqual(json.loads(out.getvalue()), {})
 
     def test_binding_registration_rejects_report_path_escape(self):
         from scripts.controller_guard import save_binding
@@ -332,6 +410,16 @@ class StopGuardTests(unittest.TestCase):
             updated = json.loads((root / "bindings.json").read_text())["bindings"][0]
             self.assertEqual(updated["status"], "BLOCKED")
             self.assertEqual(updated["cwd"], str(self.root))
+
+    def test_explicit_pane_id_does_not_query_bridge_identity(self):
+        root = self.root / "explicit-pane"
+        source = {**self.binding, "pane_id": "%7"}
+        output = io.StringIO()
+        with patch("scripts.controller_guard.TmuxBridge.id", side_effect=RuntimeError("bridge unavailable")):
+            with patch("sys.stdin", io.StringIO(json.dumps(source))), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["--state-root", str(root), "bind", "codex"]), 0)
+        registered = json.loads((root / "bindings.json").read_text())["bindings"][0]
+        self.assertEqual(registered["pane_id"], "%7")
 
 
 @unittest.skipUnless(os.environ.get("RUN_LIVE_TMUX") == "1", "set RUN_LIVE_TMUX=1 to create an isolated tmux fixture")
@@ -362,7 +450,8 @@ class LiveBridgeTests(unittest.TestCase):
                 store = GuardStore(Path(directory) / "guard.sqlite3")
                 check = preflight(target, bridge)
                 first = {
-                    "task_id": "fixture", "event_id": "send-once", "candidate": "fixture-sha",
+                    "task_id": "fixture", "host": "codex", "session_id": "fixture-session",
+                    "agent_id": "codex:fixture-session", "event_id": "send-once", "candidate": "fixture-sha",
                     "sender": sender, "destination": target, "destination_id": target,
                     "destination_name": target, "text": "fixture transport check",
                     "preflight_sha256": check["capture_sha256"], "confirm_idle": True, "confirm_no_draft": True,
@@ -389,6 +478,91 @@ class LiveBridgeTests(unittest.TestCase):
                 os.environ["TMUX_PANE"] = old_pane
             if session:
                 subprocess.run([tmux, "kill-session", "-t", session], check=False)
+
+    def test_actual_bridge_uncertainty_and_same_event_typed_recovery(self):
+        tmux = shutil.which("tmux")
+        bridge_bin = shutil.which("tmux-bridge")
+        if not tmux or not bridge_bin:
+            self.skipTest("tmux or the installed tmux-bridge is unavailable")
+        session = "controller-guard-fault-" + uuid.uuid4().hex[:8]
+        old_pane = os.environ.get("TMUX_PANE")
+        try:
+            subprocess.run([tmux, "new-session", "-d", "-s", session, "-x", "120", "-y", "35",
+                            "python3", "-u", "-c", "import time; time.sleep(300)"], check=True)
+            code = "import sys;print('❯ ',end='',flush=True);exec(\"for line in sys.stdin:\\n print('RECEIVED '+line.strip(),flush=True)\\n print('❯ ',end='',flush=True)\")"
+            subprocess.run([tmux, "split-window", "-h", "-t", session + ":0",
+                            "python3 -u -c " + shlex.quote(code)], check=True)
+            time.sleep(0.25)
+            sender = subprocess.run([tmux, "display-message", "-t", session + ":0.0", "-p", "#{pane_id}"],
+                                    check=True, text=True, capture_output=True).stdout.strip()
+            target = subprocess.run([tmux, "display-message", "-t", session + ":0.1", "-p", "#{pane_id}"],
+                                    check=True, text=True, capture_output=True).stdout.strip()
+            exit_code = "import sys;print('❯ ',end='',flush=True);exec(\"for line in sys.stdin:\\n print('EXITING '+line.strip(),flush=True)\\n sys.exit(0)\")"
+            subprocess.run([tmux, "split-window", "-v", "-t", target,
+                            "python3 -u -c " + shlex.quote(exit_code)], check=True)
+            time.sleep(0.2)
+            ambiguous_target = subprocess.run([tmux, "display-message", "-t", session + ":0.2", "-p", "#{pane_id}"],
+                                              check=True, text=True, capture_output=True).stdout.strip()
+            os.environ["TMUX_PANE"] = sender
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                wrapper = path / "bridge-fault-injector"
+                wrapper.write_text(
+                    "#!/usr/bin/env python3\nimport os, subprocess, sys\n"
+                    f"real = {bridge_bin!r}\nargs = sys.argv[1:]\n"
+                    "result = subprocess.run([real, *args], text=True, capture_output=True)\n"
+                    "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)\n"
+                    "if result.returncode: sys.exit(result.returncode)\n"
+                    "fault = os.environ.get('CONTROLLER_GUARD_FAULT')\n"
+                    "if (fault == 'message-lost' and args[:1] == ['message']) or (fault == 'enter-lost' and args[:1] == ['keys'] and 'Enter' in args): sys.exit(17)\n"
+                    "sys.exit(0)\n", encoding="utf-8")
+                wrapper.chmod(0o700)
+                store = GuardStore(path / "guard.sqlite3")
+                real_bridge = TmuxBridge(bridge_bin)
+                check = preflight(target, real_bridge)
+                base = {
+                    "task_id": "fixture-task", "host": "codex", "session_id": "fixture-session",
+                    "agent_id": "codex:fixture-session", "event_id": "typed-recovery",
+                    "candidate": "fixture-sha",
+                    "sender": sender, "destination": target, "destination_id": target,
+                    "destination_name": target, "text": "fixture uncertain transport",
+                    "preflight_sha256": check["capture_sha256"], "confirm_idle": True, "confirm_no_draft": True,
+                }
+                os.environ["CONTROLLER_GUARD_FAULT"] = "message-lost"
+                typed = checked_send(base, TmuxBridge(str(wrapper)), store)
+                self.assertEqual(typed["status"], "TYPED")
+                os.environ.pop("CONTROLLER_GUARD_FAULT", None)
+                recovered = checked_send(base, real_bridge, store)
+                self.assertEqual(recovered["status"], "SUBMITTED")
+                recovery_capture = real_bridge.read(target)
+                self.assertEqual(recovery_capture.count("RECEIVED "), 1)
+
+                check = preflight(target, real_bridge)
+                lost = {**base, "event_id": "lost-enter", "text": "fixture lost enter response",
+                        "preflight_sha256": check["capture_sha256"]}
+                os.environ["CONTROLLER_GUARD_FAULT"] = "enter-lost"
+                uncertain = checked_send(lost, TmuxBridge(str(wrapper)), store)
+                self.assertEqual(uncertain["status"], "UNCONFIRMED")
+                os.environ.pop("CONTROLLER_GUARD_FAULT", None)
+                calls_before = real_bridge.read(target).count("RECEIVED ")
+                duplicate = checked_send(lost, real_bridge, store)
+                self.assertEqual(duplicate["status"], "UNCONFIRMED")
+                self.assertEqual(real_bridge.read(target).count("RECEIVED "), calls_before)
+
+                check = preflight(ambiguous_target, real_bridge)
+                ambiguous = {**base, "event_id": "ambiguous-post-read", "destination": ambiguous_target,
+                             "destination_id": ambiguous_target, "destination_name": ambiguous_target,
+                             "text": "fixture ambiguous submission", "preflight_sha256": check["capture_sha256"]}
+                result = checked_send(ambiguous, real_bridge, store)
+                self.assertEqual(result["status"], "UNCONFIRMED")
+                self.assertEqual(checked_send(ambiguous, real_bridge, store)["status"], "UNCONFIRMED")
+        finally:
+            os.environ.pop("CONTROLLER_GUARD_FAULT", None)
+            if old_pane is None:
+                os.environ.pop("TMUX_PANE", None)
+            else:
+                os.environ["TMUX_PANE"] = old_pane
+            subprocess.run([tmux, "kill-session", "-t", session], check=False)
 
 
 if __name__ == "__main__":

@@ -27,10 +27,12 @@ def digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _key_tuple(record: dict) -> tuple[str, str, str, str, str]:
-    values = tuple(record.get(k, "") for k in ("task_id", "event_id", "candidate", "sender", "destination"))
+def _key_tuple(record: dict) -> tuple[str, str, str, str, str, str, str, str]:
+    values = tuple(record.get(k, "") for k in ("host", "session_id", "agent_id", "task_id", "event_id", "candidate", "sender", "destination"))
     if any(not isinstance(v, str) or not v or "\n" in v or "\r" in v for v in values):
-        raise ValueError("task_id, event_id, candidate, sender, and destination must be non-empty single-line strings")
+        raise ValueError("host, session_id, agent_id, task_id, event_id, candidate, sender, and destination must be non-empty single-line strings")
+    if values[0] not in {"codex", "claude"} or values[2] != f"{values[0]}:{values[1]}":
+        raise ValueError("delivery host/session identity is invalid")
     return values  # type: ignore[return-value]
 
 
@@ -45,15 +47,42 @@ class GuardStore:
         except OSError:
             pass
         with self._db() as db:
-            db.executescript(
+            db.execute(
                 "CREATE TABLE IF NOT EXISTS delivery ("
-                "task_id TEXT,event_id TEXT,candidate TEXT,sender TEXT,destination TEXT,"
+                "host TEXT NOT NULL,session_id TEXT NOT NULL,agent_id TEXT NOT NULL,"
+                "task_id TEXT NOT NULL,event_id TEXT NOT NULL,candidate TEXT NOT NULL,sender TEXT NOT NULL,destination TEXT NOT NULL,"
                 "status TEXT NOT NULL,preflight_sha256 TEXT,typed_sha256 TEXT,text_sha256 TEXT,updated_at REAL NOT NULL,"
-                "PRIMARY KEY(task_id,event_id,candidate,sender,destination));"
-                "CREATE TABLE IF NOT EXISTS stop_seen ("
-                "session_id TEXT NOT NULL,reason_id TEXT NOT NULL,updated_at REAL NOT NULL,"
-                "PRIMARY KEY(session_id,reason_id));"
+                "PRIMARY KEY(host,session_id,agent_id,task_id,event_id,candidate,sender,destination))"
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(delivery)")}
+            if "host" not in columns:
+                db.execute("ALTER TABLE delivery RENAME TO delivery_legacy")
+                db.execute(
+                    "CREATE TABLE delivery ("
+                    "host TEXT NOT NULL,session_id TEXT NOT NULL,agent_id TEXT NOT NULL,"
+                    "task_id TEXT NOT NULL,event_id TEXT NOT NULL,candidate TEXT NOT NULL,sender TEXT NOT NULL,destination TEXT NOT NULL,"
+                    "status TEXT NOT NULL,preflight_sha256 TEXT,typed_sha256 TEXT,text_sha256 TEXT,updated_at REAL NOT NULL,"
+                    "PRIMARY KEY(host,session_id,agent_id,task_id,event_id,candidate,sender,destination))"
+                )
+                db.execute(
+                    "INSERT INTO delivery SELECT '', '', '', task_id,event_id,candidate,sender,destination,status,"
+                    "preflight_sha256,typed_sha256,text_sha256,updated_at FROM delivery_legacy"
+                )
+                db.execute("DROP TABLE delivery_legacy")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS stop_seen ("
+                "host TEXT NOT NULL,session_id TEXT NOT NULL,reason_id TEXT NOT NULL,updated_at REAL NOT NULL,"
+                "PRIMARY KEY(host,session_id,reason_id))"
+            )
+            stop_columns = {row[1] for row in db.execute("PRAGMA table_info(stop_seen)")}
+            if "host" not in stop_columns:
+                db.execute("ALTER TABLE stop_seen RENAME TO stop_seen_legacy")
+                db.execute(
+                    "CREATE TABLE stop_seen (host TEXT NOT NULL,session_id TEXT NOT NULL,reason_id TEXT NOT NULL,"
+                    "updated_at REAL NOT NULL,PRIMARY KEY(host,session_id,reason_id))"
+                )
+                db.execute("INSERT INTO stop_seen SELECT '',session_id,reason_id,updated_at FROM stop_seen_legacy")
+                db.execute("DROP TABLE stop_seen_legacy")
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -75,10 +104,10 @@ class GuardStore:
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
-    def get_record(self, key: tuple[str, str, str, str, str]) -> dict | None:
+    def get_record(self, key: tuple[str, str, str, str, str, str, str, str]) -> dict | None:
         with self._db() as db:
             row = db.execute(
-                "SELECT * FROM delivery WHERE task_id=? AND event_id=? AND candidate=? AND sender=? AND destination=?", key
+                "SELECT * FROM delivery WHERE host=? AND session_id=? AND agent_id=? AND task_id=? AND event_id=? AND candidate=? AND sender=? AND destination=?", key
             ).fetchone()
             return dict(row) if row else None
 
@@ -90,8 +119,8 @@ class GuardStore:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
-                "INSERT INTO delivery VALUES (?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(task_id,event_id,candidate,sender,destination) DO UPDATE SET "
+                "INSERT INTO delivery VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(host,session_id,agent_id,task_id,event_id,candidate,sender,destination) DO UPDATE SET "
                 "status=excluded.status,preflight_sha256=COALESCE(excluded.preflight_sha256,delivery.preflight_sha256),"
                 "typed_sha256=COALESCE(excluded.typed_sha256,delivery.typed_sha256),"
                 "text_sha256=COALESCE(excluded.text_sha256,delivery.text_sha256),updated_at=excluded.updated_at",
@@ -102,25 +131,28 @@ class GuardStore:
                 ),
             )
 
-    def open_for_sender(self, sender: str) -> list[dict]:
+    def open_for_binding(self, host: str, session_id: str, agent_id: str, task_ids: list[str]) -> list[dict]:
+        if not task_ids:
+            return []
+        placeholders = ",".join("?" for _ in task_ids)
         with self._db() as db:
             rows = db.execute(
                 "SELECT task_id,event_id,candidate,destination,status FROM delivery "
-                "WHERE sender=? AND status IN (?,?,?,?) ORDER BY updated_at",
-                (sender, *OPEN_DELIVERIES),
+                f"WHERE host=? AND session_id=? AND agent_id=? AND task_id IN ({placeholders}) AND status IN (?,?,?,?) ORDER BY updated_at",
+                (host, session_id, agent_id, *task_ids, *OPEN_DELIVERIES),
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def mark_stop_reason(self, session_id: str, reason_id: str) -> bool:
+    def mark_stop_reason(self, host: str, session_id: str, reason_id: str) -> bool:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            if db.execute("SELECT 1 FROM stop_seen WHERE session_id=? AND reason_id=?", (session_id, reason_id)).fetchone():
+            if db.execute("SELECT 1 FROM stop_seen WHERE host=? AND session_id=? AND reason_id=?", (host, session_id, reason_id)).fetchone():
                 return False
-            db.execute("INSERT INTO stop_seen VALUES (?,?,?)", (session_id, reason_id, time.time()))
+            db.execute("INSERT INTO stop_seen VALUES (?,?,?,?)", (host, session_id, reason_id, time.time()))
             db.execute(
-                "DELETE FROM stop_seen WHERE session_id=? AND reason_id IN ("
-                "SELECT reason_id FROM stop_seen WHERE session_id=? ORDER BY updated_at DESC LIMIT -1 OFFSET 64)",
-                (session_id, session_id),
+                "DELETE FROM stop_seen WHERE host=? AND session_id=? AND reason_id IN ("
+                "SELECT reason_id FROM stop_seen WHERE host=? AND session_id=? ORDER BY updated_at DESC LIMIT -1 OFFSET 64)",
+                (host, session_id, host, session_id),
             )
             return True
 
@@ -186,7 +218,7 @@ def _read_hash(capture: str) -> str:
 def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.sleep(0.18)) -> dict:
     """Send one confirmed message, or preserve a state that cannot be retried."""
     key = _key_tuple(request)
-    _, _, _, sender, destination = key
+    sender, destination = key[6], key[7]
     target_id = request.get("destination_id")
     destination_name = request.get("destination_name", destination)
     text = request.get("text")
@@ -228,18 +260,21 @@ def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.s
 
         if current["status"] == "PREPARED":
             if _has_active_draft(before, sender, text):
-                store.put_record({**current, "status": "TYPED", "typed_sha256": _read_hash(before)})
-                current["status"] = "TYPED"
-            elif _read_hash(before) != preflight_hash:
+                store.put_record({**current, "status": "BLOCKED"})
+                return {"status": "BLOCKED", "reason": "PREPARED events cannot adopt an existing draft; only durable TYPED events can recover"}
+            if _read_hash(before) != preflight_hash:
                 store.put_record({**current, "status": "BLOCKED"})
                 return {"status": "BLOCKED", "reason": "pane capture changed after confirmation"}
-            elif not (request.get("confirm_idle") is True and request.get("confirm_no_draft") is True) or _has_partial_input(before):
+            if not (request.get("confirm_idle") is True and request.get("confirm_no_draft") is True) or _has_partial_input(before):
                 store.put_record({**current, "status": "BLOCKED"})
                 return {"status": "BLOCKED", "reason": "explicit idle and no-draft confirmation is required"}
 
-        if current["status"] == "TYPED" and not _has_active_draft(before, sender, text):
+        if current["status"] == "TYPED" and (
+            not _has_active_draft(before, sender, text)
+            or _read_hash(before) != current.get("typed_sha256")
+        ):
             store.put_record({**current, "status": "BLOCKED"})
-            return {"status": "BLOCKED", "reason": "the exact own draft is no longer the active input"}
+            return {"status": "BLOCKED", "reason": "the exact own draft capture is no longer the durable same-event input"}
 
         if current["status"] != "TYPED":
             try:
@@ -355,6 +390,33 @@ def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+def _valid_binding(binding: dict, host: str, session_id: str) -> bool:
+    required_text = ("host", "session_id", "agent_id", "pane_id", "cwd", "status")
+    if any(not isinstance(binding.get(key), str) or not binding[key] for key in required_text):
+        return False
+    if (
+        binding["host"] != host
+        or binding["session_id"] != session_id
+        or binding["agent_id"] != f"{host}:{session_id}"
+        or not re.fullmatch(r"%[0-9]+", binding["pane_id"])
+        or binding["status"] not in ALLOW_STOP | {"ACTIVE"}
+        or not isinstance(binding.get("required_reports"), list)
+        or not isinstance(binding.get("approved_work"), list)
+    ):
+        return False
+    if any(not isinstance(p, str) or not p or Path(p).is_absolute() or ".." in Path(p).parts for p in binding["required_reports"]):
+        return False
+    if any(
+        not isinstance(work, dict)
+        or not isinstance(work.get("id"), str)
+        or not work.get("id")
+        or not isinstance(work.get("status"), str)
+        for work in binding["approved_work"]
+    ):
+        return False
+    return True
+
+
 def stop_decision(host: str, payload: dict, state_file: Path, store: GuardStore) -> dict:
     session_id, cwd = payload.get("session_id"), payload.get("cwd")
     if not isinstance(session_id, str) or not session_id or not isinstance(cwd, str) or not cwd:
@@ -365,31 +427,24 @@ def stop_decision(host: str, payload: dict, state_file: Path, store: GuardStore)
         state = _state_read(state_file)
     except Exception:
         reason = "Controller guard state is unreadable. Repair the registered state file before the next turn."
-        first = store.mark_stop_reason(session_id, digest(host + ":" + session_id + ":bad-state"))
+        first = store.mark_stop_reason(host, session_id, digest(host + ":" + session_id + ":bad-state"))
         return {"decision": "block", "reason": reason} if first else {"decision": "allow"}
 
     matches = [b for b in state["bindings"] if isinstance(b, dict) and b.get("host") == host and b.get("session_id") == session_id]
     if len(matches) > 1:
         reason = "Controller guard has duplicate bindings for this session. Repair the state file."
-        first = store.mark_stop_reason(session_id, digest(host + ":" + session_id + ":duplicate-binding"))
+        first = store.mark_stop_reason(host, session_id, digest(host + ":" + session_id + ":duplicate-binding"))
         return {"decision": "block", "reason": reason} if first else {"decision": "allow"}
     binding = matches[0] if matches else None
     if binding is None:
         return {"decision": "allow"}
-    expected_agent = f"{host}:{session_id}"
-    if (
-        binding.get("status") not in ALLOW_STOP | {"ACTIVE"}
-        or not isinstance(binding.get("required_reports"), list)
-        or not isinstance(binding.get("approved_work"), list)
-        or any(not isinstance(p, str) or not p or Path(p).is_absolute() or ".." in Path(p).parts for p in binding.get("required_reports", []))
-        or any(not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("status"), str) for w in binding.get("approved_work", []))
-    ):
+    if not _valid_binding(binding, host, session_id):
         reason = "Controller guard session binding is malformed. Repair it before the next turn."
-        first = store.mark_stop_reason(session_id, digest(host + ":" + session_id + ":bad-binding"))
+        first = store.mark_stop_reason(host, session_id, digest(host + ":" + session_id + ":bad-binding"))
         return {"decision": "block", "reason": reason} if first else {"decision": "allow"}
-    if binding.get("agent_id") != expected_agent or os.path.realpath(cwd) != os.path.realpath(str(binding.get("cwd", ""))):
+    if os.path.realpath(cwd) != os.path.realpath(binding["cwd"]):
         reason = "Controller guard session identity does not match its registered agent and cwd. Repair the binding."
-        first = store.mark_stop_reason(session_id, digest(host + ":" + session_id + ":identity"))
+        first = store.mark_stop_reason(host, session_id, digest(host + ":" + session_id + ":identity"))
         return {"decision": "block", "reason": reason} if first else {"decision": "allow"}
     if binding.get("status") in ALLOW_STOP:
         return {"decision": "allow"}
@@ -405,7 +460,11 @@ def stop_decision(host: str, payload: dict, state_file: Path, store: GuardStore)
                 reasons.append("invalid-report-binding")
             elif not report_path.is_file():
                 reasons.append("missing-report:" + report)
-    unfinished = store.open_for_sender(binding["pane_id"])
+    active_tasks = [
+        work["id"] for work in binding["approved_work"]
+        if work["status"] in {"eligible", "pending", "in_progress"}
+    ]
+    unfinished = store.open_for_binding(host, session_id, binding["agent_id"], active_tasks)
     reasons.extend("unfinished-delivery:" + r["task_id"] + ":" + r["event_id"] for r in unfinished)
     for work in binding.get("approved_work", []):
         if isinstance(work, dict) and work.get("status") in {"eligible", "pending", "in_progress"}:
@@ -413,7 +472,7 @@ def stop_decision(host: str, payload: dict, state_file: Path, store: GuardStore)
     if not reasons:
         return {"decision": "allow"}
     reason_id = digest(host + ":" + session_id + ":" + "|".join(sorted(reasons)))
-    if not store.mark_stop_reason(session_id, reason_id):
+    if not store.mark_stop_reason(host, session_id, reason_id):
         return {"decision": "allow"}
     codes = ", ".join(part.split(":", 1)[0] for part in sorted(reasons))
     return {
@@ -441,13 +500,13 @@ def _hook(host: str, root: Path) -> int:
         if not isinstance(payload, dict):
             raise ValueError("hook input must be an object")
     except Exception:
-        print('{"continue":false}')
+        print('{}')
         return 0
     if not _binding_path(root).exists():
-        print('{"continue":false}')
+        print('{}')
         return 0
     result = stop_decision(host, payload, _binding_path(root), GuardStore(root / "delivery.sqlite3"))
-    print(json.dumps({"decision": "block", "reason": result["reason"]}, separators=(",", ":")) if result["decision"] == "block" else '{"continue":false}')
+    print(json.dumps({"decision": "block", "reason": result["reason"]}, separators=(",", ":")) if result["decision"] == "block" else '{}')
     return 0
 
 
@@ -499,7 +558,8 @@ def main(argv: list[str] | None = None) -> int:
             if not binding.get("session_id"):
                 raise ValueError("session_id is required; Claude does not provide a verified shell binding ID")
             binding.setdefault("agent_id", f"{args.host}:{binding['session_id']}")
-            binding.setdefault("pane_id", TmuxBridge().id())
+            if "pane_id" not in binding:
+                binding["pane_id"] = TmuxBridge().id()
             binding.setdefault("cwd", os.getcwd())
             binding.setdefault("status", "ACTIVE")
             binding.setdefault("required_reports", [])

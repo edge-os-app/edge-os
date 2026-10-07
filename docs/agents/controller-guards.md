@@ -14,6 +14,9 @@ Only continue when the capture shows the expected idle Codex or Claude input wit
 
 ~~~json
 {
+  "host": "codex",
+  "session_id": "session-id",
+  "agent_id": "codex:session-id",
   "task_id": "P01",
   "event_id": "dispatch-2026-10-07-01",
   "candidate": "0123456789abcdef",
@@ -30,7 +33,9 @@ Only continue when the capture shows the expected idle Codex or Claude input wit
 
 Pass that object on standard input to python3 scripts/controller_guard.py send. The helper verifies the active sender pane and destination identity. It types one normal Smux message, checks the exact active input, sends one Enter, and reads once after Enter. A fixed 0.18-second settle delay is the only wait.
 
-The durable record key is (task_id, event_id, candidate, sender pane, destination pane). The record stores the delivery status, capture hashes, and a SHA-256 message fingerprint. It never stores the message body or captured pane text. A repeated event cannot send again. TYPED can resume only if the same exact message is still the active draft. The helper writes UNCONFIRMED before it attempts Enter. If Enter may have been sent, do not retry that event.
+The durable record key is (host, session_id, agent_id, task_id, event_id, candidate, sender pane, destination pane). These fields identify the originating host session and task. Stop checks only records with the exact registered host/session/agent and task IDs in that binding's active approved-work list. Reusing a pane for a new session does not transfer old delivery obligations. Legacy records without a session binding are retained as unbound history and are not assigned to a new session.
+
+The record stores delivery status, capture hashes, and a SHA-256 message fingerprint. It never stores the message body or captured pane text. A repeated event cannot send again. A fresh PREPARED event cannot claim a matching draft. Recovery is allowed only when the durable record was already TYPED for that same event and the exact recorded capture, sender, and message are still present. The helper writes UNCONFIRMED before it attempts Enter. If Enter may have been sent, do not retry that event.
 
 The helper requires operator preflight confirmation because terminal captures do not identify an idle Codex or Claude prompt with enough certainty across versions. If the capture is unknown, partial, busy, or contains any draft, do not confirm it. This is not unattended sending.
 
@@ -53,9 +58,9 @@ Register with python3 scripts/controller_guard.py bind codex and the object on s
 
 State lives in CONTROLLER_GUARD_STATE_ROOT when set. Otherwise, it lives under the user's XDG state directory, isolated by the script's project path. The binding file is bindings.json; delivery state is in delivery.sqlite3. A private workspace can set CONTROLLER_GUARD_STATE_ROOT in its local hook command. Pass the same value to bind and send with the environment or the --state-root option. The environment override is a trusted local configuration value. The hook never uses a path from event JSON to select state.
 
-The following explicit statuses allow Stop, even when obligations remain: AWAITING_EVENT, BLOCKED, BUDGET_EXHAUSTED, APPROVAL_REQUIRED, INTERRUPTED, RUN_LIMIT, and COMPLETE. Other statuses can block once for a durable reason identity. stop_hook_active always allows the continuation call. The guard can block a missing required report, an unfinished delivery, or approved work with status eligible, pending, or in_progress.
+The following explicit statuses allow Stop, even when obligations remain: AWAITING_EVENT, BLOCKED, BUDGET_EXHAUSTED, APPROVAL_REQUIRED, INTERRUPTED, RUN_LIMIT, and COMPLETE. Other statuses can block once for a durable reason identity. stop_hook_active always allows the continuation call. The guard can block a missing required report, an unfinished delivery for a task in this binding, or approved work with status eligible, pending, or in_progress. Allowed and unregistered hook results are `{}` so this guard does not override another Stop hook. Its own block uses the host's `decision:block` output.
 
-An empty obligation list means that this binding has no tracked obligation. It does not prove that a review or task is complete. Do not register an empty list as a completion record. Missing bindings allow Stop by design. A malformed binding file blocks once with a repair instruction. A mismatched session, agent, or cwd also blocks once. Reason identities are hashes, limited to the most recent 64 per session.
+An empty obligation list means that this binding has no tracked obligation. It does not prove that a review or task is complete. Do not register an empty list as a completion record. Missing bindings allow Stop by design. A malformed registered binding (including missing or invalid pane/session identity) blocks once with a repair instruction. A mismatched session, agent, or cwd also blocks once. Reason identities are hashes, limited to the most recent 64 per host/session.
 
 The hook does not call a model itself, press Enter, inspect or poll panes, create a batch, extend a budget, or approve a merge or financial action. A block asks the host to continue once with the reason.
 
