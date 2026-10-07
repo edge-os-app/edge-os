@@ -87,6 +87,14 @@ Check that the result matches the host, session, role, task, pane, worktree, ass
 
 The committed Codex and Claude hook commands use the helper's project-scoped default state root. If you set `CONTROLLER_GUARD_STATE_ROOT`, export it before launching both clients and use that same value for SessionStart, `bind`, `send`, `assign`, `receipt`, and Stop. Do not commit a machine-specific state path.
 
+### Codex CLI 0.160.1 launch environment
+
+Launch each managed native Codex session with `codex --no-daemon` from its assigned pane. Codex clients that attach to the shared app-server use the environment from daemon startup. A terminal export does not give an attached client a private environment ([Codex daemon environment contract](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/app-server-daemon/README.md#platform-support)). Codex runs hook commands from the session environment snapshot ([hook command runner](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/hooks/src/engine/command_runner.rs)).
+
+Do not hardcode `TMUX_PANE` or treat the assignment's pane ID as runtime proof. The hook must read the actual pane from `tmux-bridge id` and the same `CONTROLLER_GUARD_STATE_ROOT` used by the controller. A missing or mismatched receipt blocks dispatch.
+
+A disposable, normally trusted Codex CLI 0.160.1 fixture produced and verified a matching `startup` receipt with `--no-daemon`. The hook saw the actual `%179` pane and state root, and the gate entered `AWAITING_EVENT`. A shared-daemon control lacked both environment values and produced no receipt. The idle `--no-daemon` session produced no observed event during one 30-second wait. The event appeared after its first inert prompt. Exact unwrapped-config, native `/clear`, and Stop qualification remain pending. This test does not qualify other panes or prove that all running lanes have protection.
+
 ## Native lane checklist
 
 - Trust the project and hook through the client's normal controls. Confirm the command in `/hooks`.
@@ -99,6 +107,7 @@ The committed Codex and Claude hook commands use the helper's project-scoped def
   ~~~
 
   Prepare a complete assignment, then run `python3 scripts/controller_guard.py --state-root "$GUARD_STATE_ROOT" assign codex < assignment.json` (use `claude` for Claude). The command must return an assignment fingerprint.
+- Launch each managed native Codex session from its assigned pane with `codex --no-daemon`. Do not assume that shell exports reach a shared app-server daemon. Keep Claude's normal launch path unchanged.
 - In the selected trusted native session, enter `/clear` through the host UI. The SessionStart hook must report the host's new session and assignment fingerprint. Verify with `python3 scripts/controller_guard.py --state-root "$GUARD_STATE_ROOT" receipt codex SESSION_ID ASSIGNMENT_ID`. The receipt must match task, role, pane, worktree, and fingerprint before activation. Workers start `ACTIVE`; gates start `AWAITING_EVENT`.
 - For a missed-delivery check, set `HOST`, `SESSION_ID`, `PANE_ID`, and `TASK_ID` from the verified receipt, then add one synthetic row. This writes no message and presses no key:
 

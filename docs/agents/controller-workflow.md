@@ -33,13 +33,15 @@ For CTRL-BIND-L3-01, the controller's recorded fresh activation, exact assignmen
 
 Before each new ticket, the controller prepares an approved local binding assignment for the exact host, role, pane, worktree, reports, task, and approved work for that task only. Use the same state root as `bind`, `send`, and the Stop hook. The assignment expires after 15 minutes.
 
+For managed native sessions on Codex CLI 0.160.1, launch Codex from the assigned pane with `codex --no-daemon`. A client attached to the shared app-server uses the environment from daemon startup, not a per-client environment. Exporting `TMUX_PANE` and `CONTROLLER_GUARD_STATE_ROOT` in the launch terminal alone does not prove the hook received them. Preserve the actual pane and state root through the local launch environment. Do not hardcode the expected pane ID. The controller must verify a matching receipt before dispatch and must block dispatch when the receipt is absent or mismatched. See [Controller-guard coverage](controller-guards.md#codex-cli-01601-launch-environment) for the current proof and its limits.
+
 The controller then checks that each destination is idle and draft-free, enters native `/clear` through keys, and reads once to confirm the reset. After the SessionStart hook returns, the controller verifies the receipt with `controller_guard.py receipt`. The receipt must match the new host session, pane, worktree, assignment ID, task, and assignment fingerprint. Do not send task activation until this check passes. An absent or mismatched receipt blocks dispatch.
 
 After the reset, confirm each client's actual host, model, effort, and fresh context. Send the complete task packet through Smux, with one pre-send read, one input check, one Enter, and one post-Enter submission check. Record the receipt and delivery evidence in the private lane ledger. A same-ticket repair does not require `/clear` and preserves all task and review state.
 
 ## Controller-guard coverage
 
-The checked-send helper and Stop guard passed native checks on Codex CLI 0.160.1 and Claude Code 2.1.292 under normal project trust. That evidence covers those client setups. A hook affects only a trusted project session with a matching binding; an unbound session remains unaffected. This branch adds native SessionStart assignment binding and remains under review. The active worker session is still unqualified until it has its own matching receipt.
+The checked-send helper and Stop guard passed native checks on Codex CLI 0.160.1 and Claude Code 2.1.292 under normal project trust. A disposable, normally trusted Codex CLI 0.160.1 session also produced and passed verification for a matching `startup` receipt when launched with `--no-daemon`. The event appeared after the first inert prompt, not during one 30-second idle wait. This does not qualify native `/clear`, Stop, the exact unwrapped hook config, or other running panes. The branch remains under review, and an unbound session remains unaffected. Do not claim all lanes have protection.
 
 These hooks do not wake a stopped client, press Enter, or provide unattended batch authority. Client crashes, host sleep, and exhausted subscriptions remain operational limits. Continue to use checked delivery and the assigned event-driven lane procedure.
 
