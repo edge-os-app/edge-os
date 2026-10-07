@@ -47,10 +47,16 @@ class FakeBridge:
     def message(self, target, text):
         self.calls.append(("message", target, text))
         self._raise("message")
-        self.capture += (
-            f"\n[tmux-bridge from:codex pane:{self.sender} at:work:0.0 — "
+        envelope = (
+            f"[tmux-bridge from:codex pane:{self.sender} at:work:0.0 — "
             f"load the smux skill to reply] {text}"
         )
+        lines = self.capture.splitlines()
+        if lines and lines[-1].strip() in {"❯", "›"}:
+            lines[-1] = f"{lines[-1].strip()} {envelope}"
+            self.capture = "\n".join(lines)
+        else:
+            self.capture += "\n" + envelope
 
     def enter(self, target):
         self.calls.append(("enter", target))
@@ -200,6 +206,29 @@ class CheckedSendTests(unittest.TestCase):
         offset = own.index("candidate") + len("candi")
         wrapped = "› " + own[:offset] + "\n" + own[offset:] + "\n+ Show details"
         self.assertTrue(_has_active_draft(wrapped, "%1", self.request["text"]))
+
+    def test_native_claude_pointer_capture_reconstructs_mixed_word_wraps(self):
+        text = (
+            "Packet CTRL-BIND-L3-01/NATIVE-CLAUDE-DELIVERY/9: "
+            "/private/tmp/edge-os-controller-bind.PQBi6Z/project/.scratch/"
+            "controller-guard-binding/packets/claude-delivery-round9-2026-10-07.md "
+            "SHA256 889940979590fb33f66301736cd3e23d220e857e583dea06b1460e2c76fb8940"
+        )
+        own_header = (
+            "[tmux-bridge from:edge-os-worker-lane-3 pane:%5 at:edge-os-lane-3:0.1 — "
+            "load the smux skill to reply] "
+        )
+        capture = (
+            "❯ " + own_header + "Packet\n"
+            "  CTRL-BIND-L3-01/NATIVE-CLAUDE-DELIVERY/9: /private/tmp/edge-os-controller-bind.PQBi6Z/project/.scratch/controller-gu\n"
+            "  ard-binding/packets/claude-delivery-round9-2026-10-07.md SHA256\n"
+            "  889940979590fb33f66301736cd3e23d220e857e583dea06b1460e2c76fb8940\n"
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        self.assertTrue(_has_active_draft(capture, "%5", text))
 
     def test_native_submitted_message_and_empty_placeholder_with_footer_confirm(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "

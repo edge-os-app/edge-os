@@ -215,10 +215,16 @@ class TmuxBridge:
         self._run("keys", target, "Enter")
 
 
-def _message_line(line: str, sender: str, text: str) -> bool:
+def _message_header(line: str, sender: str):
     line = re.sub(r"^\s*(?:❯|›)\s*", "", line)
     match = re.match(r"^\[tmux-bridge from:[^\]]+ pane:([^\s\]]+) at:[^\]]+ — load the smux skill to reply\] ", line)
-    return bool(match and match.group(1) == sender and line[match.end():] == text)
+    return match if match and match.group(1) == sender else None
+
+
+def _message_line(line: str, sender: str, text: str) -> bool:
+    header = _message_header(line, sender)
+    line = re.sub(r"^\s*(?:❯|›)\s*", "", line)
+    return bool(header and line[header.end():] == text)
 
 
 def _is_native_footer(line: str) -> bool:
@@ -260,12 +266,25 @@ def _prompt_bodies(line: str, continuation: list[str]) -> set[str]:
 
 
 def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int) -> bool:
-    parts = []
-    for end in range(index, limit):
-        parts.append(lines[end].rstrip())
-        if _message_line(" ".join(parts), sender, text) or _message_line("".join(parts), sender, text):
-            return True
-    return False
+    if index >= limit:
+        return False
+    header = _message_header(lines[index], sender)
+    if not header:
+        return False
+    first = re.sub(r"^\s*(?:❯|›)\s*", "", lines[index])[header.end():].rstrip()
+    positions = {0}
+    for i, chunk in enumerate([first, *(line.strip() for line in lines[index + 1:limit])]):
+        next_positions = set()
+        separators = ("",) if i == 0 else ("", " ")
+        for position in positions:
+            for separator in separators:
+                candidate = separator + chunk
+                if text.startswith(candidate, position):
+                    next_positions.add(position + len(candidate))
+        positions = next_positions
+        if not positions:
+            return False
+    return len(text) in positions
 
 
 def _empty_prompt(line: str, continuation: list[str]) -> bool:
@@ -279,8 +298,7 @@ def _has_active_draft(capture: str, sender: str, text: str) -> bool:
     region = _input_region(capture)
     if region:
         lines, index, continuation = region
-        return any(_message_line(body, sender, text)
-                   for body in _prompt_bodies(lines[index], continuation))
+        return _message_at([lines[index], *continuation], 0, sender, text, len(continuation) + 1)
     return bool(lines and _message_line(lines[-1], sender, text))
 
 
@@ -304,8 +322,8 @@ def _submitted(capture: str, before_enter: str, sender: str, text: str) -> bool:
         return False
     if before_region:
         before_lines, before_prompt, before_continuation = before_region
-        if not any(_message_line(body, sender, text)
-                   for body in _prompt_bodies(before_lines[before_prompt], before_continuation)):
+        if not _message_at([before_lines[before_prompt], *before_continuation], 0,
+                           sender, text, len(before_continuation) + 1):
             return False
     else:
         before_prompt = len(before_lines) - 1
