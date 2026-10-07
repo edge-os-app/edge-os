@@ -21,7 +21,7 @@ def load(name: str) -> dict[str, object]:
 
 def matches_binding(left: dict[str, object], right: dict[str, object]) -> bool:
     fields = (
-        "owner_id", "agent_id", "wallet_id", "network_id", "position_id",
+        "owner_id", "agent_id", "wallet_id", "network_id", "position_id", "action_id",
         "strategy_revision", "mandate_id", "review_hash", "asset_id",
         "quantity_raw", "decimals", "operation", "policy_binding", "approval_id",
         "deployment_id",
@@ -152,6 +152,8 @@ def main() -> None:
     assert not matches_binding(preview, changed_input)
     changed_quantity = dict(action, quantity_raw="6")
     assert not matches_binding(preview, changed_quantity)
+    changed_action_id = dict(action, action_id="action-b-duplicate")
+    assert not matches_binding(preview, changed_action_id)
     changed_asset = dict(action, asset_id="monad:143/asset:OTHER")
     assert not matches_binding(preview, changed_asset)
     cross_wallet_action = dict(action, agent_id="agent-a", wallet_id="wallet-a")
