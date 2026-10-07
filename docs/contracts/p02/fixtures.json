@@ -1379,6 +1379,20 @@
                 "SPOT_BUY",
                 "SPOT_SELL_ALL_ATTRIBUTABLE"
               ]
+            },
+            {
+              "field_name": "restrictions",
+              "state": "KNOWN",
+              "origin": "USER_STATED",
+              "source_ref": "10000000-0000-4000-8000-000000000001",
+              "interpretation_revision": "interp-fixture-2",
+              "evidence_status": "INFERENCE",
+              "value": [
+                "no leverage",
+                "no additions",
+                "no partial exits",
+                "one open position maximum"
+              ]
             }
           ],
           "clarification_history": [

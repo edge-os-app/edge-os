@@ -529,10 +529,6 @@ def route(case: dict[str, object]) -> str:
         return actual
     if interpretation["requested_job"] not in CONTRACT["required_strategy_fields"]:
         return "HANDOFF"
-    if interpretation["evidence_readiness"] == "UNRESOLVED":
-        actual = "UNRESOLVED"
-        _validate_route_result(case, actual)
-        return actual
     required = set(CONTRACT["required_strategy_fields"][interpretation["requested_job"]])
     evidence = interpretation["field_evidence"]
     if any(item["field_name"] not in required for item in evidence):
@@ -563,6 +559,10 @@ def route(case: dict[str, object]) -> str:
     supported_restrictions = CONTRACT["supported_restrictions"]
     if any(item not in supported_restrictions for item in restrictions):
         actual = "UNSUPPORTED"
+        _validate_route_result(case, actual)
+        return actual
+    if interpretation["evidence_readiness"] == "UNRESOLVED":
+        actual = "UNRESOLVED"
         _validate_route_result(case, actual)
         return actual
     strategy = data.get("candidate_strategy")
@@ -1042,6 +1042,58 @@ def check_clarification_coverage() -> None:
     assert route(adopted) == "COMPILED"
 
 
+def check_unresolved_route_coverage() -> None:
+    cases = {case["id"]: case for case in FIXTURES["cases"]}
+    for variant in ("absent", "missing", "conflicting", "pending", "restriction_mismatch", "complete"):
+        current = copy.deepcopy(cases["route-complete"])
+        interpretation = current["input"]["interpretation"]
+        interpretation["evidence_readiness"] = "UNRESOLVED"
+        current["input"]["candidate_strategy"] = None
+        exit_item = next(item for item in interpretation["field_evidence"] if item["field_name"] == "exit")
+        expected = "NEEDS_CLARIFICATION"
+        current["result"] = copy.deepcopy(cases["route-clarification"]["result"])
+        if variant == "absent":
+            interpretation["field_evidence"] = []
+            current["result"] = copy.deepcopy(cases["route-empty-meaning"]["result"])
+        elif variant in {"missing", "conflicting"}:
+            value = exit_item.pop("value")
+            exit_item["state"] = variant.upper()
+            if variant == "conflicting":
+                exit_item["conflicts"] = [{"value": value, "source_ref": "answer-a"},
+                                          {"value": STRATEGY["entry"], "source_ref": "answer-b"}]
+        elif variant == "pending":
+            exit_item.update(origin="AGENT_PROPOSED", adoption="PENDING")
+            current["result"] = copy.deepcopy(cases["route-pending-exit-proposal"]["result"])
+        elif variant == "restriction_mismatch":
+            next(item for item in interpretation["field_evidence"]
+                 if item["field_name"] == "restrictions")["value"] = []
+            expected = "INVALID_INPUT"
+            current["result"] = copy.deepcopy(cases["route-malformed"]["result"])
+        else:
+            expected = "UNRESOLVED"
+            current["result"] = copy.deepcopy(cases["route-unresolved"]["result"])
+        assert route(current) == expected, variant
+        if variant != "complete":
+            incomplete = copy.deepcopy(current)
+            incomplete["result"] = copy.deepcopy(cases["route-unresolved"]["result"])
+            try:
+                route(incomplete)
+            except Invalid:
+                pass
+            else:
+                raise AssertionError(f"unresolved evidence hides {variant} meaning")
+        if expected == "NEEDS_CLARIFICATION":
+            for finding in current["result"]["findings"]:
+                incomplete = copy.deepcopy(current)
+                incomplete["result"]["findings"].remove(finding)
+                try:
+                    route(incomplete)
+                except Invalid:
+                    pass
+                else:
+                    raise AssertionError(f"unresolved evidence hides question {finding['path']}")
+
+
 def main() -> int:
     if set(CONTRACT["operator_signatures"]) != set(CONTRACT["operators"]):
         raise AssertionError("operator names and machine signatures differ")
@@ -1049,6 +1101,7 @@ def main() -> int:
     for case in FIXTURES["cases"]:
         check_fixture(case)
     check_clarification_coverage()
+    check_unresolved_route_coverage()
     validate_strategy(STRATEGY)
 
     changed_rule = copy.deepcopy(STRATEGY)

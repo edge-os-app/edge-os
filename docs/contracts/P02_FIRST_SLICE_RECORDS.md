@@ -48,6 +48,8 @@ Clarification targets include every currently absent required field, every `MISS
 
 Preserve known, adopted values and their source/revision bindings. Bind saved restrictions as current `KNOWN` evidence matching `preserved_restrictions`. A mismatch is invalid even while another field needs clarification. An absent binding needs a question about that binding, without asking the user to restate saved restrictions.
 
+Validate required meaning and saved restriction bindings before evidence-readiness routing. Missing, conflicting or consequential pending meaning returns `NEEDS_CLARIFICATION` even when evidence is unavailable. Complete, adopted, supported meaning with unavailable essential evidence returns `UNRESOLVED`.
+
 `StrategyDraft` stores `draft_id`, original request, current interpretation revision, source syntax, validation findings, and optional proposed fields. It also stores the immutable `strategy_id` and `base_revision_id` selected when the draft starts. It has `state: DRAFT` and no published revision identity. A draft cannot set validation eligibility, paper/live readiness, or an execution mandate.
 
 ## Minimum supported strategy proposal
