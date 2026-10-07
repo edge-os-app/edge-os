@@ -6,11 +6,13 @@ from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import re
-from typing import Any
+import time
+from typing import Any, Callable
 from uuid import uuid4
 
 
 NETWORK_ID = 10143
+IDEMPOTENCY_WINDOW_SECONDS = 24 * 60 * 60
 _SETUP_ID = re.compile(r"[A-Za-z0-9_-]{1,48}\Z")
 
 
@@ -67,9 +69,16 @@ class SetupLedger:
 class SetupManager:
     """Model stable local setup identity with an explicitly authored fake."""
 
-    def __init__(self, ledger: SetupLedger, provider: FakePrivy) -> None:
+    def __init__(
+        self,
+        ledger: SetupLedger,
+        provider: FakePrivy,
+        *,
+        now: Callable[[], float] = time.time,
+    ) -> None:
         self.ledger = ledger
         self.provider = provider
+        self.now = now
 
     def create(
         self,
@@ -96,6 +105,7 @@ class SetupManager:
         record = {
             "state": "REQUESTED",
             "setup_id": setup_id,
+            "created_at": self.now(),
             "owner_id": owner_id,
             "agent_id": agent_id,
             "network_id": NETWORK_ID,
@@ -112,9 +122,46 @@ class SetupManager:
             return "CANCELLED"
         if record["state"] == "CONFIRMED":
             return "CONFIRMED"
-        if record["state"] not in {"REQUESTED", "UNKNOWN"}:
+        if record["state"] == "UNKNOWN":
+            return self._reconcile(record)
+        if record["state"] != "REQUESTED":
             raise ValueError("saved setup state is invalid")
         return self._attempt(record)
+
+    def _reconcile(self, record: dict[str, Any]) -> str:
+        try:
+            matches = self.provider.find_wallets(record["external_id"])
+        except Exception:
+            matches = None
+        if not isinstance(matches, list):
+            return "UNKNOWN"
+        if len(matches) == 1:
+            wallet = matches[0]
+            if not isinstance(wallet, dict):
+                return "UNKNOWN"
+            wallet_id = wallet.get("wallet_id")
+            if (
+                isinstance(wallet_id, str)
+                and wallet_id
+                and wallet.get("owner_id") == record["owner_id"]
+                and wallet.get("chain_type") == "ethereum"
+                and wallet.get("network_id") == record["network_id"]
+                and wallet.get("external_id") == record["external_id"]
+            ):
+                record["state"] = "CONFIRMED"
+                record["wallet_id"] = wallet_id
+                self.ledger.put(record["setup_id"], record)
+                return "CONFIRMED"
+            return "UNKNOWN"
+        if matches:
+            return "UNKNOWN"
+        try:
+            age = self.now() - float(record["created_at"])
+        except (KeyError, TypeError, ValueError):
+            return "UNKNOWN"
+        if 0 <= age < IDEMPOTENCY_WINDOW_SECONDS:
+            return self._attempt(record)
+        return "UNKNOWN"
 
     def cancel(self, setup_id: str) -> str:
         record = self.ledger.get(setup_id)
@@ -126,12 +173,17 @@ class SetupManager:
         return record["state"]
 
     def _attempt(self, record: dict[str, Any], *, lose_response: bool = False) -> str:
+        # Persist uncertainty before sending so a crash after provider acceptance
+        # cannot turn an attempted setup into a cancellable unsent setup.
+        record["state"] = "UNKNOWN"
+        self.ledger.put(record["setup_id"], record)
         try:
             response = self.provider.create_wallet(
                 idempotency_key=record["idempotency_key"],
                 request={
                     "owner_id": record["owner_id"],
                     "agent_id": record["agent_id"],
+                    "chain_type": "ethereum",
                     "network_id": record["network_id"],
                     "external_id": record["external_id"],
                 },
@@ -141,11 +193,12 @@ class SetupManager:
             record["state"] = "UNKNOWN"
             self.ledger.put(record["setup_id"], record)
             raise
-        if response is None:
-            record["state"] = "UNKNOWN"
-        else:
+        wallet_id = response.get("wallet_id") if isinstance(response, dict) else None
+        if isinstance(wallet_id, str) and wallet_id:
             record["state"] = "CONFIRMED"
-            record["wallet_id"] = response["wallet_id"]
+            record["wallet_id"] = wallet_id
+        else:
+            record["state"] = "UNKNOWN"
         self.ledger.put(record["setup_id"], record)
         return record["state"]
 
@@ -158,6 +211,7 @@ class FakePrivy:
         self.idempotency: dict[str, tuple[str, str]] = {}
         self.create_count = 0
         self.sign_attempts: list[dict[str, str]] = []
+        self.lookup_unavailable = False
 
     def create_wallet(
         self,
@@ -177,6 +231,7 @@ class FakePrivy:
             wallet_id = f"wallet-{self.create_count}"
             self.wallets[wallet_id] = {
                 **request,
+                "wallet_id": wallet_id,
                 "address": f"address-{wallet_id}",
                 "signers": set(),
                 "pending_records": [],
@@ -185,6 +240,15 @@ class FakePrivy:
         if lose_response:
             return None
         return {"wallet_id": wallet_id}
+
+    def find_wallets(self, external_id: str) -> list[dict[str, Any]] | None:
+        if self.lookup_unavailable:
+            return None
+        return [
+            dict(wallet)
+            for wallet in self.wallets.values()
+            if wallet.get("external_id") == external_id
+        ]
 
     def add_signer(self, wallet_id: str, signer_id: str) -> None:
         self.wallets[wallet_id]["signers"].add(signer_id)
