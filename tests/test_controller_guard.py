@@ -15,7 +15,10 @@ from unittest.mock import patch
 import uuid
 from pathlib import Path
 
-from scripts.controller_guard import GuardStore, TmuxBridge, checked_send, main, preflight, stop_decision
+from scripts.controller_guard import (
+    GuardStore, TmuxBridge, _has_active_draft, _has_partial_input, _submitted,
+    checked_send, main, preflight, stop_decision,
+)
 
 
 class FakeBridge:
@@ -44,10 +47,16 @@ class FakeBridge:
     def message(self, target, text):
         self.calls.append(("message", target, text))
         self._raise("message")
-        self.capture += (
-            f"\n[tmux-bridge from:codex pane:{self.sender} at:work:0.0 — "
+        envelope = (
+            f"[tmux-bridge from:codex pane:{self.sender} at:work:0.0 — "
             f"load the smux skill to reply] {text}"
         )
+        lines = self.capture.splitlines()
+        if lines and lines[-1].strip() in {"❯", "›"}:
+            lines[-1] = f"{lines[-1].strip()} {envelope}"
+            self.capture = "\n".join(lines)
+        else:
+            self.capture += "\n" + envelope
 
     def enter(self, target):
         self.calls.append(("enter", target))
@@ -115,7 +124,7 @@ class CheckedSendTests(unittest.TestCase):
         settles = []
         result = checked_send(self.request, self.bridge, self.store, settle=lambda: settles.append(True))
         self.assertEqual(result["status"], "SUBMITTED")
-        self.assertEqual(len(settles), 1)
+        self.assertEqual(len(settles), 2)
         names = [call[0] for call in self.bridge.calls]
         self.assertEqual(names.count("message"), 1)
         self.assertEqual(names.count("enter"), 1)
@@ -125,12 +134,538 @@ class CheckedSendTests(unittest.TestCase):
         self.assertLess(names.index("enter"), len(names) - 1 - names[::-1].index("read"))
         self.assertNotIn(self.request["text"].encode(), self.store.path.read_bytes())
 
+    def test_native_empty_placeholder_and_footer_are_idle(self):
+        capture = (
+            "› Ask Codex to do anything\n"
+            "────────────────────────────────────────────────────────────\n"
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts                       ⚠ 1 warning · f2 to view"
+        )
+        self.assertFalse(_has_partial_input(capture))
+        self.assertFalse(_has_partial_input(
+            '❯ Try "edit <filepath> to..."\n'
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        ))
+        self.assertFalse(_has_partial_input("❯ Try …\n\n? for shortcuts"))
+
+    def test_observed_claude_fix_lint_placeholder_is_idle_but_added_text_is_partial(self):
+        footer = (
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        empty = '❯ Try "fix lint errors"\n' + footer
+        foreign = '❯ Try "fix lint errors" plus unsent user text\n' + footer
+        self.assertFalse(_has_partial_input(empty))
+        self.assertTrue(_has_partial_input(foreign))
+
+    def test_native_own_draft_is_found_before_footer(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        capture = (
+            "› " + own + "\n"
+            "\n"
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts\n"
+            "+ Show details"
+        )
+        self.assertTrue(_has_active_draft(capture, "%1", self.request["text"]))
+
+    def test_claude_native_own_draft_is_found_before_footer(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        capture = (
+            "❯ " + own + "\n"
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        self.assertTrue(_has_active_draft(capture, "%1", self.request["text"]))
+
+    def test_claude_native_manual_mode_footer_without_hint_preserves_own_draft(self):
+        text = "Reply only ACK-20261007-r13. Do not run tools."
+        own_header = (
+            "[tmux-bridge from:claude pane:%9 at:work:0.1 — "
+            "load the smux skill to reply] "
+        )
+        capture = (
+            "❯ " + own_header + "\n"
+            "  " + text + "\n"
+            "────────────────────────────────────────────────────────────\n"
+            "  🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today | "
+            "$0.00 block (4h 18m left) | $0.00/hr | 0 (0%)\n"
+            "  [OMC#4.15.0L] -> 4.15.7 omc update | 5h:39%(4h38m) "
+            "wk:26%(6d10h) extra:0%($0.00/$30.00) | session:0m\n"
+            "  ⏸ manual mode on"
+        )
+        self.assertTrue(_has_active_draft(capture, "%9", text))
+
+    def test_footer_looking_composer_suffix_stays_visible_above_native_boundary(self):
+        text = "Reply only ACK-footer-boundary. Do not run tools."
+        own_header = (
+            "[tmux-bridge from:claude pane:%9 at:work:0.1 — "
+            "load the smux skill to reply] "
+        )
+        separator = "─" * 120
+        claude_footer = (
+            separator + "\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.19 session / $0.00 today\n"
+            "⏸ manual mode on"
+        )
+        for suffix in (
+            "  ⏸ manual mode on",
+            "  GPT-UNKNOWN · foreign unsent addition",
+            "  🤖 unknown | 💰 foreign unsent addition",
+        ):
+            with self.subTest(suffix=suffix):
+                capture = "❯ " + own_header + text + "\n" + suffix + "\n" + claude_footer
+                self.assertFalse(_has_active_draft(capture, "%9", text))
+                self.assertTrue(_has_partial_input(capture))
+
+        empty_with_foreign = "❯\n  🤖 unknown | 💰 foreign unsent addition\n" + claude_footer
+        self.assertTrue(_has_partial_input(empty_with_foreign))
+
+    def test_codex_blank_boundary_keeps_footer_and_foreign_rows_separate(self):
+        own = (
+            "[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+            "load the smux skill to reply] "
+        )
+        footer = (
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts\n"
+            "+ Show details"
+        )
+        clean = "› " + own + "fixture text\n\n" + footer
+        self.assertTrue(_has_active_draft(clean, "%1", "fixture text"))
+        self.assertFalse(_has_partial_input("› Ask Codex to do anything\n\n" + footer))
+        foreign = "› " + own + "fixture text\n  GPT-UNKNOWN · foreign unsent addition\n\n" + footer
+        self.assertFalse(_has_active_draft(foreign, "%1", "fixture text"))
+        self.assertTrue(_has_partial_input(foreign))
+        unanchored = "› " + own + "fixture text\nGPT-UNKNOWN · foreign unsent addition"
+        self.assertFalse(_has_active_draft(unanchored, "%1", "fixture text"))
+        self.assertTrue(_has_partial_input(unanchored))
+        short_separator = (
+            "❯ " + own + "fixture text\n  ⏸ manual mode on\n─\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session"
+        )
+        self.assertFalse(_has_active_draft(short_separator, "%1", "fixture text"))
+        self.assertTrue(_has_partial_input(short_separator))
+        unanchored_empty = "› Ask Codex to do anything\n? for shortcuts"
+        self.assertTrue(_has_partial_input(unanchored_empty))
+
+    def test_footer_looking_suffix_blocks_fresh_send_and_typed_recovery(self):
+        own_header = (
+            "[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+            "load the smux skill to reply] "
+        )
+        separator = "─" * 120
+        footer = separator + "\nGPT-6.1-Sol high · ~/repo · lane-3 · Main [default]"
+        suffixes = (
+            "  ⏸ manual mode on",
+            "  GPT-UNKNOWN · foreign unsent addition",
+            "  🤖 unknown | 💰 foreign unsent addition",
+        )
+        for index, suffix in enumerate(suffixes):
+            with self.subTest(stage="fresh", suffix=suffix):
+                self.request["event_id"] = f"footer-fresh-{index}"
+
+                class ForeignAfterType(FakeBridge):
+                    def message(inner, target, text):
+                        inner.calls.append(("message", target, text))
+                        inner.capture = "› " + own_header + text + "\n" + suffix + "\n" + footer
+
+                initial = "› Ask Codex to do anything\n\n" + footer
+                self.bridge = ForeignAfterType(capture=initial)
+                self.request["preflight_sha256"] = hashlib.sha256(initial.encode()).hexdigest()
+                result = self.send()
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertEqual(sum(call[0] == "enter" for call in self.bridge.calls), 0)
+                self.assertIn(suffix, self.bridge.capture)
+
+            with self.subTest(stage="typed-recovery", suffix=suffix):
+                self.request["event_id"] = f"footer-recovery-{index}"
+                capture = "› " + own_header + self.request["text"] + "\n" + suffix + "\n" + footer
+                self.bridge = FakeBridge(capture=capture)
+                self.request["preflight_sha256"] = hashlib.sha256(capture.encode()).hexdigest()
+                self.store.put_record({
+                    **self.request,
+                    "status": "TYPED",
+                    "typed_sha256": hashlib.sha256(capture.encode()).hexdigest(),
+                })
+                result = self.send()
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertFalse(any(call[0] in {"message", "enter"} for call in self.bridge.calls))
+                self.assertIn(suffix, self.bridge.capture)
+
+    def test_indented_prompt_body_cannot_replace_native_composer_boundary(self):
+        text = "Reply only ACK-prompt-boundary. Do not run tools."
+        layouts = (
+            ("claude", "❯", "❯", "separator"),
+            ("claude", "❯", "›", "separator"),
+            ("codex", "›", "❯", "blank"),
+            ("codex", "›", "›", "blank"),
+        )
+        for host, prompt, nested_prompt, boundary in layouts:
+            with self.subTest(host=host, prompt=prompt, nested=nested_prompt):
+                header = (
+                    f"[tmux-bridge from:{host} pane:%1 at:work:0.0 — "
+                    "load the smux skill to reply] "
+                )
+                if boundary == "separator":
+                    chrome = "─" * 120 + "\n🤖 Sonnet 5.5 (medium) | 💰 $0.00 session\n⏸ manual mode on"
+                else:
+                    chrome = "\n\nGPT-6.1-Sol high · ~/repo · lane-3 · Main [default]"
+
+                draft = (
+                    prompt + " foreign unsent prefix\n  " + nested_prompt + " " + header + text
+                    + "\n" + chrome
+                )
+                self.assertFalse(_has_active_draft(draft, "%1", text))
+                self.assertTrue(_has_partial_input(draft))
+
+    def test_indented_empty_looking_prompt_body_is_not_idle(self):
+        layouts = (
+            ("claude", "❯", "❯", "separator"),
+            ("claude", "❯", "›", "separator"),
+            ("codex", "›", "❯", "blank"),
+            ("codex", "›", "›", "blank"),
+        )
+        for host, prompt, nested_prompt, boundary in layouts:
+            with self.subTest(host=host, prompt=prompt, nested=nested_prompt):
+                chrome = (
+                    "─" * 120 + "\n🤖 Sonnet 5.5 (medium) | 💰 $0.00 session\n⏸ manual mode on"
+                    if boundary == "separator"
+                    else "\n\nGPT-6.1-Sol high · ~/repo · lane-3 · Main [default]"
+                )
+                empty_looking_body = (
+                    prompt + " foreign unsent prefix\n  " + nested_prompt + " \n" + chrome
+                )
+                self.assertTrue(_has_partial_input(empty_looking_body))
+
+    def test_indented_prompt_body_blocks_fresh_send_and_typed_recovery(self):
+        text = "Reply only ACK-prompt-boundary. Do not run tools."
+        self.request["text"] = text
+        layouts = (
+            ("claude", "❯", "❯", "separator"),
+            ("claude", "❯", "›", "separator"),
+            ("codex", "›", "❯", "blank"),
+            ("codex", "›", "›", "blank"),
+        )
+        for host, prompt, nested_prompt, boundary in layouts:
+            with self.subTest(host=host, prompt=prompt, nested=nested_prompt):
+                header = (
+                    f"[tmux-bridge from:{host} pane:%1 at:work:0.0 — "
+                    "load the smux skill to reply] "
+                )
+                if boundary == "separator":
+                    chrome = "─" * 120 + "\n🤖 Sonnet 5.5 (medium) | 💰 $0.00 session\n⏸ manual mode on"
+                    idle = "❯ Try \"fix lint errors\"\n" + chrome
+                else:
+                    chrome = "\n\nGPT-6.1-Sol high · ~/repo · lane-3 · Main [default]"
+                    idle = "› Ask Codex to do anything" + chrome
+                draft = (
+                    prompt + " foreign unsent prefix\n  " + nested_prompt + " " + header + text
+                    + "\n" + chrome
+                )
+                self.request["event_id"] = f"nested-prompt-{host}-{ord(nested_prompt)}"
+
+                class ForeignAfterType(FakeBridge):
+                    def message(inner, target, message):
+                        inner.calls.append(("message", target, message))
+                        inner.capture = draft
+
+                self.bridge = ForeignAfterType(capture=idle)
+                self.request["preflight_sha256"] = hashlib.sha256(idle.encode()).hexdigest()
+                result = self.send()
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertEqual(sum(call[0] == "enter" for call in self.bridge.calls), 0)
+                self.assertIn("foreign unsent prefix", self.bridge.capture)
+
+                self.request["event_id"] += "-recovery"
+                typed = draft
+                self.bridge = FakeBridge(capture=typed)
+                self.request["preflight_sha256"] = hashlib.sha256(typed.encode()).hexdigest()
+                self.store.put_record({
+                    **self.request,
+                    "status": "TYPED",
+                    "typed_sha256": hashlib.sha256(typed.encode()).hexdigest(),
+                })
+                result = self.send()
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertFalse(any(call[0] in {"message", "enter"} for call in self.bridge.calls))
+                self.assertIn("foreign unsent prefix", self.bridge.capture)
+
+    def test_indented_only_prompt_is_not_native_identity_but_direct_message_still_is(self):
+        text = self.request["text"]
+        indented = "  ❯ [tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] " + text
+        self.assertTrue(_has_partial_input(indented))
+        self.assertFalse(_has_active_draft(indented, "%1", text))
+        direct = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] " + text
+        self.assertTrue(_has_active_draft(direct, "%1", text))
+
+    def test_claude_native_split_plugin_quota_footer_and_foreign_input(self):
+        text = "Reply only ACK-r14-footer. Do not run tools."
+        own_header = (
+            "[tmux-bridge from:claude pane:%9 at:work:0.1 — "
+            "load the smux skill to reply] "
+        )
+        separator = "────────────────────────────────────────────────────────────\n"
+        update = "  [OMC#4.15.0L] -> 4.15.7 omc update\n"
+        quota = "  5h:0%* wk:19%*(~6d10h) extra:0%*($0.00/$30.00) | session:191m\n"
+        footer = (
+            separator +
+            "  🤖 Sonnet 5.5 (medium) | 💰 $0.19 session / $0.00 today / "
+            "No active block | 🧠 49,514 (5%)\n" +
+            update + quota +
+            "  ⏸ manual mode on · ← for agents"
+        )
+        idle = "❯\n" + footer
+        own = "❯ " + own_header + "\n  " + text + "\n" + footer
+        foreign = own.replace("\n" + separator, "\n  foreign unsent addition\n" + separator)
+        self.assertFalse(_has_partial_input(idle))
+        self.assertTrue(_has_active_draft(own, "%9", text))
+        self.assertFalse(_has_active_draft(foreign, "%9", text))
+        self.assertTrue(_has_partial_input(foreign))
+        self.assertTrue(_has_partial_input(idle.replace(quota, quota.rstrip() + " extra\n")))
+        self.assertTrue(_has_partial_input(idle.replace(update, update.rstrip() + " extra\n")))
+
+    def test_native_foreign_draft_with_footer_stays_partial(self):
+        capture = (
+            "❯ [tmux-bridge from:other pane:%9 at:work:0.1 — load the smux skill to reply] foreign text\n"
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        self.assertTrue(_has_partial_input(capture))
+        self.assertFalse(_has_active_draft(capture, "%1", self.request["text"]))
+
+    def test_native_wrapped_own_draft_is_found_but_collapsed_input_is_not_adopted(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        header, body = own.split(" review ", 1)
+        wrapped = (
+            "› " + header + " review\n" + body + "\n"
+            "\n"
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts\n"
+            "+ Show details"
+        )
+        collapsed = "› [pasted text 73 chars]\n" + wrapped.split("\n", 1)[1]
+        self.assertTrue(_has_active_draft(wrapped, "%1", self.request["text"]))
+        self.assertFalse(_has_active_draft(collapsed, "%1", self.request["text"]))
+        self.assertTrue(_has_partial_input(collapsed))
+
+    def test_native_word_wrapped_own_draft_is_reconstructed_without_added_space(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        offset = own.index("candidate") + len("candi")
+        wrapped = "› " + own[:offset] + "\n" + own[offset:] + "\n\n+ Show details"
+        self.assertTrue(_has_active_draft(wrapped, "%1", self.request["text"]))
+
+    def test_native_claude_pointer_capture_reconstructs_mixed_word_wraps(self):
+        text = (
+            "Packet CTRL-BIND-L3-01/NATIVE-CLAUDE-DELIVERY/9: "
+            "/private/tmp/edge-os-controller-bind.PQBi6Z/project/.scratch/"
+            "controller-guard-binding/packets/claude-delivery-round9-2026-10-07.md "
+            "SHA256 889940979590fb33f66301736cd3e23d220e857e583dea06b1460e2c76fb8940"
+        )
+        own_header = (
+            "[tmux-bridge from:edge-os-worker-lane-3 pane:%5 at:edge-os-lane-3:0.1 — "
+            "load the smux skill to reply] "
+        )
+        capture = (
+            "❯ " + own_header + "Packet\n"
+            "  CTRL-BIND-L3-01/NATIVE-CLAUDE-DELIVERY/9: /private/tmp/edge-os-controller-bind.PQBi6Z/project/.scratch/controller-gu\n"
+            "  ard-binding/packets/claude-delivery-round9-2026-10-07.md SHA256\n"
+            "  889940979590fb33f66301736cd3e23d220e857e583dea06b1460e2c76fb8940\n"
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        self.assertTrue(_has_active_draft(capture, "%5", text))
+
+    def test_native_submitted_message_and_empty_placeholder_with_footer_confirm(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        footer = (
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts\n"
+            "+ Show details"
+        )
+        before = (
+            "prior history\n› " + own + "\n"
+            "────────────────────────────────────────────────────────────\n" + footer
+        )
+        after = (
+            "prior history\n" + own + "\n"
+            "› Ask Codex to do anything\n"
+            "────────────────────────────────────────────────────────────\n" + footer
+        )
+        self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
+
+    def test_native_submission_allows_receiver_output_after_exact_message(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        before = "❯ " + own
+        after = before + "\nRECEIVED " + own + "\n❯ "
+        self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
+        self.assertFalse(_submitted(after, "❯ unrelated draft", "%1", self.request["text"]))
+
+    def test_native_submission_survives_viewport_padding_shift_but_requires_new_message(self):
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+        earlier = header + "Reply only ACK-old-event. Do not run tools."
+        fresh = header + "Reply only ACK-current-event. Do not run tools."
+        history = [
+            ">_ OpenAI Codex (v0.160.1)",
+            "permissions: YOLO mode",
+            earlier,
+            "• ACK-old-event",
+            earlier,
+            "• ACK-old-event",
+        ]
+        before = "\n".join(history + ([""] * 8) + ["› " + fresh])
+        after = "\n".join(
+            history + [fresh, "• Working (0s • esc to interrupt)", "› Ask Codex to do anything"]
+        )
+        old_history_only = "\n".join(history + ([""] * 8) + ["› Ask Codex to do anything"])
+        self.assertTrue(_submitted(after, before, "%1", "Reply only ACK-current-event. Do not run tools."))
+        self.assertFalse(_submitted(old_history_only, before, "%1", "Reply only ACK-current-event. Do not run tools."))
+
+    def test_claude_submission_ignores_only_adjacent_update_chrome(self):
+        text = "Reply only ACK-current-event. Do not run tools."
+        header = "[tmux-bridge from:claude pane:%9 at:work:0.1 — load the smux skill to reply] "
+        update_text = "✔ Update installed · Restart to update"
+        notice = " " * (120 - len(update_text)) + update_text
+        separator = "─" * 120
+        history = [
+            "Claude Code v2.1.292",
+            "Sonnet 5.5 with medium effort · Claude Pro",
+            "/repo · /rc",
+            update_text,
+            "❯ /clear",
+            "❯ Reply exactly READY; make no tool calls.",
+            "⏺ READY",
+            "✻ Worked for 2s · done",
+            "❯ Reply exactly READY; make no tool calls.",
+            "⏺ READY",
+            "✻ Cooked for 2s · done",
+        ]
+        footer = (
+            separator + "\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.19 session / $0.00 today / "
+            "No active block | 🧠 49,514 (5%)\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update\n"
+            "5h:0%* wk:19%*(~6d10h) extra:0%*($0.00/$30.00) | session:191m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        own = "❯ " + header + "\n  " + text
+        before = "\n".join(history + ["", notice, separator, own, footer])
+        after = "\n".join(history + [
+            header,
+            "  " + text,
+            "  ⎿ 1 skill available",
+            "✶ Working (0s)",
+            "  ⎿ Tip: continue",
+            notice,
+            separator,
+            "❯ ",
+            footer,
+        ])
+        old_identical_history_only = "\n".join(
+            history + [notice, separator, "❯ ", footer]
+        )
+        changed_update = before.replace(notice, notice + " (user text)", 1)
+        changed_separator = before.replace(separator + "\n" + own,
+                                           "─" * 119 + "x\n" + own, 1)
+        self.assertTrue(_submitted(after, before, "%9", text))
+        self.assertFalse(_submitted(old_identical_history_only, before, "%9", text))
+        self.assertFalse(_submitted(after, changed_update, "%9", text))
+        self.assertFalse(_submitted(after, changed_separator, "%9", text))
+
+    def test_active_draft_rejects_suffix_after_exact_message(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] fixture text")
+        capture = "❯ " + own + "\nforeign unsent addition"
+        self.assertFalse(_has_active_draft(capture, "%1", "fixture text"))
+
+    def test_checked_send_uses_350ms_settles(self):
+        with patch("scripts.controller_guard.time.sleep") as sleep:
+            result = checked_send(self.request, self.bridge, self.store)
+        self.assertEqual(result["status"], "SUBMITTED")
+        self.assertEqual([call.args for call in sleep.call_args_list], [(0.35,), (0.35,)])
+
+    def test_delayed_display_gets_one_safe_recovery_read_before_enter(self):
+        class DelayedDisplay(FakeBridge):
+            def message(inner, target, text):
+                super(DelayedDisplay, inner).message(target, text)
+                inner.stale_once = True
+
+            def read(inner, target):
+                inner.calls.append(("read", target))
+                inner._raise("read")
+                if getattr(inner, "stale_once", False):
+                    inner.stale_once = False
+                    return "❯ "
+                return inner.capture
+
+        self.bridge = DelayedDisplay()
+        settles = []
+        result = checked_send(self.request, self.bridge, self.store,
+                              settle=lambda: settles.append(True))
+        self.assertEqual(result["status"], "SUBMITTED")
+        names = [call[0] for call in self.bridge.calls]
+        self.assertEqual(names.count("message"), 1)
+        self.assertEqual(names.count("enter"), 1)
+        self.assertEqual(names.count("read"), 4)
+        self.assertEqual(len(settles), 3)
+        self.assertLess(names.index("message"), names.index("enter"))
+
     def test_duplicate_event_never_sends_twice(self):
         self.send()
         self.bridge.calls.clear()
         result = self.send()
         self.assertEqual(result["status"], "SUBMITTED")
         self.assertEqual(self.bridge.calls, [])
+
+    def test_fork_cannot_resend_event_recorded_by_parent_session(self):
+        record = {
+            **self.request,
+            "session_id": "parent-session",
+            "agent_id": "codex:parent-session",
+            "status": "SUBMITTED",
+        }
+        self.store.put_record(record)
+        result = checked_send(self.request, self.bridge, self.store, settle=lambda: None,
+                              inherited_session_ids=["parent-session"])
+        self.assertEqual(result, {"status": "SUBMITTED", "duplicate": True})
+        self.assertEqual(self.bridge.calls, [])
+        self.assertIsNone(self.store.get_record(("codex", "s1", "codex:s1", "T-1", "dispatch-1",
+                                                 "abc123", "%1", "%2")))
+
+    def test_different_pane_fork_cannot_resend_parent_terminal_event(self):
+        for status in ("SUBMITTED", "UNCONFIRMED"):
+            with self.subTest(status=status):
+                parent = {
+                    **self.request,
+                    "session_id": "parent-session",
+                    "agent_id": "codex:parent-session",
+                    "sender": "%5",
+                    "status": status,
+                }
+                self.store.put_record(parent)
+                request = {**self.request, "sender": "%6"}
+                bridge = FakeBridge(sender="%6")
+                result = checked_send(request, bridge, self.store, settle=lambda: None,
+                                      inherited_session_ids=["parent-session"])
+                self.assertEqual(result, {"status": status, "duplicate": True})
+                self.assertFalse(any(call[0] in {"message", "enter"} for call in bridge.calls))
 
     def test_prepared_event_cannot_change_its_message(self):
         self.store.put_record({
@@ -661,6 +1196,421 @@ class StopGuardTests(unittest.TestCase):
         self.assertEqual(registered["pane_id"], "%7")
 
 
+class SessionStartTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.state_root = self.root / "state"
+        self.assignment = {
+            "approved": True,
+            "assignment_id": "dispatch-1",
+            "host": "codex",
+            "role": "worker",
+            "task_id": "T-1",
+            "pane_id": "%5",
+            "cwd": str(self.root),
+            "required_reports": ["RESULT.md"],
+            "approved_work": [{"id": "T-1", "status": "in_progress"}],
+        }
+        self.event = {
+            "hook_event_name": "SessionStart",
+            "session_id": "s1",
+            "cwd": str(self.root),
+            "source": "clear",
+            "transcript_path": "/private/transcript.jsonl",
+        }
+
+    def run_cli(self, command, host="codex", payload=None, pane="%5", now=None):
+        output = io.StringIO()
+        patches = [patch("sys.stdin", io.StringIO(json.dumps(payload or {}))),
+                   contextlib.redirect_stdout(output)]
+        if command == "session-start":
+            patches.append(patch("scripts.controller_guard.TmuxBridge.id", return_value=pane))
+        if now is not None:
+            patches.append(patch("scripts.controller_guard.time.time", return_value=now))
+        with contextlib.ExitStack() as stack:
+            for context in patches:
+                stack.enter_context(context)
+            result = main(["--state-root", str(self.state_root), command, host])
+        return result, json.loads(output.getvalue()) if output.getvalue() else {}
+
+    def assign(self, assignment=None, now=1000, host="codex"):
+        return self.run_cli("assign", host=host, payload=assignment or self.assignment, now=now)
+
+    def start(self, event=None, host="codex", pane="%5", now=1001):
+        return self.run_cli("session-start", host=host, payload=event or self.event, pane=pane, now=now)
+
+    def state(self):
+        return json.loads((self.state_root / "bindings.json").read_text())
+
+    def receipt(self, host="codex", session_id="s1", assignment_id="dispatch-1"):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = main(["--state-root", str(self.state_root), "receipt", host, session_id, assignment_id])
+        return code, json.loads(output.getvalue())
+
+    def test_approved_assignment_registers_native_identity_and_matching_receipt(self):
+        self.assertEqual(self.assign()[0], 0)
+        code, receipt = self.start()
+        self.assertEqual(code, 0)
+        self.assertIn("hookSpecificOutput", receipt)
+        code, receipt = self.receipt()
+        self.assertEqual(code, 0)
+        self.assertEqual((receipt["host"], receipt["session_id"], receipt["agent_id"]),
+                         ("codex", "s1", "codex:s1"))
+        self.assertEqual((receipt["pane_id"], receipt["task_id"], receipt["assignment_id"]),
+                         ("%5", "T-1", "dispatch-1"))
+        self.assertEqual(len(receipt["assignment_sha256"]), 64)
+        self.assertNotIn("transcript", json.dumps(receipt))
+        self.assertEqual(self.state()["bindings"][0]["status"], "ACTIVE")
+        self.assertEqual(self.state()["receipts"][0], receipt)
+        self.assertNotIn("transcript_path", json.dumps(self.state()))
+
+    def test_receipt_verification_rejects_identity_or_fingerprint_tampering(self):
+        self.assign()
+        self.start()
+        state_path = self.state_root / "bindings.json"
+        original = self.state()
+        for field, value in (("role", "gate"), ("assignment_sha256", "0" * 64)):
+            with self.subTest(field=field):
+                state = json.loads(json.dumps(original))
+                state["receipts"][0][field] = value
+                state_path.write_text(json.dumps(state))
+                code, result = self.receipt()
+                self.assertEqual(code, 1)
+                self.assertEqual(result, {"registered": False})
+        state_path.write_text(json.dumps(original))
+
+    def test_claude_session_start_uses_native_session_identity(self):
+        self.assign({**self.assignment, "host": "claude"}, host="claude")
+        event = {**self.event, "session_id": "claude-session"}
+        code, output = self.start(event, host="claude")
+        self.assertEqual(code, 0)
+        self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        code, receipt = self.receipt(host="claude", session_id="claude-session")
+        self.assertEqual(code, 0)
+        self.assertEqual((receipt["host"], receipt["session_id"], receipt["task_id"]),
+                         ("claude", "claude-session", "T-1"))
+
+    def test_missing_foreign_and_malformed_assignments_do_not_enroll(self):
+        self.assertEqual(self.start()[1], {})
+        self.assign()
+        foreign_cwd = {**self.event, "cwd": str(self.root / "foreign")}
+        self.assertEqual(self.start(foreign_cwd)[1], {})
+        self.assertEqual(self.start(pane="%9")[1], {})
+        self.assertEqual(self.start(host="claude")[1], {})
+        self.assertEqual(self.state()["bindings"], [])
+        self.assertEqual(self.assign({**self.assignment, "approved": False})[0], 2)
+        self.assertEqual(self.assign({**self.assignment, "task_id": "T-2"})[0], 2)
+
+    def test_assignment_with_foreign_task_obligation_is_rejected(self):
+        mixed = {
+            **self.assignment,
+            "approved_work": [
+                {"id": "T-1", "status": "complete"},
+                {"id": "T-old", "status": "pending"},
+            ],
+        }
+        self.assertEqual(self.assign(mixed)[0], 2)
+        self.assertEqual(self.start()[1], {})
+        self.assertFalse((self.state_root / "bindings.json").exists())
+
+    def test_stale_assignment_cannot_register(self):
+        self.assign(now=1000)
+        self.assertEqual(self.start(now=1901)[1], {})
+        self.assertEqual(self.state()["bindings"], [])
+        self.assign({**self.assignment, "assignment_id": "dispatch-fresh"}, now=1902)
+        self.assertTrue(self.start(now=1903)[1])
+
+    def test_future_assignment_timestamp_cannot_register(self):
+        self.assign(now=1000)
+        state_path = self.state_root / "bindings.json"
+        state = self.state()
+        state["assignment"]["issued_at"] = 1002
+        state_path.write_text(json.dumps(state))
+        self.assertEqual(self.start(now=1001)[1], {})
+        self.assertEqual(self.state()["bindings"], [])
+
+    def test_duplicate_start_and_resume_preserve_same_ticket_state(self):
+        self.assign()
+        self.start()
+        _, original = self.receipt()
+        state = self.state()
+        state["bindings"][0]["status"] = "BLOCKED"
+        state["bindings"][0]["approved_work"][0]["status"] = "complete"
+        state["bindings"][0]["review_history"] = ["A:REVISE", "B:PASS"]
+        state["bindings"][0]["gate_verdicts"] = 2
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+        self.start()
+        _, duplicate = self.receipt()
+        self.assertEqual(duplicate, original)
+        for source in ("resume", "compact", "fork"):
+            with self.subTest(source=source):
+                self.start({**self.event, "source": source})
+                _, receipt = self.receipt()
+                self.assertEqual(receipt, original)
+        after = self.state()
+        self.assertEqual(len(after["bindings"]), 1)
+        self.assertEqual(after["bindings"][0]["status"], "BLOCKED")
+        self.assertEqual(after["bindings"][0]["review_history"], ["A:REVISE", "B:PASS"])
+        self.assertEqual(after["bindings"][0]["gate_verdicts"], 2)
+        self.assertEqual(len(after["receipts"]), 1)
+
+    def test_fork_with_approved_parent_preserves_task_binding_state(self):
+        self.assign()
+        self.start()
+        state = self.state()
+        parent = state["bindings"][0]
+        parent.update({"status": "BLOCKED", "review_history": ["A:REVISE"], "gate_verdicts": 2})
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+        assignment = {
+            **self.assignment,
+            "assignment_id": "fork-1",
+            "pane_id": "%6",
+            "fork_parent_session_id": "s1",
+        }
+        self.assertEqual(self.assign(assignment, now=1002)[0], 0)
+        event = {**self.event, "session_id": "fork-s1", "source": "fork"}
+        self.assertTrue(self.start(event, pane="%6", now=1003)[1])
+        _, parent_receipt = self.receipt()
+        _, child_receipt = self.receipt(session_id="fork-s1", assignment_id="fork-1")
+        self.assertEqual(child_receipt["source"], "fork")
+        self.assertEqual(child_receipt["task_id"], parent_receipt["task_id"])
+        self.assertEqual(child_receipt["pane_id"], "%6")
+        state = self.state()
+        self.assertEqual(len(state["bindings"]), 2)
+        child = next(binding for binding in state["bindings"] if binding["session_id"] == "fork-s1")
+        self.assertEqual(child["status"], "BLOCKED")
+        self.assertEqual(child["required_reports"], ["RESULT.md"])
+        self.assertEqual(child["approved_work"], [{"id": "T-1", "status": "in_progress"}])
+        self.assertEqual(child["review_history"], ["A:REVISE"])
+        self.assertEqual(child["gate_verdicts"], 2)
+        before_duplicate = json.loads(json.dumps(state))
+        self.start(event, now=1004)
+        self.assertEqual(self.state(), before_duplicate)
+
+    def test_fork_without_matching_parent_assignment_stays_unbound(self):
+        self.assign()
+        event = {**self.event, "session_id": "fork-s1", "source": "fork"}
+        self.assertEqual(self.start(event)[1], {})
+        state = self.state()
+        self.assertEqual(state["bindings"], [])
+        self.assertEqual(state["receipts"], [])
+        self.assertNotIn("consumed_by", state["assignment"])
+
+    def test_fork_rejects_unverified_parent_without_changing_existing_binding(self):
+        self.assign()
+        self.start()
+        before = self.state()
+        assignment = {
+            **self.assignment,
+            "assignment_id": "fork-unverified-parent",
+            "fork_parent_session_id": "foreign-session",
+        }
+        self.assertEqual(self.assign(assignment, now=1002)[0], 0)
+        event = {**self.event, "session_id": "fork-s1", "source": "fork"}
+        self.assertEqual(self.start(event, now=1003)[1], {})
+        after = self.state()
+        self.assertEqual(after["bindings"], before["bindings"])
+        self.assertEqual(after["receipts"], before["receipts"])
+        self.assertNotIn("consumed_by", after["assignment"])
+
+    def test_fork_stop_inherits_open_delivery_without_rewriting_record(self):
+        self.assign()
+        self.start()
+        store = GuardStore(self.state_root / "delivery.sqlite3")
+        record = {
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1", "task_id": "T-1",
+            "event_id": "missed", "candidate": "c1", "sender": "%5", "destination": "%9",
+            "status": "UNCONFIRMED",
+        }
+        store.put_record(record)
+        assignment = {
+            **self.assignment,
+            "assignment_id": "fork-delivery",
+            "fork_parent_session_id": "s1",
+        }
+        self.assertEqual(self.assign(assignment, now=1002)[0], 0)
+        event = {**self.event, "session_id": "fork-delivery-session", "source": "fork"}
+        self.assertTrue(self.start(event, now=1003)[1])
+        state = self.state()
+        child = next(binding for binding in state["bindings"] if binding["session_id"] == "fork-delivery-session")
+        self.assertEqual(child["inherited_session_ids"], ["s1"])
+        result = stop_decision("codex", {"session_id": "fork-delivery-session", "cwd": str(self.root)},
+                               self.state_root / "bindings.json", store)
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("unfinished-delivery", result["reason"])
+        self.assertEqual(store.get_record(("codex", "s1", "codex:s1", "T-1", "missed", "c1", "%5", "%9"))["status"], "UNCONFIRMED")
+
+    def test_send_cli_uses_only_verified_binding_fork_lineage(self):
+        self.assign()
+        self.start()
+        assignment = {
+            **self.assignment,
+            "assignment_id": "fork-send",
+            "fork_parent_session_id": "s1",
+        }
+        self.assign(assignment, now=1002)
+        event = {**self.event, "session_id": "fork-send-session", "source": "fork"}
+        self.start(event, now=1003)
+        request = {
+            "host": "codex", "session_id": "fork-send-session", "agent_id": "codex:fork-send-session",
+            "task_id": "T-1", "event_id": "e1", "candidate": "c1", "sender": "%5", "destination": "%9",
+            "destination_id": "%9", "text": "message", "preflight_sha256": "a" * 64,
+        }
+        result = io.StringIO()
+        with patch("scripts.controller_guard.checked_send",
+                   side_effect=lambda request, bridge, store, inherited_session_ids=None:
+                   {"inherited_session_ids": inherited_session_ids}):
+            with patch("sys.stdin", io.StringIO(json.dumps(request))), contextlib.redirect_stdout(result):
+                self.assertEqual(main(["--state-root", str(self.state_root), "send"]), 0)
+        self.assertEqual(json.loads(result.getvalue()), {"inherited_session_ids": ["s1"]})
+
+    def test_update_preserves_receipt_and_review_state(self):
+        self.assign()
+        self.start()
+        _, original_receipt = self.receipt()
+        state = self.state()
+        state["bindings"][0].update({"status": "BLOCKED", "review_history": ["A:REVISE"], "gate_verdicts": 2})
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+        store = GuardStore(self.state_root / "delivery.sqlite3")
+        record = {
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1", "task_id": "T-1",
+            "event_id": "missed", "candidate": "c1", "sender": "%5", "destination": "%9",
+            "status": "UNCONFIRMED",
+        }
+        store.put_record(record)
+        update = {
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1", "pane_id": "%5",
+            "cwd": str(self.root.resolve()), "status": "AWAITING_EVENT", "required_reports": ["RESULT.md"],
+            "approved_work": [{"id": "T-1", "status": "in_progress"}],
+        }
+        code, _ = self.run_cli("update", payload=update)
+        self.assertEqual(code, 0)
+        binding = self.state()["bindings"][0]
+        self.assertEqual(binding["role"], "worker")
+        self.assertEqual(binding["task_id"], "T-1")
+        self.assertEqual(binding["assignment_id"], original_receipt["assignment_id"])
+        self.assertEqual(binding["assignment_sha256"], original_receipt["assignment_sha256"])
+        self.assertEqual(binding["review_history"], ["A:REVISE"])
+        self.assertEqual(binding["gate_verdicts"], 2)
+        self.assertEqual(binding["status"], "AWAITING_EVENT")
+        self.assertEqual(store.get_record(("codex", "s1", "codex:s1", "T-1", "missed", "c1", "%5", "%9"))["status"], "UNCONFIRMED")
+        self.assertEqual(self.receipt()[1], original_receipt)
+
+        tampered = {**update, "task_id": "T-2"}
+        self.assertEqual(self.run_cli("update", payload=tampered)[0], 2)
+        self.assertEqual(self.receipt()[1], original_receipt)
+        reset_history = {**update, "review_history": [], "gate_verdicts": 0}
+        self.assertEqual(self.run_cli("update", payload=reset_history)[0], 2)
+        cross_task = {**update, "approved_work": [{"id": "T-2", "status": "pending"}]}
+        self.assertEqual(self.run_cli("update", payload=cross_task)[0], 2)
+        empty_work = {**update, "approved_work": []}
+        self.assertEqual(self.run_cli("update", payload=empty_work)[0], 2)
+        binding = self.state()["bindings"][0]
+        self.assertEqual(binding["review_history"], ["A:REVISE"])
+        self.assertEqual(binding["gate_verdicts"], 2)
+
+    def test_cli_update_preserves_omitted_status_reports_and_work(self):
+        self.assign({**self.assignment, "role": "gate", "required_reports": ["MISSING.md"]})
+        self.start()
+        state = self.state()
+        state["bindings"][0]["status"] = "BLOCKED"
+        previous_work = state["bindings"][0]["approved_work"]
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+
+        update = {
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1",
+        }
+        code, _ = self.run_cli("update", payload=update)
+        self.assertEqual(code, 0)
+        binding = self.state()["bindings"][0]
+        self.assertEqual(binding["status"], "BLOCKED")
+        self.assertEqual(binding["required_reports"], ["MISSING.md"])
+        self.assertEqual(binding["approved_work"], previous_work)
+        self.assertEqual(binding["pane_id"], "%5")
+        self.assertEqual(binding["cwd"], str(self.root.resolve()))
+
+    def test_first_gate_counter_update_is_bounded_and_preserves_receipt(self):
+        self.assign({**self.assignment, "role": "gate"})
+        self.start()
+        original = self.state()["bindings"][0]
+        _, original_receipt = self.receipt()
+        identity = {"host": "codex", "session_id": "s1", "agent_id": "codex:s1"}
+
+        for count in (4, -1):
+            with self.subTest(count=count):
+                code, _ = self.run_cli("update", payload={**identity, "gate_verdicts": count})
+                self.assertEqual(code, 2)
+                self.assertEqual(self.state()["bindings"][0], original)
+                self.assertEqual(self.receipt()[1], original_receipt)
+
+    def test_update_rejects_malformed_first_or_appended_review_history(self):
+        self.assign()
+        self.start()
+        original = self.state()["bindings"][0]
+        _, original_receipt = self.receipt()
+        identity = {"host": "codex", "session_id": "s1", "agent_id": "codex:s1"}
+
+        for history in ({}, ["A:PASS", None]):
+            with self.subTest(history=history):
+                code, _ = self.run_cli("update", payload={**identity, "review_history": history})
+                self.assertEqual(code, 2)
+                self.assertEqual(self.state()["bindings"][0], original)
+                self.assertEqual(self.receipt()[1], original_receipt)
+
+        self.assertEqual(self.run_cli("update", payload={**identity, "review_history": ["A:PASS"]})[0], 0)
+        with_history = self.state()["bindings"][0]
+        _, with_history_receipt = self.receipt()
+        code, _ = self.run_cli("update", payload={**identity, "review_history": ["A:PASS", None]})
+        self.assertEqual(code, 2)
+        self.assertEqual(self.state()["bindings"][0], with_history)
+        self.assertEqual(self.receipt()[1], with_history_receipt)
+
+    def test_clear_with_new_session_registers_new_task_without_old_obligations(self):
+        self.assign()
+        self.start()
+        self.assertEqual(self.start({**self.event, "session_id": "s2"})[1], {})
+        next_assignment = {
+            **self.assignment,
+            "assignment_id": "dispatch-2",
+            "task_id": "T-2",
+            "required_reports": ["NEXT.md"],
+            "approved_work": [{"id": "T-2", "status": "pending"}],
+        }
+        self.assign(next_assignment, now=1002)
+        next_event = {**self.event, "session_id": "s2"}
+        self.start(next_event, now=1003)
+        _, receipt = self.receipt(session_id="s2", assignment_id="dispatch-2")
+        self.assertEqual(receipt["task_id"], "T-2")
+        state = self.state()
+        self.assertEqual([binding["approved_work"][0]["id"] for binding in state["bindings"]], ["T-1", "T-2"])
+        self.assertEqual(state["bindings"][0]["required_reports"], ["RESULT.md"])
+        self.assertEqual(state["bindings"][1]["required_reports"], ["NEXT.md"])
+
+    def test_gate_assignment_starts_in_awaiting_event(self):
+        self.assign({**self.assignment, "role": "gate", "approved_work": [{"id": "T-1", "status": "pending"}]})
+        self.start()
+        self.assertEqual(self.state()["bindings"][0]["status"], "AWAITING_EVENT")
+        code, output = self.run_cli("hook", payload=self.event)
+        self.assertEqual(code, 0)
+        self.assertEqual(output, {})
+
+    def test_session_start_receipt_and_stop_hook_share_state_root(self):
+        self.assign()
+        self.start()
+        hook_payload = {"session_id": "s1", "cwd": str(self.root), "stop_hook_active": False}
+        code, output = self.run_cli("hook", payload=hook_payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(output["decision"], "block")
+        other_root = self.root / "other-state"
+        neutral = io.StringIO()
+        with patch("sys.stdin", io.StringIO(json.dumps(hook_payload))), contextlib.redirect_stdout(neutral):
+            self.assertEqual(main(["--state-root", str(other_root), "hook", "codex"]), 0)
+        self.assertEqual(json.loads(neutral.getvalue()), {})
+
+
 @unittest.skipUnless(os.environ.get("RUN_LIVE_TMUX") == "1", "set RUN_LIVE_TMUX=1 to create an isolated tmux fixture")
 class LiveBridgeTests(unittest.TestCase):
     def test_actual_bridge_submission_duplicate_and_draft_preservation(self):
@@ -695,7 +1645,42 @@ class LiveBridgeTests(unittest.TestCase):
                     "destination_name": target, "text": "fixture transport check",
                     "preflight_sha256": check["capture_sha256"], "confirm_idle": True, "confirm_no_draft": True,
                 }
-                self.assertEqual(checked_send(first, bridge, store)["status"], "SUBMITTED")
+                class StaleFirstRead:
+                    def __init__(self):
+                        self.reads = self.messages = self.enters = 0
+                        self.stale_pending = False
+                        self.stale_used = False
+                        self.last_capture = None
+
+                    def id(inner):
+                        return bridge.id()
+
+                    def resolve(inner, destination):
+                        return bridge.resolve(destination)
+
+                    def read(inner, pane):
+                        inner.reads += 1
+                        capture = bridge.read(pane)
+                        if inner.stale_pending and not inner.stale_used:
+                            inner.stale_used = True
+                            return inner.last_capture
+                        if not inner.stale_pending:
+                            inner.last_capture = capture
+                        return capture
+
+                    def message(inner, pane, text):
+                        inner.messages += 1
+                        bridge.message(pane, text)
+                        inner.stale_pending = True
+
+                    def enter(inner, pane):
+                        inner.enters += 1
+                        bridge.enter(pane)
+
+                delayed = StaleFirstRead()
+                self.assertEqual(checked_send(first, delayed, store)["status"], "SUBMITTED")
+                self.assertTrue(delayed.stale_used)
+                self.assertEqual((delayed.reads, delayed.messages, delayed.enters), (4, 1, 1))
                 self.assertEqual(checked_send(first, bridge, store)["status"], "SUBMITTED")
                 capture_after_duplicate = bridge.read(target)
                 self.assertEqual(capture_after_duplicate.count("RECEIVED "), 1)
