@@ -313,6 +313,26 @@ class CheckedSendTests(unittest.TestCase):
         self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
         self.assertFalse(_submitted(after, "❯ unrelated draft", "%1", self.request["text"]))
 
+    def test_native_submission_survives_viewport_padding_shift_but_requires_new_message(self):
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+        earlier = header + "Reply only ACK-old-event. Do not run tools."
+        fresh = header + "Reply only ACK-current-event. Do not run tools."
+        history = [
+            ">_ OpenAI Codex (v0.160.1)",
+            "permissions: YOLO mode",
+            earlier,
+            "• ACK-old-event",
+            earlier,
+            "• ACK-old-event",
+        ]
+        before = "\n".join(history + ([""] * 8) + ["› " + fresh])
+        after = "\n".join(
+            history + [fresh, "• Working (0s • esc to interrupt)", "› Ask Codex to do anything"]
+        )
+        old_history_only = "\n".join(history + ([""] * 8) + ["› Ask Codex to do anything"])
+        self.assertTrue(_submitted(after, before, "%1", "Reply only ACK-current-event. Do not run tools."))
+        self.assertFalse(_submitted(old_history_only, before, "%1", "Reply only ACK-current-event. Do not run tools."))
+
     def test_active_draft_rejects_suffix_after_exact_message(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
                "load the smux skill to reply] fixture text")

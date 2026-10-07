@@ -343,14 +343,16 @@ def _submitted(capture: str, before_enter: str, sender: str, text: str) -> bool:
         if not _message_at(before_lines, before_prompt, sender, text, len(before_lines)):
             return False
     history = before_lines[:before_prompt]
+    while history and not history[-1].strip():
+        history.pop()
     submitted = after_lines[:after_prompt]
-    return bool(
-        submitted[:len(history)] == history
-        and len(submitted) > len(history)
-        and _message_at(
-            submitted, len(history), sender, text, len(submitted),
-            allow_following_output=True,
-        )
+    if submitted[:len(history)] != history:
+        return False
+    message_index = len(history)
+    while message_index < len(submitted) and not submitted[message_index].strip():
+        message_index += 1
+    return message_index < len(submitted) and _message_at(
+        submitted, message_index, sender, text, len(submitted), allow_following_output=True,
     )
 
 
