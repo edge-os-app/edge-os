@@ -681,14 +681,16 @@ def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None
                 if (not isinstance(previous, list) or not isinstance(updated, list)
                         or updated[:len(previous)] != previous):
                     raise ValueError("update cannot remove or rewrite review history")
-            if "gate_verdicts" in old:
-                previous = old["gate_verdicts"]
-                updated = incoming.get("gate_verdicts", previous)
-                if (not isinstance(previous, int) or isinstance(previous, bool)
-                        or not isinstance(updated, int) or isinstance(updated, bool)
-                        or updated < previous
-                        or (old.get("role") == "gate" and updated > 3)):
+            if "gate_verdicts" in binding:
+                updated = binding["gate_verdicts"]
+                if (not isinstance(updated, int) or isinstance(updated, bool) or updated < 0
+                        or (binding.get("role") == "gate" and updated > 3)):
                     raise ValueError("update cannot reset or exceed the gate verdict limit")
+                if "gate_verdicts" in old:
+                    previous = old["gate_verdicts"]
+                    if (not isinstance(previous, int) or isinstance(previous, bool)
+                            or updated < previous):
+                        raise ValueError("update cannot reset or exceed the gate verdict limit")
             entries[index] = binding
         _atomic_json(state_file, state)
 
@@ -938,10 +940,10 @@ def main(argv: list[str] | None = None) -> int:
             if not binding.get("session_id"):
                 raise ValueError("session_id is required; Claude does not provide a verified shell binding ID")
             binding.setdefault("agent_id", f"{args.host}:{binding['session_id']}")
-            if "pane_id" not in binding:
-                binding["pane_id"] = TmuxBridge().id()
-            binding.setdefault("cwd", os.getcwd())
             if args.command == "bind":
+                if "pane_id" not in binding:
+                    binding["pane_id"] = TmuxBridge().id()
+                binding.setdefault("cwd", os.getcwd())
                 binding.setdefault("status", "ACTIVE")
                 binding.setdefault("required_reports", [])
                 binding.setdefault("approved_work", [])

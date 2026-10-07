@@ -1020,7 +1020,6 @@ class SessionStartTests(unittest.TestCase):
 
         update = {
             "host": "codex", "session_id": "s1", "agent_id": "codex:s1",
-            "pane_id": "%5", "cwd": str(self.root.resolve()),
         }
         code, _ = self.run_cli("update", payload=update)
         self.assertEqual(code, 0)
@@ -1028,6 +1027,22 @@ class SessionStartTests(unittest.TestCase):
         self.assertEqual(binding["status"], "BLOCKED")
         self.assertEqual(binding["required_reports"], ["MISSING.md"])
         self.assertEqual(binding["approved_work"], previous_work)
+        self.assertEqual(binding["pane_id"], "%5")
+        self.assertEqual(binding["cwd"], str(self.root.resolve()))
+
+    def test_first_gate_counter_update_is_bounded_and_preserves_receipt(self):
+        self.assign({**self.assignment, "role": "gate"})
+        self.start()
+        original = self.state()["bindings"][0]
+        _, original_receipt = self.receipt()
+        identity = {"host": "codex", "session_id": "s1", "agent_id": "codex:s1"}
+
+        for count in (4, -1):
+            with self.subTest(count=count):
+                code, _ = self.run_cli("update", payload={**identity, "gate_verdicts": count})
+                self.assertEqual(code, 2)
+                self.assertEqual(self.state()["bindings"][0], original)
+                self.assertEqual(self.receipt()[1], original_receipt)
 
     def test_clear_with_new_session_registers_new_task_without_old_obligations(self):
         self.assign()
