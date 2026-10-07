@@ -1,0 +1,88 @@
+{
+  "contract_id": "edge-os.wallet-mandate-account",
+  "version": "1.0.0",
+  "status": "FROZEN_DECISION_CONTRACT; MECHANISMS_UNQUALIFIED",
+  "record_bindings": [
+    "owner_id",
+    "agent_id",
+    "wallet_id",
+    "network_id",
+    "strategy_revision",
+    "mandate_id",
+    "position_id",
+    "action_id"
+  ],
+  "network_ids": ["monad:143", "monad-testnet:10143"],
+  "persisted_record_envelope": ["schema_version", "record_type", "record_id", "owner_id", "operation_id", "created_at", "content"],
+  "schema_versions": {
+    "wallet": "p15.wallet/1",
+    "approval_snapshot": "p15.approval_snapshot/1",
+    "mandate": "p15.mandate/1",
+    "position": "p15.position/1",
+    "capital_flow": "p15.capital_flow/1",
+    "action": "p15.action/1",
+    "stop": "p15.stop/1",
+    "signer_removal": "p15.signer_removal/1",
+    "monitoring": "p15.monitoring/1"
+  },
+  "asset_amount": {
+    "fields": ["asset_id", "raw", "decimals"],
+    "raw_type": "canonical non-negative base-10 integer string",
+    "unit_rule": "Amounts from different asset_id values are never added.",
+    "gas_rule": "Native gas has its own asset_id and budget."
+  },
+  "records": {
+    "identity_binding": ["owner_id", "agent_id", "wallet_id", "network_id", "strategy_revision", "mandate_id"],
+    "wallet": ["wallet_id", "owner_id", "agent_id", "network_id", "setup_id", "status", "provider_reference", "owner_recovery_record_id"],
+    "approval_snapshot": ["approval_id", "identity_binding", "terms", "signer_binding", "policy_binding", "approved_at", "terms_hash", "predecessor_approval_id"],
+    "mandate": ["mandate_id", "identity_binding", "approval_id", "terms", "expiry", "consumed", "reserved", "remaining", "stop_ids", "policy_binding"],
+    "position": ["position_id", "identity_binding", "asset_id", "inventory_raw", "cost_basis", "acquisition_ids", "exit_ids", "pending_action_ids"],
+    "capital_flow": ["flow_id", "owner_id", "agent_id", "wallet_id", "network_id", "kind", "asset_id", "raw", "decimals", "status", "transaction_reference"],
+    "action": ["action_id", "identity_binding", "position_id_or_owner_flow_id", "review_hash", "input", "expected_output", "status", "created_at", "updated_at", "reason", "signed_transaction_reference", "signed_transaction_hash", "transaction_reference", "provider_request_references"],
+    "stop": ["stop_id", "owner_id", "agent_id", "wallet_id", "scope", "mode", "reason", "denied_actions", "allowed_actions", "created_at"],
+    "signer_removal": ["removal_id", "owner_id", "agent_id", "wallet_id", "state", "requested_at", "verified_at", "provider_reference"],
+    "monitoring": ["agent_id", "wallet_id", "operation_state", "last_check_at", "last_result", "next_check_at_or_blocking_reason", "pending_actions", "residual_exposure", "evidence_status"]
+  },
+  "states": {
+    "wallet_setup": ["REQUESTED", "PENDING", "UNKNOWN", "CONFIRMED", "FAILED"],
+    "capital_flow": ["PENDING", "CONFIRMED", "FAILED", "UNKNOWN"],
+    "mandate": ["DRAFT", "PENDING_APPROVAL", "ACTIVE", "EXPIRED", "REVOKED", "DENIED"],
+    "action": ["PROPOSED", "QUEUED", "SUBMITTED", "CONFIRMED", "REVERTED", "DENIED", "CANCELLED", "SUBMISSION_UNKNOWN"],
+    "signer_removal": ["NOT_REQUESTED", "REQUESTED", "PENDING", "UNKNOWN", "CONFIRMED", "FAILED"],
+    "operation": ["RUNNING", "PAUSED", "RECOVERING", "STOPPED", "BLOCKED"],
+    "stop_mode": ["STOP_NEW_ENTRIES", "HALT_ALL_SWAPS"],
+    "stop_scope": ["POSITION", "DEPLOYMENT", "AGENT_WALLET_NETWORK"]
+  },
+  "invariants": [
+    "One user-owned wallet belongs to one agent. An agent wallet has no cross-agent funding, inventory, or permission fallback.",
+    "Network access names Monad 143 or testnet 10143 explicitly. Approval for one network does not approve the other.",
+    "Each position binds to its owner, agent, wallet, network, strategy revision, and mandate. Each action also binds to one position or an explicit wallet-level owner flow.",
+    "A preview is current only while every bound identity, reviewed input, mandate, strategy revision, and review_hash still matches.",
+    "An unknown wallet-creation, transfer, or submission outcome is reconciled against its original identity before retry. Unknown submission retains reservations.",
+    "One unresolved economic transaction blocks a second economic transaction in the same agent wallet and network. Other agent wallets remain independent.",
+    "Mandate renewal preserves consumed allowances, reservations, positions, pending actions, losses, and stops. Expiry extension does not replenish a limit.",
+    "An action must pass both the exact strategy rule and the mandate ceiling. A broader mandate cannot enlarge a strategy rule.",
+    "A new strategy revision or signer binding does not restore revoked authority. Verified owner approval and current policy binding are required.",
+    "A pending or unknown signer removal blocks new agent submissions until the owner-authorized result and current binding are reconciled.",
+    "A broadcast-capable swap submission consumes one attempt, including a later revert. A confirmed success consumes reconciled input. A confirmed revert consumes actual gas; unused input is released only after reconciliation. A proved pre-broadcast denial consumes neither.",
+    "A qualified resend reuses the original signed bytes and hash and keeps the same economic action_id. A new provider request is recorded separately. Changed signed bytes or a new transaction are not a resend.",
+    "STOP_NEW_ENTRIES denies entries and additions. Existing exits remain eligible only under active, explicit authority. HALT_ALL_SWAPS also denies exits. Monitoring and reconciliation continue.",
+    "A stop applies before the first position exists and only to its recorded scope.",
+    "A Stop all agents request creates an explicit stop for each selected agent wallet. It does not create shared account authority.",
+    "Weighted average acquisition cost is maintained per position. External capital flows, realized results, estimated results, and gas remain separate.",
+    "Unknown required costs, basis, marks, authority, or provider restrictions remain unknown and block the affected claim or action."
+  ],
+  "return_metrics": "UNAVAILABLE_UNTIL_PROFILED",
+  "qualification_profiles": [
+    {"input": "reporting asset, valuation source, thresholds, and freshness", "consumers": ["P19", "P24", "P27", "P33"]},
+    {"input": "route, token mechanics, fees, and full intended exit capacity", "consumers": ["P20", "P21"]},
+    {"input": "signer and policy enforcement for the deployed wallet and Flow ABI", "consumers": ["P16", "P20", "P27"]},
+    {"input": "owner transfer and withdrawal reconciliation", "consumers": ["P16", "P27"]},
+    {"input": "transaction nonce, resend, and unknown-outcome recovery", "consumers": ["P20", "P27"]},
+    {"input": "measured queue delay suitability", "consumers": ["P20", "P27"]}
+  ],
+  "initial_queue_limit": {
+    "unresolved_economic_transactions_per_agent_wallet_network": 1,
+    "qualification_status": "IMPLEMENTATION_CHOICE_NOT_RUNTIME_QUALIFIED"
+  }
+}

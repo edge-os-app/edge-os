@@ -1,0 +1,279 @@
+{
+  "fixture_id": "p15-authored-wallet-accounting-v1",
+  "contract_version": "1.0.0",
+  "evidence_class": "SYNTHETIC_AUTHORED",
+  "notice": "Identifiers and amounts are invented for contract checks. They do not describe a live account, token, route, provider response, or production limit.",
+  "agents": [
+    {
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-a",
+      "wallet_id": "wallet-a",
+      "network_id": "monad:143",
+      "wallet_status": "CONFIRMED",
+      "mandate_id": "mandate-a-v1",
+      "mandate_status": "ACTIVE",
+      "positions": ["position-a-1", "position-a-2"]
+    },
+    {
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-b",
+      "wallet_id": "wallet-b",
+      "network_id": "monad:143",
+      "wallet_status": "CONFIRMED",
+      "mandate_id": "mandate-b-v1",
+      "mandate_status": "ACTIVE",
+      "positions": ["position-b-1"]
+    }
+  ],
+  "positions": [
+    {
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-a",
+      "wallet_id": "wallet-a",
+      "network_id": "monad:143",
+      "position_id": "position-a-1",
+      "strategy_revision": "strategy-a-v3",
+      "mandate_id": "mandate-a-v1",
+      "asset_id": "monad:143/asset:MOE",
+      "inventory_raw": "15",
+      "decimals": 0
+    },
+    {
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-a",
+      "wallet_id": "wallet-a",
+      "network_id": "monad:143",
+      "position_id": "position-a-2",
+      "strategy_revision": "strategy-a-v2",
+      "mandate_id": "mandate-a-v1",
+      "asset_id": "monad:143/asset:MOE",
+      "inventory_raw": "4",
+      "decimals": 0
+    },
+    {
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-b",
+      "wallet_id": "wallet-b",
+      "network_id": "monad:143",
+      "position_id": "position-b-1",
+      "strategy_revision": "strategy-b-v5",
+      "mandate_id": "mandate-b-v1",
+      "asset_id": "monad:143/asset:MOE",
+      "inventory_raw": "9",
+      "decimals": 0
+    }
+  ],
+  "cross_agent_control": {
+    "agent_id": "agent-a",
+    "wallet_id": "wallet-a",
+    "position_agent_id": "agent-b",
+    "position_wallet_id": "wallet-b",
+    "expected": "DENY"
+  },
+  "owner_claim_control": {
+    "verified_owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+    "request_owner_id": "22ad0953-197e-4f96-b003-3459cb7b02cf",
+    "expected": "REJECT_422"
+  },
+  "approval_snapshots": [
+    {
+      "approval_id": "approval-a-v3",
+      "agent_id": "agent-a",
+      "wallet_id": "wallet-a",
+      "strategy_revision": "strategy-a-v3",
+      "mandate_id": "mandate-a-v1",
+      "terms_hash": "sha256:terms-a-v3",
+      "superseded_by": "approval-a-v4"
+    },
+    {
+      "approval_id": "approval-a-v4",
+      "agent_id": "agent-a",
+      "wallet_id": "wallet-a",
+      "strategy_revision": "strategy-a-v4",
+      "mandate_id": "mandate-a-v2",
+      "terms_hash": "sha256:terms-a-v4",
+      "supersedes": "approval-a-v3"
+    }
+  ],
+  "creation_recovery": {
+    "setup_id": "setup-agent-a-1",
+    "agent_id": "agent-a",
+    "original_wallet_id": "wallet-a",
+    "state": "UNKNOWN",
+    "reconcile_before_retry": true,
+    "retry_wallet_id": "wallet-a"
+  },
+  "capital_flows": [
+    {
+      "flow_id": "flow-a-deposit-1",
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-a",
+      "wallet_id": "wallet-a",
+      "network_id": "monad:143",
+      "kind": "DEPOSIT",
+      "asset_id": "monad:143/asset:USDC",
+      "raw": "500",
+      "decimals": 0,
+      "status": "CONFIRMED",
+      "included_in_realized_result": false
+    }
+  ],
+  "preview": {
+    "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+    "agent_id": "agent-b",
+    "wallet_id": "wallet-b",
+    "network_id": "monad:143",
+    "position_id": "position-b-1",
+    "strategy_revision": "strategy-b-v5",
+    "mandate_id": "mandate-b-v1",
+    "review_hash": "sha256:reviewed-input-example-1",
+    "action_id": "action-b-exit-1",
+    "asset_id": "monad:143/asset:MOE",
+    "quantity_raw": "5",
+    "decimals": 0,
+    "expected_quote_raw": "650",
+    "quote_status": "ESTIMATE",
+    "expires_at": "2026-10-07T12:05:00Z"
+  },
+  "action": {
+    "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+    "agent_id": "agent-b",
+    "wallet_id": "wallet-b",
+    "network_id": "monad:143",
+    "position_id": "position-b-1",
+    "strategy_revision": "strategy-b-v5",
+    "mandate_id": "mandate-b-v1",
+    "review_hash": "sha256:reviewed-input-example-1",
+    "action_id": "action-b-exit-1",
+    "status": "QUEUED"
+  },
+  "queues": {
+    "agent-a": {
+      "unresolved_action": "action-unknown",
+      "state": "SUBMISSION_UNKNOWN",
+      "provider_request_id": "provider-request-a-1",
+      "transaction_hash": "0xexample-a-1",
+      "reservations_retained": true,
+      "next_economic_action_allowed": false
+    },
+    "agent-b": {
+      "unresolved_action": null,
+      "state": "EMPTY",
+      "reservations_retained": false,
+      "next_economic_action_allowed": true
+    }
+  },
+  "inventory_reservations": {
+    "agent_id": "agent-a",
+    "wallet_id": "wallet-a",
+    "asset_id": "monad:143/asset:MOE",
+    "available_raw": "19",
+    "position_reservations": [
+      {"position_id": "position-a-1", "raw": "15"},
+      {"position_id": "position-a-2", "raw": "4"}
+    ],
+    "duplicate_attempt_raw": "1",
+    "duplicate_attempt_expected": "DENY"
+  },
+  "signer_removal": {
+    "agent_id": "agent-a",
+    "wallet_id": "wallet-a",
+    "state": "PENDING",
+    "new_submissions_allowed": false,
+    "owner_access_preserved": true
+  },
+  "renewal": {
+    "previous_mandate_id": "mandate-a-v1",
+    "new_mandate_id": "mandate-a-v2",
+    "expiry_extended": true,
+    "preserved_consumed_raw": "300",
+    "preserved_reserved_raw": "100",
+    "preserved_stop_ids": ["stop-a-loss-1"],
+    "stop_ids_after_renewal": ["stop-a-loss-1"],
+    "signer_state_after_renewal": "PENDING",
+    "new_strategy_revision_restores_authority": false
+  },
+  "pretrade_stop": {
+    "agent_id": "agent-b",
+    "wallet_id": "wallet-b",
+    "snapshot_at": "2026-10-07T11:00:00Z",
+    "positions": [],
+    "scope": "AGENT_WALLET_NETWORK",
+    "mode": "STOP_NEW_ENTRIES",
+    "entries_allowed": false,
+    "exits_allowed": false,
+    "monitoring_allowed": true,
+    "later_stop_clear_id": "owner-reviewed-stop-clear-1"
+  },
+  "entries_only_stop": {
+    "agent_id": "agent-a",
+    "wallet_id": "wallet-a",
+    "positions": ["position-a-1"],
+    "scope": "POSITION",
+    "mode": "STOP_NEW_ENTRIES",
+    "entries_allowed": false,
+    "exits_allowed": true,
+    "exit_authority": "ACTIVE_EXPLICIT_MANDATE",
+    "monitoring_allowed": true
+  },
+  "posttrade_halt": {
+    "agent_id": "agent-a",
+    "wallet_id": "wallet-a",
+    "positions": ["position-a-1", "position-a-2"],
+    "scope": "AGENT_WALLET_NETWORK",
+    "mode": "HALT_ALL_SWAPS",
+    "entries_allowed": false,
+    "exits_allowed": false,
+    "monitoring_allowed": true
+  },
+  "cancellation": {
+    "PROPOSED": "CANCELLED",
+    "QUEUED": "CANCELLED",
+    "SUBMITTED": "DENIED"
+  },
+  "attempt_semantics": {
+    "confirmed_success": {"economic_action_count": 1, "attempt_count": 1, "input_consumed_after_reconciliation": true},
+    "confirmed_revert": {"economic_action_count": 1, "attempt_count": 1, "gas_consumed": true, "input_consumed": false},
+    "proved_prebroadcast_denial": {"economic_action_count": 0, "attempt_count": 0, "input_consumed": false},
+    "submission_unknown": {"economic_action_count": 1, "attempt_count": 1, "reservations_retained": true},
+    "qualified_resend": {"action_id": "action-unknown", "signed_transaction_hash": "0xexample-a-1", "provider_request_count": 2, "economic_action_count": 1},
+    "changed_signed_transaction": {"expected": "NEW_AUTHORITY_REQUIRED"}
+  },
+  "allowance_example": {
+    "asset_id": "monad:143/asset:USDC",
+    "approved_raw": "500",
+    "consumed_raw": "300",
+    "reserved_raw": "100",
+    "remaining_raw": "100",
+    "gas_asset_id": "monad:143/native",
+    "gas_budget_raw": "12"
+  },
+  "allowance_overdraw_control": {
+    "approved_raw": "500",
+    "consumed_raw": "300",
+    "reserved_raw": "201",
+    "expected": "DENY"
+  },
+  "cost_example": {
+    "quote_asset_id": "monad:143/asset:USDC",
+    "first_units": "10",
+    "first_cost_quote": "1000",
+    "addition_units": "10",
+    "addition_cost_quote": "1200",
+    "partial_exit_units": "5",
+    "partial_exit_proceeds_quote": "650",
+    "external_deposit_quote": "500",
+    "gas_asset_id": "monad:143/native",
+    "gas_raw": "2",
+    "unrealized_mark": null,
+    "unrealized_status": "UNKNOWN"
+  },
+  "monitoring": {
+    "operation_state": "BLOCKED",
+    "last_check_at": "2026-10-07T12:00:00Z",
+    "last_result": "DENIED_STALE_PREVIEW",
+    "next_check_at": null,
+    "blocking_reason": "Owner review is required for changed strategy revision.",
+    "evidence_status": "UNPROVEN"
+  }
+}
