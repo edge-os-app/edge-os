@@ -7,6 +7,7 @@ import shutil
 import shlex
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -159,6 +160,50 @@ class CheckedSendTests(unittest.TestCase):
         self.assertEqual(result["status"], "BLOCKED")
         self.assertFalse(any(call[0] == "enter" for call in self.bridge.calls))
 
+    def test_extra_body_and_concatenated_envelope_are_rejected_on_type_and_recovery(self):
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+        for kind, extra in (
+            ("extra-body", "unrelated draft ] " + self.request["text"]),
+            ("second-envelope", header + self.request["text"]),
+        ):
+            for lost_response in (False, True):
+                with self.subTest(kind=kind, lost_response=lost_response):
+                    self.request["event_id"] = f"{kind}-{lost_response}"
+
+                    class MismatchedTyped(FakeBridge):
+                        def message(inner, target, text):
+                            inner.calls.append(("message", target, text))
+                            inner.capture += "\n" + header + extra
+                            if lost_response:
+                                raise RuntimeError("type response lost")
+
+                    self.bridge = MismatchedTyped()
+                    first = self.send()
+                    self.assertEqual(first["status"], "BLOCKED")
+                    self.assertFalse(any(call[0] == "enter" for call in self.bridge.calls))
+                    self.bridge.calls.clear()
+                    self.assertEqual(self.send()["status"], "BLOCKED")
+                    self.assertEqual(self.bridge.calls, [])
+
+    def test_durable_typed_mismatched_body_cannot_recover(self):
+        self.bridge.capture = "❯ [tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] unrelated draft ] " + self.request["text"]
+        self.store.put_record({**self.request, "status": "TYPED",
+                               "typed_sha256": hashlib.sha256(self.bridge.capture.encode()).hexdigest()})
+        self.assertEqual(self.send()["status"], "BLOCKED")
+        self.assertFalse(any(call[0] in {"message", "enter"} for call in self.bridge.calls))
+
+    def test_post_enter_confirmation_requires_exact_message_body(self):
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+
+        class ExtraBodyAfterEnter(FakeBridge):
+            def enter(inner, target):
+                inner.calls.append(("enter", target))
+                inner.capture = "\n" + header + "unrelated draft ] " + self.request["text"] + "\n❯ "
+
+        self.bridge = ExtraBodyAfterEnter()
+        self.assertEqual(self.send()["status"], "UNCONFIRMED")
+        self.assertEqual(sum(call[0] == "enter" for call in self.bridge.calls), 1)
+
     def test_lost_enter_is_unconfirmed_and_never_retried(self):
         self.bridge.fail.add("enter")
         result = self.send()
@@ -301,6 +346,116 @@ class StopGuardTests(unittest.TestCase):
         })
         self.write_state([self.binding])
         self.assertEqual(stop_decision("codex", self.payload, self.state, self.store)["decision"], "allow")
+
+    def test_active_binding_checks_unfinished_return_for_completed_task(self):
+        for host in ("codex", "claude"):
+            with self.subTest(host=host):
+                cli_root = self.root / (host + "-completed-delivery-state")
+                cli_root.mkdir()
+                GuardStore(cli_root / "delivery.sqlite3").put_record({
+                    "task_id": "T-1", "event_id": "return-report", "candidate": "abc123",
+                    "host": host, "session_id": "s1", "agent_id": host + ":s1",
+                    "sender": "%1", "destination": "%2", "status": "TYPED",
+                })
+                binding = {**self.binding, "host": host, "agent_id": host + ":s1",
+                           "approved_work": [{"id": "T-1", "status": "complete"}]}
+                (cli_root / "bindings.json").write_text(json.dumps({"version": 1, "bindings": [binding]}))
+                command = [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/controller_guard.py"),
+                           "--state-root", str(cli_root), "hook", host]
+                output = subprocess.run(command, input=json.dumps(self.payload), text=True, capture_output=True, check=False)
+                self.assertEqual(output.returncode, 0, output.stderr)
+                result = json.loads(output.stdout)
+                self.assertEqual(result.get("decision"), "block")
+                self.assertIn("unfinished-delivery", result.get("reason", ""))
+                self.assertNotIn("approved-work", result["reason"])
+                for status in ("AWAITING_EVENT", "BLOCKED", "BUDGET_EXHAUSTED", "APPROVAL_REQUIRED", "INTERRUPTED", "RUN_LIMIT", "COMPLETE"):
+                    binding["status"] = status
+                    (cli_root / "bindings.json").write_text(json.dumps({"version": 1, "bindings": [binding]}))
+                    output = subprocess.run(command, input=json.dumps(self.payload), text=True, capture_output=True, check=False)
+                    self.assertEqual(output.returncode, 0, output.stderr)
+                    self.assertEqual(json.loads(output.stdout), {})
+
+    def test_actual_hook_rejects_invalid_path_text_once_for_both_hosts(self):
+        script = str(Path(__file__).resolve().parents[1] / "scripts/controller_guard.py")
+        for host in ("codex", "claude"):
+            for index, malformed in enumerate(("cwd", "report")):
+                with self.subTest(host=host, malformed=malformed), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    session_id = f"{host}-{malformed}-{index}"
+                    binding = {
+                        "host": host, "session_id": session_id, "agent_id": f"{host}:{session_id}",
+                        "pane_id": "%1", "cwd": str(root), "status": "ACTIVE",
+                        "required_reports": [], "approved_work": [],
+                    }
+                    if malformed == "cwd":
+                        binding["cwd"] = str(root) + "\0bad"
+                    else:
+                        binding["required_reports"] = ["reports/final\0.md"]
+                    (root / "bindings.json").write_text(json.dumps({"version": 1, "bindings": [binding]}))
+                    payload = {"session_id": session_id, "cwd": str(root), "stop_hook_active": False}
+                    command = [sys.executable, script, "--state-root", str(root), "hook", host]
+                    outputs = [subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True, check=False)
+                               for _ in range(2)]
+                    self.assertEqual(outputs[0].returncode, 0, outputs[0].stderr)
+                    self.assertEqual(json.loads(outputs[0].stdout).get("decision"), "block")
+                    self.assertEqual(outputs[1].returncode, 0, outputs[1].stderr)
+                    self.assertEqual(json.loads(outputs[1].stdout), {})
+
+    def test_hook_path_io_failure_emits_one_repair_block_for_both_hosts(self):
+        realpath = os.path.realpath
+        for host in ("codex", "claude"):
+            for field in ("cwd", "report"):
+                with self.subTest(host=host, field=field):
+                    cli_root = self.root / f"{host}-{field}-io-state"
+                    cli_root.mkdir()
+                    session = host + "-" + field
+                    report = self.root / "final.md"
+                    failing_path = str(self.root) if field == "cwd" else realpath(report)
+                    binding = {**self.binding, "host": host, "session_id": session,
+                               "agent_id": host + ":" + session, "required_reports": ["final.md"]}
+                    (cli_root / "bindings.json").write_text(json.dumps({"version": 1, "bindings": [binding]}))
+                    payload = {**self.payload, "session_id": session}
+
+                    def failed_realpath(path, *args, **kwargs):
+                        if os.fspath(path) == failing_path:
+                            raise OSError("filesystem unavailable")
+                        return realpath(path, *args, **kwargs)
+
+                    outputs = []
+                    with patch("scripts.controller_guard.os.path.realpath", new=failed_realpath):
+                        for _ in range(2):
+                            output = io.StringIO()
+                            with patch("sys.stdin", io.StringIO(json.dumps(payload))), contextlib.redirect_stdout(output):
+                                try:
+                                    code = main(["--state-root", str(cli_root), "hook", host])
+                                except OSError as exc:
+                                    self.fail(f"hook raised a filesystem error instead of repair JSON: {exc}")
+                                self.assertEqual(code, 0)
+                            outputs.append(json.loads(output.getvalue()))
+                    self.assertEqual(outputs[0].get("decision"), "block")
+                    self.assertIn("Repair", outputs[0].get("reason", ""))
+                    self.assertEqual(outputs[1], {})
+
+    def test_binding_cli_rejects_nul_paths_for_both_hosts(self):
+        script = str(Path(__file__).resolve().parents[1] / "scripts/controller_guard.py")
+        for host in ("codex", "claude"):
+            for field in ("cwd", "required_reports"):
+                with self.subTest(host=host, field=field), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    binding = {
+                        "host": host, "session_id": f"{host}-bind", "agent_id": f"{host}:{host}-bind",
+                        "pane_id": "%1", "cwd": str(root), "status": "ACTIVE",
+                        "required_reports": [], "approved_work": [],
+                    }
+                    if field == "cwd":
+                        binding["cwd"] += "\0bad"
+                    else:
+                        binding["required_reports"] = ["reports\0/final.md"]
+                    result = subprocess.run(
+                        [sys.executable, script, "--state-root", str(root / "state"), "bind", host],
+                        input=json.dumps(binding), text=True, capture_output=True, check=False,
+                    )
+                    self.assertEqual(result.returncode, 2)
 
     def test_legacy_delivery_rows_migrate_as_unbound_history(self):
         path = self.root / "legacy.sqlite3"
@@ -510,10 +665,11 @@ class LiveBridgeTests(unittest.TestCase):
                 wrapper.write_text(
                     "#!/usr/bin/env python3\nimport os, subprocess, sys\n"
                     f"real = {bridge_bin!r}\nargs = sys.argv[1:]\n"
+                    "fault = os.environ.get('CONTROLLER_GUARD_FAULT')\n"
+                    "if fault == 'enter-missed' and args[:1] == ['keys'] and 'Enter' in args: sys.exit(0)\n"
                     "result = subprocess.run([real, *args], text=True, capture_output=True)\n"
                     "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)\n"
                     "if result.returncode: sys.exit(result.returncode)\n"
-                    "fault = os.environ.get('CONTROLLER_GUARD_FAULT')\n"
                     "if (fault == 'message-lost' and args[:1] == ['message']) or (fault == 'enter-lost' and args[:1] == ['keys'] and 'Enter' in args): sys.exit(17)\n"
                     "sys.exit(0)\n", encoding="utf-8")
                 wrapper.chmod(0o700)
@@ -548,6 +704,19 @@ class LiveBridgeTests(unittest.TestCase):
                 duplicate = checked_send(lost, real_bridge, store)
                 self.assertEqual(duplicate["status"], "UNCONFIRMED")
                 self.assertEqual(real_bridge.read(target).count("RECEIVED "), calls_before)
+
+                check = preflight(target, real_bridge)
+                missed = {**base, "event_id": "missed-enter", "text": "fixture physically missed enter",
+                          "preflight_sha256": check["capture_sha256"]}
+                os.environ["CONTROLLER_GUARD_FAULT"] = "enter-missed"
+                missed_result = checked_send(missed, TmuxBridge(str(wrapper)), store)
+                self.assertEqual(missed_result["status"], "UNCONFIRMED")
+                os.environ.pop("CONTROLLER_GUARD_FAULT", None)
+                capture_before_duplicate = real_bridge.read(target)
+                self.assertTrue(capture_before_duplicate.rstrip().endswith(missed["text"]))
+                self.assertNotIn("RECEIVED fixture physically missed enter", capture_before_duplicate)
+                self.assertEqual(checked_send(missed, real_bridge, store)["status"], "UNCONFIRMED")
+                self.assertEqual(real_bridge.read(target), capture_before_duplicate)
 
                 check = preflight(ambiguous_target, real_bridge)
                 ambiguous = {**base, "event_id": "ambiguous-post-read", "destination": ambiguous_target,

@@ -188,10 +188,9 @@ class TmuxBridge:
 
 
 def _message_line(line: str, sender: str, text: str) -> bool:
-    suffix = "] " + text
     line = re.sub(r"^\s*(?:❯|›)\s*", "", line)
     match = re.match(r"^\[tmux-bridge from:[^\]]+ pane:([^\s\]]+) at:[^\]]+ — load the smux skill to reply\] ", line)
-    return bool(match and match.group(1) == sender and line.endswith(suffix))
+    return bool(match and match.group(1) == sender and line[match.end():] == text)
 
 
 def _has_active_draft(capture: str, sender: str, text: str) -> bool:
@@ -354,7 +353,7 @@ def _atomic_json(path: Path, value: dict) -> None:
 
 def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None:
     required = ("host", "session_id", "agent_id", "pane_id", "cwd", "status")
-    if any(not isinstance(binding.get(k), str) or not binding[k] for k in required):
+    if any(not isinstance(binding.get(k), str) or not binding[k] or "\0" in binding[k] for k in required):
         raise ValueError("binding requires host, session_id, agent_id, pane_id, cwd, and status")
     if (
         binding["host"] not in {"codex", "claude"}
@@ -364,7 +363,7 @@ def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None
         raise ValueError("agent_id must equal '<host>:<session_id>' and pane_id must be a tmux pane ID")
     if not isinstance(binding.get("required_reports"), list) or not isinstance(binding.get("approved_work"), list):
         raise ValueError("required_reports and approved_work must be lists")
-    if any(not isinstance(p, str) or not p or Path(p).is_absolute() or ".." in Path(p).parts for p in binding["required_reports"]):
+    if any(not isinstance(p, str) or not p or "\0" in p or Path(p).is_absolute() or ".." in Path(p).parts for p in binding["required_reports"]):
         raise ValueError("required report paths must stay inside the bound cwd")
     if any(not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("status"), str) for w in binding["approved_work"]):
         raise ValueError("approved work entries require id and status")
@@ -392,7 +391,7 @@ def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None
 
 def _valid_binding(binding: dict, host: str, session_id: str) -> bool:
     required_text = ("host", "session_id", "agent_id", "pane_id", "cwd", "status")
-    if any(not isinstance(binding.get(key), str) or not binding[key] for key in required_text):
+    if any(not isinstance(binding.get(key), str) or not binding[key] or "\0" in binding[key] for key in required_text):
         return False
     if (
         binding["host"] != host
@@ -404,7 +403,7 @@ def _valid_binding(binding: dict, host: str, session_id: str) -> bool:
         or not isinstance(binding.get("approved_work"), list)
     ):
         return False
-    if any(not isinstance(p, str) or not p or Path(p).is_absolute() or ".." in Path(p).parts for p in binding["required_reports"]):
+    if any(not isinstance(p, str) or not p or "\0" in p or Path(p).is_absolute() or ".." in Path(p).parts for p in binding["required_reports"]):
         return False
     if any(
         not isinstance(work, dict)
@@ -415,6 +414,12 @@ def _valid_binding(binding: dict, host: str, session_id: str) -> bool:
     ):
         return False
     return True
+
+
+def _binding_repair(host: str, session_id: str, store: GuardStore) -> dict:
+    reason = "Controller guard session binding or path is malformed or unreadable. Repair it before the next turn."
+    first = store.mark_stop_reason(host, session_id, digest(host + ":" + session_id + ":bad-binding"))
+    return {"decision": "block", "reason": reason} if first else {"decision": "allow"}
 
 
 def stop_decision(host: str, payload: dict, state_file: Path, store: GuardStore) -> dict:
@@ -439,10 +444,12 @@ def stop_decision(host: str, payload: dict, state_file: Path, store: GuardStore)
     if binding is None:
         return {"decision": "allow"}
     if not _valid_binding(binding, host, session_id):
-        reason = "Controller guard session binding is malformed. Repair it before the next turn."
-        first = store.mark_stop_reason(host, session_id, digest(host + ":" + session_id + ":bad-binding"))
-        return {"decision": "block", "reason": reason} if first else {"decision": "allow"}
-    if os.path.realpath(cwd) != os.path.realpath(binding["cwd"]):
+        return _binding_repair(host, session_id, store)
+    try:
+        identity_matches = os.path.realpath(cwd) == os.path.realpath(binding["cwd"])
+    except (OSError, ValueError, RuntimeError):
+        return _binding_repair(host, session_id, store)
+    if not identity_matches:
         reason = "Controller guard session identity does not match its registered agent and cwd. Repair the binding."
         first = store.mark_stop_reason(host, session_id, digest(host + ":" + session_id + ":identity"))
         return {"decision": "block", "reason": reason} if first else {"decision": "allow"}
@@ -450,21 +457,18 @@ def stop_decision(host: str, payload: dict, state_file: Path, store: GuardStore)
         return {"decision": "allow"}
 
     reasons = []
-    for report in binding.get("required_reports", []):
-        if not isinstance(report, str) or not report or Path(report).is_absolute() or ".." in Path(report).parts:
-            reasons.append("invalid-report-binding")
-        else:
-            root = Path(binding["cwd"]).resolve()
+    try:
+        root = Path(binding["cwd"]).resolve()
+        for report in binding["required_reports"]:
             report_path = (root / report).resolve()
             if root not in report_path.parents:
                 reasons.append("invalid-report-binding")
             elif not report_path.is_file():
                 reasons.append("missing-report:" + report)
-    active_tasks = [
-        work["id"] for work in binding["approved_work"]
-        if work["status"] in {"eligible", "pending", "in_progress"}
-    ]
-    unfinished = store.open_for_binding(host, session_id, binding["agent_id"], active_tasks)
+    except (OSError, ValueError, RuntimeError):
+        return _binding_repair(host, session_id, store)
+    bound_tasks = [work["id"] for work in binding["approved_work"]]
+    unfinished = store.open_for_binding(host, session_id, binding["agent_id"], bound_tasks)
     reasons.extend("unfinished-delivery:" + r["task_id"] + ":" + r["event_id"] for r in unfinished)
     for work in binding.get("approved_work", []):
         if isinstance(work, dict) and work.get("status") in {"eligible", "pending", "in_progress"}:
