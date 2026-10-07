@@ -205,9 +205,18 @@ def _has_partial_input(capture: str) -> bool:
     return any(re.match(r"^\s*(?:❯|›)(?:\s|$)", line) for line in lines)
 
 
-def _submitted(capture: str, sender: str, text: str) -> bool:
-    lines = capture.splitlines()
-    return bool(lines and lines[-1].strip() in {"❯", "›"} and any(_message_line(line, sender, text) for line in lines[:-1]))
+def _submitted(capture: str, before_enter: str, sender: str, text: str) -> bool:
+    lines = [line.rstrip() for line in capture.splitlines() if line.strip()]
+    before = [line.rstrip() for line in before_enter.splitlines() if line.strip()]
+    history = before[:-1]
+    # A changed or truncated history cannot locate this attempt safely.
+    return bool(
+        before and _message_line(before[-1], sender, text)
+        and len(lines) >= len(history) + 2
+        and lines[-1] in {"❯", "›"}
+        and lines[:len(history)] == history
+        and _message_line(lines[len(history)], sender, text)
+    )
 
 
 def _read_hash(capture: str) -> str:
@@ -317,7 +326,8 @@ def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.s
         except Exception:
             store.put_record({**current, "status": "UNCONFIRMED"})
             return {"status": "UNCONFIRMED", "reason": "post-Enter read failed; do not retry this event"}
-        status = "SUBMITTED" if _submitted(after_enter, sender, text) else "UNCONFIRMED"
+        before_enter = before if current["status"] == "TYPED" else after_type
+        status = "SUBMITTED" if _submitted(after_enter, before_enter, sender, text) else "UNCONFIRMED"
         store.put_record({**current, "status": status})
         return {"status": status, "reason": None if status == "SUBMITTED" else "post-Enter result is ambiguous; do not retry this event"}
 

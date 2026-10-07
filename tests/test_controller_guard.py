@@ -204,6 +204,57 @@ class CheckedSendTests(unittest.TestCase):
         self.assertEqual(self.send()["status"], "UNCONFIRMED")
         self.assertEqual(sum(call[0] == "enter" for call in self.bridge.calls), 1)
 
+    def test_historical_match_cannot_confirm_missing_or_changed_current_submission(self):
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+        history = header + self.request["text"] + "\n❯ "
+        for current in ("", header + "unrelated draft ] " + self.request["text"] + "\n"):
+            with self.subTest(current=current):
+                self.request["event_id"] = "history-" + str(bool(current))
+                self.request["preflight_sha256"] = hashlib.sha256(history.encode()).hexdigest()
+
+                class ChangedCurrent(FakeBridge):
+                    def enter(inner, target):
+                        inner.calls.append(("enter", target))
+                        inner.capture = history + "\n" + current + "❯ "
+
+                self.bridge = ChangedCurrent(capture=history)
+                self.assertEqual(self.send()["status"], "UNCONFIRMED")
+                self.bridge.calls.clear()
+                self.assertEqual(self.send()["status"], "UNCONFIRMED")
+                self.assertEqual(self.bridge.calls, [])
+
+    def test_current_exact_submission_is_confirmed_despite_identical_history(self):
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+        self.bridge.capture = header + self.request["text"] + "\n❯ "
+        self.request["preflight_sha256"] = hashlib.sha256(self.bridge.capture.encode()).hexdigest()
+        self.assertEqual(self.send()["status"], "SUBMITTED")
+
+    def test_unidentifiable_history_change_remains_unconfirmed(self):
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+
+        class ReflowedHistory(FakeBridge):
+            def enter(inner, target):
+                inner.calls.append(("enter", target))
+                inner.capture = header + self.request["text"] + "\n❯ "
+
+        self.bridge = ReflowedHistory(capture="old context\n❯ ")
+        self.request["preflight_sha256"] = hashlib.sha256(self.bridge.capture.encode()).hexdigest()
+        self.assertEqual(self.send()["status"], "UNCONFIRMED")
+
+    def test_same_event_recovery_confirms_current_submission_with_history(self):
+        class TypedThenLost(FakeBridge):
+            def message(inner, target, text):
+                FakeBridge.message(inner, target, text)
+                raise RuntimeError("response lost after type")
+
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+        self.bridge = TypedThenLost(capture=header + self.request["text"] + "\n❯ ")
+        self.request["preflight_sha256"] = hashlib.sha256(self.bridge.capture.encode()).hexdigest()
+        self.assertEqual(self.send()["status"], "TYPED")
+        self.bridge.calls.clear()
+        self.assertEqual(self.send()["status"], "SUBMITTED")
+        self.assertFalse(any(call[0] == "message" for call in self.bridge.calls))
+
     def test_lost_enter_is_unconfirmed_and_never_retried(self):
         self.bridge.fail.add("enter")
         result = self.send()
@@ -374,6 +425,39 @@ class StopGuardTests(unittest.TestCase):
                     output = subprocess.run(command, input=json.dumps(self.payload), text=True, capture_output=True, check=False)
                     self.assertEqual(output.returncode, 0, output.stderr)
                     self.assertEqual(json.loads(output.stdout), {})
+
+    def test_historical_false_confirmation_keeps_completed_task_delivery_obligation(self):
+        header = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] "
+        script = str(Path(__file__).resolve().parents[1] / "scripts/controller_guard.py")
+        for host in ("codex", "claude"):
+            for changed in (False, True):
+                with self.subTest(host=host, changed=changed):
+                    cli_root = self.root / f"{host}-history-{changed}"
+                    text = "return complete report"
+                    history = header + text + "\n❯ "
+
+                    class ChangedCurrent(FakeBridge):
+                        def enter(inner, target):
+                            inner.calls.append(("enter", target))
+                            inner.capture = history + "\n" + (header + "foreign " + text + "\n" if changed else "") + "❯ "
+
+                    request = {
+                        "host": host, "session_id": "s1", "agent_id": host + ":s1",
+                        "task_id": "T-1", "event_id": "return", "candidate": "abc123",
+                        "sender": "%1", "destination": "%2", "destination_id": "%2",
+                        "text": text, "preflight_sha256": hashlib.sha256(history.encode()).hexdigest(),
+                        "confirm_idle": True, "confirm_no_draft": True,
+                    }
+                    store = GuardStore(cli_root / "delivery.sqlite3")
+                    self.assertEqual(checked_send(request, ChangedCurrent(capture=history), store,
+                                                  settle=lambda: None)["status"], "UNCONFIRMED")
+                    binding = {**self.binding, "host": host, "agent_id": host + ":s1",
+                               "approved_work": [{"id": "T-1", "status": "complete"}]}
+                    (cli_root / "bindings.json").write_text(json.dumps({"version": 1, "bindings": [binding]}))
+                    output = subprocess.run([sys.executable, script, "--state-root", str(cli_root), "hook", host],
+                                            input=json.dumps(self.payload), text=True, capture_output=True, check=False)
+                    self.assertEqual(output.returncode, 0, output.stderr)
+                    self.assertIn("unfinished-delivery", json.loads(output.stdout).get("reason", ""))
 
     def test_actual_hook_rejects_invalid_path_text_once_for_both_hosts(self):
         script = str(Path(__file__).resolve().parents[1] / "scripts/controller_guard.py")
