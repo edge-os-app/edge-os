@@ -1,0 +1,16 @@
+{
+  "description": "Per-session controller Stop guard. Project trust and hook trust remain required.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/controller_guard.py\" hook codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
