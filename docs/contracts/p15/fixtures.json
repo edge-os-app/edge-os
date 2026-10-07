@@ -45,7 +45,7 @@
       "network_id": "monad:143",
       "position_id": "position-a-2",
       "strategy_revision": "strategy-a-v2",
-      "mandate_id": "mandate-a-v1",
+      "mandate_id": "mandate-a-v0",
       "asset_id": "monad:143/asset:MOE",
       "inventory_raw": "4",
       "decimals": 0
@@ -77,13 +77,27 @@
   },
   "approval_snapshots": [
     {
+      "approval_id": "approval-a-v2",
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-a",
+      "wallet_id": "wallet-a",
+      "network_id": "monad:143",
+      "strategy_revision": "strategy-a-v2",
+      "mandate_id": "mandate-a-v0",
+      "terms_hash": "sha256:terms-a-v2",
+      "superseded_by": "approval-a-v3"
+    },
+    {
       "approval_id": "approval-a-v3",
       "agent_id": "agent-a",
       "wallet_id": "wallet-a",
       "strategy_revision": "strategy-a-v3",
       "mandate_id": "mandate-a-v1",
       "terms_hash": "sha256:terms-a-v3",
-      "superseded_by": "approval-a-v4"
+      "supersedes": "approval-a-v2",
+      "superseded_by": "approval-a-v4",
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "network_id": "monad:143"
     },
     {
       "approval_id": "approval-a-v4",
@@ -92,7 +106,19 @@
       "strategy_revision": "strategy-a-v4",
       "mandate_id": "mandate-a-v2",
       "terms_hash": "sha256:terms-a-v4",
-      "supersedes": "approval-a-v3"
+      "supersedes": "approval-a-v3",
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "network_id": "monad:143"
+    },
+    {
+      "approval_id": "approval-b-v5",
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-b",
+      "wallet_id": "wallet-b",
+      "network_id": "monad:143",
+      "strategy_revision": "strategy-b-v5",
+      "mandate_id": "mandate-b-v1",
+      "terms_hash": "sha256:terms-b-v5"
     }
   ],
   "creation_recovery": {
@@ -133,7 +159,11 @@
     "decimals": 0,
     "expected_quote_raw": "650",
     "quote_status": "ESTIMATE",
-    "expires_at": "2026-10-07T12:05:00Z"
+    "expires_at": "2026-10-07T12:05:00Z",
+    "operation": "EXIT",
+    "policy_binding": "policy-b-v1",
+    "approval_id": "approval-b-v5",
+    "deployment_id": "deployment-b-v5"
   },
   "action": {
     "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
@@ -145,16 +175,25 @@
     "mandate_id": "mandate-b-v1",
     "review_hash": "sha256:reviewed-input-example-1",
     "action_id": "action-b-exit-1",
-    "status": "QUEUED"
+    "status": "QUEUED",
+    "operation": "EXIT",
+    "policy_binding": "policy-b-v1",
+    "asset_id": "monad:143/asset:MOE",
+    "quantity_raw": "5",
+    "decimals": 0,
+    "approval_id": "approval-b-v5",
+    "deployment_id": "deployment-b-v5"
   },
   "queues": {
     "agent-a": {
       "unresolved_action": "action-unknown",
       "state": "SUBMISSION_UNKNOWN",
       "provider_request_id": "provider-request-a-1",
+      "signed_transaction_reference": "signed-tx-ref-a-1",
       "transaction_hash": "0xexample-a-1",
       "reservations_retained": true,
-      "next_economic_action_allowed": false
+      "next_economic_action_allowed": false,
+      "provider_request_references": ["provider-request-a-1", "provider-request-a-2"]
     },
     "agent-b": {
       "unresolved_action": null,
@@ -203,7 +242,9 @@
     "entries_allowed": false,
     "exits_allowed": false,
     "monitoring_allowed": true,
-    "later_stop_clear_id": "owner-reviewed-stop-clear-1"
+    "later_stop_clear_id": "owner-reviewed-stop-clear-1",
+    "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+    "network_id": "monad:143"
   },
   "entries_only_stop": {
     "agent_id": "agent-a",
@@ -214,7 +255,10 @@
     "entries_allowed": false,
     "exits_allowed": true,
     "exit_authority": "ACTIVE_EXPLICIT_MANDATE",
-    "monitoring_allowed": true
+    "monitoring_allowed": true,
+    "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+    "network_id": "monad:143",
+    "position_id": "position-a-1"
   },
   "posttrade_halt": {
     "agent_id": "agent-a",
@@ -224,7 +268,9 @@
     "mode": "HALT_ALL_SWAPS",
     "entries_allowed": false,
     "exits_allowed": false,
-    "monitoring_allowed": true
+    "monitoring_allowed": true,
+    "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+    "network_id": "monad:143"
   },
   "cancellation": {
     "PROPOSED": "CANCELLED",
@@ -236,7 +282,7 @@
     "confirmed_revert": {"economic_action_count": 1, "attempt_count": 1, "gas_consumed": true, "input_consumed": false},
     "proved_prebroadcast_denial": {"economic_action_count": 0, "attempt_count": 0, "input_consumed": false},
     "submission_unknown": {"economic_action_count": 1, "attempt_count": 1, "reservations_retained": true},
-    "qualified_resend": {"action_id": "action-unknown", "signed_transaction_hash": "0xexample-a-1", "provider_request_count": 2, "economic_action_count": 1},
+    "qualified_resend": {"action_id": "action-unknown", "signed_transaction_reference": "signed-tx-ref-a-1", "signed_transaction_hash": "0xexample-a-1", "provider_request_id": "provider-request-a-2", "provider_request_count": 2, "economic_action_count": 1},
     "changed_signed_transaction": {"expected": "NEW_AUTHORITY_REQUIRED"}
   },
   "allowance_example": {
@@ -275,5 +321,61 @@
     "next_check_at": null,
     "blocking_reason": "Owner review is required for changed strategy revision.",
     "evidence_status": "UNPROVEN"
+  },
+  "current_authority": {
+    "agent-b": {
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-b",
+      "wallet_id": "wallet-b",
+      "network_id": "monad:143",
+      "strategy_revision": "strategy-b-v5",
+      "mandate_id": "mandate-b-v1",
+      "mandate_status": "ACTIVE",
+      "policy_binding": "policy-b-v1",
+      "mandate_expires_at": "2026-10-07T13:00:00Z",
+      "approval_id": "approval-b-v5",
+      "policy_status": "ACTIVE",
+      "deployment_id": "deployment-b-v5"
+    }
+  },
+  "send_time_examples": {
+    "checked_at": "2026-10-07T12:04:00Z",
+    "expiry_boundary": "2026-10-07T12:04:00Z",
+    "entries_only_stop": {
+      "scope": "POSITION",
+      "mode": "STOP_NEW_ENTRIES",
+      "exit_authority": "ACTIVE_EXPLICIT_MANDATE",
+      "position_id": "position-b-1",
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-b",
+      "wallet_id": "wallet-b",
+      "network_id": "monad:143"
+    },
+    "halt_all_stop": {
+      "scope": "AGENT_WALLET_NETWORK",
+      "mode": "HALT_ALL_SWAPS",
+      "exit_authority": "NONE",
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-b",
+      "wallet_id": "wallet-b",
+      "network_id": "monad:143"
+    },
+    "deployment_stop": {
+      "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
+      "agent_id": "agent-b",
+      "wallet_id": "wallet-b",
+      "network_id": "monad:143",
+      "scope": "DEPLOYMENT",
+      "deployment_id": "deployment-b-v5",
+      "mode": "HALT_ALL_SWAPS",
+      "exit_authority": "NONE"
+    },
+    "priority_candidates": [
+      {"action_id": "entry-b-1", "operation": "ENTRY"},
+      {"action_id": "exit-b-2", "operation": "EXIT"},
+      {"action_id": "addition-b-1", "operation": "ADDITION"},
+      {"action_id": "exit-b-1", "operation": "EXIT"}
+    ],
+    "expected_priority_order": ["exit-b-1", "exit-b-2", "addition-b-1", "entry-b-1"]
   }
 }

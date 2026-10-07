@@ -39,7 +39,7 @@
     "position": ["position_id", "identity_binding", "asset_id", "inventory_raw", "cost_basis", "acquisition_ids", "exit_ids", "pending_action_ids"],
     "capital_flow": ["flow_id", "owner_id", "agent_id", "wallet_id", "network_id", "kind", "asset_id", "raw", "decimals", "status", "transaction_reference"],
     "action": ["action_id", "identity_binding", "position_id_or_owner_flow_id", "review_hash", "input", "expected_output", "status", "created_at", "updated_at", "reason", "signed_transaction_reference", "signed_transaction_hash", "transaction_reference", "provider_request_references"],
-    "stop": ["stop_id", "owner_id", "agent_id", "wallet_id", "scope", "mode", "reason", "denied_actions", "allowed_actions", "created_at"],
+    "stop": ["stop_id", "owner_id", "agent_id", "wallet_id", "network_id", "scope", "position_id", "deployment_id", "mode", "reason", "denied_actions", "allowed_actions", "created_at"],
     "signer_removal": ["removal_id", "owner_id", "agent_id", "wallet_id", "state", "requested_at", "verified_at", "provider_reference"],
     "monitoring": ["agent_id", "wallet_id", "operation_state", "last_check_at", "last_result", "next_check_at_or_blocking_reason", "pending_actions", "residual_exposure", "evidence_status"]
   },
@@ -84,5 +84,10 @@
   "initial_queue_limit": {
     "unresolved_economic_transactions_per_agent_wallet_network": 1,
     "qualification_status": "IMPLEMENTATION_CHOICE_NOT_RUNTIME_QUALIFIED"
+  },
+  "stop_scope_targets": {
+    "POSITION": ["owner_id", "agent_id", "wallet_id", "network_id", "position_id"],
+    "DEPLOYMENT": ["owner_id", "agent_id", "wallet_id", "network_id", "deployment_id"],
+    "AGENT_WALLET_NETWORK": ["owner_id", "agent_id", "wallet_id", "network_id"]
   }
 }
