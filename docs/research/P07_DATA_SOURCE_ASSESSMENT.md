@@ -25,7 +25,7 @@ No GitHub example was executed or copied. The Monad state limit is consistent wi
 | Start-boundary decimals | Real failure, retained | Four calls returned historical-state errors. Immutability stays an assumption. |
 | Original delivery time and finality | Unknown | Collection was later than the window. |
 | Fork fee and reflection mechanics | Unqualified | Published nad.fun documentation describes V3 and does not fix this fork. |
-| Decode, both directions, decimals, tie rounding | Run offline | Synthetic fixtures with hand-computed expectations. 56 tests run in total. |
+| Decode, both directions, decimals, tie rounding | Run offline | Synthetic fixtures with hand-computed expectations. 58 tests run in total. |
 | Order, duplicates, conflicts, reorg signatures | Run offline | Synthetic fixtures. |
 | Complete-empty versus incomplete, boundaries, close, volume | Run offline | Synthetic fixtures. |
 | Availability, late input, schedule and floor feasibility | Run offline | Synthetic fixtures. |

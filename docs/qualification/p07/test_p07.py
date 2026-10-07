@@ -487,6 +487,64 @@ class PerClaimQualification(unittest.TestCase):
         self.assertEqual(counts, {"COMPLETE_OCCUPIED": 0, "COMPLETE_EMPTY": 1, "INCOMPLETE": 2, "UNQUALIFIED": 0})
 
 
+class HeldOutRecordsNeverLeaveAFalseCompleteBucket(unittest.TestCase):
+    """Seeded differential test. Oracle: the true bucket contents of the uncorrupted data."""
+
+    def test_complete_buckets_hold_exactly_the_true_trades(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        template = FIXTURES["decode_cases"][0]["log"]
+        segments = [{"first_block": 100, "end_block_exclusive": 200, "first_ts": epoch("2026-09-25T09:59:00Z"),
+                     "last_ts": epoch("2026-09-25T11:30:00Z"), "page_ids": ["p"]}]
+        window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T11:00:00Z"}
+        base = epoch("2026-09-25T10:00:00Z")
+
+        def swap_log(block: int, ts: int, quote: int, **over: object) -> dict:
+            log = copy.deepcopy(template)
+            log.update(block_number=block, block_hash="0x" + format(0xb0000 + block, "064x"),
+                       transaction_hash="0x" + format(0xa0000 + block, "064x"), transaction_index=0, log_index=0,
+                       block_timestamp=ts)
+            log["data"] = "0x" + format(quote, "064x") + "0" * 64 + "0" * 64 + format(10**18, "064x")
+            log.update(over)
+            return log
+
+        rng = random.Random(11)
+        checked = 0
+        for _ in range(400):
+            blocks = sorted(rng.sample(range(101, 160), 12))
+            times = sorted(base + rng.randrange(0, 3300) for _ in blocks)
+            truth = {b: t for b, t in zip(blocks, times)}
+            logs = {b: swap_log(b, t, 1_000_000 + b) for b, t in truth.items()}
+            victim = rng.choice(blocks[1:-1])
+            lo = max(t for b, t in truth.items() if b < victim)
+            hi = min(t for b, t in truth.items() if b > victim)
+            wrong = rng.choice([base + 3500, base - 500, hi + rng.randrange(1, 900), lo - rng.randrange(1, 900)])
+            if lo <= wrong <= hi:
+                continue
+            kind = rng.choice(["wrong_time", "payload_conflict", "unsupported", "bad_index", "twin_hash"])
+            others = {b: logs[b] for b in blocks if b != victim}
+            extra = []
+            if kind == "wrong_time":
+                extra = [swap_log(victim, wrong, 1_000_000 + victim)]
+            elif kind == "payload_conflict":
+                extra = [swap_log(victim, wrong, 1_000_000 + victim), swap_log(victim, wrong, 2_000_000 + victim)]
+            elif kind == "unsupported":
+                extra = [swap_log(victim, wrong, 1, data="0x" + "0" * 255 + "1")]
+            elif kind == "bad_index":
+                extra = [swap_log(victim, wrong, 1_000_000 + victim, log_index="zz")]
+            else:
+                extra = [swap_log(victim, wrong, 1_000_000 + victim, block_hash="0x" + "cc" * 32),
+                         swap_log(victim + 1000, wrong, 1_000_000 + victim, block_hash="0x" + "cc" * 32)]
+            ingested = ingest(profile, list(others.values()) + extra)
+            for bucket in bucketize(profile, ingested, segments, window):
+                if bucket["status"] not in ("COMPLETE_OCCUPIED", "COMPLETE_EMPTY"):
+                    continue
+                start = epoch(bucket["start"])
+                true_count = sum(1 for t in truth.values() if start <= t < start + 300)
+                self.assertEqual(bucket["trade_count"], true_count, (kind, victim, wrong))
+            checked += 1
+        self.assertGreater(checked, 150)
+
+
 class FailClosed(unittest.TestCase):
     JUNK = (None, [], "x", 1, True, {}, 1.5)
 
@@ -623,6 +681,14 @@ class P02Projection(unittest.TestCase):
     def test_result_names_the_window_it_counted(self) -> None:
         got = qualify(real_pages_profile(narrow=True), pages_observations())
         self.assertEqual(got["history_window"], {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"})
+
+    def test_projection_gives_a_named_refusal_for_malformed_results(self) -> None:
+        profile = real_pages_profile(narrow=True)
+        good = qualify(profile, pages_observations())
+        for result in (None, [], "x", {**good, "claims": {**good["claims"], "BINDING_IDENTITY": {"verdict": []}}},
+                       {**good, "claims": {**good["claims"], "BINDING_IDENTITY": None}}):
+            with self.assertRaises(BindingNotEmittable):
+                to_p02_binding(profile, result)
 
     def test_projection_refuses_a_result_for_a_different_profile(self) -> None:
         a, b = PROFILES["SYN_Q0"], PROFILES["SYN_B0"]

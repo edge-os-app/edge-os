@@ -263,7 +263,7 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     for position, log in enumerate(logs):
         if not isinstance(log, Mapping):
             result.rejected.append({"code": "NOT_AN_OBJECT", "detail": "record is not an object", "position": position,
-                                    "block_timestamp": None, "key": None, "ranges": []})
+                                    "block_timestamp": None, "block": None, "key": None, "ranges": []})
             continue
         try:
             decoded.append(decode_swap_log(profile, log))
@@ -275,6 +275,7 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
             else:
                 result.rejected.append({"code": error.code, "detail": error.detail, "position": position,
                                         "block_timestamp": _try_uint(log, "block_timestamp"),
+                                        "block": _try_uint(log, "block_number"),
                                         "key": _try_key(log), "ranges": []})
 
     def name(trade: Trade) -> str:
@@ -349,12 +350,23 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
                 ranges.append((lo, hi))
         result.conflicts.append({"kind": kind, "identities": sorted({name(t) for t in members}),
                                  "timestamps": claimed, "ranges": sorted(set(ranges))})
+    blocks = [t.block_number for t in result.trades]
     for item in result.rejected:
         item["ranges"] = []
-        if item["key"] is not None and item["block_timestamp"] is not None:
+        ts = item["block_timestamp"]
+        if ts is None:
+            continue
+        if item["key"] is not None:
             lo, hi = neighbours(item["key"])
-            if not lo <= item["block_timestamp"] <= hi:
-                item["ranges"].append((lo, hi))
+        elif item["block"] is not None:
+            i, j = bisect.bisect_left(blocks, item["block"]), bisect.bisect_right(blocks, item["block"])
+            lo, hi = (times[i - 1] if i > 0 else 0), (times[j] if j < len(times) else _FAR_FUTURE)
+        else:
+            lo, hi = 0, _FAR_FUTURE
+            item["ranges"].append((lo, hi))
+            continue
+        if not lo <= ts <= hi:
+            item["ranges"].append((lo, hi))
     return result
 
 
@@ -382,6 +394,18 @@ def epoch(text: str) -> int:
 
 def iso_utc(seconds: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
+
+
+def _boundary_conflict(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    """Two pages that share a boundary must agree on what happened there."""
+    def differ(key: str) -> bool:
+        return bool(a.get(key)) and bool(b.get(key)) and str(a[key]).lower() != str(b[key]).lower()
+
+    same_start = a["from_block"] == b["from_block"] and (
+        differ("first_parent_hash") or a["first_block_timestamp"] != b["first_block_timestamp"])
+    same_end = a["next_block"] == b["next_block"] and (
+        differ("last_block_hash") or a["last_block_timestamp"] != b["last_block_timestamp"])
+    return same_start or same_end
 
 
 def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int],
@@ -412,7 +436,18 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
         elif page["next_block"] - 1 > last_final:
             breaks.append({"code": "NOT_FINAL_AT_COLLECTION", "page_id": pid})
         elif current is not None and page["from_block"] < end:
-            breaks.append({"code": "OVERLAP", "page_id": pid})
+            clash = next((i for i in range(len(current) - 1, -1, -1)
+                          if current[i]["from_block"] < page["next_block"] and page["from_block"] < current[i]["next_block"]
+                          and _boundary_conflict(current[i], page)), None)
+            if clash is None:
+                breaks.append({"code": "OVERLAP", "page_id": pid})
+            else:
+                breaks.append({"code": "OVERLAP_CONFLICT", "page_id": pid})
+                dropped = current[clash:]
+                untrusted.update(h.lower() for g in dropped + [page] for h in (g.get("last_block_hash"),) if h)
+                del current[clash:]
+                if not current:
+                    segments.pop()
         elif page["last_block_timestamp"] < page["first_block_timestamp"] or (
                 current is not None and page["first_block_timestamp"] < current[-1]["last_block_timestamp"]):
             breaks.append({"code": "TIMESTAMP_ORDER", "page_id": pid})
@@ -666,8 +701,9 @@ def feasibility(claim: Mapping[str, Any], segments: Sequence[Mapping[str, Any]],
         raise InvalidInput("CLAIM_VALUE", "horizon and reference window must be positive, warm-up non-negative integers")
     parts = claim["partitions"]
     declared = [(p.get("required_triggered"), p.get("required_control")) for p in parts]
-    if any((a is None) != (b is None) for a, b in declared):
-        raise InvalidInput("FLOOR_INCOMPLETE", "declare both the triggered and the control floor, or neither")
+    if any((a is None) != (b is None) for a, b in declared) or (
+            any(a is None for a, _ in declared) and any(a is not None for a, _ in declared)):
+        raise InvalidInput("FLOOR_INCOMPLETE", "declare both floors for every partition, or for none")
     if any(a is not None and not (_is_int(a) and a >= 1 and _is_int(b) and b >= 1) for a, b in declared):
         raise InvalidInput("FLOOR_VALUE", "floors must be integers of at least 1")
     spans = sorted((epoch(p["start_utc"]), epoch(p["end_utc"])) for p in parts)
@@ -1007,6 +1043,8 @@ def to_p02_binding(profile: Mapping[str, Any], result: Mapping[str, Any]) -> dic
 
     P02 has no LIMITED state. A limited or unresolved real profile stays a P07 result and is not projected.
     """
+    if not isinstance(result, Mapping):
+        raise BindingNotEmittable("RESULT_MALFORMED", "result is not an object")
     try:
         digest = profile_sha256(profile)
     except ValueError as error:
@@ -1017,8 +1055,9 @@ def to_p02_binding(profile: Mapping[str, Any], result: Mapping[str, Any]) -> dic
     rank = {"QUALIFIED": 0, "LIMITED": 1, "UNRESOLVED": 2}
     if not (result.get("schema_version") == RESULT_SCHEMA and result.get("scope") == "OFFLINE_CONTRACT_ONLY"
             and isinstance(result.get("observations_sha256"), str) and isinstance(claims, Mapping)
-            and set(claims) == set(CLAIMS) and all(isinstance(c, Mapping) and c.get("verdict") in rank
-                                                    for c in claims.values())
+            and set(claims) == set(CLAIMS)
+            and all(isinstance(c, Mapping) and isinstance(c.get("verdict"), str) and c["verdict"] in rank
+                    for c in claims.values())
             and result.get("overall") == max((c["verdict"] for c in claims.values()), key=rank.__getitem__)):
         raise BindingNotEmittable("RESULT_MALFORMED", "result is not a complete qualification result")
     if profile_problems(profile):
@@ -1190,6 +1229,8 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
     sides = _look(observations, "ingest", "pool_sides")
     if not isinstance(sides, list) or not sides or not all(isinstance(x, str) for x in sides):
         event.add("MISSING_EVIDENCE", "POOL_SIDES_NOT_REPORTED")
+    elif trades is not None and len(set(sides)) > trades:
+        event.add("FAILED_CHECK", "POOL_SIDES_EXCEED_TRADES", "one trade has one side")
     elif set(sides) != {"QUOTE_IN_BASE_OUT", "BASE_IN_QUOTE_OUT"}:
         event.add("LIMIT", "ONE_POOL_SIDE_ONLY", ", ".join(sorted(sides)))
     for role in ("base", "quote"):
@@ -1293,7 +1334,7 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
     status = _look(observations, "feasibility", "status")
     shown = _look(observations, "feasibility", "partitions")
     if status == "FEASIBLE" and not (isinstance(shown, list) and shown and all(
-            isinstance(row, Mapping) and row.get("shortfall") == 0 for row in shown)):
+            isinstance(row, Mapping) and _count(row.get("shortfall")) == 0 for row in shown)):
         status = "UNVERIFIED"
     if status == "INFEASIBLE":
         schedule.add("FAILED_CHECK", "INFEASIBLE_BEFORE_OUTCOMES", "declared sample floors cannot be met")

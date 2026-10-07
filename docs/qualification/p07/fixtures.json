@@ -445,7 +445,7 @@
       "page_id": "p1",
       "from_block": 100,
       "next_block": 104,
-      "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+      "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
       "first_block_timestamp": 1790330398,
       "last_block_timestamp": 1790330400,
       "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -454,7 +454,7 @@
       "page_id": "p2",
       "from_block": 104,
       "next_block": 108,
-      "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+      "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
       "first_block_timestamp": 1790330400,
       "last_block_timestamp": 1790330700,
       "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -464,7 +464,7 @@
       "page_id": "p3",
       "from_block": 108,
       "next_block": 111,
-      "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+      "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
       "first_block_timestamp": 1790330999,
       "last_block_timestamp": 1790331120,
       "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -473,7 +473,7 @@
     ],
     "dataset_revision": {
      "basis": "PAGE_DIGESTS",
-     "manifest_sha256": "2ba468076ae50b1773684ca20112d110fc98cb617f716ccf8f836cbca11b6834",
+     "manifest_sha256": "d560cbfd069308ea749edd54ebdae249cbe5573c707cd9b808df7ba215f1efcb",
      "page_count": 3,
      "row_count": 6
     }
@@ -2537,7 +2537,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 104,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2546,7 +2546,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790330400,
      "last_block_timestamp": 1790330700,
      "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -2556,7 +2556,7 @@
      "page_id": "p3",
      "from_block": 108,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330999,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -2594,7 +2594,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 104,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2603,7 +2603,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790330400,
      "last_block_timestamp": 1790330700,
      "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -2613,7 +2613,7 @@
      "page_id": "p3",
      "from_block": 108,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330999,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -2652,7 +2652,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 104,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2661,7 +2661,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790330400,
      "last_block_timestamp": 1790330700,
      "first_parent_hash": "0x9999999999999999999999999999999999999999999999999999999999999999",
@@ -2671,7 +2671,7 @@
      "page_id": "p3",
      "from_block": 108,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330999,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -2700,7 +2700,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 104,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2709,7 +2709,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790330400,
      "last_block_timestamp": 1790330700,
      "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -2719,7 +2719,7 @@
      "page_id": "p3",
      "from_block": 108,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330999,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -2757,7 +2757,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 104,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2766,7 +2766,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790330400,
      "last_block_timestamp": 1790330700,
      "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -2776,7 +2776,7 @@
      "page_id": "p3",
      "from_block": 108,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330999,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -2815,7 +2815,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 105,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2824,7 +2824,7 @@
      "page_id": "p4",
      "from_block": 107,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000007bbc",
+     "sha256": "ab71fc4c8a1c4d62b9202b36ee7c07dd398a0907a37037bd8c3959d6af573608",
      "first_block_timestamp": 1790330700,
      "last_block_timestamp": 1790331120,
      "last_block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333"
@@ -2870,7 +2870,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 106,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330550,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2879,7 +2879,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790330400,
      "last_block_timestamp": 1790330700,
      "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
@@ -2888,7 +2888,7 @@
      "page_id": "p3",
      "from_block": 106,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330699,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2926,7 +2926,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 104,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -2935,7 +2935,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790330400,
      "last_block_timestamp": 1790330700,
      "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -2945,7 +2945,7 @@
      "page_id": "p3",
      "from_block": 108,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330999,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -2955,7 +2955,7 @@
      "page_id": "p9",
      "from_block": 111,
      "next_block": 113,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000011667",
+     "sha256": "26148c43a19c95f0115e594c688e9f6e92d0bcdbdb6a75187b732fc593875e7e",
      "first_block_timestamp": 1790331150,
      "last_block_timestamp": 1790331180
     }
@@ -2993,7 +2993,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 104,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -3002,7 +3002,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790326800,
      "last_block_timestamp": 1790330700,
      "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -3012,7 +3012,7 @@
      "page_id": "p3",
      "from_block": 108,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330999,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -3060,7 +3060,7 @@
      "page_id": "p1",
      "from_block": 100,
      "next_block": 104,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000001eef",
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
      "first_block_timestamp": 1790330398,
      "last_block_timestamp": 1790330400,
      "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -3069,7 +3069,7 @@
      "page_id": "p2",
      "from_block": 104,
      "next_block": 108,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000003dde",
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
      "first_block_timestamp": 1790330400,
      "last_block_timestamp": 1790326800,
      "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -3079,7 +3079,7 @@
      "page_id": "p3",
      "from_block": 108,
      "next_block": 111,
-     "sha256": "0000000000000000000000000000000000000000000000000000000000005ccd",
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
      "first_block_timestamp": 1790330999,
      "last_block_timestamp": 1790331120,
      "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -3113,6 +3113,338 @@
     ]
    },
    "note": "A page whose last block is earlier than its first."
+  },
+  {
+   "id": "C11-chain-of-two-pages-after-a-mismatch",
+   "profile": "SYN_Q0",
+   "scan_request": {
+    "from_block": 100,
+    "to_block_exclusive": 111
+   },
+   "archive_height": 1000000,
+   "pages": [
+    {
+     "page_id": "p1",
+     "from_block": 100,
+     "next_block": 102,
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790330399,
+     "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "page_id": "p2",
+     "from_block": 102,
+     "next_block": 104,
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
+     "first_block_timestamp": 1790330399,
+     "last_block_timestamp": 1790330400,
+     "first_parent_hash": "0x9999999999999999999999999999999999999999999999999999999999999999",
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "page_id": "p3",
+     "from_block": 104,
+     "next_block": 107,
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330699,
+     "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+     "last_block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+     "page_id": "p4",
+     "from_block": 107,
+     "next_block": 111,
+     "sha256": "ab71fc4c8a1c4d62b9202b36ee7c07dd398a0907a37037bd8c3959d6af573608",
+     "first_block_timestamp": 1790330700,
+     "last_block_timestamp": 1790331120,
+     "first_parent_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+     "last_block_hash": "0x4444444444444444444444444444444444444444444444444444444444444444"
+    }
+   ],
+   "expect": {
+    "segments": [],
+    "break_codes": [
+     "REORG_BETWEEN_PAGES",
+     "CHAINED_TO_DROPPED_PAGE",
+     "CHAINED_TO_DROPPED_PAGE"
+    ]
+   },
+   "note": "Everything after the mismatch chains back to a page that was dropped."
+  },
+  {
+   "id": "C12-overlapping-page-with-another-hash-sorts-after",
+   "profile": "SYN_Q0",
+   "scan_request": {
+    "from_block": 100,
+    "to_block_exclusive": 111
+   },
+   "archive_height": 1000000,
+   "pages": [
+    {
+     "page_id": "p1",
+     "from_block": 100,
+     "next_block": 104,
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790330400,
+     "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "page_id": "p2",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "page_id": "p3",
+     "from_block": 108,
+     "next_block": 111,
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
+     "first_block_timestamp": 1790330999,
+     "last_block_timestamp": 1790331120,
+     "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+     "last_block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+     "page_id": "p2b",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "5f41cfacedb9642b7617c80bad8089f60b5dafe0b70cd91ff6b7224f9d648d2b",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "last_block_hash": "0x4444444444444444444444444444444444444444444444444444444444444444"
+    }
+   ],
+   "expect": {
+    "segments": [
+     {
+      "first_block": 100,
+      "end_block_exclusive": 104,
+      "first_ts": 1790330398,
+      "last_ts": 1790330400,
+      "page_ids": [
+       "p1"
+      ]
+     }
+    ],
+    "break_codes": [
+     "OVERLAP_CONFLICT",
+     "CHAINED_TO_DROPPED_PAGE"
+    ]
+   },
+   "note": "Two pages claim blocks 104 to 107 and end on different hashes. Neither can be trusted. Page p3 chained to one of them."
+  },
+  {
+   "id": "C13-overlapping-page-with-another-hash-sorts-before",
+   "profile": "SYN_Q0",
+   "scan_request": {
+    "from_block": 100,
+    "to_block_exclusive": 111
+   },
+   "archive_height": 1000000,
+   "pages": [
+    {
+     "page_id": "p1",
+     "from_block": 100,
+     "next_block": 104,
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790330400,
+     "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "page_id": "p2",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "page_id": "p3",
+     "from_block": 108,
+     "next_block": 111,
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
+     "first_block_timestamp": 1790330999,
+     "last_block_timestamp": 1790331120,
+     "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+     "last_block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+     "page_id": "p0b",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "182d03042d9fe1acc1c82b59d0ec715b8e5c638b0c31d96055f238a80a6221a2",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "last_block_hash": "0x4444444444444444444444444444444444444444444444444444444444444444"
+    }
+   ],
+   "expect": {
+    "segments": [
+     {
+      "first_block": 100,
+      "end_block_exclusive": 104,
+      "first_ts": 1790330398,
+      "last_ts": 1790330400,
+      "page_ids": [
+       "p1"
+      ]
+     }
+    ],
+    "break_codes": [
+     "OVERLAP_CONFLICT",
+     "CHAINED_TO_DROPPED_PAGE"
+    ]
+   },
+   "note": "Same pages as the case before with another id. The result must not depend on the id."
+  },
+  {
+   "id": "C15-overlapping-page-with-another-parent-hash",
+   "profile": "SYN_Q0",
+   "scan_request": {
+    "from_block": 100,
+    "to_block_exclusive": 111
+   },
+   "archive_height": 1000000,
+   "pages": [
+    {
+     "page_id": "p1",
+     "from_block": 100,
+     "next_block": 104,
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790330400,
+     "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "page_id": "p2",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "page_id": "p3",
+     "from_block": 108,
+     "next_block": 111,
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
+     "first_block_timestamp": 1790330999,
+     "last_block_timestamp": 1790331120,
+     "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+     "last_block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+     "page_id": "p2c",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "51f9316c9cb0dd8a43795004009996268de430f6f0294ef7cadaba84c9569502",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    }
+   ],
+   "expect": {
+    "segments": [
+     {
+      "first_block": 100,
+      "end_block_exclusive": 104,
+      "first_ts": 1790330398,
+      "last_ts": 1790330400,
+      "page_ids": [
+       "p1"
+      ]
+     }
+    ],
+    "break_codes": [
+     "OVERLAP_CONFLICT",
+     "CHAINED_TO_DROPPED_PAGE"
+    ]
+   },
+   "note": "Same blocks and same last hash, but the two pages start from different parents. That alone is a fork signal."
+  },
+  {
+   "id": "C14-identical-page-fetched-twice",
+   "profile": "SYN_Q0",
+   "scan_request": {
+    "from_block": 100,
+    "to_block_exclusive": 111
+   },
+   "archive_height": 1000000,
+   "pages": [
+    {
+     "page_id": "p1",
+     "from_block": 100,
+     "next_block": 104,
+     "sha256": "f64551fcd6f07823cb87971cfb91446425da18286b3ab1ef935e0cbd7a69f68a",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790330400,
+     "last_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "page_id": "p2",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "3946ca64ff78d93ca61090a437cbb6b3d2ca0d488f5f9ccf3059608368b27693",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "page_id": "p3",
+     "from_block": 108,
+     "next_block": 111,
+     "sha256": "43bb00d0ce7790a53b91256b370c887b24791a5539a6fbfb70c5870e8c91ae5d",
+     "first_block_timestamp": 1790330999,
+     "last_block_timestamp": 1790331120,
+     "first_parent_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+     "last_block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+     "page_id": "p2dup",
+     "from_block": 104,
+     "next_block": 108,
+     "sha256": "2743812c501b3877043fee830994197f2310e172af328a6b01694f9fef41d4d6",
+     "first_block_timestamp": 1790330400,
+     "last_block_timestamp": 1790330700,
+     "first_parent_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+     "last_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    }
+   ],
+   "expect": {
+    "segments": [
+     {
+      "first_block": 100,
+      "end_block_exclusive": 111,
+      "first_ts": 1790330398,
+      "last_ts": 1790331120,
+      "page_ids": [
+       "p1",
+       "p2",
+       "p3"
+      ]
+     }
+    ],
+    "break_codes": [
+     "OVERLAP"
+    ]
+   },
+   "note": "A repeat fetch with the same boundary facts is harmless. The copy is set aside."
   }
  ],
  "bucket_cases": [
@@ -4695,6 +5027,438 @@
     ]
    },
    "note": "Blocks 102 and 104 claim one hash. Block 102 also claims a time its neighbours rule out."
+  },
+  {
+   "id": "K16-unreadable-position-with-a-readable-block",
+   "profile": "SYN_Q0",
+   "coverage_case": "C01-three-pages-tile-the-scan",
+   "window": {
+    "start_utc": "2026-09-25T09:55:00Z",
+    "end_utc": "2026-09-25T10:15:00Z"
+   },
+   "logs": [
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002dc6c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 101,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100065",
+     "block_timestamp": "1790330500",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a102774",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002f4d60000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 102,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100066",
+     "block_timestamp": "1790331600",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a1027d8",
+     "transaction_index": 0,
+     "log_index": "zz"
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x000000000000000000000000000000000000000000000000000000000030d400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 103,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100067",
+     "block_timestamp": "1790330800",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a10283c",
+     "transaction_index": 0,
+     "log_index": 0
+    }
+   ],
+   "expect": {
+    "buckets": [
+     {
+      "start": "2026-09-25T09:55:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:00:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "UNSUPPORTED_EVENT_IN_BUCKET:FIELD_NOT_UINT"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:05:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "UNSUPPORTED_EVENT_IN_BUCKET:FIELD_NOT_UINT"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:10:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     }
+    ]
+   },
+   "note": "The record is in block 102. Blocks 101 and 103 bound its real time even though its log index is junk."
+  },
+  {
+   "id": "K17-record-with-no-block-number",
+   "profile": "SYN_Q0",
+   "coverage_case": "C01-three-pages-tile-the-scan",
+   "window": {
+    "start_utc": "2026-09-25T09:55:00Z",
+    "end_utc": "2026-09-25T10:15:00Z"
+   },
+   "logs": [
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002dc6c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 101,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100065",
+     "block_timestamp": "1790330500",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a102774",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002f4d60000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100066",
+     "block_timestamp": "1790330520",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a1027d8",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x000000000000000000000000000000000000000000000000000000000030d400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 103,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100067",
+     "block_timestamp": "1790330800",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a10283c",
+     "transaction_index": 0,
+     "log_index": 0
+    }
+   ],
+   "expect": {
+    "buckets": [
+     {
+      "start": "2026-09-25T09:55:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN",
+       "UNSUPPORTED_EVENT_IN_BUCKET:ORDER_FIELD_MISSING"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:00:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "UNSUPPORTED_EVENT_IN_BUCKET:ORDER_FIELD_MISSING"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:05:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "UNSUPPORTED_EVENT_IN_BUCKET:ORDER_FIELD_MISSING"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:10:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN",
+       "UNSUPPORTED_EVENT_IN_BUCKET:ORDER_FIELD_MISSING"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     }
+    ]
+   },
+   "note": "Without a block number the record cannot be placed. Every bucket is unreliable."
+  },
+  {
+   "id": "K18-conflict-claiming-exactly-its-neighbours-time",
+   "profile": "SYN_Q0",
+   "coverage_case": "C01-three-pages-tile-the-scan",
+   "window": {
+    "start_utc": "2026-09-25T09:55:00Z",
+    "end_utc": "2026-09-25T10:15:00Z"
+   },
+   "logs": [
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002dc6c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 101,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100065",
+     "block_timestamp": "1790330500",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a102774",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002f4d60000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 102,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100066",
+     "block_timestamp": "1790330800",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a1027d8",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002f4d61000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 102,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100066",
+     "block_timestamp": "1790330800",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a1027d8",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x000000000000000000000000000000000000000000000000000000000030d400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 103,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100067",
+     "block_timestamp": "1790330800",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a10283c",
+     "transaction_index": 0,
+     "log_index": 0
+    }
+   ],
+   "expect": {
+    "buckets": [
+     {
+      "start": "2026-09-25T09:55:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:00:00Z",
+      "status": "COMPLETE_OCCUPIED",
+      "reasons": [],
+      "trade_count": 1,
+      "quote_volume": "3",
+      "close_identity": "999001:101:0:0",
+      "close_price": "3"
+     },
+     {
+      "start": "2026-09-25T10:05:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "CONFLICT_IN_BUCKET:POSITION_PAYLOAD"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:10:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     }
+    ]
+   },
+   "note": "The claimed time equals block 103's time, so it is inside the allowed range. Only its own bucket is spoiled."
+  },
+  {
+   "id": "K19-unreadable-record-claiming-exactly-its-neighbours-time",
+   "profile": "SYN_Q0",
+   "coverage_case": "C01-three-pages-tile-the-scan",
+   "window": {
+    "start_utc": "2026-09-25T09:55:00Z",
+    "end_utc": "2026-09-25T10:15:00Z"
+   },
+   "logs": [
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x00000000000000000000000000000000000000000000000000000000002dc6c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 101,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100065",
+     "block_timestamp": "1790330500",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a102774",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+     "block_number": 102,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100066",
+     "block_timestamp": "1790330800",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a1027d8",
+     "transaction_index": 0,
+     "log_index": 0
+    },
+    {
+     "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "topics": [
+      "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "0x0000000000000000000000001111111111111111111111111111111111111111",
+      "0x0000000000000000000000002222222222222222222222222222222222222222"
+     ],
+     "data": "0x000000000000000000000000000000000000000000000000000000000030d400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000",
+     "block_number": 103,
+     "block_hash": "0x000000000000000000000000000000000000000000000000000000000b100067",
+     "block_timestamp": "1790330800",
+     "transaction_hash": "0x000000000000000000000000000000000000000000000000000000000a10283c",
+     "transaction_index": 0,
+     "log_index": 0
+    }
+   ],
+   "expect": {
+    "buckets": [
+     {
+      "start": "2026-09-25T09:55:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:00:00Z",
+      "status": "COMPLETE_OCCUPIED",
+      "reasons": [],
+      "trade_count": 1,
+      "quote_volume": "3",
+      "close_identity": "999001:101:0:0",
+      "close_price": "3"
+     },
+     {
+      "start": "2026-09-25T10:05:00Z",
+      "status": "UNQUALIFIED",
+      "reasons": [
+       "UNSUPPORTED_EVENT_IN_BUCKET:BOTH_INPUTS"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     },
+     {
+      "start": "2026-09-25T10:10:00Z",
+      "status": "INCOMPLETE",
+      "reasons": [
+       "COVERAGE_NOT_PROVEN"
+      ],
+      "trade_count": null,
+      "quote_volume": null,
+      "close_identity": null,
+      "close_price": null
+     }
+    ]
+   },
+   "note": "Same boundary rule for an unreadable record."
   },
   {
    "id": "K10-trade-from-an-unscanned-block",
@@ -6992,6 +7756,36 @@
  ],
  "claim_errors": [
   {
+   "id": "L08-floors-for-one-partition-only",
+   "claim": {
+    "schedule": {
+     "anchor_utc": "2026-09-25T00:10:00Z",
+     "period_seconds": 3600,
+     "feature_end_offset_seconds": 300
+    },
+    "horizon_seconds": 1800,
+    "reference_window_seconds": 60,
+    "warmup_buckets": 3,
+    "partitions": [
+     {
+      "name": "two-day",
+      "start_utc": "2026-09-25T00:00:00Z",
+      "end_utc": "2026-09-27T00:00:00Z",
+      "required_triggered": 10,
+      "required_control": 10
+     },
+     {
+      "name": "late",
+      "start_utc": "2026-09-27T00:00:00Z",
+      "end_utc": "2026-09-29T00:00:00Z",
+      "required_triggered": null,
+      "required_control": null
+     }
+    ]
+   },
+   "code": "FLOOR_INCOMPLETE"
+  },
+  {
    "id": "L01-negative-floor",
    "claim": {
     "schedule": {
@@ -7516,6 +8310,19 @@
     "MEASUREMENT",
     "ORIENTATION"
    ]
+  },
+  {
+   "id": "P44-zero-row-count-is-a-count",
+   "profile": "SYN_Q0_PAGES",
+   "set": [
+    [
+     "dataset",
+     "dataset_revision",
+     "row_count",
+     0
+    ]
+   ],
+   "problems": []
   },
   {
    "id": "P35-page-ends-before-it-starts",
@@ -9483,6 +10290,70 @@
    },
    "note": "The pages hold 5 rows. The counts name 6 trades.",
    "profile": "SYN_Q0_PAGES"
+  },
+  {
+   "id": "Q69-shortfall-is-a-boolean",
+   "set": [
+    [
+     "observations",
+     "feasibility",
+     {
+      "status": "FEASIBLE",
+      "partitions": [
+       {
+        "name": "x",
+        "shortfall": false
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "SCHEDULE_FEASIBILITY": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": ""
+  },
+  {
+   "id": "Q70-both-pool-sides-from-one-trade",
+   "set": [
+    [
+     "observations",
+     "ingest",
+     "trades",
+     1
+    ],
+    [
+     "observations",
+     "corroboration",
+     {
+      "class": "COMPLETE",
+      "provider": "QUICKNODE_JSON_RPC",
+      "sample_size": 1,
+      "population_size": 1,
+      "mismatches": 0
+     }
+    ],
+    [
+     "observations",
+     "bucket_status_counts",
+     {
+      "COMPLETE_OCCUPIED": 1,
+      "COMPLETE_EMPTY": 11,
+      "INCOMPLETE": 0,
+      "UNQUALIFIED": 0
+     }
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "EVENT_AND_AMOUNT_MEANING": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": "One trade has one side."
   },
   {
    "id": "Q48-population-larger-than-trades-is-fine",
