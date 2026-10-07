@@ -25,7 +25,7 @@ No GitHub example was executed or copied. The Monad state limit is consistent wi
 | Start-boundary decimals | Real failure, retained | Four calls returned historical-state errors. Immutability stays an assumption. |
 | Original delivery time and finality | Unknown | Collection was later than the window. |
 | Fork fee and reflection mechanics | Unqualified | Published nad.fun documentation describes V3 and does not fix this fork. |
-| Decode, both directions, decimals, tie rounding | Run offline | Synthetic fixtures with hand-computed expectations. 54 tests run in total. |
+| Decode, both directions, decimals, tie rounding | Run offline | Synthetic fixtures with hand-computed expectations. 56 tests run in total. |
 | Order, duplicates, conflicts, reorg signatures | Run offline | Synthetic fixtures. |
 | Complete-empty versus incomplete, boundaries, close, volume | Run offline | Synthetic fixtures. |
 | Availability, late input, schedule and floor feasibility | Run offline | Synthetic fixtures. |
@@ -66,7 +66,7 @@ The sampled tier can only reach `LIMITED`. A complete verdict needs the complete
 | Decision | Reason it stays open |
 |---|---|
 | Exact pool | MOE has retained evidence but was picked from one volume snapshot after the fact, so it carries hindsight and survivorship limits. Reuse is proposed for P07 only. |
-| Exact period | Window-start decimals can only be read within the node's state retention. A recent window allows that read. The Probe A window cannot. Probe A's holdout stays sealed either way. |
+| Exact period | Window-start decimals can only be read within the node's state retention. A recent window allows that read. The Probe A window cannot. Probe A's holdout stays sealed either way. The retained window runs to Oct 2 and so covers the sealed Sep 30 to Oct 2 holdout period. A later re-query must stop before Sep 30, or read no prices in that period. |
 | Decision schedule and floors | The builder declares them before outcomes. The table below is arithmetic on assumed full coverage, not evidence. |
 | Endpoint identity and cost | The plan limits of the QuickNode endpoint behind `rpc.monad.xyz` and of the Envio plan are not known to this task. |
 | Rights to retain raw responses | Provider terms were not checked. |

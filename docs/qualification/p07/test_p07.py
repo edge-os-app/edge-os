@@ -344,9 +344,14 @@ def pages_observations() -> dict:
     return evidence
 
 
-def real_pages_profile() -> dict:
-    """A fixture profile with portable pages, labeled REAL_SOURCE only to exercise the projection rule."""
+def real_pages_profile(narrow: bool = False) -> dict:
+    """A fixture profile with portable pages, labeled REAL_SOURCE only to exercise the projection rule.
+
+    With narrow=True the profile window holds only the two buckets the pages prove.
+    """
     profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
+    if narrow:
+        profile["dataset"]["window"] = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
     profile["availability"] = copy.deepcopy(FIXTURES["qualification_base"]["profile_availability"])
     profile["evidence_class"] = "REAL_SOURCE"
     return profile
@@ -455,19 +460,27 @@ class PerClaimQualification(unittest.TestCase):
         self.assertNotIn("QUALIFIED", {c["verdict"] for c in got["claims"].values()})
 
     def test_pipeline_output_feeds_the_qualifier(self) -> None:
-        profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
-        profile["availability"] = copy.deepcopy(FIXTURES["qualification_base"]["profile_availability"])
         logs = next(c for c in FIXTURES["bucket_cases"] if c["id"] == "K01-boundaries-close-and-volume")["logs"]
-        evidence = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
-        for window, verdict in ((None, "LIMITED"),
-                                ({"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}, "QUALIFIED")):
-            with self.subTest(window=window):
+        narrow = real_pages_profile(narrow=True)
+        narrow["evidence_class"] = "SYNTHETIC_FIXTURE"
+        wide = real_pages_profile()
+        wide["evidence_class"] = "SYNTHETIC_FIXTURE"
+        sub = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
+        for name, profile, window, verdict, code in (
+                ("window equals the proven span", narrow, None, "QUALIFIED", None),
+                ("profile window has gaps", wide, None, "LIMITED", "BUCKET_GAPS:2"),
+                ("only part of the profile window counted", wide, sub, "LIMITED", "SUBWINDOW_ONLY")):
+            with self.subTest(name):
                 observed = history_observations(profile, logs, window)
+                evidence = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
                 evidence.update(ingest=observed["ingest"], bucket_status_counts=observed["bucket_status_counts"],
                                 bucket_window=observed["bucket_window"])
                 evidence["corroboration"].update(sample_size=6, population_size=6)
                 got = qualify(profile, evidence)
-                self.assertEqual(got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["verdict"], verdict)
+                history = got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]
+                self.assertEqual(history["verdict"], verdict)
+                if code:
+                    self.assertIn(code, {r["code"] for r in history["reasons"]})
 
     def test_status_counts_cover_every_status(self) -> None:
         counts = bucket_status_counts([{"status": "COMPLETE_EMPTY"}, {"status": "INCOMPLETE"}, {"status": "INCOMPLETE"}])
@@ -572,7 +585,7 @@ class P02Projection(unittest.TestCase):
         self.assertEqual(binding["token_order"], [binding["base_asset"], binding["quote_asset"]])
 
     def test_only_a_fully_qualified_real_profile_projects_as_qualified(self) -> None:
-        profile = real_pages_profile()
+        profile = real_pages_profile(narrow=True)
         result = qualify(profile, pages_observations())
         self.assertEqual(result["overall"], "QUALIFIED")
         binding = to_p02_binding(profile, result)
@@ -584,13 +597,32 @@ class P02Projection(unittest.TestCase):
         with self.assertRaises(BindingNotEmittable) as caught:
             to_p02_binding(report["profile"], qualify(report["profile"], report["observations"]))
         self.assertEqual(caught.exception.code, "VERDICT_UNRESOLVED")
-        profile = real_pages_profile()
+        profile = real_pages_profile(narrow=True)
         profile["network"]["chain_id_source"] = "DOCUMENTATION"
         limited = qualify(profile, apply_changes({"o": pages_observations()},
                                                  [["o", "binding", "chain_id", "DOCUMENTATION"]])["o"])
         with self.assertRaises(BindingNotEmittable) as caught:
             to_p02_binding(profile, limited)
         self.assertEqual(caught.exception.code, "VERDICT_LIMITED")
+
+    def test_projection_refuses_a_hand_built_result(self) -> None:
+        profile = real_pages_profile(narrow=True)
+        good = qualify(profile, pages_observations())
+        to_p02_binding(profile, good)
+        forged = [
+            {"profile_sha256": good["profile_sha256"], "overall": "QUALIFIED"},
+            {**good, "claims": {**good["claims"], "HISTORY_COMPLETENESS_AND_ORDER": {"verdict": "LIMITED", "reasons": []}}},
+            {**good, "claims": {k: v for k, v in good["claims"].items() if k != "SCHEDULE_FEASIBILITY"}},
+            {**good, "scope": "EVERYTHING"},
+            {**good, "schema_version": "other/1"},
+        ]
+        for result in forged:
+            with self.assertRaises(BindingNotEmittable):
+                to_p02_binding(profile, result)
+
+    def test_result_names_the_window_it_counted(self) -> None:
+        got = qualify(real_pages_profile(narrow=True), pages_observations())
+        self.assertEqual(got["history_window"], {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"})
 
     def test_projection_refuses_a_result_for_a_different_profile(self) -> None:
         a, b = PROFILES["SYN_Q0"], PROFILES["SYN_B0"]

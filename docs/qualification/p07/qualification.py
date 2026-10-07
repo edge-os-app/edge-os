@@ -263,7 +263,7 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     for position, log in enumerate(logs):
         if not isinstance(log, Mapping):
             result.rejected.append({"code": "NOT_AN_OBJECT", "detail": "record is not an object", "position": position,
-                                    "block_timestamp": None, "key": None})
+                                    "block_timestamp": None, "key": None, "ranges": []})
             continue
         try:
             decoded.append(decode_swap_log(profile, log))
@@ -275,7 +275,7 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
             else:
                 result.rejected.append({"code": error.code, "detail": error.detail, "position": position,
                                         "block_timestamp": _try_uint(log, "block_timestamp"),
-                                        "key": _try_key(log)})
+                                        "key": _try_key(log), "ranges": []})
 
     def name(trade: Trade) -> str:
         return trade_identity(profile, trade)
@@ -313,6 +313,8 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     kept = drop_inconsistent("BLOCK_FACTS", kept, lambda t: t.block_hash, lambda t: t.block_number)
     kept = drop_inconsistent("TX_POSITION", kept, lambda t: t.transaction_hash,
                              lambda t: (t.block_number, t.transaction_index))
+    kept = drop_inconsistent("TX_POSITION", kept, lambda t: (t.block_number, t.transaction_index),
+                             lambda t: t.transaction_hash)
     kept.sort(key=lambda t: t.order_key)
     # Block times never fall as block numbers rise. Hold out every trade that is part of any inversion.
     flagged: set[int] = set()
@@ -333,15 +335,26 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     # between its qualified neighbours, so every bucket in that interval is unreliable too.
     keys = [t.order_key for t in result.trades]
     times = [t.block_timestamp for t in result.trades]
+
+    def neighbours(key: tuple[int, int, int]) -> tuple[int, int]:
+        i = bisect.bisect_left(keys, key)
+        return (times[i - 1] if i > 0 else 0, times[i] if i < len(times) else _FAR_FUTURE)
+
     for kind, members, extra in held:
         claimed = sorted({t.block_timestamp for t in members} | set(extra))
         ranges: list[tuple[int, int]] = []
-        if kind == "TIMESTAMP_ORDER" or len(claimed) > 1:
-            for member in members:
-                i = bisect.bisect_left(keys, member.order_key)
-                ranges.append((times[i - 1] if i > 0 else 0, times[i] if i < len(times) else _FAR_FUTURE))
+        for member in members:
+            lo, hi = neighbours(member.order_key)
+            if kind == "TIMESTAMP_ORDER" or len(claimed) > 1 or not lo <= member.block_timestamp <= hi:
+                ranges.append((lo, hi))
         result.conflicts.append({"kind": kind, "identities": sorted({name(t) for t in members}),
                                  "timestamps": claimed, "ranges": sorted(set(ranges))})
+    for item in result.rejected:
+        item["ranges"] = []
+        if item["key"] is not None and item["block_timestamp"] is not None:
+            lo, hi = neighbours(item["key"])
+            if not lo <= item["block_timestamp"] <= hi:
+                item["ranges"].append((lo, hi))
     return result
 
 
@@ -384,12 +397,18 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
     low, high = scan_request["from_block"], scan_request["to_block_exclusive"]
     segments: list[list[Mapping[str, Any]]] = []
     breaks: list[dict[str, Any]] = []
+    untrusted: set[str] = set()
     for page in sorted(pages, key=lambda p: (p["from_block"], p["page_id"])):
         pid = page["page_id"]
         current = segments[-1] if segments else None
         end = current[-1]["next_block"] if current else None
+        parent = (page.get("first_parent_hash") or "").lower()
         if page["from_block"] < low or page["next_block"] > high or page["next_block"] <= page["from_block"]:
             breaks.append({"code": "OUTSIDE_REQUEST", "page_id": pid})
+        elif parent and parent in untrusted:
+            breaks.append({"code": "CHAINED_TO_DROPPED_PAGE", "page_id": pid})
+            if page.get("last_block_hash"):
+                untrusted.add(page["last_block_hash"].lower())
         elif page["next_block"] - 1 > last_final:
             breaks.append({"code": "NOT_FINAL_AT_COLLECTION", "page_id": pid})
         elif current is not None and page["from_block"] < end:
@@ -401,6 +420,7 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
             parent, previous = page.get("first_parent_hash"), current[-1].get("last_block_hash")
             if parent and previous and parent.lower() != previous.lower():
                 breaks.append({"code": "REORG_BETWEEN_PAGES", "page_id": pid})
+                untrusted.update(h.lower() for h in (current[-1].get("last_block_hash"), page.get("last_block_hash")) if h)
                 current.pop()
                 if not current:
                     segments.pop()
@@ -457,6 +477,8 @@ def _contamination(result: IngestResult) -> tuple[list[tuple[int, str]], list[tu
                for item in result.rejected if item["block_timestamp"] is not None]
     located += [(ts, f"CONFLICT_IN_BUCKET:{item['kind']}") for item in result.conflicts for ts in item["timestamps"]]
     ranges = [(lo, hi, f"CONFLICT_IN_BUCKET:{item['kind']}") for item in result.conflicts for lo, hi in item["ranges"]]
+    ranges += [(lo, hi, f"UNSUPPORTED_EVENT_IN_BUCKET:{item['code']}") for item in result.rejected
+               for lo, hi in item["ranges"]]
     return located, ranges, any(item["block_timestamp"] is None for item in result.rejected)
 
 
@@ -543,6 +565,8 @@ def _is_int(value: object) -> bool:
 
 
 def check_availability_model(availability: Mapping[str, Any]) -> None:
+    if not isinstance(availability, Mapping):
+        raise InvalidInput("AVAILABILITY_MODEL", "availability must be an object")
     model = availability.get("model")
     if model not in _AVAILABILITY_MODELS:
         raise InvalidInput("AVAILABILITY_MODEL", f"model must be one of {', '.join(_AVAILABILITY_MODELS)}")
@@ -903,7 +927,7 @@ def _dataset_problems(profile: Mapping[str, Any], pool: object, bad: Any, closed
 
     def page_ok(pg: Any) -> bool:
         return (isinstance(pg, Mapping) and all(k in pg for k in needed) and isinstance(pg["page_id"], str)
-                and all(_is_int(pg[k]) and pg[k] >= 0 for k in numbers)
+                and all(_is_int(pg[k]) and pg[k] >= 0 for k in numbers) and pg["next_block"] > pg["from_block"]
                 and isinstance(pg["sha256"], str) and _SHA256.fullmatch(pg["sha256"]) is not None
                 and all(pg.get(k) is None or (isinstance(pg[k], str) and _HEX_WORD.fullmatch(pg[k]) is not None)
                         for k in ("first_parent_hash", "last_block_hash")))
@@ -922,6 +946,9 @@ def _dataset_problems(profile: Mapping[str, Any], pool: object, bad: Any, closed
         }.get(basis) if isinstance(basis, str) else False
         if not consistent:
             bad("DATASET_REVISION_MISMATCH", "/dataset/dataset_revision", "manifest, basis and pages disagree")
+        rows = revision["row_count"]
+        if not ((rows is None and basis != "PAGE_DIGESTS") or (_is_int(rows) and rows >= 0)):
+            bad("ROW_COUNT", "/dataset/dataset_revision/row_count", "non-negative integer, required for PAGE_DIGESTS")
 
 
 def research_binding_view(profile: Mapping[str, Any]) -> dict[str, Any]:
@@ -986,6 +1013,14 @@ def to_p02_binding(profile: Mapping[str, Any], result: Mapping[str, Any]) -> dic
         raise BindingNotEmittable("PROFILE_INVALID", str(error)) from error
     if result.get("profile_sha256") != digest:
         raise BindingNotEmittable("RESULT_FOR_OTHER_PROFILE", "qualification result was produced for another profile")
+    claims = result.get("claims")
+    rank = {"QUALIFIED": 0, "LIMITED": 1, "UNRESOLVED": 2}
+    if not (result.get("schema_version") == RESULT_SCHEMA and result.get("scope") == "OFFLINE_CONTRACT_ONLY"
+            and isinstance(result.get("observations_sha256"), str) and isinstance(claims, Mapping)
+            and set(claims) == set(CLAIMS) and all(isinstance(c, Mapping) and c.get("verdict") in rank
+                                                    for c in claims.values())
+            and result.get("overall") == max((c["verdict"] for c in claims.values()), key=rank.__getitem__)):
+        raise BindingNotEmittable("RESULT_MALFORMED", "result is not a complete qualification result")
     if profile_problems(profile):
         raise BindingNotEmittable("PROFILE_INVALID", "profile violates the contract")
     if profile["evidence_class"] == "SYNTHETIC_FIXTURE":
@@ -1075,15 +1110,20 @@ def _check_bucket_counts(claim: "_Claim", profile: Mapping[str, Any], observatio
         if start < epoch(outer["start_utc"]) or end > epoch(outer["end_utc"]):
             claim.add("FAILED_CHECK", "BUCKET_WINDOW_OUTSIDE_PROFILE")
             return
+        if (start, end) != (epoch(outer["start_utc"]), epoch(outer["end_utc"])):
+            claim.add("LIMIT", "SUBWINDOW_ONLY", "only part of the profile window was counted")
     except (InvalidInput, KeyError, TypeError):
         claim.add("MISSING_EVIDENCE", "BUCKET_WINDOW_INVALID")
         return
     complete = counts["COMPLETE_OCCUPIED"] + counts["COMPLETE_EMPTY"]
     if sum(counts[status] for status in _STATUSES) != (end - start) // BUCKET_SECONDS:
         claim.add("FAILED_CHECK", "BUCKET_COUNTS_INCONSISTENT", "counts do not add up to the window")
-    if trades is not None and (counts["COMPLETE_OCCUPIED"] > trades or (
-            trades >= 1 and counts["COMPLETE_OCCUPIED"] == 0 and window == _look(profile, "dataset", "window"))):
-        claim.add("FAILED_CHECK", "BUCKET_COUNTS_INCONSISTENT", "occupied buckets disagree with the trade count")
+    if trades is not None and counts["COMPLETE_OCCUPIED"] > trades:
+        claim.add("FAILED_CHECK", "BUCKET_COUNTS_INCONSISTENT", "more occupied buckets than trades")
+    rows = _look(profile, "dataset", "dataset_revision", "row_count")
+    if trades is not None and _look(profile, "dataset", "dataset_revision", "basis") == "PAGE_DIGESTS" and (
+            not _is_int(rows) or rows < trades):
+        claim.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "the retained pages hold fewer rows than trades")
     dataset = _look(profile, "dataset")
     if isinstance(dataset, Mapping) and dataset.get("pages") and not profile_problems(profile):
         try:
@@ -1096,6 +1136,13 @@ def _check_bucket_counts(claim: "_Claim", profile: Mapping[str, Any], observatio
             return
         if complete > proven:
             claim.add("FAILED_CHECK", "COVERAGE_CLAIM_EXCEEDS_PAGES", f"{complete} claimed, {proven} proven by the pages")
+
+
+def _history_window(profile: Mapping[str, Any], observations: Any) -> Any:
+    window = _look(observations, "bucket_window") or _look(profile, "dataset", "window")
+    if isinstance(window, Mapping) and {"start_utc", "end_utc"} <= window.keys():
+        return {"start_utc": window["start_utc"], "end_utc": window["end_utc"]}
+    return None
 
 
 def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[str, Any]:
@@ -1141,7 +1188,7 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
     if trades is None:
         event.add("MISSING_EVIDENCE", "NO_EVENT_SAMPLE")
     sides = _look(observations, "ingest", "pool_sides")
-    if not sides:
+    if not isinstance(sides, list) or not sides or not all(isinstance(x, str) for x in sides):
         event.add("MISSING_EVIDENCE", "POOL_SIDES_NOT_REPORTED")
     elif set(sides) != {"QUOTE_IN_BASE_OUT", "BASE_IN_QUOTE_OUT"}:
         event.add("LIMIT", "ONE_POOL_SIDE_ONLY", ", ".join(sorted(sides)))
@@ -1244,6 +1291,10 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
 
     schedule = claims["SCHEDULE_FEASIBILITY"]
     status = _look(observations, "feasibility", "status")
+    shown = _look(observations, "feasibility", "partitions")
+    if status == "FEASIBLE" and not (isinstance(shown, list) and shown and all(
+            isinstance(row, Mapping) and row.get("shortfall") == 0 for row in shown)):
+        status = "UNVERIFIED"
     if status == "INFEASIBLE":
         schedule.add("FAILED_CHECK", "INFEASIBLE_BEFORE_OUTCOMES", "declared sample floors cannot be met")
     elif status != "FEASIBLE":
@@ -1259,5 +1310,5 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
         raise InvalidInput("OBSERVATIONS_NOT_CANONICAL", str(error)) from error
     return {"schema_version": RESULT_SCHEMA, "profile_id": profile.get("profile_id"),
             "profile_sha256": profile_digest, "observations_sha256": evidence_digest,
-            "scope": "OFFLINE_CONTRACT_ONLY", "claims": views,
+            "scope": "OFFLINE_CONTRACT_ONLY", "history_window": _history_window(profile, observations), "claims": views,
             "overall": overall, "not_assessed": sorted(NOT_ASSESSED)}
