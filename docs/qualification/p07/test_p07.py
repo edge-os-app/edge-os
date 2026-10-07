@@ -1,0 +1,981 @@
+import copy
+import itertools
+import json
+import random
+import runpy
+import unittest
+from pathlib import Path
+
+from qualification import (
+    BindingNotEmittable,
+    InvalidInput,
+    Unsupported,
+    assemble_segments,
+    bucketize,
+    binding_incompatibilities,
+    bucket_available_at,
+    bucket_status_counts,
+    decode_swap_log,
+    decision_times,
+    dataset_revision,
+    epoch,
+    feasibility,
+    history_observations,
+    ingest,
+    keccak256,
+    opportunity_eligibility,
+    profile_problems,
+    profile_sha256,
+    qualify,
+    reference_trade,
+    research_binding_view,
+    to_p02_binding,
+    validate_schedule,
+)
+
+FIXTURES = json.loads((Path(__file__).resolve().parent / "fixtures.json").read_text(encoding="utf-8"))
+PROFILES = FIXTURES["profiles"]
+P02 = runpy.run_path(str(Path(__file__).resolve().parents[2] / "contracts/p02/check_contract.py"))
+
+
+class KeccakIdentity(unittest.TestCase):
+    def test_known_answers(self) -> None:
+        self.assertEqual(keccak256(b"").hex(), "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470")
+        self.assertEqual(keccak256(b"abc").hex(), "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45")
+
+    def test_v2_swap_topic_comes_from_the_signature(self) -> None:
+        profile = PROFILES["SYN_Q0"]["event"]
+        self.assertEqual("0x" + keccak256(profile["signature"].encode()).hex(), profile["topic0"])
+
+    def test_v3_signature_gives_a_different_topic(self) -> None:
+        v3 = "Swap(address,address,int256,int256,uint160,uint128,int24)"
+        self.assertEqual("0x" + keccak256(v3.encode()).hex(),
+                         "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67")
+
+
+class DecodeAndConvert(unittest.TestCase):
+    def test_positive_cases_match_hand_written_expectations(self) -> None:
+        cases = [c for c in FIXTURES["decode_cases"] if "trade" in c["expect"]]
+        self.assertGreaterEqual(len(cases), 12)
+        for case in cases:
+            with self.subTest(case["id"]):
+                got = decode_swap_log(PROFILES[case["profile"]], case["log"])
+                want = case["expect"]["trade"]
+                self.assertEqual(got.pool_side, want["pool_side"])
+                self.assertEqual(str(got.quote_raw), want["quote_raw"])
+                self.assertEqual(str(got.base_raw), want["base_raw"])
+                self.assertEqual(got.quote_amount, want["quote_amount"])
+                self.assertEqual(got.base_amount, want["base_amount"])
+                self.assertEqual(got.price, want["price"])
+                for key in ("block_number", "log_index", "block_timestamp", "block_hash"):
+                    if key in case["expect"]:
+                        self.assertEqual(getattr(got, key), case["expect"][key])
+
+    def test_unsupported_cases_raise_their_named_code(self) -> None:
+        cases = [c for c in FIXTURES["decode_cases"] if "unsupported" in c["expect"]]
+        self.assertGreaterEqual(len(cases), 22)
+        for case in cases:
+            with self.subTest(case["id"]):
+                with self.assertRaises(Unsupported) as caught:
+                    decode_swap_log(PROFILES[case["profile"]], case["log"])
+                self.assertEqual(caught.exception.code, case["expect"]["unsupported"])
+
+    def test_both_directions_give_the_same_price_in_either_pool_order(self) -> None:
+        by_id = {c["id"]: c for c in FIXTURES["decode_cases"]}
+        prices = {
+            decode_swap_log(PROFILES[by_id[i]["profile"]], by_id[i]["log"]).price
+            for i in ("D01-quote-in-base-out", "D02-base-in-quote-out",
+                      "D07-reversed-pool-order-sell", "D08-reversed-pool-order-buy")
+        }
+        self.assertEqual(prices, {"2.5"})
+
+    def test_input_log_is_not_modified(self) -> None:
+        case = FIXTURES["decode_cases"][0]
+        before = copy.deepcopy(case["log"])
+        decode_swap_log(PROFILES[case["profile"]], case["log"])
+        self.assertEqual(case["log"], before)
+
+
+class Ingest(unittest.TestCase):
+    def run_case(self, case: dict, logs: list | None = None):
+        return ingest(PROFILES[case["profile"]], case["logs"] if logs is None else logs)
+
+    def test_every_case_matches_hand_written_expectations(self) -> None:
+        for case in FIXTURES["ingest_cases"]:
+            with self.subTest(case["id"]):
+                got, want = self.run_case(case), case["expect"]
+                self.assertEqual(got.identities(), want["identities"])
+                self.assertEqual(got.duplicates, want["duplicates"])
+                self.assertEqual(
+                    [{"kind": c["kind"], "identities": sorted(c["identities"])} for c in got.conflicts],
+                    want["conflicts"],
+                )
+                summary = got.summary()
+                self.assertEqual(summary["rejected_codes"], want["rejected_codes"])
+                self.assertEqual(summary["removed"], want["removed"])
+                self.assertEqual(summary["foreign"], want["foreign"])
+                self.assertEqual(summary["unlocated_rejections"], want["unlocated"])
+                self.assertEqual(summary["pool_sides"], want["pool_sides"])
+
+    def test_duplicate_copies_are_counted_once_each(self) -> None:
+        by_id = {c["id"]: c for c in FIXTURES["ingest_cases"]}
+        self.assertEqual(self.run_case(by_id["I01-canonical-order"]).summary()["duplicate_copies"], 0)
+        self.assertEqual(self.run_case(by_id["I02-exact-duplicate"]).summary()["duplicate_copies"], 1)
+
+    def test_provider_row_order_never_changes_the_result(self) -> None:
+        case = next(c for c in FIXTURES["ingest_cases"] if c["id"] == "I01-canonical-order")
+        self.assertEqual(len(case["logs"]), 5)
+        for order in itertools.permutations(case["logs"]):
+            self.assertEqual(self.run_case(case, list(order)).identities(), case["expect"]["identities"])
+
+    def test_conflicting_versions_are_held_out_not_chosen(self) -> None:
+        case = next(c for c in FIXTURES["ingest_cases"] if c["id"] == "I03-conflicting-duplicate")
+        got = self.run_case(case)
+        self.assertNotIn("999001:103:0:7", got.identities())
+        self.assertEqual(got.summary()["conflicts"], 1)
+
+    def test_failed_record_does_not_stop_the_batch(self) -> None:
+        case = next(c for c in FIXTURES["ingest_cases"] if c["id"] == "I07-rejected-records-are-counted")
+        self.assertEqual(self.run_case(case).identities(), ["999001:101:0:0"])
+
+
+def coverage_for(case_id: str) -> list[dict]:
+    case = next(c for c in FIXTURES["coverage_cases"] if c["id"] == case_id)
+    return assemble_segments(PROFILES[case["profile"]], case["scan_request"], case["pages"],
+                             case["archive_height"])["segments"]
+
+
+class Coverage(unittest.TestCase):
+    def test_every_case_matches_hand_written_expectations(self) -> None:
+        for case in FIXTURES["coverage_cases"]:
+            with self.subTest(case["id"]):
+                got = assemble_segments(PROFILES[case["profile"]], case["scan_request"], case["pages"],
+                                        case["archive_height"])
+                self.assertEqual([{k: v for k, v in seg.items() if k not in ("edge_facts", "page_spans")} for seg in got["segments"]],
+                                 case["expect"]["segments"])
+                self.assertEqual([b["code"] for b in got["breaks"]], case["expect"]["break_codes"])
+
+    def test_page_order_in_the_input_does_not_matter(self) -> None:
+        case = FIXTURES["coverage_cases"][0]
+        got = assemble_segments(PROFILES[case["profile"]], case["scan_request"], list(reversed(case["pages"])),
+                                case["archive_height"])
+        self.assertEqual([{k: v for k, v in seg.items() if k not in ("edge_facts", "page_spans")} for seg in got["segments"]],
+                         case["expect"]["segments"])
+
+
+def _coverage_shape(result: dict) -> tuple:
+    """Everything about an assembly result that must not depend on page ids."""
+    return (sorted((s["first_block"], s["end_block_exclusive"], s["first_ts"], s["last_ts"]) for s in result["segments"]),
+            sorted(b["code"] for b in result["breaks"]))
+
+
+class PageIdsNeverChangeTheCoverage(unittest.TestCase):
+    def relabel(self, pages: list, rng: random.Random) -> list:
+        names = [f"x{n:03d}" for n in rng.sample(range(500), len(pages))]
+        return [{**page, "page_id": name} for page, name in zip(pages, names)]
+
+    def test_every_coverage_case_gives_the_same_coverage_under_relabeling(self) -> None:
+        rng = random.Random(5)
+        for case in FIXTURES["coverage_cases"]:
+            profile = PROFILES[case["profile"]]
+            want = _coverage_shape(assemble_segments(profile, case["scan_request"], case["pages"], case["archive_height"]))
+            for _ in range(12):
+                pages = self.relabel(case["pages"], rng)
+                rng.shuffle(pages)
+                got = _coverage_shape(assemble_segments(profile, case["scan_request"], pages, case["archive_height"]))
+                self.assertEqual(got, want, case["id"])
+
+    def test_random_pages_keep_only_pages_that_agree_and_do_not_depend_on_ids(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        rng = random.Random(23)
+        request = {"from_block": 100, "to_block_exclusive": 160}
+        base_ts = epoch("2026-09-25T10:00:00Z")
+
+        def block_ts(b: int) -> int:
+            return base_ts + (b - 100) * 7
+
+        def block_hash(b: int) -> str:
+            return "0x" + format(0xabc000 + b, "064x")
+
+        def page(pid: str, lo: int, hi: int) -> dict:
+            return {"page_id": pid, "from_block": lo, "next_block": hi, "sha256": format(lo * 1000 + hi, "064x"),
+                    "first_block_timestamp": block_ts(lo), "last_block_timestamp": block_ts(hi - 1),
+                    "first_parent_hash": block_hash(lo - 1), "last_block_hash": block_hash(hi - 1)}
+
+        forks = 0
+        for draw in range(600):
+            cuts = sorted(rng.sample(range(101, 159), rng.randrange(1, 6)))
+            edges = [100] + cuts + [160]
+            pages = [page(f"p{i}", lo, hi) for i, (lo, hi) in enumerate(zip(edges, edges[1:]))]
+            for extra in range(rng.randrange(0, 3)):
+                lo = rng.randrange(100, 158)
+                pages.append(page(f"e{extra}", lo, rng.randrange(lo + 1, 161)))
+            victim = rng.randrange(len(pages))
+            fault = rng.choice(["none", "hash_end", "hash_start", "time_first", "time_last"])
+            if fault == "hash_end":
+                pages[victim]["last_block_hash"] = "0x" + "ee" * 32
+            elif fault == "hash_start":
+                pages[victim]["first_parent_hash"] = "0x" + "ee" * 32
+            elif fault == "time_first":
+                pages[victim]["first_block_timestamp"] += rng.choice([-500, -3, 3, 500])
+            elif fault == "time_last":
+                pages[victim]["last_block_timestamp"] += rng.choice([-500, -3, 3, 500])
+            forks += fault != "none"
+            result = assemble_segments(profile, request, pages, 1_000_000)
+            kept = {pid for seg in result["segments"] for pid in seg["page_ids"]}
+            claims: dict = {}
+            for pg in pages:
+                if pg["page_id"] not in kept:
+                    continue
+                for block, ts, hash_ in ((pg["from_block"], pg["first_block_timestamp"], None),
+                                         (pg["next_block"] - 1, pg["last_block_timestamp"], pg["last_block_hash"]),
+                                         (pg["from_block"] - 1, None, pg["first_parent_hash"])):
+                    entry = claims.setdefault(block, {"ts": set(), "hash": set()})
+                    if ts is not None:
+                        entry["ts"].add(ts)
+                    if hash_ is not None:
+                        entry["hash"].add(hash_)
+            for entry in claims.values():
+                self.assertLessEqual(len(entry["ts"]), 1, draw)
+                self.assertLessEqual(len(entry["hash"]), 1, draw)
+            ordered = [(b, next(iter(e["ts"]))) for b, e in sorted(claims.items()) if e["ts"]]
+            self.assertEqual([t for _, t in ordered], sorted(t for _, t in ordered), draw)
+            relabeled = self.relabel(pages, rng)
+            rng.shuffle(relabeled)
+            self.assertEqual(_coverage_shape(assemble_segments(profile, request, relabeled, 1_000_000)),
+                             _coverage_shape(result), draw)
+        self.assertGreater(forks, 300)
+
+
+class HandBuiltSegments(unittest.TestCase):
+    def test_a_hash_the_pages_give_a_block_in_another_segment_spoils_the_trade_segment(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        h = "0x" + "11" * 32
+        segments = [
+            {"first_block": 100, "end_block_exclusive": 111, "first_ts": epoch("2026-09-25T09:00:00Z"),
+             "last_ts": epoch("2026-09-25T09:30:00Z"), "page_ids": ["a"], "edge_facts": [(109, "hash", h)]},
+            {"first_block": 200, "end_block_exclusive": 211, "first_ts": epoch("2026-09-25T09:59:00Z"),
+             "last_ts": epoch("2026-09-25T10:06:00Z"), "page_ids": ["b"], "edge_facts": []},
+        ]
+        template = copy.deepcopy(FIXTURES["decode_cases"][0]["log"])
+        template.update(block_number=205, block_timestamp=epoch("2026-09-25T10:01:00Z"), block_hash=h)
+        window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:05:00Z"}
+        got = bucketize(profile, ingest(profile, [template]), segments, window)
+        self.assertEqual((got[0]["status"], got[0]["reasons"]), ("UNQUALIFIED", ["TRADE_CONTRADICTS_PAGE_HASH"]))
+        template["block_hash"] = "0x" + "77" * 32
+        got = bucketize(profile, ingest(profile, [template]), segments, window)
+        self.assertEqual(got[0]["status"], "COMPLETE_OCCUPIED")
+
+    def test_eligibility_rejects_buckets_it_cannot_read(self) -> None:
+        good = {"start": "2026-09-25T10:00:00Z", "end": "2026-09-25T10:05:00Z", "status": "COMPLETE_OCCUPIED"}
+        assumed = {"model": "ASSUMED_DELAY", "delay_seconds": 180}
+        for buckets, code in (([{"start": good["start"], "end": good["end"]}], "BUCKET_STATUS"),
+                              ([good, {**good, "status": "INCOMPLETE"}], "BUCKET_DUPLICATE")):
+            with self.assertRaises(InvalidInput) as caught:
+                opportunity_eligibility("2026-09-25T10:20:00Z", [("price", good["start"])], buckets, assumed)
+            self.assertEqual(caught.exception.code, code)
+
+
+class Buckets(unittest.TestCase):
+    def run_case(self, case: dict, logs: list | None = None) -> list[dict]:
+        profile = PROFILES[case["profile"]]
+        result = ingest(profile, case["logs"] if logs is None else logs)
+        return bucketize(profile, result, coverage_for(case["coverage_case"]), case["window"])
+
+    def test_every_case_matches_hand_written_expectations(self) -> None:
+        for case in FIXTURES["bucket_cases"]:
+            with self.subTest(case["id"]):
+                got = self.run_case(case)
+                want = case["expect"]["buckets"]
+                self.assertEqual(len(got), len(want))
+                for bucket, expected in zip(got, want):
+                    self.assertEqual(bucket["start"], expected["start"])
+                    self.assertEqual(bucket["status"], expected["status"])
+                    self.assertEqual(bucket["reasons"], expected["reasons"])
+                    self.assertEqual(bucket["trade_count"], expected["trade_count"])
+                    self.assertEqual(bucket["quote_volume"], expected["quote_volume"])
+                    close = bucket["close"]
+                    self.assertEqual(None if close is None else close["identity"], expected["close_identity"])
+                    self.assertEqual(None if close is None else close["price"], expected["close_price"])
+
+    def test_close_does_not_depend_on_provider_row_order(self) -> None:
+        case = FIXTURES["bucket_cases"][0]
+        rng = random.Random(7)
+        for _ in range(60):
+            logs = rng.sample(case["logs"], len(case["logs"]))
+            got = self.run_case(case, logs)
+            self.assertEqual([b["close"]["identity"] if b["close"] else None for b in got],
+                             [None, "999001:106:0:0", "999001:108:0:0", None])
+
+    def test_no_bucket_invents_a_price_or_volume_without_proof(self) -> None:
+        for case in FIXTURES["bucket_cases"]:
+            for bucket in self.run_case(case):
+                if bucket["status"] in ("INCOMPLETE", "UNQUALIFIED"):
+                    self.assertIsNone(bucket["close"])
+                    self.assertIsNone(bucket["quote_volume"])
+                if bucket["status"] == "COMPLETE_EMPTY":
+                    self.assertIsNone(bucket["close"])
+                    self.assertEqual(bucket["quote_volume"], "0")
+
+    def test_volume_counts_the_quote_leg_once_in_both_directions(self) -> None:
+        case = FIXTURES["bucket_cases"][0]
+        first = self.run_case(case)[1]
+        self.assertEqual(first["quote_volume_raw"], "9700000")
+
+    def test_window_must_use_whole_five_minute_buckets(self) -> None:
+        case = FIXTURES["bucket_cases"][0]
+        profile = PROFILES[case["profile"]]
+        for bad in ({"start_utc": "2026-09-25T09:55:30Z", "end_utc": "2026-09-25T10:15:00Z"},
+                    {"start_utc": "2026-09-25T09:55:00Z", "end_utc": "2026-09-25T10:15:30Z"},
+                    {"start_utc": "2026-09-25T10:15:00Z", "end_utc": "2026-09-25T09:55:00Z"}):
+            with self.assertRaises(InvalidInput):
+                bucketize(profile, ingest(profile, []), coverage_for(case["coverage_case"]), bad)
+
+
+class ReferenceWindows(unittest.TestCase):
+    def test_every_case_matches_hand_written_expectations(self) -> None:
+        for case in FIXTURES["reference_cases"]:
+            with self.subTest(case["id"]):
+                profile = PROFILES[case["profile"]]
+                got = reference_trade(profile, ingest(profile, case["logs"]), coverage_for(case["coverage_case"]),
+                                      case["window"])
+                want = case["expect"]
+                self.assertEqual(got["status"], want["status"])
+                if want["status"] == "FOUND":
+                    self.assertEqual(got["trade"]["identity"], want["identity"])
+                    self.assertEqual(got["trade"]["price"], want["price"])
+                else:
+                    self.assertEqual(got["reason"], want["reason"])
+                    self.assertNotIn("trade", got)
+
+
+class Availability(unittest.TestCase):
+    def test_every_case_matches_hand_written_expectations(self) -> None:
+        for case in FIXTURES["availability_cases"]:
+            with self.subTest(case["id"]):
+                got = bucket_available_at(case["availability"], case["bucket"], case.get("delivered"))
+                want = case["expect"]
+                self.assertEqual(got["at"], want["at"])
+                self.assertEqual(got["basis"], want["basis"])
+                self.assertEqual(got.get("reason"), want.get("reason"))
+
+    def test_unusable_models_are_rejected_not_defaulted(self) -> None:
+        for case in FIXTURES["availability_errors"]:
+            with self.subTest(case["id"]):
+                with self.assertRaises(InvalidInput) as caught:
+                    bucket_available_at(case["availability"], case["bucket"], case.get("delivered"))
+                self.assertEqual(caught.exception.code, case["code"])
+
+    def test_unknown_series_name_is_rejected(self) -> None:
+        bucket = FIXTURES["eligibility_cases"][0]["buckets"][0]
+        with self.assertRaises(InvalidInput) as caught:
+            opportunity_eligibility("2026-09-25T10:20:00Z", [("close", bucket["start"])], [bucket],
+                                    {"model": "ASSUMED_DELAY", "delay_seconds": 180})
+        self.assertEqual(caught.exception.code, "SERIES")
+
+    def test_unknown_bucket_status_is_rejected_by_eligibility_too(self) -> None:
+        weird = {"start": "2026-09-25T10:00:00Z", "end": "2026-09-25T10:05:00Z", "status": "WEIRD"}
+        with self.assertRaises(InvalidInput) as caught:
+            opportunity_eligibility("2026-09-25T10:20:00Z", [("price", weird["start"])], [weird],
+                                    {"model": "ASSUMED_DELAY", "delay_seconds": 180})
+        self.assertEqual(caught.exception.code, "BUCKET_STATUS")
+
+    def test_leap_second_text_is_not_a_timestamp(self) -> None:
+        for text in ("2026-09-25T10:00:60Z", "2026-09-25T23:59:60Z", "2026-09-25 10:00:00Z", "2026-09-25T10:00:00"):
+            with self.assertRaises(InvalidInput):
+                epoch(text)
+        self.assertEqual(epoch("2026-09-25T10:00:59Z") + 1, epoch("2026-09-25T10:01:00Z"))
+
+    def test_eligibility_keeps_every_reason_and_never_moves_the_decision(self) -> None:
+        for case in FIXTURES["eligibility_cases"]:
+            with self.subTest(case["id"]):
+                got = opportunity_eligibility(case["decision"], [tuple(r) for r in case["requirements"]],
+                                              case["buckets"], case["availability"], case.get("delivered"))
+                self.assertEqual(got["decision"], case["decision"])
+                self.assertEqual(got["eligible"], case["expect"]["eligible"])
+                self.assertEqual([r["code"] for r in got["reasons"]], case["expect"]["codes"])
+
+
+class ScheduleFeasibility(unittest.TestCase):
+    def test_every_case_matches_hand_written_expectations(self) -> None:
+        for case in FIXTURES["feasibility_cases"]:
+            with self.subTest(case["id"]):
+                got = feasibility(case["claim"], case["segments"], case["availability"])
+                self.assertEqual(got["status"], case["expect"]["status"])
+                self.assertEqual(len(got["partitions"]), len(case["expect"]["partitions"]))
+                for actual, wanted in zip(got["partitions"], case["expect"]["partitions"]):
+                    for key, value in wanted.items():
+                        self.assertEqual(actual[key], value, key)
+
+    def test_unusable_floors_and_partitions_are_rejected(self) -> None:
+        for case in FIXTURES["claim_errors"]:
+            with self.subTest(case["id"]):
+                with self.assertRaises(InvalidInput) as caught:
+                    feasibility(case["claim"], FIXTURES["feasibility_cases"][0]["segments"],
+                                FIXTURES["feasibility_cases"][0]["availability"])
+                self.assertEqual(caught.exception.code, case["code"])
+
+    def test_schedule_off_the_bucket_grid_is_rejected(self) -> None:
+        for case in FIXTURES["schedule_errors"]:
+            with self.subTest(case["id"]):
+                with self.assertRaises(InvalidInput):
+                    validate_schedule(case["schedule"])
+
+    def test_decision_times_follow_the_declared_clock_not_the_worker(self) -> None:
+        schedule = FIXTURES["feasibility_cases"][0]["claim"]["schedule"]
+        times = decision_times(schedule, "2026-09-25T00:00:00Z", "2026-09-25T03:00:00Z")
+        self.assertEqual(times, [1790295000, 1790298600, 1790302200])
+
+
+def apply_changes(root: dict, changes: list) -> dict:
+    """Each change is a path ending in its new value. A path with ~delete removes the named key."""
+    for change in changes:
+        if len(change) >= 3 and change[-2] == "~delete":
+            node = root
+            for key in change[:-2]:
+                node = node[key]
+            del node[change[-1]]
+            continue
+        node = root
+        for key in change[:-2]:
+            node = node[key]
+        node[change[-2]] = change[-1]
+    return root
+
+
+def base_profile() -> dict:
+    profile = copy.deepcopy(PROFILES[FIXTURES["qualification_base"]["profile"]])
+    profile["availability"] = copy.deepcopy(FIXTURES["qualification_base"]["profile_availability"])
+    return profile
+
+
+def pages_observations() -> dict:
+    """Complete evidence for the two buckets that the SYN_Q0_PAGES pages prove: 10:00 to 10:10."""
+    evidence = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+    evidence["ingest"].update(trades=6, records_seen=6)
+    evidence["corroboration"].update(sample_size=6, population_size=6)
+    evidence["bucket_status_counts"] = {"COMPLETE_OCCUPIED": 2, "COMPLETE_EMPTY": 0, "INCOMPLETE": 0, "UNQUALIFIED": 0}
+    evidence["bucket_window"] = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
+    return evidence
+
+
+def real_pages_profile(narrow: bool = False) -> dict:
+    """A fixture profile with portable pages, labeled REAL_SOURCE only to exercise the projection rule.
+
+    With narrow=True the profile window holds only the two buckets the pages prove.
+    """
+    profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
+    if narrow:
+        profile["dataset"]["window"] = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
+    profile["availability"] = copy.deepcopy(FIXTURES["qualification_base"]["profile_availability"])
+    profile["evidence_class"] = "REAL_SOURCE"
+    return profile
+
+
+CLAIM_NAMES = ["BINDING_IDENTITY", "EVENT_AND_AMOUNT_MEANING", "HISTORY_COMPLETENESS_AND_ORDER",
+               "POINT_IN_TIME_AVAILABILITY", "SCHEDULE_FEASIBILITY"]
+
+
+class ProfileContract(unittest.TestCase):
+    def test_every_case_reports_exactly_its_problems(self) -> None:
+        for case in FIXTURES["profile_cases"]:
+            with self.subTest(case["id"]):
+                profile = apply_changes(copy.deepcopy(PROFILES[case["profile"]]), case["set"])
+                self.assertEqual(sorted({p["code"] for p in profile_problems(profile)}), case["problems"])
+
+    def test_profile_hash_ignores_key_order_and_follows_content(self) -> None:
+        profile = copy.deepcopy(PROFILES["SYN_Q0"])
+        shuffled = dict(reversed(list(profile.items())))
+        self.assertEqual(profile_sha256(profile), profile_sha256(shuffled))
+        changed = apply_changes(copy.deepcopy(profile), [["venue", "pool_address", "0x" + "ab" * 20]])
+        self.assertNotEqual(profile_sha256(profile), profile_sha256(changed))
+
+    def test_dataset_revision_ignores_page_order_and_follows_page_hashes(self) -> None:
+        pages = PROFILES["SYN_Q0_PAGES"]["dataset"]["pages"]
+        expected = PROFILES["SYN_Q0_PAGES"]["dataset"]["dataset_revision"]["manifest_sha256"]
+        self.assertEqual(dataset_revision(pages), expected)
+        self.assertEqual(dataset_revision(list(reversed(pages))), expected)
+        altered = copy.deepcopy(pages)
+        altered[1]["sha256"] = "0" * 64
+        self.assertNotEqual(dataset_revision(altered), expected)
+
+    def test_retained_report_profile_is_a_valid_profile(self) -> None:
+        self.assertEqual(profile_problems(FIXTURES["retained_report"]["profile"]), [])
+
+
+class BindingCompatibility(unittest.TestCase):
+    def test_every_case_matches_hand_written_expectations(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        for case in FIXTURES["compat_cases"]:
+            with self.subTest(case["id"]):
+                other = {**research_binding_view(profile), **case["other"]}
+                for key in case.get("delete", []):
+                    del other[key]
+                self.assertEqual(binding_incompatibilities(profile, other), case["codes"])
+
+    def test_pool_native_order_is_kept_apart_from_the_base_quote_pair(self) -> None:
+        q0, b0 = research_binding_view(PROFILES["SYN_Q0"]), research_binding_view(PROFILES["SYN_B0"])
+        self.assertEqual(q0["token_order"], [q0["base_asset"], q0["quote_asset"]])
+        self.assertEqual(b0["token_order"], [b0["base_asset"], b0["quote_asset"]])
+        self.assertEqual(q0["token_order"], [FIXTURES["addresses"]["token1"], FIXTURES["addresses"]["token0"]])
+        self.assertEqual(b0["token_order"], [FIXTURES["addresses"]["token0"], FIXTURES["addresses"]["token1"]])
+
+
+class PerClaimQualification(unittest.TestCase):
+    def run_case(self, case: dict) -> dict:
+        profile = real_pages_profile() if case.get("profile") == "SYN_Q0_PAGES" else base_profile()
+        if case.get("profile"):
+            profile["evidence_class"] = "SYNTHETIC_FIXTURE"
+        root = {"profile": profile, "observations": copy.deepcopy(FIXTURES["qualification_base"]["observations"])}
+        apply_changes(root, case["set"])
+        return qualify(root["profile"], root["observations"])
+
+    def test_every_case_matches_hand_written_expectations(self) -> None:
+        for case in FIXTURES["qualification_cases"]:
+            with self.subTest(case["id"]):
+                got = self.run_case(case)
+                for name in CLAIM_NAMES:
+                    self.assertEqual(got["claims"][name]["verdict"], case["expect"]["claims"].get(name, "QUALIFIED"), name)
+                self.assertEqual(got["overall"], case["expect"]["overall"])
+
+    def test_complete_evidence_still_leaves_execution_and_profit_unassessed(self) -> None:
+        got = self.run_case(FIXTURES["qualification_cases"][0])
+        self.assertEqual(got["scope"], "OFFLINE_CONTRACT_ONLY")
+        self.assertEqual(got["not_assessed"], ["EXECUTION_ATTAINABILITY", "PROFITABILITY_OR_VALIDATION",
+                                               "TRADER_NET_FILL_OR_PROFIT"])
+        self.assertNotIn("EXECUTION_ATTAINABILITY", got["claims"])
+
+    def test_a_missing_count_is_named_as_missing_not_as_a_mismatch(self) -> None:
+        case = next(c for c in FIXTURES["qualification_cases"] if c["id"] == "Q58-rejected-total-missing")
+        got = self.run_case(case)
+        reasons = {(r["code"], r["kind"]) for r in got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]}
+        self.assertEqual(reasons, {("REJECTED_TOTAL_NOT_REPORTED", "MISSING_EVIDENCE")})
+
+    def test_every_reason_names_its_kind(self) -> None:
+        got = self.run_case(FIXTURES["qualification_cases"][1])
+        reasons = got["claims"]["BINDING_IDENTITY"]["reasons"]
+        self.assertEqual([(r["code"], r["kind"]) for r in reasons], [("CHAIN_ID_FROM_DOCUMENTATION_ONLY", "ASSUMPTION")])
+
+    def test_no_unrecognized_feasibility_status_can_pass(self) -> None:
+        base = FIXTURES["qualification_base"]["observations"]
+        for status in ("ROWS_REJECTED", "UNVERIFIED", "UNDECLARED", "feasible", "", "x", True, 1, [], {}, None):
+            with self.subTest(status=status):
+                evidence = copy.deepcopy(base)
+                evidence["feasibility"] = {"status": status, "partitions": copy.deepcopy(base["feasibility"]["partitions"])}
+                got = qualify(base_profile(), evidence)
+                self.assertEqual(got["claims"]["SCHEDULE_FEASIBILITY"]["verdict"], "UNRESOLVED")
+
+    def test_records_seen_below_the_counts_is_named_even_with_conflicts(self) -> None:
+        root = {"profile": base_profile(), "observations": copy.deepcopy(FIXTURES["qualification_base"]["observations"])}
+        apply_changes(root, [["observations", "ingest", "conflicts", 2], ["observations", "ingest", "records_seen", 15]])
+        reasons = qualify(root["profile"], root["observations"])["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]
+        self.assertIn(("INGEST_COUNTS_INCONSISTENT", "FAILED_CHECK"), {(r["code"], r["kind"]) for r in reasons})
+        apply_changes(root, [["observations", "ingest", "records_seen", 25]])
+        reasons = qualify(root["profile"], root["observations"])["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]
+        self.assertNotIn("INGEST_COUNTS_INCONSISTENT", {r["code"] for r in reasons})
+
+    def test_each_count_that_accounts_for_the_records_must_be_reported(self) -> None:
+        for key in ("duplicate_copies", "rejected", "removed", "foreign"):
+            for broken in ("~delete", None, "0", False, -1):
+                with self.subTest(key=key, broken=broken):
+                    root = {"profile": base_profile(),
+                            "observations": copy.deepcopy(FIXTURES["qualification_base"]["observations"])}
+                    apply_changes(root, [["observations", "ingest", "~delete", key]] if broken == "~delete"
+                                  else [["observations", "ingest", key, broken]])
+                    got = qualify(root["profile"], root["observations"])
+                    self.assertEqual(got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["verdict"], "UNRESOLVED")
+
+    def test_inputs_are_not_modified(self) -> None:
+        profile, obs = base_profile(), copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+        before = copy.deepcopy((profile, obs))
+        qualify(profile, obs)
+        self.assertEqual((profile, obs), before)
+
+    def test_retained_report_gets_a_limited_or_unresolved_verdict_never_qualified(self) -> None:
+        report = FIXTURES["retained_report"]
+        got = qualify(report["profile"], report["observations"])
+        for name, verdict in report["expect"]["claims"].items():
+            self.assertEqual(got["claims"][name]["verdict"], verdict, name)
+        self.assertEqual(got["overall"], report["expect"]["overall"])
+        for name, codes in report["expect"]["must_include_codes"].items():
+            have = {r["code"] for r in got["claims"][name]["reasons"]}
+            for code in codes:
+                self.assertIn(code, have, f"{name} {code}")
+        self.assertNotIn("QUALIFIED", {c["verdict"] for c in got["claims"].values()})
+
+    def test_pipeline_output_feeds_the_qualifier(self) -> None:
+        logs = next(c for c in FIXTURES["bucket_cases"] if c["id"] == "K01-boundaries-close-and-volume")["logs"]
+        narrow = real_pages_profile(narrow=True)
+        narrow["evidence_class"] = "SYNTHETIC_FIXTURE"
+        wide = real_pages_profile()
+        wide["evidence_class"] = "SYNTHETIC_FIXTURE"
+        sub = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
+        for name, profile, window, verdict, code in (
+                ("window equals the proven span", narrow, None, "QUALIFIED", None),
+                ("profile window has gaps", wide, None, "LIMITED", "BUCKET_GAPS:2"),
+                ("only part of the profile window counted", wide, sub, "LIMITED", "SUBWINDOW_ONLY")):
+            with self.subTest(name):
+                observed = history_observations(profile, logs, window)
+                evidence = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+                evidence.update(ingest=observed["ingest"], bucket_status_counts=observed["bucket_status_counts"],
+                                bucket_window=observed["bucket_window"])
+                evidence["corroboration"].update(sample_size=6, population_size=6)
+                got = qualify(profile, evidence)
+                history = got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]
+                self.assertEqual(history["verdict"], verdict)
+                if code:
+                    self.assertIn(code, {r["code"] for r in history["reasons"]})
+
+    def test_rows_missing_from_the_manifest_block_complete_history(self) -> None:
+        """Gate control: two of six declared rows survive, both pool sides and both buckets still show."""
+        profile = real_pages_profile(narrow=True)
+        logs = next(c for c in FIXTURES["bucket_cases"] if c["id"] == "K01-boundaries-close-and-volume")["logs"]
+        kept = [logs[1], logs[4]]
+        observed = history_observations(profile, kept)
+        self.assertEqual(observed["ingest"]["pool_sides"], ["BASE_IN_QUOTE_OUT", "QUOTE_IN_BASE_OUT"])
+        self.assertEqual(observed["bucket_status_counts"]["COMPLETE_OCCUPIED"], 2)
+        evidence = pages_observations()
+        evidence.update(ingest=observed["ingest"], bucket_status_counts=observed["bucket_status_counts"],
+                        bucket_window=observed["bucket_window"])
+        evidence["corroboration"].update(sample_size=2, population_size=2)
+        got = qualify(profile, evidence)
+        history = got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]
+        self.assertEqual(history["verdict"], "UNRESOLVED")
+        self.assertIn("RECORDS_DO_NOT_MATCH_MANIFEST", {r["code"] for r in history["reasons"]})
+        with self.assertRaises(BindingNotEmittable):
+            to_p02_binding(profile, got)
+
+    def test_exact_duplicate_copies_are_accounted_for(self) -> None:
+        profile = real_pages_profile(narrow=True)
+        profile["dataset"]["dataset_revision"]["row_count"] = 7
+        logs = next(c for c in FIXTURES["bucket_cases"] if c["id"] == "K01-boundaries-close-and-volume")["logs"]
+        observed = history_observations(profile, logs + [logs[1]])
+        self.assertEqual((observed["ingest"]["records_seen"], observed["ingest"]["duplicate_copies"]), (7, 1))
+        evidence = pages_observations()
+        evidence.update(ingest=observed["ingest"], bucket_status_counts=observed["bucket_status_counts"],
+                        bucket_window=observed["bucket_window"])
+        got = qualify(profile, evidence)
+        self.assertEqual(got["overall"], "QUALIFIED")
+        to_p02_binding(profile, got)
+
+    def test_status_counts_cover_every_status(self) -> None:
+        counts = bucket_status_counts([{"status": "COMPLETE_EMPTY"}, {"status": "INCOMPLETE"}, {"status": "INCOMPLETE"}])
+        self.assertEqual(counts, {"COMPLETE_OCCUPIED": 0, "COMPLETE_EMPTY": 1, "INCOMPLETE": 2, "UNQUALIFIED": 0})
+
+
+class HeldOutRecordsNeverLeaveAFalseCompleteBucket(unittest.TestCase):
+    """Seeded differential test. Oracle: the true bucket contents of the uncorrupted data."""
+
+    def test_complete_buckets_hold_exactly_the_true_trades(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        template = FIXTURES["decode_cases"][0]["log"]
+        segments = [{"first_block": 100, "end_block_exclusive": 200, "first_ts": epoch("2026-09-25T09:59:00Z"),
+                     "last_ts": epoch("2026-09-25T11:30:00Z"), "page_ids": ["p"]}]
+        window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T11:00:00Z"}
+        base = epoch("2026-09-25T10:00:00Z")
+
+        def swap_log(block: int, ts: int, quote: int, **over: object) -> dict:
+            log = copy.deepcopy(template)
+            log.update(block_number=block, block_hash="0x" + format(0xb0000 + block, "064x"),
+                       transaction_hash="0x" + format(0xa0000 + block, "064x"), transaction_index=0, log_index=0,
+                       block_timestamp=ts)
+            log["data"] = "0x" + format(quote, "064x") + "0" * 64 + "0" * 64 + format(10**18, "064x")
+            log.update(over)
+            return log
+
+        rng = random.Random(11)
+        checked = 0
+        for _ in range(400):
+            blocks = sorted(rng.sample(range(101, 160), 12))
+            times = sorted(base + rng.randrange(0, 3300) for _ in blocks)
+            truth = {b: t for b, t in zip(blocks, times)}
+            logs = {b: swap_log(b, t, 1_000_000 + b) for b, t in truth.items()}
+            victim = rng.choice(blocks[1:-1])
+            lo = max(t for b, t in truth.items() if b < victim)
+            hi = min(t for b, t in truth.items() if b > victim)
+            wrong = rng.choice([base + 3500, base - 500, hi + rng.randrange(1, 900), lo - rng.randrange(1, 900)])
+            if lo <= wrong <= hi:
+                continue
+            kind = rng.choice(["wrong_time", "payload_conflict", "unsupported", "bad_index", "twin_hash"])
+            others = {b: logs[b] for b in blocks if b != victim}
+            extra = []
+            if kind == "wrong_time":
+                extra = [swap_log(victim, wrong, 1_000_000 + victim)]
+            elif kind == "payload_conflict":
+                extra = [swap_log(victim, wrong, 1_000_000 + victim), swap_log(victim, wrong, 2_000_000 + victim)]
+            elif kind == "unsupported":
+                extra = [swap_log(victim, wrong, 1, data="0x" + "0" * 255 + "1")]
+            elif kind == "bad_index":
+                extra = [swap_log(victim, wrong, 1_000_000 + victim, log_index="zz")]
+            else:
+                extra = [swap_log(victim, wrong, 1_000_000 + victim, block_hash="0x" + "cc" * 32),
+                         swap_log(victim + 1000, wrong, 1_000_000 + victim, block_hash="0x" + "cc" * 32)]
+            ingested = ingest(profile, list(others.values()) + extra)
+            for bucket in bucketize(profile, ingested, segments, window):
+                if bucket["status"] not in ("COMPLETE_OCCUPIED", "COMPLETE_EMPTY"):
+                    continue
+                start = epoch(bucket["start"])
+                true_count = sum(1 for t in truth.values() if start <= t < start + 300)
+                self.assertEqual(bucket["trade_count"], true_count, (kind, victim, wrong))
+            checked += 1
+        self.assertGreater(checked, 150)
+
+
+class RoundTenRepairs(unittest.TestCase):
+    def test_records_seen_must_be_reported_as_a_count(self) -> None:
+        for junk in ("__missing__", None, "7", True, -1, [], {}):
+            with self.subTest(junk=junk):
+                evidence = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+                if junk == "__missing__":
+                    del evidence["ingest"]["records_seen"]
+                else:
+                    evidence["ingest"]["records_seen"] = junk
+                got = qualify(base_profile(), evidence)
+                history = got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]
+                self.assertEqual(history["verdict"], "UNRESOLVED")
+                self.assertIn("RECORDS_SEEN_NOT_REPORTED", {r["code"] for r in history["reasons"]})
+
+    def swap(self, block: int, ts: int, **over: object) -> dict:
+        log = copy.deepcopy(FIXTURES["decode_cases"][0]["log"])
+        log.update(block_number=block, block_hash="0x" + format(0xb0000 + block, "064x"),
+                   transaction_hash="0x" + format(0xa0000 + block, "064x"), transaction_index=0, log_index=0,
+                   block_timestamp=ts)
+        log.update(over)
+        return log
+
+    def test_a_trade_the_pages_contradict_spoils_the_bucket_another_segment_proves(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        base = epoch("2026-09-25T10:00:00Z")
+        segments = [
+            {"first_block": 1000, "end_block_exclusive": 1070, "first_ts": base, "last_ts": base + 1380, "page_ids": ["a"]},
+            {"first_block": 1090, "end_block_exclusive": 1160, "first_ts": base + 1800, "last_ts": base + 3180, "page_ids": ["b"]},
+        ]
+        window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T11:00:00Z"}
+        # Block 1030 lies in segment a (times up to base+1380) but the log claims a time inside segment b's range.
+        moved = self.swap(1030, base + 2400)
+        got = {b["start"]: b for b in bucketize(profile, ingest(profile, [moved]), segments, window)}
+        bucket = got["2026-09-25T10:40:00Z"]
+        self.assertEqual(bucket["status"], "UNQUALIFIED")
+        self.assertIn("TRADE_CONTRADICTS_PAGE_TIMES", bucket["reasons"])
+        found = reference_trade(profile, ingest(profile, [moved]), segments,
+                                {"start_utc": "2026-09-25T10:40:00Z", "end_utc": "2026-09-25T10:40:10Z"})
+        self.assertNotEqual(found["status"], "FOUND")
+
+    def test_a_trade_the_holding_page_contradicts_is_caught_inside_one_segment(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        base = epoch("2026-09-25T10:00:00Z")
+        pages = [
+            {"page_id": "a", "from_block": 1000, "next_block": 1010, "sha256": "aa" * 32,
+             "first_block_timestamp": base - 10, "last_block_timestamp": base + 700, "first_parent_hash": None},
+            {"page_id": "b", "from_block": 1010, "next_block": 1020, "sha256": "bb" * 32,
+             "first_block_timestamp": base + 1000, "last_block_timestamp": base + 1100, "first_parent_hash": None},
+        ]
+        built = assemble_segments(profile, {"from_block": 1000, "to_block_exclusive": 1020}, pages, 5000)
+        self.assertEqual(len(built["segments"]), 1)
+        window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:15:00Z"}
+        moved = self.swap(1015, base + 400)  # block 1015 is in page b, whose blocks are no earlier than base+1000
+        result = ingest(profile, [moved])
+        by_start = {b["start"]: b for b in bucketize(profile, result, built["segments"], window)}
+        self.assertEqual(by_start["2026-09-25T10:05:00Z"]["status"], "UNQUALIFIED")
+        found = reference_trade(profile, result, built["segments"],
+                                {"start_utc": "2026-09-25T10:06:00Z", "end_utc": "2026-09-25T10:07:00Z"})
+        self.assertEqual(found["status"], "MISSING_OUTCOME")
+        honest = self.swap(1015, base + 1050)
+        self.assertNotIn("UNQUALIFIED", {b["status"] for b in bucketize(profile, ingest(profile, [honest]), built["segments"], window)})
+
+    def test_a_missing_records_seen_is_reported_once_on_every_basis(self) -> None:
+        cases = [(base_profile(), copy.deepcopy(FIXTURES["qualification_base"]["observations"])),
+                 (real_pages_profile(narrow=True), pages_observations())]
+        for profile, evidence in cases:
+            del evidence["ingest"]["records_seen"]
+            reasons = qualify(profile, evidence)["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]
+            self.assertEqual([r["code"] for r in reasons].count("RECORDS_SEEN_NOT_REPORTED"), 1)
+
+    def test_only_exact_same_range_repeats_add_edge_facts(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        base = epoch("2026-09-25T10:00:00Z")
+
+        def page(pid: str, lo: int, hi: int, **extra: object) -> dict:
+            return {"page_id": pid, "from_block": lo, "next_block": hi, "sha256": format(lo * 1000 + hi, "064x"),
+                    "first_block_timestamp": base + lo, "last_block_timestamp": base + hi - 1, **extra}
+
+        pages = [page("a", 100, 110), page("b", 110, 130), page("o", 105, 115, last_block_hash="0x" + "ee" * 32),
+                 page("r", 110, 130, last_block_hash="0x" + "dd" * 32)]
+        built = assemble_segments(profile, {"from_block": 100, "to_block_exclusive": 130}, pages, 5000)
+        hashes = {block for block, kind, _ in built["segments"][0]["edge_facts"] if kind == "hash"}
+        self.assertEqual(hashes, {129})
+        shorter = [page("a", 100, 110), page("b", 110, 120), page("r", 110, 130, last_block_hash="0x" + "dd" * 32)]
+        built = assemble_segments(profile, {"from_block": 100, "to_block_exclusive": 130}, shorter, 5000)
+        self.assertEqual(built["segments"][0]["end_block_exclusive"], 120)
+        self.assertEqual([f for f in built["segments"][0]["edge_facts"] if f[1] == "hash"], [])
+
+    def test_same_range_pages_that_differ_only_in_an_optional_hash_do_not_depend_on_ids(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        base = epoch("2026-09-25T10:00:00Z")
+        page = {"from_block": 100, "next_block": 110, "sha256": "11" * 32, "first_block_timestamp": base - 10,
+                "last_block_timestamp": base + 600, "first_parent_hash": None}
+        wrong = self.swap(109, base + 600, block_hash="0x" + "cd" * 32)
+        for plain_id, hashed_id in (("a", "b"), ("b", "a")):
+            pages = [{**page, "page_id": plain_id},
+                     {**page, "page_id": hashed_id, "last_block_hash": "0x" + "ee" * 32}]
+            built = assemble_segments(profile, {"from_block": 100, "to_block_exclusive": 110}, pages, 1000)
+            window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
+            buckets = bucketize(profile, ingest(profile, [wrong]), built["segments"], window)
+            self.assertEqual([b["status"] for b in buckets if b["start"] == "2026-09-25T10:00:00Z"], ["UNQUALIFIED"],
+                             (plain_id, hashed_id))
+
+
+class FailClosed(unittest.TestCase):
+    JUNK = (None, [], "x", 1, True, {}, 1.5)
+
+    def test_malformed_profile_sections_give_problems_not_crashes(self) -> None:
+        profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
+        for key in profile:
+            for junk in self.JUNK:
+                if (key, junk) == ("profile_id", "x"):
+                    continue  # a short string is a valid profile id
+                with self.subTest(key=key, junk=junk):
+                    broken = copy.deepcopy(profile)
+                    broken[key] = junk
+                    self.assertTrue(profile_problems(broken))
+        for key in profile["dataset"]:
+            for junk in self.JUNK:
+                with self.subTest(dataset=key, junk=junk):
+                    broken = copy.deepcopy(profile)
+                    broken["dataset"][key] = junk
+                    self.assertTrue(profile_problems(broken))
+        for index in (0, 1):
+            for junk in self.JUNK:
+                with self.subTest(token=index, junk=junk):
+                    broken = copy.deepcopy(profile)
+                    broken["pool_tokens"][index] = junk
+                    self.assertTrue(profile_problems(broken))
+        for junk in (None, [], "x", 1):
+            self.assertTrue(profile_problems(junk))
+
+    def test_profile_with_a_float_is_unresolved_not_a_crash(self) -> None:
+        profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
+        profile["dataset"]["query"]["definition"]["from_block"] = 100.5
+        got = qualify(profile, copy.deepcopy(FIXTURES["qualification_base"]["observations"]))
+        self.assertEqual(got["claims"]["BINDING_IDENTITY"]["verdict"], "UNRESOLVED")
+        self.assertIsNone(got["profile_sha256"])
+        with self.assertRaises(BindingNotEmittable):
+            to_p02_binding(profile, got)
+
+    def test_junk_in_any_profile_leaf_gives_problems_not_a_crash(self) -> None:
+        def leaves(node: object, path: tuple = ()) -> list[tuple]:
+            if isinstance(node, dict):
+                return [p for k, v in node.items() for p in leaves(v, path + (k,))] or [path]
+            if isinstance(node, list):
+                return [p for i, v in enumerate(node) for p in leaves(v, path + (i,))] or [path]
+            return [path]
+
+        profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
+        for path in leaves(profile):
+            for junk in ([], {}, "x", None, True, -1, 1.5, "\uff12"):
+                broken = copy.deepcopy(profile)
+                node = broken
+                for key in path[:-1]:
+                    node = node[key]
+                node[path[-1]] = junk
+                try:
+                    profile_problems(broken)
+                    qualify(broken, copy.deepcopy(FIXTURES["qualification_base"]["observations"]))
+                except Exception as error:  # noqa: BLE001 - any crash is the failure
+                    self.fail(f"crash at {path} with {junk!r}: {error!r}")
+
+    def test_qualifier_never_passes_on_junk_observations(self) -> None:
+        profile = base_profile()
+        for junk in (None, [], "x", 1, {"binding": "READ", "ingest": 5, "corroboration": [1], "feasibility": "FEASIBLE"}):
+            with self.subTest(junk=junk):
+                self.assertEqual(qualify(profile, junk)["overall"], "UNRESOLVED")
+
+    def test_result_binds_to_its_profile_and_evidence(self) -> None:
+        profile, evidence = base_profile(), copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+        first = qualify(profile, evidence)
+        evidence["ingest"]["trades"] += 1
+        second = qualify(profile, evidence)
+        self.assertEqual(first["profile_sha256"], second["profile_sha256"])
+        self.assertNotEqual(first["observations_sha256"], second["observations_sha256"])
+
+    def test_unusable_claims_are_rejected_before_counting(self) -> None:
+        claim = copy.deepcopy(FIXTURES["feasibility_cases"][0]["claim"])
+        segments = FIXTURES["feasibility_cases"][0]["segments"]
+        half = copy.deepcopy(claim)
+        half["partitions"][0]["required_control"] = None
+        with self.assertRaises(InvalidInput) as caught:
+            feasibility(half, segments, FIXTURES["feasibility_cases"][0]["availability"])
+        self.assertEqual(caught.exception.code, "FLOOR_INCOMPLETE")
+        for key in ("horizon_seconds", "reference_window_seconds"):
+            bad = copy.deepcopy(claim)
+            bad[key] = 0
+            with self.assertRaises(InvalidInput) as caught:
+                feasibility(bad, segments, FIXTURES["feasibility_cases"][0]["availability"])
+            self.assertEqual(caught.exception.code, "CLAIM_VALUE")
+
+
+class P02Projection(unittest.TestCase):
+    def test_synthetic_profile_projects_to_an_accepted_unqualified_binding(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        binding = to_p02_binding(profile, qualify(profile, {}))
+        P02["validate_record"]("ResearchBinding", binding)
+        self.assertEqual((binding["evidence_class"], binding["qualification"]), ("SYNTHETIC_FIXTURE", "UNQUALIFIED"))
+        self.assertEqual(binding["token_order"], [binding["base_asset"], binding["quote_asset"]])
+
+    def test_only_a_fully_qualified_real_profile_projects_as_qualified(self) -> None:
+        profile = real_pages_profile(narrow=True)
+        result = qualify(profile, pages_observations())
+        self.assertEqual(result["overall"], "QUALIFIED")
+        binding = to_p02_binding(profile, result)
+        P02["validate_record"]("ResearchBinding", binding)
+        self.assertEqual((binding["evidence_class"], binding["qualification"]), ("QUALIFIED_SOURCE", "QUALIFIED"))
+
+    def test_limited_or_unresolved_real_profile_cannot_project(self) -> None:
+        report = FIXTURES["retained_report"]
+        with self.assertRaises(BindingNotEmittable) as caught:
+            to_p02_binding(report["profile"], qualify(report["profile"], report["observations"]))
+        self.assertEqual(caught.exception.code, "VERDICT_UNRESOLVED")
+        profile = real_pages_profile(narrow=True)
+        profile["network"]["chain_id_source"] = "DOCUMENTATION"
+        limited = qualify(profile, apply_changes({"o": pages_observations()},
+                                                 [["o", "binding", "chain_id", "DOCUMENTATION"]])["o"])
+        with self.assertRaises(BindingNotEmittable) as caught:
+            to_p02_binding(profile, limited)
+        self.assertEqual(caught.exception.code, "VERDICT_LIMITED")
+
+    def test_projection_refuses_a_hand_built_result(self) -> None:
+        profile = real_pages_profile(narrow=True)
+        good = qualify(profile, pages_observations())
+        to_p02_binding(profile, good)
+        forged = [
+            {"profile_sha256": good["profile_sha256"], "overall": "QUALIFIED"},
+            {**good, "claims": {**good["claims"], "HISTORY_COMPLETENESS_AND_ORDER": {"verdict": "LIMITED", "reasons": []}}},
+            {**good, "claims": {k: v for k, v in good["claims"].items() if k != "SCHEDULE_FEASIBILITY"}},
+            {**good, "scope": "EVERYTHING"},
+            {**good, "schema_version": "other/1"},
+        ]
+        for result in forged:
+            with self.assertRaises(BindingNotEmittable):
+                to_p02_binding(profile, result)
+
+    def test_result_names_the_window_it_counted(self) -> None:
+        got = qualify(real_pages_profile(narrow=True), pages_observations())
+        self.assertEqual(got["history_window"], {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"})
+
+    def test_projection_gives_a_named_refusal_for_malformed_results(self) -> None:
+        profile = real_pages_profile(narrow=True)
+        good = qualify(profile, pages_observations())
+        for result in (None, [], "x", {**good, "claims": {**good["claims"], "BINDING_IDENTITY": {"verdict": []}}},
+                       {**good, "claims": {**good["claims"], "BINDING_IDENTITY": None}}):
+            with self.assertRaises(BindingNotEmittable):
+                to_p02_binding(profile, result)
+
+    def test_projection_refuses_a_result_for_a_different_profile(self) -> None:
+        a, b = PROFILES["SYN_Q0"], PROFILES["SYN_B0"]
+        with self.assertRaises(BindingNotEmittable) as caught:
+            to_p02_binding(a, qualify(b, {}))
+        self.assertEqual(caught.exception.code, "RESULT_FOR_OTHER_PROFILE")
+
+
+if __name__ == "__main__":
+    unittest.main()
