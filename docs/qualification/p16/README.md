@@ -55,7 +55,7 @@ These sources informed the check design. No source code was copied.
 
 ## Later provider recipe
 
-Run these steps only after the builder approves the development app, owners, provider operations, and call cost. The worker saved the current request outside the candidate. It requests no purchase and sets operation counts. Keep secrets outside this repository and model context.
+Run these steps only after the builder approves the development app, owners, provider operations, and call cost in the pending `P16-L2-01/AUTHORIZATION/5` request. It supersedes request 4 and asks for eight sign-only calls: A positive; B positive; A-to-B denial using B's valid request; C positive; A-to-C denial using C's valid request; owner-positive after A removal; removed-A denial; and B-positive after A removal. No provider call is authorized until the builder approves this exact request. The request asks for no purchase. Keep secrets outside this repository and model context.
 
 1. Use one isolated Privy development app. Use two test owners. Use Monad Testnet `10143` only.
 2. Create three unfunded EVM wallets. Assign wallets A and B to owner 1. Assign wallet C to owner 2.
