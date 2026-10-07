@@ -221,29 +221,100 @@ def _message_line(line: str, sender: str, text: str) -> bool:
     return bool(match and match.group(1) == sender and line[match.end():] == text)
 
 
+def _is_native_footer(line: str) -> bool:
+    line = line.strip()
+    return bool(
+        re.match(r"^(?:GPT-[^·]+|Claude [^·]+) · ", line)
+        or re.match(r"^🤖 [^|]+ \| 💰 ", line)
+        or re.match(r"^\[OMC#[^]]+\] -> .+ \| session:\S+$", line)
+        or re.match(r"^← for agents · \? for shortcuts(?:\s+⚠ .+ · f\d+ to view)?$", line)
+        or line in {"? for shortcuts", "+ Show details", "⏸ manual mode on · ← for agents"}
+        or re.match(r"^⚠ .+ · f\d+ to view$", line)
+    )
+
+
+def _footer_start(lines: list[str]) -> int:
+    end = len(lines)
+    while end and not lines[end - 1].strip():
+        end -= 1
+    start = end
+    while start and _is_native_footer(lines[start - 1]):
+        start -= 1
+    return start if start < end else len(lines)
+
+
+def _input_region(capture: str) -> tuple[list[str], int, list[str]] | None:
+    lines = capture.splitlines()
+    limit = _footer_start(lines)
+    for index in range(limit - 1, -1, -1):
+        if re.match(r"^\s*(?:❯|›)(?:\s|$)", lines[index]):
+            return lines, index, lines[index + 1:limit]
+    return None
+
+
+def _prompt_body(line: str, continuation: list[str]) -> str:
+    first = re.sub(r"^\s*(?:❯|›)\s*", "", line).rstrip()
+    return " ".join([first, *(part.strip() for part in continuation)]).strip()
+
+
+def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int) -> bool:
+    parts = []
+    for end in range(index, limit):
+        parts.append(lines[end].rstrip())
+        if _message_line(" ".join(parts), sender, text) or _message_line("".join(parts), sender, text):
+            return True
+    return False
+
+
+def _empty_prompt(line: str, continuation: list[str]) -> bool:
+    body = _prompt_body(line, continuation)
+    return not body or body in {
+        "Ask Codex to do anything", "Try …", 'Try "edit <filepath> to..."',
+    }
+
+
 def _has_active_draft(capture: str, sender: str, text: str) -> bool:
     lines = capture.splitlines()
+    region = _input_region(capture)
+    if region:
+        lines, index, continuation = region
+        body = _prompt_body(lines[index], continuation)
+        return _message_line(body, sender, text)
     return bool(lines and _message_line(lines[-1], sender, text))
 
 
 def _has_partial_input(capture: str) -> bool:
-    lines = capture.splitlines()
-    if not lines or lines[-1].strip() in {"❯", "›"}:
+    region = _input_region(capture)
+    if not region:
         return False
-    return any(re.match(r"^\s*(?:❯|›)(?:\s|$)", line) for line in lines)
+    lines, index, continuation = region
+    return not _empty_prompt(lines[index], continuation)
 
 
 def _submitted(capture: str, before_enter: str, sender: str, text: str) -> bool:
-    lines = [line.rstrip() for line in capture.splitlines() if line.strip()]
-    before = [line.rstrip() for line in before_enter.splitlines() if line.strip()]
-    history = before[:-1]
-    # A changed or truncated history cannot locate this attempt safely.
+    before_lines = [line.rstrip() for line in before_enter.splitlines()]
+    after_lines = [line.rstrip() for line in capture.splitlines()]
+    before_region = _input_region(before_enter)
+    after_region = _input_region(capture)
+    if not before_lines or not after_lines or not after_region:
+        return False
+    after_lines, after_prompt, after_continuation = after_region
+    if not _empty_prompt(after_lines[after_prompt], after_continuation):
+        return False
+    if before_region:
+        before_lines, before_prompt, before_continuation = before_region
+        if not _message_line(_prompt_body(before_lines[before_prompt], before_continuation), sender, text):
+            return False
+    else:
+        before_prompt = len(before_lines) - 1
+        if not _message_at(before_lines, before_prompt, sender, text, len(before_lines)):
+            return False
+    history = before_lines[:before_prompt]
+    submitted = after_lines[:after_prompt]
     return bool(
-        before and _message_line(before[-1], sender, text)
-        and len(lines) >= len(history) + 2
-        and lines[-1] in {"❯", "›"}
-        and lines[:len(history)] == history
-        and _message_line(lines[len(history)], sender, text)
+        submitted[:len(history)] == history
+        and len(submitted) > len(history)
+        and _message_at(submitted, len(history), sender, text, len(submitted))
     )
 
 
@@ -251,7 +322,7 @@ def _read_hash(capture: str) -> str:
     return hashlib.sha256(capture.encode("utf-8")).hexdigest()
 
 
-def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.sleep(0.18),
+def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.sleep(0.35),
                  inherited_session_ids: list[str] | None = None) -> dict:
     """Send one confirmed message, or preserve a state that cannot be retried."""
     key = _key_tuple(request)

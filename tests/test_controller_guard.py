@@ -15,7 +15,10 @@ from unittest.mock import patch
 import uuid
 from pathlib import Path
 
-from scripts.controller_guard import GuardStore, TmuxBridge, checked_send, main, preflight, stop_decision
+from scripts.controller_guard import (
+    GuardStore, TmuxBridge, _has_active_draft, _has_partial_input, _submitted,
+    checked_send, main, preflight, stop_decision,
+)
 
 
 class FakeBridge:
@@ -124,6 +127,79 @@ class CheckedSendTests(unittest.TestCase):
         self.assertLess(names.index("message"), names.index("enter"))
         self.assertLess(names.index("enter"), len(names) - 1 - names[::-1].index("read"))
         self.assertNotIn(self.request["text"].encode(), self.store.path.read_bytes())
+
+    def test_native_empty_placeholder_and_footer_are_idle(self):
+        capture = (
+            "› Ask Codex to do anything\n"
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts                       ⚠ 1 warning · f2 to view"
+        )
+        self.assertFalse(_has_partial_input(capture))
+        self.assertFalse(_has_partial_input(
+            '❯ Try "edit <filepath> to..."\n'
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        ))
+        self.assertFalse(_has_partial_input("❯ Try …\n? for shortcuts"))
+
+    def test_native_own_draft_is_found_before_footer(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        capture = (
+            "› " + own + "\n"
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts\n"
+            "+ Show details"
+        )
+        self.assertTrue(_has_active_draft(capture, "%1", self.request["text"]))
+
+    def test_claude_native_own_draft_is_found_before_footer(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        capture = (
+            "❯ " + own + "\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        self.assertTrue(_has_active_draft(capture, "%1", self.request["text"]))
+
+    def test_native_wrapped_own_draft_is_found_but_collapsed_input_is_not_adopted(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        header, body = own.split(" review ", 1)
+        wrapped = (
+            "› " + header + " review\n" + body + "\n"
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts\n"
+            "+ Show details"
+        )
+        collapsed = "› [pasted text 73 chars]\n" + wrapped.split("\n", 1)[1]
+        self.assertTrue(_has_active_draft(wrapped, "%1", self.request["text"]))
+        self.assertFalse(_has_active_draft(collapsed, "%1", self.request["text"]))
+        self.assertTrue(_has_partial_input(collapsed))
+
+    def test_native_submitted_message_and_empty_placeholder_with_footer_confirm(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        footer = (
+            "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
+            "← for agents · ? for shortcuts\n"
+            "+ Show details"
+        )
+        before = "prior history\n› " + own + "\n" + footer
+        after = (
+            "prior history\n" + own + "\n"
+            "› Ask Codex to do anything\n" + footer
+        )
+        self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
+
+    def test_checked_send_uses_350ms_settles(self):
+        with patch("scripts.controller_guard.time.sleep") as sleep:
+            result = checked_send(self.request, self.bridge, self.store)
+        self.assertEqual(result["status"], "SUBMITTED")
+        self.assertEqual([call.args for call in sleep.call_args_list], [(0.35,), (0.35,)])
 
     def test_delayed_display_gets_one_safe_recovery_read_before_enter(self):
         class DelayedDisplay(FakeBridge):
