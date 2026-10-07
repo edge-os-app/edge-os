@@ -151,7 +151,7 @@ class Coverage(unittest.TestCase):
             with self.subTest(case["id"]):
                 got = assemble_segments(PROFILES[case["profile"]], case["scan_request"], case["pages"],
                                         case["archive_height"])
-                self.assertEqual([{k: v for k, v in seg.items() if k != "edge_facts"} for seg in got["segments"]],
+                self.assertEqual([{k: v for k, v in seg.items() if k not in ("edge_facts", "page_spans")} for seg in got["segments"]],
                                  case["expect"]["segments"])
                 self.assertEqual([b["code"] for b in got["breaks"]], case["expect"]["break_codes"])
 
@@ -159,7 +159,7 @@ class Coverage(unittest.TestCase):
         case = FIXTURES["coverage_cases"][0]
         got = assemble_segments(PROFILES[case["profile"]], case["scan_request"], list(reversed(case["pages"])),
                                 case["archive_height"])
-        self.assertEqual([{k: v for k, v in seg.items() if k != "edge_facts"} for seg in got["segments"]],
+        self.assertEqual([{k: v for k, v in seg.items() if k not in ("edge_facts", "page_spans")} for seg in got["segments"]],
                          case["expect"]["segments"])
 
 
@@ -760,6 +760,54 @@ class RoundTenRepairs(unittest.TestCase):
         found = reference_trade(profile, ingest(profile, [moved]), segments,
                                 {"start_utc": "2026-09-25T10:40:00Z", "end_utc": "2026-09-25T10:40:10Z"})
         self.assertNotEqual(found["status"], "FOUND")
+
+    def test_a_trade_the_holding_page_contradicts_is_caught_inside_one_segment(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        base = epoch("2026-09-25T10:00:00Z")
+        pages = [
+            {"page_id": "a", "from_block": 1000, "next_block": 1010, "sha256": "aa" * 32,
+             "first_block_timestamp": base - 10, "last_block_timestamp": base + 700, "first_parent_hash": None},
+            {"page_id": "b", "from_block": 1010, "next_block": 1020, "sha256": "bb" * 32,
+             "first_block_timestamp": base + 1000, "last_block_timestamp": base + 1100, "first_parent_hash": None},
+        ]
+        built = assemble_segments(profile, {"from_block": 1000, "to_block_exclusive": 1020}, pages, 5000)
+        self.assertEqual(len(built["segments"]), 1)
+        window = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:15:00Z"}
+        moved = self.swap(1015, base + 400)  # block 1015 is in page b, whose blocks are no earlier than base+1000
+        result = ingest(profile, [moved])
+        by_start = {b["start"]: b for b in bucketize(profile, result, built["segments"], window)}
+        self.assertEqual(by_start["2026-09-25T10:05:00Z"]["status"], "UNQUALIFIED")
+        found = reference_trade(profile, result, built["segments"],
+                                {"start_utc": "2026-09-25T10:06:00Z", "end_utc": "2026-09-25T10:07:00Z"})
+        self.assertEqual(found["status"], "MISSING_OUTCOME")
+        honest = self.swap(1015, base + 1050)
+        self.assertNotIn("UNQUALIFIED", {b["status"] for b in bucketize(profile, ingest(profile, [honest]), built["segments"], window)})
+
+    def test_a_missing_records_seen_is_reported_once_on_every_basis(self) -> None:
+        cases = [(base_profile(), copy.deepcopy(FIXTURES["qualification_base"]["observations"])),
+                 (real_pages_profile(narrow=True), pages_observations())]
+        for profile, evidence in cases:
+            del evidence["ingest"]["records_seen"]
+            reasons = qualify(profile, evidence)["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]
+            self.assertEqual([r["code"] for r in reasons].count("RECORDS_SEEN_NOT_REPORTED"), 1)
+
+    def test_only_exact_same_range_repeats_add_edge_facts(self) -> None:
+        profile = PROFILES["SYN_Q0"]
+        base = epoch("2026-09-25T10:00:00Z")
+
+        def page(pid: str, lo: int, hi: int, **extra: object) -> dict:
+            return {"page_id": pid, "from_block": lo, "next_block": hi, "sha256": format(lo * 1000 + hi, "064x"),
+                    "first_block_timestamp": base + lo, "last_block_timestamp": base + hi - 1, **extra}
+
+        pages = [page("a", 100, 110), page("b", 110, 130), page("o", 105, 115, last_block_hash="0x" + "ee" * 32),
+                 page("r", 110, 130, last_block_hash="0x" + "dd" * 32)]
+        built = assemble_segments(profile, {"from_block": 100, "to_block_exclusive": 130}, pages, 5000)
+        hashes = {block for block, kind, _ in built["segments"][0]["edge_facts"] if kind == "hash"}
+        self.assertEqual(hashes, {129})
+        shorter = [page("a", 100, 110), page("b", 110, 120), page("r", 110, 130, last_block_hash="0x" + "dd" * 32)]
+        built = assemble_segments(profile, {"from_block": 100, "to_block_exclusive": 130}, shorter, 5000)
+        self.assertEqual(built["segments"][0]["end_block_exclusive"], 120)
+        self.assertEqual([f for f in built["segments"][0]["edge_facts"] if f[1] == "hash"], [])
 
     def test_same_range_pages_that_differ_only_in_an_optional_hash_do_not_depend_on_ids(self) -> None:
         profile = PROFILES["SYN_Q0"]

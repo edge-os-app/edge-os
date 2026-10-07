@@ -2582,6 +2582,41 @@
    "note": "Pages meet end to start. One segment. Blocks 100 to 110 are scanned."
   },
   {
+   "id": "C06-one-page-holds-the-scan",
+   "profile": "SYN_Q0",
+   "scan_request": {
+    "from_block": 100,
+    "to_block_exclusive": 111
+   },
+   "archive_height": 1000000,
+   "pages": [
+    {
+     "page_id": "w1",
+     "from_block": 100,
+     "next_block": 111,
+     "sha256": "60c5590f72eef292f9545afc28bf63ca91d2016a0a288f90f9a32f89d3fffcaf",
+     "first_block_timestamp": 1790330398,
+     "last_block_timestamp": 1790331120,
+     "last_block_hash": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    }
+   ],
+   "expect": {
+    "segments": [
+     {
+      "first_block": 100,
+      "end_block_exclusive": 111,
+      "first_ts": 1790330398,
+      "last_ts": 1790331120,
+      "page_ids": [
+       "w1"
+      ]
+     }
+    ],
+    "break_codes": []
+   },
+   "note": "One page holds blocks 100 to 110. Its first and last block times are the segment bounds, so no log time is contradicted by a narrower page."
+  },
+  {
    "id": "C02-tail-not-final-at-collection",
    "profile": "SYN_Q0",
    "scan_request": {
@@ -4701,7 +4736,7 @@
   {
    "id": "K12-held-out-trade-spoils-the-time-it-could-have-had",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"
@@ -4807,7 +4842,7 @@
   {
    "id": "K13-payload-conflict-with-one-out-of-order-time",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"
@@ -4928,7 +4963,7 @@
   {
    "id": "K14-unreadable-record-with-an-out-of-order-time",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"
@@ -5034,7 +5069,7 @@
   {
    "id": "K15-one-hash-two-blocks-with-an-out-of-order-time",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"
@@ -5155,7 +5190,7 @@
   {
    "id": "K16-unreadable-position-with-a-readable-block",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"
@@ -5260,7 +5295,7 @@
   {
    "id": "K17-record-with-no-block-number",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"
@@ -5366,7 +5401,7 @@
   {
    "id": "K18-conflict-claiming-exactly-its-neighbours-time",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"
@@ -5484,7 +5519,7 @@
   {
    "id": "K19-unreadable-record-claiming-exactly-its-neighbours-time",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"
@@ -5587,7 +5622,7 @@
   {
    "id": "K20-unreadable-record-in-a-block-with-a-known-time",
    "profile": "SYN_Q0",
-   "coverage_case": "C01-three-pages-tile-the-scan",
+   "coverage_case": "C06-one-page-holds-the-scan",
    "window": {
     "start_utc": "2026-09-25T09:55:00Z",
     "end_utc": "2026-09-25T10:15:00Z"

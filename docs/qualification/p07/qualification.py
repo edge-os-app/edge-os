@@ -496,6 +496,8 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
             {"first_block": group[0]["from_block"], "end_block_exclusive": group[-1]["next_block"],
              "first_ts": group[0]["first_block_timestamp"], "last_ts": group[-1]["last_block_timestamp"],
              "page_ids": [p["page_id"] for p in group],
+             "page_spans": [(p["from_block"], p["next_block"], p["first_block_timestamp"], p["last_block_timestamp"])
+                            for p in group],
              "edge_facts": sorted({(block, kind, value) for p in group + repeats[n] for block, kind, value in _page_claims(p)})}
             for n, group in enumerate(segments)
         ],
@@ -521,7 +523,7 @@ def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, A
     A trade from a block no segment scanned spoils the bucket of its timestamp.
     A trade whose time contradicts the pages also spoils the bucket of its claimed time, whichever segment proves that bucket.
     A trade inside a segment spoils the whole segment when its time falls outside the segment's first and last
-    block times, or when it disagrees with what the pages state about its own block (hash or time).
+    block times or outside the first and last block times of the page that holds its block, or when it disagrees with what the pages state about its own block (hash or time).
     """
     outside: list[tuple[int, str]] = []
     bad_segments: dict[int, set[str]] = defaultdict(set)
@@ -531,7 +533,9 @@ def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, A
             if seg["first_block"] <= trade.block_number < seg["end_block_exclusive"]:
                 if stated_for.get(trade.block_hash, trade.block_number) != trade.block_number:
                     bad_segments[index].add("TRADE_CONTRADICTS_PAGE_HASH")
-                if not seg["first_ts"] <= trade.block_timestamp <= seg["last_ts"]:
+                spans = [(seg["first_ts"], seg["last_ts"])]
+                spans += [(first, last) for lo, hi, first, last in seg.get("page_spans", ()) if lo <= trade.block_number < hi]
+                if any(not first <= trade.block_timestamp <= last for first, last in spans):
                     bad_segments[index].add("TRADE_CONTRADICTS_PAGE_TIMES")
                     outside.append((trade.block_timestamp, "TRADE_CONTRADICTS_PAGE_TIMES"))
                 for block, kind, value in seg.get("edge_facts", ()):
