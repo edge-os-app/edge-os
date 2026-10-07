@@ -235,7 +235,10 @@ def _is_native_footer(line: str) -> bool:
         or re.match(r"^🤖 [^|]+ \| 💰 ", line)
         or re.match(r"^\[OMC#[^]]+\] -> .+ \| session:\S+$", line)
         or re.match(r"^← for agents · \? for shortcuts(?:\s+⚠ .+ · f\d+ to view)?$", line)
-        or line in {"? for shortcuts", "+ Show details", "⏸ manual mode on · ← for agents"}
+        or line in {
+            "? for shortcuts", "+ Show details", "⏸ manual mode on",
+            "⏸ manual mode on · ← for agents",
+        }
         or re.match(r"^⚠ .+ · f\d+ to view$", line)
     )
 

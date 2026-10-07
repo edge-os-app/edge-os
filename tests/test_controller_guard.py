@@ -186,6 +186,24 @@ class CheckedSendTests(unittest.TestCase):
         )
         self.assertTrue(_has_active_draft(capture, "%1", self.request["text"]))
 
+    def test_claude_native_manual_mode_footer_without_hint_preserves_own_draft(self):
+        text = "Reply only ACK-20261007-r13. Do not run tools."
+        own_header = (
+            "[tmux-bridge from:claude pane:%9 at:work:0.1 — "
+            "load the smux skill to reply] "
+        )
+        capture = (
+            "❯ " + own_header + "\n"
+            "  " + text + "\n"
+            "────────────────────────────────────────────────────────────\n"
+            "  🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today | "
+            "$0.00 block (4h 18m left) | $0.00/hr | 0 (0%)\n"
+            "  [OMC#4.15.0L] -> 4.15.7 omc update | 5h:39%(4h38m) "
+            "wk:26%(6d10h) extra:0%($0.00/$30.00) | session:0m\n"
+            "  ⏸ manual mode on"
+        )
+        self.assertTrue(_has_active_draft(capture, "%9", text))
+
     def test_native_foreign_draft_with_footer_stays_partial(self):
         capture = (
             "❯ [tmux-bridge from:other pane:%9 at:work:0.1 — load the smux skill to reply] foreign text\n"
