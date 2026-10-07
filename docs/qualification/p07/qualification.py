@@ -6,6 +6,7 @@ Amounts stay exact integers. Prices use the accepted decimal-50-half-even contex
 
 from __future__ import annotations
 
+import bisect
 import calendar
 import hashlib
 import re
@@ -279,9 +280,10 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     def name(trade: Trade) -> str:
         return trade_identity(profile, trade)
 
+    held: list[tuple[str, Sequence[Trade], Sequence[int]]] = []
+
     def hold_out(kind: str, members: Sequence[Trade], extra_times: Sequence[int] = ()) -> None:
-        result.conflicts.append({"kind": kind, "identities": sorted({name(t) for t in members}),
-                                 "timestamps": sorted({t.block_timestamp for t in members} | set(extra_times))})
+        held.append((kind, list(members), tuple(extra_times)))
 
     unreadable = {item["key"]: item["block_timestamp"] for item in result.rejected if item["key"] is not None}
     by_position: dict[tuple[int, int, int], list[Trade]] = defaultdict(list)
@@ -327,10 +329,24 @@ def ingest(profile: Mapping[str, Any], logs: Sequence[Mapping[str, Any]]) -> Ing
     if flagged:
         hold_out("TIMESTAMP_ORDER", [kept[i] for i in sorted(flagged)])
     result.trades = tuple(t for i, t in enumerate(kept) if i not in flagged)
+    # A held-out trade has an unreliable time. When the claimed times disagree, its real time can be anywhere
+    # between its qualified neighbours, so every bucket in that interval is unreliable too.
+    keys = [t.order_key for t in result.trades]
+    times = [t.block_timestamp for t in result.trades]
+    for kind, members, extra in held:
+        claimed = sorted({t.block_timestamp for t in members} | set(extra))
+        ranges: list[tuple[int, int]] = []
+        if kind == "TIMESTAMP_ORDER" or len(claimed) > 1:
+            for member in members:
+                i = bisect.bisect_left(keys, member.order_key)
+                ranges.append((times[i - 1] if i > 0 else 0, times[i] if i < len(times) else _FAR_FUTURE))
+        result.conflicts.append({"kind": kind, "identities": sorted({name(t) for t in members}),
+                                 "timestamps": claimed, "ranges": sorted(set(ranges))})
     return result
 
 
 BUCKET_SECONDS = 300
+_FAR_FUTURE = 1 << 62
 
 
 class InvalidInput(ValueError):
@@ -343,7 +359,7 @@ class InvalidInput(ValueError):
 
 def epoch(text: str) -> int:
     """Whole-second UTC timestamp. Block timestamps have second precision."""
-    if not isinstance(text, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:[0-5]\dZ", text):
+    if not isinstance(text, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-5][0-9]Z", text):
         raise InvalidInput("TIMESTAMP_FORMAT", "expected YYYY-MM-DDTHH:MM:SSZ")
     try:
         return calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))
@@ -388,7 +404,6 @@ def assemble_segments(profile: Mapping[str, Any], scan_request: Mapping[str, int
                 current.pop()
                 if not current:
                     segments.pop()
-                segments.append([page])
             else:
                 current.append(page)
         else:
@@ -437,11 +452,12 @@ def _page_contradictions(result: IngestResult, segments: Sequence[Mapping[str, A
     return outside, bad_segments
 
 
-def _contamination(result: IngestResult) -> tuple[list[tuple[int, str]], bool]:
+def _contamination(result: IngestResult) -> tuple[list[tuple[int, str]], list[tuple[int, int, str]], bool]:
     located = [(item["block_timestamp"], f"UNSUPPORTED_EVENT_IN_BUCKET:{item['code']}")
                for item in result.rejected if item["block_timestamp"] is not None]
     located += [(ts, f"CONFLICT_IN_BUCKET:{item['kind']}") for item in result.conflicts for ts in item["timestamps"]]
-    return located, any(item["block_timestamp"] is None for item in result.rejected)
+    ranges = [(lo, hi, f"CONFLICT_IN_BUCKET:{item['kind']}") for item in result.conflicts for lo, hi in item["ranges"]]
+    return located, ranges, any(item["block_timestamp"] is None for item in result.rejected)
 
 
 def _trade_view(profile: Mapping[str, Any], trade: Trade) -> dict[str, Any]:
@@ -458,11 +474,14 @@ def bucketize(profile: Mapping[str, Any], result: IngestResult, segments: Sequen
     if start >= end or start % BUCKET_SECONDS or end % BUCKET_SECONDS:
         raise InvalidInput("WINDOW_NOT_BUCKET_ALIGNED", "window must hold whole five-minute buckets")
     quote_decimals = next(t["decimals"] for t in profile["pool_tokens"] if t["role"] == "QUOTE")
-    located, unlocated = _contamination(result)
+    located, ranges, unlocated = _contamination(result)
     outside, bad_segments = _page_contradictions(result, segments)
     spoiled: dict[int, set[str]] = defaultdict(set)
     for ts, reason in located:
         spoiled[ts - ts % BUCKET_SECONDS].add(reason)
+    for lo, hi, reason in ranges:
+        for first in range(max(start, lo - lo % BUCKET_SECONDS), min(end, hi + 1), BUCKET_SECONDS):
+            spoiled[first].add(reason)
     page_spoiled: dict[int, set[str]] = defaultdict(set)
     for ts, reason in outside:
         page_spoiled[ts - ts % BUCKET_SECONDS].add(reason)
@@ -504,9 +523,10 @@ def reference_trade(profile: Mapping[str, Any], result: IngestResult, segments: 
         raise InvalidInput("WINDOW_ORDER", "window start must be before its end")
     if not window_covered(segments, start, end):
         return {"status": "MISSING_OUTCOME", "reason": "COVERAGE_NOT_PROVEN"}
-    located, unlocated = _contamination(result)
+    located, ranges, unlocated = _contamination(result)
     outside, bad_segments = _page_contradictions(result, segments)
     if (unlocated or any(start <= ts < end for ts, _ in located + outside)
+            or any(lo < end and hi >= start for lo, hi, _ in ranges)
             or covering_segment(segments, start, end) in bad_segments):
         return {"status": "MISSING_OUTCOME", "reason": "UNQUALIFIED_RECORDS"}
     for trade in result.trades:
@@ -762,7 +782,7 @@ def profile_problems(profile: Any) -> list[dict[str, str]]:
                 bad("DECIMALS_RANGE", f"{where}/decimals", "integer from 0 to 255")
         if sorted(str(t.get("role")) for t in tokens if isinstance(t, Mapping)) != ["BASE", "QUOTE"]:
             bad("TOKEN_ROLES", "/pool_tokens", "one BASE and one QUOTE")
-        addresses = [t.get("address") for t in tokens if isinstance(t, Mapping)]
+        addresses = [t.get("address") for t in tokens if isinstance(t, Mapping) and _is_address(t.get("address"))]
         if len(set(addresses)) != len(addresses):
             bad("TOKEN_ADDRESSES", "/pool_tokens", "token addresses must differ")
         if pool in addresses:
@@ -839,21 +859,23 @@ def _dataset_problems(profile: Mapping[str, Any], pool: object, bad: Any, closed
     collection = dataset["collection"]
     if closed(collection, {"collected_at_utc", "collected_on_utc", "archive_height"}, "/dataset/collection"):
         at, day = collection["collected_at_utc"], collection["collected_on_utc"]
-        if (at is None) == (day is None):
-            bad("COLLECTION", "/dataset/collection", "give collected_at_utc or collected_on_utc")
+        if (at is None) == (day is None) or not (at is None or isinstance(at, str)) or not (
+                day is None or isinstance(day, str)):
+            bad("COLLECTION", "/dataset/collection", "give collected_at_utc or collected_on_utc, as text")
+            at = day = None
         try:
             if at is not None and window_end is not None and epoch(at) < window_end:
                 bad("COLLECTED_BEFORE_WINDOW_END", "/dataset/collection", "collection cannot precede the window end")
             if day is not None:
-                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+                if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day):
                     bad("COLLECTION", "/dataset/collection", "collected_on_utc is YYYY-MM-DD")
                 elif window_end is not None and day < iso_utc(window_end)[:10]:
                     bad("COLLECTED_BEFORE_WINDOW_END", "/dataset/collection", "collection cannot precede the window end")
         except InvalidInput as error:
             bad("COLLECTION", "/dataset/collection", error.args[0])
         height = collection["archive_height"]
-        if height is not None and not _is_int(height):
-            bad("COLLECTION", "/dataset/collection/archive_height", "integer or null")
+        if height is not None and not (_is_int(height) and height >= 0):
+            bad("COLLECTION", "/dataset/collection/archive_height", "non-negative integer or null")
     query = dataset["query"]
     if closed(query, {"identity_sha256", "definition", "from_block", "to_block_exclusive"}, "/dataset/query"):
         definition = query["definition"]
@@ -877,19 +899,27 @@ def _dataset_problems(profile: Mapping[str, Any], pool: object, bad: Any, closed
         return
     ids = [pg.get("page_id") for pg in pages if isinstance(pg, Mapping)]
     needed = ("page_id", "from_block", "next_block", "sha256", "first_block_timestamp", "last_block_timestamp")
-    if len(ids) != len(pages) or len(set(ids)) != len(ids) or any(
-            any(k not in pg for k in needed) or not _is_int(pg["from_block"]) or not _is_int(pg["next_block"])
-            or not (isinstance(pg["sha256"], str) and _SHA256.fullmatch(pg["sha256"]))
-            or not _is_int(pg["first_block_timestamp"]) or not _is_int(pg["last_block_timestamp"]) for pg in pages):
-        bad("PAGE_RECORD", "/dataset/pages", "pages need unique ids, integer ranges and sha256 digests")
+    numbers = ("from_block", "next_block", "first_block_timestamp", "last_block_timestamp")
+
+    def page_ok(pg: Any) -> bool:
+        return (isinstance(pg, Mapping) and all(k in pg for k in needed) and isinstance(pg["page_id"], str)
+                and all(_is_int(pg[k]) and pg[k] >= 0 for k in numbers)
+                and isinstance(pg["sha256"], str) and _SHA256.fullmatch(pg["sha256"]) is not None
+                and all(pg.get(k) is None or (isinstance(pg[k], str) and _HEX_WORD.fullmatch(pg[k]) is not None)
+                        for k in ("first_parent_hash", "last_block_hash")))
+
+    if not all(page_ok(pg) for pg in pages) or len(set(ids)) != len(ids):
+        bad("PAGE_RECORD", "/dataset/pages", "pages need unique text ids, non-negative integer ranges and times, and hex hashes")
         return
+    if pages and _look(dataset, "collection", "archive_height") is None:
+        bad("ARCHIVE_HEIGHT_MISSING", "/dataset/collection/archive_height", "finality of the pages needs the archive height")
     if closed(revision, {"basis", "manifest_sha256", "page_count", "row_count"}, "/dataset/dataset_revision"):
         basis, manifest = revision["basis"], revision["manifest_sha256"]
         consistent = {
             "NONE": manifest is None and not pages and revision["page_count"] == 0,
             "PAGE_DIGESTS": bool(pages) and manifest == dataset_revision(pages) and revision["page_count"] == len(pages),
             "PRIVATE_NOT_PORTABLE": not pages and _is_int(revision["page_count"]) and revision["page_count"] >= 0,
-        }.get(basis)
+        }.get(basis) if isinstance(basis, str) else False
         if not consistent:
             bad("DATASET_REVISION_MISMATCH", "/dataset/dataset_revision", "manifest, basis and pages disagree")
 
@@ -996,7 +1026,9 @@ def history_observations(profile: Mapping[str, Any], logs: Sequence[Mapping[str,
     assembled = assemble_segments(profile, dataset["query"], dataset["pages"], height or 0)
     result = ingest(profile, logs)
     buckets = bucketize(profile, result, assembled["segments"], window or dataset["window"])
+    used = window or dataset["window"]
     return {"ingest": result.summary(), "bucket_status_counts": bucket_status_counts(buckets),
+            "bucket_window": {"start_utc": used["start_utc"], "end_utc": used["end_utc"]},
             "segment_breaks": [item["code"] for item in assembled["breaks"]]}
 
 
@@ -1029,6 +1061,41 @@ class _Claim:
 
     def view(self) -> dict[str, Any]:
         return {"verdict": self.verdict(), "reasons": self.reasons}
+
+
+def _check_bucket_counts(claim: "_Claim", profile: Mapping[str, Any], observations: Any, counts: Mapping[str, int],
+                         trades: int | None) -> None:
+    """Tie the bucket counts to the profile window, the trade count and the retained pages."""
+    window = _look(observations, "bucket_window") or _look(profile, "dataset", "window")
+    try:
+        start, end = epoch(window["start_utc"]), epoch(window["end_utc"])
+        if start >= end or start % BUCKET_SECONDS or end % BUCKET_SECONDS:
+            raise InvalidInput("WINDOW", "bad window")
+        outer = _look(profile, "dataset", "window")
+        if start < epoch(outer["start_utc"]) or end > epoch(outer["end_utc"]):
+            claim.add("FAILED_CHECK", "BUCKET_WINDOW_OUTSIDE_PROFILE")
+            return
+    except (InvalidInput, KeyError, TypeError):
+        claim.add("MISSING_EVIDENCE", "BUCKET_WINDOW_INVALID")
+        return
+    complete = counts["COMPLETE_OCCUPIED"] + counts["COMPLETE_EMPTY"]
+    if sum(counts[status] for status in _STATUSES) != (end - start) // BUCKET_SECONDS:
+        claim.add("FAILED_CHECK", "BUCKET_COUNTS_INCONSISTENT", "counts do not add up to the window")
+    if trades is not None and (counts["COMPLETE_OCCUPIED"] > trades or (
+            trades >= 1 and counts["COMPLETE_OCCUPIED"] == 0 and window == _look(profile, "dataset", "window"))):
+        claim.add("FAILED_CHECK", "BUCKET_COUNTS_INCONSISTENT", "occupied buckets disagree with the trade count")
+    dataset = _look(profile, "dataset")
+    if isinstance(dataset, Mapping) and dataset.get("pages") and not profile_problems(profile):
+        try:
+            height = dataset["collection"]["archive_height"]
+            assembled = assemble_segments(profile, dataset["query"], dataset["pages"], height)
+            proven = sum(1 for first in range(start, end, BUCKET_SECONDS)
+                         if window_covered(assembled["segments"], first, first + BUCKET_SECONDS))
+        except (KeyError, TypeError):
+            claim.add("MISSING_EVIDENCE", "PAGES_UNUSABLE")
+            return
+        if complete > proven:
+            claim.add("FAILED_CHECK", "COVERAGE_CLAIM_EXCEEDS_PAGES", f"{complete} claimed, {proven} proven by the pages")
 
 
 def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[str, Any]:
@@ -1106,15 +1173,21 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
             history.add("FAILED_CHECK", "ORDER_OR_IDENTITY_FIELDS_MISSING")
         if sum(n for code, n in codes.items() if code not in _ORDER_CODES):
             history.add("LIMIT", "UNSUPPORTED_EVENTS_PRESENT")
-        total = _look(observations, "ingest", "rejected")
-        if total is not None and total != sum(codes.values()):
+        total = _count(_look(observations, "ingest", "rejected"))
+        if total is None:
+            history.add("MISSING_EVIDENCE", "REJECTED_TOTAL_NOT_REPORTED")
+        elif total != sum(codes.values()):
             history.add("FAILED_CHECK", "INGEST_COUNTS_INCONSISTENT", "rejected total differs from its codes")
-    if _count(_look(observations, "ingest", "unlocated_rejections")):
-        history.add("FAILED_CHECK", "UNLOCATED_RECORDS", "a rejected record has no timestamp")
-    if _count(_look(observations, "ingest", "removed")):
-        history.add("LIMIT", "REMOVED_LOGS_PRESENT")
-    if _count(_look(observations, "ingest", "foreign")):
-        history.add("LIMIT", "FOREIGN_RECORDS_IN_QUERY_RESULT")
+    for field_name, label in (("unlocated_rejections", "UNLOCATED"), ("removed", "REMOVED"), ("foreign", "FOREIGN")):
+        seen = _count(_look(observations, "ingest", field_name))
+        if seen is None:
+            history.add("MISSING_EVIDENCE", f"{label}_COUNT_NOT_REPORTED")
+        elif seen and field_name == "unlocated_rejections":
+            history.add("FAILED_CHECK", "UNLOCATED_RECORDS", "a rejected record has no timestamp")
+        elif seen and field_name == "removed":
+            history.add("LIMIT", "REMOVED_LOGS_PRESENT")
+        elif seen:
+            history.add("LIMIT", "FOREIGN_RECORDS_IN_QUERY_RESULT")
     if profile.get("evidence_class") in ("REAL_SOURCE", "RETAINED_REPORT") and _look(
             profile, "dataset", "dataset_revision", "basis") != "PAGE_DIGESTS":
         history.add("MISSING_EVIDENCE", "COVERAGE_PROOF_NOT_PORTABLE", "pages and their revision must travel with the profile")
@@ -1123,16 +1196,20 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
     counts = _look(observations, "bucket_status_counts")
     if not isinstance(counts, Mapping) or any(_count(counts.get(status)) is None for status in _STATUSES):
         history.add("MISSING_EVIDENCE", "COVERAGE_PROOF_NOT_PORTABLE")
-    elif counts["COMPLETE_OCCUPIED"] + counts["COMPLETE_EMPTY"] == 0:
-        history.add("MISSING_EVIDENCE", "NO_PROVEN_BUCKET")
-    elif counts["INCOMPLETE"] + counts["UNQUALIFIED"]:
-        history.add("LIMIT", f"BUCKET_GAPS:{counts['INCOMPLETE'] + counts['UNQUALIFIED']}")
+    else:
+        _check_bucket_counts(history, profile, observations, counts, trades)
+        if counts["COMPLETE_OCCUPIED"] + counts["COMPLETE_EMPTY"] == 0:
+            history.add("MISSING_EVIDENCE", "NO_PROVEN_BUCKET")
+        elif counts["INCOMPLETE"] + counts["UNQUALIFIED"]:
+            history.add("LIMIT", f"BUCKET_GAPS:{counts['INCOMPLETE'] + counts['UNQUALIFIED']}")
     check = _look(observations, "corroboration")
     kind = _look(check, "class")
     mismatches = _count(_look(check, "mismatches"))
     sample, population = _count(_look(check, "sample_size"), 1), _count(_look(check, "population_size"), 1)
     if kind not in ("COMPLETE", "SAMPLED"):
         history.add("MISSING_EVIDENCE", "NO_CORROBORATION")
+    elif _look(check, "provider") != _look(profile, "source", "corroboration_provider"):
+        history.add("FAILED_CHECK", "CORROBORATION_PROVIDER_MISMATCH", "the corroborating source must be independent of the history source")
     elif mismatches is None:
         history.add("MISSING_EVIDENCE", "CORROBORATION_RESULT_NOT_REPORTED")
     elif mismatches:

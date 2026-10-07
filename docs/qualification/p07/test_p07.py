@@ -117,6 +117,11 @@ class Ingest(unittest.TestCase):
                 self.assertEqual(summary["unlocated_rejections"], want["unlocated"])
                 self.assertEqual(summary["pool_sides"], want["pool_sides"])
 
+    def test_duplicate_copies_are_counted_once_each(self) -> None:
+        by_id = {c["id"]: c for c in FIXTURES["ingest_cases"]}
+        self.assertEqual(self.run_case(by_id["I01-canonical-order"]).summary()["duplicate_copies"], 0)
+        self.assertEqual(self.run_case(by_id["I02-exact-duplicate"]).summary()["duplicate_copies"], 1)
+
     def test_provider_row_order_never_changes_the_result(self) -> None:
         case = next(c for c in FIXTURES["ingest_cases"] if c["id"] == "I01-canonical-order")
         self.assertEqual(len(case["logs"]), 5)
@@ -205,9 +210,11 @@ class Buckets(unittest.TestCase):
     def test_window_must_use_whole_five_minute_buckets(self) -> None:
         case = FIXTURES["bucket_cases"][0]
         profile = PROFILES[case["profile"]]
-        bad = {"start_utc": "2026-09-25T09:55:30Z", "end_utc": "2026-09-25T10:15:00Z"}
-        with self.assertRaises(ValueError):
-            bucketize(profile, ingest(profile, []), coverage_for(case["coverage_case"]), bad)
+        for bad in ({"start_utc": "2026-09-25T09:55:30Z", "end_utc": "2026-09-25T10:15:00Z"},
+                    {"start_utc": "2026-09-25T09:55:00Z", "end_utc": "2026-09-25T10:15:30Z"},
+                    {"start_utc": "2026-09-25T10:15:00Z", "end_utc": "2026-09-25T09:55:00Z"}):
+            with self.assertRaises(InvalidInput):
+                bucketize(profile, ingest(profile, []), coverage_for(case["coverage_case"]), bad)
 
 
 class ReferenceWindows(unittest.TestCase):
@@ -243,6 +250,13 @@ class Availability(unittest.TestCase):
                 with self.assertRaises(InvalidInput) as caught:
                     bucket_available_at(case["availability"], case["bucket"], case.get("delivered"))
                 self.assertEqual(caught.exception.code, case["code"])
+
+    def test_unknown_series_name_is_rejected(self) -> None:
+        bucket = FIXTURES["eligibility_cases"][0]["buckets"][0]
+        with self.assertRaises(InvalidInput) as caught:
+            opportunity_eligibility("2026-09-25T10:20:00Z", [("close", bucket["start"])], [bucket],
+                                    {"model": "ASSUMED_DELAY", "delay_seconds": 180})
+        self.assertEqual(caught.exception.code, "SERIES")
 
     def test_unknown_bucket_status_is_rejected_by_eligibility_too(self) -> None:
         weird = {"start": "2026-09-25T10:00:00Z", "end": "2026-09-25T10:05:00Z", "status": "WEIRD"}
@@ -320,6 +334,16 @@ def base_profile() -> dict:
     return profile
 
 
+def pages_observations() -> dict:
+    """Complete evidence for the two buckets that the SYN_Q0_PAGES pages prove: 10:00 to 10:10."""
+    evidence = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+    evidence["ingest"]["trades"] = 6
+    evidence["corroboration"].update(sample_size=6, population_size=6)
+    evidence["bucket_status_counts"] = {"COMPLETE_OCCUPIED": 2, "COMPLETE_EMPTY": 0, "INCOMPLETE": 0, "UNQUALIFIED": 0}
+    evidence["bucket_window"] = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}
+    return evidence
+
+
 def real_pages_profile() -> dict:
     """A fixture profile with portable pages, labeled REAL_SOURCE only to exercise the projection rule."""
     profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
@@ -379,7 +403,10 @@ class BindingCompatibility(unittest.TestCase):
 
 class PerClaimQualification(unittest.TestCase):
     def run_case(self, case: dict) -> dict:
-        root = {"profile": base_profile(), "observations": copy.deepcopy(FIXTURES["qualification_base"]["observations"])}
+        profile = real_pages_profile() if case.get("profile") == "SYN_Q0_PAGES" else base_profile()
+        if case.get("profile"):
+            profile["evidence_class"] = "SYNTHETIC_FIXTURE"
+        root = {"profile": profile, "observations": copy.deepcopy(FIXTURES["qualification_base"]["observations"])}
         apply_changes(root, case["set"])
         return qualify(root["profile"], root["observations"])
 
@@ -397,6 +424,12 @@ class PerClaimQualification(unittest.TestCase):
         self.assertEqual(got["not_assessed"], ["EXECUTION_ATTAINABILITY", "PROFITABILITY_OR_VALIDATION",
                                                "TRADER_NET_FILL_OR_PROFIT"])
         self.assertNotIn("EXECUTION_ATTAINABILITY", got["claims"])
+
+    def test_a_missing_count_is_named_as_missing_not_as_a_mismatch(self) -> None:
+        case = next(c for c in FIXTURES["qualification_cases"] if c["id"] == "Q58-rejected-total-missing")
+        got = self.run_case(case)
+        reasons = {(r["code"], r["kind"]) for r in got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["reasons"]}
+        self.assertEqual(reasons, {("REJECTED_TOTAL_NOT_REPORTED", "MISSING_EVIDENCE")})
 
     def test_every_reason_names_its_kind(self) -> None:
         got = self.run_case(FIXTURES["qualification_cases"][1])
@@ -430,7 +463,8 @@ class PerClaimQualification(unittest.TestCase):
                                 ({"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:10:00Z"}, "QUALIFIED")):
             with self.subTest(window=window):
                 observed = history_observations(profile, logs, window)
-                evidence.update(ingest=observed["ingest"], bucket_status_counts=observed["bucket_status_counts"])
+                evidence.update(ingest=observed["ingest"], bucket_status_counts=observed["bucket_status_counts"],
+                                bucket_window=observed["bucket_window"])
                 evidence["corroboration"].update(sample_size=6, population_size=6)
                 got = qualify(profile, evidence)
                 self.assertEqual(got["claims"]["HISTORY_COMPLETENESS_AND_ORDER"]["verdict"], verdict)
@@ -477,6 +511,28 @@ class FailClosed(unittest.TestCase):
         with self.assertRaises(BindingNotEmittable):
             to_p02_binding(profile, got)
 
+    def test_junk_in_any_profile_leaf_gives_problems_not_a_crash(self) -> None:
+        def leaves(node: object, path: tuple = ()) -> list[tuple]:
+            if isinstance(node, dict):
+                return [p for k, v in node.items() for p in leaves(v, path + (k,))] or [path]
+            if isinstance(node, list):
+                return [p for i, v in enumerate(node) for p in leaves(v, path + (i,))] or [path]
+            return [path]
+
+        profile = copy.deepcopy(PROFILES["SYN_Q0_PAGES"])
+        for path in leaves(profile):
+            for junk in ([], {}, "x", None, True, -1, 1.5, "\uff12"):
+                broken = copy.deepcopy(profile)
+                node = broken
+                for key in path[:-1]:
+                    node = node[key]
+                node[path[-1]] = junk
+                try:
+                    profile_problems(broken)
+                    qualify(broken, copy.deepcopy(FIXTURES["qualification_base"]["observations"]))
+                except Exception as error:  # noqa: BLE001 - any crash is the failure
+                    self.fail(f"crash at {path} with {junk!r}: {error!r}")
+
     def test_qualifier_never_passes_on_junk_observations(self) -> None:
         profile = base_profile()
         for junk in (None, [], "x", 1, {"binding": "READ", "ingest": 5, "corroboration": [1], "feasibility": "FEASIBLE"}):
@@ -517,7 +573,7 @@ class P02Projection(unittest.TestCase):
 
     def test_only_a_fully_qualified_real_profile_projects_as_qualified(self) -> None:
         profile = real_pages_profile()
-        result = qualify(profile, copy.deepcopy(FIXTURES["qualification_base"]["observations"]))
+        result = qualify(profile, pages_observations())
         self.assertEqual(result["overall"], "QUALIFIED")
         binding = to_p02_binding(profile, result)
         P02["validate_record"]("ResearchBinding", binding)
@@ -530,7 +586,7 @@ class P02Projection(unittest.TestCase):
         self.assertEqual(caught.exception.code, "VERDICT_UNRESOLVED")
         profile = real_pages_profile()
         profile["network"]["chain_id_source"] = "DOCUMENTATION"
-        limited = qualify(profile, apply_changes({"o": copy.deepcopy(FIXTURES["qualification_base"]["observations"])},
+        limited = qualify(profile, apply_changes({"o": pages_observations()},
                                                  [["o", "binding", "chain_id", "DOCUMENTATION"]])["o"])
         with self.assertRaises(BindingNotEmittable) as caught:
             to_p02_binding(profile, limited)

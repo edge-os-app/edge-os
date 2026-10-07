@@ -54,12 +54,12 @@ Trade identity is `chain:block:transaction_index:log_index`. Hashes are kept. Or
 - Exact duplicate copies count once. The copy count is kept.
 - Same position with different content is a conflict (`POSITION_PAYLOAD`). That includes different sender or recipient topics, and a readable trade that shares its position with an unreadable record. No version is used.
 - One block number with two hashes or times, or one block hash on two block numbers (`BLOCK_FACTS`), and one transaction hash at two positions (`TX_POSITION`) are conflicts.
-- Block times never fall as block numbers rise. Any trade that is part of an inversion with any other trade, adjacent or not, is a `TIMESTAMP_ORDER` conflict. Involved trades are held out.
+- Block times never fall as block numbers rise. Any trade that is part of an inversion with any other trade, adjacent or not, is a `TIMESTAMP_ORDER` conflict. Involved trades are held out. A held-out trade whose claimed times disagree has no reliable time. Its real time can lie anywhere between its qualified neighbours, so every bucket in that interval is spoiled, not only the buckets its claimed times name.
 - Removed (reorged) logs, foreign-pool logs and unsupported shapes are counted by code. A rejected record without a timestamp is counted as unlocated. A row that is not an object is rejected as `NOT_AN_OBJECT` and the batch continues.
 
 ## Buckets, coverage and the close
 
-Coverage comes from retained query pages. `assemble_segments()` keeps pages that tile a contiguous block range, are at least the documented finality depth below the archive height at collection, do not overlap, keep timestamps non-decreasing and, where both parent and last hashes exist, agree on the hash chain. Adjacent pages that carry no hashes merge on range and finality depth alone. Each dropped page gets a break code (`NOT_FINAL_AT_COLLECTION`, `OVERLAP`, `BLOCK_GAP`, `REORG_BETWEEN_PAGES`, `OUTSIDE_REQUEST`, `TIMESTAMP_ORDER`).
+Coverage comes from retained query pages. `assemble_segments()` keeps pages that tile a contiguous block range, are at least the documented finality depth below the archive height at collection, do not overlap, keep timestamps non-decreasing and, where both parent and last hashes exist, agree on the hash chain. A hash mismatch drops both pages. Neither can be called canonical. Adjacent pages that carry no hashes merge on range and finality depth alone. Each dropped page gets a break code (`NOT_FINAL_AT_COLLECTION`, `OVERLAP`, `BLOCK_GAP`, `REORG_BETWEEN_PAGES`, `OUTSIDE_REQUEST`, `TIMESTAMP_ORDER`).
 
 A bucket `[s,e)` is covered when one segment has `first_ts < s` and `e <= last_ts`. Reason: block timestamps never fall with block number, so unscanned blocks before the segment are at or below `first_ts` and unscanned blocks after it are at or above `last_ts`. The strict start is deliberate because blocks share seconds.
 
@@ -86,7 +86,7 @@ A decision schedule is an anchor, a period and the offset between a decision and
 
 ## Claims and verdicts
 
-`qualify(profile, observations)` returns one verdict per claim and an overall verdict. `QUALIFIED` needs direct evidence. `LIMITED` names an assumption or limit. `UNRESOLVED` names a failed check or missing evidence. A missing, malformed or unknown fact never passes. Counts must be real non-negative integers. The overall verdict is the worst claim. `qualify()` trusts the observation values it is given. It checks types, consistency between them and agreement with the profile, and it binds the result to the profile and observations by hash. It cannot check where a value came from. For a real or retained profile it also requires the pages and their revision to travel with the profile. The result states `scope: OFFLINE_CONTRACT_ONLY` and lists what it does not assess.
+`qualify(profile, observations)` returns one verdict per claim and an overall verdict. `QUALIFIED` needs direct evidence. `LIMITED` names an assumption or limit. `UNRESOLVED` names a failed check or missing evidence. A missing, malformed or unknown fact never passes. Counts must be real non-negative integers. The overall verdict is the worst claim. `qualify()` trusts the observation values it is given. It checks types, consistency between the counts, and agreement with the profile: the chain id source, the window, the pages (it recomputes how many buckets the retained pages prove and rejects a larger claim), the archive height and the corroborating provider. It binds the result to the profile and observations by hash. It cannot check where a value came from. For a real or retained profile it also requires the pages and their revision to travel with the profile. The result states `scope: OFFLINE_CONTRACT_ONLY` and lists what it does not assess.
 
 | Claim | Qualified needs | Limited when | Unresolved when |
 |---|---|---|---|
@@ -94,7 +94,7 @@ A decision schedule is an anchor, a period and the offset between a decision and
 | `EVENT_AND_AMOUNT_MEANING` | events decoded, both pool sides seen, decimals read at the window start, token mechanics qualified | decimals read only later, one pool side, mechanics unqualified | no event sample, no pool side reported, decimals never read |
 | `HISTORY_COMPLETENESS_AND_ORDER` | no conflict, no unsupported event, every bucket proven, complete corroboration (every record compared, at least as many records as trades, no mismatch) | unsupported events, foreign or removed rows, bucket gaps, sampled corroboration, a retained report | conflict, missing order or identity fields, unlocated records, any mismatch, no corroboration, no coverage proof, no portable pages for a real or retained profile, inconsistent counts or an inconsistent "complete" claim |
 | `POINT_IN_TIME_AVAILABILITY` | observed delivery and observed finality | assumed delay, finality inferred at collection | model unknown, observed delivery without finality |
-| `SCHEDULE_FEASIBILITY` | declared floors fit the schedule | none | floors undeclared or not met |
+| `SCHEDULE_FEASIBILITY` | declared floors fit the schedule's upper-bound count | none | floors undeclared or not met |
 
 Not assessed: `EXECUTION_ATTAINABILITY`, `TRADER_NET_FILL_OR_PROFIT`, `PROFITABILITY_OR_VALIDATION`. The result binds to the profile hash and the observations hash.
 
@@ -121,7 +121,7 @@ Reusing MOE for the first real qualification is a proposal. It is not a selectio
 
 ## Verification and limits
 
-Run from `docs/qualification/p07`: `python3 -B -m unittest -v test_p07`. The README lists the recipe and the evidence. Seams under test: decode and convert, ingest, coverage assembly, bucketize, reference windows, availability and eligibility, schedule and feasibility, profile validation, binding comparison, qualification, and P02 projection. Fixtures were authored by `author_fixtures.py`, which does not import the module and writes hand-computed literals. Synthetic profiles use the invented chain id 999001, not a real one. A mutation script breaks 64 rules one at a time. All 64 break a test. Two internal reviews found defects in the first candidate. The repairs and their tests are in the evidence folder.
+Run from `docs/qualification/p07`: `python3 -B -m unittest -v test_p07`. The README lists the recipe and the evidence. Seams under test: decode and convert, ingest, coverage assembly, bucketize, reference windows, availability and eligibility, schedule and feasibility, profile validation, binding comparison, qualification, and P02 projection. Fixtures were authored by `author_fixtures.py`, which does not import the module and writes hand-computed literals. Synthetic profiles use the invented chain id 999001, not a real one. A mutation script breaks 85 rules one at a time. All 85 break a test. Internal reviews of the first two candidates found defects. The repairs and their tests are in the evidence folder.
 
 Not verified: any real provider behavior, the retained pages, the type checker (`mypy`, `ruff` and `pytest` are not installed and nothing was installed), Python versions other than 3.14.4, runtime cost, and anything about execution or profit.
 
