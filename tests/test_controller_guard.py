@@ -269,6 +269,12 @@ class CheckedSendTests(unittest.TestCase):
         self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
         self.assertFalse(_submitted(after, "❯ unrelated draft", "%1", self.request["text"]))
 
+    def test_active_draft_rejects_suffix_after_exact_message(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] fixture text")
+        capture = "❯ " + own + "\nforeign unsent addition"
+        self.assertFalse(_has_active_draft(capture, "%1", "fixture text"))
+
     def test_checked_send_uses_350ms_settles(self):
         with patch("scripts.controller_guard.time.sleep") as sleep:
             result = checked_send(self.request, self.bridge, self.store)

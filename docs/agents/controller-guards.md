@@ -43,7 +43,7 @@ The record stores delivery status, capture hashes, and a SHA-256 message fingerp
 
 The helper requires operator preflight confirmation because terminal captures do not identify an idle Codex or Claude prompt with enough certainty across versions. If the capture is unknown, partial, busy, or contains any draft, do not confirm it. This is not unattended sending.
 
-The tested Codex CLI 0.160.1 and Claude Code captures render their empty composers as `› Ask Codex to do anything`, `❯ Try "edit <filepath> to..."`, and `❯ Try "fix lint errors"` (Claude Code 2.1.293). The helper recognizes these observed empty placeholders, the prior Claude `❯ Try …` rendering, and known native separator/footer rows. It checks the prompt before the footer, accepts wrapped own input only when it reconstructs the exact message, and leaves collapsed or unknown input blocked. This is layout recognition, not proof that a native send or Enter succeeded; verify disposable native delivery separately.
+The tested Codex CLI 0.160.1 and Claude Code 2.1.292 captures render their empty composers as `› Ask Codex to do anything`, `❯ Try "edit <filepath> to..."`, and `❯ Try "fix lint errors"`. The helper recognizes these observed empty placeholders, the prior Claude `❯ Try …` rendering, and known native separator/footer rows. It checks the prompt before the footer, accepts wrapped own input only when it reconstructs the exact message, and leaves collapsed or unknown input blocked. This is layout recognition, not proof that a native send or Enter succeeded; verify disposable native delivery separately.
 
 ## SessionStart binding
 

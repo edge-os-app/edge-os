@@ -265,7 +265,8 @@ def _prompt_bodies(line: str, continuation: list[str]) -> set[str]:
     return {" ".join(parts).strip(), "".join(parts).strip()}
 
 
-def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int) -> bool:
+def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int,
+                *, allow_following_output: bool = False) -> bool:
     if index >= limit:
         return False
     header = _message_header(lines[index], sender)
@@ -284,7 +285,7 @@ def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int
         positions = next_positions
         if not positions:
             return False
-        if len(text) in positions:
+        if allow_following_output and len(text) in positions:
             return True
     return len(text) in positions
 
@@ -337,7 +338,10 @@ def _submitted(capture: str, before_enter: str, sender: str, text: str) -> bool:
     return bool(
         submitted[:len(history)] == history
         and len(submitted) > len(history)
-        and _message_at(submitted, len(history), sender, text, len(submitted))
+        and _message_at(
+            submitted, len(history), sender, text, len(submitted),
+            allow_following_output=True,
+        )
     )
 
 
