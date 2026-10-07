@@ -273,7 +273,7 @@ def _input_region(capture: str) -> tuple[list[str], int, list[str]] | None:
     lines = capture.splitlines()
     limit = _footer_start(lines)
     for index in range(limit - 1, -1, -1):
-        if re.match(r"^\s*(?:❯|›)(?:\s|$)", lines[index]):
+        if re.match(r"^(?:❯|›)(?:\s|$)", lines[index]):
             return lines, index, lines[index + 1:limit]
     return None
 
@@ -322,13 +322,16 @@ def _has_active_draft(capture: str, sender: str, text: str) -> bool:
     if region:
         lines, index, continuation = region
         return _message_at([lines[index], *continuation], 0, sender, text, len(continuation) + 1)
-    return bool(lines and _message_line(lines[-1], sender, text))
+    return bool(lines and not _has_partial_input(capture) and _message_line(lines[-1], sender, text))
 
 
 def _has_partial_input(capture: str) -> bool:
     region = _input_region(capture)
     if not region:
-        return False
+        return any(
+            re.match(r"^\s+(?:❯|›)(?:\s|$)", line)
+            for line in capture.splitlines()
+        )
     lines, index, continuation = region
     return not _empty_prompt(lines[index], continuation)
 

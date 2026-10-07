@@ -302,6 +302,112 @@ class CheckedSendTests(unittest.TestCase):
                 self.assertFalse(any(call[0] in {"message", "enter"} for call in self.bridge.calls))
                 self.assertIn(suffix, self.bridge.capture)
 
+    def test_indented_prompt_body_cannot_replace_native_composer_boundary(self):
+        text = "Reply only ACK-prompt-boundary. Do not run tools."
+        layouts = (
+            ("claude", "❯", "❯", "separator"),
+            ("claude", "❯", "›", "separator"),
+            ("codex", "›", "❯", "blank"),
+            ("codex", "›", "›", "blank"),
+        )
+        for host, prompt, nested_prompt, boundary in layouts:
+            with self.subTest(host=host, prompt=prompt, nested=nested_prompt):
+                header = (
+                    f"[tmux-bridge from:{host} pane:%1 at:work:0.0 — "
+                    "load the smux skill to reply] "
+                )
+                if boundary == "separator":
+                    chrome = "─" * 120 + "\n🤖 Sonnet 5.5 (medium) | 💰 $0.00 session\n⏸ manual mode on"
+                else:
+                    chrome = "\n\nGPT-6.1-Sol high · ~/repo · lane-3 · Main [default]"
+
+                draft = (
+                    prompt + " foreign unsent prefix\n  " + nested_prompt + " " + header + text
+                    + "\n" + chrome
+                )
+                self.assertFalse(_has_active_draft(draft, "%1", text))
+                self.assertTrue(_has_partial_input(draft))
+
+    def test_indented_empty_looking_prompt_body_is_not_idle(self):
+        layouts = (
+            ("claude", "❯", "❯", "separator"),
+            ("claude", "❯", "›", "separator"),
+            ("codex", "›", "❯", "blank"),
+            ("codex", "›", "›", "blank"),
+        )
+        for host, prompt, nested_prompt, boundary in layouts:
+            with self.subTest(host=host, prompt=prompt, nested=nested_prompt):
+                chrome = (
+                    "─" * 120 + "\n🤖 Sonnet 5.5 (medium) | 💰 $0.00 session\n⏸ manual mode on"
+                    if boundary == "separator"
+                    else "\n\nGPT-6.1-Sol high · ~/repo · lane-3 · Main [default]"
+                )
+                empty_looking_body = (
+                    prompt + " foreign unsent prefix\n  " + nested_prompt + " \n" + chrome
+                )
+                self.assertTrue(_has_partial_input(empty_looking_body))
+
+    def test_indented_prompt_body_blocks_fresh_send_and_typed_recovery(self):
+        text = "Reply only ACK-prompt-boundary. Do not run tools."
+        self.request["text"] = text
+        layouts = (
+            ("claude", "❯", "❯", "separator"),
+            ("claude", "❯", "›", "separator"),
+            ("codex", "›", "❯", "blank"),
+            ("codex", "›", "›", "blank"),
+        )
+        for host, prompt, nested_prompt, boundary in layouts:
+            with self.subTest(host=host, prompt=prompt, nested=nested_prompt):
+                header = (
+                    f"[tmux-bridge from:{host} pane:%1 at:work:0.0 — "
+                    "load the smux skill to reply] "
+                )
+                if boundary == "separator":
+                    chrome = "─" * 120 + "\n🤖 Sonnet 5.5 (medium) | 💰 $0.00 session\n⏸ manual mode on"
+                    idle = "❯ Try \"fix lint errors\"\n" + chrome
+                else:
+                    chrome = "\n\nGPT-6.1-Sol high · ~/repo · lane-3 · Main [default]"
+                    idle = "› Ask Codex to do anything" + chrome
+                draft = (
+                    prompt + " foreign unsent prefix\n  " + nested_prompt + " " + header + text
+                    + "\n" + chrome
+                )
+                self.request["event_id"] = f"nested-prompt-{host}-{ord(nested_prompt)}"
+
+                class ForeignAfterType(FakeBridge):
+                    def message(inner, target, message):
+                        inner.calls.append(("message", target, message))
+                        inner.capture = draft
+
+                self.bridge = ForeignAfterType(capture=idle)
+                self.request["preflight_sha256"] = hashlib.sha256(idle.encode()).hexdigest()
+                result = self.send()
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertEqual(sum(call[0] == "enter" for call in self.bridge.calls), 0)
+                self.assertIn("foreign unsent prefix", self.bridge.capture)
+
+                self.request["event_id"] += "-recovery"
+                typed = draft
+                self.bridge = FakeBridge(capture=typed)
+                self.request["preflight_sha256"] = hashlib.sha256(typed.encode()).hexdigest()
+                self.store.put_record({
+                    **self.request,
+                    "status": "TYPED",
+                    "typed_sha256": hashlib.sha256(typed.encode()).hexdigest(),
+                })
+                result = self.send()
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertFalse(any(call[0] in {"message", "enter"} for call in self.bridge.calls))
+                self.assertIn("foreign unsent prefix", self.bridge.capture)
+
+    def test_indented_only_prompt_is_not_native_identity_but_direct_message_still_is(self):
+        text = self.request["text"]
+        indented = "  ❯ [tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] " + text
+        self.assertTrue(_has_partial_input(indented))
+        self.assertFalse(_has_active_draft(indented, "%1", text))
+        direct = "[tmux-bridge from:codex pane:%1 at:work:0.0 — load the smux skill to reply] " + text
+        self.assertTrue(_has_active_draft(direct, "%1", text))
+
     def test_claude_native_split_plugin_quota_footer_and_foreign_input(self):
         text = "Reply only ACK-r14-footer. Do not run tools."
         own_header = (
