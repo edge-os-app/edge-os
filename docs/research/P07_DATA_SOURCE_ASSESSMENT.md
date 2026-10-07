@@ -80,7 +80,7 @@ Schedule arithmetic for one two-day partition, 30-minute outcome horizon, 60-sec
 | 1800 s | 96 | 95 | 60 | feasible |
 | 900 s | 192 | 190 | 60 | feasible |
 
-The counts are an upper bound on opportunities, not on independent observations. They also assume every reference window yields a trade. Probe A found only 34 of 72 research opportunities with both references. A quiet pool loses opportunities to empty reference windows, and dropping them selects busier periods. The 190 usable slots at 900 seconds would not clear a floor of 60 at that loss rate. A 30-minute period with a 30-minute horizon makes one opportunity's end reference window the next one's start window. A 15-minute period makes responses overlap by half. Dependence between them is a STAT-Q01 matter and is not settled here. The counts also ignore unqualified buckets.
+The counts are an upper bound on opportunities, not on independent observations. They also assume every reference window yields a trade. Probe A found only 34 of 72 research opportunities with both references. A quiet pool loses opportunities to empty reference windows, and dropping them selects busier periods. At that one observed rate the 900 s row would leave about 90 opportunities, which clears a floor of 60 with a margin of about 30. The 1800 s row would leave about 45 and the 3600 s row about 23, so neither clears it. One observation is not a model of the loss. A 30-minute period with a 30-minute horizon makes one opportunity's end reference window the next one's start window. A 15-minute period makes responses overlap by half. Dependence between them is a STAT-Q01 matter and is not settled here. The counts also ignore unqualified buckets.
 
 ## Claim declarations
 

@@ -11498,6 +11498,39 @@
    "note": ""
   },
   {
+   "id": "Q82-two-feasibility-rows-with-one-name",
+   "set": [
+    [
+     "observations",
+     "feasibility",
+     {
+      "status": "FEASIBLE",
+      "partitions": [
+       {
+        "name": "two-day",
+        "usable": 48,
+        "required_total": 20,
+        "shortfall": 0
+       },
+       {
+        "name": "two-day",
+        "usable": 48,
+        "required_total": 20,
+        "shortfall": 0
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": {
+    "claims": {
+     "SCHEDULE_FEASIBILITY": "UNRESOLVED"
+    },
+    "overall": "UNRESOLVED"
+   },
+   "note": ""
+  },
+  {
    "id": "Q48-population-larger-than-trades-is-fine",
    "set": [
     [

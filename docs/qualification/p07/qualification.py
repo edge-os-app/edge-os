@@ -1172,6 +1172,9 @@ def _feasibility_rows(rows: Any) -> tuple[str, str, str] | None:
     """A FEASIBLE claim must carry one consistent row per declared partition. None means the rows are usable."""
     if not (isinstance(rows, list) and rows):
         return ("MISSING_EVIDENCE", "FEASIBILITY_ROWS_INVALID", "no partition rows")
+    names = [row.get("name") for row in rows if isinstance(row, Mapping)]
+    if len(set(map(str, names))) != len(names):
+        return ("MISSING_EVIDENCE", "FEASIBILITY_ROWS_INVALID", "partition names must be unique")
     for row in rows:
         if not (isinstance(row, Mapping) and isinstance(row.get("name"), str) and row["name"]):
             return ("MISSING_EVIDENCE", "FEASIBILITY_ROWS_INVALID", "each row needs a name")
