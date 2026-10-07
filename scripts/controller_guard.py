@@ -114,6 +114,15 @@ class GuardStore:
             ).fetchone()
             return dict(row) if row else None
 
+    def get_inherited_record(self, key: tuple[str, str, str, str, str, str, str, str],
+                             inherited_session_ids: list[str]) -> dict | None:
+        for session_id in reversed(inherited_session_ids):
+            inherited_key = (key[0], session_id, f"{key[0]}:{session_id}", *key[3:])
+            record = self.get_record(inherited_key)
+            if record:
+                return record
+        return None
+
     def put_record(self, record: dict) -> None:
         key = _key_tuple(record)
         status = record.get("status")
@@ -134,15 +143,21 @@ class GuardStore:
                 ),
             )
 
-    def open_for_binding(self, host: str, session_id: str, agent_id: str, task_ids: list[str]) -> list[dict]:
+    def open_for_binding(self, host: str, session_id: str, agent_id: str, task_ids: list[str],
+                         inherited_session_ids: list[str] | None = None) -> list[dict]:
         if not task_ids:
             return []
-        placeholders = ",".join("?" for _ in task_ids)
+        session_ids = list(dict.fromkeys([session_id, *(inherited_session_ids or [])]))
+        session_agents = [(value, agent_id if value == session_id else f"{host}:{value}")
+                          for value in session_ids]
+        identity_filter = " OR ".join("(session_id=? AND agent_id=?)" for _ in session_agents)
+        task_placeholders = ",".join("?" for _ in task_ids)
         with self._db() as db:
             rows = db.execute(
                 "SELECT task_id,event_id,candidate,destination,status FROM delivery "
-                f"WHERE host=? AND session_id=? AND agent_id=? AND task_id IN ({placeholders}) AND status IN (?,?,?,?) ORDER BY updated_at",
-                (host, session_id, agent_id, *task_ids, *OPEN_DELIVERIES),
+                f"WHERE host=? AND ({identity_filter}) AND task_id IN ({task_placeholders}) "
+                "AND status IN (?,?,?,?) ORDER BY updated_at",
+                (host, *(value for pair in session_agents for value in pair), *task_ids, *OPEN_DELIVERIES),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -226,7 +241,8 @@ def _read_hash(capture: str) -> str:
     return hashlib.sha256(capture.encode("utf-8")).hexdigest()
 
 
-def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.sleep(0.18)) -> dict:
+def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.sleep(0.18),
+                 inherited_session_ids: list[str] | None = None) -> dict:
     """Send one confirmed message, or preserve a state that cannot be retried."""
     key = _key_tuple(request)
     sender, destination = key[6], key[7]
@@ -243,6 +259,10 @@ def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.s
 
     with store.target_lock(destination):
         current = store.get_record(key)
+        if current is None and inherited_session_ids:
+            current = store.get_inherited_record(key, inherited_session_ids)
+            if current:
+                return {"status": current["status"], "duplicate": True}
         if current and current["status"] in {"SUBMITTED", "UNCONFIRMED", "BLOCKED"}:
             return {"status": current["status"], "duplicate": True}
         if current and current.get("text_sha256") != digest(text):
@@ -382,8 +402,8 @@ def _state_lock(state_file: Path):
 
 def _assignment_digest(assignment: dict) -> str:
     fields = ("approved", "assignment_id", "host", "role", "task_id", "pane_id", "cwd",
-              "required_reports", "approved_work", "issued_at")
-    identity = {key: assignment[key] for key in fields}
+              "required_reports", "approved_work", "issued_at", "fork_parent_session_id")
+    identity = {key: assignment[key] for key in fields if key in assignment}
     return digest(json.dumps(identity, sort_keys=True, separators=(",", ":")))
 
 
@@ -406,6 +426,12 @@ def _valid_assignment(assignment: dict) -> bool:
         return False
     if not isinstance(assignment.get("required_reports"), list) or not isinstance(assignment.get("approved_work"), list):
         return False
+    parent_session_id = assignment.get("fork_parent_session_id")
+    if parent_session_id is not None and (
+        not isinstance(parent_session_id, str) or not parent_session_id
+        or any(char in parent_session_id for char in "\0\r\n")
+    ):
+        return False
     if any(not isinstance(path, str) or not path or any(char in path for char in "\0\r\n")
            or Path(path).is_absolute() or ".." in Path(path).parts
            for path in assignment["required_reports"]):
@@ -422,7 +448,7 @@ def _valid_assignment(assignment: dict) -> bool:
 
 def approve_assignment(state_file: Path, assignment: dict) -> dict:
     allowed = {"approved", "assignment_id", "host", "role", "task_id", "pane_id", "cwd",
-               "required_reports", "approved_work"}
+               "required_reports", "approved_work", "fork_parent_session_id"}
     if not isinstance(assignment, dict) or set(assignment) - allowed:
         raise ValueError("assignment contains unsupported fields")
     issued_at = time.time()
@@ -480,7 +506,7 @@ def _receipt_matches(state: dict, host: str, session_id: str, cwd: str, pane_id:
         or not isinstance(receipt.get("assignment_sha256"), str)
         or not HASH_RE.fullmatch(receipt["assignment_sha256"])
         or receipt.get("assignment_id") != binding.get("assignment_id")
-        or receipt.get("source") not in {"startup", "clear"}
+        or receipt.get("source") not in {"startup", "clear", "fork"}
         or not isinstance(receipt.get("registered_at"), (int, float))
     ):
         return None
@@ -512,7 +538,7 @@ def register_session_start(host: str, payload: dict, state_file: Path, bridge: T
         if any(isinstance(b, dict) and b.get("host") == host and b.get("session_id") == session_id
                for b in state["bindings"]):
             return None
-        if source not in {"startup", "clear"}:
+        if source not in {"startup", "clear", "fork"}:
             return None
         assignment = state.get("assignment")
         if not isinstance(assignment, dict) or not _valid_assignment(assignment):
@@ -523,21 +549,51 @@ def register_session_start(host: str, payload: dict, state_file: Path, bridge: T
                 or not 0 <= assignment_age < ASSIGNMENT_TTL_SECONDS):
             return None
 
+        if source == "fork":
+            parent_id = assignment.get("fork_parent_session_id")
+            parents = [b for b in state["bindings"] if isinstance(b, dict)
+                       and b.get("host") == host and b.get("session_id") == parent_id]
+            if len(parents) != 1:
+                return None
+            parent = parents[0]
+            if (not _receipt_matches(state, host, parent_id, parent.get("cwd"), parent.get("pane_id"))
+                    or assignment["assignment_id"] == parent.get("assignment_id")
+                    or assignment["cwd"] != parent.get("cwd")
+                    or any(assignment[key] != parent.get(key) for key in
+                           ("role", "task_id", "required_reports", "approved_work"))):
+                return None
+            inherited_sessions = parent.get("inherited_session_ids", [])
+            if (not isinstance(inherited_sessions, list)
+                    or any(not isinstance(value, str) or not value for value in inherited_sessions)):
+                return None
+            binding = {
+                **parent,
+                "session_id": session_id,
+                "agent_id": f"{host}:{session_id}",
+                "pane_id": pane_id,
+                "assignment_id": assignment["assignment_id"],
+                "assignment_sha256": _assignment_digest(assignment),
+                "fork_parent_session_id": parent_id,
+                "inherited_session_ids": list(dict.fromkeys([*inherited_sessions, parent_id])),
+            }
+        else:
+            if assignment.get("fork_parent_session_id") is not None:
+                return None
+            binding = {
+                "host": host,
+                "session_id": session_id,
+                "agent_id": f"{host}:{session_id}",
+                "pane_id": pane_id,
+                "cwd": cwd,
+                "role": assignment["role"],
+                "task_id": assignment["task_id"],
+                "assignment_id": assignment["assignment_id"],
+                "assignment_sha256": _assignment_digest(assignment),
+                "status": "ACTIVE" if assignment["role"] == "worker" else "AWAITING_EVENT",
+                "required_reports": assignment["required_reports"],
+                "approved_work": assignment["approved_work"],
+            }
         assignment_sha256 = _assignment_digest(assignment)
-        binding = {
-            "host": host,
-            "session_id": session_id,
-            "agent_id": f"{host}:{session_id}",
-            "pane_id": pane_id,
-            "cwd": cwd,
-            "role": assignment["role"],
-            "task_id": assignment["task_id"],
-            "assignment_id": assignment["assignment_id"],
-            "assignment_sha256": assignment_sha256,
-            "status": "ACTIVE" if assignment["role"] == "worker" else "AWAITING_EVENT",
-            "required_reports": assignment["required_reports"],
-            "approved_work": assignment["approved_work"],
-        }
         receipt = {
             "registered": True,
             "host": host,
@@ -598,7 +654,28 @@ def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None
             old = entries[index]
             if old.get("agent_id") != binding["agent_id"] or old.get("pane_id") != binding["pane_id"] or old.get("cwd") != binding["cwd"]:
                 raise ValueError("update cannot change the bound agent, pane, or cwd identity")
-            entries[index] = binding
+            for key in ("role", "task_id", "assignment_id", "assignment_sha256", "fork_parent_session_id",
+                        "inherited_session_ids"):
+                if key in binding and binding[key] != old.get(key):
+                    raise ValueError("update cannot change the bound task assignment")
+            if old.get("task_id") and any(work["id"] != old["task_id"] for work in binding["approved_work"]):
+                raise ValueError("update cannot add another task to an assigned session")
+            if old.get("task_id") and not binding["approved_work"] and binding["status"] != "COMPLETE":
+                raise ValueError("update cannot remove assigned work before completion")
+            if "review_history" in binding and "review_history" in old:
+                previous, updated = old["review_history"], binding["review_history"]
+                if (not isinstance(previous, list) or not isinstance(updated, list)
+                        or updated[:len(previous)] != previous):
+                    raise ValueError("update cannot remove or rewrite review history")
+            if "gate_verdicts" in old:
+                previous = old["gate_verdicts"]
+                updated = binding.get("gate_verdicts", previous)
+                if (not isinstance(previous, int) or isinstance(previous, bool)
+                        or not isinstance(updated, int) or isinstance(updated, bool)
+                        or updated < previous
+                        or (old.get("role") == "gate" and updated > 3)):
+                    raise ValueError("update cannot reset or exceed the gate verdict limit")
+            entries[index] = {**old, **binding}
         _atomic_json(state_file, state)
 
 
@@ -625,6 +702,25 @@ def _valid_binding(binding: dict, host: str, session_id: str) -> bool:
         or not isinstance(work.get("status"), str)
         for work in binding["approved_work"]
     ):
+        return False
+    inherited = binding.get("inherited_session_ids", [])
+    if (not isinstance(inherited, list)
+            or any(not isinstance(value, str) or not value or value == session_id
+                   or any(char in value for char in "\0\r\n") for value in inherited)
+            or len(set(inherited)) != len(inherited)):
+        return False
+    parent_id = binding.get("fork_parent_session_id")
+    if parent_id is not None and (
+        not isinstance(parent_id, str) or not parent_id or parent_id == session_id
+        or any(char in parent_id for char in "\0\r\n")
+    ):
+        return False
+    history = binding.get("review_history", [])
+    if not isinstance(history, list) or any(not isinstance(item, str) for item in history):
+        return False
+    gate_verdicts = binding.get("gate_verdicts", 0)
+    if (not isinstance(gate_verdicts, int) or isinstance(gate_verdicts, bool) or gate_verdicts < 0
+            or (binding.get("role") == "gate" and gate_verdicts > 3)):
         return False
     return True
 
@@ -681,7 +777,9 @@ def stop_decision(host: str, payload: dict, state_file: Path, store: GuardStore)
     except (OSError, ValueError, RuntimeError):
         return _binding_repair(host, session_id, store)
     bound_tasks = [work["id"] for work in binding["approved_work"]]
-    unfinished = store.open_for_binding(host, session_id, binding["agent_id"], bound_tasks)
+    unfinished = store.open_for_binding(
+        host, session_id, binding["agent_id"], bound_tasks, binding.get("inherited_session_ids", []),
+    )
     reasons.extend("unfinished-delivery:" + r["task_id"] + ":" + r["event_id"] for r in unfinished)
     for work in binding.get("approved_work", []):
         if isinstance(work, dict) and work.get("status") in {"eligible", "pending", "in_progress"}:
@@ -841,7 +939,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "send":
         try:
             request = json.load(sys.stdin)
-            result = checked_send(request, TmuxBridge(), GuardStore(root / "delivery.sqlite3"))
+            state = _state_read(_binding_path(root))
+            matches = [binding for binding in state["bindings"] if isinstance(binding, dict)
+                       and binding.get("host") == request.get("host")
+                       and binding.get("session_id") == request.get("session_id")]
+            inherited = []
+            if len(matches) == 1:
+                binding = matches[0]
+                if (_valid_binding(binding, request.get("host"), request.get("session_id"))
+                        and request.get("agent_id") == binding["agent_id"]
+                        and request.get("task_id") in [work["id"] for work in binding["approved_work"]]):
+                    inherited = binding.get("inherited_session_ids", [])
+            result = checked_send(request, TmuxBridge(), GuardStore(root / "delivery.sqlite3"),
+                                  inherited_session_ids=inherited)
             print(json.dumps(result, separators=(",", ":")))
             return 0
         except Exception as exc:

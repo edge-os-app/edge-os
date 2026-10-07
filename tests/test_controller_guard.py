@@ -132,6 +132,21 @@ class CheckedSendTests(unittest.TestCase):
         self.assertEqual(result["status"], "SUBMITTED")
         self.assertEqual(self.bridge.calls, [])
 
+    def test_fork_cannot_resend_event_recorded_by_parent_session(self):
+        record = {
+            **self.request,
+            "session_id": "parent-session",
+            "agent_id": "codex:parent-session",
+            "status": "SUBMITTED",
+        }
+        self.store.put_record(record)
+        result = checked_send(self.request, self.bridge, self.store, settle=lambda: None,
+                              inherited_session_ids=["parent-session"])
+        self.assertEqual(result, {"status": "SUBMITTED", "duplicate": True})
+        self.assertEqual(self.bridge.calls, [])
+        self.assertIsNone(self.store.get_record(("codex", "s1", "codex:s1", "T-1", "dispatch-1",
+                                                 "abc123", "%1", "%2")))
+
     def test_prepared_event_cannot_change_its_message(self):
         self.store.put_record({
             **self.request,
@@ -821,6 +836,161 @@ class SessionStartTests(unittest.TestCase):
         self.assertEqual(after["bindings"][0]["review_history"], ["A:REVISE", "B:PASS"])
         self.assertEqual(after["bindings"][0]["gate_verdicts"], 2)
         self.assertEqual(len(after["receipts"]), 1)
+
+    def test_fork_with_approved_parent_preserves_task_binding_state(self):
+        self.assign()
+        self.start()
+        state = self.state()
+        parent = state["bindings"][0]
+        parent.update({"status": "BLOCKED", "review_history": ["A:REVISE"], "gate_verdicts": 2})
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+        assignment = {
+            **self.assignment,
+            "assignment_id": "fork-1",
+            "pane_id": "%6",
+            "fork_parent_session_id": "s1",
+        }
+        self.assertEqual(self.assign(assignment, now=1002)[0], 0)
+        event = {**self.event, "session_id": "fork-s1", "source": "fork"}
+        self.assertTrue(self.start(event, pane="%6", now=1003)[1])
+        _, parent_receipt = self.receipt()
+        _, child_receipt = self.receipt(session_id="fork-s1", assignment_id="fork-1")
+        self.assertEqual(child_receipt["source"], "fork")
+        self.assertEqual(child_receipt["task_id"], parent_receipt["task_id"])
+        self.assertEqual(child_receipt["pane_id"], "%6")
+        state = self.state()
+        self.assertEqual(len(state["bindings"]), 2)
+        child = next(binding for binding in state["bindings"] if binding["session_id"] == "fork-s1")
+        self.assertEqual(child["status"], "BLOCKED")
+        self.assertEqual(child["required_reports"], ["RESULT.md"])
+        self.assertEqual(child["approved_work"], [{"id": "T-1", "status": "in_progress"}])
+        self.assertEqual(child["review_history"], ["A:REVISE"])
+        self.assertEqual(child["gate_verdicts"], 2)
+        before_duplicate = json.loads(json.dumps(state))
+        self.start(event, now=1004)
+        self.assertEqual(self.state(), before_duplicate)
+
+    def test_fork_without_matching_parent_assignment_stays_unbound(self):
+        self.assign()
+        event = {**self.event, "session_id": "fork-s1", "source": "fork"}
+        self.assertEqual(self.start(event)[1], {})
+        state = self.state()
+        self.assertEqual(state["bindings"], [])
+        self.assertEqual(state["receipts"], [])
+        self.assertNotIn("consumed_by", state["assignment"])
+
+    def test_fork_rejects_unverified_parent_without_changing_existing_binding(self):
+        self.assign()
+        self.start()
+        before = self.state()
+        assignment = {
+            **self.assignment,
+            "assignment_id": "fork-unverified-parent",
+            "fork_parent_session_id": "foreign-session",
+        }
+        self.assertEqual(self.assign(assignment, now=1002)[0], 0)
+        event = {**self.event, "session_id": "fork-s1", "source": "fork"}
+        self.assertEqual(self.start(event, now=1003)[1], {})
+        after = self.state()
+        self.assertEqual(after["bindings"], before["bindings"])
+        self.assertEqual(after["receipts"], before["receipts"])
+        self.assertNotIn("consumed_by", after["assignment"])
+
+    def test_fork_stop_inherits_open_delivery_without_rewriting_record(self):
+        self.assign()
+        self.start()
+        store = GuardStore(self.state_root / "delivery.sqlite3")
+        record = {
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1", "task_id": "T-1",
+            "event_id": "missed", "candidate": "c1", "sender": "%5", "destination": "%9",
+            "status": "UNCONFIRMED",
+        }
+        store.put_record(record)
+        assignment = {
+            **self.assignment,
+            "assignment_id": "fork-delivery",
+            "fork_parent_session_id": "s1",
+        }
+        self.assertEqual(self.assign(assignment, now=1002)[0], 0)
+        event = {**self.event, "session_id": "fork-delivery-session", "source": "fork"}
+        self.assertTrue(self.start(event, now=1003)[1])
+        state = self.state()
+        child = next(binding for binding in state["bindings"] if binding["session_id"] == "fork-delivery-session")
+        self.assertEqual(child["inherited_session_ids"], ["s1"])
+        result = stop_decision("codex", {"session_id": "fork-delivery-session", "cwd": str(self.root)},
+                               self.state_root / "bindings.json", store)
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("unfinished-delivery", result["reason"])
+        self.assertEqual(store.get_record(("codex", "s1", "codex:s1", "T-1", "missed", "c1", "%5", "%9"))["status"], "UNCONFIRMED")
+
+    def test_send_cli_uses_only_verified_binding_fork_lineage(self):
+        self.assign()
+        self.start()
+        assignment = {
+            **self.assignment,
+            "assignment_id": "fork-send",
+            "fork_parent_session_id": "s1",
+        }
+        self.assign(assignment, now=1002)
+        event = {**self.event, "session_id": "fork-send-session", "source": "fork"}
+        self.start(event, now=1003)
+        request = {
+            "host": "codex", "session_id": "fork-send-session", "agent_id": "codex:fork-send-session",
+            "task_id": "T-1", "event_id": "e1", "candidate": "c1", "sender": "%5", "destination": "%9",
+            "destination_id": "%9", "text": "message", "preflight_sha256": "a" * 64,
+        }
+        result = io.StringIO()
+        with patch("scripts.controller_guard.checked_send",
+                   side_effect=lambda request, bridge, store, inherited_session_ids=None:
+                   {"inherited_session_ids": inherited_session_ids}):
+            with patch("sys.stdin", io.StringIO(json.dumps(request))), contextlib.redirect_stdout(result):
+                self.assertEqual(main(["--state-root", str(self.state_root), "send"]), 0)
+        self.assertEqual(json.loads(result.getvalue()), {"inherited_session_ids": ["s1"]})
+
+    def test_update_preserves_receipt_and_review_state(self):
+        self.assign()
+        self.start()
+        _, original_receipt = self.receipt()
+        state = self.state()
+        state["bindings"][0].update({"status": "BLOCKED", "review_history": ["A:REVISE"], "gate_verdicts": 2})
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+        store = GuardStore(self.state_root / "delivery.sqlite3")
+        record = {
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1", "task_id": "T-1",
+            "event_id": "missed", "candidate": "c1", "sender": "%5", "destination": "%9",
+            "status": "UNCONFIRMED",
+        }
+        store.put_record(record)
+        update = {
+            "host": "codex", "session_id": "s1", "agent_id": "codex:s1", "pane_id": "%5",
+            "cwd": str(self.root.resolve()), "status": "AWAITING_EVENT", "required_reports": ["RESULT.md"],
+            "approved_work": [{"id": "T-1", "status": "in_progress"}],
+        }
+        code, _ = self.run_cli("update", payload=update)
+        self.assertEqual(code, 0)
+        binding = self.state()["bindings"][0]
+        self.assertEqual(binding["role"], "worker")
+        self.assertEqual(binding["task_id"], "T-1")
+        self.assertEqual(binding["assignment_id"], original_receipt["assignment_id"])
+        self.assertEqual(binding["assignment_sha256"], original_receipt["assignment_sha256"])
+        self.assertEqual(binding["review_history"], ["A:REVISE"])
+        self.assertEqual(binding["gate_verdicts"], 2)
+        self.assertEqual(binding["status"], "AWAITING_EVENT")
+        self.assertEqual(store.get_record(("codex", "s1", "codex:s1", "T-1", "missed", "c1", "%5", "%9"))["status"], "UNCONFIRMED")
+        self.assertEqual(self.receipt()[1], original_receipt)
+
+        tampered = {**update, "task_id": "T-2"}
+        self.assertEqual(self.run_cli("update", payload=tampered)[0], 2)
+        self.assertEqual(self.receipt()[1], original_receipt)
+        reset_history = {**update, "review_history": [], "gate_verdicts": 0}
+        self.assertEqual(self.run_cli("update", payload=reset_history)[0], 2)
+        cross_task = {**update, "approved_work": [{"id": "T-2", "status": "pending"}]}
+        self.assertEqual(self.run_cli("update", payload=cross_task)[0], 2)
+        empty_work = {**update, "approved_work": []}
+        self.assertEqual(self.run_cli("update", payload=empty_work)[0], 2)
+        binding = self.state()["bindings"][0]
+        self.assertEqual(binding["review_history"], ["A:REVISE"])
+        self.assertEqual(binding["gate_verdicts"], 2)
 
     def test_clear_with_new_session_registers_new_task_without_old_obligations(self):
         self.assign()
