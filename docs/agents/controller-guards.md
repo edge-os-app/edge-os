@@ -93,7 +93,7 @@ Launch each managed native Codex session with `codex --no-daemon` from its assig
 
 Do not hardcode `TMUX_PANE` or treat the assignment's pane ID as runtime proof. The hook must read the actual pane from `tmux-bridge id` and the same `CONTROLLER_GUARD_STATE_ROOT` used by the controller. A missing or mismatched receipt blocks dispatch.
 
-A disposable, normally trusted Codex CLI 0.160.1 fixture produced and verified a matching `startup` receipt with `--no-daemon`. The hook saw the actual `%179` pane and state root, and the gate entered `AWAITING_EVENT`. A shared-daemon control lacked both environment values and produced no receipt. The idle `--no-daemon` session produced no observed event during one 30-second wait. The event appeared after its first inert prompt. Exact unwrapped-config, native `/clear`, and Stop qualification remain pending. This test does not qualify other panes or prove that all running lanes have protection.
+A disposable, normally trusted Codex CLI 0.160.1 fixture produced and verified a matching `startup` receipt with the exact, unwrapped project hook config when launched with `--no-daemon`. The hook saw the actual pane and state root, and the gate entered `AWAITING_EVENT`. A shared-daemon control lacked both environment values and produced no receipt. The idle `--no-daemon` session produced no observed event during one 30-second wait. The event appeared after its first inert prompt. Native `/clear` and Stop qualification remain pending. This test does not qualify other panes or prove that all running lanes have protection.
 
 ## Native lane checklist
 

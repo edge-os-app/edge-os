@@ -41,7 +41,7 @@ After the reset, confirm each client's actual host, model, effort, and fresh con
 
 ## Controller-guard coverage
 
-The checked-send helper and Stop guard passed native checks on Codex CLI 0.160.1 and Claude Code 2.1.292 under normal project trust. A disposable, normally trusted Codex CLI 0.160.1 session also produced and passed verification for a matching `startup` receipt when launched with `--no-daemon`. The event appeared after the first inert prompt, not during one 30-second idle wait. This does not qualify native `/clear`, Stop, the exact unwrapped hook config, or other running panes. The branch remains under review, and an unbound session remains unaffected. Do not claim all lanes have protection.
+The checked-send helper and Stop guard passed native checks on Codex CLI 0.160.1 and Claude Code 2.1.292 under normal project trust. A disposable, normally trusted Codex CLI 0.160.1 session also produced and passed verification for a matching `startup` receipt with the exact, unwrapped project hook config when launched with `--no-daemon`. The event appeared after the first inert prompt, not during one 30-second idle wait. This does not qualify native `/clear`, Stop, or other running panes. The branch remains under review, and an unbound session remains unaffected. Do not claim all lanes have protection.
 
 These hooks do not wake a stopped client, press Enter, or provide unattended batch authority. Client crashes, host sleep, and exhausted subscriptions remain operational limits. Continue to use checked delivery and the assigned event-driven lane procedure.
 
