@@ -94,7 +94,7 @@ Smallest arrangement: the existing application persists an idempotent research j
 | Claim | Current verdict | What remains |
 |---|---|---|
 | Pinned local source and interface | Source inspected | Install-free Python-version matrix and actual embedded invocation are unrun. |
-| P02 result shape | Offline fixture validates the Outcome envelope | Actual provider wire and existing application adapter are unrun. |
+| P02 result shape | Offline fixture validates `Outcome` record content with the accepted P02 checker | Persisted application envelope, actual provider wire and application adapter are unrun. |
 | Memory owner/agent scoping | Offline fixture only | Authenticated storage, same-owner cross-agent, cross-user, source-link and restart checks are unrun. |
 | Filesystem/context isolation | Offline path fixture only | OS/container mounts, cache/temp/config isolation and escape attempts are unrun. |
 | Cancellation and cleanup | Fake coroutine and temp-directory lifecycle only | Hermes process-tree termination, upstream cancellation and restart reconciliation are unrun. |

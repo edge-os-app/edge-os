@@ -1,6 +1,6 @@
 # P04 offline qualification fixtures
 
-These standard-library checks exercise independent local fixtures for owner/agent scoping, memory version use, duplicate jobs, task-directory path checks, cancellation/timeout cleanup, strict P02 `Outcome` parsing, redacted errors, usage reservations and fake provider/network-denial behavior. They do not import or run Hermes and make no network calls.
+These standard-library checks exercise independent local fixtures for owner/agent scoping, memory version use, duplicate jobs, task-directory path checks, cancellation/timeout cleanup, P02 `Outcome` record validation, redacted errors, usage reservations and fake provider/network-denial behavior. They load the accepted P02 checker from `docs/contracts/p02/check_contract.py`; they do not import or run Hermes and make no network calls.
 
 Run from the repository root:
 
@@ -21,6 +21,6 @@ The fake provider returns a fixed response, and the denied-network fixture rejec
 
 `MemoryStore`, `JobRegistry` and `UsageLedger` are process-local fixtures. Their passing cases do not prove authentication, durable storage, atomic idempotency, concurrent reservations, cross-process isolation or server authorization. The fake provider does not open a socket; no test here proves network denial. A fixture error string is discarded, but production redaction and log storage are unqualified.
 
-The P02 output test preserves `NEEDS_CLARIFICATION`, `UNSUPPORTED`, `UNRESOLVED`, `INVALID_INPUT`, `COMPILED` and `CONFLICTED`, rejects malformed/truncated JSON, unknown outcomes, missing intake IDs and extra fields. The production adapter must validate against the exact pinned machine contract, not trust this small independent checker.
+The P02 output test uses accepted checker fixtures for `NEEDS_CLARIFICATION`, `UNSUPPORTED`, `UNRESOLVED`, `INVALID_INPUT`, `COMPILED`, `CONFLICTED` and `PUBLISHED`; it rejects malformed/truncated JSON, unknown outcomes, invalid stable codes and pointers, duplicate keys, missing intake IDs and extra fields. It validates the `Outcome` record content, not a persisted application record envelope. The production adapter must validate the exact pinned machine contract and its stored record envelope.
 
 No packages, provider credentials, sample code, real inference, host configuration or wallet behavior are used. `python3 -B` avoids writing bytecode. Temporary data is removed by `TemporaryDirectory` after success, failure, timeout or cancellation.

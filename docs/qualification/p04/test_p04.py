@@ -1,5 +1,7 @@
 import asyncio
+import copy
 import json
+import runpy
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,23 +19,34 @@ from qualification import (
     validate_outcome,
 )
 
+P02 = runpy.run_path(str(Path(__file__).resolve().parents[2] / "contracts/p02/check_contract.py"))
+
 
 def outcome(status: str, *, intake_record_id: str | None = None) -> str:
-    return json.dumps(
-        {
-            "operation_id": "op-1",
-            "intake_record_id": intake_record_id,
-            "stage": "INTERPRETATION",
-            "outcome": status,
-            "code": status.lower(),
-            "findings": (
-                [{"code": "fixture", "path": "/", "detail": "fixture finding"}]
-                if status in {"NEEDS_CLARIFICATION", "UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT", "CONFLICTED"}
-                else []
-            ),
-            "retry": "NOT_RETRYABLE",
-        }
+    examples = P02["FIXTURES"]["record_examples"]
+    variants = P02["FIXTURES"]["record_variants"]
+    sample = next(
+        (item["value"] for item in variants
+         if item.get("type") == "Outcome" and item["value"]["outcome"] == status),
+        None,
     )
+    if sample is None and status == "COMPILED":
+        sample = examples["Outcome"]
+    if sample is None:
+        code = {"PUBLISHED": "published", "CONFLICTED": "idempotency_key_reused"}.get(status, status.lower())
+        findings = (
+            [{"code": "idempotency_key_reused", "path": "/operation_id", "detail": "Request key was reused."}]
+            if status == "CONFLICTED" else []
+        )
+        sample = {
+            "operation_id": "op-1", "stage": "PUBLICATION", "outcome": status,
+            "code": code, "findings": findings, "retry": "RECONCILE",
+            "intake_record_id": None,
+        }
+    result = copy.deepcopy(sample)
+    if intake_record_id is not None:
+        result["intake_record_id"] = intake_record_id
+    return json.dumps(result)
 
 
 def dummy_provider(_: str) -> str:
@@ -85,6 +98,18 @@ class MemoryScopeTests(unittest.TestCase):
         store.clear("owner-a", "agent-a")
         self.assertIsNone(store.task_snapshot("owner-a", "agent-a"))
         self.assertEqual([(item.version, item.entries) for item in store.history("owner-a", "agent-a")], [(3, ())])
+
+    def test_clear_removes_pending_suggestions_only_for_the_cleared_agent(self) -> None:
+        store = MemoryStore()
+        stale = store.suggest("owner-a", "agent-a", "old lesson", ["https://private.example/old"])
+        other = store.suggest("owner-a", "agent-b", "keep lesson", ["https://source.test/keep"])
+
+        store.clear("owner-a", "agent-a")
+
+        with self.assertRaises(PermissionError):
+            store.adopt_suggestion("owner-a", "agent-a", stale)
+        store.adopt_suggestion("owner-a", "agent-b", other)
+        self.assertEqual(store.retrieve("owner-a", "agent-b").entries[0].text, "keep lesson")
 
 
 class JobAndWorkspaceTests(unittest.TestCase):
@@ -181,6 +206,20 @@ class UsageAndOutputTests(unittest.TestCase):
         self.assertEqual(settled.status, "SETTLED")
         self.assertEqual(ledger.reserved_usd, 0)
 
+    def test_rejected_reconciliation_keeps_unknown_usage_recoverable(self) -> None:
+        for bad_cost in (-0.1, "NaN", "not-money"):
+            with self.subTest(bad_cost=bad_cost):
+                ledger = UsageLedger()
+                ledger.reserve("job-1", 1.00)
+                unknown = ledger.settle("job-1", actual_usd=None, actual_tokens=None)
+                with self.assertRaises(ValueError):
+                    ledger.reconcile("job-1", actual_usd=bad_cost, actual_tokens=12)
+                self.assertEqual(unknown.status, "UNKNOWN")
+                self.assertEqual(ledger.reserved_usd, 1.00)
+                settled = ledger.reconcile("job-1", actual_usd=0.24, actual_tokens=12)
+                self.assertEqual(settled.status, "SETTLED")
+                self.assertEqual(ledger.reserved_usd, 0)
+
     def test_outcome_contract_preserves_each_p02_status(self) -> None:
         for status, intake_id in (
             ("NEEDS_CLARIFICATION", "intake-1"),
@@ -189,20 +228,41 @@ class UsageAndOutputTests(unittest.TestCase):
             ("INVALID_INPUT", None),
             ("COMPILED", None),
             ("CONFLICTED", None),
+            ("PUBLISHED", None),
         ):
-            self.assertEqual(validate_outcome(outcome(status, intake_record_id=intake_id))["outcome"], status)
+            payload = json.loads(outcome(status, intake_record_id=intake_id))
+            if status == "CONFLICTED":
+                payload["stage"] = "COMPILATION"
+                payload["retry"] = "NOT_RETRYABLE"
+            self.assertEqual(validate_outcome(json.dumps(payload))["outcome"], status)
+            P02["validate_record"]("Outcome", payload)
 
     def test_malformed_truncated_and_untyped_outputs_are_rejected(self) -> None:
+        missing_intake = json.loads(outcome("NEEDS_CLARIFICATION"))
+        missing_intake["intake_record_id"] = None
         for payload in (
             "{\"outcome\":",
             "not json",
             outcome("MADE_UP"),
-            outcome("NEEDS_CLARIFICATION"),
+            json.dumps(missing_intake),
             json.dumps({**json.loads(outcome("COMPILED")), "extra": True}),
             json.dumps({**json.loads(outcome("COMPILED")), "outcome": []}),
         ):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 validate_outcome(payload)
+
+    def test_outcome_validation_uses_p02_stable_codes_pointers_and_duplicate_key_rules(self) -> None:
+        invalid_code = json.loads(outcome("INVALID_INPUT"))
+        invalid_code["code"] = "invented-code"
+        invalid_path = json.loads(outcome("INVALID_INPUT"))
+        invalid_path["findings"][0]["path"] = "not-pointer"
+        duplicate_key = outcome("COMPILED")[:-1] + ',"outcome":"COMPILED"}'
+
+        for payload in (json.dumps(invalid_code), json.dumps(invalid_path), duplicate_key):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                validate_outcome(payload)
+            with self.subTest(p02_payload=payload), self.assertRaises(ValueError):
+                P02["validate_record"]("Outcome", P02["strict_loads"](payload))
 
     def test_provider_errors_are_recorded_without_untrusted_detail(self) -> None:
         safe = safe_error("PROVIDER_FAILURE", "Authorization failed: sk-test-secret")

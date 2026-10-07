@@ -4,34 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import runpy
 import tempfile
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Awaitable, Callable, TypeVar
 
 T = TypeVar("T")
 
-_OUTCOMES = {
-    "NEEDS_CLARIFICATION",
-    "UNSUPPORTED",
-    "UNRESOLVED",
-    "INVALID_INPUT",
-    "COMPILED",
-    "CONFLICTED",
-    "PUBLISHED",
-}
-_STAGES = {"INTERPRETATION", "VALIDATION", "COMPILATION", "PUBLICATION"}
-_RETRIES = {"SAFE_SAME_KEY", "RECONCILE", "NOT_RETRYABLE"}
-_OUTCOME_FIELDS = {
-    "operation_id", "intake_record_id", "stage", "outcome", "code", "findings", "retry",
-}
-_OPTIONAL_OUTCOME_FIELDS = {"artifact_id", "revision_id"}
-_FINDING_OUTCOMES = {
-    "NEEDS_CLARIFICATION", "UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT", "CONFLICTED",
-}
-_INTAKE_OUTCOMES = {"NEEDS_CLARIFICATION", "UNSUPPORTED", "UNRESOLVED"}
+_P02 = runpy.run_path(str(Path(__file__).resolve().parents[3] / "docs/contracts/p02/check_contract.py"))
 
 
 class IdempotencyConflict(ValueError):
@@ -179,6 +162,9 @@ class MemoryStore:
         self._entries[key] = ()
         self._history[key] = (MemorySnapshot(version, ()),)
         self._enabled[key] = False
+        for suggestion_id, (suggestion_owner, suggestion_agent, _) in tuple(self._suggestions.items()):
+            if (suggestion_owner, suggestion_agent) == key:
+                self._suggestions.pop(suggestion_id)
 
 
 class JobRegistry:
@@ -266,11 +252,9 @@ class UsageLedger:
         if actual_usd is None or actual_tokens is None:
             record.status = "UNKNOWN"
             return record
-        actual = Decimal(str(actual_usd))
-        if not actual.is_finite() or actual < 0 or actual_tokens < 0:
-            raise ValueError("reported usage must be nonnegative and finite")
+        actual, tokens = _validated_usage(actual_usd, actual_tokens)
         record.actual_usd = actual
-        record.actual_tokens = actual_tokens
+        record.actual_tokens = tokens
         record.status = "SETTLED"
         return record
 
@@ -280,46 +264,34 @@ class UsageLedger:
         record = self._records[job_id]
         if record.status != "UNKNOWN":
             raise ValueError("only unknown usage can be reconciled")
-        record.status = "RESERVED"
-        return self.settle(job_id, actual_usd=actual_usd, actual_tokens=actual_tokens)
+        actual, tokens = _validated_usage(actual_usd, actual_tokens)
+        record.actual_usd = actual
+        record.actual_tokens = tokens
+        record.status = "SETTLED"
+        return record
+
+
+def _validated_usage(actual_usd: Decimal | str | float, actual_tokens: int) -> tuple[Decimal, int]:
+    try:
+        actual = Decimal(str(actual_usd))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("reported usage must be a valid finite amount") from exc
+    if (
+        not actual.is_finite() or actual < 0
+        or isinstance(actual_tokens, bool) or not isinstance(actual_tokens, int)
+        or actual_tokens < 0
+    ):
+        raise ValueError("reported usage must be nonnegative and finite")
+    return actual, actual_tokens
 
 
 def validate_outcome(payload: str) -> dict[str, object]:
-    """Validate an Outcome fixture against the P02 envelope's required shape."""
+    """Validate Outcome record content with the accepted P02 checker."""
     try:
-        value = json.loads(payload)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise ValueError("provider output is not complete JSON") from exc
-    if not isinstance(value, dict):
-        raise ValueError("provider output must be a JSON object")
-    if not _OUTCOME_FIELDS <= value.keys() or value.keys() - _OUTCOME_FIELDS - _OPTIONAL_OUTCOME_FIELDS:
-        raise ValueError("provider output does not match the P02 Outcome fields")
-    for field in ("operation_id", "code"):
-        if not isinstance(value[field], str) or not value[field].strip():
-            raise ValueError(f"{field} must be a nonempty string")
-    if not all(isinstance(value[field], str) for field in ("stage", "outcome", "retry")):
-        raise ValueError("provider output discriminators must be strings")
-    if value["stage"] not in _STAGES or value["outcome"] not in _OUTCOMES or value["retry"] not in _RETRIES:
-        raise ValueError("provider output has an unsupported P02 discriminator")
-    for field in _OPTIONAL_OUTCOME_FIELDS:
-        if field in value and value[field] is not None and not isinstance(value[field], str):
-            raise ValueError(f"{field} must be a string or null")
-    intake_id = value["intake_record_id"]
-    if value["outcome"] in _INTAKE_OUTCOMES:
-        if not isinstance(intake_id, str) or not intake_id.strip():
-            raise ValueError("this outcome requires an intake record")
-    elif intake_id is not None and not isinstance(intake_id, str):
-        raise ValueError("intake_record_id must be a string or null")
-    findings = value["findings"]
-    if not isinstance(findings, list):
-        raise ValueError("findings must be an array")
-    if value["outcome"] in _FINDING_OUTCOMES and not findings:
-        raise ValueError("this outcome requires a finding")
-    for finding in findings:
-        if not isinstance(finding, dict) or set(finding) != {"code", "path", "detail"}:
-            raise ValueError("finding must match the P02 Finding shape")
-        if not all(isinstance(finding[field], str) and finding[field].strip() for field in finding):
-            raise ValueError("finding fields must be nonempty strings")
+        value = _P02["strict_loads"](payload)
+        _P02["validate_record"]("Outcome", value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("provider output does not match the P02 Outcome record") from exc
     return value
 
 
