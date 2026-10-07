@@ -224,7 +224,8 @@ def _message_line(line: str, sender: str, text: str) -> bool:
 def _is_native_footer(line: str) -> bool:
     line = line.strip()
     return bool(
-        re.match(r"^(?:GPT-[^·]+|Claude [^·]+) · ", line)
+        line and set(line) == {"─"}
+        or re.match(r"^(?:GPT-[^·]+|Claude [^·]+) · ", line)
         or re.match(r"^🤖 [^|]+ \| 💰 ", line)
         or re.match(r"^\[OMC#[^]]+\] -> .+ \| session:\S+$", line)
         or re.match(r"^← for agents · \? for shortcuts(?:\s+⚠ .+ · f\d+ to view)?$", line)
@@ -252,9 +253,10 @@ def _input_region(capture: str) -> tuple[list[str], int, list[str]] | None:
     return None
 
 
-def _prompt_body(line: str, continuation: list[str]) -> str:
+def _prompt_bodies(line: str, continuation: list[str]) -> set[str]:
     first = re.sub(r"^\s*(?:❯|›)\s*", "", line).rstrip()
-    return " ".join([first, *(part.strip() for part in continuation)]).strip()
+    parts = [first, *(part.strip() for part in continuation)]
+    return {" ".join(parts).strip(), "".join(parts).strip()}
 
 
 def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int) -> bool:
@@ -267,10 +269,9 @@ def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int
 
 
 def _empty_prompt(line: str, continuation: list[str]) -> bool:
-    body = _prompt_body(line, continuation)
-    return not body or body in {
-        "Ask Codex to do anything", "Try …", 'Try "edit <filepath> to..."',
-    }
+    return bool(_prompt_bodies(line, continuation) & {
+        "", "Ask Codex to do anything", "Try …", 'Try "edit <filepath> to..."',
+    })
 
 
 def _has_active_draft(capture: str, sender: str, text: str) -> bool:
@@ -278,8 +279,8 @@ def _has_active_draft(capture: str, sender: str, text: str) -> bool:
     region = _input_region(capture)
     if region:
         lines, index, continuation = region
-        body = _prompt_body(lines[index], continuation)
-        return _message_line(body, sender, text)
+        return any(_message_line(body, sender, text)
+                   for body in _prompt_bodies(lines[index], continuation))
     return bool(lines and _message_line(lines[-1], sender, text))
 
 
@@ -303,7 +304,8 @@ def _submitted(capture: str, before_enter: str, sender: str, text: str) -> bool:
         return False
     if before_region:
         before_lines, before_prompt, before_continuation = before_region
-        if not _message_line(_prompt_body(before_lines[before_prompt], before_continuation), sender, text):
+        if not any(_message_line(body, sender, text)
+                   for body in _prompt_bodies(before_lines[before_prompt], before_continuation)):
             return False
     else:
         before_prompt = len(before_lines) - 1

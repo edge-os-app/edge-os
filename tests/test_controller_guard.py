@@ -131,12 +131,14 @@ class CheckedSendTests(unittest.TestCase):
     def test_native_empty_placeholder_and_footer_are_idle(self):
         capture = (
             "› Ask Codex to do anything\n"
+            "────────────────────────────────────────────────────────────\n"
             "GPT-6.1-Sol high · ~/repo · lane-3 · Main [default]\n"
             "← for agents · ? for shortcuts                       ⚠ 1 warning · f2 to view"
         )
         self.assertFalse(_has_partial_input(capture))
         self.assertFalse(_has_partial_input(
             '❯ Try "edit <filepath> to..."\n'
+            "────────────────────────────────────────────────────────────\n"
             "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
             "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
             "⏸ manual mode on · ← for agents"
@@ -159,11 +161,23 @@ class CheckedSendTests(unittest.TestCase):
                "load the smux skill to reply] " + self.request["text"])
         capture = (
             "❯ " + own + "\n"
+            "────────────────────────────────────────────────────────────\n"
             "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
             "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
             "⏸ manual mode on · ← for agents"
         )
         self.assertTrue(_has_active_draft(capture, "%1", self.request["text"]))
+
+    def test_native_foreign_draft_with_footer_stays_partial(self):
+        capture = (
+            "❯ [tmux-bridge from:other pane:%9 at:work:0.1 — load the smux skill to reply] foreign text\n"
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        self.assertTrue(_has_partial_input(capture))
+        self.assertFalse(_has_active_draft(capture, "%1", self.request["text"]))
 
     def test_native_wrapped_own_draft_is_found_but_collapsed_input_is_not_adopted(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
@@ -180,6 +194,13 @@ class CheckedSendTests(unittest.TestCase):
         self.assertFalse(_has_active_draft(collapsed, "%1", self.request["text"]))
         self.assertTrue(_has_partial_input(collapsed))
 
+    def test_native_word_wrapped_own_draft_is_reconstructed_without_added_space(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        offset = own.index("candidate") + len("candi")
+        wrapped = "› " + own[:offset] + "\n" + own[offset:] + "\n+ Show details"
+        self.assertTrue(_has_active_draft(wrapped, "%1", self.request["text"]))
+
     def test_native_submitted_message_and_empty_placeholder_with_footer_confirm(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
                "load the smux skill to reply] " + self.request["text"])
@@ -188,10 +209,14 @@ class CheckedSendTests(unittest.TestCase):
             "← for agents · ? for shortcuts\n"
             "+ Show details"
         )
-        before = "prior history\n› " + own + "\n" + footer
+        before = (
+            "prior history\n› " + own + "\n"
+            "────────────────────────────────────────────────────────────\n" + footer
+        )
         after = (
             "prior history\n" + own + "\n"
-            "› Ask Codex to do anything\n" + footer
+            "› Ask Codex to do anything\n"
+            "────────────────────────────────────────────────────────────\n" + footer
         )
         self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
 
