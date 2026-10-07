@@ -333,6 +333,57 @@ class CheckedSendTests(unittest.TestCase):
         self.assertTrue(_submitted(after, before, "%1", "Reply only ACK-current-event. Do not run tools."))
         self.assertFalse(_submitted(old_history_only, before, "%1", "Reply only ACK-current-event. Do not run tools."))
 
+    def test_claude_submission_ignores_only_adjacent_update_chrome(self):
+        text = "Reply only ACK-current-event. Do not run tools."
+        header = "[tmux-bridge from:claude pane:%9 at:work:0.1 — load the smux skill to reply] "
+        update_text = "✔ Update installed · Restart to update"
+        notice = " " * (120 - len(update_text)) + update_text
+        separator = "─" * 120
+        history = [
+            "Claude Code v2.1.292",
+            "Sonnet 5.5 with medium effort · Claude Pro",
+            "/repo · /rc",
+            update_text,
+            "❯ /clear",
+            "❯ Reply exactly READY; make no tool calls.",
+            "⏺ READY",
+            "✻ Worked for 2s · done",
+            "❯ Reply exactly READY; make no tool calls.",
+            "⏺ READY",
+            "✻ Cooked for 2s · done",
+        ]
+        footer = (
+            separator + "\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.19 session / $0.00 today / "
+            "No active block | 🧠 49,514 (5%)\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update\n"
+            "5h:0%* wk:19%*(~6d10h) extra:0%*($0.00/$30.00) | session:191m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        own = "❯ " + header + "\n  " + text
+        before = "\n".join(history + ["", notice, separator, own, footer])
+        after = "\n".join(history + [
+            header,
+            "  " + text,
+            "  ⎿ 1 skill available",
+            "✶ Working (0s)",
+            "  ⎿ Tip: continue",
+            notice,
+            separator,
+            "❯ ",
+            footer,
+        ])
+        old_identical_history_only = "\n".join(
+            history + [notice, separator, "❯ ", footer]
+        )
+        changed_update = before.replace(notice, notice + " (user text)", 1)
+        changed_separator = before.replace(separator + "\n" + own,
+                                           "─" * 119 + "x\n" + own, 1)
+        self.assertTrue(_submitted(after, before, "%9", text))
+        self.assertFalse(_submitted(old_identical_history_only, before, "%9", text))
+        self.assertFalse(_submitted(after, changed_update, "%9", text))
+        self.assertFalse(_submitted(after, changed_separator, "%9", text))
+
     def test_active_draft_rejects_suffix_after_exact_message(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
                "load the smux skill to reply] fixture text")

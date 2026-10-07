@@ -343,6 +343,14 @@ def _submitted(capture: str, before_enter: str, sender: str, text: str) -> bool:
         if not _message_at(before_lines, before_prompt, sender, text, len(before_lines)):
             return False
     history = before_lines[:before_prompt]
+    if (
+        re.match(r"^\s*❯(?:\s|$)", before_lines[before_prompt])
+        and len(history) >= 2
+        and len(history[-1].strip()) >= 20
+        and set(history[-1].strip()) == {"─"}
+        and re.fullmatch(r" +✔ Update installed · Restart to update", history[-2])
+    ):
+        history = history[:-2]
     while history and not history[-1].strip():
         history.pop()
     submitted = after_lines[:after_prompt]
