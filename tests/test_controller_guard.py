@@ -115,7 +115,7 @@ class CheckedSendTests(unittest.TestCase):
         settles = []
         result = checked_send(self.request, self.bridge, self.store, settle=lambda: settles.append(True))
         self.assertEqual(result["status"], "SUBMITTED")
-        self.assertEqual(len(settles), 1)
+        self.assertEqual(len(settles), 2)
         names = [call[0] for call in self.bridge.calls]
         self.assertEqual(names.count("message"), 1)
         self.assertEqual(names.count("enter"), 1)
@@ -124,6 +124,32 @@ class CheckedSendTests(unittest.TestCase):
         self.assertLess(names.index("message"), names.index("enter"))
         self.assertLess(names.index("enter"), len(names) - 1 - names[::-1].index("read"))
         self.assertNotIn(self.request["text"].encode(), self.store.path.read_bytes())
+
+    def test_delayed_display_gets_one_safe_recovery_read_before_enter(self):
+        class DelayedDisplay(FakeBridge):
+            def message(inner, target, text):
+                super(DelayedDisplay, inner).message(target, text)
+                inner.stale_once = True
+
+            def read(inner, target):
+                inner.calls.append(("read", target))
+                inner._raise("read")
+                if getattr(inner, "stale_once", False):
+                    inner.stale_once = False
+                    return "❯ "
+                return inner.capture
+
+        self.bridge = DelayedDisplay()
+        settles = []
+        result = checked_send(self.request, self.bridge, self.store,
+                              settle=lambda: settles.append(True))
+        self.assertEqual(result["status"], "SUBMITTED")
+        names = [call[0] for call in self.bridge.calls]
+        self.assertEqual(names.count("message"), 1)
+        self.assertEqual(names.count("enter"), 1)
+        self.assertEqual(names.count("read"), 4)
+        self.assertEqual(len(settles), 3)
+        self.assertLess(names.index("message"), names.index("enter"))
 
     def test_duplicate_event_never_sends_twice(self):
         self.send()
@@ -1143,7 +1169,42 @@ class LiveBridgeTests(unittest.TestCase):
                     "destination_name": target, "text": "fixture transport check",
                     "preflight_sha256": check["capture_sha256"], "confirm_idle": True, "confirm_no_draft": True,
                 }
-                self.assertEqual(checked_send(first, bridge, store)["status"], "SUBMITTED")
+                class StaleFirstRead:
+                    def __init__(self):
+                        self.reads = self.messages = self.enters = 0
+                        self.stale_pending = False
+                        self.stale_used = False
+                        self.last_capture = None
+
+                    def id(inner):
+                        return bridge.id()
+
+                    def resolve(inner, destination):
+                        return bridge.resolve(destination)
+
+                    def read(inner, pane):
+                        inner.reads += 1
+                        capture = bridge.read(pane)
+                        if inner.stale_pending and not inner.stale_used:
+                            inner.stale_used = True
+                            return inner.last_capture
+                        if not inner.stale_pending:
+                            inner.last_capture = capture
+                        return capture
+
+                    def message(inner, pane, text):
+                        inner.messages += 1
+                        bridge.message(pane, text)
+                        inner.stale_pending = True
+
+                    def enter(inner, pane):
+                        inner.enters += 1
+                        bridge.enter(pane)
+
+                delayed = StaleFirstRead()
+                self.assertEqual(checked_send(first, delayed, store)["status"], "SUBMITTED")
+                self.assertTrue(delayed.stale_used)
+                self.assertEqual((delayed.reads, delayed.messages, delayed.enters), (4, 1, 1))
                 self.assertEqual(checked_send(first, bridge, store)["status"], "SUBMITTED")
                 capture_after_duplicate = bridge.read(target)
                 self.assertEqual(capture_after_duplicate.count("RECEIVED "), 1)

@@ -31,15 +31,19 @@ Only continue when the capture shows the expected idle Codex or Claude input wit
 }
 ~~~
 
-Pass that object on standard input to python3 scripts/controller_guard.py send. The helper verifies the active sender pane and destination identity. It types one normal Smux message, checks the exact active input, sends one Enter, and reads once after Enter. A fixed 0.18-second settle delay is the only wait.
+Pass that object on standard input to python3 scripts/controller_guard.py send. The helper verifies the active sender pane and destination identity. It types one normal Smux message and waits 0.18 seconds before reading. If that capture is empty or stale, it waits another 0.18 seconds and makes one recovery read. It sends one Enter only after either read confirms the exact active input, then waits 0.18 seconds and reads once after Enter. It never polls or repeats Enter.
 
 Submission requires an empty prompt and the exact current message in the position occupied by the saved pre-Enter draft. The earlier non-empty history lines must still match. An older identical message cannot confirm this attempt. Missing or changed current input, truncated history, or a layout change leaves UNCONFIRMED. This conservative check can leave a successful delivery unconfirmed; it never permits another Enter for that event.
+
+If neither pre-Enter capture verifies the exact message, the event is BLOCKED and the helper leaves the pane input unchanged. A stale capture alone does not prove the type failed. The one recovery read is the limit; an unresolved or foreign draft stays untouched for operator inspection.
 
 The durable record key is (host, session_id, agent_id, task_id, event_id, candidate, sender pane, destination pane). These fields identify the originating host session and task. Stop checks records with the exact registered host/session/agent and every task ID in that binding's approved-work list. A completed task can still owe a return delivery. Work eligibility is checked separately. Reusing a pane for a new session does not transfer old delivery obligations. Legacy records without a session binding are retained as unbound history and are not assigned to a new session.
 
 The record stores delivery status, capture hashes, and a SHA-256 message fingerprint. It never stores the message body or captured pane text. A repeated event cannot send again. A fresh PREPARED event cannot claim a matching draft. Recovery is allowed only when the durable record was already TYPED for that same event and the exact recorded capture, sender, and message are still present. The helper writes UNCONFIRMED before it attempts Enter. If Enter may have been sent, do not retry that event.
 
 The helper requires operator preflight confirmation because terminal captures do not identify an idle Codex or Claude prompt with enough certainty across versions. If the capture is unknown, partial, busy, or contains any draft, do not confirm it. This is not unattended sending.
+
+The tested Codex CLI 0.160.1 and Claude Code 2.1.292 captures render their empty composers as `› Ask Codex to do anything` and `❯ Try …`. The helper currently treats either non-empty prompt line as possible input and blocks before typing. Do not add a placeholder exception unless the installed client exposes a reliable way to distinguish placeholder text from a user draft.
 
 ## SessionStart binding
 
@@ -107,6 +111,53 @@ The next inert native prompt must produce one continuation. Set the same binding
 - Resume or compact the second session. The receipt, status, reports, review history, and gate count must remain unchanged.
 - Before a native fork, prepare an assignment for the same role, task, reports, and approved work as the verified parent receipt, with a fresh assignment ID and `fork_parent_session_id` set to that parent session ID. The fork must receive a new receipt while preserving the current status, review history, gate count, and pending delivery checks. Without the matching assignment, it stays unbound.
 - Repeat on Codex and Claude. Both use `session-start` and the same SessionStart result shape. Codex emits `additionalContext`; Claude must show the project's SessionStart and Stop commands in `/hooks`. Do not use trust-bypass flags. An unavailable client, trust prompt, or native input is a gap, not a pass.
+
+## Delivery timing and Stop recovery checks
+
+Use disposable native Codex and Claude panes in the already trusted fixture project. Keep their receipt, event, and state identities separate. Use only unique inert markers. Do not use a model switch, quota bypass, or external send path.
+
+- Run the guard unit test `python3 -m unittest tests.test_controller_guard.CheckedSendTests.test_delayed_display_gets_one_safe_recovery_read_before_enter`. Its deterministic bridge returns the old empty prompt once after a successful type, then the exact draft. Expect one message, one extra read, one Enter, and `SUBMITTED`. The ordinary success test remains the immediate-display control.
+- On each native client pane, preflight the exact pane and inspect the capture locally. Run one checked send with a fresh event ID and the matching sender/session/task identities. The helper permits only its initial 0.18-second settle and one further 0.18-second settle/read when the first capture is stale. Confirm a fresh event and exactly one Enter; after another 0.18 seconds it performs one settled read. Record whether the native client actually showed delayed rendering. A controlled stale-read result does not prove a native race occurred.
+- If the installed TUI capture shows one of the composer placeholders above, the checked send must return `BLOCKED` before `message` or `Enter`. Preserve the prompt as uncertain input and record that the native race could not be exercised on that client. Do not change the empty-prompt assertion to force a send.
+- For missed Enter, use the exact native SessionStart receipt and shared state root. In disposable panes only, create a fresh checked-send request, type its exact Smux envelope with `tmux-bridge message`, read and verify that exact draft, then record that capture as `TYPED` in `GuardStore`. Do not press Enter. Allow the bound native Stop hook to observe the open record and request one continuation. Complete that same event with `scripts/controller_guard.py send` using the unchanged request and pane identities; the helper, not the builder, presses Enter. Verify the exact marker appears once and the input is empty. Then run Stop once more to confirm no second continuation is required. Never use this fixture setup on a user or active agent draft.
+
+The disposable `TYPED` fixture setup below rechecks the preflight hash, types once, confirms the exact draft, and stores only fingerprints:
+
+~~~sh
+TMUX_PANE="$SENDER_PANE" CONTROLLER_GUARD_STATE_ROOT="$STATE_ROOT" REQUEST_JSON="$REQUEST_JSON" python3 - <<'PY'
+import hashlib, json, os
+from pathlib import Path
+from scripts.controller_guard import GuardStore, TmuxBridge, _has_active_draft, _has_partial_input
+
+request = json.loads(Path(os.environ["REQUEST_JSON"]).read_text())
+bridge = TmuxBridge()
+if bridge.id() != request["sender"]:
+    raise SystemExit("sender pane changed")
+before = bridge.read(request["destination_id"])
+if (hashlib.sha256(before.encode()).hexdigest() != request["preflight_sha256"]
+        or not request.get("confirm_idle") or not request.get("confirm_no_draft")
+        or _has_partial_input(before)):
+    raise SystemExit("destination is not the confirmed idle fixture pane")
+bridge.message(request["destination_id"], request["text"])
+typed = bridge.read(request["destination_id"])
+if not _has_active_draft(typed, request["sender"], request["text"]):
+    raise SystemExit("exact fixture draft was not visible; do not press Enter")
+GuardStore(Path(os.environ["CONTROLLER_GUARD_STATE_ROOT"]) / "delivery.sqlite3").put_record(
+    {**request, "status": "TYPED", "typed_sha256": hashlib.sha256(typed.encode()).hexdigest()}
+)
+PY
+~~~
+
+After the native Stop continuation is observed, submit the unchanged request through the helper:
+
+~~~sh
+TMUX_PANE="$SENDER_PANE" CONTROLLER_GUARD_STATE_ROOT="$STATE_ROOT" \
+  python3 scripts/controller_guard.py --state-root "$STATE_ROOT" send < "$REQUEST_JSON"
+~~~
+
+Do not copy the fixture draft into another pane.
+- Set the same disposable binding to `AWAITING_EVENT` and invoke one native Stop check. Expect `{}` with no continuation. Keep user interruption, unverifiable/collapsed input, and foreign drafts separate; none is delivery success.
+- Save only sanitized identities, hashes, command results, actor and observed timing. Do not save pane captures or message bodies. Clean up only the disposable sessions and state created for this check; retain the sanitized result and do not alter an active worker or gate pane.
 
 ## Stop guard binding
 

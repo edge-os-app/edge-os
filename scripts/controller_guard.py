@@ -337,6 +337,12 @@ def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.s
                     return {"status": "BLOCKED", "reason": "typing failed or left an unverified pane state"}
                 return {"status": "TYPED", "reason": "own draft is present; same-input recovery is available"}
             if not _has_active_draft(after_type, sender, text):
+                settle()
+                try:
+                    after_type = bridge.read(target_id)
+                except Exception:
+                    after_type = ""
+            if not _has_active_draft(after_type, sender, text):
                 store.put_record({**current, "status": "BLOCKED"})
                 return {"status": "BLOCKED", "reason": "typed message did not match the exact requested input"}
             store.put_record({**current, "status": "TYPED", "typed_sha256": _read_hash(after_type)})
@@ -348,6 +354,7 @@ def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.s
             bridge.enter(target_id)
         except Exception:
             try:
+                settle()
                 bridge.read(target_id)
             except Exception:
                 pass
@@ -355,6 +362,7 @@ def checked_send(request: dict, bridge, store: GuardStore, settle=lambda: time.s
             return {"status": "UNCONFIRMED", "reason": "Enter may have been sent; do not retry this event"}
 
         try:
+            settle()
             after_enter = bridge.read(target_id)
         except Exception:
             store.put_record({**current, "status": "UNCONFIRMED"})
