@@ -203,9 +203,12 @@
     }
   },
   "inventory_reservations": {
+    "owner_id": "b212b4e8-88d0-4233-bc92-084bace61d08",
     "agent_id": "agent-a",
     "wallet_id": "wallet-a",
+    "network_id": "monad:143",
     "asset_id": "monad:143/asset:MOE",
+    "decimals": 0,
     "available_raw": "19",
     "position_reservations": [
       {"position_id": "position-a-1", "raw": "15"},

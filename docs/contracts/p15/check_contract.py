@@ -19,6 +19,16 @@ def load(name: str) -> dict[str, object]:
     return json.loads((ROOT / name).read_text(encoding="utf-8"))
 
 
+def valid_raw_amount(value: object) -> bool:
+    return isinstance(value, str) and RAW_AMOUNT.fullmatch(value) is not None
+
+
+def raw_amount(value: object) -> Decimal:
+    if not valid_raw_amount(value):
+        raise ValueError("amount must be a canonical non-negative base-10 integer string")
+    return Decimal(value)
+
+
 def matches_binding(left: dict[str, object], right: dict[str, object]) -> bool:
     fields = (
         "owner_id", "agent_id", "wallet_id", "network_id", "position_id", "action_id",
@@ -27,6 +37,27 @@ def matches_binding(left: dict[str, object], right: dict[str, object]) -> bool:
         "deployment_id",
     )
     return all(left[field] == right[field] for field in fields)
+
+
+def exit_fits_position(action: dict[str, object], position: dict[str, object]) -> bool:
+    fields = (
+        "owner_id", "agent_id", "wallet_id", "network_id", "strategy_revision",
+        "mandate_id", "asset_id", "decimals",
+    )
+    return (
+        action["operation"] == "EXIT"
+        and all(action[field] == position[field] for field in fields)
+        and raw_amount(action["quantity_raw"]) <= raw_amount(position["inventory_raw"])
+    )
+
+
+def reservation_fits_position(
+    reservation: dict[str, object], position: dict[str, object]
+) -> bool:
+    return (
+        reservation["position_id"] == position["position_id"]
+        and raw_amount(reservation["raw"]) <= raw_amount(position["inventory_raw"])
+    )
 
 
 def eligible_at_send(
@@ -89,6 +120,8 @@ def main() -> None:
     assert contract["contract_id"] == "edge-os.wallet-mandate-account"
     assert fixture["contract_version"] == contract["version"]
     assert contract["network_ids"] == ["monad:143", "monad-testnet:10143"]
+    assert not valid_raw_amount("-1")
+    assert not valid_raw_amount("0300")
     for stop in (
         fixture["pretrade_stop"], fixture["entries_only_stop"], fixture["posttrade_halt"],
         fixture["send_time_examples"]["entries_only_stop"],
@@ -127,7 +160,7 @@ def main() -> None:
         assert position["owner_id"] == owner["owner_id"]
         assert position["wallet_id"] == owner["wallet_id"]
         assert position["network_id"] == owner["network_id"]
-        assert RAW_AMOUNT.fullmatch(position["inventory_raw"])
+        raw_amount(position["inventory_raw"])
 
     denied_cross_agent = fixture["cross_agent_control"]
     assert denied_cross_agent["agent_id"] != denied_cross_agent["position_agent_id"]
@@ -140,12 +173,17 @@ def main() -> None:
     preview = fixture["preview"]
     action = fixture["action"]
     assert matches_binding(preview, action)
-    assert RAW_AMOUNT.fullmatch(str(preview["quantity_raw"]))
-    assert RAW_AMOUNT.fullmatch(str(action["quantity_raw"]))
+    raw_amount(preview["quantity_raw"])
+    raw_amount(action["quantity_raw"])
+    raw_amount(preview["expected_quote_raw"])
     position = next(item for item in positions if item["position_id"] == action["position_id"])
     assert all(position[field] == action[field] for field in (
         "owner_id", "agent_id", "wallet_id", "network_id", "strategy_revision", "mandate_id",
     ))
+    assert exit_fits_position(action, position)
+    assert not exit_fits_position(dict(action, asset_id="monad:143/asset:WRONG"), position)
+    assert not exit_fits_position(dict(action, decimals=18), position)
+    assert not exit_fits_position(dict(action, quantity_raw="50"), position)
     stale_action = dict(action, strategy_revision="strategy-a-v4")
     assert not matches_binding(preview, stale_action)
     changed_input = dict(action, review_hash="sha256:changed-input")
@@ -224,11 +262,34 @@ def main() -> None:
     )
     assert [item["action_id"] for item in ordered] == send["expected_priority_order"]
     inventory = fixture["inventory_reservations"]
-    reserved_inventory = sum(Decimal(item["raw"]) for item in inventory["position_reservations"])
-    assert reserved_inventory == Decimal(inventory["available_raw"])
-    assert reserved_inventory + Decimal(inventory["duplicate_attempt_raw"]) > Decimal(
-        inventory["available_raw"]
+    inventory_owner = next(agent for agent in agents if agent["agent_id"] == inventory["agent_id"])
+    assert all(inventory[field] == inventory_owner[field] for field in (
+        "owner_id", "agent_id", "wallet_id", "network_id",
+    ))
+    assert inventory["asset_id"] == same_token[0]["asset_id"]
+    assert inventory["decimals"] == same_token[0]["decimals"]
+    positions_by_id = {position["position_id"]: position for position in positions}
+    reservations = inventory["position_reservations"]
+    assert len({item["position_id"] for item in reservations}) == len(reservations)
+    for reservation in reservations:
+        position = positions_by_id[reservation["position_id"]]
+        assert all(position[field] == inventory[field] for field in (
+            "owner_id", "agent_id", "wallet_id", "network_id", "asset_id", "decimals",
+        ))
+        assert reservation_fits_position(reservation, position)
+    swapped_reservations = [
+        {"position_id": "position-a-1", "raw": "4"},
+        {"position_id": "position-a-2", "raw": "15"},
+    ]
+    assert not all(
+        reservation_fits_position(item, positions_by_id[item["position_id"]])
+        for item in swapped_reservations
     )
+    reserved_inventory = sum(raw_amount(item["raw"]) for item in reservations)
+    available_inventory = raw_amount(inventory["available_raw"])
+    assert reserved_inventory == available_inventory
+    duplicate_attempt = raw_amount(inventory["duplicate_attempt_raw"])
+    assert reserved_inventory + duplicate_attempt > available_inventory
     assert inventory["duplicate_attempt_expected"] == "DENY"
 
     removal = fixture["signer_removal"]
@@ -238,6 +299,8 @@ def main() -> None:
     assert removal["owner_access_preserved"] is True
     assert renewal["preserved_consumed_raw"] == "300"
     assert renewal["preserved_reserved_raw"] == "100"
+    raw_amount(renewal["preserved_consumed_raw"])
+    raw_amount(renewal["preserved_reserved_raw"])
     assert renewal["preserved_stop_ids"] == renewal["stop_ids_after_renewal"]
     assert renewal["signer_state_after_renewal"] == "PENDING"
     assert renewal["new_strategy_revision_restores_authority"] is False
@@ -292,11 +355,17 @@ def main() -> None:
     assert attempts["changed_signed_transaction"]["expected"] == "NEW_AUTHORITY_REQUIRED"
 
     cost = fixture["cost_example"]
-    basis = Decimal(cost["first_cost_quote"]) + Decimal(cost["addition_cost_quote"])
-    units = Decimal(cost["first_units"]) + Decimal(cost["addition_units"])
+    for field in (
+        "first_cost_quote", "first_units", "addition_cost_quote", "addition_units",
+        "partial_exit_units", "partial_exit_proceeds_quote", "external_deposit_quote",
+        "gas_raw",
+    ):
+        raw_amount(cost[field])
+    basis = raw_amount(cost["first_cost_quote"]) + raw_amount(cost["addition_cost_quote"])
+    units = raw_amount(cost["first_units"]) + raw_amount(cost["addition_units"])
     average = basis / units
-    partial_basis = average * Decimal(cost["partial_exit_units"])
-    realized = Decimal(cost["partial_exit_proceeds_quote"]) - partial_basis
+    partial_basis = average * raw_amount(cost["partial_exit_units"])
+    realized = raw_amount(cost["partial_exit_proceeds_quote"]) - partial_basis
     assert average == Decimal("110")
     assert partial_basis == Decimal("550")
     assert realized == Decimal("100")
@@ -306,26 +375,28 @@ def main() -> None:
     assert cost["unrealized_status"] == "UNKNOWN"
 
     flows = fixture["capital_flows"]
+    for flow in flows:
+        raw_amount(flow["raw"])
     assert flows[0]["kind"] == "DEPOSIT"
     assert flows[0]["wallet_id"] == "wallet-a"
     assert flows[0]["status"] == "CONFIRMED"
     assert flows[0]["included_in_realized_result"] is False
 
     limits = fixture["allowance_example"]
-    assert Decimal(limits["consumed_raw"]) + Decimal(limits["reserved_raw"]) <= Decimal(
-        limits["approved_raw"]
-    )
-    assert Decimal(limits["remaining_raw"]) == (
-        Decimal(limits["approved_raw"])
-        - Decimal(limits["consumed_raw"])
-        - Decimal(limits["reserved_raw"])
-    )
+    approved = raw_amount(limits["approved_raw"])
+    consumed = raw_amount(limits["consumed_raw"])
+    reserved = raw_amount(limits["reserved_raw"])
+    remaining = raw_amount(limits["remaining_raw"])
+    raw_amount(limits["gas_budget_raw"])
+    assert consumed + reserved <= approved
+    assert remaining == approved - consumed - reserved
     assert limits["asset_id"] == "monad:143/asset:USDC"
     assert limits["gas_asset_id"] == "monad:143/native"
     overdraw = fixture["allowance_overdraw_control"]
-    assert Decimal(overdraw["consumed_raw"]) + Decimal(overdraw["reserved_raw"]) > Decimal(
-        overdraw["approved_raw"]
-    )
+    overdraw_approved = raw_amount(overdraw["approved_raw"])
+    overdraw_consumed = raw_amount(overdraw["consumed_raw"])
+    overdraw_reserved = raw_amount(overdraw["reserved_raw"])
+    assert overdraw_consumed + overdraw_reserved > overdraw_approved
     assert overdraw["expected"] == "DENY"
 
     monitoring = fixture["monitoring"]
