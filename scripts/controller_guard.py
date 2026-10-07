@@ -676,9 +676,10 @@ def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None
                 raise ValueError("update cannot add another task to an assigned session")
             if old.get("task_id") and not binding["approved_work"] and binding["status"] != "COMPLETE":
                 raise ValueError("update cannot remove assigned work before completion")
-            if "review_history" in incoming and "review_history" in old:
-                previous, updated = old["review_history"], incoming["review_history"]
+            if "review_history" in incoming:
+                previous, updated = old.get("review_history", []), incoming["review_history"]
                 if (not isinstance(previous, list) or not isinstance(updated, list)
+                        or any(not isinstance(item, str) for item in previous + updated)
                         or updated[:len(previous)] != previous):
                     raise ValueError("update cannot remove or rewrite review history")
             if "gate_verdicts" in binding:

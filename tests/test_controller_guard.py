@@ -1044,6 +1044,28 @@ class SessionStartTests(unittest.TestCase):
                 self.assertEqual(self.state()["bindings"][0], original)
                 self.assertEqual(self.receipt()[1], original_receipt)
 
+    def test_update_rejects_malformed_first_or_appended_review_history(self):
+        self.assign()
+        self.start()
+        original = self.state()["bindings"][0]
+        _, original_receipt = self.receipt()
+        identity = {"host": "codex", "session_id": "s1", "agent_id": "codex:s1"}
+
+        for history in ({}, ["A:PASS", None]):
+            with self.subTest(history=history):
+                code, _ = self.run_cli("update", payload={**identity, "review_history": history})
+                self.assertEqual(code, 2)
+                self.assertEqual(self.state()["bindings"][0], original)
+                self.assertEqual(self.receipt()[1], original_receipt)
+
+        self.assertEqual(self.run_cli("update", payload={**identity, "review_history": ["A:PASS"]})[0], 0)
+        with_history = self.state()["bindings"][0]
+        _, with_history_receipt = self.receipt()
+        code, _ = self.run_cli("update", payload={**identity, "review_history": ["A:PASS", None]})
+        self.assertEqual(code, 2)
+        self.assertEqual(self.state()["bindings"][0], with_history)
+        self.assertEqual(self.receipt()[1], with_history_receipt)
+
     def test_clear_with_new_session_registers_new_task_without_old_obligations(self):
         self.assign()
         self.start()
