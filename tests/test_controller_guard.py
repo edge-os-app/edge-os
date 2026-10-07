@@ -151,6 +151,18 @@ class CheckedSendTests(unittest.TestCase):
         ))
         self.assertFalse(_has_partial_input("❯ Try …\n? for shortcuts"))
 
+    def test_observed_claude_fix_lint_placeholder_is_idle_but_added_text_is_partial(self):
+        footer = (
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | session:0m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        empty = '❯ Try "fix lint errors"\n' + footer
+        foreign = '❯ Try "fix lint errors" plus unsent user text\n' + footer
+        self.assertFalse(_has_partial_input(empty))
+        self.assertTrue(_has_partial_input(foreign))
+
     def test_native_own_draft_is_found_before_footer(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
                "load the smux skill to reply] " + self.request["text"])
@@ -248,6 +260,14 @@ class CheckedSendTests(unittest.TestCase):
             "────────────────────────────────────────────────────────────\n" + footer
         )
         self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
+
+    def test_native_submission_allows_receiver_output_after_exact_message(self):
+        own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+               "load the smux skill to reply] " + self.request["text"])
+        before = "❯ " + own
+        after = before + "\nRECEIVED " + own + "\n❯ "
+        self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
+        self.assertFalse(_submitted(after, "❯ unrelated draft", "%1", self.request["text"]))
 
     def test_checked_send_uses_350ms_settles(self):
         with patch("scripts.controller_guard.time.sleep") as sleep:

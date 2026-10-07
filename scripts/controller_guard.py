@@ -284,12 +284,15 @@ def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int
         positions = next_positions
         if not positions:
             return False
+        if len(text) in positions:
+            return True
     return len(text) in positions
 
 
 def _empty_prompt(line: str, continuation: list[str]) -> bool:
     return bool(_prompt_bodies(line, continuation) & {
         "", "Ask Codex to do anything", "Try …", 'Try "edit <filepath> to..."',
+        'Try "fix lint errors"',
     })
 
 
