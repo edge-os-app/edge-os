@@ -54,15 +54,17 @@ function pctOf(value: string): string { return percent(value.replace("-", "")); 
 /** Reads `price_return(n) <op> constant`. Never turns a sign around: the words follow the number. */
 function describeReturn(op: string, buckets: number, value: string): string {
   const minutes = buckets * 5;
-  const v = Number(value);
+  const negative = value.startsWith("-");
+  const magnitude = negative ? value.slice(1) : value;
+  const zero = !/[1-9]/.test(magnitude);
   const span = `over the last ${minutes} minutes`;
-  if (op === "gt" && v === 0) return `price rose ${span}`;
-  if (op === "lt" && v === 0) return `price fell ${span}`;
-  if (op === "gt" && v > 0) return `price rose more than ${pctOf(value)} ${span}`;
-  if (op === "gte" && v > 0) return `price rose at least ${pctOf(value)} ${span}`;
-  if (op === "lt" && v < 0) return `price fell more than ${pctOf(value)} ${span}`;
-  if (op === "lte" && v < 0) return `price fell at least ${pctOf(value)} ${span}`;
-  return `the ${minutes}-minute price return is ${COMPARE_WORDS[op]} ${v < 0 ? "-" : ""}${pctOf(value)}`;
+  if (op === "gt" && zero) return `price rose ${span}`;
+  if (op === "lt" && zero) return `price fell ${span}`;
+  if (op === "gt" && !negative) return `price rose more than ${pctOf(value)} ${span}`;
+  if (op === "gte" && !negative) return `price rose at least ${pctOf(value)} ${span}`;
+  if (op === "lt" && negative) return `price fell more than ${pctOf(value)} ${span}`;
+  if (op === "lte" && negative) return `price fell at least ${pctOf(value)} ${span}`;
+  return `the ${minutes}-minute price return is ${COMPARE_WORDS[op]} ${negative ? "-" : ""}${pctOf(value)}`;
 }
 
 /** Plain-words reading of a supported expression. Falls back to a labelled operator tree. */
@@ -85,7 +87,10 @@ export function describeExpression(node: unknown): string {
     case "relative_volume": return `current quote volume divided by the mean of the previous ${Number(expr.lookback_buckets) * 5} minutes`;
     case "lag": return `${describeExpression(expr.value)} from ${Number(expr.buckets) * 5} minutes earlier`;
     case "sum": case "mean": return `the ${expr.op} of ${describeExpression(expr.value)} over ${Number(expr.buckets) * 5} minutes`;
-    case "and": case "or": return args.map(describeExpression).join(` ${expr.op} `);
+    case "and": case "or": return args.map((arg) => {
+      const summary = describeExpression(arg);
+      return arg.op === "and" || arg.op === "or" ? `(${summary})` : summary;
+    }).join(` ${expr.op} `);
     case "not": return `not (${describeExpression(expr.value)})`;
     default: return expr.op;
   }

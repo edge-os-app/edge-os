@@ -315,7 +315,7 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
     checks["revisions"] = rows("select count(*) c from strategy_revisions")[0]["c"]
     verdicts = []
     for key, saved in results.items():
-        if not key.startswith(("thesis-", "volume-rule-")):
+        if not key.startswith(("thesis-", "volume-rule-", "grouped-rule-", "grouped-right-", "tiny-threshold-")):
             continue
         request_id = saved["url"].split("/research/")[1]
         intake = rows(f"select record_id, content from records where record_type='IntakeRequest' and record_id = '{request_id}' "
@@ -329,6 +329,8 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
             item["parent_is_null"] = revision[0]["parent_revision_id"] is None
             item["strategy_schema_version"] = strategy.get("schema_version")
             item["relative_volume_baseline"] = strategy.get("entry", {}).get("args", [{}])[0] if key.startswith("volume-rule-") else None
+            if "expectedEntryTree" in saved:
+                item["entry_tree_matches_ui_fixture"] = strategy.get("entry") == saved["expectedEntryTree"]
             if key.startswith("volume-rule-"):
                 item["quote_volume_input_declared"] = "quote_volume" in strategy.get("data_inputs", [])
             item["owner_matches_intake"] = bool(rows(
@@ -346,6 +348,7 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                                     and (not v["key"].startswith("volume-rule-") or
                                          v.get("quote_volume_input_declared") and
                                          v.get("relative_volume_baseline") == {"op": "relative_volume", "lookback_buckets": 2})
+                                    and ("entry_tree_matches_ui_fixture" not in v or v["entry_tree_matches_ui_fixture"])
                                     for v in verdicts)
     return {"checks": checks, "all_checks_pass": passed}
 

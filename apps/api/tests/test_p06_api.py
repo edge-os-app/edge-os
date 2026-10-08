@@ -74,6 +74,83 @@ def test_user_can_review_save_and_reopen_a_price_volume_rule(client, owner_a, pg
     assert row["manifest_sha256"] == result["manifest_sha256"] == p06.manifest_sha256()
 
 
+def test_mapped_only_rule_fixtures_do_not_appear_as_home_examples(client, owner_a):
+    response = client.get("/v1/interpreter", headers=owner_a)
+    assert response.status_code == 200
+    visible = {sample["scenario_id"] for sample in response.json()["samples"]}
+    assert not {"grouped-rule", "grouped-rule-right", "tiny-threshold"} & visible
+
+
+def test_grouped_rules_keep_distinct_meaning_when_saved_and_reopened(client, owner_a, pg):
+    grouped_left = ("Enter when (current quote volume is above twice its prior 10-minute mean or price is above 20) "
+                    "and price is above 30. Exit when the 5-minute price return is below zero.")
+    grouped_right = ("Enter when current quote volume is above twice its prior 10-minute mean or (price is above 20 "
+                     "and price is above 30). Exit when the 5-minute price return is below zero.")
+    a = {"op": "gt", "args": [{"op": "relative_volume", "lookback_buckets": 2},
+                                  {"op": "constant", "value": "2", "unit": "DIMENSIONLESS"}]}
+    b = {"op": "gt", "args": [{"op": "price"},
+                                  {"op": "constant", "value": "20", "unit": "PRICE"}]}
+    c = {"op": "gt", "args": [{"op": "price"},
+                                  {"op": "constant", "value": "30", "unit": "PRICE"}]}
+
+    bundle = compiled_thesis(client, owner_a, text=grouped_left, restrictions=["no leverage"])
+    first_strategy = bundle["drafts"][0]["content"]["source_syntax"]
+    assert first_strategy["entry"] == {"op": "and", "args": [{"op": "or", "args": [a, b]}, c]}
+    first_body = publication_body(bundle)
+    first = client.post(f"/v1/strategies/{first_strategy['strategy_id']}/revisions", json=first_body,
+                        headers=owner_a)
+    assert first.status_code == 201, first.text
+
+    second_bundle = compiled_thesis(client, owner_a, text=grouped_right, restrictions=["no leverage"])
+    second_strategy = second_bundle["drafts"][0]["content"]["source_syntax"]
+    assert second_strategy["entry"] == {"op": "or", "args": [a, {"op": "and", "args": [b, c]}]}
+    second_body = publication_body(second_bundle)
+    second = client.post(f"/v1/strategies/{second_strategy['strategy_id']}/revisions", json=second_body,
+                         headers=owner_a)
+    assert second.status_code == 201, second.text
+
+    reopened = []
+    rows = []
+    for strategy, publication, expected_tree in ((first_strategy, first.json(), first_strategy["entry"]),
+                                                  (second_strategy, second.json(), second_strategy["entry"])):
+        response = client.get(f"/v1/strategies/{strategy['strategy_id']}/revisions/"
+                              f"{publication['revision_id']}", headers=owner_a)
+        assert response.status_code == 200
+        assert response.json()["strategy"]["entry"] == expected_tree
+        assert response.json()["stored_hash_matches_content"] is True
+        reopened.append(response.json()["strategy"]["entry"])
+        rows.append(json.loads(pg.psql("select coalesce(json_agg(r), '[]'::json) from strategy_revisions r "
+                                       f"where revision_id = '{publication['revision_id']}'"))[0])
+
+    assert reopened[0] != reopened[1]
+    assert rows[0]["content_sha256"] != rows[1]["content_sha256"]
+    for row, publication in zip(rows, (first.json(), second.json()), strict=True):
+        assert row["content_sha256"] == publication["content_sha256"]
+        assert row["manifest_sha256"] == p06.manifest_sha256()
+
+
+def test_exact_tiny_return_threshold_survives_review_save_and_reopen(client, owner_a, pg):
+    threshold = "-0." + ("0" * 399) + "1"
+    original = (f"Enter when the 5-minute price return is above {threshold}. "
+                "Exit when the 5-minute price return is below zero.")
+    bundle = compiled_thesis(client, owner_a, text=original, restrictions=["no leverage"])
+    strategy = bundle["drafts"][0]["content"]["source_syntax"]
+    assert strategy["entry"]["args"][1]["value"] == threshold
+    body = publication_body(bundle)
+    result = client.post(f"/v1/strategies/{strategy['strategy_id']}/revisions", json=body, headers=owner_a)
+    assert result.status_code == 201, result.text
+
+    reopened = client.get(f"/v1/strategies/{strategy['strategy_id']}/revisions/{result.json()['revision_id']}",
+                          headers=owner_a)
+    assert reopened.status_code == 200
+    assert reopened.json()["strategy"]["entry"] == strategy["entry"]
+    assert reopened.json()["strategy"]["entry"]["args"][1]["value"] == threshold
+    row = json.loads(pg.psql("select coalesce(json_agg(r), '[]'::json) from strategy_revisions r where revision_id = "
+                             f"'{result.json()['revision_id']}'"))[0]
+    assert row["strategy_canonical"].encode() == p02.canonical_bytes(strategy)
+    assert row["content_sha256"] == result.json()["content_sha256"] == p02.sha256_hex(strategy)
+
+
 def test_unsupported_indicator_names_the_entry_field(client, owner_a):
     first = submit(client, owner_a, UNSUPPORTED_RULE, restrictions=["no leverage"]).json()
     result = answer(client, owner_a, first, "adopt-suggested-settings", "adopt").json()

@@ -23,6 +23,18 @@ describe("plain-words rules", () => {
     expect(describeExpression({ op: "relative_volume", lookback_buckets: 3 }))
       .toBe("current quote volume divided by the mean of the previous 15 minutes");
   });
+  it("keeps nested Boolean groups visible in the review text", () => {
+    const a = { op: "gt", args: [{ op: "relative_volume", lookback_buckets: 2 }, { op: "constant", value: "2", unit: "DIMENSIONLESS" }] };
+    const b = { op: "gt", args: [{ op: "price" }, { op: "constant", value: "20", unit: "PRICE" }] };
+    const c = { op: "gt", args: [{ op: "price" }, { op: "constant", value: "30", unit: "PRICE" }] };
+
+    expect(describeExpression({ op: "and", args: [{ op: "or", args: [a, b] }, c] }))
+      .toBe("(current quote volume divided by the mean of the previous 10 minutes is above 2 or price is above 20) and price is above 30");
+    expect(describeExpression({ op: "or", args: [a, { op: "and", args: [b, c] }] }))
+      .toBe("current quote volume divided by the mean of the previous 10 minutes is above 2 or (price is above 20 and price is above 30)");
+    expect(describeExpression({ op: "and", args: [{ op: "not", value: { op: "or", args: [a, b] } }, c] }))
+      .toBe("not (current quote volume divided by the mean of the previous 10 minutes is above 2 or price is above 20) and price is above 30");
+  });
   it("marks synthetic assumptions as synthetic", () => {
     expect(summarizeValue("cost_assumptions", { fee_rate: "0.003", slippage_rate: "0.005", source_ref: "x" })).toMatch(/synthetic assumption/);
     expect(summarizeValue("market", { network: "MONAD", research_binding: { evidence_class: "SYNTHETIC_FIXTURE" } })).toMatch(/not a real pool/);
@@ -36,9 +48,32 @@ describe("plain-words rules", () => {
 });
 
 describe("percent formatting is exact", () => {
-  const cmp = (value: string) => ({ op: "gt", args: [{ op: "price_return", lookback_buckets: 1 }, { op: "constant", value, unit: "DIMENSIONLESS" }] });
+  const cmp = (value: string, op = "gt") => ({ op, args: [{ op: "price_return", lookback_buckets: 1 }, { op: "constant", value, unit: "DIMENSIONLESS" }] });
   it.each([["0.07", "7%"], ["0.29", "29%"], ["0.00004", "0.004%"], ["0.00125", "0.125%"], ["0.035", "3.5%"], ["0.5", "50%"], ["1", "100%"], ["0.01", "1%"]])(
     "renders %s as %s", (value, expected) => {
       expect(describeExpression(cmp(value))).toBe(`price rose more than ${expected} over the last 5 minutes`);
     });
+  it("preserves nonzero decimal thresholds that underflow JavaScript Number", () => {
+    const positiveTiny = `0.${"0".repeat(399)}1`;
+    const negativeTiny = `-${positiveTiny}`;
+    const percentPositiveTiny = `0.${"0".repeat(397)}1%`;
+
+    expect(describeExpression(cmp(positiveTiny)))
+      .toBe(`price rose more than ${percentPositiveTiny} over the last 5 minutes`);
+    expect(describeExpression(cmp(positiveTiny, "gte")))
+      .toBe(`price rose at least ${percentPositiveTiny} over the last 5 minutes`);
+    expect(describeExpression(cmp(positiveTiny, "lt")))
+      .toBe(`the 5-minute price return is below ${percentPositiveTiny}`);
+    expect(describeExpression(cmp(positiveTiny, "lte")))
+      .toBe(`the 5-minute price return is at or below ${percentPositiveTiny}`);
+    expect(describeExpression(cmp(negativeTiny)))
+      .toBe(`the 5-minute price return is above -0.${"0".repeat(397)}1%`);
+    expect(describeExpression(cmp(negativeTiny, "gte")))
+      .toBe(`the 5-minute price return is at or above -0.${"0".repeat(397)}1%`);
+    expect(describeExpression(cmp(negativeTiny, "lt")))
+      .toBe(`price fell more than ${percentPositiveTiny} over the last 5 minutes`);
+    expect(describeExpression(cmp(negativeTiny, "lte")))
+      .toBe(`price fell at least ${percentPositiveTiny} over the last 5 minutes`);
+    expect(describeExpression(cmp("0"))).toBe("price rose over the last 5 minutes");
+  });
 });

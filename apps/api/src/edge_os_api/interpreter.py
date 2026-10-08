@@ -88,6 +88,14 @@ VOLUME_ENTRY = {"op": "gt", "args": [
     {"op": "relative_volume", "lookback_buckets": 2},
     {"op": "constant", "value": "2", "unit": "DIMENSIONLESS"},
 ]}
+PRICE_ABOVE_20 = {"op": "gt", "args": [{"op": "price"}, {"op": "constant", "value": "20", "unit": "PRICE"}]}
+PRICE_ABOVE_30 = {"op": "gt", "args": [{"op": "price"}, {"op": "constant", "value": "30", "unit": "PRICE"}]}
+GROUPED_ENTRY = {"op": "and", "args": [{"op": "or", "args": [VOLUME_ENTRY, PRICE_ABOVE_20]}, PRICE_ABOVE_30]}
+GROUPED_RIGHT_ENTRY = {"op": "or", "args": [VOLUME_ENTRY, {"op": "and", "args": [PRICE_ABOVE_20, PRICE_ABOVE_30]}]}
+TINY_NEGATIVE_RETURN_ENTRY = {"op": "gt", "args": [
+    {"op": "price_return", "lookback_buckets": 1},
+    {"op": "constant", "value": "-0." + ("0" * 399) + "1", "unit": "DIMENSIONLESS"},
+]}
 UNSUPPORTED_ENTRY = {"op": "gt", "args": [
     {"op": "rsi", "lookback_buckets": 14},
     {"op": "constant", "value": "70", "unit": "DIMENSIONLESS"},
@@ -120,6 +128,7 @@ class Scenario:
     stated: dict[str, Any] = field(default_factory=dict)
     choices: tuple[ChoiceQuestion, ...] = ()
     proposes_defaults: bool = True
+    show_example: bool = True
 
 
 SCENARIOS: tuple[Scenario, ...] = (
@@ -134,6 +143,23 @@ SCENARIOS: tuple[Scenario, ...] = (
              "Enter when current quote volume is above twice its prior 10-minute mean; exit when the 5-minute "
              "price return is below zero.", "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
              stated={"entry": VOLUME_ENTRY, "exit": EXIT_RULE, "data_inputs": ["price", "quote_volume"]}),
+    Scenario("grouped-rule", "Nested Boolean rule",
+             "Enter when (current quote volume is above twice its prior 10-minute mean or price is above 20) and "
+             "price is above 30. Exit when the 5-minute price return is below zero.",
+             "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
+             stated={"entry": GROUPED_ENTRY, "exit": EXIT_RULE, "data_inputs": ["price", "quote_volume"]},
+             show_example=False),
+    Scenario("grouped-rule-right", "Nested Boolean rule with right group",
+             "Enter when current quote volume is above twice its prior 10-minute mean or (price is above 20 and "
+             "price is above 30). Exit when the 5-minute price return is below zero.",
+             "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
+             stated={"entry": GROUPED_RIGHT_ENTRY, "exit": EXIT_RULE, "data_inputs": ["price", "quote_volume"]},
+             show_example=False),
+    Scenario("tiny-threshold", "Exact tiny return threshold",
+             "Enter when the 5-minute price return is above " + TINY_NEGATIVE_RETURN_ENTRY["args"][1]["value"] +
+             ". Exit when the 5-minute price return is below zero.",
+             "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
+             stated={"entry": TINY_NEGATIVE_RETURN_ENTRY, "exit": EXIT_RULE}, show_example=False),
     Scenario("unsupported-indicator", "Unsupported indicator",
              "Enter when the 14-period RSI is above 70; exit when the 5-minute price return is below zero.",
              "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
@@ -302,4 +328,4 @@ def open_questions(intake: dict[str, Any], interpreter: FixtureInterpreter, evid
 def samples() -> list[dict[str, Any]]:
     return [{"scenario_id": s.id, "label": s.label, "text": s.text, "input_class": s.input_class,
              "requested_job": s.requested_job, "restrictions": list(s.restrictions),
-             "declared_market": copy.deepcopy(s.declared_market)} for s in SCENARIOS]
+             "declared_market": copy.deepcopy(s.declared_market)} for s in SCENARIOS if s.show_example]

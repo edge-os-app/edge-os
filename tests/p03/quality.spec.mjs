@@ -317,7 +317,7 @@ test("the keyboard focus ring has at least 3:1 contrast on every surface it appe
   for (const r of results) { expect(r.visible, JSON.stringify(r)).toBe(true); expect(r.outline, JSON.stringify(r)).not.toBe("none"); expect(r.ratio, JSON.stringify(r)).toBeGreaterThanOrEqual(3); }
 });
 
-/** Words that wrap in the middle: a word whose characters span more than one line box. Long pasted tokens are exempt. */
+/** Detect mid-word wraps while allowing a hyphenated compound to wrap at its valid hyphen break. */
 async function splitWords(page) {
   return page.evaluate(() => {
     const roots = document.querySelectorAll("table.records th, table.records td, h1, h2, h3, button, label.choice, legend, .status, .tag, .notice, .convo p, .panel p, summary, dt");
@@ -326,7 +326,7 @@ async function splitWords(page) {
       if (root.closest("dialog:not([open])") || root.classList.contains("visually-hidden")) continue;
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        for (const match of node.data.matchAll(/\S+/g)) {
+        for (const match of node.data.matchAll(/[^\s-]+/g)) {
           if (match[0].length > 24) continue;
           const range = document.createRange();
           range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
@@ -339,7 +339,16 @@ async function splitWords(page) {
   });
 }
 
-test("no word is split in the middle in the main states", async ({ page }, info) => {
+test("word-split check allows a hyphen break but still catches breaks inside a word segment", async ({ page }) => {
+  await page.setContent(`<style>body{font:16px Arial} .panel{width:60px} .panel p{overflow-wrap:anywhere}</style>
+    <section class="panel"><p>10-minute</p><p>internationalization</p></section>`);
+  const found = await splitWords(page);
+  expect(found).toContain("internationalization");
+  expect(found).not.toContain("10");
+  expect(found).not.toContain("minute");
+});
+
+test("no word segment is split in the middle in the main states", async ({ page }, info) => {
   const found = {};
   await open(page, tokens.a);
   found.home = await splitWords(page);
