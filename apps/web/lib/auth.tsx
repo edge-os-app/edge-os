@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, setTokenSource, setUnauthorizedHandler } from "./api";
+import { clearClientState } from "./draft";
 
 export type AuthStatus = "loading" | "signed-out" | "signing-in" | "ready" | "unavailable";
 
@@ -29,6 +30,7 @@ export interface AuthValue {
   unavailableReason: string | null;
   userId: string | null;
   signInMessage: string | null;
+  signInSlow: boolean;
   explicitSignOut: boolean;
   login(): void;
   logout(): void;
@@ -55,7 +57,8 @@ interface Source {
   loginErrors?: number;
 }
 
-const SIGN_IN_TIMEOUT_MS = 60_000;
+const SIGN_IN_SLOW_MS = 60_000;
+const SESSION_REJECTED = "Your session was rejected or has ended. Sign in again.";
 const SIGN_IN_FAILED = "Sign-in did not finish. Nothing was changed. Try again.";
 
 export function AuthRoot({ children }: { children: ReactNode }) {
@@ -96,7 +99,10 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
   const [reason, setReason] = useState<string | null>(unavailable);
   const [signInMessage, setSignInMessage] = useState<string | null>(null);
   const [explicitSignOut, setExplicitSignOut] = useState(false);
+  const [signInSlow, setSignInSlow] = useState(false);
   const statusRef = useRef<AuthStatus>("loading");
+  const sourceRef = useRef<Source | null>(source);
+  sourceRef.current = source;
   const getToken = source?.getAccessToken;
   statusRef.current = status;
 
@@ -111,14 +117,25 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
   useEffect(() => {
     if (loginErrors !== seenErrors.current) { seenErrors.current = loginErrors; endSignIn(SIGN_IN_FAILED); }
   }, [loginErrors, endSignIn]);
+  // A slow sign-in is not a failed one: the person may be entering a code in the sign-in window. Say so, keep
+  // the window and the focus where they are, and let the person try again.
   useEffect(() => {
+    setSignInSlow(false);
     if (status !== "signing-in") return;
-    const timer = setTimeout(() => endSignIn(SIGN_IN_FAILED), SIGN_IN_TIMEOUT_MS);
+    const timer = setTimeout(() => setSignInSlow(true), SIGN_IN_SLOW_MS);
     return () => clearTimeout(timer);
-  }, [status, endSignIn]);
+  }, [status]);
+
+  // The service rejected the credential. Log the provider out too, so the next sign-in is a real one.
+  const rejectSession = useCallback(() => {
+    setUserId(null);
+    setSignInMessage(SESSION_REJECTED);
+    setStatus("signed-out");
+    sourceRef.current?.logout();
+  }, []);
 
   useEffect(() => { setTokenSource(getToken ?? (async () => null)); }, [getToken]);
-  useEffect(() => { setUnauthorizedHandler(() => { setUserId(null); setStatus("signed-out"); }); }, []);
+  useEffect(() => { setUnauthorizedHandler(rejectSession); }, [rejectSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,19 +146,22 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
     setStatus("loading");
     api.me().then((me) => { if (!cancelled) { setUserId(me.user_id); setSignInMessage(null); setExplicitSignOut(false); setStatus("ready"); } }).catch((error: unknown) => {
       if (cancelled) return;
-      if (error instanceof ApiError && error.status === 401) { setStatus("signed-out"); return; }
+      if (error instanceof ApiError && error.status === 401) { rejectSession(); return; }
       setReason(error instanceof ApiError && error.status === 503
         ? "The service cannot verify sign-in right now. Try again soon."
         : "The service could not be reached.");
       setStatus("unavailable");
     });
     return () => { cancelled = true; };
-  }, [source?.ready, source?.authenticated, unavailable]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [source?.ready, source?.authenticated, unavailable, rejectSession]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = useCallback(() => { setSignInMessage(null); setStatus("signing-in"); source?.login(); }, [source]);
-  const logout = useCallback(() => { setUserId(null); setExplicitSignOut(true); setSignInMessage(null); setStatus("signed-out"); source?.logout(); }, [source]);
+  const logout = useCallback(() => {
+    clearClientState(); // the next person in this tab must not see this person's unsent words or retry keys
+    setUserId(null); setExplicitSignOut(true); setSignInMessage(null); setStatus("signed-out"); source?.logout();
+  }, [source]);
   const value = useMemo<AuthValue>(
-    () => ({ status, fixtureLabel, unavailableReason: reason, userId, signInMessage, explicitSignOut, login, logout }),
-    [status, fixtureLabel, reason, userId, signInMessage, explicitSignOut, login, logout]);
+    () => ({ status, fixtureLabel, unavailableReason: reason, userId, signInMessage, signInSlow, explicitSignOut, login, logout }),
+    [status, fixtureLabel, reason, userId, signInMessage, signInSlow, explicitSignOut, login, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

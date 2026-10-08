@@ -15,7 +15,7 @@ export interface AnswerProps {
 
 export type AnswerMessageValue = { kind: "error" | "notice"; text: string; surface: string };
 
-/** Shows a message only on the surface where the person acted, so a failure is announced once. A conflict notice
+/** Shows a message only on the surface where the person acted, so a failure appears in one place. A conflict notice
  * must outlive the question form: the reload can remove the form, so hosts render this too. */
 export function AnswerMessage({ message, surface }: { message?: AnswerMessageValue; surface: string }) {
   const ref = useRef<HTMLParagraphElement>(null);

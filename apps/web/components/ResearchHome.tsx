@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, JOB_LABEL, OUTCOME_COPY, SUPPORTED_RESTRICTIONS, formatTime } from "../lib/describe";
+import { draftKey, parseDraft } from "../lib/draft";
 import type { InputClass, Job, RequestSummary, Sample } from "../lib/types";
 import { MoeExample } from "./MoeExample";
 
@@ -12,7 +13,7 @@ const KINDS: { id: InputClass; job: Job; label: string; hint: string }[] = [
   { id: "BOUNDED_NO_THESIS", job: "INVESTIGATE_EFFECT", label: "No thesis, a bounded question", hint: "You want to look at a market without a view." },
 ];
 
-export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: string) => void; consumeReturn: () => string | null }) {
+export function ResearchHome({ userId, go, consumeReturn }: { userId: string | null; go: (hash: string, from?: string) => void; consumeReturn: () => string | null }) {
   const heading = useRef<HTMLHeadingElement>(null);
   const formId = useId();
   const [text, setText] = useState("");
@@ -48,27 +49,20 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
     api.list().then((r) => { setSaved(r.requests); setHasMore(r.has_more); }).catch(() => {});
   }, []);
 
-  // An unsent draft survives a reload or a sign-in after a session ends. It lives in this browser only.
-  const draftKey = "edge-os:research-draft";
-  const restored = useRef(false);
+  // An unsent draft survives a reload or a session that ended. It is kept in this tab for this verified person only,
+  // validated before use, and removed on sign-out. `hydrated` keeps the first (empty) render from overwriting it.
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
-    try {
-      const raw = window.sessionStorage.getItem(draftKey);
-      if (raw) {
-        const draft = JSON.parse(raw) as { text?: string; kind?: InputClass; restrictions?: string[]; custom?: string; useMarket?: boolean };
-        if (typeof draft.text === "string") setText(draft.text);
-        if (draft.kind) setKind(draft.kind);
-        if (Array.isArray(draft.restrictions)) setRestrictions(draft.restrictions);
-        if (typeof draft.custom === "string") setCustom(draft.custom);
-        if (typeof draft.useMarket === "boolean") setUseMarket(draft.useMarket);
-      }
-    } catch { /* storage may be blocked */ }
-    restored.current = true;
-  }, []);
+    let raw: string | null = null;
+    try { raw = userId ? window.sessionStorage.getItem(draftKey(userId)) : null; } catch { /* storage may be blocked */ }
+    const draft = parseDraft(raw);
+    if (draft) { setText(draft.text); setKind(draft.kind); setRestrictions(draft.restrictions); setCustom(draft.custom); setUseMarket(draft.useMarket); }
+    setHydrated(true);
+  }, [userId]);
   useEffect(() => {
-    if (!restored.current) return;
-    try { window.sessionStorage.setItem(draftKey, JSON.stringify({ text, kind, restrictions, custom, useMarket })); } catch { /* ignore */ }
-  }, [text, kind, restrictions, custom, useMarket]);
+    if (!hydrated || !userId) return;
+    try { window.sessionStorage.setItem(draftKey(userId), JSON.stringify({ text, kind, restrictions, custom, useMarket })); } catch { /* ignore */ }
+  }, [hydrated, userId, text, kind, restrictions, custom, useMarket]);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,7 +96,7 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
         original_request: text, restrictions, requested_job: job, input_class: kind,
         ...(job === "INVESTIGATE_EFFECT" && useMarket && sample ? { declared_market: sample } : {}),
       });
-      try { window.sessionStorage.removeItem(draftKey); } catch { /* ignore */ }
+      try { if (userId) window.sessionStorage.removeItem(draftKey(userId)); } catch { /* ignore */ }
       go(`#/research/${bundle.intake.record_id}`, "start-request");
     } catch (e) {
       // With no answer from the service the request may still have been saved: say so and refresh the list.
@@ -198,7 +192,12 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
 
       <section aria-labelledby="saved-title" className="stack">
         <h2 id="saved-title" style={{ fontSize: 24, margin: 0 }}>Saved requests</h2>
-        {loadError ? <p role="alert" className="error-text">{loadError}</p> : null}
+        {loadError ? (
+          <div className="btn-row">
+            <p role="alert" className="error-text" style={{ margin: 0 }}>{loadError}</p>
+            <button type="button" className="btn btn-secondary" onClick={() => { setLoadError(""); refreshList(); }}>Try again</button>
+          </div>
+        ) : null}
         {saved === null && !loadError ? <p className="muted" role="status">Loading saved requests.</p> : null}
         {saved && saved.length === 0 ? <p className="muted">Nothing saved yet. Your requests appear here and stay after you close the page.</p> : null}
         {hasMore ? <p className="muted" role="status">Showing your 50 most recent requests. Older ones are saved but not listed here yet.</p> : null}

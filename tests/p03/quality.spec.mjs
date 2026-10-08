@@ -523,7 +523,7 @@ test("a lost reply on the first submit says the request may be saved and refresh
   await page.screenshot({ path: path.join(outDir, `lost-reply-${info.project.name}.png`), fullPage: false });
 });
 
-test("signing out and back in is announced, keeps focus sensible and returns to Research", async ({ page }) => {
+test("signing out and back in keeps focus on the sign-in heading and returns to Research", async ({ page }) => {
   await open(page, tokens.a);
   await page.getByRole("button", { name: "Sign out" }).click();
   const heading = page.getByRole("heading", { name: "Sign in to start" });
@@ -548,4 +548,38 @@ test("an unsent draft survives a reload and is cleared by a successful submit", 
   await page.getByRole("button", { name: "All requests" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   await expect(page.getByLabel("Your words", { exact: true })).toHaveValue("");
+});
+
+
+test("a rejected session explains itself, keeps the draft for the same person and signs in again for real", async ({ page }, info) => {
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill("My careful unsent hunch.");
+  await page.route("**/v1/research/requests", (route) => route.request().method() === "POST"
+    ? route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ code: "auth_invalid", findings: [{ detail: "The credential is not valid for this application." }] }) })
+    : route.continue());
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
+  const message = page.locator('[role="alert"]', { hasText: "session was rejected" });
+  await expect(message).toBeVisible();
+  await expect(message).toBeFocused(); // no silent drop to the page body
+  await page.screenshot({ path: path.join(outDir, `session-rejected-${info.project.name}.png`), fullPage: false });
+  await page.unroute("**/v1/research/requests");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible(); // a real second sign-in, not a dead loop
+  await expect(page.getByLabel("Your words", { exact: true })).toHaveValue("My careful unsent hunch.");
+});
+
+test("signing out removes the draft, and another person never sees it", async ({ page }) => {
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill("Owner A private unsent hunch.");
+  await page.getByRole("button", { name: /Add “no leverage”/ }).click();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
+  const kept = await page.evaluate(() => Object.keys(window.sessionStorage).filter((k) => k.startsWith("edge-os:")));
+  expect(kept, "nothing this app stored may survive a sign-out").toEqual([]);
+  await page.evaluate((token) => { window.__EDGE_OS_TEST_AUTH__.getAccessToken = async () => token; }, tokens.b); // the next person signs in
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
+  await expect(page.getByLabel("Your words", { exact: true })).toHaveValue("");
+  await expect(page.getByRole("list", { name: "Your restrictions" })).toHaveCount(0);
 });

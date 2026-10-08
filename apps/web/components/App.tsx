@@ -56,9 +56,12 @@ function Signed() {
           <p>Research on Monad. Your words and restrictions are kept exactly as you write them.</p>
           <p className="muted">Signing in does not create a wallet, grant permission or move money.</p>
           {auth.signInMessage ? <p role="alert" className="status err" ref={message} tabIndex={-1}>{auth.signInMessage}</p> : null}
-          {waiting ? <p role="status" className="muted">Waiting for sign-in to finish. This gives up after a minute.</p> : null}
+          {waiting && !auth.signInSlow ? <p role="status" className="muted">Waiting for sign-in to finish.</p> : null}
+          {waiting && auth.signInSlow ? <p role="status" className="muted">Still waiting. If the sign-in window is closed or stuck, press Try again.</p> : null}
           <div className="btn-row">
-            <button className="btn btn-primary" type="button" onClick={() => { if (!waiting) auth.login(); }} aria-disabled={waiting || undefined}>{waiting ? "Signing in…" : "Sign in"}</button>
+            <button className="btn btn-primary" type="button" onClick={() => { if (!waiting || auth.signInSlow) auth.login(); }} aria-disabled={(waiting && !auth.signInSlow) || undefined}>
+              {waiting ? (auth.signInSlow ? "Try again" : "Signing in…") : "Sign in"}
+            </button>
           </div>
         </section>
       )}

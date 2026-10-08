@@ -39,12 +39,13 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
   const [verified, setVerified] = useState<null | boolean>(null);
   const [opened, setOpened] = useState<"loading" | "loaded">("loading");
 
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    api.get(id).then((b) => { if (!cancelled) { setBundle(b); setOpened("loaded"); } })
+    api.get(id).then((b) => { if (!cancelled) { setBundle(b); setOpened("loaded"); setError(""); } })
       .catch((e: unknown) => { if (!cancelled) setError(e instanceof ApiError && e.status === 404 ? "This request was not found." : "The request could not be loaded."); });
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, attempt]);
 
   useEffect(() => { if (bundle) heading.current?.focus(); }, [bundle === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -107,6 +108,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
     if (!draft) return;
     const keys = pendingKeys(draft.record_id);
     setBusy(true); setError(""); setNotice("");
+    setAnswerMessage(undefined); // an earlier conflict notice must not outlive the next action
     focusSurface.current = null; // the Save button disappears; the layout effect lands focus on the new state
     try {
       await api.publish(draft.content.strategy_id, { ...keys, expected_parent_revision_id: null, draft_id: draft.record_id, strategy: draft.content.source_syntax });
@@ -128,7 +130,10 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
         <h1 ref={heading} tabIndex={-1}>Request</h1>
         {error ? (
           <section className="panel" role="alert"><h2>{error}</h2>
-            <button className="btn btn-secondary" type="button" onClick={() => go("#/research")}>Back to Research</button></section>
+            <div className="btn-row">
+              {error !== "This request was not found." ? <button className="btn btn-primary" type="button" onClick={() => { setError(""); setAttempt((n) => n + 1); }}>Try again</button> : null}
+              <button className="btn btn-secondary" type="button" onClick={() => go("#/research")}>Back to Research</button>
+            </div></section>
         ) : <p role="status" aria-busy="true" className="muted">Opening saved request.</p>}
       </div>
     );

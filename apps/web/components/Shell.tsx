@@ -80,7 +80,7 @@ export function Shell() {
         </div>
       </aside>
       <main id="main" className="main" tabIndex={-1}>
-        {route.name === "research" && <ResearchHome go={go} consumeReturn={consumeReturn} />}
+        {route.name === "research" && <ResearchHome userId={auth.userId} go={go} consumeReturn={consumeReturn} />}
         {route.name === "request" && (
           <RequestPage key={route.id} id={route.id} go={go} setContext={setBundleContext}
             openConversation={openSheet} />

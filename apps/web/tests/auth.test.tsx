@@ -19,7 +19,7 @@ function Probe() {
   const auth = useAuth();
   return (
     <div>
-      <div data-testid="probe">{auth.status}|{auth.fixtureLabel ?? "no-fixture"}|{auth.unavailableReason ?? ""}|{auth.signInMessage ?? ""}</div>
+      <div data-testid="probe">{auth.status}|{auth.fixtureLabel ?? "no-fixture"}|{auth.unavailableReason ?? ""}|{auth.signInMessage ?? ""}|{auth.signInSlow ? "slow" : ""}</div>
       <button onClick={auth.login}>login</button>
       <button onClick={auth.logout}>logout</button>
     </div>
@@ -86,17 +86,45 @@ describe("auth session", () => {
     expect(screen.getByTestId("probe")).toHaveTextContent(/did not finish/i);
   });
 
-  it("a sign-in that never finishes gives up after a minute", async () => {
+  it("a sign-in that is slow says so after a minute and stays usable, without leaving the sign-in window", async () => {
     vi.stubEnv("NEXT_PUBLIC_PRIVY_APP_ID", "app-test");
     render(<AuthRoot><Probe /></AuthRoot>);
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|"));
     vi.useFakeTimers();
     try {
       fireEvent.click(screen.getByText("login"));
-      expect(screen.getByTestId("probe")).toHaveTextContent("signing-in|");
       await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
-      expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|");
-      expect(screen.getByTestId("probe")).toHaveTextContent(/did not finish/i);
+      expect(screen.getByTestId("probe")).toHaveTextContent("signing-in|");  // still waiting: the person may be typing a code
+      expect(screen.getByTestId("probe")).toHaveTextContent("slow");
     } finally { vi.useRealTimers(); }
+  });
+
+  it("a rejected session returns to signed-out with a message, and signing in again works", async () => {
+    let rejectNext = false;
+    vi.stubGlobal("fetch", vi.fn((url: string) => (rejectNext && url.endsWith("/v1/research/requests"))
+      ? jsonResponse(401, { code: "auth_invalid", findings: [] }) : jsonResponse(200, { user_id: "u1", requests: [], has_more: false })));
+    window.__EDGE_OS_TEST_AUTH__ = { label: "TEST AUTH FIXTURE", getAccessToken: async () => "t" };
+    render(<AuthRoot><Probe /></AuthRoot>);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("ready|"));
+    rejectNext = true;
+    const { api } = await import("../lib/api");
+    await act(async () => { await api.list().catch(() => {}); });
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|"));
+    expect(screen.getByTestId("probe")).toHaveTextContent(/session was rejected/i);
+    rejectNext = false;
+    fireEvent.click(screen.getByText("login"));
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("ready|")); // a real second sign-in, not a dead loop
+  });
+
+  it("signing out removes what this app stored in the tab", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => jsonResponse(200, { user_id: "u1" })));
+    window.__EDGE_OS_TEST_AUTH__ = { label: "TEST AUTH FIXTURE", getAccessToken: async () => "t" };
+    window.sessionStorage.setItem("edge-os:research-draft:u1", "{}");
+    window.sessionStorage.setItem("other-app:keep", "1");
+    render(<AuthRoot><Probe /></AuthRoot>);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("ready|"));
+    fireEvent.click(screen.getByText("logout"));
+    expect(window.sessionStorage.getItem("edge-os:research-draft:u1")).toBeNull();
+    expect(window.sessionStorage.getItem("other-app:keep")).toBe("1");
   });
 });
