@@ -83,8 +83,9 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 details { border: 1px solid var(--color-divider); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); background: var(--color-bg); }
 details > summary { cursor: pointer; font-weight: 600; min-height: var(--control-min); display: flex; align-items: center; }
 details[open] > summary { margin-bottom: var(--space-3); }
-table.records { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.records { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 14px; }
 table.records th, table.records td { text-align: left; padding: var(--space-2); border-bottom: 1px solid var(--color-divider); vertical-align: top; }
+table.records td:nth-of-type(1) { overflow-wrap: break-word; }
 table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
 .cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
 .card-open { display: flex; flex-direction: column; gap: var(--space-2); text-align: left; width: 100%; font: inherit; color: inherit; cursor: pointer;
@@ -97,7 +98,6 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
 .convo h2 { font-size: 22px; margin: 0; }
 .convo-about { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-3); font-size: 14px; }
 .words, .card-open .title, .convo-about, .msg, dl.kv dd, .chip, .status p { overflow-wrap: anywhere; } /* a pasted address or token must wrap, never widen the page */
-table.records td { overflow-wrap: break-word; } /* never collapse table columns: words stay whole unless a token overflows */
 :focus-visible { outline: 2px solid var(--color-accent-700); outline-offset: 2px; } /* 3:1 or better on the sidebar and cards; the exported accent is 2.7:1 */
 .msg { border-radius: var(--radius-md); padding: var(--space-3); font-size: 14px; }
 .msg.system { background: var(--color-surface); }
@@ -139,5 +139,12 @@ table.records td { overflow-wrap: break-word; } /* never collapse table columns:
   .main h1 { font-size: 32px; }
   .panel { padding: var(--space-4); border-radius: var(--radius-md); }
   .sheet { width: 100vw; border-radius: 0; }
+  table.records { font-size: 12px; }
+  table.records tr > :nth-child(1) { width: 27%; }
+  table.records tr > :nth-child(2) { width: 28%; }
+  table.records tr > :nth-child(3) { width: 25%; }
+  table.records tr > :nth-child(4) { width: 20%; }
+  table.records th, table.records td { padding: var(--space-1); }
+  table.records tbody th { font-size: 12px; letter-spacing: normal; text-transform: none; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }

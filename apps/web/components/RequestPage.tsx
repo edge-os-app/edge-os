@@ -99,7 +99,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
     if (!revision) { setVerified(null); return; }
     let cancelled = false;
     api.revision(revision.strategy_id, revision.revision_id)
-      .then((r) => { if (!cancelled) setVerified(r.stored_hash_matches_content && r.content_sha256 === revision.content_sha256); })
+      .then((r) => { if (!cancelled) setVerified(r.stored_hash_matches_content && r.stored_manifest_hash_matches_content && r.content_sha256 === revision.content_sha256); })
       .catch(() => { if (!cancelled) setVerified(false); });
     return () => { cancelled = true; };
   }, [revision?.revision_id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -186,7 +186,10 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
         {outcome === "PUBLISHED" && <p>This revision is saved. Reopening it later shows the same record from storage.</p>}
         {stopped && (
           <>
-            {findings.map((f) => (<p key={f.path + f.code}>{f.detail}</p>))}
+            {findings.map((f) => {
+              const field = f.path.match(/^\/field_evidence\/([^/]+)/)?.[1];
+              return <p key={f.path + f.code}>{field ? <><strong>{FIELD_LABEL[field] ?? field.replaceAll("_", " ")}:</strong> </> : null}{f.detail}</p>;
+            })}
             <p>Your words, restrictions and the reason are saved. {outcome === "UNRESOLVED" ? "No study ran, and no signal or strategy was created." : "No strategy was created."}</p>
           </>
         )}

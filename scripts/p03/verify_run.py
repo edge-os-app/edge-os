@@ -242,7 +242,7 @@ def main() -> int:
         if not args.skip_ui:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}
-            code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs"], ui_env, evidence / "ui-e2e.log")
+            code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs", "provenance.spec.mjs"], ui_env, evidence / "ui-e2e.log")
             ok &= rec.step("browser drive (desktop and 390px)", code == 0, {"exit": code})
 
             results_path = evidence / "ui" / "ui-results.json"
@@ -315,7 +315,7 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
     checks["revisions"] = rows("select count(*) c from strategy_revisions")[0]["c"]
     verdicts = []
     for key, saved in results.items():
-        if not key.startswith("thesis-"):
+        if not key.startswith(("thesis-", "volume-rule-", "grouped-rule-", "grouped-right-", "tiny-threshold-")):
             continue
         request_id = saved["url"].split("/research/")[1]
         intake = rows(f"select record_id, content from records where record_type='IntakeRequest' and record_id = '{request_id}' "
@@ -324,8 +324,15 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
         item = {"key": key, "request_id": request_id, "intake_rows_with_exact_text": len(intake), "revision_rows": len(revision)}
         if revision:
             canonical = revision[0]["strategy_canonical"]
+            strategy = json.loads(canonical)
             item["hash_recomputed_matches"] = hashlib.sha256(canonical.encode()).hexdigest() == revision[0]["content_sha256"]
             item["parent_is_null"] = revision[0]["parent_revision_id"] is None
+            item["strategy_schema_version"] = strategy.get("schema_version")
+            item["relative_volume_baseline"] = strategy.get("entry", {}).get("args", [{}])[0] if key.startswith("volume-rule-") else None
+            if "expectedEntryTree" in saved:
+                item["entry_tree_matches_ui_fixture"] = strategy.get("entry") == saved["expectedEntryTree"]
+            if key.startswith("volume-rule-"):
+                item["quote_volume_input_declared"] = "quote_volume" in strategy.get("data_inputs", [])
             item["owner_matches_intake"] = bool(rows(
                 "select 1 from records r join strategy_revisions s on s.owner_id = r.owner_id "
                 f"where s.revision_id = '{saved['revisionId']}' and r.record_id = '{request_id}'"))
@@ -337,7 +344,12 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
     checks["thesis_verdicts"] = verdicts
     passed = bool(verdicts) and all(v["intake_rows_with_exact_text"] == 1 and v["revision_rows"] == 1 and v.get("revision_draft_belongs_to_request")
                                     and v.get("hash_recomputed_matches") and v.get("parent_is_null")
-                                    and v.get("owner_matches_intake") for v in verdicts)
+                                    and v.get("owner_matches_intake") and v.get("strategy_schema_version") == "p06.strategy/1"
+                                    and (not v["key"].startswith("volume-rule-") or
+                                         v.get("quote_volume_input_declared") and
+                                         v.get("relative_volume_baseline") == {"op": "relative_volume", "lookback_buckets": 2})
+                                    and ("entry_tree_matches_ui_fixture" not in v or v["entry_tree_matches_ui_fixture"])
+                                    for v in verdicts)
     return {"checks": checks, "all_checks_pass": passed}
 
 

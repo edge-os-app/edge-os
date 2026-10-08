@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { injectAuth, tokens } from "./fixture-auth.mjs";
+import { expectProvenanceFits, openProvenanceAndMeasure } from "./provenance-layout.mjs";
 
 const evidence = process.env.P03_EVIDENCE_DIR ?? ".evidence";
 const shots = path.join(evidence, "screenshots");
@@ -18,6 +19,26 @@ function record(key, value) {
 
 const THESIS = "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only.";
 const HUNCH = "Recent rises seem to keep running. Is that worth testing?";
+const GROUPED_RULE = "Enter when (current quote volume is above twice its prior 10-minute mean or price is above 20) and price is above 30. Exit when the 5-minute price return is below zero.";
+const GROUPED_RIGHT_RULE = "Enter when current quote volume is above twice its prior 10-minute mean or (price is above 20 and price is above 30). Exit when the 5-minute price return is below zero.";
+const TINY_THRESHOLD = `-0.${"0".repeat(399)}1`;
+const TINY_RULE = `Enter when the 5-minute price return is above ${TINY_THRESHOLD}. Exit when the 5-minute price return is below zero.`;
+const GROUPED_ENTRY = { op: "and", args: [
+  { op: "or", args: [
+    { op: "gt", args: [{ op: "relative_volume", lookback_buckets: 2 }, { op: "constant", value: "2", unit: "DIMENSIONLESS" }] },
+    { op: "gt", args: [{ op: "price" }, { op: "constant", value: "20", unit: "PRICE" }] },
+  ] },
+  { op: "gt", args: [{ op: "price" }, { op: "constant", value: "30", unit: "PRICE" }] },
+] };
+const GROUPED_RIGHT_ENTRY = { op: "or", args: [
+  { op: "gt", args: [{ op: "relative_volume", lookback_buckets: 2 }, { op: "constant", value: "2", unit: "DIMENSIONLESS" }] },
+  { op: "and", args: [
+    { op: "gt", args: [{ op: "price" }, { op: "constant", value: "20", unit: "PRICE" }] },
+    { op: "gt", args: [{ op: "price" }, { op: "constant", value: "30", unit: "PRICE" }] },
+  ] },
+] };
+const TINY_ENTRY = { op: "gt", args: [{ op: "price_return", lookback_buckets: 1 },
+  { op: "constant", value: TINY_THRESHOLD, unit: "DIMENSIONLESS" }] };
 
 async function shot(page, project, name) {
   await page.screenshot({ path: path.join(shots, `${project}-${name}.png`), fullPage: true });
@@ -94,6 +115,101 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   // leaving returns focus to the opened card
   await page.getByRole("button", { name: "All requests" }).click();
   await expect(page.locator("button.card-open").first()).toBeFocused();
+});
+
+test("quote-volume rule: review, save and reopen the scheduled baseline", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  await sample(page, /current quote volume is above twice its prior 10-minute mean/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  await expect(page.getByTestId("rules-review")).toContainText("current quote volume divided by the mean of the previous 10 minutes is above 2");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toContainText("Read back from the database");
+  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const requestUrl = page.url();
+  record(`volume-rule-${project}`, { url: requestUrl, revisionId, original: "Enter when current quote volume is above twice its prior 10-minute mean; exit when the 5-minute price return is below zero." });
+  const fresh = await page.context().browser().newContext({ viewport: page.viewportSize() });
+  const again = await fresh.newPage();
+  await injectAuth(again, tokens.a);
+  await again.goto(requestUrl);
+  await expect(again.getByTestId("revision-id")).toHaveText(revisionId);
+  await expect(again.getByTestId("rules-review")).toContainText("previous 10 minutes");
+  await fresh.close();
+});
+
+test("nested Boolean groups retain their review meaning through save", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill(GROUPED_RULE);
+  await page.getByRole("radio", { name: "Specific rule or thesis" }).check();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  const expectedEntry = "Enter when (current quote volume divided by the mean of the previous 10 minutes is above 2 or price is above 20) and price is above 30";
+  await expect(page.getByTestId("rules-review")).toContainText(expectedEntry);
+  await shot(page, project, "grouped-rules-review");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toContainText("Read back from the database");
+  await expect(page.getByTestId("rules-review")).toContainText(expectedEntry);
+  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const requestUrl = page.url();
+  record(`grouped-rule-${project}`, { url: requestUrl, revisionId, original: GROUPED_RULE,
+    expectedEntry, expectedEntryTree: GROUPED_ENTRY });
+  await shot(page, project, "grouped-rules-saved");
+});
+
+test("a right-nested Boolean group stays distinct through save", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill(GROUPED_RIGHT_RULE);
+  await page.getByRole("radio", { name: "Specific rule or thesis" }).check();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  const expectedEntry = "Enter when current quote volume divided by the mean of the previous 10 minutes is above 2 or (price is above 20 and price is above 30)";
+  await expect(page.getByTestId("rules-review")).toContainText(expectedEntry);
+  await shot(page, project, "grouped-right-rules-review");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toContainText("Read back from the database");
+  await expect(page.getByTestId("rules-review")).toContainText(expectedEntry);
+  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  record(`grouped-right-${project}`, { url: page.url(), revisionId, original: GROUPED_RIGHT_RULE,
+    expectedEntry, expectedEntryTree: GROUPED_RIGHT_ENTRY });
+  await shot(page, project, "grouped-right-rules-saved");
+});
+
+test("exact negative tiny threshold remains visible through save", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill(TINY_RULE);
+  await page.getByRole("radio", { name: "Specific rule or thesis" }).check();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  const expectedEntry = `Enter when the 5-minute price return is above -0.${"0".repeat(397)}1%`;
+  const expectedProvenance = `Enter when the 5-minute price return is above -0.${"0".repeat(397)}1%`;
+  const review = page.getByTestId("rules-review");
+  await expect(review).toContainText(expectedEntry);
+  const width = await review.evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }));
+  expect(width.scroll).toBeLessThanOrEqual(width.client);
+  await shot(page, project, "tiny-threshold-review");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toContainText("Read back from the database");
+  await expect(review).toContainText(expectedEntry);
+  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const requestUrl = page.url();
+  record(`tiny-threshold-${project}`, { url: requestUrl, revisionId, original: TINY_RULE,
+    expectedEntry, expectedProvenance, expectedEntryTree: TINY_ENTRY });
+  await shot(page, project, "tiny-threshold-saved");
+  const provenance = await openProvenanceAndMeasure(page, expectedProvenance);
+  expectProvenanceFits(provenance);
+  await shot(page, project, "tiny-threshold-provenance-open");
 });
 
 test("hunch: keyboard choice, Tab order and Escape-free completion", async ({ page }, info) => {
@@ -174,6 +290,15 @@ test("unsupported meaning and unsupported restriction are kept and block compila
   await page.getByRole("button", { name: "Prepare request" }).click();
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "UNSUPPORTED");
   await expect(page.getByRole("list", { name: "Saved restrictions" })).toContainText("only tokens younger than 24 hours");
+
+  await open(page, tokens.a);
+  await sample(page, /14-period RSI is above 70/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "UNSUPPORTED");
+  await expect(page.getByTestId("outcome")).toContainText("Entry rule:");
+  await expect(page.getByTestId("outcome")).toContainText("rsi");
 });
 
 test("unscripted text is a system message, not a verdict on the idea", async ({ page }) => {
