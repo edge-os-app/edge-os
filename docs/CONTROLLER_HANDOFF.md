@@ -1,10 +1,14 @@
 # Edge OS team handoff
 
-Last updated: 2026-10-06, Africa/Kinshasa.
+Last updated: 2026-10-08, Africa/Kinshasa.
 
 This file records team-facing state. The builder's detailed controller history, retired Funnel ledger, courses and research archives are private and are not required inputs for a teammate's clone.
 
 ## Current state
+
+### P16 deferred cross-user application check
+
+The approved one-owner provider run completed the six sign-only controls and A signer removal. See [P16 provider signing results](qualification/p16/PROVIDER_SIGNING_RESULT_2026-10-08.md). Independent reviews and the gate verdict remain pending, so P16 stays open and unqualified. This run does not test cross-user application authorization. Keep that capability `NOT RUN`; owner-group equality and exact wallet ownership do not prove the application backend isolates users. Trigger the actual-backend check before claiming production or tenant-level isolation, once the authenticated P03/backend request path is available. Use two distinct authenticated owners: verify each can access its own wallet binding, then send owner B's valid request against owner A's wallet binding through the real backend. Require a server-side denial and no persisted mutation or provider call. Keep existing synthetic cross-owner tests as local regressions only. This deferred check needs its own scoped owner/resource setup and does not extend P16's one-owner wallet or signing limits.
 
 Current publication approval, 2026-10-06: the builder approved the complete 43-task graph and authenticated-request → persisted-record → retrieval testing boundary. The corrected graph's SHA256 is `9c013c9f0be7c3c37b09177c62ee84342e0507164993e0bd421415893be8e39e`; P27 requires P31, with 99 acyclic blocking edges and all 88 stories covered. The builder first requested individual local drafts, then explicitly authorized publishing the reviewed shared handoff on a documentation branch/PR and creating its GitHub issues. No main merge, worker assignment, production implementation, provider access or financial action is authorized. This dated entry supersedes older graph-approval/publication-pending statements below; historical evidence remains unchanged. Tickets must link the exact published documentation revision and accessible required inputs. P01/P02/P43 are the initial prerequisite tasks, not completed or dispatched work. Missing contract, fixture, design or qualification evidence remains a task-specific readiness condition. Publication is authorized, not yet completed by this record.
 
