@@ -29,7 +29,7 @@ Work from the repository root. Each step names its own done condition. The whole
    ```
    Evidence lands in `.scratch/p03/evidence/<run_id>/`. Keep it. It is untracked.
 4. **Inspect the records yourself.** During the hold, run the `psql` command from the `HOLD` line. Queries are in [feature-map.md](feature-map.md#sql-checks). Compare what you see with `sql-inspection.json`. Done when the saved request text equals the text in `ui-results.json` byte for byte and the revision hash recomputes.
-5. **Read the evidence.** Open `steps.json`, `ui/ui-results.json`, `ownership-drive.json`, `bundle-scan.json`, `resources-before.json` and `resources-after.json`. Look at three screenshots in `ui/screenshots/` (desktop and `mobile-390`). Done when `resources-after.json` equals `resources-before.json`.
+5. **Read the evidence.** Open `steps.json`, `ui/ui-results.json`, `ownership-drive.json`, `bundle-scan.json`, `resources-before.json` and `resources-after.json`. Look at three screenshots in `ui/screenshots/` (desktop and `mobile-390`). Done when `resources-after.json` equals `resources-before.json`. Resources labelled for another run are ignored, so a parallel labelled run is fine. An unlabelled container or volume that appears or disappears fails the step.
 6. **Clean up orphans.** A crashed run can leave labelled containers. List them, remove only a stopped one by naming its run ID:
    ```bash
    python3 scripts/p03/harness.py orphans

@@ -97,11 +97,14 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
     if (!draft) return;
     const keys = pendingKeys(draft.record_id);
     setBusy(true); setError(""); setNotice("");
+    focusSurface.current = null; // the Save button disappears; the layout effect lands focus on the new state
     try {
       await api.publish(draft.content.strategy_id, { ...keys, expected_parent_revision_id: null, draft_id: draft.record_id, strategy: draft.content.source_syntax });
-      if (await reload()) setNotice("Saved. The revision below was read back from storage.");
+      await reload();
     } catch (e) {
+      focusSurface.current = undefined;
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
+        focusSurface.current = null;
         if (await reload()) setNotice("A revision of this rule was already saved. The saved record is shown.");
       } else if (e instanceof ApiError && e.status === 0) {
         setError("We could not confirm the save. Press save again. It reuses the same key, so it cannot create a second revision.");
@@ -135,8 +138,8 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
   return (
     <div className="stack">
       <div>
-        <p className="eyebrow">Saved request · {shortId(bundle.intake.record_id)}</p>
         <h1 ref={heading} tabIndex={-1}>Your request</h1>
+        <p className="muted" style={{ marginTop: 0 }}>Saved request {shortId(bundle.intake.record_id)}</p>
         <div className="btn-row">
           <button className="btn btn-secondary" type="button" onClick={() => go("#/research", `req-${id}`)}>All requests</button>
           <button className="btn btn-secondary convo-button" type="button" onClick={openConversation}>Conversation</button>

@@ -89,3 +89,11 @@ def test_list_marks_when_more_requests_exist(client, owner_a):
         rows, more = service.list_requests(session, Principal(user_id, "did:privy:x"), limit=3)
         assert len(rows) == 3 and more is False
     assert client.get("/v1/research/requests", headers=owner_a).json()["has_more"] is False
+
+
+def test_decomposed_text_gets_a_message_a_person_can_act_on(client, owner_a):
+    decomposed = "Café rises seem to keep running."  # e + combining accent, not NFC
+    response = submit(client, owner_a, decomposed)
+    body = assert_envelope(response, 422)
+    detail = body["findings"][0]["detail"].lower()
+    assert "nfc" in detail and "composed" in detail

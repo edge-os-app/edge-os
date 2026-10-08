@@ -16,7 +16,7 @@ import jwt
 from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DataError, SQLAlchemyError
 
 from .errors import auth_error, service_unavailable
 from .models import User
@@ -30,6 +30,18 @@ IDENTITY_CLAIMS = ("linked_accounts", "custom_metadata")
 _LOG_INTERVAL = 60.0
 _last_logged: dict[str, float] = {}
 counters: dict[str, int] = {"auth.signature_failure": 0, "auth.previous_key_accepted": 0}
+
+
+def count_event(name: str) -> None:
+    """Count an operator-facing auth event and log it at most once a minute (name and running total only).
+
+    `auth.signature_failure` shows a spike. `auth.previous_key_accepted` shows when the previous key can go.
+    """
+    counters[name] += 1
+    now = time.monotonic()
+    if now - _last_logged.get(name, -_LOG_INTERVAL) >= _LOG_INTERVAL:
+        _last_logged[name] = now
+        log.warning("%s total=%d", name, counters[name])
 
 
 @dataclass(frozen=True)
@@ -62,7 +74,7 @@ class Verifier:
                 claims = jwt.decode(token, key, algorithms=["ES256"], issuer="privy.io", audience=self.app_id,
                                     options={"require": REQUIRED_CLAIMS}, leeway=LEEWAY_SECONDS)
             except jwt.InvalidSignatureError:
-                counters["auth.signature_failure"] += 1
+                count_event("auth.signature_failure")
                 continue
             except jwt.ExpiredSignatureError:
                 raise AuthFailure(401, "auth_expired") from None
@@ -74,7 +86,7 @@ class Verifier:
                 self._log_unexpected(type(error).__name__)
                 raise AuthFailure(401, "auth_invalid") from None
             if index > 0:
-                counters["auth.previous_key_accepted"] += 1
+                count_event("auth.previous_key_accepted")
             break
         if claims is None:
             raise AuthFailure(401, "auth_invalid")
@@ -132,6 +144,8 @@ def require_principal(request: Request) -> Principal:
                             .on_conflict_do_nothing(index_elements=[User.privy_did]))
             user_id = session.execute(select(User.id).where(User.privy_did == did)).scalar_one()
             session.commit()
+    except DataError:  # a signed subject the database cannot store (for example U+0000) is a bad credential
+        raise auth_error(401, "auth_invalid", "The credential is not valid for this application.") from None
     except SQLAlchemyError:
         raise service_unavailable() from None
     return Principal(user_id=user_id, privy_did=did)

@@ -37,9 +37,14 @@ export const OUTCOME_COPY: Record<OutcomeName, { title: string; tone: "accent" |
   PUBLISHED: { title: "Saved", tone: "accent-2" },
 };
 
+/** Exact: the decimal string shifts two places, with no float rounding. "0.00125" reads "0.125%". */
 function percent(value: string): string {
-  const n = Number(value) * 100;
-  return `${Number.isInteger(n) ? n : n.toFixed(2).replace(/0+$/, "")}%`;
+  const negative = value.startsWith("-");
+  const [whole = "0", fraction = ""] = value.replace("-", "").split(".");
+  const padded = fraction.padEnd(2, "0");
+  const digits = (whole + padded.slice(0, 2)).replace(/^0+(?=\d)/, "");
+  const rest = padded.slice(2).replace(/0+$/, "");
+  return `${negative ? "-" : ""}${digits}${rest ? `.${rest}` : ""}%`;
 }
 
 const COMPARE_WORDS: Record<string, string> = { gt: "above", gte: "at or above", lt: "below", lte: "at or below" };

@@ -159,3 +159,75 @@ test("side panel answer keeps focus in the side panel on desktop", async ({ page
   await expect(side.getByRole("log")).toContainText("Entry rule");
   expect(await page.evaluate(() => !!document.activeElement?.closest(".convo-desktop") && document.activeElement !== document.body)).toBe(true);
 });
+
+
+/** WCAG contrast of text against the nearest opaque background, including ::placeholder and translucent colors. */
+async function lowContrast(page) {
+  return page.evaluate(() => {
+    const parse = (value) => {
+      const m = value.match(/^rgba?\(([^)]+)\)$/) ?? null;
+      if (m) { const p = m[1].split(/[ ,/]+/).filter(Boolean).map(Number); return { r: p[0], g: p[1], b: p[2], a: p[3] ?? 1 }; }
+      const c = value.match(/^color\(srgb ([^)]+)\)$/);
+      if (c) { const p = c[1].split(/[ /]+/).filter(Boolean).map(Number); return { r: p[0] * 255, g: p[1] * 255, b: p[2] * 255, a: p[3] ?? 1 }; }
+      return null;
+    };
+    const over = (top, bottom) => ({ r: top.r * top.a + bottom.r * (1 - top.a), g: top.g * top.a + bottom.g * (1 - top.a), b: top.b * top.a + bottom.b * (1 - top.a), a: 1 });
+    const background = (el) => {
+      const layers = [];
+      for (let node = el; node; node = node.parentElement) {
+        const bg = parse(getComputedStyle(node).backgroundColor);
+        if (bg && bg.a > 0) { layers.push(bg); if (bg.a === 1) break; }
+      }
+      let base = { r: 255, g: 255, b: 255, a: 1 };
+      for (const layer of layers.reverse()) base = over(layer, base);
+      return base;
+    };
+    const lum = ({ r, g, b }) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+    const ratio = (fg, bg) => { const a = lum(fg), b = lum(bg); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
+    const checks = [];
+    const selectors = ".muted, .eyebrow, .msg .who, dl.kv dt, table.records th, .tag, .chip, .status, .notice, .choice, .example, .card-open, label, legend, h1, h2, h3, p, summary";
+    for (const el of document.querySelectorAll(selectors)) {
+      const style = getComputedStyle(el);
+      if (style.visibility === "hidden" || style.display === "none" || !el.getBoundingClientRect().width || !el.textContent.trim()) continue;
+      if (el.closest("dialog:not([open])") || el.classList.contains("visually-hidden")) continue;
+      const bg = background(el), fg = parse(style.color);
+      if (!fg) continue;
+      const large = parseFloat(style.fontSize) >= 24 || (parseFloat(style.fontSize) >= 18.66 && Number(style.fontWeight) >= 700);
+      checks.push({ what: `${el.tagName.toLowerCase()}.${el.className}`.slice(0, 40), text: el.textContent.trim().slice(0, 24), ratio: ratio(over(fg, bg), bg), min: large ? 3 : 4.5 });
+    }
+    for (const el of document.querySelectorAll("input.input, textarea.input")) {
+      const fg = parse(getComputedStyle(el, "::placeholder").color);
+      if (fg && el.getBoundingClientRect().width) { const bg = background(el); checks.push({ what: `placeholder ${el.tagName.toLowerCase()}`, text: el.id.slice(-12), ratio: ratio(over(fg, bg), bg), min: 4.5 }); }
+    }
+    return checks.filter((c) => c.ratio < c.min).map((c) => ({ ...c, ratio: Math.round(c.ratio * 100) / 100 }));
+  });
+}
+
+test("text and placeholder contrast meet 4.5:1 (3:1 for large text) in the main states", async ({ page }, info) => {
+  const failures = {};
+  await open(page, tokens.a);
+  failures.home = await lowContrast(page);
+  await sample(page, /Recent rises seem to keep running/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  failures.needsAnswer = await lowContrast(page);
+  fs.writeFileSync(path.join(outDir, `contrast-${info.project.name}.json`), JSON.stringify(failures, null, 2));
+  expect(failures, JSON.stringify(failures, null, 2)).toEqual({ home: [], needsAnswer: [] });
+});
+
+test("no horizontal scroll with long unbroken text, at any width", async ({ page }, info) => {
+  await open(page, tokens.a);
+  const long = `Is 0x1111111111111111111111111111111111111111 ${"x".repeat(140)} worth testing?`;
+  await page.getByLabel("Your words", { exact: true }).fill(long);
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toBeVisible();
+  const overflow = async () => page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
+  const requestPage = await overflow();
+  await page.getByRole("button", { name: "All requests" }).click();
+  await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
+  await expect(page.locator("button.card-open").first()).toBeVisible();
+  const home = await overflow();
+  fs.writeFileSync(path.join(outDir, `overflow-${info.project.name}.json`), JSON.stringify({ requestPage, home }, null, 2));
+  expect(requestPage.scrollWidth).toBeLessThanOrEqual(requestPage.innerWidth);
+  expect(home.scrollWidth).toBeLessThanOrEqual(home.innerWidth);
+});

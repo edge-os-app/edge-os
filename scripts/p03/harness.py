@@ -102,6 +102,10 @@ class Postgres:
             raise RuntimeError(f"refusing to start run {self.run_id}: {', '.join(present)} already exists. "
                                "Nothing was created or changed. Use a new run ID.")
         sh(["docker", "volume", "create", *self.labels(), self.volume])
+        # `docker volume create` is idempotent. Claim the volume only if it carries this run's labels.
+        if label_of("volume", self.volume, "edge-os.test.run") != self.run_id or label_of("volume", self.volume, "edge-os.test") != "1":
+            raise RuntimeError(f"refusing run {self.run_id}: volume {self.volume} exists without this run's labels. "
+                               "Nothing was removed.")
         self.created_volume = True
         try:
             sh(["docker", "run", "-d", "--name", self.container, *self.labels(),

@@ -16,9 +16,9 @@ Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column na
 | Contextual conversation | Desktop side panel; 390px sheet with Escape, Tab wrap, focus return | same records as the page | none | screenshot `08` |
 | Reopen | Open from the list or a link in a new browser context | `GET /v1/research/requests/{id}` | read only | screenshot `09`, `ui-reopen.log` |
 | Restart | API process stopped and started on the same database | `GET /readyz` | unchanged | `steps.json`, `sql-inspection.json` |
-| Cross-owner denial | Other owner sees "not found" | read, answer and publish as owner B return 404 | no row changes | `ownership-drive.json` |
+| Cross-owner denial | Other owner sees "not found" | read, answer and publish as owner B return 404 | no row changes | `ownership-drive.json`. A foreign parent reference is covered by `apps/api/tests/test_publication.py::test_database_rejects_cross_owner_parent_reference` and the 409 conflict test |
 | Publication retry | Same operation and key return the same identity | `POST …/revisions` | one `strategy_revisions` row | `apps/api/tests/test_publication.py`, `test_live.py` |
-| Interface quality | 44px control minimum, no console or network errors, axe-core on five states, focus stays in the answering surface | none | none | `ui/quality/controls-*.json`, `smoke-*.json`, `axe-*.json` |
+| Interface quality | 44px control minimum, text and placeholder contrast, no sideways scroll with long text, no console or network errors, axe-core on five states, focus stays in the answering surface and lands on the new state after a save | none | none | `ui/quality/controls-*.json`, `contrast-*.json`, `overflow-*.json`, `smoke-*.json`, `axe-*.json` |
 | Cleanup | none | none | none | `resources-before.json`, `resources-after.json`; refusal of a repeated run ID: `apps/api/tests/test_harness_isolation.py` |
 
 Not covered: real Privy login (`R1`–`R4` of the P01 profile), real model output, research execution, Agents, Positions, Funds, wallets, funding, signing.

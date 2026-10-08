@@ -58,10 +58,19 @@ def tool_version(args: list[str]) -> str:
         return f"unavailable: {type(error).__name__}"
 
 
-def docker_resources() -> dict[str, list[str]]:
-    containers = harness.sh(["docker", "ps", "-a", "--format", "{{.Names}}"], check=False).stdout.split()
-    volumes = harness.sh(["docker", "volume", "ls", "--format", "{{.Name}}"], check=False).stdout.split()
-    return {"containers": sorted(containers), "volumes": sorted(volumes)}
+def docker_resources(run_id: str) -> dict[str, list[str]]:
+    """Containers and volumes that are not another run's. Unlabelled resources (the user's) and this run's are
+    compared, so a parallel labelled run cannot cause a false failure while an unrelated change still shows."""
+    def keep(listing: str) -> list[str]:
+        names = []
+        for line in listing.splitlines():
+            name, _, owner = line.partition("\t")
+            if name and owner in ("", run_id):
+                names.append(name)
+        return sorted(names)
+    containers = harness.sh(["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Label \"edge-os.test.run\"}}"], check=False).stdout
+    volumes = harness.sh(["docker", "volume", "ls", "--format", "{{.Name}}\t{{.Label \"edge-os.test.run\"}}"], check=False).stdout
+    return {"containers": keep(containers), "volumes": keep(volumes)}
 
 
 def http(method: str, url: str, token: str | None = None, body: object = None) -> tuple[int, dict]:
@@ -141,7 +150,7 @@ def main() -> int:
         return 2
     rec = Recorder(evidence)
     processes: list[harness.Process] = []
-    before = docker_resources()
+    before = docker_resources(run_id)
     rec.write("resources-before.json", before)
     signer = TestSigner()
     ok = True
@@ -215,7 +224,7 @@ def main() -> int:
             # cross-owner denial against the real saved rows
             denial = ownership_drive(pg, api_url, token_a, token_b)
             rec.write("ownership-drive.json", denial)
-            ok &= rec.step("another owner is denied read, mutation and parent reference", denial["all_denied"], denial)
+            ok &= rec.step("another owner is denied read and mutation of saved rows (a foreign parent reference is covered by the database test)", denial["all_denied"], denial)
 
             api.stop()
             api = harness.start_api(env, api_port, evidence / "logs", name="api-restarted")
@@ -246,7 +255,7 @@ def main() -> int:
         pg.stop_and_remove()
         shutil.rmtree(dist_path, ignore_errors=True)
         tsconfig_copy.unlink(missing_ok=True)
-        after = docker_resources()
+        after = docker_resources(run_id)
         rec.write("resources-after.json", after)
         clean = pg.leftovers() == [] and after == before and not dist_path.exists() and not tsconfig_copy.exists()
         rec.step("cleanup removed only this run's resources", clean, {"leftovers": pg.leftovers(), "unchanged": after == before})

@@ -24,3 +24,11 @@ describe("plain-words rules", () => {
     expect(summarizeValue("market", {})).toMatch(/not a real pool/);
   });
 });
+
+describe("percent formatting is exact", () => {
+  const cmp = (value: string) => ({ op: "gt", args: [{ op: "price_return", lookback_buckets: 1 }, { op: "constant", value, unit: "DIMENSIONLESS" }] });
+  it.each([["0.07", "7%"], ["0.29", "29%"], ["0.00004", "0.004%"], ["0.00125", "0.125%"], ["0.035", "3.5%"], ["0.5", "50%"], ["1", "100%"], ["0.01", "1%"]])(
+    "renders %s as %s", (value, expected) => {
+      expect(describeExpression(cmp(value))).toBe(`price rose more than ${expected} over the last 5 minutes`);
+    });
+});

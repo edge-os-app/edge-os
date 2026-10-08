@@ -76,6 +76,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await shot(page, project, "03-review");
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
+  await expect(page.locator("#state-title")).toBeFocused(); // the Save button is gone; focus lands on the new state
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
   const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
   const requestUrl = page.url();

@@ -237,3 +237,36 @@ def test_no_auth_disabling_setting(env):
     for name in ("EDGE_OS_PRIVY_APP_SECRET", "EDGE_OS_AUTH_DISABLED", "EDGE_OS_DEV_AUTH_BYPASS"):
         with pytest.raises(ConfigError):
             load_settings({**env, name: "1"})
+
+
+def test_rotation_counters_are_logged_for_operators(signer, pg, migrated, caplog):
+    """P01: `auth.signature_failure` shows a spike, `auth.previous_key_accepted` shows when the old key is safe to remove."""
+    import harness
+    from fastapi.testclient import TestClient
+    from edge_os_api import auth as auth_module
+    from edge_os_api.main import create_app
+    from edge_os_api.settings import load_settings
+    old = TestSigner()
+    env = harness.api_env(database_url=pg.url, public_pem=signer.public_pem, previous_pem=old.public_pem,
+                          cors=["http://127.0.0.1:3999"])
+    auth_module._last_logged.clear()
+    caplog.set_level(logging.INFO, logger="edge_os.auth")
+    with TestClient(create_app(load_settings(env))) as rotated:
+        assert get(rotated, old.token("did:privy:rotlog-" + str(time.time_ns()))).status_code == 200
+        text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "auth.previous_key_accepted" in text and "auth.signature_failure" in text  # the current key failed first
+        caplog.clear()
+        before = auth_module.counters["auth.signature_failure"]
+        assert get(rotated, TestSigner().token()).status_code == 401  # a key we never trusted
+        assert auth_module.counters["auth.signature_failure"] > before
+        assert "auth.signature_failure" not in "\n".join(r.getMessage() for r in caplog.records)  # rate limited: once a minute
+        auth_module._last_logged.clear()
+        assert get(rotated, TestSigner().token()).status_code == 401
+        assert "auth.signature_failure" in "\n".join(r.getMessage() for r in caplog.records)
+    token_text = old.token()
+    assert token_text not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_a_signed_subject_with_a_nul_character_is_a_401_not_a_503(client, signer):
+    token = jwt.encode({**signer.claims(), "sub": "did:privy:\x00x"}, signer.private_key, algorithm="ES256")
+    assert_error(get(client, token), 401, "auth_invalid")

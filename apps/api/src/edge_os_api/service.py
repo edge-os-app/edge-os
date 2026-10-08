@@ -133,7 +133,9 @@ def create_request(session: Session, principal: Principal, body: dict[str, Any])
     try:
         p02.validate_record("IntakeRequest", content)
     except p02.Invalid as error:
-        raise invalid("/", str(error)) from None
+        detail = ("Text must use composed Unicode characters (NFC). Re-type or paste it as plain text, for example "
+                  "so that an accented letter is one character.") if "NFC" in str(error) else str(error)
+        raise invalid("/", detail) from None
     intake = put_record(session, principal, "IntakeRequest", content, operation_id, moment)
     proposal = INTERPRETER.interpret(content)
     if proposal is None:
