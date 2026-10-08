@@ -82,6 +82,9 @@ export function describeExpression(node: unknown): string {
     case "price": return "price";
     case "quote_volume": return "quote volume";
     case "price_return": return `price return over ${Number(expr.lookback_buckets) * 5} minutes`;
+    case "relative_volume": return `current quote volume divided by the mean of the previous ${Number(expr.lookback_buckets) * 5} minutes`;
+    case "lag": return `${describeExpression(expr.value)} from ${Number(expr.buckets) * 5} minutes earlier`;
+    case "sum": case "mean": return `the ${expr.op} of ${describeExpression(expr.value)} over ${Number(expr.buckets) * 5} minutes`;
     case "and": case "or": return args.map(describeExpression).join(` ${expr.op} `);
     case "not": return `not (${describeExpression(expr.value)})`;
     default: return expr.op;

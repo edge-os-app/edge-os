@@ -1,0 +1,40 @@
+{
+  "schema_version": "p06.fixtures/1",
+  "cases": [
+    {
+      "id": "relative-volume-prior-two",
+      "expression": {"op": "relative_volume", "lookback_buckets": 2},
+      "scheduled_quote_volume": ["4", "8", "20"],
+      "position": 2,
+      "expected": "10/3",
+      "test": "test_relative_volume_uses_only_prior_scheduled_buckets"
+    },
+    {
+      "id": "relative-volume-zero-baseline-zero-current",
+      "expression": {"op": "relative_volume", "lookback_buckets": 2},
+      "scheduled_quote_volume": ["0", "0", "0"],
+      "position": 2,
+      "expected_state": "UNKNOWN",
+      "expected_reasons": ["ZERO_BASELINE"],
+      "test": "test_relative_volume_zero_baseline_is_unknown"
+    },
+    {
+      "id": "price-return-qualified-endpoints-with-gap",
+      "expression": {"op": "price_return", "lookback_buckets": 2},
+      "scheduled_price": ["100", null, "110"],
+      "position": 2,
+      "expected": "0.1",
+      "expected_reasons": ["MISSING_PRICE:1"],
+      "test": "test_price_return_keeps_intermediate_gap_while_using_qualified_endpoints"
+    },
+    {
+      "id": "rolling-mean-does-not-shrink",
+      "expression": {"op": "mean", "value": {"op": "price"}, "buckets": 3},
+      "scheduled_price": ["100", null, "110"],
+      "position": 2,
+      "expected_state": "UNKNOWN",
+      "expected_reasons": ["MISSING_PRICE:1"],
+      "test": "test_rolling_mean_does_not_shrink_around_missing_scheduled_position"
+    }
+  ]
+}

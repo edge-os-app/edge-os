@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
-from . import p02
+from . import p02, p06
 from .auth import Principal
 from .errors import AppError, finding, invalid, not_found, service_unavailable
 from .interpreter import FixtureInterpreter, find_scenario, open_questions
@@ -307,7 +307,10 @@ def publish(session: Session, principal: Principal, strategy_id: str, body: dict
     path = f"/v1/strategies/{strategy_id}/revisions"
     strategy = body["strategy"]
     try:
-        p02.validate_strategy(strategy)
+        p06.validate_strategy(strategy)
+    except p06.CompilerError as error:
+        path = "/strategy" + (error.path if error.path != "/" else "")
+        raise invalid(path, error.detail, error.code) from None
     except (p02.Invalid, KeyError, TypeError) as error:
         raise invalid("/strategy", f"The strategy is not valid: {error}") from None
     if strategy["strategy_id"] != strategy_id:
@@ -354,6 +357,13 @@ def _publish_once(session: Session, principal: Principal, strategy_id: str, path
     content = draft.content
     if content["strategy_id"] != strategy_id or content["base_revision_id"] != body["expected_parent_revision_id"]:
         raise _conflict("parent_revision_conflict", "The draft does not bind to this strategy and parent revision.")
+    try:
+        p06.validate_strategy(content["source_syntax"])
+    except p06.CompilerError as error:
+        path = "/strategy" + (error.path if error.path != "/" else "")
+        raise invalid(path, error.detail, error.code) from None
+    except (p02.Invalid, KeyError, TypeError) as error:
+        raise invalid("/strategy", f"The saved strategy is not valid: {error}") from None
     if p02.canonical_bytes(content["source_syntax"]).decode("utf-8") != canonical:
         raise invalid("/strategy", "The strategy differs from the adopted meaning saved in the draft.",
                       "strategy_differs_from_draft")
@@ -410,6 +420,11 @@ def get_revision(session: Session, principal: Principal, strategy_id: str, revis
     if row is None:
         raise not_found("revision")
     strategy = p02.strict_loads(row.strategy_canonical)
+    try:
+        p06.validate_strategy(strategy)
+    except (p06.CompilerError, p02.Invalid, KeyError, TypeError):
+        raise AppError(500, "READ", "UNAVAILABLE", "service_unavailable",
+                       [finding("stored_strategy_invalid", "/strategy", "The saved revision failed P06 validation.")]) from None
     recomputed = p02.sha256_hex(strategy)
     return {**revision_summary(row), "strategy": strategy, "stored_hash_matches_content": recomputed == row.content_sha256}
 

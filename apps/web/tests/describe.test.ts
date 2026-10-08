@@ -19,6 +19,10 @@ describe("plain-words rules", () => {
   it("states that action scope grants no permission", () => {
     expect(summarizeValue("action_scope", ["SPOT_BUY"])).toMatch(/grants no permission/);
   });
+  it("explains the quote-volume baseline and its scheduled timing", () => {
+    expect(describeExpression({ op: "relative_volume", lookback_buckets: 3 }))
+      .toBe("current quote volume divided by the mean of the previous 15 minutes");
+  });
   it("marks synthetic assumptions as synthetic", () => {
     expect(summarizeValue("cost_assumptions", { fee_rate: "0.003", slippage_rate: "0.005", source_ref: "x" })).toMatch(/synthetic assumption/);
     expect(summarizeValue("market", { network: "MONAD", research_binding: { evidence_class: "SYNTHETIC_FIXTURE" } })).toMatch(/not a real pool/);

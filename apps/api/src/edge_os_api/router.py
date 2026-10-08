@@ -6,11 +6,10 @@ strategy from unadopted meaning. Strategy validation uses the frozen P02 validat
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import p02
+from . import p02, p06
 from .errors import finding as _finding
 from .interpreter import FixtureInterpreter, Scenario, clarification_text
 
@@ -42,18 +41,7 @@ def required_fields(job: str) -> list[str]:
 
 
 def build_strategy(strategy_id: str, values: dict[str, Any]) -> dict[str, Any]:
-    expressions = [values["entry"], values["exit"]]
-    if not (isinstance(values["invalidation"], dict) and values["invalidation"].get("state") == "NOT_REQUESTED"):
-        expressions.append(values["invalidation"])
-    strategy: dict[str, Any] = {"schema_version": p02.CONTRACT["identity"]["strategy_schema"],
-                                "strategy_id": strategy_id, "domain": "SPOT"}
-    for name in p02.CREATE_STRATEGY_FIELDS:
-        if name != "restrictions":
-            strategy[name] = copy.deepcopy(values[name])
-    strategy["execution_permission"] = {"state": "NOT_GRANTED", "mandate_ref": None}
-    strategy["warmup_buckets"] = max(p02.required_history(expression) for expression in expressions)
-    strategy["semantic_manifest"] = dict(p02.MANIFEST)
-    return strategy
+    return p06.build_strategy(strategy_id, values)
 
 
 def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureInterpreter,
@@ -108,7 +96,13 @@ def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureIn
     if job == "CREATE_STRATEGY":
         values = {name: item["value"] for name, item in by_name.items()}
         try:
-            p02.validate_compile_fields(values)
+            p06.validate_compile_fields(values)
+        except p06.CompilerError as error:
+            field = error.path.strip("/").split("/", 1)[0]
+            path = f"/field_evidence/{field}" if field else "/field_evidence"
+            if error.code == "unsupported_operator":
+                return Routed("UNSUPPORTED", "COMPILATION", [_finding("missing_capability", path, error.detail)])
+            return Routed("INVALID_INPUT", "VALIDATION", [_finding(error.code, path, error.detail)])
         except (p02.Invalid, KeyError, TypeError) as error:
             return _invalid("/field_evidence", f"A supplied field is not valid: {error}", "invalid_field")
     if job != "CREATE_STRATEGY" or interp["evidence_readiness"] == "UNRESOLVED":
@@ -119,7 +113,11 @@ def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureIn
 
     strategy = build_strategy(strategy_id, values)
     try:
-        p02.validate_strategy(strategy)
+        p06.validate_strategy(strategy)
+    except p06.CompilerError as error:
+        field = error.path.strip("/").split("/", 1)[0]
+        path = f"/field_evidence/{field}" if field else "/field_evidence"
+        return Routed("INVALID_INPUT", "VALIDATION", [_finding(error.code, path, error.detail)])
     except (p02.Invalid, KeyError, TypeError) as error:
         return _invalid("/field_evidence", f"The adopted meaning does not form a valid strategy: {error}",
                         "invalid_strategy")

@@ -84,6 +84,14 @@ PROPOSALS: dict[str, tuple[str, str, str, str]] = {
 EXIT_RULE = {"op": "lt", "args": [{"op": "price_return", "lookback_buckets": 1},
                                   {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}]}
 THESIS_ENTRY = _gt_return(3, "0.01")
+VOLUME_ENTRY = {"op": "gt", "args": [
+    {"op": "relative_volume", "lookback_buckets": 2},
+    {"op": "constant", "value": "2", "unit": "DIMENSIONLESS"},
+]}
+UNSUPPORTED_ENTRY = {"op": "gt", "args": [
+    {"op": "rsi", "lookback_buckets": 14},
+    {"op": "constant", "value": "70", "unit": "DIMENSIONLESS"},
+]}
 
 
 def proposal_values() -> dict[str, Any]:
@@ -122,6 +130,14 @@ SCENARIOS: tuple[Scenario, ...] = (
              "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
              "Spot only.", "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage", "one open position maximum"),
              stated={"entry": THESIS_ENTRY, "exit": EXIT_RULE}),
+    Scenario("volume-rule", "Quote volume rule",
+             "Enter when current quote volume is above twice its prior 10-minute mean; exit when the 5-minute "
+             "price return is below zero.", "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
+             stated={"entry": VOLUME_ENTRY, "exit": EXIT_RULE, "data_inputs": ["price", "quote_volume"]}),
+    Scenario("unsupported-indicator", "Unsupported indicator",
+             "Enter when the 14-period RSI is above 70; exit when the 5-minute price return is below zero.",
+             "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
+             stated={"entry": UNSUPPORTED_ENTRY, "exit": EXIT_RULE}),
     Scenario("no-thesis", "No thesis, bounded question",
              "I have no view. Look at this market over the last two days and tell me whether anything is worth testing.",
              "BOUNDED_NO_THESIS", "INVESTIGATE_EFFECT", (), declared_market=DECLARED_MARKET,

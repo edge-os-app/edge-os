@@ -1,0 +1,47 @@
+{
+  "schema_version": "p06.contract/1",
+  "identity": {
+    "strategy_schema": "p06.strategy/1",
+    "manifest_components": {
+      "language": "edge-strategy/2",
+      "operator_registry": "edge-operators/2",
+      "history": "scheduled-5m-no-fill/1",
+      "boolean": "kleene-whole-tree/1",
+      "numeric": "decimal-50-half-even/1",
+      "serialization": "p02-json-decimal-string/1",
+      "compiler": "edge-compiler/2"
+    }
+  },
+  "machine_encoding": "p06-expression-json/1",
+  "limits": {
+    "input_bytes": 65536,
+    "expression_nodes": 2048,
+    "expression_depth": 64,
+    "lookback_buckets": 288,
+    "manifest_entries": 256,
+    "evaluation_steps": 1000000
+  },
+  "operators": [
+    "constant", "price", "quote_volume", "price_return", "lag", "sum", "mean", "relative_volume",
+    "gt", "gte", "lt", "lte", "and", "or", "not"
+  ],
+  "relative_volume": {
+    "shape": {"op": "relative_volume", "lookback_buckets": "positive integer"},
+    "result": "DIMENSIONLESS",
+    "definition": "quote_volume[t] / mean(quote_volume[t-n .. t-1])",
+    "zero_baseline": "UNKNOWN with reason ZERO_BASELINE"
+  },
+  "resource_profile": {
+    "evaluation_steps": "One per visited expression node and scheduled input observation. Hard limit is enforced before the next step.",
+    "measured_on": "P06 worker evidence records the host, the exact high-cost accepted fixture and step count, elapsed time, and process peak RSS."
+  },
+  "source_mapping": {
+    "QT301": "Selected recursive expression, primitive signature, parser rejection and deterministic evaluation requirements from docs/research/P02_COMPILER_REQUIREMENTS.md; T01-T36 mappings are in P06_INPUTS.md.",
+    "QT401": "Typed construction metadata is considered only as source context. Generator tags and sampled parameter ranges do not validate supplied or stored trees.",
+    "exclusions": [
+      "No QT301/QT401 source code or private archive is included.",
+      "No cross-sectional percentile, selector, z-score, OBV, product, macro, generated code or future-price operator.",
+      "No retained-valid-row rolling, forward fill, arithmetic masks, float tolerance, or assumed market qualification."
+    ]
+  }
+}

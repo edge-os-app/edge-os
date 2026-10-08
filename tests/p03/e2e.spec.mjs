@@ -96,6 +96,29 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(page.locator("button.card-open").first()).toBeFocused();
 });
 
+test("quote-volume rule: review, save and reopen the scheduled baseline", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  await sample(page, /current quote volume is above twice its prior 10-minute mean/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  await expect(page.getByTestId("rules-review")).toContainText("current quote volume divided by the mean of the previous 10 minutes is above 2");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toContainText("Read back from the database");
+  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const requestUrl = page.url();
+  record(`volume-rule-${project}`, { url: requestUrl, revisionId, original: "Enter when current quote volume is above twice its prior 10-minute mean; exit when the 5-minute price return is below zero." });
+  const fresh = await page.context().browser().newContext({ viewport: page.viewportSize() });
+  const again = await fresh.newPage();
+  await injectAuth(again, tokens.a);
+  await again.goto(requestUrl);
+  await expect(again.getByTestId("revision-id")).toHaveText(revisionId);
+  await expect(again.getByTestId("rules-review")).toContainText("previous 10 minutes");
+  await fresh.close();
+});
+
 test("hunch: keyboard choice, Tab order and Escape-free completion", async ({ page }, info) => {
   const project = info.project.name;
   await open(page, tokens.a);
@@ -174,6 +197,15 @@ test("unsupported meaning and unsupported restriction are kept and block compila
   await page.getByRole("button", { name: "Prepare request" }).click();
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "UNSUPPORTED");
   await expect(page.getByRole("list", { name: "Saved restrictions" })).toContainText("only tokens younger than 24 hours");
+
+  await open(page, tokens.a);
+  await sample(page, /14-period RSI is above 70/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "UNSUPPORTED");
+  await expect(page.getByTestId("outcome")).toContainText("Entry rule:");
+  await expect(page.getByTestId("outcome")).toContainText("rsi");
 });
 
 test("unscripted text is a system message, not a verdict on the idea", async ({ page }) => {
