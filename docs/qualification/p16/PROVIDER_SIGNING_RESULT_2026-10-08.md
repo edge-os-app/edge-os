@@ -8,12 +8,12 @@ The six authorized sign-only calls completed in order:
 
 | # | Caller and target | Result |
 |---|---|---|
-| 1 | A signer signs A's configured self-call | `SIGNED`; 228-byte result discarded |
-| 2 | B signer signs B's configured self-call | `SIGNED`; 228-byte result discarded |
+| 1 | A signer signs A's configured self-call | `SIGNED`; 228-character prefixed hex result discarded |
+| 2 | B signer signs B's configured self-call | `SIGNED`; 228-character prefixed hex result discarded |
 | 3 | A signer attempts B's configured call against B | Raw result `DENIED_UNCLASSIFIED`, HTTP 401, no code. The separate local control classifier records `CONTROLLED_PROVIDER_REFUSAL`. |
 | 4 | Owner signs A's configured self-call after A signer removal | Page confirmed completion and that signed bytes were discarded. |
 | 5 | Removed A signer attempts A's configured call | Raw result `DENIED_UNCLASSIFIED`, HTTP 401, no code. The separate local control classifier records `CONTROLLED_PROVIDER_REFUSAL`. |
-| 6 | B signer signs B's configured self-call after A removal | `SIGNED`; 228-byte result discarded |
+| 6 | B signer signs B's configured self-call after A removal | `SIGNED`; 228-character prefixed hex result discarded |
 
 The original raw denial records remain unchanged. The local classification is a separate evidence event. The vendor-specific reason for either HTTP 401 remains unknown because the response body was not retained.
 
