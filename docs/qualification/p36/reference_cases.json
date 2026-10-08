@@ -1,0 +1,39 @@
+{
+  "fixture_id": "p36-constant-product-unadopted-01",
+  "status": "ILLUSTRATIVE_UNADOPTED",
+  "source": "independently authored worked mechanics example; no external data",
+  "model": "constant-product x*y=k, no fee reinvestment, full-pool position",
+  "warning": "This fixture demonstrates accounting separation only. It is not an adopted pool, venue, strategy, or real history.",
+  "units": {
+    "base_asset": "BASE, illustrative token units",
+    "quote_asset": "QUOTE, illustrative quote units",
+    "prices": "QUOTE per BASE",
+    "all_values": "QUOTE at the final valuation time"
+  },
+  "inputs": {
+    "initial_base": "1",
+    "initial_quote": "100",
+    "initial_price": "100",
+    "final_price": "400",
+    "fees_collected_quote": "5",
+    "gas_cost_quote": "3",
+    "rebalance_cost_quote": "0"
+  },
+  "independent_working": [
+    "Initial invariant k = 1 * 100 = 100.",
+    "At price 400, base inventory = sqrt(100 / 400) = 0.5 and quote inventory = sqrt(100 * 400) = 200.",
+    "LP inventory value = 0.5 * 400 + 200 = 400 QUOTE.",
+    "Same-allocation hold comparator = 1 * 400 + 100 = 500 QUOTE.",
+    "Impermanent-loss diagnostic = 400 - 500 = -100 QUOTE.",
+    "Net benefit = 400 inventory + 5 collected fees - 3 gas - 0 rebalance - 500 comparator = -98 QUOTE."
+  ],
+  "expected": {
+    "lp_inventory_value": "400",
+    "holding_comparator_value": "500",
+    "gross_fees": "5",
+    "impermanent_loss": "-100",
+    "gas_cost": "3",
+    "rebalance_cost": "0",
+    "net_benefit": "-98"
+  }
+}

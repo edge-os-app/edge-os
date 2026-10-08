@@ -1,0 +1,120 @@
+{
+  "profile_id": "p36-lp-model-data-qualification",
+  "version": 1,
+  "assessment": "UNRESOLVED",
+  "output_kind": "bounded qualification preparation",
+  "scope": {
+    "issue": "edge-os-app/edge-os#12",
+    "stories": [84, 85],
+    "permitted_result": "explicit missing-input qualification",
+    "runtime_readiness": "NOT_ESTABLISHED",
+    "profitable_edge": "NOT_ESTABLISHED"
+  },
+  "accepted_boundary": {
+    "spot_first": true,
+    "lp_is_separate_domain": true,
+    "p02_scope": "spot-only; LP actions are unsupported",
+    "financial_authority": "none"
+  },
+  "unresolved_choices": [
+    "pool model and pool universe",
+    "asset identities and position or range rules",
+    "data period and point-in-time observation/action convention",
+    "data source access, permitted use, version and freshness limits",
+    "comparator and initial allocation",
+    "fee, inventory, price and position-history coverage",
+    "gas and rebalance-cost convention",
+    "supported LP language and add/remove/rebalance/collect meanings"
+  ],
+  "action_semantics": {
+    "add": "UNRESOLVED; accepted liquidity change, funding source, timing and fee treatment are not selected.",
+    "remove": "UNRESOLVED; partial/full removal, timing, residual position and fee treatment are not selected.",
+    "rebalance": "UNRESOLVED; trigger, old/new position linkage, swap execution, gas and fee treatment are not selected.",
+    "collect": "UNRESOLVED; accrued-versus-collected distinction, timing, asset units and accounting treatment are not selected."
+  },
+  "adopted_conventions": {
+    "units": "None for a production LP result. The fixture's BASE/QUOTE units are illustrative only.",
+    "timestamps_and_actions": "None. Point-in-time observation and action timing must be adopted before evaluating history.",
+    "data_freshness": "None. Each source needs a version, coverage and freshness limit before use."
+  },
+  "required_inputs": {
+    "pool_and_model": "Exact chain, venue, pool address, model version, fee tier, assets, decimals, and range or allocation parameters. No pool or model is selected.",
+    "position_history": "Timestamped deposits, removals, liquidity changes, range changes, fees earned and collected, and any reinvestment. Unknown action history leaves affected inventory and fee claims unresolved.",
+    "prices": "Source-identified, versioned, timestamped asset prices with units, coverage, update/finality convention and freshness limits at each required observation and valuation time.",
+    "costs": "Receipt or independently sourced gas amounts and valuation, plus declared rebalance trade costs, timing and units. Missing costs cannot be treated as zero.",
+    "comparator": "Adopted alternative, same initial capital/assets, cash-flow treatment, valuation time and common quote unit. No comparator is selected."
+  },
+  "accounting": {
+    "gross_fees": "Fees accrued or collected, reported separately from principal inventory.",
+    "inventory_value": "Position assets valued at the declared time and price source, excluding un-reinvested fees.",
+    "impermanent_loss_diagnostic": "No-fee position inventory value minus the declared same-initial-allocation comparator value.",
+    "costs": "Gas and rebalance costs reported in separate fields after conversion under an adopted valuation rule.",
+    "net_benefit": "ending inventory value + separately held fees - gas - rebalance costs - comparator value, adjusted only by explicitly declared external cash flows.",
+    "double_count_rule": "Do not subtract the inventory loss again after calculating net benefit from inventory value and comparator value. Do not add fees to inventory value when those fees are already reinvested in the position."
+  },
+  "acceptance_checks": [
+    {
+      "id": "LP-01",
+      "issue_check": "Declare units, timing, fee/position/price coverage and limitations.",
+      "evidence": "Required-input fields name the needed coverage; exact profile choices remain listed as unresolved.",
+      "result": "COVERED_WITH_UNRESOLVED_INPUTS"
+    },
+    {
+      "id": "LP-02",
+      "issue_check": "Separate net benefit from gross fees.",
+      "evidence": "Accounting equations and the illustrative case report fees, inventory, impermanent loss, costs and net benefit separately.",
+      "result": "COVERED_BY_MECHANICS_FIXTURE"
+    },
+    {
+      "id": "LP-03",
+      "issue_check": "Supply portable source-backed extracts or labeled mechanics fixtures.",
+      "evidence": "reference_cases.json is a self-contained, independently worked, illustrative constant-product case; it is not market history or an adopted model.",
+      "result": "COVERED_BY_MECHANICS_FIXTURE"
+    },
+    {
+      "id": "LP-04",
+      "issue_check": "Missing history leaves the affected claim unresolved.",
+      "evidence": "Missing fee, inventory, price or cost inputs block the affected result; no zero-fill or synthetic-history rule is adopted.",
+      "result": "UNRESOLVED_WHEN_INPUTS_ARE_MISSING"
+    },
+    {
+      "id": "LP-05",
+      "issue_check": "Planning can proceed independently of wallet execution qualification.",
+      "evidence": "This package qualifies only a planning result and grants no wallet or execution authority.",
+      "result": "COVERED_BY_SCOPE"
+    }
+  ],
+  "sources": [
+    {
+      "id": "EDGE-DESIGN-2026-09-29",
+      "path": "docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#15-lp-proof",
+      "sha256": "16d2a92afb0d3173a1b0f73b51fba811bd77e4f93ceb487f01d1e26ce548eeb9",
+      "role": "accepted LP proof requirements"
+    },
+    {
+      "id": "EDGE-BUILD-BRIEF",
+      "path": "docs/EDGE_OS_BUILD_BRIEF.md#add-ons-and-the-lp-proof",
+      "role": "accepted spot-first order and separate LP mechanics"
+    },
+    {
+      "id": "P02-SPOT-ONLY",
+      "path": "docs/contracts/P02_FIRST_SLICE_RECORDS.md",
+      "role": "accepted spot boundary; not an LP model"
+    },
+    {
+      "id": "ADR-0002",
+      "path": "docs/adr/0002-separate-evidence-and-financial-authority.md",
+      "role": "separates evidence from financial authority"
+    },
+    {
+      "id": "ADR-0005",
+      "path": "docs/adr/0005-model-and-execution-authority-boundary.md",
+      "role": "separates model output from execution authority"
+    }
+  ],
+  "limitations": [
+    "The fixture is authored mechanics only and does not choose a venue, pool, strategy, or LP rule.",
+    "No real LP position, fee, price, event, gas, or rebalance history was collected or qualified.",
+    "This package does not implement a production numerical engine or establish LP readiness, profitability, or live execution support."
+  ]
+}
