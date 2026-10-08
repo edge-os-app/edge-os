@@ -233,7 +233,9 @@ def _is_native_footer(line: str) -> bool:
         len(line) >= 60 and set(line) == {"─"}
         or re.match(r"^(?:GPT-[^·]+|Claude [^·]+) · ", line)
         or re.match(r"^🤖 [^|]+ \| 💰 ", line)
-        or re.match(r"^\[OMC#[^]]+\] -> .+ \| session:\S+$", line)
+        # ponytail: other plugin additions stay blocked until their native layout is qualified.
+        or re.match(r"^\[OMC#[^]]+\] -> .+ \| session:\S+(?: \| skill:smux)?$", line)
+        or re.fullmatch(r"🔧\d+ ⚡\d+", line)
         or re.match(r"^\[OMC#[^]]+\] -> \d+\.\d+\.\d+ omc update$", line)
         or re.match(
             r"^\d+h:\d+%\* wk:\d+%\*\([^()]+\) extra:\d+%\*"
@@ -370,7 +372,10 @@ def _submitted(capture: str, before_enter: str, sender: str, text: str) -> bool:
         and len(history) >= 2
         and len(history[-1].strip()) >= 20
         and set(history[-1].strip()) == {"─"}
-        and re.fullmatch(r" +✔ Update installed · Restart to update", history[-2])
+        and re.fullmatch(
+            r" +(?:✔ Update installed · Restart to update|✘ Auto-update failed · Run claude doctor)",
+            history[-2],
+        )
     ):
         history = history[:-2]
     while history and not history[-1].strip():

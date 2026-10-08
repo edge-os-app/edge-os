@@ -640,6 +640,54 @@ class CheckedSendTests(unittest.TestCase):
         self.assertFalse(_submitted(after, changed_update, "%9", text))
         self.assertFalse(_submitted(after, changed_separator, "%9", text))
 
+    def test_claude_submission_handles_adjacent_auto_update_failure_without_losing_history(self):
+        text = "Read .scratch/proof.md SHA256 " + "a" * 64
+        header = "[tmux-bridge from:claude pane:%9 at:work:0.1 — load the smux skill to reply] "
+        notice = " " * 30 + "✘ Auto-update failed · Run claude doctor"
+        separator = "─" * 120
+        footer = separator + "\n⏸ manual mode on · ← for agents"
+        history = "❯ Initialization-only delivery target.\n⏺ TARGET_READY\n✻ Worked for 12s"
+        own = "❯ " + header + text
+        before = "\n".join([history, "", notice, separator, own, footer])
+        after = "\n".join([
+            history, "", own, "✢ Mustering…", notice, separator, "❯ ", footer,
+        ])
+        self.assertTrue(_has_active_draft(before, "%9", text))
+        self.assertTrue(_submitted(after, before, "%9", text))
+        old_history_only = "\n".join([history, notice, separator, "❯ ", footer])
+        for altered_after, altered_before in (
+            (old_history_only, before),
+            (after.replace("pane:%9", "pane:%8"), before),
+            (after.replace(text, text + " foreign addition"), before),
+            (after.replace("TARGET_READY", "FOREIGN_HISTORY"), before),
+            (after, before.replace(notice, notice + " (user text)")),
+            (after, before.replace(separator + "\n" + own, "─" * 119 + "x\n" + own)),
+            (after, before.replace(notice + "\n" + separator, notice + "\nforeign\n" + separator)),
+        ):
+            with self.subTest(after=altered_after, before=altered_before):
+                self.assertFalse(_submitted(altered_after, altered_before, "%9", text))
+
+    def test_claude_smux_tool_footer_requires_boundary_and_preserves_foreign_input(self):
+        text = "Read .scratch/proof.md SHA256 " + "a" * 64
+        header = "[tmux-bridge from:claude pane:%9 at:work:0.1 — load the smux skill to reply] "
+        separator = "─" * 120
+        footer = (
+            separator + "\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.64 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update | 5h:22%(4h49m) wk:55%(5d13h) "
+            "extra:0%($0.00/$30.00) | session:224m | skill:smux\n"
+            "🔧20 ⚡1\n⏸ manual mode on · ← for agents"
+        )
+        self.assertFalse(_has_partial_input("❯ \n" + footer))
+        own = "❯ " + header + text
+        self.assertTrue(_has_active_draft(own + "\n" + footer, "%9", text))
+        for continuation in ("🔧20 ⚡1", "foreign draft", "[OMC#4.15.0L] -> unknown"):
+            capture = own + "\n" + continuation + "\n" + footer
+            with self.subTest(continuation=continuation):
+                self.assertTrue(_has_partial_input(capture))
+                self.assertFalse(_has_active_draft(capture, "%9", text))
+        self.assertTrue(_has_partial_input("❯ \n" + footer.replace(separator + "\n", "", 1)))
+
     def test_active_draft_rejects_suffix_after_exact_message(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
                "load the smux skill to reply] fixture text")
