@@ -1,0 +1,10 @@
+{
+  "name": "edge-os-p03-browser-checks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.64.0"
+  }
+}

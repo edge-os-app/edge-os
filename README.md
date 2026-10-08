@@ -134,6 +134,19 @@ See the [probe result report](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) and [fr
 
 The bounded research process produced an unresolved finding, not a profitable strategy or autonomous-execution proof. A passing test or completed transaction does not prove a trading edge.
 
+## Run the first Research path
+
+The first application slice (P03) is a FastAPI service, PostgreSQL and a Next.js app. It submits a request, asks the necessary question, saves reviewed rules and reopens them after a restart. It uses fixture interpretation and fixture sign-in for verification. No real model, real Privy login, research run or wallet is involved. See [the implementation notes](docs/implementation/P03_FIRST_RESEARCH_PATH.md) and the [verification skill](.agents/skills/verify-edge-os/SKILL.md).
+
+```bash
+(cd apps/api && uv sync --frozen && uv run --frozen pytest)
+(cd apps/web && npm ci && npm run typecheck && npm test)
+(cd tests/p03 && npm ci && npx playwright install chromium)
+(cd apps/api && uv run --frozen python ../../scripts/p03/verify_run.py)   # fresh isolated instance, full path, evidence, cleanup
+```
+
+The commands need Docker, Python 3.14, `uv`, and Node 24.
+
 ## Project documents
 
 The specification, contracts, scoped probe plan and project workflow in this repository are the shared sources of truth. This README explains the product; the specification controls detailed behavior. Their approval status remains explicit.
