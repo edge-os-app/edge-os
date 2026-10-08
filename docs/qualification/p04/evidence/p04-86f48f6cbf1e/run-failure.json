@@ -1,0 +1,9 @@
+{
+  "cleanup_error_class": null,
+  "cleanup_status": "verified_absent",
+  "error_class": "AssertionError",
+  "error_message_retained": false,
+  "real_inference_requests": 0,
+  "run_id": "p04-86f48f6cbf1e",
+  "stage": "normal_job_2_owner-a_agent-b"
+}

@@ -1,0 +1,16 @@
+{
+  "cleanup_error_class": null,
+  "cleanup_status": "verified_absent",
+  "error_class": "AssertionError",
+  "error_message_retained": false,
+  "real_inference_requests": 0,
+  "resource_cleanup": {
+    "cancellation_container": null,
+    "image": {
+      "status": "verified_absent",
+      "tag": "p04-hermes:p04-1e63fad68e85"
+    }
+  },
+  "run_id": "p04-1e63fad68e85",
+  "stage": "normal_job_1_owner-a_agent-a"
+}

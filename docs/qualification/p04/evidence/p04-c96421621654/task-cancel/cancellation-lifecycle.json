@@ -1,0 +1,16 @@
+{
+  "attempt_recovered_interrupted_unknown": true,
+  "container_cleanup_status": "verified_absent",
+  "kill_error_class": null,
+  "kill_exit_code": 0,
+  "last_container_state": "absent",
+  "original_error_class": null,
+  "ownership": "verified_by_exact_name",
+  "ownership_before_termination": "verified",
+  "process_cleanup_status": "reaped",
+  "process_stdout_tail": "",
+  "recovery_error_class": null,
+  "required_run_label": "p04-c96421621654",
+  "resource_name": "p04-p04-c96421621654-cancel",
+  "verification_error_class": null
+}

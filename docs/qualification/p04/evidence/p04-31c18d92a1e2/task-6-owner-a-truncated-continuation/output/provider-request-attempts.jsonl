@@ -1,0 +1,2 @@
+{"accepted": true, "attempt": 1, "phase": "initial", "provider_work_performed": true, "rejection_reason": null, "requested_max_tokens": 128}
+{"accepted": false, "attempt": 2, "phase": "truncation_continuation", "provider_work_performed": false, "rejection_reason": "output_request_limit_exceeded", "requested_max_tokens": 256}

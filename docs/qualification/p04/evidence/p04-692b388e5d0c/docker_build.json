@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "docker",
+    "build",
+    "--pull",
+    "--tag",
+    "p04-hermes:p04-692b388e5d0c",
+    "/var/folders/gy/zdy3h00d62d1008nv39p35_c0000gn/T/p04-692b388e5d0c-build-h0pdu8ik"
+  ],
+  "exit_code": 0,
+  "stderr": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 689B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2\n#2 DONE 0.0s\n\n#3 [internal] load .dockerignore\n#3 transferring context: 2B done\n#3 DONE 0.0s\n\n#4 [1/6] FROM docker.io/library/python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2\n#4 resolve docker.io/library/python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 0.0s done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 205.34MB 1.7s done\n#5 DONE 1.8s\n\n#6 [2/6] RUN python -m pip install --no-cache-dir uv==0.12.16\n#6 CACHED\n\n#7 [3/6] COPY hermes-agent/ /opt/hermes/\n#7 CACHED\n\n#8 [4/6] WORKDIR /opt/hermes\n#8 CACHED\n\n#9 [5/6] RUN uv sync --frozen --no-dev --no-install-project --python 3.14  && .venv/bin/python -c 'from run_agent import AIAgent; print(\"PINNED_HERMES_IMPORT_OK\")'\n#9 CACHED\n\n#10 [6/6] COPY container_probe.py /opt/qualification/container_probe.py\n#10 DONE 0.2s\n\n#11 exporting to image\n#11 exporting layers 0.0s done\n#11 exporting manifest sha256:76e6e54f65a12333d7b2f78354297da160d54ea1f5c42433c5225e2d1beb276c 0.0s done\n#11 exporting config sha256:46994d1f0e6f94d91e1036ab397ca0351cbab091f50bc8f649f2db44fa29cfdb 0.0s done\n#11 exporting attestation manifest sha256:96b576cfdaa6166b6b6206de4c4eb12b2064d0864069f9bc033fa37fccb145c8 done\n#11 exporting manifest list sha256:4fdea0ae97b543876edc851ee3821832f3970088b53afcfdcd6faa18af62f092 done\n#11 naming to docker.io/library/p04-hermes:p04-692b388e5d0c done\n#11 unpacking to docker.io/library/p04-hermes:p04-692b388e5d0c\n#11 unpacking to docker.io/library/p04-hermes:p04-692b388e5d0c 1.4s done\n#11 DONE 1.5s\n",
+  "stdout": ""
+}

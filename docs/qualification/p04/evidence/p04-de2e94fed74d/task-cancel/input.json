@@ -1,0 +1,1 @@
+{"agent_id": "agent-a", "job_id": "p04-p04-de2e94fed74d-cancel", "memory": {"enabled": true, "entries": ["owner A short-memory sentinel"], "version": 1}, "mode": "cancel", "owner_id": "owner-a", "sources": [{"content": "Source A fixture text.", "ref": "fixture://source/a", "source_id": "source-a"}]}

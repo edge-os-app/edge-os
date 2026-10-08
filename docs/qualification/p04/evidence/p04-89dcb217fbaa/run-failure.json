@@ -1,0 +1,10 @@
+{
+  "run_id": "p04-89dcb217fbaa",
+  "stage": "normal_job_1_owner-a",
+  "error_class": "AssertionError",
+  "error_message_retained": false,
+  "cause": "The isolation assertion searched the full control input, which intentionally included a forbidden-sentinel probe, instead of the owner-scoped task payload.",
+  "real_inference_requests": 0,
+  "fixture_requests_may_have_occurred": true,
+  "cleanup": "The exact run image was removed; the labelled container used --rm."
+}

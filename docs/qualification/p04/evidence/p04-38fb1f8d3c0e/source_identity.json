@@ -1,0 +1,8 @@
+{
+  "clean": true,
+  "commit": "54bc5e509c985f37265c3d416bd2c64b10fc77ba",
+  "container_base": "python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2",
+  "pyproject_sha256": "d09cd0a47109e5abb9abeb326224208b857faa0d1e921c515d7f0bc6031d2d73",
+  "uv_lock_sha256": "de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01",
+  "uv_version_host": "uv 0.12.16 (761ff1379 2026-09-17 aarch64-apple-darwin)"
+}

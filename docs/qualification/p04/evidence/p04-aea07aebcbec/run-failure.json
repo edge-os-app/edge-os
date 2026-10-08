@@ -1,0 +1,10 @@
+{
+  "run_id": "p04-aea07aebcbec",
+  "stage": "normal_job_1_owner-a",
+  "error_class": "AttributeError",
+  "error_message_retained": false,
+  "cause": "The harness queried a nonexistent AIAgent.skip_memory attribute after the actual Hermes fake call.",
+  "real_inference_requests": 0,
+  "fixture_requests_may_have_occurred": true,
+  "cleanup": "The exact run image was removed; the labelled container used --rm."
+}

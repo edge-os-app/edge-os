@@ -1,0 +1,5 @@
+{
+  "exit_code": 0,
+  "image_id": "sha256:b40853c5221c8621cdc32063ff35343c862a08d70e6382e341f9edd618558e1a",
+  "output": "Untagged: p04-hermes:p04-b5924330d416\nDeleted: sha256:b40853c5221c8621cdc32063ff35343c862a08d70e6382e341f9edd618558e1a\n"
+}

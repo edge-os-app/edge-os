@@ -1,0 +1,79 @@
+{
+  "agent_id": "agent-a",
+  "fixture_label": "LOCAL_FAKE_PROVIDER_NO_NETWORK",
+  "hermes": {
+    "agent_max_iterations": 2,
+    "agent_max_tokens": 128,
+    "api_max_retries": 1,
+    "auto_recovery_cycles": 0,
+    "failed": true,
+    "failure_reason": "truncated",
+    "fake_request_count": 1,
+    "fallback_count": 0,
+    "final_response": "{\"operation_id\":\n\nOpenRouter rate-limited every one of 1 attempts \u2014 it looks temporarily unavailable. Wait a minute and send /retry, or switch models with /model. To avoid this in future, add a backup provider with `hermes fallback add`.\n\nProvider said: HTTP 429: local qualification request bound rejected this call",
+    "interrupted": false,
+    "partial": true,
+    "provider_request_guard": {
+      "output_token_limit": 128,
+      "physical_attempts_seen_by_local_guard": 2,
+      "provider_work_count": 1,
+      "rejections": [
+        {
+          "accepted": false,
+          "attempt": 2,
+          "phase": "truncation_continuation",
+          "provider_work_performed": false,
+          "rejection_reason": "output_request_limit_exceeded",
+          "requested_max_tokens": 256
+        }
+      ],
+      "request_limit": 1,
+      "truncation_seen": true
+    },
+    "skip_background_review": true,
+    "skip_context_files": true,
+    "skip_memory_effective": true,
+    "status": "TRUNCATED_PARTIAL",
+    "streaming_disabled": true,
+    "tools_effective": []
+  },
+  "hermes_source_commit": "54bc5e509c985f37265c3d416bd2c64b10fc77ba",
+  "job_id": "p04-p04-60b7244fc4dc-6-owner-a-truncated-continuation",
+  "memory_version": 2,
+  "owner_id": "owner-a",
+  "sandbox": {
+    "cgroup": {
+      "cpu_max": "100000 100000",
+      "memory_max": "536870912",
+      "pids_current": "1",
+      "pids_max": "64"
+    },
+    "filesystem": {
+      "forbidden_file_not_in_task_context": true,
+      "forbidden_memory_not_in_task_context": true,
+      "forbidden_source_not_in_task_context": true,
+      "hermes_home": "/tmp/p04-p04-60b7244fc4dc-6-owner-a-truncated-continuation/hermes-home",
+      "home": "/tmp/p04-p04-60b7244fc4dc-6-owner-a-truncated-continuation/home",
+      "host_or_docker_mounts_present": [],
+      "input_mount_read_only": true,
+      "other_job_input_unmounted": true,
+      "other_job_output_unmounted": true,
+      "provider_secret_env_names_present": [],
+      "root_filesystem_read_only": true,
+      "task_cache_path": "/tmp/p04-p04-60b7244fc4dc-6-owner-a-truncated-continuation/cache",
+      "task_cache_private_marker": true,
+      "task_output_mount_writable": true,
+      "xdg_config_home": "/tmp/p04-p04-60b7244fc4dc-6-owner-a-truncated-continuation/config"
+    },
+    "network": {
+      "blocked": true,
+      "elapsed_ms": 4,
+      "reason": "OSError"
+    },
+    "process": {
+      "child_parent_pid": 1,
+      "child_pid": 7,
+      "child_process_created": true
+    }
+  }
+}
