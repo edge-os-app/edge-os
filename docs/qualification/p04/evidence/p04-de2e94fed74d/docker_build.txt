@@ -1,0 +1,46 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 617B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/python:3.14-slim-trixie
+#2 DONE 3.4s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/6] FROM docker.io/library/python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2
+#4 resolve docker.io/library/python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 0.0s done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 205.34MB 2.1s done
+#5 DONE 2.1s
+
+#6 [2/6] RUN python -m pip install --no-cache-dir uv==0.12.16
+#6 CACHED
+
+#7 [3/6] COPY hermes-agent/ /opt/hermes/
+#7 CACHED
+
+#8 [4/6] WORKDIR /opt/hermes
+#8 CACHED
+
+#9 [5/6] RUN uv sync --frozen --no-dev --no-install-project --python 3.14  && .venv/bin/python -c 'from run_agent import AIAgent; print("PINNED_HERMES_IMPORT_OK")'
+#9 CACHED
+
+#10 [6/6] COPY container_probe.py /opt/qualification/container_probe.py
+#10 DONE 0.2s
+
+#11 exporting to image
+#11 exporting layers 0.0s done
+#11 exporting manifest sha256:573b476af79cadf323e74ffaa0374269f3b44131e0336bcc284ed73f56017a1e done
+#11 exporting config sha256:30b86da7355d923b3d497d618d4e16134b94886a615a356903c9dca816743f5d done
+#11 exporting attestation manifest sha256:269ec8ec30b1710c253606e33f9f04f890b569279c9397a7719d751c8a3a6aa2 done
+#11 exporting manifest list sha256:ff3e18e6061579bfdb04d94c402af9942e41997001610c34cbc43d88df085adf done
+#11 naming to docker.io/library/p04-hermes:p04-de2e94fed74d done
+#11 unpacking to docker.io/library/p04-hermes:p04-de2e94fed74d
+#11 unpacking to docker.io/library/p04-hermes:p04-de2e94fed74d 1.6s done
+#11 DONE 1.7s

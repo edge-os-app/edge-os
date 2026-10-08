@@ -1,0 +1,52 @@
+{
+  "agent_id": "agent-b",
+  "fixture_label": "LOCAL_FAKE_PROVIDER_NO_NETWORK",
+  "hermes": {
+    "agent_max_iterations": 2,
+    "agent_max_tokens": 128,
+    "api_max_retries": 1,
+    "auto_recovery_cycles": 0,
+    "failed": false,
+    "fake_request_count": 1,
+    "fallback_count": 0,
+    "final_response": "{\"operation_id\": \"p04-local-fake-outcome\", \"stage\": \"VALIDATION\", \"outcome\": \"UNRESOLVED\", \"code\": \"unresolved\", \"findings\": [{\"code\": \"missing_dependency\", \"path\": \"/market/research_binding\", \"detail\": \"qualified endpoint prices are unavailable.\"}], \"retry\": \"NOT_RETRYABLE\", \"intake_record_id\": \"10000000-0000-4000-8000-000000000001\"}",
+    "interrupted": false,
+    "skip_background_review": true,
+    "skip_context_files": true,
+    "skip_memory_effective": true,
+    "status": "returned",
+    "streaming_disabled": true,
+    "tools_effective": []
+  },
+  "hermes_source_commit": "54bc5e509c985f37265c3d416bd2c64b10fc77ba",
+  "job_id": "p04-p04-4dc462676949-2-owner-b",
+  "memory_version": 1,
+  "owner_id": "owner-b",
+  "sandbox": {
+    "cgroup": {
+      "cpu_max": "100000 100000",
+      "memory_max": "536870912",
+      "pids_current": "1",
+      "pids_max": "64"
+    },
+    "filesystem": {
+      "hermes_home": "/tmp/hermes-home",
+      "home": "/tmp/home",
+      "host_or_docker_mounts_present": [],
+      "input_mount_read_only": true,
+      "provider_secret_env_names_present": [],
+      "task_output_mount_writable": true,
+      "xdg_config_home": "/tmp/home/.config"
+    },
+    "network": {
+      "blocked": true,
+      "elapsed_ms": 4,
+      "reason": "OSError"
+    },
+    "process": {
+      "child_parent_pid": 1,
+      "child_pid": 7,
+      "child_process_created": true
+    }
+  }
+}

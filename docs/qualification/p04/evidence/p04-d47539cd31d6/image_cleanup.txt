@@ -1,0 +1,8 @@
+{
+  "cleanup_pass": true,
+  "exit_code": 0,
+  "image_id": "sha256:81bd44d1abd4eaaba128c3b6a30758cf16e8bdc3e6a6799298c0f095412ca85a",
+  "image_tag": "p04-hermes:p04-d47539cd31d6",
+  "output": "Untagged: p04-hermes:p04-d47539cd31d6\nDeleted: sha256:81bd44d1abd4eaaba128c3b6a30758cf16e8bdc3e6a6799298c0f095412ca85a\n",
+  "tag_absent_after_cleanup": true
+}
