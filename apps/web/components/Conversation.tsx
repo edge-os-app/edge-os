@@ -2,7 +2,7 @@
 
 import { FIELD_LABEL, summarizeValue } from "../lib/describe";
 import type { Bundle, Clarification } from "../lib/types";
-import { QuestionForm } from "./QuestionForm";
+import { AnswerMessage, QuestionForm } from "./QuestionForm";
 
 export interface ConversationContext {
   bundle: Bundle;
@@ -59,7 +59,10 @@ export function Conversation({ context, idPrefix, showTitle = true }: { context:
       {head.outcome === "NEEDS_CLARIFICATION" ? (
         <QuestionForm questions={head.questions} busy={busy} idPrefix={idPrefix} onAnswer={answer} message={message} />
       ) : (
-        <p className="muted">No question is open for this revision.</p>
+        <>
+          <AnswerMessage message={message} surface={idPrefix} />
+          <p className="muted">No question is open for this revision.</p>
+        </>
       )}
     </>
   );

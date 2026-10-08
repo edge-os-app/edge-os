@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, setTokenSource, setUnauthorizedHandler } from "./api";
 
 export type AuthStatus = "loading" | "signed-out" | "signing-in" | "ready" | "unavailable";
@@ -28,6 +28,8 @@ export interface AuthValue {
   fixtureLabel: string | null;
   unavailableReason: string | null;
   userId: string | null;
+  signInMessage: string | null;
+  explicitSignOut: boolean;
   login(): void;
   logout(): void;
 }
@@ -49,7 +51,12 @@ interface Source {
   getAccessToken(): Promise<string | null>;
   login(): void;
   logout(): void;
+  /** Counts sign-in attempts that ended in an error or a closed window. */
+  loginErrors?: number;
 }
+
+const SIGN_IN_TIMEOUT_MS = 60_000;
+const SIGN_IN_FAILED = "Sign-in did not finish. Nothing was changed. Try again.";
 
 export function AuthRoot({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<"detecting" | "fixture" | "privy" | "unconfigured">("detecting");
@@ -64,17 +71,21 @@ export function AuthRoot({ children }: { children: ReactNode }) {
   if (mode === "detecting") return <AuthSession source={null} fixtureLabel={null} unavailable={null}>{children}</AuthSession>;
   if (mode === "unconfigured")
     return <AuthSession source={null} fixtureLabel={null} unavailable="Sign-in is not configured for this deployment.">{children}</AuthSession>;
-  if (mode === "fixture" && fixture) {
-    const source: Source = {
-      ready: true, authenticated: true, getAccessToken: () => fixture.getAccessToken(),
-      login: () => {}, logout: () => fixture.signOut?.(),
-    };
-    return <AuthSession source={source} fixtureLabel={fixture.label} unavailable={null}>{children}</AuthSession>;
-  }
+  if (mode === "fixture" && fixture) return <FixtureAuth fixture={fixture}>{children}</FixtureAuth>;
   return (
     <PrivyBridge appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID as string}
       render={(source) => <AuthSession source={source} fixtureLabel={null} unavailable={null}>{children}</AuthSession>} />
   );
+}
+
+/** A fixture session that really signs out and back in, so the harness exercises both directions. */
+function FixtureAuth({ fixture, children }: { fixture: InjectedTestAuth; children: ReactNode }) {
+  const [signedIn, setSignedIn] = useState(true);
+  const source = useMemo<Source>(() => ({
+    ready: true, authenticated: signedIn, getAccessToken: () => fixture.getAccessToken(),
+    login: () => setSignedIn(true), logout: () => { setSignedIn(false); fixture.signOut?.(); },
+  }), [fixture, signedIn]);
+  return <AuthSession source={source} fixtureLabel={fixture.label} unavailable={null}>{children}</AuthSession>;
 }
 
 function AuthSession({ source, fixtureLabel, unavailable, children }: {
@@ -83,7 +94,28 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [userId, setUserId] = useState<string | null>(null);
   const [reason, setReason] = useState<string | null>(unavailable);
+  const [signInMessage, setSignInMessage] = useState<string | null>(null);
+  const [explicitSignOut, setExplicitSignOut] = useState(false);
+  const statusRef = useRef<AuthStatus>("loading");
   const getToken = source?.getAccessToken;
+  statusRef.current = status;
+
+  // A sign-in that ends in an error, a closed window or silence must not leave a dead "Signing in" state.
+  const endSignIn = useCallback((message: string) => {
+    if (statusRef.current !== "signing-in") return;
+    setSignInMessage(message);
+    setStatus("signed-out");
+  }, []);
+  const loginErrors = source?.loginErrors ?? 0;
+  const seenErrors = useRef(loginErrors);
+  useEffect(() => {
+    if (loginErrors !== seenErrors.current) { seenErrors.current = loginErrors; endSignIn(SIGN_IN_FAILED); }
+  }, [loginErrors, endSignIn]);
+  useEffect(() => {
+    if (status !== "signing-in") return;
+    const timer = setTimeout(() => endSignIn(SIGN_IN_FAILED), SIGN_IN_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [status, endSignIn]);
 
   useEffect(() => { setTokenSource(getToken ?? (async () => null)); }, [getToken]);
   useEffect(() => { setUnauthorizedHandler(() => { setUserId(null); setStatus("signed-out"); }); }, []);
@@ -95,7 +127,7 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
     if (!source.authenticated) { setUserId(null); setStatus("signed-out"); return; }
     // Probe the API once the provider is signed in. The API alone decides whether the session is accepted.
     setStatus("loading");
-    api.me().then((me) => { if (!cancelled) { setUserId(me.user_id); setStatus("ready"); } }).catch((error: unknown) => {
+    api.me().then((me) => { if (!cancelled) { setUserId(me.user_id); setSignInMessage(null); setExplicitSignOut(false); setStatus("ready"); } }).catch((error: unknown) => {
       if (cancelled) return;
       if (error instanceof ApiError && error.status === 401) { setStatus("signed-out"); return; }
       setReason(error instanceof ApiError && error.status === 503
@@ -106,10 +138,10 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
     return () => { cancelled = true; };
   }, [source?.ready, source?.authenticated, unavailable]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const login = useCallback(() => { setStatus("signing-in"); source?.login(); }, [source]);
-  const logout = useCallback(() => { setUserId(null); setStatus("signed-out"); source?.logout(); }, [source]);
+  const login = useCallback(() => { setSignInMessage(null); setStatus("signing-in"); source?.login(); }, [source]);
+  const logout = useCallback(() => { setUserId(null); setExplicitSignOut(true); setSignInMessage(null); setStatus("signed-out"); source?.logout(); }, [source]);
   const value = useMemo<AuthValue>(
-    () => ({ status, fixtureLabel, unavailableReason: reason, userId, login, logout }),
-    [status, fixtureLabel, reason, userId, login, logout]);
+    () => ({ status, fixtureLabel, unavailableReason: reason, userId, signInMessage, explicitSignOut, login, logout }),
+    [status, fixtureLabel, reason, userId, signInMessage, explicitSignOut, login, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

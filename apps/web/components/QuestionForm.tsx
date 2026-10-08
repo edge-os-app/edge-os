@@ -10,25 +10,31 @@ export interface AnswerProps {
   idPrefix: string;
   onAnswer(questionId: string, choiceId: string, origin?: HTMLElement): void;
   onCancel?(): void;
-  message?: { kind: "error" | "notice"; text: string; surface: string };
+  message?: AnswerMessageValue;
 }
 
-export function QuestionForm({ questions, busy, idPrefix, onAnswer, onCancel, message: pending }: AnswerProps) {
-  // Only the surface where the person acted shows the message, so one failure is announced once.
-  const shown = pending && pending.surface === idPrefix ? pending : undefined;
-  const error = shown?.kind === "error" ? shown.text : "";
-  const notice = shown?.kind === "notice" ? shown.text : "";
-  const message = useRef<HTMLParagraphElement>(null);
-  // A failure must be visible in the surface where the person acted, next to the button they pressed.
-  useEffect(() => { if (error || notice) message.current?.scrollIntoView?.({ block: "center" }); }, [error, notice]);
+export type AnswerMessageValue = { kind: "error" | "notice"; text: string; surface: string };
+
+/** Shows a message only on the surface where the person acted, so a failure is announced once. A conflict notice
+ * must outlive the question form: the reload can remove the form, so hosts render this too. */
+export function AnswerMessage({ message, surface }: { message?: AnswerMessageValue; surface: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const shown = message && message.surface === surface ? message : undefined;
+  useEffect(() => { if (shown) ref.current?.scrollIntoView?.({ block: "center" }); }, [shown?.text, shown?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!shown) return null;
+  return shown.kind === "error"
+    ? <p role="alert" className="status err" ref={ref} tabIndex={-1}>{shown.text}</p>
+    : <p role="status" className="status stop" ref={ref} tabIndex={-1}>{shown.text}</p>;
+}
+
+export function QuestionForm({ questions, busy, idPrefix, onAnswer, onCancel, message }: AnswerProps) {
   if (questions.length === 0) return null;
   return (
     <div className="stack">
       {questions.map((question) => (
         <One key={question.question_id} question={question} busy={busy} idPrefix={idPrefix} onAnswer={onAnswer} />
       ))}
-      {error ? <p role="alert" className="status err" ref={message} tabIndex={-1}>{error}</p> : null}
-      {!error && notice ? <p role="status" className="status ok" ref={message}>{notice}</p> : null}
+      <AnswerMessage message={message} surface={idPrefix} />
       {onCancel ? (
         <div className="btn-row">
           <button type="button" className="btn btn-secondary" onClick={onCancel}>Not now</button>

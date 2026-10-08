@@ -442,3 +442,110 @@ test("a pending action shows that it is working", async ({ page }) => {
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
   await page.unroute("**/clarifications");
 });
+
+const API = process.env.P03_API_URL;
+
+/** Another client answers the open question first, so the page's next answer is stale. */
+async function answerOutOfBand(page) {
+  const id = page.url().split("/research/")[1];
+  const headers = { Authorization: `Bearer ${tokens.a}` };
+  const bundle = await (await page.request.get(`${API}/v1/research/requests/${id}`, { headers })).json();
+  const reply = await page.request.post(`${API}/v1/research/requests/${id}/clarifications`, { headers, data: {
+    previous_revision_id: bundle.head.interpretation_revision_id, question_id: "adopt-suggested-settings", choice_id: "adopt" } });
+  expect(reply.status()).toBe(201);
+}
+
+async function openThesis(page) {
+  await open(page, tokens.a);
+  await sample(page, "Specific thesis").click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+}
+
+/** The three places a question can be answered. The sheet and the side panel exist at different widths. */
+function surfaces(page, project) {
+  const list = [{ name: "main", root: page.locator("main"), focus: page.locator("#state-title") }];
+  if (project === "desktop") list.push({ name: "side", root: page.locator(".convo-desktop"), focus: page.locator(".convo-desktop [data-focus-target]") });
+  else list.push({ name: "sheet", root: page.getByRole("dialog", { name: "Conversation" }), focus: page.locator("dialog [data-focus-target]"), open: () => page.getByRole("button", { name: "Conversation" }).click() });
+  return list;
+}
+
+for (const surfaceName of ["main", "conversation"]) {
+  test(`a stale answer in the ${surfaceName} surface explains itself there and moves focus into it`, async ({ page }, info) => {
+    await openThesis(page);
+    const surface = surfaces(page, info.project.name)[surfaceName === "main" ? 0 : 1];
+    await surface.open?.();
+    await answerOutOfBand(page);
+    const adopt = surface.root.getByRole("button", { name: "Adopt these settings" });
+    await adopt.focus();
+    await page.keyboard.press("Enter");
+    await expect(surface.root.locator('[role="status"]', { hasText: "changed elsewhere" })).toBeVisible(); // the form is gone; the notice still has a home
+    await expect(surface.focus.first()).toBeFocused();
+    await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+    await page.screenshot({ path: path.join(outDir, `stale-${surfaceName}-${info.project.name}.png`), fullPage: false });
+  });
+
+  test(`a stale answer whose reload fails says so in the ${surfaceName} surface and never claims a reload`, async ({ page }, info) => {
+    await openThesis(page);
+    const surface = surfaces(page, info.project.name)[surfaceName === "main" ? 0 : 1];
+    await surface.open?.();
+    await answerOutOfBand(page);
+    await page.route("**/v1/research/requests/*", (route) => route.request().method() === "GET" ? route.fulfill(unavailable) : route.continue());
+    const adopt = surface.root.getByRole("button", { name: "Adopt these settings" });
+    await adopt.focus();
+    await page.keyboard.press("Enter");
+    const alert = surface.root.locator('[role="alert"]');
+    await expect(alert).toContainText("could not be reloaded");
+    await expect(surface.root.getByText("It was reloaded")).toHaveCount(0);
+    await expectInView(page, alert.first(), "the reload failure must be visible where the person acted");
+    await expect(adopt).toBeFocused();
+    await page.unroute("**/v1/research/requests/*");
+  });
+}
+
+test("a lost reply on the first submit says the request may be saved and refreshes the list", async ({ page }, info) => {
+  await open(page, tokens.c); // a small list, so a new request is visible in it (the list shows at most 50)
+  await expect(page.getByText("Loading saved requests.")).toHaveCount(0);
+  await sample(page, /Recent rises seem to keep running/).click();
+  const before = await page.locator("button.card-open").count();
+  await page.route("**/v1/research/requests", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await route.fetch(); // the server saves the request ...
+    await route.abort("failed"); // ... and the reply is lost
+  });
+  const prepare = page.getByRole("button", { name: "Prepare request" });
+  await prepare.focus();
+  await page.keyboard.press("Enter");
+  await expect(alerts(page)).toContainText("may have been saved");
+  await expect(prepare).toBeFocused();
+  await expect.poll(() => page.locator("button.card-open").count(), { message: "the saved list must refresh" }).toBeGreaterThan(before);
+  await page.unroute("**/v1/research/requests");
+  await page.screenshot({ path: path.join(outDir, `lost-reply-${info.project.name}.png`), fullPage: false });
+});
+
+test("signing out and back in is announced, keeps focus sensible and returns to Research", async ({ page }) => {
+  await open(page, tokens.a);
+  await page.getByRole("button", { name: "Sign out" }).click();
+  const heading = page.getByRole("heading", { name: "Sign in to start" });
+  await expect(heading).toBeVisible();
+  await expect(heading).toBeFocused();
+  const signIn = page.getByRole("button", { name: "Sign in" });
+  await signIn.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
+});
+
+test("an unsent draft survives a reload and is cleared by a successful submit", async ({ page }) => {
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill("My half written hunch about volume.");
+  await page.getByRole("button", { name: /Add “no leverage”/ }).click();
+  await page.reload();
+  await expect(page.getByLabel("Your words", { exact: true })).toHaveValue("My half written hunch about volume.");
+  await expect(page.getByRole("list", { name: "Your restrictions" })).toContainText("no leverage");
+  await sample(page, /Recent rises seem to keep running/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByRole("heading", { name: "Your request" })).toBeVisible();
+  await page.getByRole("button", { name: "All requests" }).click();
+  await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
+  await expect(page.getByLabel("Your words", { exact: true })).toHaveValue("");
+});

@@ -1,7 +1,7 @@
 "use client";
 
-import { PrivyProvider, usePrivy } from "@privy-io/react-auth";
-import type { ReactNode } from "react";
+import { PrivyProvider, useLogin, usePrivy } from "@privy-io/react-auth";
+import { useState, type ReactNode } from "react";
 import { PRIVY_CONFIG } from "./privy-config";
 
 interface Source {
@@ -10,11 +10,15 @@ interface Source {
   getAccessToken(): Promise<string | null>;
   login(): void;
   logout(): void;
+  loginErrors: number;
 }
 
 function Bridge({ render }: { render: (source: Source) => ReactNode }) {
-  const { ready, authenticated, getAccessToken, login, logout } = usePrivy();
-  return <>{render({ ready, authenticated, getAccessToken, login: () => login(), logout: () => void logout() })}</>;
+  const { ready, authenticated, getAccessToken, logout } = usePrivy();
+  // Privy calls onError on a login error and when the person closes the login window.
+  const [loginErrors, setLoginErrors] = useState(0);
+  const { login } = useLogin({ onError: () => setLoginErrors((n) => n + 1) });
+  return <>{render({ ready, authenticated, getAccessToken, login: () => login(), logout: () => void logout(), loginErrors })}</>;
 }
 
 export default function PrivyBridge({ appId, render }: { appId: string; render: (source: Source) => ReactNode }) {

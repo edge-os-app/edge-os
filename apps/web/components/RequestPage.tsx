@@ -5,7 +5,7 @@ import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, FIELD_LABEL, JOB_LABEL, ORIGIN_LABEL, OUTCOME_COPY, formatTime, shortId, summarizeValue } from "../lib/describe";
 import type { Bundle, Finding, Strategy } from "../lib/types";
 import type { ConversationContext } from "./Conversation";
-import { QuestionForm } from "./QuestionForm";
+import { AnswerMessage, QuestionForm } from "./QuestionForm";
 import { RulesReview } from "./RulesReview";
 
 interface Props {
@@ -48,9 +48,9 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
 
   useEffect(() => { if (bundle) heading.current?.focus(); }, [bundle === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const reload = useCallback(async (): Promise<boolean> => {
+  const reload = useCallback(async (quiet = false): Promise<boolean> => {
     try { setBundle(await api.get(id)); return true; }
-    catch { setError("The saved request could not be reloaded. Reload the page to see its current state."); return false; }
+    catch { if (!quiet) setError("The saved request could not be reloaded. Reload the page to see its current state."); return false; }
   }, [id]);
 
   const answer = useCallback(async (questionId: string, choiceId: string, origin?: HTMLElement) => {
@@ -64,8 +64,12 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
       focusSurface.current = surface; // the answered form is gone; the layout effect lands focus on the new state
     } catch (e) {
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
-        setAnswerMessage({ kind: "notice", surface: surfaceName, text: "This request changed elsewhere. It was reloaded. Check the question and answer again." });
-        await reload();
+        focusSurface.current = surface; // after the reload commits, focus lands in this surface
+        if (await reload(true)) setAnswerMessage({ kind: "notice", surface: surfaceName, text: "This request changed elsewhere. It was reloaded. Check the current state before you answer again." });
+        else {
+          focusSurface.current = undefined;
+          setAnswerMessage({ kind: "error", surface: surfaceName, text: "This request changed elsewhere and the saved copy could not be reloaded. Reload the page before you answer again." });
+        }
       } else setAnswerMessage({ kind: "error", surface: surfaceName, text: e instanceof ApiError ? e.detail : "Your answer was not saved." });
     } finally { setBusy(false); }
   }, [bundle, id, reload]);
@@ -187,6 +191,8 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
           <QuestionForm questions={head.questions} busy={busy} idPrefix="main" onAnswer={answer} message={answerMessage} onCancel={() => go("#/research", `req-${id}`)} />
         </section>
       )}
+
+      {outcome !== "NEEDS_CLARIFICATION" ? <AnswerMessage message={answerMessage} surface="main" /> : null}
 
       {(outcome === "COMPILED" || outcome === "PUBLISHED") && draft && (
         <section className="panel" aria-labelledby="rules-title">

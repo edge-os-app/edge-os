@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness  # noqa: E402
-from tokens import OWNER_A, OWNER_B, TestSigner  # noqa: E402
+from tokens import OWNER_A, OWNER_B, OWNER_C, TestSigner  # noqa: E402
 
 THESIS = ("Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
           "Spot only.")
@@ -206,7 +206,7 @@ def main() -> int:
         harness.wait_http(web_url + "/")
         ok &= rec.step("web health", True, {"url": web_url})
 
-        token_a, token_b = signer.token(OWNER_A), signer.token(OWNER_B)
+        token_a, token_b, token_c = signer.token(OWNER_A), signer.token(OWNER_B), signer.token(OWNER_C)
         token_bad = TestSigner().token(OWNER_A)
 
         status_none, _ = http("GET", f"{api_url}/v1/me")
@@ -214,7 +214,7 @@ def main() -> int:
         ok &= rec.step("API rejects missing and wrong-key credentials", (status_none, status_bad) == (401, 401), [status_none, status_bad])
 
         if not args.skip_ui:
-            ui_env = {"P03_WEB_URL": web_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_BAD": token_bad,
+            ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}
             code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs"], ui_env, evidence / "ui-e2e.log")
             ok &= rec.step("browser drive (desktop and 390px)", code == 0, {"exit": code})
@@ -248,7 +248,7 @@ def main() -> int:
             time.sleep(args.hold_seconds)
 
         logs = [p for p in (evidence / "logs").glob("*.log")]
-        secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_bad, signer.private_pem))]
+        secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_c, token_bad, signer.private_pem))]
         ok &= rec.step("logs contain no token or private key", not secrets_seen, secrets_seen)
     except Exception as error:  # noqa: BLE001
         rec.step("run aborted", False, f"{type(error).__name__}: {error}")

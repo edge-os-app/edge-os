@@ -1,10 +1,29 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthRoot, useAuth } from "../lib/auth";
 
+const hoisted = vi.hoisted(() => ({ emitLoginError: null as null | (() => void) }));
+// The Privy bridge is replaced so the sign-in state machine can be driven without a Privy app.
+vi.mock("../lib/privy-bridge", async () => {
+  const React = await import("react");
+  return {
+    default: ({ render }: { render: (source: unknown) => React.ReactNode }) => {
+      const [errors, setErrors] = React.useState(0);
+      hoisted.emitLoginError = () => setErrors((n) => n + 1);
+      return render({ ready: true, authenticated: false, getAccessToken: async () => null, login: () => {}, logout: () => {}, loginErrors: errors });
+    },
+  };
+});
+
 function Probe() {
   const auth = useAuth();
-  return <div data-testid="probe">{auth.status}|{auth.fixtureLabel ?? "no-fixture"}|{auth.unavailableReason ?? ""}</div>;
+  return (
+    <div>
+      <div data-testid="probe">{auth.status}|{auth.fixtureLabel ?? "no-fixture"}|{auth.unavailableReason ?? ""}|{auth.signInMessage ?? ""}</div>
+      <button onClick={auth.login}>login</button>
+      <button onClick={auth.logout}>logout</button>
+    </div>
+  );
 }
 
 const jsonResponse = (status: number, body: unknown) =>
@@ -43,5 +62,41 @@ describe("auth session", () => {
     window.__EDGE_OS_TEST_AUTH__ = { label: "TEST AUTH FIXTURE", getAccessToken: async () => "t" };
     render(<AuthRoot><Probe /></AuthRoot>);
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("cannot verify sign-in"));
+  });
+
+  it("fixture session: signing out and in again returns to the app", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => jsonResponse(200, { user_id: "u1" })));
+    window.__EDGE_OS_TEST_AUTH__ = { label: "TEST AUTH FIXTURE", getAccessToken: async () => "token-123" };
+    render(<AuthRoot><Probe /></AuthRoot>);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("ready|"));
+    fireEvent.click(screen.getByText("logout"));
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|"));
+    fireEvent.click(screen.getByText("login"));
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("ready|"));
+  });
+
+  it("a sign-in that ends in an error goes back to signed-out with a message", async () => {
+    vi.stubEnv("NEXT_PUBLIC_PRIVY_APP_ID", "app-test");
+    render(<AuthRoot><Probe /></AuthRoot>);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|"));
+    fireEvent.click(screen.getByText("login"));
+    expect(screen.getByTestId("probe")).toHaveTextContent("signing-in|");
+    act(() => hoisted.emitLoginError?.()); // the person closed the Privy window or sign-in failed
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|"));
+    expect(screen.getByTestId("probe")).toHaveTextContent(/did not finish/i);
+  });
+
+  it("a sign-in that never finishes gives up after a minute", async () => {
+    vi.stubEnv("NEXT_PUBLIC_PRIVY_APP_ID", "app-test");
+    render(<AuthRoot><Probe /></AuthRoot>);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|"));
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByText("login"));
+      expect(screen.getByTestId("probe")).toHaveTextContent("signing-in|");
+      await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+      expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|");
+      expect(screen.getByTestId("probe")).toHaveTextContent(/did not finish/i);
+    } finally { vi.useRealTimers(); }
   });
 });

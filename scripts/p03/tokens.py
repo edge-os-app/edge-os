@@ -13,6 +13,7 @@ from harness import TEST_APP_ID
 
 OWNER_A = "did:privy:test-owner-a"
 OWNER_B = "did:privy:test-owner-b"
+OWNER_C = "did:privy:test-owner-c"
 
 
 class TestSigner:

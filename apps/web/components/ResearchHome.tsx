@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, JOB_LABEL, OUTCOME_COPY, SUPPORTED_RESTRICTIONS, formatTime } from "../lib/describe";
 import type { InputClass, Job, RequestSummary, Sample } from "../lib/types";
@@ -44,6 +44,32 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
     (document.getElementById(target) ?? heading.current)?.focus();
   }, [saved, loadError]);
 
+  const refreshList = useCallback(() => {
+    api.list().then((r) => { setSaved(r.requests); setHasMore(r.has_more); }).catch(() => {});
+  }, []);
+
+  // An unsent draft survives a reload or a sign-in after a session ends. It lives in this browser only.
+  const draftKey = "edge-os:research-draft";
+  const restored = useRef(false);
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(draftKey);
+      if (raw) {
+        const draft = JSON.parse(raw) as { text?: string; kind?: InputClass; restrictions?: string[]; custom?: string; useMarket?: boolean };
+        if (typeof draft.text === "string") setText(draft.text);
+        if (draft.kind) setKind(draft.kind);
+        if (Array.isArray(draft.restrictions)) setRestrictions(draft.restrictions);
+        if (typeof draft.custom === "string") setCustom(draft.custom);
+        if (typeof draft.useMarket === "boolean") setUseMarket(draft.useMarket);
+      }
+    } catch { /* storage may be blocked */ }
+    restored.current = true;
+  }, []);
+  useEffect(() => {
+    if (!restored.current) return;
+    try { window.sessionStorage.setItem(draftKey, JSON.stringify({ text, kind, restrictions, custom, useMarket })); } catch { /* ignore */ }
+  }, [text, kind, restrictions, custom, useMarket]);
+
   useEffect(() => {
     let cancelled = false;
     api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); } }).catch(() => {});
@@ -76,9 +102,14 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
         original_request: text, restrictions, requested_job: job, input_class: kind,
         ...(job === "INVESTIGATE_EFFECT" && useMarket && sample ? { declared_market: sample } : {}),
       });
+      try { window.sessionStorage.removeItem(draftKey); } catch { /* ignore */ }
       go(`#/research/${bundle.intake.record_id}`, "start-request");
     } catch (e) {
-      setSubmitError(e instanceof ApiError ? e.detail : "The request was not saved. Try again. Check the saved list first if you are unsure.");
+      // With no answer from the service the request may still have been saved: say so and refresh the list.
+      const unsure = e instanceof ApiError && e.status === 0;
+      setSubmitError(unsure ? "The request may have been saved. Check Saved requests below before you send it again."
+        : e instanceof ApiError ? e.detail : "The request was not saved. Try again.");
+      refreshList();
       setBusy(false);
     }
   };

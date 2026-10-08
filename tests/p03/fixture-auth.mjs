@@ -12,5 +12,6 @@ export async function injectAuth(page, token, label = "TEST AUTH FIXTURE · not 
 export const tokens = {
   a: process.env.P03_TOKEN_A,
   b: process.env.P03_TOKEN_B,
+  c: process.env.P03_TOKEN_C,
   bad: process.env.P03_TOKEN_BAD,
 };

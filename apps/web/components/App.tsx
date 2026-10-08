@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { AuthRoot, useAuth } from "../lib/auth";
 import { Shell } from "./Shell";
 
@@ -26,12 +27,21 @@ function Gate() {
 
 function Signed() {
   const auth = useAuth();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const message = useRef<HTMLParagraphElement>(null);
+  const waiting = auth.status === "signing-in";
+  // After an explicit sign-out, or when sign-in ends in a message, focus lands on what the person needs to read.
+  useEffect(() => {
+    if (auth.status !== "signed-out") return;
+    if (auth.signInMessage) message.current?.focus();
+    else if (auth.explicitSignOut) heading.current?.focus();
+  }, [auth.status, auth.signInMessage, auth.explicitSignOut]);
   return (
     <main id="main" className="center-card stack" style={{ padding: "0 16px" }}>
       <h1 className="brand" style={{ margin: 0 }}>Edge OS</h1>
-      {auth.status === "loading" || auth.status === "signing-in" ? (
+      {auth.status === "loading" ? (
         <section className="panel" aria-busy="true" role="status">
-          <h2>{auth.status === "signing-in" ? "Signing in" : "Checking your session"}</h2>
+          <h2>Checking your session</h2>
           <p className="muted">One moment.</p>
         </section>
       ) : auth.status === "unavailable" ? (
@@ -42,11 +52,13 @@ function Signed() {
         </section>
       ) : (
         <section className="panel">
-          <h2>Sign in to start</h2>
+          <h2 ref={heading} tabIndex={-1}>Sign in to start</h2>
           <p>Research on Monad. Your words and restrictions are kept exactly as you write them.</p>
           <p className="muted">Signing in does not create a wallet, grant permission or move money.</p>
+          {auth.signInMessage ? <p role="alert" className="status err" ref={message} tabIndex={-1}>{auth.signInMessage}</p> : null}
+          {waiting ? <p role="status" className="muted">Waiting for sign-in to finish. This gives up after a minute.</p> : null}
           <div className="btn-row">
-            <button className="btn btn-primary" type="button" onClick={auth.login}>Sign in</button>
+            <button className="btn btn-primary" type="button" onClick={() => { if (!waiting) auth.login(); }} aria-disabled={waiting || undefined}>{waiting ? "Signing in…" : "Sign in"}</button>
           </div>
         </section>
       )}
