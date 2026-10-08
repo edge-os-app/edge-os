@@ -512,6 +512,97 @@ class NormalProcessLifecycleRegressionTests(unittest.TestCase):
             self.assertEqual(lifecycle["container_cleanup_status"], "unknown_pending_verification")
             self.assertEqual(lifecycle["process_cleanup_status"], "reaped_after_local_kill")
 
+    def test_normal_job_nonzero_client_exit_cleans_owned_container_and_records_original_failure(self):
+        from docs.qualification.p04 import native_runner
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            run_id = "p04-normal-client-exit"
+            name = f"p04-{run_id}-1"
+            running = json.dumps({
+                "Id": "fixture-container-id", "Name": f"/{name}",
+                "Config": {"Labels": {"edge-os.test.run": run_id}},
+                "State": {"Running": True},
+            })
+            process = SimpleNamespace(
+                returncode=-9,
+                communicate=lambda timeout=None: ("client exited unexpectedly\n", None),
+            )
+            missing = subprocess.CalledProcessError(
+                1, ["docker", "inspect"], stderr="error: no such object: task container",
+            )
+
+            with (
+                patch.object(native_runner.subprocess, "Popen", return_value=process),
+                patch.object(native_runner, "_docker", side_effect=[running, missing]),
+                patch.object(
+                    native_runner.subprocess, "run", return_value=SimpleNamespace(returncode=0)
+                ) as docker_run,
+            ):
+                with self.assertRaisesRegex(RuntimeError, r"(?s)exited -9.*cleanup=verified_absent") as raised:
+                    native_runner._run_normal(
+                        policy=DockerPolicy(run_id), image="p04-test:image",
+                        owner_id="owner-a", agent_id="agent-a",
+                        context={"memory": {"version": 1, "enabled": True, "entries": []}, "sources": [], "files": []},
+                        evidence=evidence, run_id=run_id, ordinal="1",
+                    )
+
+            self.assertIn("client exited unexpectedly", str(raised.exception))
+            docker_run.assert_called_once_with(
+                ["docker", "kill", "--signal=KILL", name],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            lifecycle = json.loads(
+                (evidence / "task-1" / "container-lifecycle.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(lifecycle["client_exit_code"], -9)
+            self.assertEqual(lifecycle["client_error_class"], "RuntimeError")
+            self.assertEqual(lifecycle["failure_stage"], "normal_job_client_exit")
+            self.assertEqual(lifecycle["resource_name"], name)
+            self.assertEqual(lifecycle["container_cleanup_status"], "verified_absent")
+            self.assertEqual(lifecycle["process_cleanup_status"], "reaped")
+
+    def test_normal_job_nonzero_client_exit_records_unverified_cleanup_without_killing(self):
+        from docs.qualification.p04 import native_runner
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            run_id = "p04-normal-client-exit-unverified"
+            name = f"p04-{run_id}-1"
+            mismatched = json.dumps({
+                "Id": "another-container-id", "Name": "/other-task",
+                "Config": {"Labels": {"edge-os.test.run": "other-run"}},
+                "State": {"Running": True},
+            })
+            process = SimpleNamespace(
+                returncode=17,
+                communicate=lambda timeout=None: ("client failed\n", None),
+            )
+
+            with (
+                patch.object(native_runner.subprocess, "Popen", return_value=process),
+                patch.object(native_runner, "_docker", return_value=mismatched),
+                patch.object(native_runner.subprocess, "run") as docker_run,
+            ):
+                with self.assertRaisesRegex(RuntimeError, r"(?s)exited 17.*cleanup=unknown_pending_verification") as raised:
+                    native_runner._run_normal(
+                        policy=DockerPolicy(run_id), image="p04-test:image",
+                        owner_id="owner-a", agent_id="agent-a",
+                        context={"memory": {"version": 1, "enabled": True, "entries": []}, "sources": [], "files": []},
+                        evidence=evidence, run_id=run_id, ordinal="1",
+                    )
+
+            self.assertIn("client failed", str(raised.exception))
+            docker_run.assert_not_called()
+            lifecycle = json.loads(
+                (evidence / "task-1" / "container-lifecycle.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(lifecycle["client_exit_code"], 17)
+            self.assertEqual(lifecycle["client_error_class"], "RuntimeError")
+            self.assertEqual(lifecycle["failure_stage"], "normal_job_client_exit")
+            self.assertEqual(lifecycle["ownership"], "unverified")
+            self.assertEqual(lifecycle["container_cleanup_status"], "unknown_pending_verification")
+
 
 class ProviderBoundaryRegressionTests(unittest.TestCase):
     def _run_normal_consumer(self, context, *, mutate_sent=None, observed_receipts=None):

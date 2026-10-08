@@ -735,7 +735,31 @@ def _run_normal(
             f"container {name} exceeded 90 seconds; cleanup={cleanup['container_cleanup_status']}"
         ) from exc
     if proc.returncode != 0:
-        raise RuntimeError(f"container {name} exited {proc.returncode}: {stdout[-2000:]}")
+        original_error = RuntimeError(f"container {name} exited {proc.returncode}: {stdout[-2000:]}")
+        try:
+            cleanup = _cleanup_owned_container(name, policy.run_id, proc)
+        except Exception as cleanup_exc:
+            cleanup = {
+                "resource_name": name,
+                "required_run_label": policy.run_id,
+                "ownership": "unverified",
+                "container_cleanup_status": "unknown_pending_verification",
+                "process_cleanup_status": "unknown_pending_reap",
+                "cleanup_error_class": type(cleanup_exc).__name__,
+            }
+        lifecycle = {
+            **cleanup,
+            "failure_stage": "normal_job_client_exit",
+            "client_exit_code": proc.returncode,
+            "client_error_class": type(original_error).__name__,
+            "client_error_message_retained": False,
+        }
+        (task_dir / "container-lifecycle.json").write_text(
+            json.dumps(lifecycle, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+        raise RuntimeError(
+            f"{original_error}; cleanup={lifecycle['container_cleanup_status']}"
+        ) from original_error
     result_path = output / "container-result.json"
     result = json.loads(result_path.read_text(encoding="utf-8"))
     _validate_container_result(result, allow_failed=mode in ("error", "truncated"))
