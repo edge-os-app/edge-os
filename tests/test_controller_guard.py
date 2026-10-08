@@ -163,6 +163,37 @@ class CheckedSendTests(unittest.TestCase):
         self.assertFalse(_has_partial_input(empty))
         self.assertTrue(_has_partial_input(foreign))
 
+    def test_codex_shortcut_warning_footer_allows_checked_submission(self):
+        footer = (
+            "\n\nGPT-6.1-Sol high · ~/repo · Probe initialization hook\n"
+            "? for shortcuts                       ⚠ 1 warning · f2 to view"
+        )
+
+        class WarningFooterBridge(FakeBridge):
+            def message(inner, target, text):
+                inner.calls.append(("message", target, text))
+                inner.envelope = (
+                    "[tmux-bridge from:codex pane:%1 at:work:0.0 — "
+                    "load the smux skill to reply] " + text
+                )
+                inner.capture = "› " + inner.envelope + footer
+
+            def enter(inner, target):
+                inner.calls.append(("enter", target))
+                inner.capture = "› " + inner.envelope + "\n\n› Ask Codex to do anything" + footer
+
+        self.bridge = WarningFooterBridge("› Ask Codex to do anything" + footer)
+        self.request["preflight_sha256"] = hashlib.sha256(self.bridge.capture.encode()).hexdigest()
+        self.assertEqual(self.send()["status"], "SUBMITTED")
+        self.assertEqual(sum(call[0] == "message" for call in self.bridge.calls), 1)
+        self.assertEqual(sum(call[0] == "enter" for call in self.bridge.calls), 1)
+        before_duplicate = list(self.bridge.calls)
+        self.assertTrue(self.send()["duplicate"])
+        self.assertEqual(self.bridge.calls, before_duplicate)
+
+        self.assertTrue(_has_partial_input("› Ask Codex to do anything\n" + footer.strip()))
+        self.assertTrue(_has_partial_input("› Ask Codex to do anything" + footer + " foreign draft"))
+
     def test_native_own_draft_is_found_before_footer(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
                "load the smux skill to reply] " + self.request["text"])
@@ -174,6 +205,25 @@ class CheckedSendTests(unittest.TestCase):
             "+ Show details"
         )
         self.assertTrue(_has_active_draft(capture, "%1", self.request["text"]))
+
+    def test_two_line_native_smux_header_keeps_exact_sender_and_body(self):
+        envelope = (
+            "[tmux-bridge from:edge-os-worker-lane-3 pane:%1 at:edge-os-lane-3:0.1 —\n"
+            "  load the smux skill to reply] " + self.request["text"]
+        )
+        footer = "\n\nGPT-6.1-Sol high · ~/repo · gate-3\n? for shortcuts"
+        before = "old history\n› " + envelope + footer
+        after = "old history\n› " + envelope + "\n\n› Ask Codex to do anything" + footer
+        self.assertTrue(_has_active_draft(before, "%1", self.request["text"]))
+        self.assertTrue(_submitted(after, before, "%1", self.request["text"]))
+        for foreign in (
+            before.replace("pane:%1", "pane:%9"),
+            before.replace("load the smux", "foreign load the smux"),
+            before.replace("reply] ", "reply] foreign "),
+            before.replace(footer, "\n  foreign user draft" + footer),
+        ):
+            with self.subTest(capture=foreign):
+                self.assertFalse(_has_active_draft(foreign, "%1", self.request["text"]))
 
     def test_claude_native_own_draft_is_found_before_footer(self):
         own = ("[tmux-bridge from:codex pane:%1 at:work:0.0 — "
@@ -269,6 +319,7 @@ class CheckedSendTests(unittest.TestCase):
             "  ⏸ manual mode on",
             "  GPT-UNKNOWN · foreign unsent addition",
             "  🤖 unknown | 💰 foreign unsent addition",
+            "  ? for shortcuts                       ⚠ 1 warning · f2 to view",
         )
         for index, suffix in enumerate(suffixes):
             with self.subTest(stage="fresh", suffix=suffix):

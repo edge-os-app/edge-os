@@ -240,7 +240,7 @@ def _is_native_footer(line: str) -> bool:
             r"\(\$[\d,.]+/\$[\d,.]+\) \| session:\d+m$",
             line,
         )
-        or re.match(r"^← for agents · \? for shortcuts(?:\s+⚠ .+ · f\d+ to view)?$", line)
+        or re.match(r"^(?:← for agents · )?\? for shortcuts(?:\s+⚠ .+ · f\d+ to view)?$", line)
         or line in {
             "? for shortcuts", "+ Show details", "⏸ manual mode on",
             "⏸ manual mode on · ← for agents",
@@ -288,12 +288,21 @@ def _message_at(lines: list[str], index: int, sender: str, text: str, limit: int
                 *, allow_following_output: bool = False) -> bool:
     if index >= limit:
         return False
-    header = _message_header(lines[index], sender)
+    row, header_rows = lines[index], 1
+    header = _message_header(row, sender)
+    # ponytail: recognize two-row headers; longer unknown wraps stay blocked until qualified.
+    if not header and index + 1 < limit:
+        for separator in (" ", ""):
+            joined = row.rstrip() + separator + lines[index + 1].strip()
+            header = _message_header(joined, sender)
+            if header:
+                row, header_rows = joined, 2
+                break
     if not header:
         return False
-    first = re.sub(r"^\s*(?:❯|›)\s*", "", lines[index])[header.end():].rstrip()
+    first = re.sub(r"^\s*(?:❯|›)\s*", "", row)[header.end():].rstrip()
     positions = {0}
-    for i, chunk in enumerate([first, *(line.strip() for line in lines[index + 1:limit])]):
+    for i, chunk in enumerate([first, *(line.strip() for line in lines[index + header_rows:limit])]):
         next_positions = set()
         separators = ("",) if i == 0 else ("", " ")
         for position in positions:
