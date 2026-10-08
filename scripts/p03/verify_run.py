@@ -242,7 +242,7 @@ def main() -> int:
         if not args.skip_ui:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}
-            code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs"], ui_env, evidence / "ui-e2e.log")
+            code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs", "provenance.spec.mjs"], ui_env, evidence / "ui-e2e.log")
             ok &= rec.step("browser drive (desktop and 390px)", code == 0, {"exit": code})
 
             results_path = evidence / "ui" / "ui-results.json"

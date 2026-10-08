@@ -96,6 +96,10 @@ TINY_NEGATIVE_RETURN_ENTRY = {"op": "gt", "args": [
     {"op": "price_return", "lookback_buckets": 1},
     {"op": "constant", "value": "-0." + ("0" * 399) + "1", "unit": "DIMENSIONLESS"},
 ]}
+TINY_POSITIVE_RETURN_ENTRY = {"op": "gt", "args": [
+    {"op": "price_return", "lookback_buckets": 1},
+    {"op": "constant", "value": "0." + ("0" * 399) + "1", "unit": "DIMENSIONLESS"},
+]}
 UNSUPPORTED_ENTRY = {"op": "gt", "args": [
     {"op": "rsi", "lookback_buckets": 14},
     {"op": "constant", "value": "70", "unit": "DIMENSIONLESS"},
@@ -160,6 +164,11 @@ SCENARIOS: tuple[Scenario, ...] = (
              ". Exit when the 5-minute price return is below zero.",
              "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
              stated={"entry": TINY_NEGATIVE_RETURN_ENTRY, "exit": EXIT_RULE}, show_example=False),
+    Scenario("tiny-threshold-positive", "Exact tiny positive return threshold",
+             "Enter when the 5-minute price return is above " + TINY_POSITIVE_RETURN_ENTRY["args"][1]["value"] +
+             ". Exit when the 5-minute price return is below zero.",
+             "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),
+             stated={"entry": TINY_POSITIVE_RETURN_ENTRY, "exit": EXIT_RULE}, show_example=False),
     Scenario("unsupported-indicator", "Unsupported indicator",
              "Enter when the 14-period RSI is above 70; exit when the 5-minute price return is below zero.",
              "CONCRETE_THESIS", "CREATE_STRATEGY", ("no leverage",),

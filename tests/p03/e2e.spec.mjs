@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { injectAuth, tokens } from "./fixture-auth.mjs";
+import { expectProvenanceFits, openProvenanceAndMeasure } from "./provenance-layout.mjs";
 
 const evidence = process.env.P03_EVIDENCE_DIR ?? ".evidence";
 const shots = path.join(evidence, "screenshots");
@@ -192,6 +193,7 @@ test("exact negative tiny threshold remains visible through save", async ({ page
   await page.getByRole("button", { name: "Adopt these settings" }).first().click();
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
   const expectedEntry = `Enter when the 5-minute price return is above -0.${"0".repeat(397)}1%`;
+  const expectedProvenance = `Enter when the 5-minute price return is above -0.${"0".repeat(397)}1%`;
   const review = page.getByTestId("rules-review");
   await expect(review).toContainText(expectedEntry);
   const width = await review.evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }));
@@ -203,8 +205,11 @@ test("exact negative tiny threshold remains visible through save", async ({ page
   const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
   const requestUrl = page.url();
   record(`tiny-threshold-${project}`, { url: requestUrl, revisionId, original: TINY_RULE,
-    expectedEntry, expectedEntryTree: TINY_ENTRY });
+    expectedEntry, expectedProvenance, expectedEntryTree: TINY_ENTRY });
   await shot(page, project, "tiny-threshold-saved");
+  const provenance = await openProvenanceAndMeasure(page, expectedProvenance);
+  expectProvenanceFits(provenance);
+  await shot(page, project, "tiny-threshold-provenance-open");
 });
 
 test("hunch: keyboard choice, Tab order and Escape-free completion", async ({ page }, info) => {

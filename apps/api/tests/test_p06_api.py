@@ -78,7 +78,7 @@ def test_mapped_only_rule_fixtures_do_not_appear_as_home_examples(client, owner_
     response = client.get("/v1/interpreter", headers=owner_a)
     assert response.status_code == 200
     visible = {sample["scenario_id"] for sample in response.json()["samples"]}
-    assert not {"grouped-rule", "grouped-rule-right", "tiny-threshold"} & visible
+    assert not {"grouped-rule", "grouped-rule-right", "tiny-threshold", "tiny-threshold-positive"} & visible
 
 
 def test_grouped_rules_keep_distinct_meaning_when_saved_and_reopened(client, owner_a, pg):
