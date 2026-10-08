@@ -221,6 +221,9 @@ def validate_compile_fields(strategy: dict[str, Any]) -> int:
         info = expression_info(node, market, f"/{field_name}")
         if info.kind != "BOOLEAN":
             raise CompilerError("incompatible_type", f"/{field_name}", f"{field_name} must be a Boolean rule.")
+        if info.history > LIMITS["lookback_buckets"]:
+            raise CompilerError("history_limit", f"/{field_name}",
+                                "Nested rules need more than 288 scheduled buckets.")
         if not _input_names(node) <= set(strategy["data_inputs"]):
             raise CompilerError("undeclared_input", f"/{field_name}", f"{field_name} uses an undeclared data input.")
         infos.append(info)
@@ -325,13 +328,22 @@ def evaluate_expression(node: object, market: dict[str, Any], context: Evaluatio
         raise CompilerError("invalid_timing", "/data/decision_time", "Decision time must be an explicit UTC instant.")
     if len(context.prices) != len(context.quote_volumes) or len(context.prices) != len(context.scheduled_bucket_ends):
         raise CompilerError("schedule_mismatch", "/data", "Price, quote-volume and schedule positions must match.")
+    spend = [0]
+    if len(context.scheduled_bucket_ends) > LIMITS["evaluation_steps"]:
+        raise CompilerError("evaluation_limit", "/", "Rule evaluation exceeded its declared work limit.")
+    previous: dt.datetime | None = None
     for index, current in enumerate(context.scheduled_bucket_ends):
+        spend[0] += 1
+        if spend[0] > LIMITS["evaluation_steps"]:
+            raise CompilerError("evaluation_limit", "/", "Rule evaluation exceeded its declared work limit.")
         if (current.tzinfo is None or current.utcoffset() != dt.timedelta(0)
                 or current.minute % 5 or current.second or current.microsecond
-                or index and current - context.scheduled_bucket_ends[index - 1] != dt.timedelta(minutes=5)):
+                or index and current - previous != dt.timedelta(minutes=5)):
             raise CompilerError("schedule_mismatch", "/data/scheduled_bucket_ends",
                                 "Evaluation positions must be unique scheduled five-minute UTC buckets.")
-    spend = [0]
+        previous = current
+    def numeric_failure(reasons: tuple[str, ...]) -> EvaluationResult:
+        return EvaluationResult(None, _merge_reasons(reasons, ("NUMERIC_FAILURE",)))
 
     def evaluate(current: dict[str, Any], position: int) -> EvaluationResult:
         spend[0] += 1
@@ -354,8 +366,12 @@ def evaluate_expression(node: object, market: dict[str, Any], context: Evaluatio
             reasons = _merge_reasons(now.reasons, then.reasons, *gaps)
             if not isinstance(now.value, Decimal) or not isinstance(then.value, Decimal):
                 return EvaluationResult(None, reasons)
-            with localcontext(NUMERIC):
-                return EvaluationResult(now.value / then.value - Decimal(1), reasons)
+            try:
+                with localcontext(NUMERIC):
+                    value = now.value / then.value - Decimal(1)
+            except DecimalException:
+                return numeric_failure(reasons)
+            return EvaluationResult(value, reasons)
         if op in {"lag", "sum", "mean"}:
             n = current["buckets"]
             if op == "lag":
@@ -364,9 +380,13 @@ def evaluate_expression(node: object, market: dict[str, Any], context: Evaluatio
             reasons = _merge_reasons(*(value.reasons for value in values))
             if any(not isinstance(value.value, Decimal) for value in values):
                 return EvaluationResult(None, reasons)
-            with localcontext(NUMERIC):
-                total = sum((value.value for value in values if isinstance(value.value, Decimal)), Decimal(0))
-                return EvaluationResult(total if op == "sum" else total / Decimal(n), reasons)
+            try:
+                with localcontext(NUMERIC):
+                    total = sum((value.value for value in values if isinstance(value.value, Decimal)), Decimal(0))
+                    result = total if op == "sum" else total / Decimal(n)
+            except DecimalException:
+                return numeric_failure(reasons)
+            return EvaluationResult(result, reasons)
         if op == "relative_volume":
             n = current["lookback_buckets"]
             now = evaluate({"op": "quote_volume"}, position)
@@ -374,11 +394,15 @@ def evaluate_expression(node: object, market: dict[str, Any], context: Evaluatio
             reasons = _merge_reasons(now.reasons, *(value.reasons for value in base))
             if not isinstance(now.value, Decimal) or any(not isinstance(value.value, Decimal) for value in base):
                 return EvaluationResult(None, reasons)
-            with localcontext(NUMERIC):
-                mean = sum((value.value for value in base if isinstance(value.value, Decimal)), Decimal(0)) / Decimal(n)
-                if mean == 0:
-                    return EvaluationResult(None, _merge_reasons(reasons, ("ZERO_BASELINE",)))
-                return EvaluationResult(now.value / mean, reasons)
+            try:
+                with localcontext(NUMERIC):
+                    mean = sum((value.value for value in base if isinstance(value.value, Decimal)), Decimal(0)) / Decimal(n)
+                    if mean == 0:
+                        return EvaluationResult(None, _merge_reasons(reasons, ("ZERO_BASELINE",)))
+                    result = now.value / mean
+            except DecimalException:
+                return numeric_failure(reasons)
+            return EvaluationResult(result, reasons)
         if op == "not":
             value = evaluate(current["value"], position)
             if value.value == Truth.TRUE:
@@ -404,7 +428,4 @@ def evaluate_expression(node: object, market: dict[str, Any], context: Evaluatio
                   "lt": left.value < right.value, "lte": left.value <= right.value}[op]
         return EvaluationResult(Truth.TRUE if result else Truth.FALSE, reasons)
 
-    try:
-        return evaluate(node, context.position)
-    except DecimalException:
-        return EvaluationResult(Truth.UNKNOWN, ("NUMERIC_FAILURE",))
+    return evaluate(node, context.position)

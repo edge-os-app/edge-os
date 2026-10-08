@@ -32,7 +32,7 @@
     "zero_baseline": "UNKNOWN with reason ZERO_BASELINE"
   },
   "resource_profile": {
-    "evaluation_steps": "One per visited expression node and scheduled input observation. Hard limit is enforced before the next step.",
+    "evaluation_steps": "One per scheduled bucket admitted by schedule validation, visited expression node, and scheduled input observation. Hard limit is enforced before the next step.",
     "measured_on": "P06 worker evidence records the host, the exact high-cost accepted fixture and step count, elapsed time, and process peak RSS."
   },
   "source_mapping": {

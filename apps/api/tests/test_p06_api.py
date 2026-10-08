@@ -5,11 +5,44 @@ import json
 import uuid
 
 from edge_os_api import p02, p06
-from flows import answer, publication_body, submit
+from flows import answer, compiled_thesis, publication_body, submit
 
 VOLUME_RULE = ("Enter when current quote volume is above twice its prior 10-minute mean; exit when the 5-minute "
                "price return is below zero.")
 UNSUPPORTED_RULE = ("Enter when the 14-period RSI is above 70; exit when the 5-minute price return is below zero.")
+
+
+def legacy_p02_bundle(client, owner, pg):
+    bundle = compiled_thesis(client, owner)
+    source = copy.deepcopy(bundle["drafts"][0]["content"])
+    strategy = source["source_syntax"]
+    strategy["schema_version"] = p02.CONTRACT["identity"]["strategy_schema"]
+    strategy["semantic_manifest"] = dict(p02.MANIFEST)
+    p02.validate_strategy(strategy)
+    draft_id = str(uuid.uuid4())
+    source["draft_id"] = draft_id
+    owner_id = pg.psql("select owner_id from records where record_id = "
+                       f"'{bundle['intake']['record_id']}'")
+    source_json = json.dumps(source, separators=(",", ":")).replace("'", "''")
+    pg.psql("insert into records (record_id, owner_id, record_type, schema_version, operation_id, created_at, "
+            "content, intake_record_id, predecessor_record_id, interpretation_record_id) values "
+            f"('{draft_id}', '{owner_id}', 'StrategyDraft', 'p02.strategy_draft/1', "
+            f"'{bundle['intake']['operation_id']}', now(), '{source_json}'::jsonb, "
+            f"'{bundle['intake']['record_id']}', null, '{bundle['head']['interpretation_revision_id']}')")
+    return bundle, strategy, draft_id, owner_id
+
+
+def seed_legacy_revision(pg, strategy, draft_id, owner_id, *, operation_id=None):
+    revision_id, publication_id = str(uuid.uuid4()), str(uuid.uuid4())
+    operation_id = operation_id or str(uuid.uuid4())
+    canonical = p02.canonical_bytes(strategy).decode().replace("'", "''")
+    pg.psql("insert into strategy_revisions (revision_id, owner_id, strategy_id, parent_revision_id, "
+            "draft_record_id, publication_id, operation_id, content_sha256, manifest_sha256, strategy_canonical, "
+            "created_at) values "
+            f"('{revision_id}', '{owner_id}', '{strategy['strategy_id']}', null, '{draft_id}', "
+            f"'{publication_id}', '{operation_id}', '{p02.sha256_hex(strategy)}', '{p02.manifest_sha256()}', "
+            f"'{canonical}', now())")
+    return revision_id, publication_id, operation_id
 
 
 def test_user_can_review_save_and_reopen_a_price_volume_rule(client, owner_a, pg):
@@ -84,3 +117,98 @@ def test_fresh_and_saved_invalid_rule_have_the_same_compile_rejection(client, ow
     assert saved.json()["findings"] == fresh.json()["findings"]
     assert saved.json()["findings"][0]["path"] == "/strategy/entry/args/0"
     assert pg.psql("select count(*) from strategy_revisions") == before
+
+
+def test_valid_existing_p02_revision_remains_readable_without_rewriting_its_bytes(client, owner_a, pg):
+    _, strategy, draft_id, owner_id = legacy_p02_bundle(client, owner_a, pg)
+    revision_id, _, _ = seed_legacy_revision(pg, strategy, draft_id, owner_id)
+
+    response = client.get(f"/v1/strategies/{strategy['strategy_id']}/revisions/{revision_id}", headers=owner_a)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["strategy"] == strategy
+    assert response.json()["stored_hash_matches_content"] is True
+    assert response.json()["stored_manifest_hash_matches_content"] is True
+
+
+def test_corrupt_stored_manifest_is_reported_without_claiming_verification(client, owner_a, pg):
+    bundle = compiled_thesis(client, owner_a)
+    strategy = bundle["drafts"][0]["content"]["source_syntax"]
+    result = client.post(f"/v1/strategies/{strategy['strategy_id']}/revisions", headers=owner_a,
+                         json=publication_body(bundle)).json()
+    corrupt_revision_id, publication_id, operation_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    pg.psql("insert into strategy_revisions (revision_id, owner_id, strategy_id, parent_revision_id, "
+            "draft_record_id, publication_id, operation_id, content_sha256, manifest_sha256, strategy_canonical, "
+            "created_at) select "
+            f"'{corrupt_revision_id}', owner_id, strategy_id, '{result['revision_id']}', draft_record_id, "
+            f"'{publication_id}', '{operation_id}', content_sha256, '{'0' * 64}', strategy_canonical, now() "
+            f"from strategy_revisions where revision_id = '{result['revision_id']}'")
+
+    response = client.get(f"/v1/strategies/{strategy['strategy_id']}/revisions/{corrupt_revision_id}",
+                          headers=owner_a)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["stored_hash_matches_content"] is True
+    assert response.json()["stored_manifest_hash_matches_content"] is False
+
+
+def test_successful_existing_p02_publication_replay_remains_idempotent(client, owner_a, pg):
+    bundle, strategy, draft_id, owner_id = legacy_p02_bundle(client, owner_a, pg)
+    operation_id = str(uuid.uuid4())
+    revision_id, publication_id, _ = seed_legacy_revision(
+        pg, strategy, draft_id, owner_id, operation_id=operation_id)
+    path = f"/v1/strategies/{strategy['strategy_id']}/revisions"
+    idempotency_key = "legacy-replay-round-one"
+    body = {"operation_id": operation_id, "idempotency_key": idempotency_key,
+            "expected_parent_revision_id": None, "draft_id": draft_id, "strategy": strategy}
+    fingerprint = p02.sha256_hex({"owner_id": owner_id, "method": "POST", "path": path,
+        "expected_parent_revision_id": None, "draft_id": draft_id,
+        "canonical_strategy_bytes": p02.canonical_bytes(strategy).decode()})
+    result = {"operation_id": operation_id, "stage": "PUBLICATION", "outcome": "PUBLISHED",
+              "code": "published", "findings": [], "retry": "SAFE_SAME_KEY",
+              "publication_id": publication_id, "revision_id": revision_id,
+              "content_sha256": p02.sha256_hex(strategy), "manifest_sha256": p02.manifest_sha256(),
+              "created_at": "2026-01-01T00:00:00.000000Z"}
+    p02.validate_record("PublicationResult", result)
+    result_json = json.dumps(result, separators=(",", ":")).replace("'", "''")
+    pg.psql("insert into idempotency_records (owner_id, method, path, idempotency_key, fingerprint, revision_id, "
+            "response) values "
+            f"('{owner_id}', 'POST', '{path}', '{idempotency_key}', '{fingerprint}', '{revision_id}', "
+            f"'{result_json}'::jsonb)")
+    before = pg.psql("select count(*) from strategy_revisions")
+
+    replay = client.post(path, json=body, headers=owner_a)
+
+    assert replay.status_code == 200, replay.text
+    assert replay.headers["idempotent-replay"] == "true"
+    assert replay.json() == result
+    assert pg.psql("select count(*) from strategy_revisions") == before
+
+
+def test_over_limit_derived_history_rejects_before_unresolved_evidence(client, owner_a, monkeypatch):
+    from edge_os_api import service
+
+    original_interpret = service.INTERPRETER.interpret
+
+    def unresolved_with_deep_entry(intake):
+        result = original_interpret(intake)
+        result["evidence_readiness"] = "UNRESOLVED"
+        rule: dict = {"op": "price"}
+        for _ in range(2):
+            rule = {"op": "lag", "value": rule, "buckets": 288}
+        for item in result["field_evidence"]:
+            if item["field_name"] == "entry":
+                item["value"] = {"op": "gt", "args": [
+                    rule, {"op": "constant", "value": "1", "unit": "PRICE"}]}
+        return result
+
+    monkeypatch.setattr(service.INTERPRETER, "interpret", unresolved_with_deep_entry)
+    first = submit(client, owner_a).json()
+
+    response = answer(client, owner_a, first, "adopt-suggested-settings", "adopt")
+
+    assert response.status_code == 201, response.text
+    assert response.json()["head"]["outcome"] == "INVALID_INPUT"
+    finding = response.json()["outcomes"][-1]["record"]["content"]["findings"][0]
+    assert finding["code"] == "history_limit"
+    assert finding["path"] == "/field_evidence/entry"

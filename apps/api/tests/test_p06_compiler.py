@@ -92,6 +92,28 @@ def test_price_return_keeps_intermediate_gap_while_using_qualified_endpoints():
     assert result.reasons == ("MISSING_PRICE:1",)
 
 
+def test_numeric_failure_keeps_other_missing_reasons():
+    result = p06.evaluate_expression({"op": "price_return", "lookback_buckets": 2}, MARKET,
+                                     context(prices=("1e-999999", None, "1e999999"), position=2))
+
+    assert result.state == "UNKNOWN"
+    assert result.reasons == ("MISSING_PRICE:1", "NUMERIC_FAILURE")
+
+
+def test_numeric_failure_is_an_unknown_operand_under_kleene_or():
+    failed = compare("gt", {"op": "price_return", "lookback_buckets": 2},
+                     {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"})
+    rule = {"op": "or", "args": [
+        compare("gt", {"op": "price"}, {"op": "constant", "value": "0", "unit": "PRICE"}), failed,
+    ]}
+
+    result = p06.evaluate_expression(rule, MARKET,
+                                     context(prices=("1e-999999", None, "1e999999"), position=2))
+
+    assert result.value == p06.Truth.TRUE
+    assert result.reasons == ("MISSING_PRICE:1", "NUMERIC_FAILURE")
+
+
 def test_rolling_mean_does_not_shrink_around_missing_scheduled_position():
     result = p06.evaluate_expression({"op": "mean", "value": {"op": "price"}, "buckets": 3}, MARKET,
                                      context(prices=("100", None, "110"), position=2))
@@ -338,30 +360,71 @@ def test_evaluation_work_limit_stops_nested_rolling_expansion():
 def test_evaluation_work_limit_accepts_boundary_then_rejects_one_step_over(monkeypatch):
     rule = {"op": "price_return", "lookback_buckets": 1}
     data = context(prices=("100", "110"), position=1)
-    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 3)
+    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 5)
 
     assert p06.evaluate_expression(rule, MARKET, data).value == Decimal("0.1")
 
-    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 2)
+    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 4)
     with pytest.raises(p06.CompilerError) as error:
         p06.evaluate_expression(rule, MARKET, data)
     assert error.value.code == "evaluation_limit"
 
 
-def test_six_level_eight_bucket_rolling_fixture_consumes_exactly_561737_steps(monkeypatch):
+def test_schedule_admission_and_expression_share_exact_work_boundary(monkeypatch):
+    schedule = tuple(DECISION - dt.timedelta(minutes=5 * index) for index in range(4, -1, -1))
+    data = p06.EvaluationContext((None,) * 5, (None,) * 5, schedule,
+                                 p06.market_binding_id(MARKET), DECISION, 4)
+    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 6)
+
+    result = p06.evaluate_expression({"op": "constant", "value": "1", "unit": "DIMENSIONLESS"}, MARKET, data)
+
+    assert result.value == Decimal("1")
+    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 5)
+    with pytest.raises(p06.CompilerError) as error:
+        p06.evaluate_expression({"op": "constant", "value": "1", "unit": "DIMENSIONLESS"}, MARKET, data)
+    assert error.value.code == "evaluation_limit"
+
+
+def test_schedule_admission_rejects_oversized_length_before_scanning():
+    class SizedSequence:
+        def __init__(self, size):
+            self.size, self.reads = size, 0
+
+        def __len__(self):
+            return self.size
+
+        def __getitem__(self, index):
+            self.reads += 1
+            if index < 0 or index >= self.size:
+                raise IndexError(index)
+            return DECISION
+
+    size = p06.LIMITS["evaluation_steps"] + 1
+    schedule = SizedSequence(size)
+    data = p06.EvaluationContext(SizedSequence(size), SizedSequence(size), schedule,
+                                 p06.market_binding_id(MARKET), DECISION, size - 1)
+
+    with pytest.raises(p06.CompilerError) as error:
+        p06.evaluate_expression({"op": "constant", "value": "1", "unit": "DIMENSIONLESS"}, MARKET, data)
+
+    assert error.value.code == "evaluation_limit"
+    assert schedule.reads == 0
+
+
+def test_six_level_eight_bucket_rolling_fixture_consumes_exactly_561780_steps(monkeypatch):
     expression: dict = {"op": "price"}
     for _ in range(6):
         expression = {"op": "mean", "value": expression, "buckets": 8}
     values = tuple("1" for _ in range(43))
 
     data = context(prices=values, position=42)
-    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 561_737)
+    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 561_780)
     result = p06.evaluate_expression(expression, MARKET, data)
 
     assert result.value == Decimal("1")
     assert p06.required_history(expression, MARKET) == 42
 
-    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 561_736)
+    monkeypatch.setitem(p06.LIMITS, "evaluation_steps", 561_779)
     with pytest.raises(p06.CompilerError) as error:
         p06.evaluate_expression(expression, MARKET, data)
     assert error.value.code == "evaluation_limit"

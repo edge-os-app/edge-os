@@ -99,7 +99,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
     if (!revision) { setVerified(null); return; }
     let cancelled = false;
     api.revision(revision.strategy_id, revision.revision_id)
-      .then((r) => { if (!cancelled) setVerified(r.stored_hash_matches_content && r.content_sha256 === revision.content_sha256); })
+      .then((r) => { if (!cancelled) setVerified(r.stored_hash_matches_content && r.stored_manifest_hash_matches_content && r.content_sha256 === revision.content_sha256); })
       .catch(() => { if (!cancelled) setVerified(false); });
     return () => { cancelled = true; };
   }, [revision?.revision_id]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -29,7 +29,7 @@ Evaluation observations carry an exact scheduled bucket end and a hash of their 
 
 ## Limits
 
-P06 preserves the accepted 64 KiB strategy input, 2,048 nodes per expression, depth 64, 288 lookback buckets and 256 manifest-entry limits. Evaluation also stops after 1,000,000 deterministic work steps. A step counts a visited expression node or scheduled input observation. The evaluator raises `evaluation_limit` before exceeding that count. These limits apply to this compiler version only.
+P06 preserves the accepted 64 KiB strategy input, 2,048 nodes per expression, depth 64, 288 lookback buckets and 256 manifest-entry limits. Evaluation also stops after 1,000,000 deterministic work steps. A step counts one scheduled bucket during schedule validation, one visited expression node, or one scheduled input observation. Schedule validation and recursive evaluation share this same budget. An over-limit schedule length is rejected before scanning it; the evaluator raises `evaluation_limit` before exceeding the work count. These limits apply to this compiler version only.
 
 The worker result records the exact high-cost accepted fixture and its evaluation-step count, host, elapsed time and process peak RSS. The numeric ceilings are deterministic rejection limits; elapsed time and RSS are measured observations, not hardware-independent promises.
 

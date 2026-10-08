@@ -65,7 +65,7 @@ export const api = {
   publish: (strategyId: string, body: unknown) =>
     request<PublicationResult>(`/v1/strategies/${strategyId}/revisions`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   revision: (strategyId: string, revisionId: string) =>
-    request<{ revision_id: string; content_sha256: string; manifest_sha256: string; created_at: string; stored_hash_matches_content: boolean }>(
+    request<{ revision_id: string; content_sha256: string; manifest_sha256: string; created_at: string; stored_hash_matches_content: boolean; stored_manifest_hash_matches_content: boolean }>(
       `/v1/strategies/${strategyId}/revisions/${revisionId}`).then((r) => r.body),
   operation: (id: string) => request<PublicationResult>(`/v1/operations/${id}`).then((r) => r.body),
 };
