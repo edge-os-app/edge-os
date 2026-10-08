@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 from typing import Literal
@@ -103,8 +104,9 @@ class Settings(BaseSettings):
     def docs_enabled(self) -> bool:
         return self.env == "local"
 
-    @property
+    @functools.cached_property
     def resolved_build_sha(self) -> str:
+        """Resolved once per process, so /healthz never spawns a process."""
         if self.build_sha:
             return self.build_sha
         try:

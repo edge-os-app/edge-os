@@ -76,11 +76,15 @@ def install_handlers(app: Any) -> None:
         body = AppError(422, "VALIDATION", "INVALID_INPUT", "validation_error", findings).body()
         return JSONResponse(body, status_code=422)
 
-    @app.exception_handler(Exception)
-    async def _unexpected(request: Request, error: Exception) -> JSONResponse:
-        # Log the class only. Messages and SQL parameters can hold the user's words.
-        logging.getLogger("edge_os").error("unhandled %s on %s %s", type(error).__name__, request.method, request.url.path)
-        return JSONResponse(internal_error().body(), status_code=500)
+    @app.middleware("http")
+    async def _contain_unexpected(request: Request, call_next: Any) -> Any:
+        """Turn an unexpected exception into the contract envelope. Do not re-raise: the server would log the
+        traceback and the exception message, which can hold the user's words. Log the class and route only."""
+        try:
+            return await call_next(request)
+        except Exception as error:  # noqa: BLE001
+            logging.getLogger("edge_os").error("unhandled %s on %s %s", type(error).__name__, request.method, request.url.path)
+            return JSONResponse(internal_error().body(), status_code=500)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(_: Request, error: StarletteHTTPException) -> JSONResponse:

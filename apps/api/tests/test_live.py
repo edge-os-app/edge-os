@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import subprocess
-import time
 import uuid
 
 import httpx
-import pytest
 
 import harness
 from conftest import LiveApi, run_threads
 from flows import HUNCH, THESIS, RESTRICTIONS, publication_body
-from tokens import TestSigner
 
 
 def auth(signer, did):

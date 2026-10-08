@@ -87,16 +87,16 @@ export function Shell() {
         )}
         {route.name === "later" && <Later area={route.area} />}
       </main>
-      <div className="convo convo-desktop" role="complementary" aria-label="Conversation">
+      <div className="convo convo-desktop" role="complementary" aria-label="Conversation" data-focus-surface="side">
         <Conversation context={context} idPrefix="side" />
       </div>
-      <dialog ref={sheet} className="sheet" aria-label="Conversation" onKeyDown={trapTab} onClose={() => sheetTrigger.current?.focus()}>
+      <dialog ref={sheet} className="sheet" aria-label="Conversation" data-focus-surface="sheet" onKeyDown={trapTab} onClose={() => sheetTrigger.current?.focus()}>
         <div className="convo">
           <div className="sheet-head">
-            <h2>Conversation</h2>
+            <h2 tabIndex={-1} data-focus-target>Conversation</h2>
             <button className="btn btn-secondary" type="button" onClick={closeSheet}>Close</button>
           </div>
-          <Conversation context={context} idPrefix="sheet" />
+          <Conversation context={context} idPrefix="sheet" showTitle={false} />
         </div>
       </dialog>
     </div>

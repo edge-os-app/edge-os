@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import p02
-from .interpreter import FixtureInterpreter, Scenario, clarification_text, field_label
+from .interpreter import FixtureInterpreter, Scenario, clarification_text
 
 UNSUPPORTED_JOBS = {"SIMULATE", "OBSERVE_FORWARD", "REQUEST_LIVE"}
 INVESTIGATION_FIELDS = ["market", "restrictions"]

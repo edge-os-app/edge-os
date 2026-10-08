@@ -45,11 +45,29 @@ def new_run_id() -> str:
     return "p03" + secrets.token_hex(4)
 
 
+def exists(kind: str, name: str) -> bool:
+    """Exact-name lookup. `docker <kind> inspect` never matches by substring."""
+    return sh(["docker", kind, "inspect", name], check=False).returncode == 0
+
+
+def label_of(kind: str, name: str, key: str) -> str:
+    template = "{{index .Config.Labels \"%s\"}}" % key if kind == "container" else "{{index .Labels \"%s\"}}" % key
+    return sh(["docker", kind, "inspect", "-f", template, name], check=False).stdout.strip()
+
+
 @dataclass
 class Postgres:
+    """A run-labelled PostgreSQL container and volume.
+
+    This object removes only what it created itself (`created_*`) and only after the labels still name this run.
+    A name or label match alone never proves ownership, so a repeated run ID refuses and preserves what exists.
+    """
+
     run_id: str
     password: str = field(default_factory=lambda: secrets.token_urlsafe(18))
     host_port: int = 0
+    created_container: bool = False
+    created_volume: bool = False
 
     @property
     def container(self) -> str:
@@ -70,11 +88,29 @@ class Postgres:
     def labels(self) -> list[str]:
         return ["--label", LABEL, "--label", f"edge-os.test.run={self.run_id}"]
 
+    def existing_resources(self) -> list[str]:
+        found = []
+        if exists("container", self.container):
+            found.append(f"container {self.container}")
+        if exists("volume", self.volume):
+            found.append(f"volume {self.volume}")
+        return found
+
     def start(self) -> "Postgres":
+        present = self.existing_resources()
+        if present:
+            raise RuntimeError(f"refusing to start run {self.run_id}: {', '.join(present)} already exists. "
+                               "Nothing was created or changed. Use a new run ID.")
         sh(["docker", "volume", "create", *self.labels(), self.volume])
-        sh(["docker", "run", "-d", "--name", self.container, *self.labels(),
-            "-e", f"POSTGRES_PASSWORD={self.password}", "-e", f"POSTGRES_DB={self.database}",
-            "-p", "127.0.0.1::5432", "-v", f"{self.volume}:/var/lib/postgresql", POSTGRES_IMAGE])
+        self.created_volume = True
+        try:
+            sh(["docker", "run", "-d", "--name", self.container, *self.labels(),
+                "-e", f"POSTGRES_PASSWORD={self.password}", "-e", f"POSTGRES_DB={self.database}",
+                "-p", "127.0.0.1::5432", "-v", f"{self.volume}:/var/lib/postgresql", POSTGRES_IMAGE])
+        finally:
+            # `docker run` can create the container and still fail to start it. Own it only if it now exists.
+            self.created_container = exists("container", self.container) and \
+                label_of("container", self.container, "edge-os.test.run") == self.run_id
         port_line = sh(["docker", "port", self.container, "5432/tcp"]).stdout.strip().splitlines()[0]
         self.host_port = int(port_line.rsplit(":", 1)[1])
         self._wait_ready()
@@ -110,18 +146,24 @@ class Postgres:
         info = json.loads(sh(["docker", "image", "inspect", POSTGRES_IMAGE]).stdout)[0]
         return {"image": POSTGRES_IMAGE, "id": info["Id"], "repo_digests": ",".join(info.get("RepoDigests", []))}
 
+    def _owned(self, kind: str, name: str) -> bool:
+        return exists(kind, name) and label_of(kind, name, "edge-os.test") == "1" \
+            and label_of(kind, name, "edge-os.test.run") == self.run_id
+
     def stop_and_remove(self) -> None:
-        sh(["docker", "rm", "-f", "-v", self.container], check=False)
-        sh(["docker", "volume", "rm", self.volume], check=False)
+        """Remove what this instance created, if its labels still name this run. Otherwise change nothing."""
+        if self.created_container and self._owned("container", self.container):
+            sh(["docker", "rm", "-f", "-v", self.container], check=False)
+        if self.created_volume and self._owned("volume", self.volume):
+            sh(["docker", "volume", "rm", self.volume], check=False)
 
     def leftovers(self) -> list[str]:
+        """Resources this instance created that still exist."""
         out: list[str] = []
-        names = sh(["docker", "ps", "-a", "--filter", f"label=edge-os.test.run={self.run_id}",
-                    "--format", "{{.Names}}"], check=False).stdout.split()
-        out += [f"container:{n}" for n in names]
-        vols = sh(["docker", "volume", "ls", "--filter", f"label=edge-os.test.run={self.run_id}",
-                   "--format", "{{.Name}}"], check=False).stdout.split()
-        out += [f"volume:{v}" for v in vols]
+        if self.created_container and exists("container", self.container):
+            out.append(f"container:{self.container}")
+        if self.created_volume and exists("volume", self.volume):
+            out.append(f"volume:{self.volume}")
         return out
 
 
@@ -242,15 +284,16 @@ def orphan_report() -> list[dict[str, str]]:
 
 
 def remove_orphan(run_id: str) -> None:
-    """Remove one stopped orphan run after the operator named its run ID."""
+    """Remove one stopped, labelled orphan after the operator named its run ID. Refuse anything else."""
     pg = Postgres(run_id)
-    state = sh(["docker", "inspect", "-f", "{{.State.Running}}", pg.container], check=False).stdout.strip()
-    if state == "true":
+    if not exists("container", pg.container):
+        raise RuntimeError(f"{pg.container} does not exist")
+    if sh(["docker", "inspect", "-f", "{{.State.Running}}", pg.container], check=False).stdout.strip() == "true":
         raise RuntimeError(f"{pg.container} is running and may belong to a live run; refusing removal")
-    labels = sh(["docker", "inspect", "-f", "{{index .Config.Labels \"edge-os.test.run\"}}", pg.container],
-                check=False).stdout.strip()
-    if labels != run_id:
-        raise RuntimeError("label mismatch; refusing removal")
+    if label_of("container", pg.container, "edge-os.test") != "1" or label_of("container", pg.container, "edge-os.test.run") != run_id:
+        raise RuntimeError("labels do not match this run ID; refusing removal")
+    pg.created_container = True  # the operator named this run and its labels match: removal is authorized
+    pg.created_volume = exists("volume", pg.volume)
     pg.stop_and_remove()
 
 

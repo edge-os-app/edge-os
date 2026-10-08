@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from . import p02
@@ -61,14 +61,6 @@ def put_record(session: Session, principal: Principal, record_type: str, content
     session.add(row)
     session.flush()
     return row
-
-
-def guarded(call: Any) -> Any:
-    """Map database availability failures to the stable 503 body."""
-    try:
-        return call()
-    except OperationalError:
-        raise service_unavailable() from None
 
 
 def get_owned(session: Session, principal: Principal, record_id: str, record_type: str | None = None) -> Record:

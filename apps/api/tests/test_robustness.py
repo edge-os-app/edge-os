@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
 from fastapi.testclient import TestClient
 
 from edge_os_api import p02, service
 from edge_os_api.auth import Principal
 from edge_os_api.main import create_app
-from flows import HUNCH, RESTRICTIONS, THESIS, compiled_thesis, publication_body, submit
+from flows import HUNCH, THESIS, compiled_thesis, publication_body, submit
 
 
 def assert_envelope(response, status):
@@ -60,7 +59,7 @@ def test_a_record_id_that_is_not_an_intake_is_not_found(client, owner_a):
     assert client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).status_code == 200
 
 
-def test_unexpected_exceptions_return_the_contract_envelope_without_details(settings, signer, monkeypatch):
+def test_unexpected_exceptions_return_the_contract_envelope_without_details(settings, signer, monkeypatch, caplog):
     def explode(*_a, **_k):
         raise RuntimeError("secret internals SECRETWORDS")
     monkeypatch.setattr(service, "create_request", explode)
@@ -70,6 +69,10 @@ def test_unexpected_exceptions_return_the_contract_envelope_without_details(sett
     body = assert_envelope(response, 500)
     assert body["code"] == "service_unavailable" and body["retry"] == "RECONCILE"
     assert "SECRETWORDS" not in response.text and "Traceback" not in response.text
+    # the log names the exception class and route only: no message, no traceback
+    logged = [r for r in caplog.records if r.name == "edge_os"]
+    assert logged and all("RuntimeError" in r.getMessage() and r.exc_info is None for r in logged)
+    assert "SECRETWORDS" not in caplog.text
 
 
 def test_sql_parameters_are_hidden_from_error_text(client):

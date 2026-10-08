@@ -8,7 +8,7 @@ export interface AnswerProps {
   questions: Question[];
   busy: boolean;
   idPrefix: string;
-  onAnswer(questionId: string, choiceId: string): void;
+  onAnswer(questionId: string, choiceId: string, origin?: HTMLElement): void;
   onCancel?(): void;
 }
 
@@ -34,7 +34,7 @@ function One({ question, busy, idPrefix, onAnswer }: { question: Question; busy:
   const base = `${idPrefix}-${question.question_id}`;
   return (
     <form
-      onSubmit={(event) => { event.preventDefault(); if (choice) onAnswer(question.question_id, choice); }}
+      onSubmit={(event) => { event.preventDefault(); if (choice) onAnswer(question.question_id, choice, event.currentTarget); }}
       aria-labelledby={`${base}-title`} className="stack" data-question={question.question_id}>
       <h3 id={`${base}-title`}>{question.text}</h3>
       {question.kind === "ADOPT" ? (

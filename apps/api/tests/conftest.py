@@ -7,7 +7,6 @@ import threading
 import uuid
 from pathlib import Path
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 

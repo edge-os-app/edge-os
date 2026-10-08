@@ -7,15 +7,16 @@ import { QuestionForm } from "./QuestionForm";
 export interface ConversationContext {
   bundle: Bundle;
   busy: boolean;
-  answer(questionId: string, choiceId: string): void;
+  answer(questionId: string, choiceId: string, origin?: HTMLElement): void;
 }
 
 /** Contextual conversation. It reads the same saved request and revision as the page. It has no financial tools. */
-export function Conversation({ context, idPrefix }: { context: ConversationContext | null; idPrefix: string }) {
+export function Conversation({ context, idPrefix, showTitle = true }: { context: ConversationContext | null; idPrefix: string; showTitle?: boolean }) {
+  const title = showTitle ? <h2 tabIndex={-1} data-focus-target>Conversation</h2> : null;
   if (!context) {
     return (
       <>
-        <h2>Conversation</h2>
+        {title}
         <div className="convo-about">
           <span className="eyebrow">About</span>
           <p style={{ margin: "4px 0 0" }}><strong>Research</strong><br />Your saved requests</p>
@@ -38,7 +39,7 @@ export function Conversation({ context, idPrefix }: { context: ConversationConte
   };
   return (
     <>
-      <h2>Conversation</h2>
+      {title}
       <div className="convo-about">
         <span className="eyebrow">About this request</span>
         <p style={{ margin: "4px 0 0" }}><strong>{text.length > 90 ? `${text.slice(0, 90)}…` : text}</strong><br />

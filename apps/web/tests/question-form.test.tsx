@@ -18,7 +18,7 @@ describe("question form", () => {
     await user.tab(); await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("radio", { name: /Up 2%/ })).toBeChecked();
     await user.keyboard("{Enter}");
-    expect(onAnswer).toHaveBeenCalledWith("choose-entry", "b");
+    expect(onAnswer).toHaveBeenCalledWith("choose-entry", "b", expect.any(HTMLFormElement)); // the form says which surface answered
   });
 
   it("shows every suggested setting with its source before adoption", async () => {
@@ -27,7 +27,7 @@ describe("question form", () => {
     expect(screen.getByRole("row", { name: /Sizing.*Fixed 100 quote units.*Suggested/ })).toBeInTheDocument();
     expect(screen.getByText(/grant no permission to trade/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Adopt these settings" }));
-    expect(onAnswer).toHaveBeenCalledWith("adopt-suggested-settings", "adopt");
+    expect(onAnswer).toHaveBeenCalledWith("adopt-suggested-settings", "adopt", expect.any(HTMLFormElement));
   });
 
   it("offers a way out that keeps the work", async () => {

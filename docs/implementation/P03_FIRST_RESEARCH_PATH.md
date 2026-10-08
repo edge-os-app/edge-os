@@ -63,7 +63,7 @@ Web side: `getAccessToken` is the only token source. `createOnLogin` is `"off"` 
 
 `apps/api/uv.lock` and `apps/web/package-lock.json` are the source. Python 3.14.4, uv 0.12.16, FastAPI 0.142.2, Pydantic 2.13.5, pydantic-settings 2.15.0, Uvicorn 0.54.0, PyJWT 2.15.1, SQLAlchemy 2.0.54, Alembic 1.20.0, psycopg 3.3.6, pytest 9.1.1, httpx 0.28.1. Node 24.13.1, npm 11.8.0, Next 16.3.8, React 19.3.0, `@privy-io/react-auth` 3.47.0, TypeScript 5.9.3 (`next build` accepts it; the registry's 7.0.2 was not tried), vitest 5.0.3, Playwright 1.64.0. PostgreSQL image `postgres:18.6-trixie`, image ID `sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336` (arm64, pulled 2026-10-08). Each verification run records the exact identities in `environment.json`.
 
-Differences from the P01 table: none in pins. TypeScript is now fixed at 5.9.3. FastAPI 0.142.2 wraps routers in an internal `_IncludedRouter`, so the route walk flattens it. Starlette's `TestClient` prints a deprecation notice for `httpx`; the pins stay as accepted.
+Differences from the P01 table: none in pins. Publication returns `409 parent_revision_conflict`, identical for a foreign and a random parent, as the frozen P02 text requires. The P01 row A22 says 404 for a foreign parent. The P02 contract is the more specific source, so P02 controls. TypeScript is now fixed at 5.9.3. FastAPI 0.142.2 wraps routers in an internal `_IncludedRouter`, so the route walk flattens it. Starlette's `TestClient` prints a deprecation notice for `httpx`; the pins stay as accepted.
 
 ## Run it
 
@@ -84,12 +84,21 @@ Proved against a real PostgreSQL 18.6 container, a real uvicorn process and a re
 
 Not proved: any real Privy login or token (`R1`–`R4`), the Dashboard key type, token rotation behavior, real model output, research execution, deployment, screen readers, a physical phone, or that a first-time user understands the screens. Keyboard checks cover Tab, Shift+Tab, arrow keys, Enter and Escape on the paths in `tests/p03/e2e.spec.mjs` in Chromium only. Browser checks cover Chromium; Safari and Firefox were not run.
 
+## Test infrastructure rules
+
+The harness removes only what its own `Postgres` object created, and only while the labels still name that run. A repeated run ID, a foreign container with the same name or an existing volume makes the start refuse and change nothing. `verify_run.py` also refuses an existing evidence folder, web build folder or tsconfig copy for its run ID and exits 2 before it creates or deletes anything. `apps/api/tests/test_harness_isolation.py` covers these cases. Orphan removal needs the run ID, a stopped container and matching labels.
+
+## Interface checks
+
+`tests/p03/quality.spec.mjs` runs with the end-to-end spec. It measures every visible control against the accepted 44px minimum (radios and checkboxes through their label), watches for console errors, page errors and failed requests on the main path, runs axe-core with the WCAG 2.0 to 2.2 A and AA tags on five states (an automated pass covers part of WCAG and nothing more), and checks that focus stays in the surface that took an answer: the main page, the desktop side panel or the modal sheet. The modal sheet wraps Tab and Shift+Tab inside itself.
+
 ## Open items for the builder
 
 - Q1–Q4 of the P01 profile still need a Privy development app. The official Privy token pages read on 2026-10-08 (Exa fetch) still describe ES256, the claim list, `sid` in both token types and identity tokens that carry linked accounts. They name no JWKS URL for access tokens.
 - Q5: the web config offers email login only, a conservative placeholder. A connected wallet is not an identity.
 - Record sizes and rate limiting are not set beyond a 256 KiB body cap (enforced while streaming) and a JSON nesting limit of 100. U+0000 in any text field returns 422.
 - `POST /v1/research/requests` has no idempotency key. A retry after a lost acknowledgement saves a second request. Publication has the recovery path. The list shows the 50 most recent requests and says when more exist.
+- The append-only triggers assume the application database role does not own the tables and is not a superuser. The tests connect as a superuser, so they prove the trigger, not least-privilege access. `TRUNCATE` is not blocked. The web app sets no security headers (CSP, frame-ancestors).
 - A database that accepts connections and never answers (a paused server) is not detected. Connect and pool timeouts cover refused and slow connects. Fault injection uses a database that refuses connections.
 
 ## Provenance

@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import uuid
 
-import psycopg
 import pytest
 
 from edge_os_api import p02
@@ -94,7 +93,7 @@ def test_second_null_parent_loses_the_root_slot(client, owner_a, pg):
     assert second.status_code == 409 and second.json()["code"] == "parent_revision_conflict"
     sid = body["strategy"]["strategy_id"]
     assert pg.psql(f"select count(*) from strategy_revisions where strategy_id = '{sid}'") == "1"
-    assert pg.psql(f"select count(*) from idempotency_records where idempotency_key = 'other-key'") == "0"
+    assert pg.psql("select count(*) from idempotency_records where idempotency_key = 'other-key'") == "0"
 
 
 def test_reused_operation_id_with_new_key_conflicts(client, owner_a):

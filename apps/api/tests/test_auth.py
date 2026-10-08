@@ -7,7 +7,6 @@ import time
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
 
 from edge_os_api import p02
 from edge_os_api.auth import Verifier

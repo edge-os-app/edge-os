@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -110,10 +109,10 @@ def scan_bundle(dist: Path) -> dict:
     }
 
 
-def run_playwright(spec: str, env_extra: dict[str, str], log: Path) -> int:
+def run_playwright(specs: list[str], env_extra: dict[str, str], log: Path) -> int:
     env = harness.base_env()
     env.update(env_extra)
-    result = subprocess.run(["npx", "playwright", "test", "--config", "playwright.config.mjs", spec],
+    result = subprocess.run(["npx", "playwright", "test", "--config", "playwright.config.mjs", *specs],
                             cwd=harness.REPO / "tests" / "p03", env=env, capture_output=True, text=True, timeout=900)
     log.write_text(result.stdout + result.stderr)
     return result.returncode
@@ -129,10 +128,18 @@ def main() -> int:
     args = parser.parse_args()
     run_id = args.run_id
     evidence = Path(args.evidence_root) / run_id
-    rec = Recorder(evidence)
     pg = harness.Postgres(run_id)
     dist = f".next-{run_id}"
     dist_path = harness.WEB_DIR / dist
+    tsconfig_copy = harness.WEB_DIR / harness.web_tsconfig(dist)
+    # A repeated run ID must never touch what an earlier run owns: refuse before creating or deleting anything.
+    present = pg.existing_resources()
+    present += [f"path {p}" for p in (dist_path, tsconfig_copy) if p.exists()]
+    present += [f"evidence {evidence}"] if evidence.exists() and any(evidence.iterdir()) else []
+    if present:
+        print(f"REFUSED run {run_id}: {', '.join(present)} already exists. Nothing was created or changed. Use a new run ID.")
+        return 2
+    rec = Recorder(evidence)
     processes: list[harness.Process] = []
     before = docker_resources()
     rec.write("resources-before.json", before)
@@ -196,7 +203,7 @@ def main() -> int:
         if not args.skip_ui:
             ui_env = {"P03_WEB_URL": web_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_BAD": token_bad,
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}
-            code = run_playwright("e2e.spec.mjs", ui_env, evidence / "ui-e2e.log")
+            code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs"], ui_env, evidence / "ui-e2e.log")
             ok &= rec.step("browser drive (desktop and 390px)", code == 0, {"exit": code})
 
             results_path = evidence / "ui" / "ui-results.json"
@@ -215,7 +222,7 @@ def main() -> int:
             processes.append(api)
             harness.wait_http(f"{api_url}/readyz")
             ok &= rec.step("API restarted on the same database", True)
-            code = run_playwright("reopen.spec.mjs", ui_env, evidence / "ui-reopen.log")
+            code = run_playwright(["reopen.spec.mjs"], ui_env, evidence / "ui-reopen.log")
             ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
             after_restart = sql_inspection(pg, results)
             ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
@@ -238,11 +245,10 @@ def main() -> int:
             process.stop()
         pg.stop_and_remove()
         shutil.rmtree(dist_path, ignore_errors=True)
-        (harness.WEB_DIR / harness.web_tsconfig(dist)).unlink(missing_ok=True)
+        tsconfig_copy.unlink(missing_ok=True)
         after = docker_resources()
         rec.write("resources-after.json", after)
-        clean = (pg.leftovers() == [] and after == before and not dist_path.exists()
-                 and not (harness.WEB_DIR / harness.web_tsconfig(dist)).exists())
+        clean = pg.leftovers() == [] and after == before and not dist_path.exists() and not tsconfig_copy.exists()
         rec.step("cleanup removed only this run's resources", clean, {"leftovers": pg.leftovers(), "unchanged": after == before})
         ok &= clean
         manifest = {str(p.relative_to(evidence)): sha256_file(p) for p in sorted(evidence.rglob("*")) if p.is_file()}

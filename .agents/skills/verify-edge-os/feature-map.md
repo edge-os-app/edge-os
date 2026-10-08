@@ -18,7 +18,8 @@ Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column na
 | Restart | API process stopped and started on the same database | `GET /readyz` | unchanged | `steps.json`, `sql-inspection.json` |
 | Cross-owner denial | Other owner sees "not found" | read, answer and publish as owner B return 404 | no row changes | `ownership-drive.json` |
 | Publication retry | Same operation and key return the same identity | `POST …/revisions` | one `strategy_revisions` row | `apps/api/tests/test_publication.py`, `test_live.py` |
-| Cleanup | none | none | none | `resources-before.json`, `resources-after.json` |
+| Interface quality | 44px control minimum, no console or network errors, axe-core on five states, focus stays in the answering surface | none | none | `ui/quality/controls-*.json`, `smoke-*.json`, `axe-*.json` |
+| Cleanup | none | none | none | `resources-before.json`, `resources-after.json`; refusal of a repeated run ID: `apps/api/tests/test_harness_isolation.py` |
 
 Not covered: real Privy login (`R1`–`R4` of the P01 profile), real model output, research execution, Agents, Positions, Funds, wallets, funding, signing.
 

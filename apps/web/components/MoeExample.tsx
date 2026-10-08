@@ -8,7 +8,7 @@ export function MoeExample() {
         has no study worker. Opening it starts nothing.
       </p>
       <dl className="kv">
-        <dt>Subject</dt><dd>MOE / WMON pool on Monad, research window Sep 25–30, 2026</dd>
+        <dt>Subject</dt><dd>MOE / WMON pool on Monad. Research Sep 25–28, 2026, validation Sep 28–30, holdout kept sealed and untested</dd>
         <dt>Variants tried</dt><dd>Four, declared before any outcome was read</dd>
         <dt>Finding</dt><dd>Every variant had too few samples (INSUFFICIENT_SAMPLE)</dd>
         <dt>Result</dt><dd>Unresolved. No supported strategy. No permission to trade.</dd>

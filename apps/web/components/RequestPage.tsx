@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, FIELD_LABEL, JOB_LABEL, ORIGIN_LABEL, OUTCOME_COPY, formatTime, shortId, summarizeValue } from "../lib/describe";
 import type { Bundle, Finding, Strategy } from "../lib/types";
@@ -29,6 +29,7 @@ function pendingKeys(draftId: string): { operation_id: string; idempotency_key: 
 export function RequestPage({ id, go, setContext, openConversation }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
   const stateHeading = useRef<HTMLHeadingElement>(null);
+  const focusSurface = useRef<HTMLElement | null | undefined>(undefined); // undefined: nothing pending
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -45,17 +46,19 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
 
   useEffect(() => { if (bundle) heading.current?.focus(); }, [bundle === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const reload = useCallback(async () => {
-    try { setBundle(await api.get(id)); }
-    catch { setError("The saved request could not be reloaded. Reload the page to see its current state."); }
+  const reload = useCallback(async (): Promise<boolean> => {
+    try { setBundle(await api.get(id)); return true; }
+    catch { setError("The saved request could not be reloaded. Reload the page to see its current state."); return false; }
   }, [id]);
 
-  const answer = useCallback(async (questionId: string, choiceId: string) => {
+  const answer = useCallback(async (questionId: string, choiceId: string, origin?: HTMLElement) => {
     if (!bundle?.head.interpretation_revision_id) return;
+    // Remember which surface took the answer. After the state change, focus stays there.
+    const surface = origin?.closest<HTMLElement>("[data-focus-surface]") ?? null;
     setBusy(true); setError(""); setNotice("");
     try {
       setBundle(await api.answer(id, { previous_revision_id: bundle.head.interpretation_revision_id, question_id: questionId, choice_id: choiceId }));
-      requestAnimationFrame(() => stateHeading.current?.focus()); // the answered form is gone; land on the new state
+      focusSurface.current = surface; // the answered form is gone; the layout effect lands focus on the new state
     } catch (e) {
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
         setNotice("This request changed elsewhere. It was reloaded. Check the question and answer again.");
@@ -63,6 +66,15 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
       } else setError(e instanceof ApiError ? e.detail : "Your answer was not saved.");
     } finally { setBusy(false); }
   }, [bundle, id, reload]);
+
+  // Runs right after the new state commits, before paint: focus stays inside the surface that took the answer.
+  useLayoutEffect(() => {
+    if (focusSurface.current === undefined) return;
+    const surface = focusSurface.current;
+    focusSurface.current = undefined;
+    const inside = surface && surface.dataset.focusSurface !== "main" ? surface.querySelector<HTMLElement>("[data-focus-target]") : null;
+    (inside ?? stateHeading.current)?.focus();
+  }, [bundle]);
 
   useEffect(() => {
     setContext(bundle ? { bundle, busy, answer } : null);
@@ -87,12 +99,10 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
     setBusy(true); setError(""); setNotice("");
     try {
       await api.publish(draft.content.strategy_id, { ...keys, expected_parent_revision_id: null, draft_id: draft.record_id, strategy: draft.content.source_syntax });
-      await reload();
-      setNotice("Saved. The revision below was read back from storage.");
+      if (await reload()) setNotice("Saved. The revision below was read back from storage.");
     } catch (e) {
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
-        await reload();
-        setNotice("A revision of this rule was already saved. The saved record is shown.");
+        if (await reload()) setNotice("A revision of this rule was already saved. The saved record is shown.");
       } else if (e instanceof ApiError && e.status === 0) {
         setError("We could not confirm the save. Press save again. It reuses the same key, so it cannot create a second revision.");
       } else setError(e instanceof ApiError ? e.detail : "The revision was not saved.");
