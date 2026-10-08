@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "docker",
+    "build",
+    "--pull",
+    "--tag",
+    "p04-hermes:p04-042334d50b62",
+    "/var/folders/gy/zdy3h00d62d1008nv39p35_c0000gn/T/p04-042334d50b62-build-87jq_kpu"
+  ],
+  "exit_code": 0,
+  "stderr": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 689B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2\n#2 DONE 0.0s\n\n#3 [internal] load .dockerignore\n#3 transferring context: 2B done\n#3 DONE 0.0s\n\n#4 [1/6] FROM docker.io/library/python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2\n#4 resolve docker.io/library/python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 0.0s done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 205.34MB 1.9s done\n#5 DONE 1.9s\n\n#6 [3/6] COPY hermes-agent/ /opt/hermes/\n#6 CACHED\n\n#7 [4/6] WORKDIR /opt/hermes\n#7 CACHED\n\n#8 [2/6] RUN python -m pip install --no-cache-dir uv==0.12.16\n#8 CACHED\n\n#9 [5/6] RUN uv sync --frozen --no-dev --no-install-project --python 3.14  && .venv/bin/python -c 'from run_agent import AIAgent; print(\"PINNED_HERMES_IMPORT_OK\")'\n#9 CACHED\n\n#10 [6/6] COPY container_probe.py /opt/qualification/container_probe.py\n#10 DONE 0.3s\n\n#11 exporting to image\n#11 exporting layers 0.0s done\n#11 exporting manifest sha256:3d20fb688aaa40c37171a0d64fe930d890b26508323b1826382279c85332ed2b done\n#11 exporting config sha256:d77a26e6c2da2e7aff2b2a1404f3a25f75aab324e82e6874773fd12532d0e8e3 done\n#11 exporting attestation manifest sha256:2acd07ffa1d130521fb5d34bd5a1b71a53840decac75b54fdfb01366366dbbd6 done\n#11 exporting manifest list sha256:f04aca1e026113fce26ee9c2976de830f46e7ba6bbccab5654282497d5f050d0 done\n#11 naming to docker.io/library/p04-hermes:p04-042334d50b62 done\n#11 unpacking to docker.io/library/p04-hermes:p04-042334d50b62\n#11 unpacking to docker.io/library/p04-hermes:p04-042334d50b62 1.4s done\n#11 DONE 1.5s\n",
+  "stdout": ""
+}

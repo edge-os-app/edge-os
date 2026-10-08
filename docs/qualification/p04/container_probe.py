@@ -66,7 +66,9 @@ def _filesystem_checks(task: dict) -> dict:
     cache_marker = cache_root / "owner-agent.marker"
     cache_marker.write_text(f"{task['owner_id']}:{task['agent_id']}\n", encoding="utf-8")
     forbidden = task.get("probe_forbidden", {})
-    fixture_payload = json.dumps({key: task[key] for key in ("owner_id", "agent_id", "memory", "sources")})
+    memory_entries = task.get("memory", {}).get("entries", [])
+    source_ids = [source.get("source_id", "") for source in task.get("sources", [])]
+    file_ids = [fixture_file.get("file_id", "") for fixture_file in task.get("files", [])]
     return {
         "input_mount_read_only": input_read_only,
         "root_filesystem_read_only": root_read_only,
@@ -77,8 +79,9 @@ def _filesystem_checks(task: dict) -> dict:
         "task_output_mount_writable": output_probe.read_text(encoding="utf-8").strip() == "task-local-output",
         "task_cache_private_marker": cache_marker.read_text(encoding="utf-8").strip() == f"{task['owner_id']}:{task['agent_id']}",
         "task_cache_path": str(cache_root),
-        "forbidden_owner_memory_not_in_task_context": forbidden.get("memory", "") not in fixture_payload,
-        "forbidden_owner_source_not_in_task_context": forbidden.get("source_id", "") not in fixture_payload,
+        "forbidden_memory_not_in_task_context": forbidden.get("memory", "") not in memory_entries,
+        "forbidden_source_not_in_task_context": forbidden.get("source_id", "") not in source_ids,
+        "forbidden_file_not_in_task_context": forbidden.get("file_id", "") not in file_ids,
         "home": os.environ.get("HOME"),
         "hermes_home": os.environ.get("HERMES_HOME"),
         "xdg_config_home": os.environ.get("XDG_CONFIG_HOME"),
@@ -97,7 +100,31 @@ def _spawn_child_check() -> dict:
 def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
     body = json.loads(request.content)
     messages = body.get("messages", [])
-    text = "\n".join(str(message.get("content", "")) for message in messages)
+    prompt_context = {}
+    for message in messages:
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            continue
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(parsed, dict) and parsed.get("job_id") == task.get("job_id"):
+            prompt_context = parsed
+            break
+    memory_entries = task.get("memory", {}).get("entries", [])
+    memory_snapshot_matches = prompt_context.get("memory") == task.get("memory")
+    expected_memory = bool(memory_entries) and memory_snapshot_matches
+    source_ids = [source.get("source_id", "") for source in task.get("sources", [])]
+    source_snapshot_matches = prompt_context.get("sources", []) == task.get("sources", [])
+    expected_sources = bool(source_ids) and source_snapshot_matches
+    file_ids = [fixture_file.get("file_id", "") for fixture_file in task.get("files", [])]
+    file_snapshot_matches = prompt_context.get("files", []) == task.get("files", [])
+    expected_files = bool(file_ids) and file_snapshot_matches
+    forbidden = task.get("probe_forbidden", {})
+    forbidden_memory_absent = forbidden.get("memory", "") not in memory_entries
+    forbidden_source_absent = forbidden.get("source_id", "") not in source_ids
+    forbidden_file_absent = forbidden.get("file_id", "") not in file_ids
     receipt = {
         "request_url": str(request.url),
         "model": body.get("model"),
@@ -105,15 +132,26 @@ def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
         "max_tokens": body.get("max_tokens", body.get("max_completion_tokens")),
         "tool_count": len(body.get("tools") or []),
         "message_count": len(messages),
-        "owner_fixture_present": task["owner_id"] in text,
-        "agent_fixture_present": task["agent_id"] in text,
-        "only_expected_memory_present": task["memory"]["entries"][0] in text,
-        "only_expected_source_present": task["sources"][0]["source_id"] in text,
-        "other_owner_memory_absent": task.get("probe_forbidden", {}).get("memory", "") not in text,
-        "other_owner_source_absent": task.get("probe_forbidden", {}).get("source_id", "") not in text,
+        "owner_fixture_present": prompt_context.get("owner_id") == task["owner_id"],
+        "agent_fixture_present": prompt_context.get("agent_id") == task["agent_id"],
+        "memory_version_present": prompt_context.get("memory", {}).get("version") == task.get("memory", {}).get("version"),
+        "memory_snapshot_empty": prompt_context.get("memory", {}).get("entries") == [],
+        "memory_snapshot_matches": memory_snapshot_matches,
+        "only_expected_memory_present": expected_memory,
+        "source_snapshot_empty": prompt_context.get("sources") == [],
+        "source_snapshot_matches": source_snapshot_matches,
+        "only_expected_source_present": expected_sources,
+        "file_snapshot_empty": prompt_context.get("files") == [],
+        "file_snapshot_matches": file_snapshot_matches,
+        "only_expected_file_present": expected_files,
+        "forbidden_memory_absent": forbidden_memory_absent,
+        "forbidden_source_absent": forbidden_source_absent,
+        "forbidden_file_absent": forbidden_file_absent,
         "authorization_header_present": bool(request.headers.get("authorization")),
         "real_http_socket_used": False,
     }
+    if mode == "truncated":
+        receipt["response_finish_reason"] = "length"
     requests_path = OUTPUT / "fake-provider-requests.jsonl"
     with requests_path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(receipt, sort_keys=True) + "\n")
@@ -125,6 +163,16 @@ def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
         return receipt, httpx.Response(
             503, json={"error": {"message": "fixture provider unavailable", "type": "server_error"}}
         )
+    if mode == "truncated":
+        response = {
+            "id": "chatcmpl-p04-local-fake-truncated",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": body.get("model", "fixture-model"),
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "{\"operation_id\":"}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 24, "completion_tokens": 128, "total_tokens": 152},
+        }
+        return receipt, response
     outcome = {
         "operation_id": "p04-local-fake-outcome",
         "stage": "VALIDATION",
@@ -149,6 +197,96 @@ def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
     return receipt, response
 
 
+class ProviderRequestGuard:
+    """Reject Hermes continuation/summary calls before the fake provider does work."""
+
+    def __init__(self, task: dict, mode: str, output: Path, *, max_requests: int = 1, max_tokens: int = 128):
+        self.task = task
+        self.mode = mode
+        self.output = output
+        self.max_requests = max_requests
+        self.max_tokens = max_tokens
+        self.attempt_count = 0
+        self.provider_work_count = 0
+        self.truncation_seen = False
+        self.rejections: list[dict] = []
+
+    @staticmethod
+    def _phase(messages: list[dict]) -> str:
+        content = "\n".join(str(message.get("content", "")) for message in messages)
+        if "summarizing what you've found and accomplished so far" in content:
+            return "iteration_summary"
+        if "Continue exactly where you left off" in content:
+            return "truncation_continuation"
+        return "initial"
+
+    def __call__(self, request):
+        import httpx
+
+        body = json.loads(request.content)
+        messages = body.get("messages", [])
+        requested_tokens = body.get("max_tokens", body.get("max_completion_tokens"))
+        self.attempt_count += 1
+        phase = self._phase(messages)
+        reason = None
+        if type(requested_tokens) is not int or requested_tokens <= 0 or requested_tokens > self.max_tokens:
+            reason = "output_request_limit_exceeded"
+        elif self.provider_work_count >= self.max_requests:
+            reason = "physical_request_count_exceeded"
+
+        if reason:
+            rejection = {
+                "attempt": self.attempt_count,
+                "phase": phase,
+                "requested_max_tokens": requested_tokens,
+                "accepted": False,
+                "rejection_reason": reason,
+                "provider_work_performed": False,
+            }
+            self.rejections.append(rejection)
+            self._append_attempt(rejection)
+            return httpx.Response(
+                429,
+                json={"error": {"message": "local qualification request bound rejected this call", "type": "request_not_admitted"}},
+                request=request,
+            )
+
+        self.provider_work_count += 1
+        self._append_attempt({
+            "attempt": self.attempt_count,
+            "phase": phase,
+            "requested_max_tokens": requested_tokens,
+            "accepted": True,
+            "rejection_reason": None,
+            "provider_work_performed": True,
+        })
+        receipt, response = _record_request(request, self.mode, self.task)
+        finish_reason = None
+        if isinstance(response, dict):
+            choices = response.get("choices") or []
+            if choices and isinstance(choices[0], dict):
+                finish_reason = choices[0].get("finish_reason")
+        if finish_reason == "length":
+            self.truncation_seen = True
+        if isinstance(response, httpx.Response):
+            return httpx.Response(response.status_code, json=response.json(), request=request)
+        return httpx.Response(200, json=response, request=request)
+
+    def _append_attempt(self, attempt: dict) -> None:
+        with (self.output / "provider-request-attempts.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(attempt, sort_keys=True) + "\n")
+
+    def evidence(self) -> dict:
+        return {
+            "physical_attempts_seen_by_local_guard": self.attempt_count,
+            "provider_work_count": self.provider_work_count,
+            "request_limit": self.max_requests,
+            "output_token_limit": self.max_tokens,
+            "truncation_seen": self.truncation_seen,
+            "rejections": self.rejections,
+        }
+
+
 def _run_hermes(task: dict, mode: str) -> dict:
     home = Path(os.environ["HERMES_HOME"])
     home.mkdir(parents=True, exist_ok=True)
@@ -158,21 +296,13 @@ def _run_hermes(task: dict, mode: str) -> dict:
         "model:\n  streaming: false\ncompression:\n  enabled: false\n",
         encoding="utf-8",
     )
-    prompt_task = {key: task[key] for key in ("owner_id", "agent_id", "job_id", "memory", "sources")}
+    prompt_task = {key: task.get(key) for key in ("owner_id", "agent_id", "job_id", "memory", "sources", "files")}
     task_text = json.dumps(prompt_task, sort_keys=True, separators=(",", ":"))
     system = (
         "You are a P04 local qualification fixture. Return one P02-compatible Outcome JSON object. "
         "Do not call tools or claim production isolation. The task context is fixture data."
     )
-    request_receipts: list[dict] = []
-
-    def handler(request):
-        receipt, response = _record_request(request, mode, task)
-        request_receipts.append(receipt)
-        import httpx
-        if isinstance(response, httpx.Response):
-            return httpx.Response(response.status_code, json=response.json(), request=request)
-        return httpx.Response(200, json=response, request=request)
+    provider_guard = ProviderRequestGuard(task, mode, OUTPUT)
 
     import httpx
     from openai import OpenAI
@@ -183,7 +313,7 @@ def _run_hermes(task: dict, mode: str) -> dict:
         api_key="fixture-only-not-a-secret",
         provider="openrouter",
         model="openai/gpt-6.1-sol",
-        max_iterations=2,
+        max_iterations=task.get("max_iterations", 2),
         max_tokens=128,
         enabled_toolsets=[],
         save_trajectories=False,
@@ -202,7 +332,7 @@ def _run_hermes(task: dict, mode: str) -> dict:
         api_key="fixture-only-not-a-secret",
         base_url="https://fake-provider.invalid/v1",
         max_retries=0,
-        http_client=httpx.Client(transport=httpx.MockTransport(handler), timeout=5),
+        http_client=httpx.Client(transport=httpx.MockTransport(provider_guard), timeout=5),
     )
     agent._create_request_openai_client = lambda **_: fake_client
     agent._close_request_openai_client = lambda *_args, **_kwargs: None
@@ -221,6 +351,8 @@ def _run_hermes(task: dict, mode: str) -> dict:
                 "error_class": type(exc).__name__,
                 "interrupted": False,
                 "failed": True,
+                "partial": provider_guard.truncation_seen,
+                "failure_reason": "truncated" if provider_guard.truncation_seen else "provider_error",
                 "tools_effective": [item.get("function", {}).get("name") for item in (agent.tools or [])],
                 "agent_max_iterations": agent.max_iterations,
                 "agent_max_tokens": agent.max_tokens,
@@ -231,14 +363,19 @@ def _run_hermes(task: dict, mode: str) -> dict:
                 "skip_context_files": agent.skip_context_files,
                 "skip_background_review": agent.skip_background_review,
                 "fallback_count": len(getattr(agent, "_fallback_chain", []) or []),
-                "fake_request_count": len(request_receipts),
+                "fake_request_count": provider_guard.provider_work_count,
+                "provider_request_guard": provider_guard.evidence(),
             }
         final_response = result.get("final_response") if isinstance(result, dict) else None
+        truncated = provider_guard.truncation_seen
+        rejected = bool(provider_guard.rejections)
         return {
-            "status": "returned",
+            "status": "TRUNCATED_PARTIAL" if truncated else "returned",
             "final_response": final_response,
             "interrupted": bool(result.get("interrupted")) if isinstance(result, dict) else False,
-            "failed": bool(result.get("failed")) if isinstance(result, dict) else False,
+            "failed": (bool(result.get("failed")) if isinstance(result, dict) else False) or truncated or rejected,
+            "partial": truncated,
+            "failure_reason": "truncated" if truncated else ("request_rejected" if rejected else None),
             "tools_effective": [item.get("function", {}).get("name") for item in (agent.tools or [])],
             "agent_max_iterations": agent.max_iterations,
             "agent_max_tokens": agent.max_tokens,
@@ -249,7 +386,8 @@ def _run_hermes(task: dict, mode: str) -> dict:
             "skip_context_files": agent.skip_context_files,
             "skip_background_review": agent.skip_background_review,
             "fallback_count": len(getattr(agent, "_fallback_chain", []) or []),
-            "fake_request_count": len(request_receipts),
+            "fake_request_count": provider_guard.provider_work_count,
+            "provider_request_guard": provider_guard.evidence(),
         }
     finally:
         try:
