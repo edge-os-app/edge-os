@@ -228,9 +228,11 @@ def main() -> int:
             process.stop()
         pg.stop_and_remove()
         shutil.rmtree(dist_path, ignore_errors=True)
+        (harness.WEB_DIR / harness.web_tsconfig(dist)).unlink(missing_ok=True)
         after = docker_resources()
         rec.write("resources-after.json", after)
-        clean = pg.leftovers() == [] and after == before and not dist_path.exists()
+        clean = (pg.leftovers() == [] and after == before and not dist_path.exists()
+                 and not (harness.WEB_DIR / harness.web_tsconfig(dist)).exists())
         rec.step("cleanup removed only this run's resources", clean, {"leftovers": pg.leftovers(), "unchanged": after == before})
         ok &= clean
         manifest = {str(p.relative_to(evidence)): sha256_file(p) for p in sorted(evidence.rglob("*")) if p.is_file()}

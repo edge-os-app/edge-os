@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shutil
 import signal
 import socket
 import subprocess
@@ -199,8 +200,13 @@ def start_api(env: dict[str, str], port: int, log_dir: Path, name: str = "api") 
     return Process(name, popen, log_path)
 
 
+def web_tsconfig(dist: str) -> str:
+    return f"tsconfig.{dist.lstrip('.')}.json"
+
+
 def web_env(api_url: str, dist: str) -> dict[str, str]:
     env = base_env()
+    env["EDGE_OS_WEB_TSCONFIG"] = web_tsconfig(dist)
     env["NEXT_PUBLIC_API_BASE_URL"] = api_url
     env["NEXT_PUBLIC_PRIVY_APP_ID"] = TEST_APP_ID
     env["EDGE_OS_WEB_DIST"] = dist
@@ -210,6 +216,7 @@ def web_env(api_url: str, dist: str) -> dict[str, str]:
 def build_web(*, api_url: str, dist: str, log_dir: Path) -> subprocess.CompletedProcess[str]:
     """Production build into a run-scoped directory. NEXT_PUBLIC_* values are inlined here, at build time."""
     log_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(WEB_DIR / "tsconfig.json", WEB_DIR / web_tsconfig(dist))
     result = subprocess.run(["npm", "run", "build"], cwd=WEB_DIR, env=web_env(api_url, dist), capture_output=True,
                             text=True, timeout=600)
     (log_dir / "web-build.log").write_text(result.stdout + result.stderr)

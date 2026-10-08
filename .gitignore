@@ -19,3 +19,5 @@ coverage/
 # macOS metadata
 .DS_Store
 *.tsbuildinfo
+tsconfig.next-*.json
+next-env.d.ts

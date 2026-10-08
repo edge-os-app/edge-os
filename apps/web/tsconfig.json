@@ -28,25 +28,7 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    ".next-p03e4a4aa90/types/**/*.ts",
-    ".next-p03e4a4aa90/dev/types/**/*.ts",
-    ".next-p0355707ef7/types/**/*.ts",
-    ".next-p0355707ef7/dev/types/**/*.ts",
-    ".next-p03119a6d97/types/**/*.ts",
-    ".next-p03119a6d97/dev/types/**/*.ts",
-    ".next-p0380715411/types/**/*.ts",
-    ".next-p0380715411/dev/types/**/*.ts",
-    ".next-p036b9b5204/types/**/*.ts",
-    ".next-p036b9b5204/dev/types/**/*.ts",
-    ".next-p03a9953c42/types/**/*.ts",
-    ".next-p03a9953c42/dev/types/**/*.ts",
-    ".next-p03e77aa174/types/**/*.ts",
-    ".next-p03e77aa174/dev/types/**/*.ts",
-    ".next-p034e964308/types/**/*.ts",
-    ".next-p034e964308/dev/types/**/*.ts",
-    ".next-p03b96feb8b/types/**/*.ts",
-    ".next-p03b96feb8b/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
