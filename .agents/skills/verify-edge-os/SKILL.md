@@ -27,9 +27,10 @@ Work from the repository root. Each step names its own done condition. The whole
    ```bash
    mkdir -p .scratch/p03
    (cd apps/api && uv run --frozen python ../../scripts/p03/verify_run.py --hold-seconds 300 > ../../.scratch/p03/verify.log 2>&1 &)
-   until grep -q '^HOLD' .scratch/p03/verify.log; do sleep 5; done   # waits for the hold, however long the build takes
-   grep '^HOLD' .scratch/p03/verify.log                              # the HOLD line holds the psql command and URLs
+   timeout 900 sh -c 'until grep -qE "^(HOLD|REFUSED|[{])" .scratch/p03/verify.log; do sleep 5; done'
+   tail -n 5 .scratch/p03/verify.log   # a HOLD line holds the psql command and URLs
    ```
+   The wait ends at the `HOLD` line, at a `REFUSED` line, or at the final JSON line. A run that fails before the hold prints the final JSON line with `"ok": false`. If the last lines show no `HOLD`, the run did not reach the hold: read `steps.json` and stop. Step 5 needs the run to exit, so wait for the final JSON line first.
    Python 3.14 and Node 24 are required. The harness picks free loopback ports itself.
    Evidence lands in `.scratch/p03/evidence/<run_id>/`. Keep it. It is untracked.
 4. **Inspect the records yourself.** During the hold, run the `psql` command from the `HOLD` line. Queries are in [feature-map.md](feature-map.md#sql-checks). Compare what you see with `sql-inspection.json`. Done when the saved request text equals the text in `ui-results.json` byte for byte and the revision hash recomputes.

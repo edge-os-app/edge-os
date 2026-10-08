@@ -196,7 +196,8 @@ def main() -> int:
         build = harness.build_web(api_url=api_url, dist=dist, log_dir=evidence / "logs")
         ok &= rec.step("web production build", build.returncode == 0, {"dist": dist})
         if build.returncode != 0:
-            return 1
+            # Fall through to the cleanup and the final JSON line, so a waiting reader is never left without an end.
+            raise RuntimeError("web build failed; see logs/")
         bundle = scan_bundle(dist_path)
         rec.write("bundle-scan.json", bundle)
         ok &= rec.step("production bundle has no fixture provider or key", not bundle["fixture_label_in_bundle"]

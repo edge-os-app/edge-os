@@ -13,6 +13,10 @@ const KINDS: { id: InputClass; job: Job; label: string; hint: string }[] = [
   { id: "BOUNDED_NO_THESIS", job: "INVESTIGATE_EFFECT", label: "No thesis, a bounded question", hint: "You want to look at a market without a view." },
 ];
 
+const sameForm = (a: { text: string; kind: string; restrictions: string[]; useMarket: boolean }, b: typeof a) =>
+  a.text === b.text && a.kind === b.kind && a.useMarket === b.useMarket
+  && a.restrictions.length === b.restrictions.length && a.restrictions.every((r, i) => r === b.restrictions[i]);
+
 export function ResearchHome({ userId, go, consumeReturn }: { userId: string | null; go: (hash: string, from?: string) => void; consumeReturn: () => string | null }) {
   const heading = useRef<HTMLHeadingElement>(null);
   const formId = useId();
@@ -24,7 +28,9 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   const [samples, setSamples] = useState<Sample[]>([]);
   const [fixtureNotice, setFixtureNotice] = useState("");
   const [samplesError, setSamplesError] = useState(false);
-  const [undoExample, setUndoExample] = useState<{ text: string; kind: InputClass; restrictions: string[]; useMarket: boolean } | null>(null);
+  type FormState = { text: string; kind: InputClass; restrictions: string[]; useMarket: boolean };
+  const [undoExample, setUndoExample] = useState<FormState | null>(null);
+  const [lastExample, setLastExample] = useState<FormState | null>(null); // what the last example filled in
   const [saved, setSaved] = useState<RequestSummary[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -50,14 +56,17 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   // `visible` loads show their own error and busy state. A background refresh keeps the list it has.
   const [listBusy, setListBusy] = useState(false);
   const [listFailures, setListFailures] = useState(0);
-  const loadList = useCallback(async (visible: boolean) => {
-    if (visible) setListBusy(true);
+  const listBusyRef = useRef(false);
+  const savedHeading = useRef<HTMLHeadingElement>(null);
+  const loadList = useCallback(async (visible: boolean, afterRetry = false) => {
+    if (visible) { if (listBusyRef.current) return; listBusyRef.current = true; setListBusy(true); }
     try {
       const r = await api.list();
       setSaved(r.requests); setHasMore(r.has_more); setLoadError("");
+      if (afterRetry) setTimeout(() => savedHeading.current?.focus(), 0); // the retry button is gone; keep focus in the section
     } catch (e) {
       if (visible) { setLoadError(e instanceof ApiError ? e.detail : "Saved requests could not be loaded."); setListFailures((n) => n + 1); }
-    } finally { if (visible) setListBusy(false); }
+    } finally { if (visible) { listBusyRef.current = false; setListBusy(false); } }
   }, []);
   const refreshList = useCallback(() => { void loadList(false); }, [loadList]);
 
@@ -90,15 +99,20 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   };
 
   const fill = (sample: Sample) => {
-    // An example replaces the form. If the person had typed something, keep it for one undo.
-    setUndoExample(text.trim() || restrictions.length ? { text, kind, restrictions, useMarket } : null);
-    setText(sample.text); setKind(sample.input_class); setRestrictions(sample.restrictions);
-    setUseMarket(Boolean(sample.declared_market));
+    // An example replaces the form. If the person had typed something, keep it for one undo. While the form
+    // still shows the previous example unchanged, the person's own words stay the thing to restore.
+    const next: FormState = { text: sample.text, kind: sample.input_class, restrictions: sample.restrictions, useMarket: Boolean(sample.declared_market) };
+    if (!(undoExample && lastExample && sameForm(lastExample, { text, kind, restrictions, useMarket }))) {
+      setUndoExample(text.trim() || restrictions.length ? { text, kind, restrictions, useMarket } : null);
+    }
+    setLastExample(next);
+    setText(next.text); setKind(next.kind); setRestrictions(next.restrictions); setUseMarket(next.useMarket);
   };
+  const editedSinceExample = Boolean(lastExample) && !sameForm(lastExample!, { text, kind, restrictions, useMarket });
   const restoreTyped = () => {
     if (!undoExample) return;
     setText(undoExample.text); setKind(undoExample.kind); setRestrictions(undoExample.restrictions); setUseMarket(undoExample.useMarket);
-    setUndoExample(null);
+    setUndoExample(null); setLastExample(null);
   };
 
   useEffect(() => { if (submitError) submitMessage.current?.scrollIntoView({ block: "center" }); }, [submitError]);
@@ -111,7 +125,8 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
     const pending = custom.trim();
     const sent = pending && !restrictions.includes(pending) ? [...restrictions, pending] : restrictions;
     setBusy(true); setError(""); setSubmitError("");
-    if (sent !== restrictions) { setRestrictions(sent); setCustom(""); }
+    if (pending) setCustom(""); // added, or already listed: either way it is no longer a loose draft
+    if (sent !== restrictions) setRestrictions(sent);
     try {
       const sample = samples.find((s) => s.declared_market)?.declared_market ?? null;
       const bundle = await api.submit({
@@ -199,7 +214,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         <div className="stack" style={{ gap: 8 }}>
           <p className="muted" id={`${formId}-examples`}>Fixture examples. {fixtureNotice || "The fixture interpreter answers only these."} Picking one fills the form; you can edit it.</p>
           {samplesError ? <p role="status" className="muted">The fixture examples could not be loaded. You can still write your own request.</p> : null}
-          {undoExample ? <button type="button" className="btn btn-secondary" onClick={restoreTyped}>Restore what I typed</button> : null}
+          {undoExample ? <button type="button" className="btn btn-secondary" onClick={restoreTyped}>Restore what I typed{editedSinceExample ? " (replaces your edits)" : ""}</button> : null}
           {samples.map((s) => (
             <button key={s.scenario_id} type="button" className="example" aria-describedby={`${formId}-examples`} onClick={() => fill(s)}>
               <span className="eyebrow">{s.label}</span>{s.text}
@@ -215,11 +230,11 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
       </form>
 
       <section aria-labelledby="saved-title" className="stack">
-        <h2 id="saved-title" style={{ fontSize: 24, margin: 0 }}>Saved requests</h2>
+        <h2 id="saved-title" ref={savedHeading} tabIndex={-1} style={{ fontSize: 24, margin: 0 }}>Saved requests</h2>
         {loadError ? (
           <div className="btn-row">
             <p role="alert" className="error-text" style={{ margin: 0 }} key={listFailures}>{loadError}</p>
-            <button type="button" className="btn btn-secondary" onClick={() => void loadList(true)} aria-disabled={listBusy || undefined}>{listBusy ? "Trying again…" : "Try again"}</button>
+            <button type="button" className="btn btn-secondary" onClick={() => void loadList(true, true)} aria-disabled={listBusy || undefined}>{listBusy ? "Trying again…" : "Try again"}</button>
           </div>
         ) : null}
         {saved === null && !loadError ? <p className="muted" role="status">Loading saved requests.</p> : null}

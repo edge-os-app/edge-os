@@ -154,3 +154,32 @@ def test_a_start_that_fails_after_the_container_exists_is_cleaned_up_by_its_own_
     assert pg.created_container and pg.created_volume
     pg.stop_and_remove()
     assert pg.leftovers() == [] and not container_exists(pg.container) and not volume_exists(pg.volume)
+
+
+def test_a_failed_web_build_still_ends_with_the_final_json_line_and_cleans_up(monkeypatch, tmp_path, capsys):
+    """The skill waits for HOLD or the final line. A failed build must end in the final line, not in silence."""
+    import json
+    import subprocess as sp
+    import sys
+
+    import verify_run
+
+    monkeypatch.setattr(harness, "build_web", lambda **_k: sp.CompletedProcess([], 1, "", "boom"))
+    run_id = harness.new_run_id()
+    monkeypatch.setattr(sys, "argv", ["verify_run.py", "--run-id", run_id, "--evidence-root", str(tmp_path), "--skip-ui"])
+    code = verify_run.main()
+    out = capsys.readouterr().out
+    final = json.loads(out.strip().splitlines()[-1])
+    assert code == 1 and final["ok"] is False and final["run_id"] == run_id
+    assert harness.Postgres(run_id).existing_resources() == []
+
+
+def test_the_skill_wait_loop_ends_on_a_refused_or_failed_run():
+    import re
+    import subprocess as sp
+    skill = (harness.REPO / ".agents" / "skills" / "verify-edge-os" / "SKILL.md").read_text()
+    pattern = re.search(r'grep -qE "([^"]+)"', skill)
+    assert pattern, "the skill must wait for HOLD, REFUSED or the final line"
+    for log in ('HOLD {"web": "http://127.0.0.1:1"}', "REFUSED run x: container y already exists.", '{"run_id": "x", "evidence": "e", "ok": false}'):
+        assert sp.run(["grep", "-qE", pattern.group(1)], input=log, text=True).returncode == 0, log
+    assert sp.run(["grep", "-qE", pattern.group(1)], input="PASS postgres started", text=True).returncode != 0

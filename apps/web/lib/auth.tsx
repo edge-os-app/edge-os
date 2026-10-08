@@ -127,10 +127,11 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
   }, [status]);
 
   // The service rejected the credential. Log the provider out too, so the next sign-in is a real one.
-  const rejectedAt = useRef(0);
+  // One rejection can be reported twice (a request and the probe). Handle it once, until a new sign-in starts.
+  const rejectionHandled = useRef(false);
   const rejectSession = useCallback(() => {
-    if (Date.now() - rejectedAt.current < 1000) return; // one rejection can be reported twice; log out once
-    rejectedAt.current = Date.now();
+    if (rejectionHandled.current) return;
+    rejectionHandled.current = true;
     setUserId(null);
     setSignInMessage(SESSION_REJECTED);
     setStatus("signed-out");
@@ -144,10 +145,10 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
     let cancelled = false;
     if (unavailable) { setStatus("unavailable"); setReason(unavailable); return; }
     if (!source || !source.ready) { setStatus("loading"); return; }
-    if (!source.authenticated) { setUserId(null); setStatus("signed-out"); return; }
+    if (!source.authenticated) { rejectionHandled.current = false; setUserId(null); setStatus("signed-out"); return; }
     // Probe the API once the provider is signed in. The API alone decides whether the session is accepted.
     setStatus("loading");
-    api.me().then((me) => { if (!cancelled) { setUserId(me.user_id); setSignInMessage(null); setExplicitSignOut(false); setStatus("ready"); } }).catch((error: unknown) => {
+    api.me().then((me) => { if (!cancelled) { rejectionHandled.current = false; setUserId(me.user_id); setSignInMessage(null); setExplicitSignOut(false); setStatus("ready"); } }).catch((error: unknown) => {
       if (cancelled) return;
       if (error instanceof ApiError && error.status === 401) { rejectSession(); return; }
       setReason(error instanceof ApiError && error.status === 503
@@ -158,7 +159,7 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
     return () => { cancelled = true; };
   }, [source?.ready, source?.authenticated, unavailable, rejectSession]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const login = useCallback(() => { setSignInMessage(null); setStatus("signing-in"); source?.login(); }, [source]);
+  const login = useCallback(() => { rejectionHandled.current = false; setSignInMessage(null); setStatus("signing-in"); source?.login(); }, [source]);
   const logout = useCallback(() => {
     clearClientState(); // the next person in this tab must not see this person's unsent words or retry keys
     setUserId(null); setExplicitSignOut(true); setSignInMessage(null); setStatus("signed-out"); source?.logout();

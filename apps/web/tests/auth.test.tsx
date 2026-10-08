@@ -127,4 +127,15 @@ describe("auth session", () => {
     expect(window.sessionStorage.getItem("edge-os:research-draft:u1")).toBeNull();
     expect(window.sessionStorage.getItem("other-app:keep")).toBe("1");
   });
+
+  it("a second rejection right after sign-in is handled again, never left on a dead 'Checking' screen", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => jsonResponse(401, { code: "auth_invalid", findings: [] })));
+    window.__EDGE_OS_TEST_AUTH__ = { label: "TEST AUTH FIXTURE", getAccessToken: async () => "t" };
+    render(<AuthRoot><Probe /></AuthRoot>);
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|"));
+    expect(screen.getByTestId("probe")).toHaveTextContent(/session was rejected/i);
+    fireEvent.click(screen.getByText("login")); // the service still refuses the token
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("signed-out|"));
+    expect(screen.getByTestId("probe")).toHaveTextContent(/session was rejected/i);
+  });
 });

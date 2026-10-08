@@ -131,7 +131,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
       <div className="stack">
         <h1 ref={heading} tabIndex={-1}>Request</h1>
         {error ? (
-          <section className="panel" role="alert"><h2>{error}</h2>
+          <section className="panel" role="alert" key={attempt}><h2>{error}</h2>
             <div className="btn-row">
               {error !== "This request was not found." ? <button className="btn btn-primary" type="button" onClick={() => { if (!retrying) { setRetrying(true); setAttempt((n) => n + 1); } }} aria-disabled={retrying || undefined}>{retrying ? "Trying again…" : "Try again"}</button> : null}
               <button className="btn btn-secondary" type="button" onClick={() => go("#/research")}>Back to Research</button>
