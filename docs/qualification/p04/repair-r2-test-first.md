@@ -150,4 +150,36 @@ python3 -B docs/qualification/p04/native_runner.py --evidence-root docs/qualific
 P04 local qualification evidence: docs/qualification/p04/evidence/p04-7a05daed09f1
 ```
 
-The final result hash is `623e661bdd0bdb3f9693720acd23c5b3e8d62a9d7b0d6ce58f5eca9d0c7881d8`. It records four normal actual-Hermes turns, two truncation cases, one HTTP-503 case, and one cancellation/recovery case, for eight fake requests and zero real inference. The cancellation record hash is `d593d3218e43e083a2e2fa83ec5a691ad8f7da58f770f14b6f00f1c86b8734d2`; image cleanup hash is `27c8968b6572f7027a6e34caa7e2ba107debb4801e35fc67b2081a0902d69302`.
+
+## Coordinator preflight: JSON-escaped memory regression
+
+The coordinator's preflight on committed candidate `8b19633ff480fbf770d2778b13cd8a555c2052cd` supplied a valid extra JSON message whose `\u006f` escape decodes to the forbidden memory fixture `other memory`. The original memory branch returned after scanning serialized text, so the receipt incorrectly kept `forbidden_memory_absent=true`. This is a coordinator preflight finding, not a reviewer or gate verdict. The candidate and the earlier evidence remain unchanged in Git history.
+
+Before changing `container_probe.py`, I added `ProviderBoundaryRegressionTests.test_forbidden_memory_is_detected_after_decoding_json_string_escapes`. It checks both ordinary JSON and the Unicode-escaped JSON form through the actual `_record_request` seam with the local fake response adapter.
+
+RED command:
+
+```text
+python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressionTests.test_forbidden_memory_is_detected_after_decoding_json_string_escapes
+```
+
+The ordinary JSON subtest passed; the escaped JSON subtest failed at the receipt assertion:
+
+```text
+extra_content='{"memory":{"entries":["\\u006fther memory"]}}' ... FAIL
+AssertionError: True is not false : JSON memory case 1 was missed
+Ran 1 test
+FAILED (failures=1)
+```
+
+The narrow fix now scans ordinary string values and, for each valid JSON string representation, decoded string values. Invalid JSON and structured/multipart strings retain the raw-text scan. Exact owner/agent/source/file matching and source-prefix rules are unchanged. No general decoding, dependency, or production-security claim was added.
+
+Focused GREEN command:
+
+```text
+python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressionTests.test_forbidden_memory_is_detected_after_decoding_json_string_escapes tests.p04.test_native_runner.ProviderBoundaryRegressionTests
+```
+
+Result: all 10 provider-boundary tests passed, including ordinary/escaped JSON, the authorized snapshot, prior plain/multipart contamination, structured identity detection and source-prefix protection. Full native/offline/P02 results and the new actual pinned-Hermes fake-provider run are recorded below.
+
+The full native runner suite passed 28 tests, the offline suite passed 16, and the P02 checker passed 39 fixtures and 10 examples/rejection mutations. The pinned-Hermes run completed as `p04-dad145eebf8f` with 4 normal jobs, 2 truncation fixtures, 1 HTTP-503 fixture, 1 cancellation, 8 local fake requests and 0 real inference. Its `qualification-result.json` SHA-256 is `dca3c1eb947cd5416ca16f85ba9d65fd361bb41e58df0b386102c0b18168238d`; cancellation evidence SHA-256 is `b9d502b4634d15f74384d7d363bdb987098d33a0657ffdb92bc0c83d4cbcb2b5`; image cleanup SHA-256 is `dd4bd08b8b8582c53f66ad361714af411a3dbdee18c4904561ae594c529cd2fe`. Both the task-labelled container query and exact image inspection confirmed absence. This runtime run confirms pinned-Hermes integration; the exact Unicode-escape behavior is established by the direct `_record_request` regression above.

@@ -633,6 +633,38 @@ class ProviderBoundaryRegressionTests(unittest.TestCase):
             hashlib.sha256(json.dumps(sent_messages, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
         )
 
+    def test_forbidden_memory_is_detected_after_decoding_json_string_escapes(self):
+        fake_httpx = ModuleType("httpx")
+        fake_httpx.Response = lambda status_code, *, json, request: SimpleNamespace(
+            status_code=status_code, json=lambda: json, request=request,
+        )
+        task = {
+            "owner_id": "owner-a", "agent_id": "agent-a", "job_id": "job-json-memory",
+            "memory": {"version": 1, "enabled": True, "entries": ["authorized memory"]},
+            "sources": [], "files": [],
+            "probe_forbidden": {"memory": "other memory"},
+        }
+        authorized = {key: task[key] for key in ("owner_id", "agent_id", "job_id", "memory", "sources", "files")}
+        extra_json_values = (
+            '{"memory":{"entries":["other memory"]}}',
+            r'{"memory":{"entries":["\u006fther memory"]}}',
+        )
+
+        for index, extra_content in enumerate(extra_json_values):
+            request = SimpleNamespace(
+                content=json.dumps({"model": "fixture-model", "messages": [
+                    {"role": "user", "content": json.dumps(authorized)},
+                    {"role": "system", "content": extra_content},
+                ], "max_tokens": 128}).encode(),
+                url="https://fake-provider.invalid/v1/chat/completions",
+                headers={"authorization": "Bearer fixture-not-a-secret"},
+            )
+            with self.subTest(extra_content=extra_content), tempfile.TemporaryDirectory() as directory:
+                with patch.object(container_probe, "OUTPUT", Path(directory)), patch.dict("sys.modules", {"httpx": fake_httpx}):
+                    receipt, _ = container_probe._record_request(request, "normal", task)
+
+                self.assertFalse(receipt["forbidden_memory_absent"], f"JSON memory case {index} was missed")
+
     def test_forbidden_context_in_structured_text_parts_is_detected_without_id_prefix_false_positive(self):
         fake_httpx = ModuleType("httpx")
         fake_httpx.Response = lambda status_code, *, json, request: SimpleNamespace(

@@ -125,15 +125,22 @@ def _forbidden_text_present(messages: list[dict[str, object]], field: str, value
     if not value:
         return False
     strings = list(_message_strings(messages))
-    if field == "memory":
-        return any(value in text for text in strings)
-
-    pattern = re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(value)}(?![A-Za-z0-9_-])")
+    pattern = None if field == "memory" else re.compile(
+        rf"(?<![A-Za-z0-9_-]){re.escape(value)}(?![A-Za-z0-9_-])"
+    )
     for text in strings:
+        if field == "memory" and value in text:
+            return True
         try:
             parsed = json.loads(text)
         except (json.JSONDecodeError, TypeError):
             parsed = None
+        if field == "memory":
+            if parsed is not None and any(
+                value in decoded_text for decoded_text in _message_strings(parsed)
+            ):
+                return True
+            continue
         if _has_structured_identity(parsed, field, value) or pattern.search(text):
             return True
     return False
