@@ -17,11 +17,11 @@ The six authorized sign-only calls completed in order:
 
 The original raw denial records remain unchanged. The local classification is a separate evidence event. The vendor-specific reason for either HTTP 401 remains unknown because the response body was not retained.
 
-Before the calls, the owner removed A's signer once. One post-removal wallet check returned `MATCH/NO_ADDITIONAL_SIGNER`. The owner then completed the A self-sign control once. Private counters record six sign attempts, one A removal, one owner-positive A attempt, five purpose wallet checks, and five owner verifications. The two failed A attachments and original analytics history remain preserved.
+After calls 1–3 and before calls 4–6, the owner removed A's signer once. One post-removal wallet check returned `MATCH/NO_ADDITIONAL_SIGNER`. The owner then completed call 4, the A self-sign control, once. Private counters record six sign attempts, one A removal, one owner-positive A attempt, five purpose wallet checks, and five owner verifications. The two failed A attachments and original analytics history remain preserved.
 
 All configured transactions were type-2, chain `10143`, zero-value self-calls with empty data. The helper discarded signed bytes. No transaction was broadcast, no wallet was funded, and no chain write occurred. Additional spend was `$0`.
 
-The local helper test suite passed `54/54`. Its production build and runner syntax check passed. P16's offline qualification tests passed `12/12`; the P15, P02 and P04 regression checks also passed. These local checks do not replace independent review or the gate verdict.
+The local helper test suite passed `55/55`, including a synthetic regression that keeps A-on-B classification unclassified when A's saved wallet, signer, config binding, or transaction is missing or mismatched. Its production build and runner syntax checks passed. P16's offline qualification tests passed `12/12`; the P15, P02 and P04 regression checks also passed. These local checks do not replace independent review or the gate verdict.
 
 ## Scope and limits
 
