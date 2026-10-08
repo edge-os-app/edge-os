@@ -44,7 +44,8 @@ test("signed-out and rejected sessions never show data", async ({ page }, info) 
 test("empty state for an owner with no requests", async ({ page }, info) => {
   await open(page, tokens.b);
   await expect(page.getByText("Nothing saved yet.")).toBeVisible();
-  await expect(page.getByTestId("moe-example")).toContainText("Imported example · not run by this application");
+  await expect(page.getByTestId("moe-example")).toContainText("Imported example");
+  await expect(page.getByTestId("moe-example")).toContainText("Not run by this application");
   await shot(page, info.project.name, "home-empty");
 });
 

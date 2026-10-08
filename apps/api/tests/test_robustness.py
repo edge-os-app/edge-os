@@ -97,3 +97,15 @@ def test_decomposed_text_gets_a_message_a_person_can_act_on(client, owner_a):
     body = assert_envelope(response, 422)
     detail = body["findings"][0]["detail"].lower()
     assert "nfc" in detail and "composed" in detail
+
+
+def test_a_database_outage_on_intake_tells_the_client_to_reconcile_not_to_retry_blindly(settings, signer, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    def refuse(*_a, **_k):
+        raise OperationalError("select", {}, Exception("connection refused"))
+    monkeypatch.setattr(service, "create_request", refuse)
+    with TestClient(create_app(settings)) as quiet:
+        headers = {"Authorization": f"Bearer {signer.token('did:privy:outage-' + uuid.uuid4().hex)}"}
+        body = assert_envelope(submit(quiet, headers, HUNCH, input_class="LOOSE_INTUITION"), 503)
+    assert body["code"] == "service_unavailable" and body["retry"] == "RECONCILE"  # intake has no idempotency key

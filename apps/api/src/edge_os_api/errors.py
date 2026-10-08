@@ -48,10 +48,9 @@ def auth_error(status: int, code: str, detail: str, www: bool = True) -> AppErro
     return AppError(status, "AUTHENTICATION", outcome, code, [finding(code, "/", detail)], retry, headers)
 
 
-def service_unavailable() -> AppError:
+def service_unavailable(retry: str = "SAFE_SAME_KEY") -> AppError:
     return AppError(503, "READ", "UNAVAILABLE", "service_unavailable",
-                    [finding("service_unavailable", "/", "A required service is unavailable. Retry later.")],
-                    "SAFE_SAME_KEY")
+                    [finding("service_unavailable", "/", "A required service is unavailable. Retry later.")], retry)
 
 
 def _pointer(loc: tuple[Any, ...]) -> str:

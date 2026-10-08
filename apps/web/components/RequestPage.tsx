@@ -29,6 +29,7 @@ function pendingKeys(draftId: string): { operation_id: string; idempotency_key: 
 export function RequestPage({ id, go, setContext, openConversation }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
   const stateHeading = useRef<HTMLHeadingElement>(null);
+  const errorBanner = useRef<HTMLParagraphElement>(null);
   const focusSurface = useRef<HTMLElement | null | undefined>(undefined); // undefined: nothing pending
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [error, setError] = useState("");
@@ -67,12 +68,15 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
     } finally { setBusy(false); }
   }, [bundle, id, reload]);
 
+  // A failure must be visible where the user acted, not above the fold. Focus stays on the pressed button.
+  useEffect(() => { if (error) errorBanner.current?.scrollIntoView({ block: "center", behavior: "auto" }); }, [error]);
+
   // Runs right after the new state commits, before paint: focus stays inside the surface that took the answer.
   useLayoutEffect(() => {
     if (focusSurface.current === undefined) return;
     const surface = focusSurface.current;
     focusSurface.current = undefined;
-    const inside = surface && surface.dataset.focusSurface !== "main" ? surface.querySelector<HTMLElement>("[data-focus-target]") : null;
+    const inside = surface?.querySelector<HTMLElement>("[data-focus-target]") ?? null; // main-page forms carry no surface: they land on the state heading
     (inside ?? stateHeading.current)?.focus();
   }, [bundle]);
 
@@ -92,7 +96,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
   }, [revision?.revision_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const publish = async () => {
-    if (!bundle?.head.draft_id) return;
+    if (busy || !bundle?.head.draft_id) return;
     const draft = bundle.drafts.find((d) => d.record_id === bundle.head.draft_id);
     if (!draft) return;
     const keys = pendingKeys(draft.record_id);
@@ -159,7 +163,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
       </section>
 
       {notice ? <p role="status" className="status ok">{notice}</p> : null}
-      {error ? <p role="alert" className="status err">{error}</p> : null}
+      {error ? <p role="alert" className="status err" ref={errorBanner} tabIndex={-1}>{error}</p> : null}
 
       <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={outcome}>
         <p className="visually-hidden" role="status">{copy.title}</p>
@@ -189,7 +193,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
           <p className="muted">Compiling gives reviewable rules. It is not evidence they work, and it grants no permission to trade.</p>
           {outcome === "COMPILED" && (
             <div className="btn-row">
-              <button className="btn btn-primary" type="button" onClick={publish} disabled={busy}>{busy ? "Saving" : "Save this revision"}</button>
+              <button className="btn btn-primary" type="button" onClick={publish} aria-disabled={busy || undefined}>{busy ? "Saving" : "Save this revision"}</button>
               <button className="btn btn-secondary" type="button" onClick={() => go("#/research", `req-${id}`)}>Not now</button>
             </div>
           )}

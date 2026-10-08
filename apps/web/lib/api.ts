@@ -19,11 +19,17 @@ export function apiBase(): string {
   return (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
 }
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
 async function send(path: string, init: RequestInit, token: string | null): Promise<Response> {
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body) headers.set("Content-Type", "application/json");
-  return fetch(`${apiBase()}${path}`, { ...init, headers, cache: "no-store" });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(`${apiBase()}${path}`, { ...init, headers, cache: "no-store", signal: controller.signal });
+  } finally { clearTimeout(timer); }
 }
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<{ status: number; body: T }> {
@@ -34,7 +40,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
       const first = await response.clone().json().catch(() => ({}));
       if (first.code === "auth_expired") response = await send(path, init, await tokenSource());
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError")
+      throw new ApiError(0, "timeout", "The service did not answer in time. Check the saved record before repeating a change.");
     throw new ApiError(0, "network_error", "The service could not be reached.");
   }
   const body = await response.json().catch(() => ({}));

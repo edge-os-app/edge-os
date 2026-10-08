@@ -21,7 +21,13 @@ describe("plain-words rules", () => {
   });
   it("marks synthetic assumptions as synthetic", () => {
     expect(summarizeValue("cost_assumptions", { fee_rate: "0.003", slippage_rate: "0.005", source_ref: "x" })).toMatch(/synthetic assumption/);
-    expect(summarizeValue("market", {})).toMatch(/not a real pool/);
+    expect(summarizeValue("market", { network: "MONAD", research_binding: { evidence_class: "SYNTHETIC_FIXTURE" } })).toMatch(/not a real pool/);
+  });
+  it("names the market from its value, never from a fixed label", () => {
+    const text = summarizeValue("market", { network: "MONAD", base_asset: "0xabababababababababababababababababababab", quote_asset: "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" });
+    expect(text).not.toMatch(/not a real pool/);
+    expect(text).toMatch(/0xabab/);
+    expect(text).toMatch(/0xcdcd/);
   });
 });
 

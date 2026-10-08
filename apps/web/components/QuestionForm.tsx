@@ -34,7 +34,7 @@ function One({ question, busy, idPrefix, onAnswer }: { question: Question; busy:
   const base = `${idPrefix}-${question.question_id}`;
   return (
     <form
-      onSubmit={(event) => { event.preventDefault(); if (choice) onAnswer(question.question_id, choice, event.currentTarget); }}
+      onSubmit={(event) => { event.preventDefault(); if (choice && !busy) onAnswer(question.question_id, choice, event.currentTarget); }}
       aria-labelledby={`${base}-title`} className="stack" data-question={question.question_id}>
       <h3 id={`${base}-title`}>{question.text}</h3>
       {question.kind === "ADOPT" ? (
@@ -69,7 +69,7 @@ function One({ question, busy, idPrefix, onAnswer }: { question: Question; busy:
         </fieldset>
       )}
       <div className="btn-row">
-        <button type="submit" className="btn btn-primary" disabled={busy || !choice}>
+        <button type="submit" className="btn btn-primary" disabled={!choice} aria-disabled={busy || undefined}>
           {question.kind === "ADOPT" ? "Adopt these settings" : "Save my answer"}
         </button>
       </div>

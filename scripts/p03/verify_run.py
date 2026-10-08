@@ -135,7 +135,11 @@ def main() -> int:
     parser.add_argument("--hold-seconds", type=int, default=0,
                         help="keep the instance up this long after the drive so an inspector can run SQL, then clean up")
     args = parser.parse_args()
-    run_id = args.run_id
+    try:
+        run_id = harness.check_run_id(args.run_id)
+    except ValueError as error:
+        print(f"REFUSED: {error}")
+        return 2
     evidence = Path(args.evidence_root) / run_id
     pg = harness.Postgres(run_id)
     dist = f".next-{run_id}"
@@ -250,11 +254,21 @@ def main() -> int:
         rec.step("run aborted", False, f"{type(error).__name__}: {error}")
         ok = False
     finally:
+        # Each step runs even if an earlier one raises, so one failure cannot leave the container or build folder behind.
         for process in reversed(processes):
-            process.stop()
-        pg.stop_and_remove()
-        shutil.rmtree(dist_path, ignore_errors=True)
-        tsconfig_copy.unlink(missing_ok=True)
+            try:
+                process.stop()
+            except Exception as error:  # noqa: BLE001
+                rec.step(f"stop {process.name}", False, f"{type(error).__name__}: {error}")
+                ok = False
+        for label, action in (("remove database container and volume", pg.stop_and_remove),
+                              ("remove web build folder", lambda: shutil.rmtree(dist_path, ignore_errors=True)),
+                              ("remove tsconfig copy", lambda: tsconfig_copy.unlink(missing_ok=True))):
+            try:
+                action()
+            except Exception as error:  # noqa: BLE001
+                rec.step(label, False, f"{type(error).__name__}: {error}")
+                ok = False
         after = docker_resources(run_id)
         rec.write("resources-after.json", after)
         clean = pg.leftovers() == [] and after == before and not dist_path.exists() and not tsconfig_copy.exists()

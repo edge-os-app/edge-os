@@ -44,8 +44,3 @@ class TestSigner:
 
 DROP = object()
 
-
-def signer_from_private_pem(pem: str) -> TestSigner:
-    signer = TestSigner.__new__(TestSigner)
-    signer.private_key = serialization.load_pem_private_key(pem.encode(), password=None)  # type: ignore[assignment]
-    return signer

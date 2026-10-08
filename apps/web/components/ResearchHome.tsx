@@ -29,13 +29,16 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
   const [error, setError] = useState("");
   const job = KINDS.find((k) => k.id === kind)!.job;
 
-  // Focus returns to the control that opened the request. The saved list loads after mount, so wait for it.
+  // Focus returns to the control that opened the request. The saved list loads after mount, so wait for it,
+  // and never take focus from a field the person has already moved to.
   const pendingFocus = useRef<string | null>(null);
   useEffect(() => { pendingFocus.current = consumeReturn(); if (!pendingFocus.current) heading.current?.focus(); }, [consumeReturn]);
   useEffect(() => {
     const target = pendingFocus.current;
     if (!target || (saved === null && !loadError)) return;
     pendingFocus.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== heading.current) return; // the person moved on
     (document.getElementById(target) ?? heading.current)?.focus();
   }, [saved, loadError]);
 

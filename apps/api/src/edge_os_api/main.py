@@ -131,13 +131,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     private = APIRouter(prefix="/v1", dependencies=[Depends(require_principal)])
 
-    def run(session: Session, call: Callable[[], Any]) -> Any:
+    def run(session: Session, call: Callable[[], Any], retry: str = "SAFE_SAME_KEY") -> Any:
         try:
             return call()
         except SQLAlchemyError as error:
             session.rollback()
             if isinstance(error, OperationalError):
-                raise service_unavailable() from None
+                raise service_unavailable(retry) from None
             if isinstance(error, DataError):  # for example U+0000 in a path segment
                 raise invalid("/", "A value cannot be stored as sent.", "invalid_character") from None
             raise
@@ -154,7 +154,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def create_request(data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
                        session: Session = Depends(get_session)) -> Any:
         body = parse_body(IntakeBody, data).model_dump()
-        return run(session, lambda: service.create_request(session, principal, body))
+        # Intake has no idempotency key: after an outage the client must check the saved list before repeating.
+        return run(session, lambda: service.create_request(session, principal, body), retry="RECONCILE")
 
     @private.get("/research/requests")
     def list_requests(principal: Principal = Depends(require_principal),

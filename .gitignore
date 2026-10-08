@@ -21,3 +21,4 @@ coverage/
 *.tsbuildinfo
 tsconfig.next-*.json
 next-env.d.ts
+.scratch/

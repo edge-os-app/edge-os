@@ -38,8 +38,15 @@ describe("question form", () => {
     expect(screen.getByText(/stay saved/)).toBeInTheDocument();
   });
 
-  it("disables answering while a save is in flight", () => {
-    render(<QuestionForm questions={[adopt]} busy idPrefix="t" onAnswer={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Adopt these settings" })).toBeDisabled();
+  it("ignores a second answer while a save is in flight, without dropping keyboard focus", async () => {
+    const onAnswer = vi.fn(); const user = userEvent.setup();
+    render(<QuestionForm questions={[adopt]} busy idPrefix="t" onAnswer={onAnswer} />);
+    const button = screen.getByRole("button", { name: "Adopt these settings" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled(); // a disabled button would lose focus on a failed save
+    button.focus();
+    await user.keyboard("{Enter}");
+    expect(onAnswer).not.toHaveBeenCalled();
+    expect(button).toHaveFocus();
   });
 });

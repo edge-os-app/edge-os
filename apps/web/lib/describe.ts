@@ -88,6 +88,20 @@ export function describeExpression(node: unknown): string {
   }
 }
 
+function shortAddress(address: unknown): string {
+  return typeof address === "string" && address.length > 12 ? `${address.slice(0, 6)}…${address.slice(-4)}` : String(address ?? "unknown");
+}
+
+/** Names the market from its value. Only the recorded synthetic fixture is called synthetic. */
+function describeMarket(value: unknown): string {
+  const v = value as { network?: string; research_binding?: { evidence_class?: string; base_asset?: string; quote_asset?: string }; base_asset?: string; quote_asset?: string };
+  if (v?.research_binding?.evidence_class === "SYNTHETIC_FIXTURE") return "Synthetic fixture market (not a real pool)";
+  const base = v?.research_binding?.base_asset ?? v?.base_asset, quote = v?.research_binding?.quote_asset ?? v?.quote_asset;
+  if (base === "0x1111111111111111111111111111111111111111" && quote === "0x2222222222222222222222222222222222222222")
+    return "Synthetic fixture market (not a real pool)";
+  return `${v?.network ?? "Unknown network"} market, base ${shortAddress(base)}, quote ${shortAddress(quote)}`;
+}
+
 export function summarizeValue(field: string, value: unknown): string {
   if (value === undefined) return "No value yet";
   const v = value as Record<string, unknown>;
@@ -96,7 +110,7 @@ export function summarizeValue(field: string, value: unknown): string {
     case "exit": return `Exit when ${describeExpression(value)}`;
     case "invalidation":
       return v && (v as { state?: string }).state === "NOT_REQUESTED" ? "No separate invalidation rule" : `Stop when ${describeExpression(value)}`;
-    case "market": return "Synthetic fixture market (not a real pool)";
+    case "market": return describeMarket(value);
     case "decision_interval_seconds": return `Decide once per ${Number(value) / 60} minutes`;
     case "data_inputs": return (value as string[]).join(", ");
     case "sizing": return `Fixed ${(v as { amount: string }).amount} quote units per entry`;

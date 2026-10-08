@@ -38,6 +38,19 @@ describe("api client", () => {
     expect(String(init.body)).not.toMatch(/owner/);
   });
 
+  it("gives up on a service that never answers and says so", async () => {
+    vi.useFakeTimers();
+    try {
+      setTokenSource(async () => "t");
+      vi.stubGlobal("fetch", vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      })));
+      const pending = api.list().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(await pending).toMatchObject({ status: 0, code: "timeout" });
+    } finally { vi.useRealTimers(); }
+  });
+
   it("reports an unreachable service as a network error", async () => {
     setTokenSource(async () => "t"); vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
     await expect(api.list()).rejects.toMatchObject({ status: 0, code: "network_error" });

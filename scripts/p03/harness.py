@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -20,6 +21,7 @@ import sys
 import time
 import urllib.request
 from dataclasses import dataclass, field
+from typing import Any
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,8 +43,18 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
+RUN_ID = re.compile(r"^[a-z0-9]{4,24}$")
+
+
 def new_run_id() -> str:
     return "p03" + secrets.token_hex(4)
+
+
+def check_run_id(run_id: str) -> str:
+    """Run IDs become container, volume, database and folder names. Accept plain lowercase words only."""
+    if not RUN_ID.fullmatch(run_id):
+        raise ValueError(f"run ID {run_id!r} must be 4 to 24 lowercase letters or digits")
+    return run_id
 
 
 def exists(kind: str, name: str) -> bool:
@@ -176,17 +188,23 @@ class Process:
     name: str
     popen: subprocess.Popen[bytes]
     log_path: Path
+    log_handle: Any = None
 
     def stop(self, grace: float = 8.0) -> None:
-        if self.popen.poll() is not None:
-            return  # already exited: never signal a possibly reused process group
-        os.killpg(self.popen.pid, signal.SIGTERM)
         try:
-            self.popen.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            if self.popen.poll() is None:
-                os.killpg(self.popen.pid, signal.SIGKILL)
+            if self.popen.poll() is not None:
+                return  # already exited: never signal a possibly reused process group
+            os.killpg(self.popen.pid, signal.SIGTERM)
+            try:
                 self.popen.wait(timeout=grace)
+            except subprocess.TimeoutExpired:
+                if self.popen.poll() is None:
+                    os.killpg(self.popen.pid, signal.SIGKILL)
+                    self.popen.wait(timeout=grace)
+        finally:
+            if self.log_handle is not None:
+                self.log_handle.close()
+                self.log_handle = None
 
 
 def wait_http(url: str, *, timeout: float = 60.0, ok: tuple[int, ...] = (200,)) -> None:
@@ -243,7 +261,7 @@ def start_api(env: dict[str, str], port: int, log_dir: Path, name: str = "api") 
     popen = subprocess.Popen(
         [api_python(), "-m", "uvicorn", "edge_os_api.main:create_app", "--factory", "--host", "127.0.0.1",
          "--port", str(port)], cwd=API_DIR, env=env, stdout=handle, stderr=handle, start_new_session=True)
-    return Process(name, popen, log_path)
+    return Process(name, popen, log_path, handle)
 
 
 def web_tsconfig(dist: str) -> str:
@@ -277,7 +295,7 @@ def start_web(*, api_url: str, dist: str, port: int, log_dir: Path, name: str = 
     popen = subprocess.Popen(["node", str(WEB_DIR / "node_modules" / "next" / "dist" / "bin" / "next"), "start",
                               "--hostname", "127.0.0.1", "--port", str(port)], cwd=WEB_DIR, env=env,
                              stdout=handle, stderr=handle, start_new_session=True)
-    return Process(name, popen, log_path)
+    return Process(name, popen, log_path, handle)
 
 
 def orphan_report() -> list[dict[str, str]]:

@@ -211,8 +211,28 @@ test("text and placeholder contrast meet 4.5:1 (3:1 for large text) in the main 
   await page.getByRole("button", { name: "Prepare request" }).click();
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
   failures.needsAnswer = await lowContrast(page);
+  if (info.project.name === "mobile-390") {
+    await page.getByRole("button", { name: "Conversation" }).click();
+    failures.conversationSheet = await lowContrast(page);
+    await page.keyboard.press("Escape");
+  }
+  await page.locator("main").getByRole("button", { name: "Adopt these settings" }).click();
+  await page.locator("main").getByRole("radio", { name: /more than 2% over the last 15 minutes/ }).check();
+  await page.locator("main").getByRole("button", { name: "Save my answer" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  failures.compiled = await lowContrast(page);
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toBeVisible();
+  failures.saved = await lowContrast(page);
+  await page.getByRole("button", { name: "All requests" }).click();
+  await sample(page, /I have no view/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "UNRESOLVED");
+  failures.unresolved = await lowContrast(page);
   fs.writeFileSync(path.join(outDir, `contrast-${info.project.name}.json`), JSON.stringify(failures, null, 2));
-  expect(failures, JSON.stringify(failures, null, 2)).toEqual({ home: [], needsAnswer: [] });
+  const clean = Object.fromEntries(Object.keys(failures).map((state) => [state, []]));
+  expect(Object.keys(clean).length).toBeGreaterThanOrEqual(5);
+  expect(failures, JSON.stringify(failures, null, 2)).toEqual(clean);
 });
 
 test("no horizontal scroll with long unbroken text, at any width", async ({ page }, info) => {
@@ -230,4 +250,125 @@ test("no horizontal scroll with long unbroken text, at any width", async ({ page
   fs.writeFileSync(path.join(outDir, `overflow-${info.project.name}.json`), JSON.stringify({ requestPage, home }, null, 2));
   expect(requestPage.scrollWidth).toBeLessThanOrEqual(requestPage.innerWidth);
   expect(home.scrollWidth).toBeLessThanOrEqual(home.innerWidth);
+});
+
+const alerts = (page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
+const inView = (page, locator) => locator.evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+
+test("a failed answer or save keeps focus on the pressed button and shows the error in view", async ({ page }, info) => {
+  await open(page, tokens.a);
+  await sample(page, "Specific thesis").click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  const unavailable = { status: 503, contentType: "application/json", body: JSON.stringify({ code: "service_unavailable", findings: [{ detail: "A required service is unavailable. Retry later." }] }) };
+  // 1. a failed answer
+  await page.route("**/clarifications", (route) => route.fulfill(unavailable));
+  const adopt = page.locator("main").getByRole("button", { name: "Adopt these settings" });
+  await adopt.focus();
+  await page.keyboard.press("Enter");
+  await expect(alerts(page)).toContainText("unavailable");
+  await expect(adopt).toBeFocused();
+  expect(await inView(page, alerts(page).first()), "the error must be on screen").toBe(true);
+  await page.unroute("**/clarifications");
+  await page.keyboard.press("Enter"); // retry works and the answer succeeds
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  // 2. a failed save
+  await page.route("**/revisions", (route) => route.request().method() === "POST" ? route.fulfill(unavailable) : route.continue());
+  const save = page.getByRole("button", { name: "Save this revision" });
+  await save.focus();
+  await page.keyboard.press("Enter");
+  await expect(alerts(page)).toContainText("unavailable");
+  await expect(save).toBeFocused();
+  expect(await inView(page, alerts(page).first()), "the save error must be on screen").toBe(true);
+  await page.unroute("**/revisions");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("revision")).toBeVisible();
+  await expect(page.locator("#state-title")).toBeFocused();
+  await page.screenshot({ path: path.join(outDir, `failure-recovery-${info.project.name}.png`), fullPage: true });
+});
+
+test("the keyboard focus ring has at least 3:1 contrast on every surface it appears on", async ({ page }, info) => {
+  await open(page, tokens.a);
+  await page.keyboard.press("Tab"); // keyboard modality, so :focus-visible applies
+  const targets = [page.getByRole("button", { name: "Agents", exact: true }), page.getByLabel("Your words", { exact: true }),
+    page.getByRole("button", { name: "Prepare request" }), page.getByRole("button", { name: /Add “no leverage”/ })];
+  const results = [];
+  for (const target of targets) {
+    await target.focus();
+    results.push(await target.evaluate((el) => {
+      const parse = (v) => { const m = v.match(/^rgba?\(([^)]+)\)$/); if (!m) return null; const p = m[1].split(/[ ,/]+/).filter(Boolean).map(Number); return { r: p[0], g: p[1], b: p[2], a: p[3] ?? 1 }; };
+      const bgOf = (node) => { for (let n = node; n; n = n.parentElement) { const c = parse(getComputedStyle(n).backgroundColor); if (c && c.a > 0) return c; } return { r: 255, g: 255, b: 255, a: 1 }; };
+      const lum = ({ r, g, b }) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+      const style = getComputedStyle(el), ring = parse(style.outlineColor), bg = bgOf(el.parentElement ?? el);
+      const ratio = ring ? (Math.max(lum(ring), lum(bg)) + 0.05) / (Math.min(lum(ring), lum(bg)) + 0.05) : 0;
+      return { what: (el.getAttribute("aria-label") || el.textContent || el.id).trim().slice(0, 30), outline: style.outlineStyle, ratio: Math.round(ratio * 100) / 100, visible: el.matches(":focus-visible") };
+    }));
+  }
+  fs.writeFileSync(path.join(outDir, `focus-ring-${info.project.name}.json`), JSON.stringify(results, null, 2));
+  for (const r of results) { expect(r.visible, JSON.stringify(r)).toBe(true); expect(r.outline, JSON.stringify(r)).not.toBe("none"); expect(r.ratio, JSON.stringify(r)).toBeGreaterThanOrEqual(3); }
+});
+
+/** Words that wrap in the middle: a word whose characters span more than one line box. Long pasted tokens are exempt. */
+async function splitWords(page) {
+  return page.evaluate(() => {
+    const roots = document.querySelectorAll("table.records th, table.records td, h1, h2, h3, button, label.choice, legend, .status, .tag, .notice, .convo p, .panel p, summary, dt");
+    const split = [];
+    for (const root of roots) {
+      if (root.closest("dialog:not([open])") || root.classList.contains("visually-hidden")) continue;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        for (const match of node.data.matchAll(/\S+/g)) {
+          if (match[0].length > 24) continue;
+          const range = document.createRange();
+          range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
+          const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top / 4)));
+          if (tops.size > 1) split.push(match[0]);
+        }
+      }
+    }
+    return [...new Set(split)];
+  });
+}
+
+test("no word is split in the middle in the main states", async ({ page }, info) => {
+  const found = {};
+  await open(page, tokens.a);
+  found.home = await splitWords(page);
+  await sample(page, /Recent rises seem to keep running/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  found.needsAnswer = await splitWords(page);
+  await page.locator("main").getByRole("button", { name: "Adopt these settings" }).click();
+  await page.locator("main").getByRole("radio", { name: /more than 2% over the last 15 minutes/ }).check();
+  await page.locator("main").getByRole("button", { name: "Save my answer" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  found.review = await splitWords(page);
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toBeVisible();
+  await page.locator("summary", { hasText: "Where each setting came from" }).click();
+  found.saved = await splitWords(page);
+  fs.writeFileSync(path.join(outDir, `split-words-${info.project.name}.json`), JSON.stringify(found, null, 2));
+  expect(found, JSON.stringify(found)).toEqual({ home: [], needsAnswer: [], review: [], saved: [] });
+});
+
+test("a late focus return never steals focus from a field the person is typing in", async ({ page }, info) => {
+  await open(page, tokens.a);
+  await sample(page, /Recent rises seem to keep running/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toBeVisible();
+  // the saved list answers slowly, so the return-focus target appears late
+  await page.route("**/v1/research/requests", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return route.continue();
+  });
+  await page.getByRole("button", { name: "All requests" }).click();
+  await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
+  const words = page.getByLabel("Your words", { exact: true });
+  await words.click();
+  await page.keyboard.type("still typing");
+  await page.waitForTimeout(2200); // the list arrives and the old target now exists
+  await expect(words).toBeFocused();
+  await expect(words).toHaveValue("still typing");
+  await page.unroute("**/v1/research/requests");
 });

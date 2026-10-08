@@ -136,7 +136,7 @@ def test_database_rejects_cross_owner_parent_reference(pg, client, owner_a, owne
     assert "fk_revision_parent" in str(getattr(caught.value, "stderr", caught.value))
 
 
-def test_second_revision_with_valid_parent_succeeds_and_siblings_are_allowed(client, owner_a, pg):
+def test_database_accepts_sibling_children_of_one_parent(client, owner_a, pg):
     # second revisions need a draft whose base revision is the parent; the first slice only creates root drafts,
     # so exercise the database rule directly: two children of one parent are both accepted.
     bundle = compiled_thesis(client, owner_a)

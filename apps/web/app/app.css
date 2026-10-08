@@ -95,7 +95,9 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
 .convo { background: var(--color-neutral-100); border-left: 1px solid var(--color-divider); padding: var(--space-6) var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 .convo h2 { font-size: 22px; margin: 0; }
 .convo-about { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-3); font-size: 14px; }
-.convo, .panel, .status { overflow-wrap: anywhere; } /* a pasted address or token must wrap, never widen the page */
+.words, .card-open .title, .convo-about, .msg, dl.kv dd, .chip, .status p { overflow-wrap: anywhere; } /* a pasted address or token must wrap, never widen the page */
+table.records td { overflow-wrap: break-word; } /* never collapse table columns: words stay whole unless a token overflows */
+:focus-visible { outline: 2px solid var(--color-accent-700); outline-offset: 2px; } /* 3:1 or better on the sidebar and cards; the exported accent is 2.7:1 */
 .msg { border-radius: var(--radius-md); padding: var(--space-3); font-size: 14px; }
 .msg.system { background: var(--color-surface); }
 .msg.user { background: var(--color-accent-100); margin-left: var(--space-6); }
