@@ -182,6 +182,8 @@ python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressio
 
 Result: all 10 provider-boundary tests passed, including ordinary/escaped JSON, the authorized snapshot, prior plain/multipart contamination, structured identity detection and source-prefix protection. Full native/offline/P02 results and the new actual pinned-Hermes fake-provider run are recorded below.
 
+The full native runner suite passed 28 tests, the offline suite passed 16, and the P02 checker passed 39 fixtures and 10 examples/rejection mutations. The pinned-Hermes run completed as `p04-dad145eebf8f` with 4 normal jobs, 2 truncation fixtures, 1 HTTP-503 fixture, 1 cancellation, 8 local fake requests and 0 real inference. Its `qualification-result.json` SHA-256 is `dca3c1eb947cd5416ca16f85ba9d65fd361bb41e58df0b386102c0b18168238d`; cancellation evidence SHA-256 is `b9d502b4634d15f74384d7d363bdb987098d33a0657ffdb92bc0c83d4cbcb2b5`; image cleanup SHA-256 is `dd4bd08b8b8582c53f66ad361714af411a3dbdee18c4904561ae594c529cd2fe`. Both the task-labelled container query and exact image inspection confirmed absence. This runtime run confirms pinned-Hermes integration; the exact Unicode-escape behavior is established by the direct `_record_request` regression above.
+
 
 ## R3 combined repair: test-first record
 
@@ -197,13 +199,9 @@ python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressio
 
 Observed: owner, agent, cleared-memory and empty-file subtests each failed with `AssertionError not raised`. The empty-source mismatch was already rejected by the prior explicit empty-source guard.
 
-The identifier regression uses the retained R3 value string:
+The identifier regression's exact raw JSON string is `encoded_identifiers` in `tests/p04/test_native_runner.py:777`. The test places it in system content, a multipart text part, and nested tool-call arguments. Before the probe change, the test failed in each placement with `decoded owner was missed`. A separate test checks that decoded suffixes such as `owner-b-suffix`, `agent-b-suffix`, `source-a-suffix` and `file-a-suffix` remain non-matches. The existing escaped-memory, raw text and structured identity tests remain active.
 
-```text
-{"notes":["\\u006fwner-b","\\u0061gent-b","\\u006fther-source","\\u006fther-file"]}
-```
-
-It places that valid JSON in system content, a multipart text part, and nested tool-call arguments. Before the probe change, the test failed in each placement with `decoded owner was missed`. A separate test checks that decoded suffixes such as `owner-b-suffix`, `agent-b-suffix`, `source-a-suffix` and `file-a-suffix` remain non-matches. The existing escaped-memory, raw text and structured identity tests remain active.
+The raw stdout/stderr logs for the R3 RED commands and focused GREEN command were not retained as files. The observations in this section were recorded in the task transcript and summarized here; they do not have independent log-file hashes. The regression tests remain in the committed source, and the post-fix focused and full-suite PASS results are recorded in the candidate-bound result packet.
 
 After adding unconditional identity and full memory/source/file equality checks to `_run_normal` and scanning decoded valid-JSON string values with the existing identifier-boundary pattern, this command passed all 13 provider-boundary tests:
 
