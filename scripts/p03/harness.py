@@ -199,13 +199,28 @@ def start_api(env: dict[str, str], port: int, log_dir: Path, name: str = "api") 
     return Process(name, popen, log_path)
 
 
-def start_web(*, api_url: str, port: int, log_dir: Path, name: str = "web") -> Process:
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"{name}.log"
-    handle = open(log_path, "ab")
+def web_env(api_url: str, dist: str) -> dict[str, str]:
     env = base_env()
     env["NEXT_PUBLIC_API_BASE_URL"] = api_url
     env["NEXT_PUBLIC_PRIVY_APP_ID"] = TEST_APP_ID
+    env["EDGE_OS_WEB_DIST"] = dist
+    return env
+
+
+def build_web(*, api_url: str, dist: str, log_dir: Path) -> subprocess.CompletedProcess[str]:
+    """Production build into a run-scoped directory. NEXT_PUBLIC_* values are inlined here, at build time."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(["npm", "run", "build"], cwd=WEB_DIR, env=web_env(api_url, dist), capture_output=True,
+                            text=True, timeout=600)
+    (log_dir / "web-build.log").write_text(result.stdout + result.stderr)
+    return result
+
+
+def start_web(*, api_url: str, dist: str, port: int, log_dir: Path, name: str = "web") -> Process:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{name}.log"
+    handle = open(log_path, "ab")
+    env = web_env(api_url, dist)
     popen = subprocess.Popen(["node", str(WEB_DIR / "node_modules" / "next" / "dist" / "bin" / "next"), "start",
                               "--hostname", "127.0.0.1", "--port", str(port)], cwd=WEB_DIR, env=env,
                              stdout=handle, stderr=handle, start_new_session=True)
