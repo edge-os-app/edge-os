@@ -125,7 +125,7 @@ def _forbidden_text_present(messages: list[dict[str, object]], field: str, value
     if not value:
         return False
     strings = list(_message_strings(messages))
-    pattern = None if field == "memory" else re.compile(
+    pattern = re.compile(
         rf"(?<![A-Za-z0-9_-]){re.escape(value)}(?![A-Za-z0-9_-])"
     )
     for text in strings:
@@ -142,6 +142,10 @@ def _forbidden_text_present(messages: list[dict[str, object]], field: str, value
                 return True
             continue
         if _has_structured_identity(parsed, field, value) or pattern.search(text):
+            return True
+        if parsed is not None and any(
+            pattern.search(decoded_text) for decoded_text in _message_strings(parsed)
+        ):
             return True
     return False
 

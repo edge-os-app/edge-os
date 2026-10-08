@@ -1,0 +1,11 @@
+{
+  "credentials_exposed": false,
+  "max_output_tokens": 128,
+  "schema": "p04-authoritative-local-fixture/1",
+  "selected_toolsets": [],
+  "spending_limit_usd": "2.00",
+  "strategy_rules": {
+    "editable_by_memory": false,
+    "fixture_revision": 1
+  }
+}

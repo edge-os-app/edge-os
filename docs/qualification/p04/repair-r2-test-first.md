@@ -182,4 +182,33 @@ python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressio
 
 Result: all 10 provider-boundary tests passed, including ordinary/escaped JSON, the authorized snapshot, prior plain/multipart contamination, structured identity detection and source-prefix protection. Full native/offline/P02 results and the new actual pinned-Hermes fake-provider run are recorded below.
 
-The full native runner suite passed 28 tests, the offline suite passed 16, and the P02 checker passed 39 fixtures and 10 examples/rejection mutations. The pinned-Hermes run completed as `p04-dad145eebf8f` with 4 normal jobs, 2 truncation fixtures, 1 HTTP-503 fixture, 1 cancellation, 8 local fake requests and 0 real inference. Its `qualification-result.json` SHA-256 is `dca3c1eb947cd5416ca16f85ba9d65fd361bb41e58df0b386102c0b18168238d`; cancellation evidence SHA-256 is `b9d502b4634d15f74384d7d363bdb987098d33a0657ffdb92bc0c83d4cbcb2b5`; image cleanup SHA-256 is `dd4bd08b8b8582c53f66ad361714af411a3dbdee18c4904561ae594c529cd2fe`. Both the task-labelled container query and exact image inspection confirmed absence. This runtime run confirms pinned-Hermes integration; the exact Unicode-escape behavior is established by the direct `_record_request` regression above.
+
+## R3 combined repair: test-first record
+
+The R3 independent pair found two failures on candidate `f78043b01160d0a0a13a8b1c0af35570932cf2d7`. The normal-job consumer accepted false owner/agent and full-snapshot receipt fields. The identifier scanner also missed forbidden IDs in valid JSON text after Unicode escapes decoded. No reviewer or gate verdict has been consumed on this repair.
+
+Before the production edits, I added consumer regressions and decoded-identifier tests. The consumer regression drives the actual `_record_request` and `_run_normal`; only the external Docker process/output is simulated. It tests wrong owner, wrong agent, changed `enabled` on cleared memory, and extra items in empty source/file snapshots. A healthy populated snapshot and a healthy empty/cleared snapshot must both pass.
+
+The first consumer test attempt exposed two test-harness errors: the test had not added the qualification directory to `sys.path`, and a shallow nested copy let the memory mutation also change the expected task. I corrected the import path and deep-copied the expected JSON before accepting RED evidence. Then, with the R3 consumer code absent, this command failed for the expected behavior:
+
+```text
+python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressionTests.test_normal_result_consumer_rejects_identity_and_snapshot_mismatches
+```
+
+Observed: owner, agent, cleared-memory and empty-file subtests each failed with `AssertionError not raised`. The empty-source mismatch was already rejected by the prior explicit empty-source guard.
+
+The identifier regression uses the retained R3 value string:
+
+```text
+{"notes":["\\u006fwner-b","\\u0061gent-b","\\u006fther-source","\\u006fther-file"]}
+```
+
+It places that valid JSON in system content, a multipart text part, and nested tool-call arguments. Before the probe change, the test failed in each placement with `decoded owner was missed`. A separate test checks that decoded suffixes such as `owner-b-suffix`, `agent-b-suffix`, `source-a-suffix` and `file-a-suffix` remain non-matches. The existing escaped-memory, raw text and structured identity tests remain active.
+
+After adding unconditional identity and full memory/source/file equality checks to `_run_normal` and scanning decoded valid-JSON string values with the existing identifier-boundary pattern, this command passed all 13 provider-boundary tests:
+
+```text
+python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressionTests
+```
+
+Full results on the R3 candidate: native runner 32 tests PASS; offline P04 16 PASS; P02 checker 39 fixtures and 10 examples/rejection mutations PASS; AST syntax and `git diff --check` PASS. Actual pinned-Hermes evidence is `p04-c96421621654`, detailed in the R3 result packet and current runtime/research/README follow-up sections. It records four exact normal snapshots, all five forbidden-context flags true, two failed/partial truncation paths, one 503 fixture, cancellation recovery, eight local fake requests and zero real inference.

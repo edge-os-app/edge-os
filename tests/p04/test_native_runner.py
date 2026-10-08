@@ -514,6 +514,99 @@ class NormalProcessLifecycleRegressionTests(unittest.TestCase):
 
 
 class ProviderBoundaryRegressionTests(unittest.TestCase):
+    def _run_normal_consumer(self, context, *, mutate_sent=None):
+        import sys
+
+        from docs.qualification.p04 import native_runner
+
+        fake_httpx = ModuleType("httpx")
+        fake_httpx.Response = lambda status_code, *, json, request: SimpleNamespace(
+            status_code=status_code, json=lambda: json, request=request,
+        )
+        result_fixture = (
+            native_runner.WORKSPACE / "docs/qualification/p04/evidence/p04-dad145eebf8f/"
+            "task-1-owner-a/output/container-result.json"
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+
+            def start_fake_container(argv, **kwargs):
+                task_dir = evidence / "task-1"
+                task = json.loads((task_dir / "input.json").read_text(encoding="utf-8"))
+                sent = json.loads(json.dumps({
+                    key: task[key]
+                    for key in ("owner_id", "agent_id", "job_id", "memory", "sources", "files")
+                }))
+                if mutate_sent is not None:
+                    mutate_sent(sent)
+                request = SimpleNamespace(
+                    content=json.dumps({
+                        "model": "fixture-model",
+                        "messages": [{"role": "user", "content": json.dumps(sent)}],
+                        "max_tokens": 128,
+                    }).encode(),
+                    url="https://fake-provider.invalid/v1/chat/completions",
+                    headers={"authorization": "Bearer fixture-not-a-secret"},
+                )
+                with patch.object(container_probe, "OUTPUT", task_dir / "output"), patch.dict(
+                    "sys.modules", {"httpx": fake_httpx}
+                ):
+                    container_probe._record_request(request, "normal", task)
+
+                result = json.loads(result_fixture.read_text(encoding="utf-8"))
+                result.update(job_id=task["job_id"], owner_id=task["owner_id"], agent_id=task["agent_id"])
+                (task_dir / "output" / "container-result.json").write_text(
+                    json.dumps(result), encoding="utf-8",
+                )
+                return SimpleNamespace(returncode=0, communicate=lambda **_: ("fixture output\n", None))
+
+            qualification_path = str(native_runner.WORKSPACE / "docs/qualification/p04")
+            with patch.object(native_runner.subprocess, "Popen", side_effect=start_fake_container), patch.object(
+                sys, "path", [qualification_path, *sys.path]
+            ):
+                return native_runner._run_normal(
+                    policy=DockerPolicy("p04-consumer-test"), image="p04-test:image",
+                    owner_id="owner-a", agent_id="agent-a", context=context,
+                    evidence=evidence, run_id="p04-consumer-test", ordinal="1",
+                )
+
+    def test_normal_result_consumer_rejects_identity_and_snapshot_mismatches(self):
+        empty_context = {
+            "memory": {"version": 2, "enabled": False, "entries": []},
+            "sources": [], "files": [],
+        }
+        mutations = {
+            "owner": lambda payload: payload.update(owner_id="owner-z"),
+            "agent": lambda payload: payload.update(agent_id="agent-z"),
+            "cleared_memory": lambda payload: payload["memory"].update(enabled=True),
+            "empty_sources": lambda payload: payload.update(sources=[{"source_id": "unexpected-source"}]),
+            "empty_files": lambda payload: payload.update(files=[{"file_id": "unexpected-file", "content": "foreign"}]),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(mismatch=name), self.assertRaises(AssertionError):
+                self._run_normal_consumer(empty_context, mutate_sent=mutation)
+
+    def test_normal_result_consumer_accepts_exact_populated_and_empty_snapshots(self):
+        contexts = (
+            {
+                "memory": {"version": 1, "enabled": True, "entries": ["authorized memory"]},
+                "sources": [{"source_id": "source-a", "content": "authorized source"}],
+                "files": [{"file_id": "file-a", "content": "authorized file"}],
+            },
+            {
+                "memory": {"version": 2, "enabled": False, "entries": []},
+                "sources": [], "files": [],
+            },
+        )
+        for context in contexts:
+            with self.subTest(context=context):
+                result = self._run_normal_consumer(context)
+                self.assertEqual(result["provider_receipt"]["owner_fixture_present"], True)
+                self.assertEqual(result["provider_receipt"]["agent_fixture_present"], True)
+                for snapshot in ("memory", "source", "file"):
+                    self.assertTrue(result["provider_receipt"][f"{snapshot}_snapshot_matches"])
+
     def test_disjoint_identity_controls_exclude_shared_owner_but_keep_other_agent(self):
         from docs.qualification.p04.native_runner import _forbidden_identity_values
 
@@ -664,6 +757,88 @@ class ProviderBoundaryRegressionTests(unittest.TestCase):
                     receipt, _ = container_probe._record_request(request, "normal", task)
 
                 self.assertFalse(receipt["forbidden_memory_absent"], f"JSON memory case {index} was missed")
+
+    def test_forbidden_identifiers_are_detected_in_decoded_json_at_each_message_placement(self):
+        fake_httpx = ModuleType("httpx")
+        fake_httpx.Response = lambda status_code, *, json, request: SimpleNamespace(
+            status_code=status_code, json=lambda: json, request=request,
+        )
+        task = {
+            "owner_id": "owner-a", "agent_id": "agent-a", "job_id": "job-json-identifiers",
+            "memory": {"version": 1, "enabled": True, "entries": ["authorized memory"]},
+            "sources": [{"source_id": "source-a", "content": "authorized source"}],
+            "files": [{"file_id": "file-a", "content": "authorized file"}],
+            "probe_forbidden": {
+                "owner_id": "owner-b", "agent_id": "agent-b",
+                "memory": "other memory", "source_id": "other-source", "file_id": "other-file",
+            },
+        }
+        authorized = {key: task[key] for key in ("owner_id", "agent_id", "job_id", "memory", "sources", "files")}
+        encoded_identifiers = r'{"notes":["\u006fwner-b","\u0061gent-b","\u006fther-source","\u006fther-file"]}'
+        placements = {
+            "system_content": {"role": "system", "content": encoded_identifiers},
+            "multipart_text": {"role": "system", "content": [{"type": "text", "text": encoded_identifiers}]},
+            "tool_arguments": {
+                "role": "assistant", "content": None,
+                "tool_calls": [{"type": "function", "function": {
+                    "name": "fixture_tool", "arguments": encoded_identifiers,
+                }}],
+            },
+        }
+
+        for placement, extra_message in placements.items():
+            request = SimpleNamespace(
+                content=json.dumps({"model": "fixture-model", "messages": [
+                    {"role": "user", "content": json.dumps(authorized)}, extra_message,
+                ], "max_tokens": 128}).encode(),
+                url="https://fake-provider.invalid/v1/chat/completions",
+                headers={"authorization": "Bearer fixture-not-a-secret"},
+            )
+            with self.subTest(placement=placement), tempfile.TemporaryDirectory() as directory:
+                with patch.object(container_probe, "OUTPUT", Path(directory)), patch.dict(
+                    "sys.modules", {"httpx": fake_httpx}
+                ):
+                    receipt, _ = container_probe._record_request(request, "normal", task)
+
+                for identity in ("owner", "agent", "source", "file"):
+                    self.assertFalse(
+                        receipt[f"forbidden_{identity}_absent"],
+                        f"decoded {identity} was missed in {placement}",
+                    )
+
+    def test_decoded_identifier_suffixes_do_not_match_forbidden_ids(self):
+        fake_httpx = ModuleType("httpx")
+        fake_httpx.Response = lambda status_code, *, json, request: SimpleNamespace(
+            status_code=status_code, json=lambda: json, request=request,
+        )
+        task = {
+            "owner_id": "owner-a", "agent_id": "agent-a", "job_id": "job-identifier-prefixes",
+            "memory": {"version": 1, "enabled": True, "entries": ["authorized memory"]},
+            "sources": [{"source_id": "source-a-b", "content": "authorized source"}],
+            "files": [{"file_id": "file-a-b", "content": "authorized file"}],
+            "probe_forbidden": {
+                "owner_id": "owner-b", "agent_id": "agent-b",
+                "memory": "other memory", "source_id": "source-a", "file_id": "file-a",
+            },
+        }
+        authorized = {key: task[key] for key in ("owner_id", "agent_id", "job_id", "memory", "sources", "files")}
+        suffixes = r'{"notes":["owner-b-suffix","agent-b-suffix","source-a-suffix","file-a-suffix"]}'
+        request = SimpleNamespace(
+            content=json.dumps({"model": "fixture-model", "messages": [
+                {"role": "user", "content": json.dumps(authorized)},
+                {"role": "system", "content": suffixes},
+            ], "max_tokens": 128}).encode(),
+            url="https://fake-provider.invalid/v1/chat/completions",
+            headers={"authorization": "Bearer fixture-not-a-secret"},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(container_probe, "OUTPUT", Path(directory)), patch.dict(
+                "sys.modules", {"httpx": fake_httpx}
+            ):
+                receipt, _ = container_probe._record_request(request, "normal", task)
+
+        for identity in ("owner", "agent", "source", "file"):
+            self.assertTrue(receipt[f"forbidden_{identity}_absent"])
 
     def test_forbidden_context_in_structured_text_parts_is_detected_without_id_prefix_false_positive(self):
         fake_httpx = ModuleType("httpx")

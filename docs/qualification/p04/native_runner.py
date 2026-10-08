@@ -745,8 +745,16 @@ def _run_normal(
     receipt = json.loads(receipt_lines[0])
     if receipt["tool_count"] != 0 or receipt["stream"] is not False or receipt["max_tokens"] > 128:
         raise AssertionError(f"fake provider saw a request outside the local profile: {receipt}")
+    if not receipt["owner_fixture_present"] or not receipt["agent_fixture_present"]:
+        raise AssertionError("provider request identity does not match the authorized owner and agent")
     if not receipt["memory_version_present"]:
         raise AssertionError("provider request omitted its task-start memory version")
+    if not receipt["memory_snapshot_matches"]:
+        raise AssertionError("provider request memory snapshot differs from the authorized task snapshot")
+    if not receipt["source_snapshot_matches"]:
+        raise AssertionError("provider request source snapshot differs from the authorized task snapshot")
+    if not receipt["file_snapshot_matches"]:
+        raise AssertionError("provider request file snapshot differs from the authorized task snapshot")
     if not receipt["forbidden_owner_absent"] or not receipt["forbidden_agent_absent"]:
         raise AssertionError("provider request contains another owner or agent identity")
     if context["memory"]["entries"] and not receipt["only_expected_memory_present"]:
