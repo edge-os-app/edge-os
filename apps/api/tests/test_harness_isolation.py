@@ -183,3 +183,75 @@ def test_the_skill_wait_loop_ends_on_a_refused_or_failed_run():
     for log in ('HOLD {"web": "http://127.0.0.1:1"}', "REFUSED run x: container y already exists.", '{"run_id": "x", "evidence": "e", "ok": false}'):
         assert sp.run(["grep", "-qE", pattern.group(1)], input=log, text=True).returncode == 0, log
     assert sp.run(["grep", "-qE", pattern.group(1)], input="PASS postgres started", text=True).returncode != 0
+
+
+def test_a_losing_concurrent_start_never_removes_the_winning_live_instance(monkeypatch):
+    """Both callers pass the absence check before either creates anything (the gate's interleaving).
+
+    The first finishes starting. The second then reaches Docker and loses the name. Its cleanup must leave the
+    winner's container and volume alone.
+    """
+    run_id = harness.new_run_id()
+    winner = harness.Postgres(run_id)
+    loser = harness.Postgres(run_id)
+    absent = lambda self: []  # noqa: E731 - both absence checks answered "nothing exists" before any creation
+    monkeypatch.setattr(harness.Postgres, "existing_resources", absent)
+    try:
+        winner.start()
+        with pytest.raises(RuntimeError):
+            loser.start()
+        assert not loser.created_container and not loser.created_volume, "a lost claim must not become ownership"
+        loser.stop_and_remove()
+        assert loser.leftovers() == []
+        assert alive(winner) and volume_exists(winner.volume), "the winner must survive the loser's cleanup"
+    finally:
+        monkeypatch.undo()
+        winner.stop_and_remove()
+    assert winner.leftovers() == [] and not container_exists(winner.container) and not volume_exists(winner.volume)
+
+
+def test_real_concurrent_starts_leave_exactly_one_owner_and_preserve_it(monkeypatch):
+    import concurrent.futures
+    import threading
+    run_id = harness.new_run_id()
+    instances = [harness.Postgres(run_id), harness.Postgres(run_id)]
+    gate = threading.Barrier(2)
+    real = harness.Postgres.existing_resources
+
+    def synchronized(self):
+        found = real(self)
+        gate.wait(timeout=30)  # both absence checks finish before either caller creates anything
+        return found
+    monkeypatch.setattr(harness.Postgres, "existing_resources", synchronized)
+
+    def attempt(instance):
+        try:
+            instance.start()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(attempt, instances))
+        monkeypatch.undo()
+        assert outcomes.count(True) == 1, outcomes
+        winner = instances[outcomes.index(True)]
+        loser = instances[outcomes.index(False)]
+        assert not loser.created_container
+        loser.stop_and_remove()
+        assert alive(winner) and volume_exists(winner.volume)
+    finally:
+        monkeypatch.undo()
+        for instance in instances:
+            instance.stop_and_remove()
+    assert all(i.leftovers() == [] for i in instances) and not container_exists(instances[0].container)
+
+
+def test_explicit_orphan_removal_never_force_removes_a_container_that_started_again():
+    pg = harness.Postgres(harness.new_run_id()).start()
+    try:
+        with pytest.raises(RuntimeError, match="running"):
+            harness.remove_orphan(pg.run_id)
+        assert alive(pg)
+    finally:
+        pg.stop_and_remove()

@@ -55,4 +55,4 @@ Unmigrated database stops startup. Schema drift and a database that refuses conn
 
 ## Resources and cleanup
 
-Every container and volume is `edge-os-test-pg-<run_id>` with labels `edge-os.test=1` and `edge-os.test.run=<run_id>`. The web build lands in `apps/web/.next-<run_id>` and is removed. Processes stop through the handles the run holds. The run never touches another container, port or database.
+Every container and volume is `edge-os-test-pg-<run_id>` with labels `edge-os.test=1`, `edge-os.test.run=<run_id>` and a random per-attempt `edge-os.test.claim`. A run removes only what its own claim created, so two starts with one run ID cannot delete each other's instance. The web build lands in `apps/web/.next-<run_id>` and is removed. Processes stop through the handles the run holds. The run never touches another container, port or database.

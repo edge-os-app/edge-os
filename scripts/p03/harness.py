@@ -71,13 +71,20 @@ def label_of(kind: str, name: str, key: str) -> str:
 class Postgres:
     """A run-labelled PostgreSQL container and volume.
 
-    This object removes only what it created itself (`created_*`) and only after the labels still name this run.
-    A name or label match alone never proves ownership, so a repeated run ID refuses and preserves what exists.
+    This object removes only what it created itself. Ownership comes from an exclusive claim, never from a matching
+    name or run label, because two callers can use the same run ID at the same time:
+    - the container is made with `docker create`, which fails for a second caller with the same name, so a
+      successful create is the claim, and cleanup uses the container ID that create returned;
+    - `docker volume create` is idempotent, so the volume carries this attempt's random claim label, and the caller
+      owns it only if the volume still shows that claim.
+    A caller that loses either claim owns nothing and removes nothing.
     """
 
     run_id: str
     password: str = field(default_factory=lambda: secrets.token_urlsafe(18))
+    claim: str = field(default_factory=lambda: secrets.token_hex(8))
     host_port: int = 0
+    container_id: str = ""
     created_container: bool = False
     created_volume: bool = False
 
@@ -98,7 +105,7 @@ class Postgres:
         return f"postgresql+psycopg://postgres:{self.password}@127.0.0.1:{self.host_port}/{self.database}"
 
     def labels(self) -> list[str]:
-        return ["--label", LABEL, "--label", f"edge-os.test.run={self.run_id}"]
+        return ["--label", LABEL, "--label", f"edge-os.test.run={self.run_id}", "--label", f"edge-os.test.claim={self.claim}"]
 
     def existing_resources(self) -> list[str]:
         found = []
@@ -114,44 +121,47 @@ class Postgres:
             raise RuntimeError(f"refusing to start run {self.run_id}: {', '.join(present)} already exists. "
                                "Nothing was created or changed. Use a new run ID.")
         sh(["docker", "volume", "create", *self.labels(), self.volume])
-        # `docker volume create` is idempotent. Claim the volume only if it carries this run's labels.
-        if label_of("volume", self.volume, "edge-os.test.run") != self.run_id or label_of("volume", self.volume, "edge-os.test") != "1":
-            raise RuntimeError(f"refusing run {self.run_id}: volume {self.volume} exists without this run's labels. "
-                               "Nothing was removed.")
+        # The create above succeeds for a volume another caller made a moment ago. Only this attempt's claim label proves ours.
+        if label_of("volume", self.volume, "edge-os.test.claim") != self.claim:
+            raise RuntimeError(f"refusing run {self.run_id}: volume {self.volume} already exists and was not created by "
+                               "this attempt. Nothing was removed.")
         self.created_volume = True
         try:
-            sh(["docker", "run", "-d", "--name", self.container, *self.labels(),
-                "-e", f"POSTGRES_PASSWORD={self.password}", "-e", f"POSTGRES_DB={self.database}",
-                "-p", "127.0.0.1::5432", "-v", f"{self.volume}:/var/lib/postgresql", POSTGRES_IMAGE])
-        finally:
-            # `docker run` can create the container and still fail to start it. Own it only if it now exists.
-            self.created_container = exists("container", self.container) and \
-                label_of("container", self.container, "edge-os.test.run") == self.run_id
-        port_line = sh(["docker", "port", self.container, "5432/tcp"]).stdout.strip().splitlines()[0]
+            created = sh(["docker", "create", "--name", self.container, *self.labels(),
+                          "-e", f"POSTGRES_PASSWORD={self.password}", "-e", f"POSTGRES_DB={self.database}",
+                          "-p", "127.0.0.1::5432", "-v", f"{self.volume}:/var/lib/postgresql", POSTGRES_IMAGE])
+        except subprocess.CalledProcessError as error:
+            # A name collision lands here. A failed create made no container for this attempt, so none is claimed.
+            raise RuntimeError(f"refusing run {self.run_id}: container {self.container} could not be created "
+                               f"(already exists?): {error.stderr.strip()[:200]}") from error
+        self.container_id = created.stdout.strip()
+        self.created_container = True  # the successful create is the exclusive claim; start may still fail
+        sh(["docker", "start", self.container_id])
+        port_line = sh(["docker", "port", self.container_id, "5432/tcp"]).stdout.strip().splitlines()[0]
         self.host_port = int(port_line.rsplit(":", 1)[1])
         self._wait_ready()
         self.assert_guard()
         return self
 
     def psql(self, sql: str, *, db: str | None = None) -> str:
-        return sh(["docker", "exec", self.container, "psql", "-U", "postgres", "-d", db or self.database,
+        return sh(["docker", "exec", self.container_id, "psql", "-U", "postgres", "-d", db or self.database,
                    "-v", "ON_ERROR_STOP=1", "-tAc", sql]).stdout.strip()
 
     def _wait_ready(self, timeout: float = 90.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            result = sh(["docker", "exec", self.container, "psql", "-U", "postgres", "-d", self.database,
+            result = sh(["docker", "exec", self.container_id, "psql", "-U", "postgres", "-d", self.database,
                          "-tAc", "select 1"], check=False)
             if result.returncode == 0 and result.stdout.strip() == "1":
                 return
             time.sleep(0.5)
-        raise RuntimeError(f"postgres {self.container} did not become ready")
+        raise RuntimeError(f"postgres {self.container_id[:12]} did not become ready")
 
     def assert_guard(self) -> None:
         """Refuse to continue unless this is the run's own labelled container and database."""
         if self.psql("select current_database()") != self.database:
             raise RuntimeError("guard: current_database() is not this run's database")
-        inspected = json.loads(sh(["docker", "inspect", self.container]).stdout)[0]["Config"]["Labels"]
+        inspected = json.loads(sh(["docker", "inspect", self.container_id]).stdout)[0]["Config"]["Labels"]
         if inspected.get("edge-os.test") != "1" or inspected.get("edge-os.test.run") != self.run_id:
             raise RuntimeError("guard: container labels do not match this run")
 
@@ -162,23 +172,30 @@ class Postgres:
         info = json.loads(sh(["docker", "image", "inspect", POSTGRES_IMAGE]).stdout)[0]
         return {"image": POSTGRES_IMAGE, "id": info["Id"], "repo_digests": ",".join(info.get("RepoDigests", []))}
 
-    def _owned(self, kind: str, name: str) -> bool:
-        return exists(kind, name) and label_of(kind, name, "edge-os.test") == "1" \
-            and label_of(kind, name, "edge-os.test.run") == self.run_id
+    def _owns_container(self) -> bool:
+        """True only for the container this attempt created, found by its ID and still carrying this attempt's claim."""
+        return bool(self.created_container and self.container_id and exists("container", self.container_id)
+                    and label_of("container", self.container_id, "edge-os.test.claim") == self.claim
+                    and label_of("container", self.container_id, "edge-os.test.run") == self.run_id)
+
+    def _owns_volume(self) -> bool:
+        return bool(self.created_volume and exists("volume", self.volume)
+                    and label_of("volume", self.volume, "edge-os.test.claim") == self.claim
+                    and label_of("volume", self.volume, "edge-os.test.run") == self.run_id)
 
     def stop_and_remove(self) -> None:
-        """Remove what this instance created, if its labels still name this run. Otherwise change nothing."""
-        if self.created_container and self._owned("container", self.container):
-            sh(["docker", "rm", "-f", "-v", self.container], check=False)
-        if self.created_volume and self._owned("volume", self.volume):
+        """Remove what this attempt created, if it still carries this attempt's claim. Otherwise change nothing."""
+        if self._owns_container():
+            sh(["docker", "rm", "-f", "-v", self.container_id], check=False)
+        if self._owns_volume():
             sh(["docker", "volume", "rm", self.volume], check=False)
 
     def leftovers(self) -> list[str]:
-        """Resources this instance created that still exist."""
+        """Resources this attempt created that still exist."""
         out: list[str] = []
-        if self.created_container and exists("container", self.container):
+        if self._owns_container():
             out.append(f"container:{self.container}")
-        if self.created_volume and exists("volume", self.volume):
+        if self._owns_volume():
             out.append(f"volume:{self.volume}")
         return out
 
@@ -314,9 +331,13 @@ def remove_orphan(run_id: str) -> None:
         raise RuntimeError(f"{pg.container} is running and may belong to a live run; refusing removal")
     if label_of("container", pg.container, "edge-os.test") != "1" or label_of("container", pg.container, "edge-os.test.run") != run_id:
         raise RuntimeError("labels do not match this run ID; refusing removal")
-    pg.created_container = True  # the operator named this run and its labels match: removal is authorized
-    pg.created_volume = exists("volume", pg.volume)
-    pg.stop_and_remove()
+    # The operator named this run and its labels match: removal is authorized. Remove by ID, without force,
+    # so a container that started again in the meantime is refused instead of killed.
+    cid = sh(["docker", "inspect", "-f", "{{.Id}}", pg.container]).stdout.strip()
+    sh(["docker", "rm", "-v", cid])
+    if exists("volume", pg.volume) and label_of("volume", pg.volume, "edge-os.test") == "1" \
+            and label_of("volume", pg.volume, "edge-os.test.run") == run_id:
+        sh(["docker", "volume", "rm", pg.volume], check=False)
 
 
 if __name__ == "__main__":
