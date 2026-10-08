@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 
@@ -97,6 +100,45 @@ def _spawn_child_check() -> dict:
     return {"child_process_created": len(values) == 2, "child_parent_pid": int(values[0]), "child_pid": int(values[1])}
 
 
+def _message_strings(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _message_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _message_strings(item)
+
+
+def _has_structured_identity(value: object, field: str, expected: str) -> bool:
+    if isinstance(value, dict):
+        if value.get(field) == expected:
+            return True
+        return any(_has_structured_identity(item, field, expected) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_structured_identity(item, field, expected) for item in value)
+    return False
+
+
+def _forbidden_text_present(messages: list[dict[str, object]], field: str, value: str) -> bool:
+    if not value:
+        return False
+    strings = list(_message_strings(messages))
+    if field == "memory":
+        return any(value in text for text in strings)
+
+    pattern = re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(value)}(?![A-Za-z0-9_-])")
+    for text in strings:
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if _has_structured_identity(parsed, field, value) or pattern.search(text):
+            return True
+    return False
+
+
 def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
     body = json.loads(request.content)
     messages = body.get("messages", [])
@@ -122,9 +164,11 @@ def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
     file_snapshot_matches = prompt_context.get("files", []) == task.get("files", [])
     expected_files = bool(file_ids) and file_snapshot_matches
     forbidden = task.get("probe_forbidden", {})
-    forbidden_memory_absent = forbidden.get("memory", "") not in memory_entries
-    forbidden_source_absent = forbidden.get("source_id", "") not in source_ids
-    forbidden_file_absent = forbidden.get("file_id", "") not in file_ids
+    forbidden_owner_absent = not _forbidden_text_present(messages, "owner_id", forbidden.get("owner_id", ""))
+    forbidden_agent_absent = not _forbidden_text_present(messages, "agent_id", forbidden.get("agent_id", ""))
+    forbidden_memory_absent = not _forbidden_text_present(messages, "memory", forbidden.get("memory", ""))
+    forbidden_source_absent = not _forbidden_text_present(messages, "source_id", forbidden.get("source_id", ""))
+    forbidden_file_absent = not _forbidden_text_present(messages, "file_id", forbidden.get("file_id", ""))
     receipt = {
         "request_url": str(request.url),
         "model": body.get("model"),
@@ -132,6 +176,9 @@ def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
         "max_tokens": body.get("max_tokens", body.get("max_completion_tokens")),
         "tool_count": len(body.get("tools") or []),
         "message_count": len(messages),
+        "outgoing_messages_sha256": hashlib.sha256(
+            json.dumps(messages, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
         "owner_fixture_present": prompt_context.get("owner_id") == task["owner_id"],
         "agent_fixture_present": prompt_context.get("agent_id") == task["agent_id"],
         "memory_version_present": prompt_context.get("memory", {}).get("version") == task.get("memory", {}).get("version"),
@@ -144,6 +191,8 @@ def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
         "file_snapshot_empty": prompt_context.get("files") == [],
         "file_snapshot_matches": file_snapshot_matches,
         "only_expected_file_present": expected_files,
+        "forbidden_owner_absent": forbidden_owner_absent,
+        "forbidden_agent_absent": forbidden_agent_absent,
         "forbidden_memory_absent": forbidden_memory_absent,
         "forbidden_source_absent": forbidden_source_absent,
         "forbidden_file_absent": forbidden_file_absent,

@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import subprocess
 from threading import Barrier
@@ -169,6 +170,280 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(ledger.reserved_usd, "1.25")
 
 
+class CancellationLifecycleRegressionTests(unittest.TestCase):
+    @staticmethod
+    def _owned_inspection(run_id, name, *, running=True):
+        return json.dumps({
+            "Id": "fixture-container-id", "Name": f"/{name}",
+            "Config": {"Labels": {"edge-os.test.run": run_id}},
+            "State": {"Running": running},
+        })
+
+    def test_docker_no_such_object_error_is_verified_absence_case_insensitively(self):
+        from docs.qualification.p04 import native_runner
+
+        missing = subprocess.CalledProcessError(
+            1, ["docker", "inspect"], stderr="error: no such object: task-name",
+        )
+        with patch.object(native_runner, "_docker", side_effect=missing):
+            result = native_runner._inspect_owned_container("task-name", "p04-run")
+
+        self.assertEqual(result["status"], "absent")
+        self.assertEqual(result["ownership"], "verified_by_exact_name")
+
+    def test_absent_container_still_reaps_running_docker_client(self):
+        from docs.qualification.p04 import native_runner
+
+        class FakeProcess:
+            returncode = 0
+            communicate_calls = 0
+
+            def communicate(self, timeout=None):
+                self.communicate_calls += 1
+                return "docker client output", None
+
+        process = FakeProcess()
+        missing = subprocess.CalledProcessError(
+            1, ["docker", "inspect"], stderr="error: no such object: task-name",
+        )
+        with patch.object(native_runner, "_docker", side_effect=missing):
+            result = native_runner._cleanup_owned_container("task-name", "p04-run", process)
+
+        self.assertEqual(result["container_cleanup_status"], "verified_absent")
+        self.assertEqual(result["process_cleanup_status"], "reaped")
+        self.assertEqual(process.communicate_calls, 1)
+
+    def test_inspection_failure_reaps_runner_and_recovers_reserved_attempt_as_unknown(self):
+        from docs.qualification.p04 import native_runner
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            output = evidence / "task-cancel" / "output"
+
+            class FakeProcess:
+                returncode = None
+                killed = False
+
+                def poll(self):
+                    return self.returncode
+
+                def kill(self):
+                    self.killed = True
+                    self.returncode = -9
+
+                def communicate(self, timeout=None):
+                    if self.returncode is None:
+                        raise subprocess.TimeoutExpired(["docker", "run"], timeout)
+                    return "", None
+
+            process = FakeProcess()
+
+            def start_process(*_args, **_kwargs):
+                output.joinpath("provider-started.marker").write_text("started\n", encoding="utf-8")
+                return process
+
+            with (
+                patch.object(native_runner.subprocess, "Popen", side_effect=start_process),
+                patch.object(
+                    native_runner, "_docker",
+                    side_effect=subprocess.CalledProcessError(1, ["docker", "inspect"], stderr="daemon unavailable"),
+                ),
+            ):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    native_runner._run_cancellation(
+                        policy=DockerPolicy("p04-test-inspection"), image="p04-test:image",
+                        context={"memory": {"version": 1, "enabled": True, "entries": []}, "sources": [], "files": []},
+                        evidence=evidence, run_id="p04-test-inspection",
+                    )
+
+            ledger = QualificationLedger(output.parent / "restart.sqlite3", total_budget_usd="2.00")
+            connection = ledger._connect()
+            try:
+                job_id = connection.execute(
+                    "SELECT job_id FROM attempts WHERE request_key='request-cancel'"
+                ).fetchone()["job_id"]
+            finally:
+                connection.close()
+            self.assertTrue(process.killed, "the Docker runner process was not reaped after inspection failed")
+            self.assertEqual(ledger.state(job_id), AttemptState.INTERRUPTED)
+            self.assertEqual(ledger.usage_state(job_id), "UNKNOWN")
+            self.assertEqual(ledger.dispatch_count(job_id), 1)
+            self.assertEqual(ledger.reserved_usd, "2.00")
+            lifecycle = json.loads((output.parent / "cancellation-lifecycle.json").read_text(encoding="utf-8"))
+            self.assertEqual(lifecycle["container_cleanup_status"], "unknown_pending_verification")
+            self.assertEqual(lifecycle["original_error_class"], "CalledProcessError")
+
+    def test_wrong_owner_label_and_malformed_inspection_never_kill_a_container(self):
+        from docs.qualification.p04 import native_runner
+
+        cases = (
+            ("wrong-name", json.dumps({
+                "Name": "/different-container", "Config": {"Labels": {"edge-os.test.run": "p04-test-owner"}},
+                "State": {"Running": True},
+            })),
+            ("wrong-label", json.dumps({
+                "Name": "/p04-test-owner-cancel", "Config": {"Labels": {"edge-os.test.run": "other-run"}},
+                "State": {"Running": True},
+            })),
+            ("malformed-json", "not-json"),
+        )
+        for run_id, inspect_result in cases:
+            with self.subTest(run_id=run_id), tempfile.TemporaryDirectory() as directory:
+                evidence = Path(directory)
+                output = evidence / "task-cancel" / "output"
+
+                class FakeProcess:
+                    returncode = None
+
+                    def poll(self):
+                        return self.returncode
+
+                    def kill(self):
+                        self.returncode = -9
+
+                    def communicate(self, timeout=None):
+                        if self.returncode is None:
+                            raise subprocess.TimeoutExpired(["docker", "run"], timeout)
+                        return "", None
+
+                process = FakeProcess()
+
+                def start_process(*_args, **_kwargs):
+                    output.joinpath("provider-started.marker").write_text("started\n", encoding="utf-8")
+                    return process
+
+                policy = DockerPolicy(run_id)
+                name = f"p04-{run_id}-cancel"
+                with (
+                    patch.object(native_runner.subprocess, "Popen", side_effect=start_process),
+                    patch.object(native_runner, "_docker", return_value=inspect_result),
+                    patch.object(native_runner.subprocess, "run") as docker_run,
+                ):
+                    with self.assertRaises((AssertionError, ValueError)):
+                        native_runner._run_cancellation(
+                            policy=policy, image="p04-test:image",
+                            context={"memory": {"version": 1, "enabled": True, "entries": []}, "sources": [], "files": []},
+                            evidence=evidence, run_id=run_id,
+                        )
+
+                docker_run.assert_not_called()
+                lifecycle = json.loads((output.parent / "cancellation-lifecycle.json").read_text(encoding="utf-8"))
+                self.assertEqual(lifecycle["container_cleanup_status"], "unknown_pending_verification")
+                self.assertTrue(lifecycle["attempt_recovered_interrupted_unknown"])
+
+    def test_marker_timeout_kills_verified_container_and_recovers_attempt(self):
+        from docs.qualification.p04 import native_runner
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            output = evidence / "task-cancel" / "output"
+            run_id = "p04-marker-timeout"
+            name = f"p04-{run_id}-cancel"
+
+            class FakeProcess:
+                returncode = None
+
+                def poll(self):
+                    return self.returncode
+
+                def kill(self):
+                    self.returncode = -9
+
+                def communicate(self, timeout=None):
+                    if self.returncode is None:
+                        raise subprocess.TimeoutExpired(["docker", "run"], timeout)
+                    return "fixture killed\n", None
+
+            process = FakeProcess()
+            inspect = self._owned_inspection(run_id, name)
+            absent = subprocess.CalledProcessError(1, ["docker", "inspect"], stderr="No such object")
+            ticks = iter((0, 31, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49))
+
+            def set_process_exit(*_args, **_kwargs):
+                process.returncode = 137
+                return subprocess.CompletedProcess(["docker", "kill"], 0, stdout="", stderr="")
+
+            with (
+                patch.object(
+                    native_runner.subprocess, "Popen", return_value=process,
+                ),
+                patch.object(native_runner, "_docker", side_effect=(inspect, inspect, absent)),
+                patch.object(native_runner.subprocess, "run", side_effect=set_process_exit),
+                patch.object(native_runner.time, "monotonic", side_effect=lambda: next(ticks)),
+                patch.object(native_runner.time, "sleep"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "marker did not appear"):
+                    native_runner._run_cancellation(
+                        policy=DockerPolicy(run_id), image="p04-test:image",
+                        context={"memory": {"version": 1, "enabled": True, "entries": []}, "sources": [], "files": []},
+                        evidence=evidence, run_id=run_id,
+                    )
+
+            lifecycle = json.loads((output.parent / "cancellation-lifecycle.json").read_text(encoding="utf-8"))
+            self.assertEqual(lifecycle["container_cleanup_status"], "verified_absent")
+            self.assertEqual(lifecycle["process_cleanup_status"], "reaped")
+            self.assertEqual(lifecycle["original_error_class"], "RuntimeError")
+            self.assertTrue(lifecycle["attempt_recovered_interrupted_unknown"])
+
+    def test_kill_and_process_wait_failures_remain_unknown_and_recover_without_replay(self):
+        from docs.qualification.p04 import native_runner
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            output = evidence / "task-cancel" / "output"
+            run_id = "p04-kill-failure"
+            name = f"p04-{run_id}-cancel"
+
+            class FakeProcess:
+                returncode = None
+
+                def poll(self):
+                    return self.returncode
+
+                def kill(self):
+                    raise OSError("fixture process kill failed")
+
+                def communicate(self, timeout=None):
+                    raise subprocess.TimeoutExpired(["docker", "run"], timeout)
+
+            process = FakeProcess()
+            inspect = self._owned_inspection(run_id, name)
+            ticks = [0]
+
+            def advance_clock():
+                ticks[0] += 6
+                return ticks[0]
+
+            with (
+                patch.object(
+                    native_runner.subprocess, "Popen",
+                    side_effect=lambda *_args, **_kwargs: (
+                        output.joinpath("provider-started.marker").write_text("started\n", encoding="utf-8"),
+                        process,
+                    )[1],
+                ),
+                patch.object(native_runner, "_docker", return_value=inspect),
+                patch.object(native_runner.subprocess, "run", side_effect=subprocess.TimeoutExpired(["docker", "kill"], 10)),
+                patch.object(native_runner.time, "monotonic", side_effect=advance_clock),
+                patch.object(native_runner.time, "sleep"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "cleanup is unresolved"):
+                    native_runner._run_cancellation(
+                        policy=DockerPolicy(run_id), image="p04-test:image",
+                        context={"memory": {"version": 1, "enabled": True, "entries": []}, "sources": [], "files": []},
+                        evidence=evidence, run_id=run_id,
+                    )
+
+            lifecycle = json.loads((output.parent / "cancellation-lifecycle.json").read_text(encoding="utf-8"))
+            self.assertEqual(lifecycle["container_cleanup_status"], "unknown_pending_verification")
+            self.assertEqual(lifecycle["kill_error_class"], "TimeoutExpired")
+            self.assertEqual(lifecycle["process_cleanup_status"], "unknown_pending_reap")
+            self.assertTrue(lifecycle["attempt_recovered_interrupted_unknown"])
+            ledger = QualificationLedger(output.parent / "restart.sqlite3", total_budget_usd="2.00")
+            self.assertEqual(ledger.reserved_usd, "2.00")
+            self.assertEqual(ledger.dispatch_count_by_owner("owner-a"), 1)
+
+
 class SandboxPolicyTests(unittest.TestCase):
     def test_container_policy_is_labeled_bounded_read_only_and_egress_denied(self):
         policy = DockerPolicy(run_id="p04-test-run-unique")
@@ -192,7 +467,65 @@ class SandboxPolicyTests(unittest.TestCase):
         self.assertNotIn("/Users", " ".join(argv))
 
 
+class NormalProcessLifecycleRegressionTests(unittest.TestCase):
+    def test_normal_job_timeout_does_not_kill_unverified_container_and_reaps_docker_client(self):
+        from docs.qualification.p04 import native_runner
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+
+            class FakeProcess:
+                returncode = None
+                killed = False
+
+                def communicate(self, timeout=None):
+                    if self.returncode is None:
+                        raise subprocess.TimeoutExpired(["docker", "run"], timeout)
+                    return "fixture reaped\n", None
+
+                def kill(self):
+                    self.killed = True
+                    self.returncode = -9
+
+            process = FakeProcess()
+            inspection_error = subprocess.CalledProcessError(
+                1, ["docker", "inspect"], stderr="daemon unavailable",
+            )
+            with (
+                patch.object(native_runner.subprocess, "Popen", return_value=process),
+                patch.object(native_runner, "_docker", side_effect=inspection_error),
+                patch.object(native_runner.subprocess, "run") as docker_run,
+            ):
+                with self.assertRaisesRegex(TimeoutError, "unknown_pending_verification"):
+                    native_runner._run_normal(
+                        policy=DockerPolicy("p04-normal-timeout"), image="p04-test:image",
+                        owner_id="owner-a", agent_id="agent-a",
+                        context={"memory": {"version": 1, "enabled": True, "entries": []}, "sources": [], "files": []},
+                        evidence=evidence, run_id="p04-normal-timeout", ordinal="1",
+                    )
+
+            self.assertTrue(process.killed)
+            docker_run.assert_not_called()
+            lifecycle = json.loads(
+                (evidence / "task-1" / "container-lifecycle.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(lifecycle["container_cleanup_status"], "unknown_pending_verification")
+            self.assertEqual(lifecycle["process_cleanup_status"], "reaped_after_local_kill")
+
+
 class ProviderBoundaryRegressionTests(unittest.TestCase):
+    def test_disjoint_identity_controls_exclude_shared_owner_but_keep_other_agent(self):
+        from docs.qualification.p04.native_runner import _forbidden_identity_values
+
+        self.assertEqual(
+            _forbidden_identity_values("owner-a", "agent-a", "owner-a", "agent-b"),
+            {"owner_id": "", "agent_id": "agent-b"},
+        )
+        self.assertEqual(
+            _forbidden_identity_values("owner-a", "agent-a", "owner-b", "agent-d"),
+            {"owner_id": "owner-b", "agent_id": "agent-d"},
+        )
+
     def test_cleared_memory_and_empty_sources_are_recorded_at_the_provider_boundary(self):
         with tempfile.TemporaryDirectory() as directory:
             task = {
@@ -256,6 +589,93 @@ class ProviderBoundaryRegressionTests(unittest.TestCase):
 
         self.assertTrue(receipt["forbidden_source_absent"])
         self.assertTrue(receipt["forbidden_file_absent"])
+
+    def test_forbidden_context_in_additional_outgoing_json_message_is_recorded_as_present(self):
+        fake_httpx = ModuleType("httpx")
+        fake_httpx.Response = lambda status_code, *, json, request: SimpleNamespace(
+            status_code=status_code, json=lambda: json, request=request,
+        )
+        task = {
+            "owner_id": "owner-a", "agent_id": "agent-a", "job_id": "job-extra-context",
+            "memory": {"version": 1, "enabled": True, "entries": ["memory-a"]},
+            "sources": [{"source_id": "source-a"}],
+            "files": [{"file_id": "file-a", "content": "private file A"}],
+            "probe_forbidden": {
+                "owner_id": "owner-b", "agent_id": "agent-b", "memory": "memory-b",
+                "source_id": "source-b", "file_id": "file-b",
+            },
+        }
+        authorized = {key: task[key] for key in ("owner_id", "agent_id", "job_id", "memory", "sources", "files")}
+        request = SimpleNamespace(
+            content=json.dumps({"model": "fixture-model", "messages": [
+                {"role": "user", "content": json.dumps(authorized)},
+                {"role": "system", "content": json.dumps({
+                    "owner_id": "owner-b", "agent_id": "agent-b", "memory": ["memory-b"],
+                    "sources": [{"source_id": "source-b"}],
+                    "files": [{"file_id": "file-b", "content": "private file B"}],
+                })},
+            ], "max_tokens": 128}).encode(),
+            url="https://fake-provider.invalid/v1/chat/completions",
+            headers={"authorization": "Bearer fixture-not-a-secret"},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(container_probe, "OUTPUT", Path(directory)), patch.dict("sys.modules", {"httpx": fake_httpx}):
+                receipt, _ = container_probe._record_request(request, "normal", task)
+
+        self.assertFalse(receipt["forbidden_owner_absent"])
+        self.assertFalse(receipt["forbidden_agent_absent"])
+        self.assertFalse(receipt["forbidden_memory_absent"])
+        self.assertFalse(receipt["forbidden_source_absent"])
+        self.assertFalse(receipt["forbidden_file_absent"])
+        sent_messages = json.loads(request.content)["messages"]
+        self.assertEqual(
+            receipt["outgoing_messages_sha256"],
+            hashlib.sha256(json.dumps(sent_messages, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+        )
+
+    def test_forbidden_context_in_structured_text_parts_is_detected_without_id_prefix_false_positive(self):
+        fake_httpx = ModuleType("httpx")
+        fake_httpx.Response = lambda status_code, *, json, request: SimpleNamespace(
+            status_code=status_code, json=lambda: json, request=request,
+        )
+        task = {
+            "owner_id": "owner-a", "agent_id": "agent-a", "job_id": "job-structured-context",
+            "memory": {"version": 1, "enabled": True, "entries": ["memory-a"]},
+            "sources": [{"source_id": "source-a-b"}],
+            "files": [{"file_id": "file-a-b", "content": "private file AB"}],
+            "probe_forbidden": {
+                "owner_id": "owner-b", "agent_id": "agent-b", "memory": "memory-b",
+                "source_id": "source-a", "file_id": "file-a",
+            },
+        }
+        authorized = {key: task[key] for key in ("owner_id", "agent_id", "job_id", "memory", "sources", "files")}
+        request = SimpleNamespace(
+            content=json.dumps({"model": "fixture-model", "messages": [
+                {"role": "user", "content": json.dumps(authorized)},
+                {"role": "system", "content": [
+                    {"type": "text", "text": "Other agent memory-b and file-a."},
+                    {"type": "text", "text": "The authorized source is source-a-b."},
+                ]},
+                {"role": "assistant", "content": None, "tool_calls": [{
+                    "type": "function", "function": {
+                        "name": "fixture_tool", "arguments": json.dumps({
+                            "owner_id": "owner-b", "agent_id": "agent-b",
+                        }),
+                    },
+                }]},
+            ], "max_tokens": 128}).encode(),
+            url="https://fake-provider.invalid/v1/chat/completions",
+            headers={"authorization": "Bearer fixture-not-a-secret"},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(container_probe, "OUTPUT", Path(directory)), patch.dict("sys.modules", {"httpx": fake_httpx}):
+                receipt, _ = container_probe._record_request(request, "normal", task)
+
+        self.assertTrue(receipt["forbidden_source_absent"])
+        self.assertFalse(receipt["forbidden_owner_absent"])
+        self.assertFalse(receipt["forbidden_agent_absent"])
+        self.assertFalse(receipt["forbidden_memory_absent"])
+        self.assertFalse(receipt["forbidden_file_absent"])
 
     def test_same_sized_second_request_is_rejected_before_fake_provider_work(self):
         class FakeResponse:

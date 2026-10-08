@@ -115,3 +115,15 @@ The reproducible local runner and sanitized evidence are in `docs/qualification/
 4. Before choosing deployment, compare the candidate sandbox on the intended host, then record the selected host and its tested CPU, memory, wall-time, disk and network enforcement. P04 selects no paid host or deployment.
 
 No real provider inference, deployment or financial operation occurred for this profile. One authorized read-only OpenRouter key-control request used the existing key route. The exact sanitized result is retained outside the repository; no credential value was logged or copied. Pinned dependencies were installed only inside temporary local Docker images, which were removed after each run.
+
+## R2 repair-candidate evidence (2026-10-08)
+
+The earlier `evidence/p04-b7a0f3a179b9/qualification-result.json` remains historical. Reviewer A's and B's R2 adversarial checks found that it did not inspect every outgoing message for forbidden context and did not cover cancellation inspection failure. Do not treat that receipt as proof of these repaired controls.
+
+The final corrected local run `evidence/p04-7a05daed09f1` executes the same pinned Hermes checkout (`54bc5e509c985f37265c3d416bd2c64b10fc77ba`; `pyproject.toml` SHA-256 `d09cd0a47109e5abb9abeb326224208b857faa0d1e921c515d7f0bc6031d2d73`; `uv.lock` SHA-256 `de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01`) in the task-labelled, network-isolated container recipe. Four normal jobs recorded the authorized owner/agent and all five forbidden-context absence checks as true. Each receipt includes a SHA-256 of the complete outgoing messages. Two actual Hermes truncation jobs and one HTTP-503 fixture brought the total to eight local fake-provider requests; real inference remained zero. The fixed fake response proves only the request guard and fixture structure, not model resistance or production tenancy.
+
+The cancellation fixture recorded `kill_exit_code=0`, reaped the Docker client, verified the exact run-labelled container absent, and reopened SQLite as `INTERRUPTED`/`UNKNOWN`. The full USD 2.00 local reservation remained; repeat admission was denied and dispatch count stayed one. Separate fault-injection tests retained `unknown_pending_verification` when exact ownership, termination, process reaping or absence verification could not be proved. These tests mocked Docker/process failure boundaries and created no resources. The actual run's unique image was verified absent and its run label matched no remaining containers.
+
+Evidence: `qualification-result.json` SHA-256 `623e661bdd0bdb3f9693720acd23c5b3e8d62a9d7b0d6ce58f5eca9d0c7881d8`; `task-cancel/cancellation-lifecycle.json` SHA-256 `d593d3218e43e083a2e2fa83ec5a691ad8f7da58f770f14b6f00f1c86b8734d2`; `image_cleanup.json` SHA-256 `27c8968b6572f7027a6e34caa7e2ba107debb4801e35fc67b2081a0902d69302`.
+
+This remains a local fake-provider qualification candidate. It does not enforce an external account/key spend cap, prove provider-side cancellation or settlement, or qualify production authentication, persistence, hosted isolation or resistance to malicious model instructions. Live inference remains zero.

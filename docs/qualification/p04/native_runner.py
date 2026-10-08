@@ -488,6 +488,152 @@ def _docker_resources(run_id: str) -> list[str]:
     return [line for line in raw.splitlines() if line]
 
 
+def _inspect_owned_container(name: str, run_id: str) -> dict:
+    try:
+        raw = _docker("inspect", "--format", "{{json .}}", name)
+    except subprocess.CalledProcessError as exc:
+        detail = f"{exc.stdout or ''}\n{exc.stderr or ''}"
+        if any(marker in detail.casefold() for marker in ("no such object", "no such container")):
+            return {"status": "absent", "ownership": "verified_by_exact_name"}
+        return {
+            "status": "unknown", "ownership": "unverified",
+            "error_class": type(exc).__name__, "_exception": exc,
+        }
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "status": "unknown", "ownership": "unverified",
+            "error_class": type(exc).__name__, "_exception": exc,
+        }
+
+    try:
+        container = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {
+            "status": "unknown", "ownership": "unverified", "error_class": "InvalidInspectJSON",
+            "_exception": ValueError("Docker inspection returned invalid JSON"),
+        }
+    if not isinstance(container, dict):
+        return {
+            "status": "unknown", "ownership": "unverified", "error_class": "InvalidInspectJSON",
+            "_exception": ValueError("Docker inspection returned a non-object JSON value"),
+        }
+    config = container.get("Config")
+    labels = config.get("Labels") if isinstance(config, dict) else None
+    state = container.get("State")
+    if not isinstance(labels, dict) or not isinstance(state, dict):
+        return {
+            "status": "unknown", "ownership": "unverified", "error_class": "InvalidInspectJSON",
+            "_exception": ValueError("Docker inspection omitted labels or state"),
+        }
+    if container.get("Name") != f"/{name}" or labels.get("edge-os.test.run") != run_id:
+        return {"status": "present", "ownership": "unverified", "error_class": "OwnershipMismatch"}
+    if type(state.get("Running")) is not bool:
+        return {"status": "unknown", "ownership": "verified", "error_class": "InvalidInspectState"}
+    return {
+        "status": "running" if state["Running"] else "stopped",
+        "ownership": "verified",
+        "container_id": container.get("Id"),
+    }
+
+
+def _reap_docker_process(proc: subprocess.Popen | None) -> dict:
+    if proc is None:
+        return {"status": "not_started"}
+    try:
+        stdout, _ = proc.communicate(timeout=10)
+        return {"status": "reaped", "return_code": proc.returncode, "stdout_tail": stdout[-1200:]}
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError as exc:
+            return {"status": "unknown_pending_reap", "error_class": type(exc).__name__}
+        try:
+            stdout, _ = proc.communicate(timeout=10)
+            return {
+                "status": "reaped_after_local_kill",
+                "return_code": proc.returncode,
+                "stdout_tail": stdout[-1200:],
+            }
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"status": "unknown_pending_reap", "error_class": type(exc).__name__}
+    except OSError as exc:
+        return {"status": "unknown_pending_reap", "error_class": type(exc).__name__}
+
+
+def _cleanup_owned_container(name: str, run_id: str, proc: subprocess.Popen | None) -> dict:
+    """Stop and verify one exact task-labelled container, then reap its Docker client."""
+    result = {
+        "resource_name": name,
+        "required_run_label": run_id,
+        "ownership": "unverified",
+        "container_cleanup_status": "unknown_pending_verification",
+        "process_cleanup_status": "not_started" if proc is None else "pending",
+        "kill_exit_code": None,
+        "kill_error_class": None,
+        "verification_error_class": None,
+    }
+    kill_attempted = False
+    remove_attempted = False
+    process_reaped = False
+    inspection_attempts = 0
+    deadline = time.monotonic() + 5
+    while True:
+        inspection_attempts += 1
+        inspection = _inspect_owned_container(name, run_id)
+        result["ownership"] = inspection["ownership"]
+        result["last_container_state"] = inspection["status"]
+        if inspection.get("error_class"):
+            result["verification_error_class"] = inspection["error_class"]
+        if inspection["status"] == "absent":
+            result["container_cleanup_status"] = "verified_absent"
+            process_result = _reap_docker_process(proc)
+            result["process_cleanup_status"] = process_result["status"]
+            result["process_stdout_tail"] = process_result.get("stdout_tail", "")
+            if process_result.get("error_class"):
+                result["process_error_class"] = process_result["error_class"]
+            break
+
+        if inspection["ownership"] == "verified":
+            if inspection["status"] == "running" and not kill_attempted:
+                kill_attempted = True
+                try:
+                    killed = subprocess.run(
+                        ["docker", "kill", "--signal=KILL", name],
+                        capture_output=True, text=True, timeout=10, check=False,
+                    )
+                    result["kill_exit_code"] = killed.returncode
+                    if killed.returncode:
+                        result["kill_error_class"] = "DockerCommandFailed"
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    result["kill_error_class"] = type(exc).__name__
+            elif inspection["status"] == "stopped" and not remove_attempted:
+                remove_attempted = True
+                try:
+                    removed = subprocess.run(
+                        ["docker", "rm", name], capture_output=True, text=True, timeout=10, check=False,
+                    )
+                    if removed.returncode:
+                        result["kill_error_class"] = "DockerRemoveFailed"
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    result["kill_error_class"] = type(exc).__name__
+
+        if not process_reaped:
+            process_result = _reap_docker_process(proc)
+            process_reaped = process_result["status"] in ("reaped", "reaped_after_local_kill", "not_started")
+            result["process_cleanup_status"] = process_result["status"]
+            result["process_stdout_tail"] = process_result.get("stdout_tail", "")
+            if process_result.get("error_class"):
+                result["process_error_class"] = process_result["error_class"]
+        if inspection["ownership"] != "verified" and process_reaped and inspection_attempts >= 2:
+            result["container_cleanup_status"] = "unknown_pending_verification"
+            break
+        if time.monotonic() >= deadline:
+            result["container_cleanup_status"] = "unknown_pending_verification"
+            break
+        time.sleep(0.1)
+    return result
+
+
 def _validate_container_result(result: dict, *, allow_failed: bool = False) -> None:
     sandbox = result["sandbox"]
     if not sandbox["filesystem"]["input_mount_read_only"] or not sandbox["filesystem"]["root_filesystem_read_only"]:
@@ -532,10 +678,20 @@ def _validate_container_result(result: dict, *, allow_failed: bool = False) -> N
         raise AssertionError(f"Hermes invocation violated a local bound: {hermes}")
 
 
+def _forbidden_identity_values(
+    owner_id: str, agent_id: str, other_owner_id: str, other_agent_id: str,
+) -> dict[str, str]:
+    """Return only owner/agent IDs disjoint from the authorized task identity."""
+    return {
+        "owner_id": other_owner_id if other_owner_id != owner_id else "",
+        "agent_id": other_agent_id if (other_owner_id, other_agent_id) != (owner_id, agent_id) else "",
+    }
+
+
 def _run_normal(
     *, policy: DockerPolicy, image: str, owner_id: str, agent_id: str, context: dict,
     evidence: Path, run_id: str, ordinal: str, forbidden_memory: str = "", forbidden_source: str = "",
-    forbidden_file: str = "",
+    forbidden_file: str = "", forbidden_owner: str = "", forbidden_agent: str = "",
     max_iterations: int = 2,
     expected_rejected_phase: str | None = None,
     mode: str = "normal",
@@ -551,7 +707,10 @@ def _run_normal(
         "agent_id": agent_id,
         "mode": mode,
         "max_iterations": max_iterations,
-        "probe_forbidden": {"memory": forbidden_memory, "source_id": forbidden_source, "file_id": forbidden_file},
+        "probe_forbidden": {
+            "owner_id": forbidden_owner, "agent_id": forbidden_agent,
+            "memory": forbidden_memory, "source_id": forbidden_source, "file_id": forbidden_file,
+        },
     }
     input_path = task_dir / "input.json"
     encoded_task = json.dumps(task, sort_keys=True).encode("utf-8")
@@ -567,10 +726,14 @@ def _run_normal(
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         stdout, _ = proc.communicate(timeout=90)
-    except subprocess.TimeoutExpired:
-        subprocess.run(["docker", "kill", name], capture_output=True, timeout=10, check=False)
-        stdout, _ = proc.communicate(timeout=15)
-        raise TimeoutError(f"container {name} exceeded 90 seconds; output: {stdout[-1000:]}")
+    except subprocess.TimeoutExpired as exc:
+        cleanup = _cleanup_owned_container(name, policy.run_id, proc)
+        (task_dir / "container-lifecycle.json").write_text(
+            json.dumps(cleanup, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+        raise TimeoutError(
+            f"container {name} exceeded 90 seconds; cleanup={cleanup['container_cleanup_status']}"
+        ) from exc
     if proc.returncode != 0:
         raise RuntimeError(f"container {name} exited {proc.returncode}: {stdout[-2000:]}")
     result_path = output / "container-result.json"
@@ -584,6 +747,8 @@ def _run_normal(
         raise AssertionError(f"fake provider saw a request outside the local profile: {receipt}")
     if not receipt["memory_version_present"]:
         raise AssertionError("provider request omitted its task-start memory version")
+    if not receipt["forbidden_owner_absent"] or not receipt["forbidden_agent_absent"]:
+        raise AssertionError("provider request contains another owner or agent identity")
     if context["memory"]["entries"] and not receipt["only_expected_memory_present"]:
         raise AssertionError("provider request omitted the authorized memory snapshot")
     if not context["memory"]["entries"] and not receipt["memory_snapshot_empty"]:
@@ -653,40 +818,73 @@ def _run_cancellation(
     )
     if not created:
         raise AssertionError("cancel attempt was not newly reserved")
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = None
+    primary_error = None
+    before = None
+    recovered = False
+    recovery_error = None
     marker = output / "provider-started.marker"
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and proc.poll() is None and not marker.exists():
-        time.sleep(0.1)
-    if not marker.exists():
-        subprocess.run(["docker", "kill", name], capture_output=True, timeout=10, check=False)
-        stdout, _ = proc.communicate(timeout=15)
-        raise RuntimeError(f"fake-provider cancellation marker did not appear: {stdout[-1500:]}")
-    before = json.loads(_docker("inspect", "--format", "{{json .Config.Labels}}", name))
-    if before.get("edge-os.test.run") != run_id:
-        raise AssertionError("cancellation container lacks this task's resource label")
-    subprocess.run(["docker", "kill", "--signal=KILL", name], capture_output=True, timeout=10, check=True)
-    stdout, _ = proc.communicate(timeout=15)
-    if proc.returncode == 0:
-        raise AssertionError("killed fake-provider request unexpectedly completed")
+    try:
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and proc.poll() is None and not marker.exists():
+            time.sleep(0.1)
+        if not marker.exists():
+            raise RuntimeError("fake-provider cancellation marker did not appear")
+        before = _inspect_owned_container(name, run_id)
+        if before["ownership"] != "verified" or before["status"] != "running":
+            raise before.get("_exception") or AssertionError(
+                "cancellation container ownership or running state was not verified"
+            )
+    except Exception as exc:
+        primary_error = exc
+
+    cleanup = _cleanup_owned_container(name, run_id, proc)
+    try:
+        ledger = QualificationLedger(ledger_path, total_budget_usd="2.00")
+        ledger.recover_running()
+        recovered = ledger.state(job_id) == AttemptState.INTERRUPTED and ledger.usage_state(job_id) == "UNKNOWN"
+    except Exception as exc:
+        recovery_error = type(exc).__name__
+    lifecycle = {
+        **cleanup,
+        "original_error_class": type(primary_error).__name__ if primary_error else None,
+        "ownership_before_termination": before["ownership"] if before else "unverified",
+        "attempt_recovered_interrupted_unknown": recovered,
+        "recovery_error_class": recovery_error,
+    }
+    (task_dir / "cancellation-lifecycle.json").write_text(
+        json.dumps(lifecycle, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
+    if primary_error is not None:
+        raise primary_error
+    if recovery_error or not recovered:
+        raise RuntimeError(f"canceled attempt recovery is unresolved: {recovery_error or 'state mismatch'}")
+    if cleanup["container_cleanup_status"] != "verified_absent":
+        raise RuntimeError(f"cancellation container cleanup is unresolved: {cleanup['container_cleanup_status']}")
+    if cleanup["process_cleanup_status"] not in ("reaped", "reaped_after_local_kill"):
+        raise RuntimeError(f"Docker runner process cleanup is unresolved: {cleanup['process_cleanup_status']}")
+    stdout = cleanup.get("process_stdout_tail", "")
     ledger = QualificationLedger(ledger_path, total_budget_usd="2.00")
-    interrupted = ledger.recover_running()
     same_job, created_again = ledger.reserve_and_start(
         owner_id=owner_id, agent_id=agent_id, request_key="request-cancel",
         prompt_sha256=prompt_hash, reserve_usd="2.00",
     )
-    receipts = (output / "fake-provider-requests.jsonl").read_text(encoding="utf-8").splitlines()
+    receipts_path = output / "fake-provider-requests.jsonl"
+    receipts = receipts_path.read_text(encoding="utf-8").splitlines() if receipts_path.exists() else []
     if same_job != job_id or created_again or ledger.dispatch_count(job_id) != 1 or len(receipts) != 1:
         raise AssertionError("canceled attempt was replayed or duplicated")
     if ledger.state(job_id) != AttemptState.INTERRUPTED or ledger.usage_state(job_id) != "UNKNOWN":
         raise AssertionError("restart did not preserve interrupted/unknown attempt state")
     if ledger.reserved_usd != "2.00":
         raise AssertionError("unknown charge reservation was released")
+    if proc is not None and proc.returncode == 0:
+        raise AssertionError("killed fake-provider request unexpectedly completed")
     return {
         "container": name,
         "argv": argv,
         "label_before_kill": before,
-        "docker_run_exit_code": proc.returncode,
+        "docker_run_exit_code": proc.returncode if proc is not None else None,
         "docker_stdout_tail": stdout[-1200:],
         "request_count_before_cancel": len(receipts),
         "recovery_state": ledger.state(job_id).value,
@@ -695,7 +893,8 @@ def _run_cancellation(
         "reserved_usd_local_fixture": ledger.reserved_usd,
         "repeat_same_request_created": created_again,
         "dispatch_count": ledger.dispatch_count(job_id),
-        "resource_absent_after_kill": not _docker_resources(run_id),
+        "resource_absent_after_kill": cleanup["container_cleanup_status"] == "verified_absent",
+        "container_cleanup": cleanup,
     }
 
 
@@ -736,6 +935,10 @@ def _cleanup_owned_image(image: str) -> dict:
 
 
 def _write_run_failure(evidence: Path, *, run_id: str, stage: str, exc: Exception, cleanup: dict) -> None:
+    cancellation_path = evidence / "task-cancel" / "cancellation-lifecycle.json"
+    cancellation_cleanup = None
+    if cancellation_path.exists():
+        cancellation_cleanup = json.loads(cancellation_path.read_text(encoding="utf-8"))
     (evidence / "run-failure.json").write_text(
         json.dumps({
             "run_id": run_id,
@@ -745,6 +948,10 @@ def _write_run_failure(evidence: Path, *, run_id: str, stage: str, exc: Exceptio
             "real_inference_requests": 0,
             "cleanup_status": cleanup["status"],
             "cleanup_error_class": cleanup.get("cleanup_error_class"),
+            "resource_cleanup": {
+                "image": {"status": cleanup["status"], "tag": cleanup["image_tag"]},
+                "cancellation_container": cancellation_cleanup,
+            },
         }, sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
@@ -870,9 +1077,13 @@ def run_qualification(
             stage = f"normal_job_{ordinal}_{owner}_{agent}"
             context = fixtures.task_context(owner, agent)
             forbidden_context = fixtures.task_context(forbidden_owner, forbidden_agent)
+            forbidden_ids = _forbidden_identity_values(
+                owner, agent, forbidden_context["owner_id"], forbidden_context["agent_id"]
+            )
             result = _run_normal(
                 policy=policy, image=image, owner_id=owner, agent_id=agent,
                 context=context, evidence=evidence, run_id=run_id, ordinal=f"{ordinal}-{owner}",
+                forbidden_owner=forbidden_ids["owner_id"], forbidden_agent=forbidden_ids["agent_id"],
                 forbidden_memory=forbidden_context["memory"]["entries"][0] if forbidden_context["memory"]["entries"] else "",
                 forbidden_source=forbidden_context["sources"][0]["source_id"] if forbidden_context["sources"] else "",
                 forbidden_file=forbidden_context["files"][0]["file_id"] if forbidden_context["files"] else "",

@@ -1,0 +1,153 @@
+# P04 repair R2 test-first record
+
+These tests were added on the clean R2 repair start before any implementation edits. They target the original independent findings: outgoing-message receipts that ignore additional content and cancellation inspection failure that skips process reap and durable recovery.
+
+## Outgoing context RED
+
+Command:
+
+```text
+python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressionTests
+```
+
+Observed before implementation:
+
+```text
+test_boolean_output_limit_is_not_accepted_as_a_numeric_token_ceiling ... ok
+test_cleared_memory_and_empty_sources_are_recorded_at_the_provider_boundary ... ok
+test_forbidden_context_in_additional_outgoing_json_message_is_recorded_as_present ... ERROR
+test_forbidden_context_in_structured_text_parts_is_detected_without_id_prefix_false_positive ... FAIL
+test_forbidden_source_and_file_ids_use_exact_context_not_substrings ... ok
+test_same_sized_second_request_is_rejected_before_fake_provider_work ... ok
+test_truncation_fixture_returns_length_termination_instead_of_a_valid_outcome ... ok
+
+======================================================================
+ERROR: test_forbidden_context_in_additional_outgoing_json_message_is_recorded_as_present
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tests/p04/test_native_runner.py", line 292, in test_forbidden_context_in_additional_outgoing_json_message_is_recorded_as_present
+    self.assertFalse(receipt["forbidden_owner_absent"])
+                     ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'forbidden_owner_absent'
+
+======================================================================
+FAIL: test_forbidden_context_in_structured_text_parts_is_detected_without_id_prefix_false_positive
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tests/p04/test_native_runner.py", line 330, in test_forbidden_context_in_structured_text_parts_is_detected_without_id_prefix_false_positive
+    self.assertFalse(receipt["forbidden_memory_absent"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.003s
+
+FAILED (failures=1, errors=1)
+```
+
+The first test reached the existing receipt and found no owner/agent evidence fields. The structured-content test demonstrated the false absence flag for an actual forbidden free-text value. The existing exact source-prefix case remained green.
+
+## Cancellation RED
+
+Command:
+
+```text
+python3 -B -m unittest -v tests.p04.test_native_runner.CancellationLifecycleRegressionTests.test_inspection_failure_reaps_runner_and_recovers_reserved_attempt_as_unknown
+```
+
+Observed before implementation:
+
+```text
+test_inspection_failure_reaps_runner_and_recovers_reserved_attempt_as_unknown ... FAIL
+
+======================================================================
+FAIL: test_inspection_failure_reaps_runner_and_recovers_reserved_attempt_as_unknown
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tests/p04/test_native_runner.py", line 218, in test_inspection_failure_reaps_runner_and_recovers_reserved_attempt_as_unknown
+    self.assertTrue(process.killed, "the Docker runner process was not reaped after inspection failed")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : the Docker runner process was not reaped after inspection failed
+
+----------------------------------------------------------------------
+Ran 1 test in 0.007s
+
+FAILED (failures=1)
+```
+
+The inspection exception escaped the actual cancellation function before its process or SQLite recovery path. The injected Docker failure created no Docker resource and made no provider request.
+
+## Focused GREEN
+
+Command:
+
+```text
+python3 -B -m unittest -v tests.p04.test_native_runner.ProviderBoundaryRegressionTests tests.p04.test_native_runner.CancellationLifecycleRegressionTests tests.p04.test_native_runner.NormalProcessLifecycleRegressionTests
+```
+
+Observed after the scoped implementation:
+
+```text
+test_boolean_output_limit_is_not_accepted_as_a_numeric_token_ceiling ... ok
+test_cleared_memory_and_empty_sources_are_recorded_at_the_provider_boundary ... ok
+test_forbidden_context_in_additional_outgoing_json_message_is_recorded_as_present ... ok
+test_forbidden_context_in_structured_text_parts_is_detected_without_id_prefix_false_positive ... ok
+test_forbidden_source_and_file_ids_use_exact_context_not_substrings ... ok
+test_same_sized_second_request_is_rejected_before_fake_provider_work ... ok
+test_truncation_fixture_returns_length_termination_instead_of_a_valid_outcome ... ok
+test_inspection_failure_reaps_runner_and_recovers_reserved_attempt_as_unknown ... ok
+test_kill_and_process_wait_failures_remain_unknown_and_recover_without_replay ... ok
+test_marker_timeout_kills_verified_container_and_recovers_attempt ... ok
+test_wrong_owner_label_and_malformed_inspection_never_kill_a_container ... ok
+test_normal_job_timeout_does_not_kill_unverified_container_and_reaps_docker_client ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.558s
+
+OK
+```
+
+The fault matrix injected inspection daemon failure, wrong container name, wrong run label, invalid inspection JSON, missing startup marker, Docker kill timeout, and local runner wait/kill failure. Each cancellation fault kept or recovered the attempt as interrupted/unknown, retained its $2.00 reservation, and did not replay. Unverified ownership never issued a Docker kill. Verified ownership issued the exact-name kill and absence verification. The normal-job timeout now shares those ownership and client-reap checks. All Docker/process faults were mocks; no container resource or provider request was created by this matrix.
+
+## First actual-Hermes rerun and correction
+
+Command:
+
+```text
+python3 -B docs/qualification/p04/native_runner.py --evidence-root docs/qualification/p04/evidence
+```
+
+The pinned Hermes image built and the labelled local recipe entered normal job 1. The provider request was rejected by the new owner/agent guard because the probe incorrectly marked the same `owner-a` shared by two agents as forbidden. No live provider call occurred. The runner retained `run-failure.json` at `docs/qualification/p04/evidence/p04-1e63fad68e85/` with `stage=normal_job_1_owner-a_agent-a`, `error_class=AssertionError`, and `real_inference_requests=0`. Its unique image cleanup recorded `verified_absent`; a label-filtered Docker check found no remaining containers for `p04-1e63fad68e85`.
+
+Before changing the probe selection, `ProviderBoundaryRegressionTests.test_disjoint_identity_controls_exclude_shared_owner_but_keep_other_agent` failed with `ImportError: cannot import name '_forbidden_identity_values'`. This named the missing behavior, not a test setup error. After adding the scoped selector, that test passed. The actual rerun below is the canonical evidence for the corrected version.
+
+The next actual run reached and terminated the correctly owned cancellation container. Docker then returned `error: no such object: p04-p04-38fb1f8d3c0e-cancel` after `--rm` removed it. The case-sensitive absence matcher classified this verified exact-name absence as unknown. `run-failure.json` retained `stage=cancellation_and_recovery`; `cancellation-lifecycle.json` retained `kill_exit_code=0`, `attempt_recovered_interrupted_unknown=true`, and `container_cleanup_status=unknown_pending_verification`. A label-filtered container check was empty and the unique image was verified absent.
+
+Before the case-insensitive fix, the focused regression failed:
+
+```text
+python3 -B -m unittest -v tests.p04.test_native_runner.CancellationLifecycleRegressionTests.test_docker_no_such_object_error_is_verified_absence_case_insensitively
+
+FAIL: expected result["status"] == "absent"; got "unknown"
+Ran 1 test
+FAILED (failures=1)
+```
+
+After changing only the Docker absence comparison to case-insensitive matching, the same command passed:
+
+```text
+test_docker_no_such_object_error_is_verified_absence_case_insensitively ... ok
+Ran 1 test in 0.000s
+OK
+```
+
+The next resource-lifecycle regression checked that a Docker client is reaped even when its exact container is already absent. Before the fix, the focused command reported `AssertionError: 'pending' != 'reaped'` for `process_cleanup_status`. After adding bounded client reaping to the verified-absence branch, the same command passed (`Ran 1 test in 0.000s; OK`). This case is distinct from container absence: both outcomes are now recorded separately.
+
+An intermediate corrected actual recipe completed successfully as `p04-4b377eaace67`. A final regression then found that the cleanup helper did not reap the Docker client when inspection already showed the container absent. That code path was fixed test-first and the full actual recipe was rerun on the final code below; use that result as the replacement candidate's canonical runtime evidence.
+
+```text
+python3 -B docs/qualification/p04/native_runner.py --evidence-root docs/qualification/p04/evidence
+P04 local qualification evidence: docs/qualification/p04/evidence/p04-7a05daed09f1
+```
+
+The final result hash is `623e661bdd0bdb3f9693720acd23c5b3e8d62a9d7b0d6ce58f5eca9d0c7881d8`. It records four normal actual-Hermes turns, two truncation cases, one HTTP-503 case, and one cancellation/recovery case, for eight fake requests and zero real inference. The cancellation record hash is `d593d3218e43e083a2e2fa83ec5a691ad8f7da58f770f14b6f00f1c86b8734d2`; image cleanup hash is `27c8968b6572f7027a6e34caa7e2ba107debb4801e35fc67b2081a0902d69302`.

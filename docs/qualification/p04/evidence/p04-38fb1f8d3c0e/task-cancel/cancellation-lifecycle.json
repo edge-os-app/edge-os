@@ -1,0 +1,16 @@
+{
+  "attempt_recovered_interrupted_unknown": true,
+  "container_cleanup_status": "unknown_pending_verification",
+  "kill_error_class": null,
+  "kill_exit_code": 0,
+  "last_container_state": "unknown",
+  "original_error_class": null,
+  "ownership": "unverified",
+  "ownership_before_termination": "verified",
+  "process_cleanup_status": "reaped",
+  "process_stdout_tail": "",
+  "recovery_error_class": null,
+  "required_run_label": "p04-38fb1f8d3c0e",
+  "resource_name": "p04-p04-38fb1f8d3c0e-cancel",
+  "verification_error_class": "CalledProcessError"
+}

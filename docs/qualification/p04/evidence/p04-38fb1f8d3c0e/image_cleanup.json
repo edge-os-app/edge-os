@@ -1,0 +1,9 @@
+{
+  "cleanup_pass": true,
+  "image_tag": "p04-hermes:p04-38fb1f8d3c0e",
+  "remove_error_class": null,
+  "remove_exit_code": 0,
+  "status": "verified_absent",
+  "tag_absent_after_cleanup": true,
+  "verify_exit_code": 1
+}
