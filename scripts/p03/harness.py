@@ -327,8 +327,10 @@ def remove_orphan(run_id: str) -> None:
     pg = Postgres(run_id)
     if not exists("container", pg.container):
         raise RuntimeError(f"{pg.container} does not exist")
-    if sh(["docker", "inspect", "-f", "{{.State.Running}}", pg.container], check=False).stdout.strip() == "true":
-        raise RuntimeError(f"{pg.container} is running and may belong to a live run; refusing removal")
+    status = sh(["docker", "inspect", "-f", "{{.State.Status}}", pg.container], check=False).stdout.strip()
+    if status not in ("exited", "dead"):
+        # "created" belongs to a caller that is between `docker create` and `docker start`.
+        raise RuntimeError(f"{pg.container} is {status or 'in an unknown state'} and may belong to a live run; refusing removal")
     if label_of("container", pg.container, "edge-os.test") != "1" or label_of("container", pg.container, "edge-os.test.run") != run_id:
         raise RuntimeError("labels do not match this run ID; refusing removal")
     # The operator named this run and its labels match: removal is authorized. Remove by ID, without force,

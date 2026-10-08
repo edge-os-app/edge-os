@@ -178,7 +178,7 @@ def test_the_skill_wait_loop_ends_on_a_refused_or_failed_run():
     import re
     import subprocess as sp
     skill = (harness.REPO / ".agents" / "skills" / "verify-edge-os" / "SKILL.md").read_text()
-    pattern = re.search(r'grep -qE "([^"]+)"', skill)
+    pattern = re.search(r"grep -qE '([^']+)'", skill)
     assert pattern, "the skill must wait for HOLD, REFUSED or the final line"
     for log in ('HOLD {"web": "http://127.0.0.1:1"}', "REFUSED run x: container y already exists.", '{"run_id": "x", "evidence": "e", "ok": false}'):
         assert sp.run(["grep", "-qE", pattern.group(1)], input=log, text=True).returncode == 0, log
@@ -255,3 +255,46 @@ def test_explicit_orphan_removal_never_force_removes_a_container_that_started_ag
         assert alive(pg)
     finally:
         pg.stop_and_remove()
+
+
+@pytest.mark.parametrize("kind", ["build", "tsconfig"])
+def test_a_run_that_loses_the_race_for_the_build_paths_removes_nothing_it_did_not_create(monkeypatch, tmp_path, capsys, kind):
+    """Another caller with the same run ID created its build folder after this call's preflight.
+
+    The preflight is stubbed to answer "nothing exists", as it would for two callers that check at the same moment.
+    The claim must still fail, and the other caller's files must survive this call's cleanup.
+    """
+    import sys
+
+    import verify_run
+
+    run_id = harness.new_run_id()
+    dist = harness.WEB_DIR / f".next-{run_id}"
+    tsconfig = harness.WEB_DIR / harness.web_tsconfig(f".next-{run_id}")
+    foreign = dist if kind == "build" else tsconfig
+    foreign.mkdir() if kind == "build" else foreign.write_text("{}")
+    monkeypatch.setattr(verify_run, "preflight_present", lambda *_a, **_k: [])
+    monkeypatch.setattr(sys, "argv", ["verify_run.py", "--run-id", run_id, "--evidence-root", str(tmp_path)])
+    try:
+        code = verify_run.main()
+        out = capsys.readouterr().out
+        assert code == 2 and "REFUSED" in out and "already exists" in out
+        assert foreign.exists(), "the losing run deleted the other caller's path"
+        assert harness.Postgres(run_id).existing_resources() == [], "the losing run must not start a database"
+    finally:
+        (foreign.rmdir() if kind == "build" else foreign.unlink(missing_ok=True))
+        other = dist if kind == "tsconfig" else tsconfig
+        if other.exists():
+            (other.rmdir() if other.is_dir() else other.unlink())
+
+
+def test_orphan_removal_refuses_a_container_that_is_created_but_not_yet_started():
+    run_id = harness.new_run_id()
+    pg = harness.Postgres(run_id)
+    cid = harness.sh(["docker", "create", "--name", pg.container, *pg.labels(), harness.POSTGRES_IMAGE]).stdout.strip()
+    try:
+        with pytest.raises(RuntimeError, match="created"):
+            harness.remove_orphan(run_id)
+        assert container_exists(cid)
+    finally:
+        harness.sh(["docker", "rm", "-f", "-v", cid], check=False)

@@ -127,6 +127,21 @@ def run_playwright(specs: list[str], env_extra: dict[str, str], log: Path) -> in
     return result.returncode
 
 
+def preflight_present(pg: harness.Postgres, evidence: Path, paths: tuple[Path, ...]) -> list[str]:
+    present = pg.existing_resources()
+    present += [f"path {p}" for p in paths if p.exists()]
+    present += [f"evidence {evidence}"] if evidence.exists() and any(evidence.iterdir()) else []
+    return present
+
+
+def release_owned(owned: list[Path]) -> None:
+    for path in owned:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", default=harness.new_run_id())
@@ -146,11 +161,21 @@ def main() -> int:
     dist_path = harness.WEB_DIR / dist
     tsconfig_copy = harness.WEB_DIR / harness.web_tsconfig(dist)
     # A repeated run ID must never touch what an earlier run owns: refuse before creating or deleting anything.
-    present = pg.existing_resources()
-    present += [f"path {p}" for p in (dist_path, tsconfig_copy) if p.exists()]
-    present += [f"evidence {evidence}"] if evidence.exists() and any(evidence.iterdir()) else []
+    present = preflight_present(pg, evidence, (dist_path, tsconfig_copy))
     if present:
         print(f"REFUSED run {run_id}: {', '.join(present)} already exists. Nothing was created or changed. Use a new run ID.")
+        return 2
+    # The check above is not a claim: another caller with this run ID can pass it too. Claim the build folder and the
+    # tsconfig copy by exclusive creation, and remove later only what this call created.
+    owned: list[Path] = []
+    try:
+        dist_path.mkdir()
+        owned.append(dist_path)
+        tsconfig_copy.open("x").close()
+        owned.append(tsconfig_copy)
+    except FileExistsError as error:
+        release_owned(owned)
+        print(f"REFUSED run {run_id}: {error.filename} already exists. Nothing was created or changed. Use a new run ID.")
         return 2
     rec = Recorder(evidence)
     processes: list[harness.Process] = []
@@ -263,8 +288,7 @@ def main() -> int:
                 rec.step(f"stop {process.name}", False, f"{type(error).__name__}: {error}")
                 ok = False
         for label, action in (("remove database container and volume", pg.stop_and_remove),
-                              ("remove web build folder", lambda: shutil.rmtree(dist_path, ignore_errors=True)),
-                              ("remove tsconfig copy", lambda: tsconfig_copy.unlink(missing_ok=True))):
+                              ("remove the web build folder and tsconfig copy this run created", lambda: release_owned(owned))):
             try:
                 action()
             except Exception as error:  # noqa: BLE001
@@ -272,7 +296,7 @@ def main() -> int:
                 ok = False
         after = docker_resources(run_id)
         rec.write("resources-after.json", after)
-        clean = pg.leftovers() == [] and after == before and not dist_path.exists() and not tsconfig_copy.exists()
+        clean = pg.leftovers() == [] and after == before and not any(p.exists() for p in owned)
         rec.step("cleanup removed only this run's resources", clean, {"leftovers": pg.leftovers(), "unchanged": after == before})
         ok &= clean
         manifest = {str(p.relative_to(evidence)): sha256_file(p) for p in sorted(evidence.rglob("*")) if p.is_file()}

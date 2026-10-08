@@ -9,7 +9,7 @@ Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column na
 | Signed-out and rejected session | "Sign in to start" page, no data | `GET /v1/me` returns 401 | none | `ui/screenshots/*-signed-out.png`, `steps.json` |
 | Submit a request | Research form, "Prepare request" | `POST /v1/research/requests` | `IntakeRequest`, `PromptInterpretation`, `Outcome` | `ui/ui-results.json`, `sql-inspection.json` |
 | Specific thesis | Fixture "Specific thesis", adopt, review, save | `POST …/clarifications`, `POST /v1/strategies/{id}/revisions` | `Clarification`, `StrategyDraft`, `PublicationResult`, `strategy_revisions` | screenshots `01`–`04` |
-| Rough hunch | Keyboard choice (arrow keys, Enter) then adopt | `POST …/clarifications` twice | two `Clarification` rows, entry origin `USER_CONFIRMED` | screenshot `05` |
+| Rough hunch | Keyboard choice (arrow keys, Enter) then adopt | `POST …/clarifications` twice | two `Clarification` rows | screenshot `05`; the `USER_CONFIRMED` entry origin is asserted by `apps/api/tests/test_research_flow.py`, not by the mapped run |
 | Bounded no-thesis | Investigation stays an investigation, outcome Unresolved, no save button | `POST /v1/research/requests` | `Outcome` `UNRESOLVED`, no `StrategyDraft` | screenshot `06` |
 | Unsupported meaning or restriction | Outcome "Not supported yet", words and restrictions kept | same | `Outcome` `UNSUPPORTED` | screenshot `07` |
 | Unscripted text | Outcome "Could not be interpreted", not a verdict on the idea | same | `Outcome` `INVALID_INPUT` | `ui-e2e.log` |
@@ -25,7 +25,7 @@ Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column na
 
 | Check | Where it runs | Evidence |
 |---|---|---|
-| 44px minimum on every control, text and placeholder contrast, focus-ring contrast, no mid-word splits, no sideways scroll with long text, axe-core (home, needs-answer, review, saved, unresolved, mobile sheet) | desktop and 390px | `controls-*`, `contrast-*`, `focus-ring-*`, `split-words-*`, `overflow-*`, `axe-*` |
+| 44px minimum on every control, text and placeholder contrast, focus-ring contrast, no mid-word splits, no sideways scroll with long text, axe-core (five states: home, needs-answer, review, saved, unresolved; not the mobile sheet) | desktop and 390px | `controls-*`, `contrast-*`, `focus-ring-*`, `split-words-*`, `overflow-*`, `axe-*` |
 | A failed first submit, a failed answer (main page, desktop side panel, modal sheet) and a failed save keep focus on the pressed button and show the error in that surface only, scrolled into view. A busy button shows a Saving label and is dimmed | desktop and 390px | `failure-recovery-*`, `conversation-failure-*`, `intake-failure-*` |
 | A stale answer (another client answered first) shows its notice in the surface that acted, even after the reload removes the question, and moves focus into that surface. When the reload itself fails the message says so | desktop and 390px | `stale-*` |
 | A lost reply on the first submit says the request may be saved and refreshes the list. A restriction typed but not yet added is sent with the request. Choosing an example over typed words can be undone (unit test only, not driven in the browser) | desktop and 390px for the lost reply | `lost-reply-*`; `apps/web/tests/research-home.test.tsx` |
