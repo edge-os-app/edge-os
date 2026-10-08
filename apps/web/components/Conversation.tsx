@@ -1,6 +1,7 @@
 "use client";
 
-import type { Bundle } from "../lib/types";
+import { FIELD_LABEL, summarizeValue } from "../lib/describe";
+import type { Bundle, Clarification } from "../lib/types";
 import { QuestionForm } from "./QuestionForm";
 
 export interface ConversationContext {
@@ -26,9 +27,14 @@ export function Conversation({ context, idPrefix }: { context: ConversationConte
   const { bundle, busy, answer } = context;
   const { intake, clarifications, head } = bundle;
   const text = intake.content.original_request;
-  const labelFor = (qid: string, ref: string) => {
-    const choiceId = ref.split(":")[2] ?? "";
-    return choiceId === "adopt" ? "Adopted the suggested settings" : `Chose “${choiceId}”`;
+  // Say what the answer changed, in the words of the saved record, not the internal choice ID.
+  const labelFor = (c: Clarification) => {
+    const result = bundle.interpretations.find((i) => i.content.interpretation_revision_id === c.resulting_revision_id);
+    return c.changed_fields.map((name) => {
+      const item = result?.content.field_evidence.find((f) => f.field_name === name);
+      const label = FIELD_LABEL[name] ?? name;
+      return item && item.state === "KNOWN" && c.question_id !== "adopt-suggested-settings" ? `${label}: ${summarizeValue(name, item.value)}` : label;
+    });
   };
   return (
     <>
@@ -43,7 +49,7 @@ export function Conversation({ context, idPrefix }: { context: ConversationConte
         {clarifications.map((c) => (
           <div key={c.record_id} className="stack" style={{ gap: 8 }}>
             <div className="msg system"><span className="who">Question</span>{c.content.question}</div>
-            <div className="msg user"><span className="who">Your answer</span>{labelFor(c.content.question_id, c.content.answer_ref)}</div>
+            <div className="msg user"><span className="who">{c.content.question_id === "adopt-suggested-settings" ? "You adopted" : "Your answer"}</span>{labelFor(c.content).join("; ")}</div>
           </div>
         ))}
         {clarifications.length === 0 ? <p className="muted">No questions answered yet.</p> : null}

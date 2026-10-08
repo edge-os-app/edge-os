@@ -57,7 +57,7 @@ The router follows the P02 outcome rules and uses the frozen validators through 
 
 PyJWT verifies `ES256` only, with `iss=privy.io`, `aud` equal to the configured app ID as a plain string, and required `exp`, `iat`, `iss`, `aud`, `sub`, `sid`. After verification a payload with a top-level `linked_accounts` or `custom_metadata` claim is refused. That is an Edge OS policy, not a Privy guarantee. The key is a static P-256 PEM from configuration, with an optional previous key for rotation. There is no app secret and no setting that disables authentication. A test source scan fails the build if `dependency_overrides` appears under `src/`.
 
-Web side: `getAccessToken` is the only token source. `createOnLogin` is `"off"` for Ethereum and Solana. The Privy module loads only when sign-in is configured. The browser harness injects a labelled test session through `window.__EDGE_OS_TEST_AUTH__` before page scripts run. The fixture provider and its token live under `tests/p03` only. No environment variable or build flag selects it. The production bundle scan finds neither the fixture label nor any key block.
+Web side: `getAccessToken` is the only token source. `createOnLogin` is `"off"` for Ethereum and Solana. The Privy module loads only when sign-in is configured. The browser harness injects a labelled test session through `window.__EDGE_OS_TEST_AUTH__` before page scripts run. The fixture provider, its token and its key live under `tests/p03` only. The product code does contain the small seam that reads `window.__EDGE_OS_TEST_AUTH__`, so the production bundle includes that reader. It only supplies a token string to the API, which verifies every token, and the app shows a visible banner when it is used. No environment variable or build flag selects it. The production bundle scan finds neither the fixture label nor any private-key block, and finds the `createOnLogin: "off"` literals.
 
 ## Versions that the locks resolved
 
@@ -88,7 +88,8 @@ Not proved: any real Privy login or token (`R1`–`R4`), the Dashboard key type,
 
 - Q1–Q4 of the P01 profile still need a Privy development app. The official Privy token pages read on 2026-10-08 (Exa fetch) still describe ES256, the claim list, `sid` in both token types and identity tokens that carry linked accounts. They name no JWKS URL for access tokens.
 - Q5: the web config offers email login only, a conservative placeholder. A connected wallet is not an identity.
-- Record sizes, list limits and rate limiting are not set beyond a 256 KiB body cap.
+- Record sizes and rate limiting are not set beyond a 256 KiB body cap (enforced while streaming) and a JSON nesting limit of 100. U+0000 in any text field returns 422.
+- `POST /v1/research/requests` has no idempotency key. A retry after a lost acknowledgement saves a second request. Publication has the recovery path. The list shows the 50 most recent requests and says when more exist.
 - A database that accepts connections and never answers (a paused server) is not detected. Connect and pool timeouts cover refused and slow connects. Fault injection uses a database that refuses connections.
 
 ## Provenance

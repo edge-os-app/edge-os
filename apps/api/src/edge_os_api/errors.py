@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -58,6 +59,12 @@ def _pointer(loc: tuple[Any, ...]) -> str:
     return "/" + "/".join(parts) if parts else "/"
 
 
+def internal_error() -> AppError:
+    return AppError(500, "READ", "UNAVAILABLE", "service_unavailable",
+                    [finding("internal_error", "/", "The service failed while handling this request. "
+                             "Check the saved record before repeating a change.")], "RECONCILE")
+
+
 def install_handlers(app: Any) -> None:
     @app.exception_handler(AppError)
     async def _app_error(_: Request, error: AppError) -> JSONResponse:
@@ -68,6 +75,12 @@ def install_handlers(app: Any) -> None:
         findings = [finding(item["type"], _pointer(tuple(item["loc"])), item["msg"]) for item in error.errors()][:20]
         body = AppError(422, "VALIDATION", "INVALID_INPUT", "validation_error", findings).body()
         return JSONResponse(body, status_code=422)
+
+    @app.exception_handler(Exception)
+    async def _unexpected(request: Request, error: Exception) -> JSONResponse:
+        # Log the class only. Messages and SQL parameters can hold the user's words.
+        logging.getLogger("edge_os").error("unhandled %s on %s %s", type(error).__name__, request.method, request.url.path)
+        return JSONResponse(internal_error().body(), status_code=500)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(_: Request, error: StarletteHTTPException) -> JSONResponse:

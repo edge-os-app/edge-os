@@ -61,7 +61,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: var(--space-2); list-style: none; margin: 0; padding: 0; }
 .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: 999px; padding: 4px 6px 4px 12px; font-size: 14px; min-height: 36px; }
 .chip button { border: 0; background: transparent; cursor: pointer; font: inherit; min-width: 32px; min-height: 32px; border-radius: 999px; color: var(--color-text); }
-.chip button:hover { background: color-mix(in srgb, var(--color-text) 10%, transparent); }
+@media (hover: hover) { .chip button:hover { background: color-mix(in srgb, var(--color-text) 10%, transparent); } }
 .tag { white-space: nowrap; }
 .tag-accent { background: var(--color-accent-200); color: var(--color-accent-900); }
 .tag-accent-2 { background: var(--color-accent-2-200); color: var(--color-accent-2-900); }
@@ -111,7 +111,15 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
 .center-card { max-width: 520px; margin: 12vh auto; }
 .spinner-line { height: 4px; border-radius: 2px; background: var(--color-divider); overflow: hidden; }
 
-@media (hover: none) { .example:hover, .card-open:hover { border-color: var(--color-divider); } }
+@media (hover: none) {
+  /* Touch screens keep the pressed look after a tap. Undo the exported hover fills there. */
+  .example:hover, .card-open:hover { border-color: var(--color-divider); }
+  .btn-primary:hover:not(:disabled) { background: var(--color-accent-700); }
+  .btn-secondary:hover, .btn-ghost:hover { background: transparent; }
+  .input:hover { border-color: var(--color-divider); }
+  .table tbody tr:hover { background: transparent; }
+  .nav a:hover { color: inherit; }
+}
 @media (hover: hover) { .example:hover, .card-open:hover { border-color: var(--color-accent-700); } }
 @media (max-width: 1180px) {
   .app { grid-template-columns: 220px minmax(0, 1fr); }

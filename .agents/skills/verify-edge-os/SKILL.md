@@ -9,21 +9,21 @@ Run the mapped path on a fresh instance, read the saved records yourself, keep t
 
 ## Run
 
-Work from the repository root. Done when every step below reports `PASS` and the final JSON line says `"ok": true`.
+Work from the repository root. Each step names its own done condition. The whole run is done when step 3's final JSON line says `"ok": true` and steps 4 to 6 meet their conditions.
 
-1. **Preflight.** Docker answers `docker info`. Tools exist: `uv`, `node` 24, `npm`. Install pinned dependencies:
+1. **Preflight.** Done when `docker info` answers, `uv`, `node` 24 and `npm` exist, and all three installs finish without a lockfile error:
    ```bash
    (cd apps/api && uv sync --frozen)
    (cd apps/web && npm ci)
    (cd tests/p03 && npm ci && npx playwright install chromium)
    ```
-2. **Unit and contract checks.**
+2. **Unit and contract checks.** Done when each command exits 0.
    ```bash
    (cd apps/api && uv run --frozen pytest)            # starts and removes its own PostgreSQL container
    (cd apps/web && npm run typecheck && npm test)
    python3 docs/contracts/p02/check_contract.py
    ```
-3. **Mapped path.** One command starts PostgreSQL 18, migrates, starts the API, builds and starts the web app, drives the browser at 1280px and 390px, inspects the rows with SQL, restarts the API, reopens the record in a new browser context, scans logs and the production bundle, then removes its own resources. Add `--hold-seconds 300` to keep the instance up for your own SQL.
+3. **Mapped path.** Done when every printed step is `PASS` and the final line says `"ok": true`. One command checks the lockfiles, starts PostgreSQL 18, migrates, starts the API, builds and starts the web app, drives the browser at 1280px and 390px, inspects the rows with SQL, restarts the API, reopens the record in a new browser context, scans logs and the production bundle, then removes its own resources. Add `--hold-seconds 300` to keep the instance up for your own SQL.
    ```bash
    (cd apps/api && uv run --frozen python ../../scripts/p03/verify_run.py --hold-seconds 300)
    ```

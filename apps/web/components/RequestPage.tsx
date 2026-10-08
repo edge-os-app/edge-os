@@ -28,6 +28,7 @@ function pendingKeys(draftId: string): { operation_id: string; idempotency_key: 
 
 export function RequestPage({ id, go, setContext, openConversation }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
+  const stateHeading = useRef<HTMLHeadingElement>(null);
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -44,18 +45,24 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
 
   useEffect(() => { if (bundle) heading.current?.focus(); }, [bundle === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const reload = useCallback(async () => {
+    try { setBundle(await api.get(id)); }
+    catch { setError("The saved request could not be reloaded. Reload the page to see its current state."); }
+  }, [id]);
+
   const answer = useCallback(async (questionId: string, choiceId: string) => {
     if (!bundle?.head.interpretation_revision_id) return;
     setBusy(true); setError(""); setNotice("");
     try {
       setBundle(await api.answer(id, { previous_revision_id: bundle.head.interpretation_revision_id, question_id: questionId, choice_id: choiceId }));
+      requestAnimationFrame(() => stateHeading.current?.focus()); // the answered form is gone; land on the new state
     } catch (e) {
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
         setNotice("This request changed elsewhere. It was reloaded. Check the question and answer again.");
-        setBundle(await api.get(id));
+        await reload();
       } else setError(e instanceof ApiError ? e.detail : "Your answer was not saved.");
     } finally { setBusy(false); }
-  }, [bundle, id]);
+  }, [bundle, id, reload]);
 
   useEffect(() => {
     setContext(bundle ? { bundle, busy, answer } : null);
@@ -80,11 +87,11 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
     setBusy(true); setError(""); setNotice("");
     try {
       await api.publish(draft.content.strategy_id, { ...keys, expected_parent_revision_id: null, draft_id: draft.record_id, strategy: draft.content.source_syntax });
-      setBundle(await api.get(id));
+      await reload();
       setNotice("Saved. The revision below was read back from storage.");
     } catch (e) {
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
-        setBundle(await api.get(id));
+        await reload();
         setNotice("A revision of this rule was already saved. The saved record is shown.");
       } else if (e instanceof ApiError && e.status === 0) {
         setError("We could not confirm the save. Press save again. It reuses the same key, so it cannot create a second revision.");
@@ -141,8 +148,9 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
       {notice ? <p role="status" className="status ok">{notice}</p> : null}
       {error ? <p role="alert" className="status err">{error}</p> : null}
 
-      <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped ? "stop" : ""}`} aria-labelledby="state-title" role="status" data-testid="outcome" data-outcome={outcome}>
-        <h2 id="state-title"><span className={`tag tag-${copy.tone}`} style={{ marginRight: 8 }}>{copy.title}</span></h2>
+      <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={outcome}>
+        <p className="visually-hidden" role="status">{copy.title}</p>
+        <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${copy.tone}`} style={{ marginRight: 8 }}>{copy.title}</span></h2>
         {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the rules can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
         {outcome === "COMPILED" && <p>These rules came from your words and the settings you adopted. Check them, then save. Saving makes an immutable revision. It does not show the rules work.</p>}
         {outcome === "PUBLISHED" && <p>This revision is saved. Reopening it later shows the same record from storage.</p>}

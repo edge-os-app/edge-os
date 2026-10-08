@@ -49,7 +49,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
 export const api = {
   me: () => request<{ user_id: string }>("/v1/me").then((r) => r.body),
   interpreter: () => request<{ interpreter: { kind: string; id: string; notice: string }; samples: Sample[] }>("/v1/interpreter").then((r) => r.body),
-  list: () => request<{ requests: RequestSummary[] }>("/v1/research/requests").then((r) => r.body.requests),
+  list: () => request<{ requests: RequestSummary[]; has_more: boolean }>("/v1/research/requests").then((r) => r.body),
   get: (id: string) => request<Bundle>(`/v1/research/requests/${id}`).then((r) => r.body),
   submit: (body: unknown) => request<Bundle>("/v1/research/requests", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   answer: (id: string, body: { previous_revision_id: string; question_id: string; choice_id: string }) =>

@@ -105,7 +105,7 @@ def scan_bundle(dist: Path) -> dict:
     return {
         "fixture_label_in_bundle": found(b"TEST AUTH FIXTURE"),
         "private_key_blocks_in_bundle": sorted(str(p.relative_to(dist)) for p, data in texts.items() if pem_body.search(data)),
-        "privy_wallet_creation_off_in_bundle": bool(found(b"createOnLogin")),
+        "privy_create_on_login_off_literals": sum(len(re.findall(rb'createOnLogin:\s*"off"', data)) for data in texts.values()),
         "files_scanned": len(texts),
     }
 
@@ -143,6 +143,16 @@ def main() -> int:
         rec.write("environment.json", environment_record(pg))
         ok &= rec.step("postgres started (isolated, labelled)", True, {"container": pg.container, "version": pg.version()})
 
+        locks = {}
+        for name, command, cwd in (("api uv.lock", ["uv", "lock", "--check"], harness.API_DIR),
+                                   ("web package-lock.json", ["npm", "ci", "--dry-run", "--no-audit", "--no-fund"], harness.WEB_DIR),
+                                   ("browser-check package-lock.json", ["npm", "ci", "--dry-run", "--no-audit", "--no-fund"],
+                                    harness.REPO / "tests" / "p03")):
+            result = subprocess.run(command, cwd=cwd, env={**harness.base_env()}, capture_output=True, text=True)
+            locks[name] = result.returncode == 0
+        rec.write("lockfiles.json", locks)
+        ok &= rec.step("lockfiles install cleanly (uv lock --check, npm ci --dry-run)", all(locks.values()), locks)
+
         api_port, web_port = harness.free_port(), harness.free_port()
         api_url, web_url = f"http://127.0.0.1:{api_port}", f"http://127.0.0.1:{web_port}"
         env = harness.api_env(database_url=pg.url, public_pem=signer.public_pem, previous_pem=None, cors=[web_url])
@@ -170,7 +180,7 @@ def main() -> int:
         bundle = scan_bundle(dist_path)
         rec.write("bundle-scan.json", bundle)
         ok &= rec.step("production bundle has no fixture provider or key", not bundle["fixture_label_in_bundle"]
-                       and not bundle["private_key_blocks_in_bundle"] and bundle["privy_wallet_creation_off_in_bundle"], bundle)
+                       and not bundle["private_key_blocks_in_bundle"] and bundle["privy_create_on_login_off_literals"] >= 2, bundle)
         web = harness.start_web(api_url=api_url, dist=dist, port=web_port, log_dir=evidence / "logs")
         processes.append(web)
         harness.wait_http(web_url + "/")
@@ -253,22 +263,25 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
     for key, saved in results.items():
         if not key.startswith("thesis-"):
             continue
-        intake = rows(f"select record_id, content from records where record_type='IntakeRequest' "
+        request_id = saved["url"].split("/research/")[1]
+        intake = rows(f"select record_id, content from records where record_type='IntakeRequest' and record_id = '{request_id}' "
                       f"and content->>'original_request' = {sql_literal(saved['original'])}")
         revision = rows(f"select * from strategy_revisions where revision_id = '{saved['revisionId']}'")
-        item = {"key": key, "intake_rows_with_exact_text": len(intake), "revision_rows": len(revision)}
+        item = {"key": key, "request_id": request_id, "intake_rows_with_exact_text": len(intake), "revision_rows": len(revision)}
         if revision:
             canonical = revision[0]["strategy_canonical"]
             item["hash_recomputed_matches"] = hashlib.sha256(canonical.encode()).hexdigest() == revision[0]["content_sha256"]
             item["parent_is_null"] = revision[0]["parent_revision_id"] is None
             item["owner_matches_intake"] = bool(rows(
                 "select 1 from records r join strategy_revisions s on s.owner_id = r.owner_id "
-                f"where s.revision_id = '{saved['revisionId']}' and r.record_type = 'IntakeRequest' "
-                f"and r.content->>'original_request' = {sql_literal(saved['original'])}"))
+                f"where s.revision_id = '{saved['revisionId']}' and r.record_id = '{request_id}'"))
+            item["revision_draft_belongs_to_request"] = bool(rows(
+                "select 1 from records d join strategy_revisions s on s.draft_record_id = d.record_id "
+                f"where s.revision_id = '{saved['revisionId']}' and d.intake_record_id = '{request_id}'"))
             item["restrictions_saved"] = intake[0]["content"]["restrictions"] if intake else None
         verdicts.append(item)
     checks["thesis_verdicts"] = verdicts
-    passed = bool(verdicts) and all(v["intake_rows_with_exact_text"] >= 1 and v["revision_rows"] == 1
+    passed = bool(verdicts) and all(v["intake_rows_with_exact_text"] == 1 and v["revision_rows"] == 1 and v.get("revision_draft_belongs_to_request")
                                     and v.get("hash_recomputed_matches") and v.get("parent_is_null")
                                     and v.get("owner_matches_intake") for v in verdicts)
     return {"checks": checks, "all_checks_pass": passed}
@@ -290,9 +303,6 @@ def ownership_drive(pg: harness.Postgres, api_url: str, token_a: str, token_b: s
     results["read_other_request"] = http("GET", f"{api_url}/v1/research/requests/{intake}", token_b)[0]
     results["answer_other_request"] = http("POST", f"{api_url}/v1/research/requests/{intake}/clarifications", token_b,
                                            {"previous_revision_id": "x", "question_id": "choose-entry", "choice_id": "g3-1pct"})[0]
-    results["publish_other_draft"] = http("POST", f"{api_url}/v1/strategies/{sid}/revisions", token_b, {
-        "operation_id": "11111111-1111-4111-8111-111111111111", "idempotency_key": "attack-1",
-        "expected_parent_revision_id": None, "draft_id": draft, "strategy": {}})[0]
     results["random_id_read"] = http("GET", f"{api_url}/v1/research/requests/22222222-2222-4222-8222-222222222222", token_b)[0]
     results["owner_a_still_reads"] = http("GET", f"{api_url}/v1/research/requests/{intake}", token_a)[0]
     denied = [results[k] for k in ("read_other_request", "answer_other_request", "random_id_read")]

@@ -15,6 +15,7 @@ API_ROOT = Path(__file__).resolve().parents[2]
 
 def make_engine(url: str) -> Engine:
     return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=10, pool_timeout=10,
+                         hide_parameters=True,  # SQL errors must not write the user's saved words to the log
                          connect_args={"connect_timeout": 5})
 
 

@@ -87,7 +87,7 @@ export function Shell() {
         )}
         {route.name === "later" && <Later area={route.area} />}
       </main>
-      <div className="convo convo-desktop" aria-label="Conversation">
+      <div className="convo convo-desktop" role="complementary" aria-label="Conversation">
         <Conversation context={context} idPrefix="side" />
       </div>
       <dialog ref={sheet} className="sheet" aria-label="Conversation" onKeyDown={trapTab} onClose={() => sheetTrigger.current?.focus()}>

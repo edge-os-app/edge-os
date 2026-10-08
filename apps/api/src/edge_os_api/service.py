@@ -240,7 +240,7 @@ def revision_summary(row: StrategyRevision) -> dict[str, Any]:
 
 def load_bundle(session: Session, principal: Principal, intake_id: uuid.UUID) -> dict[str, Any]:
     rows = intake_rows(session, principal, intake_id)
-    if not rows or rows[0].record_id != intake_id:
+    if not rows or rows[0].record_id != intake_id or rows[0].record_type != "IntakeRequest":
         raise not_found()
     by_type: dict[str, list[Record]] = {}
     for row in rows:
@@ -285,13 +285,14 @@ def load_bundle(session: Session, principal: Principal, intake_id: uuid.UUID) ->
     }
 
 
-def list_requests(session: Session, principal: Principal, limit: int = 50) -> list[dict[str, Any]]:
-    intakes = list(session.execute(select(Record).where(
+def list_requests(session: Session, principal: Principal, limit: int = 50) -> tuple[list[dict[str, Any]], bool]:
+    fetched = list(session.execute(select(Record).where(
         Record.owner_id == principal.user_id, Record.record_type == "IntakeRequest")
-        .order_by(Record.seq.desc()).limit(limit)).scalars())
+        .order_by(Record.seq.desc()).limit(limit + 1)).scalars())
+    has_more, intakes = len(fetched) > limit, fetched[:limit]
     ids = [i.record_id for i in intakes]
     if not ids:
-        return []
+        return [], False
     outcomes = session.execute(select(Record).where(
         Record.owner_id == principal.user_id, Record.record_type == "Outcome", Record.intake_record_id.in_(ids))
         .order_by(Record.seq)).scalars()
@@ -305,7 +306,7 @@ def list_requests(session: Session, principal: Principal, limit: int = 50) -> li
              "original_request": i.content["original_request"], "requested_job": i.content["requested_job"],
              "input_class": i.content["input_class"],
              "outcome": latest[i.record_id].content["outcome"] if i.record_id in latest else None,
-             "published": i.record_id in published} for i in intakes]
+             "published": i.record_id in published} for i in intakes], has_more
 
 
 def publish(session: Session, principal: Principal, strategy_id: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:

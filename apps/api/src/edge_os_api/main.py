@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DataError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from . import p02, service
@@ -28,17 +28,49 @@ MAX_BODY_BYTES = 256 * 1024
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
+MAX_JSON_DEPTH = 100  # strategies allow expression depth 64; envelope and wrappers add a few levels
+
+
+def _scan(node: Any) -> tuple[bool, int]:
+    """Iterative walk: (contains U+0000, maximum nesting depth). PostgreSQL text and jsonb cannot hold U+0000."""
+    has_nul, deepest, stack = False, 0, [(node, 1)]
+    while stack:
+        item, depth = stack.pop()
+        deepest = max(deepest, depth)
+        if depth > MAX_JSON_DEPTH:
+            return has_nul, deepest
+        if isinstance(item, str):
+            has_nul = has_nul or "\x00" in item
+        elif isinstance(item, list):
+            stack.extend((child, depth + 1) for child in item)
+        elif isinstance(item, dict):
+            for key, value in item.items():
+                has_nul = has_nul or "\x00" in key
+                stack.append((value, depth + 1))
+    return has_nul, deepest
+
+
 async def read_json(request: Request) -> Any:
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
         raise invalid("/", "The request body is too large.", "body_too_large")
-    raw = await request.body()
-    if len(raw) > MAX_BODY_BYTES:
-        raise invalid("/", "The request body is too large.", "body_too_large")
+    chunks, size = [], 0
+    async for chunk in request.stream():  # stop reading at the cap, even without a Content-Length
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            raise invalid("/", "The request body is too large.", "body_too_large")
+        chunks.append(chunk)
     try:
-        return p02.strict_loads(raw.decode("utf-8"))
-    except (p02.Invalid, ValueError, UnicodeDecodeError) as error:
-        raise invalid("/", f"The body is not strict JSON: {error}", "invalid_json") from None
+        data = p02.strict_loads(b"".join(chunks).decode("utf-8"))
+    except (p02.Invalid, ValueError, UnicodeDecodeError, RecursionError) as error:
+        detail = "The body nests too deeply." if isinstance(error, RecursionError) else f"The body is not strict JSON: {error}"
+        raise invalid("/", detail, "invalid_json") from None
+    has_nul, depth = _scan(data)
+    if depth > MAX_JSON_DEPTH:
+        raise invalid("/", "The body nests too deeply.", "invalid_json")
+    if has_nul:
+        raise invalid("/", "Text cannot contain the NUL character (U+0000).", "invalid_character")
+    return data
 
 
 def parse_body(model: type[ModelT], data: Any) -> ModelT:
@@ -107,6 +139,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.rollback()
             if isinstance(error, OperationalError):
                 raise service_unavailable() from None
+            if isinstance(error, DataError):  # for example U+0000 in a path segment
+                raise invalid("/", "A value cannot be stored as sent.", "invalid_character") from None
             raise
 
     @private.get("/me")
@@ -126,7 +160,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @private.get("/research/requests")
     def list_requests(principal: Principal = Depends(require_principal),
                       session: Session = Depends(get_session)) -> dict[str, Any]:
-        return {"requests": run(session, lambda: service.list_requests(session, principal))}
+        requests, has_more = run(session, lambda: service.list_requests(session, principal))
+        return {"requests": requests, "has_more": has_more}
 
     @private.get("/research/requests/{intake_id}")
     def get_request(intake_id: str, principal: Principal = Depends(require_principal),

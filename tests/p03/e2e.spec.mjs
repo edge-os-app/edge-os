@@ -109,6 +109,7 @@ test("hunch: keyboard choice, Tab order and Escape-free completion", async ({ pa
   await page.keyboard.press("Tab");
   await page.keyboard.press("Enter"); // native form submit from the checked radio
   await expect(main.getByRole("radio", { name: /more than 2% over the last 15 minutes/ })).toHaveCount(0);
+  await expect(page.locator("#state-title")).toBeFocused(); // the answered form is gone; focus lands on the new state
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
   await main.getByRole("button", { name: "Adopt these settings" }).click();
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
@@ -222,6 +223,8 @@ test("conversation: same record, focus handling, Escape and Tab containment", as
     await side.getByRole("button", { name: "Save my answer" }).click();
     await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
     await expect(side.getByRole("log")).toContainText("Question");
+    await expect(side.getByRole("log")).toContainText("Entry rule: Enter when price rose more than 3% over the last 30 minutes");
+    await expect(side.getByRole("log")).not.toContainText("g6-3pct");
     await shot(page, project, "08-conversation-panel");
   }
 });

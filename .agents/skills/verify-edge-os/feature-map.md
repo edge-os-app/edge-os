@@ -1,6 +1,6 @@
 # Feature map
 
-Each row was exercised by `scripts/p03/verify_run.py`. Evidence paths are relative to `.scratch/p03/evidence/<run_id>/`. Sample requests are scripted fixtures (`apps/api/src/edge_os_api/interpreter.py`); the fixture interpreter answers only those texts.
+Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column names a pytest file; those rows are covered by `uv run --frozen pytest`, not by the mapped path. Evidence paths are relative to `.scratch/p03/evidence/<run_id>/`. Sample requests are scripted fixtures (`apps/api/src/edge_os_api/interpreter.py`); the fixture interpreter answers only those texts.
 
 ## First Research path (P03)
 

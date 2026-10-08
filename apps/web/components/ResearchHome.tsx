@@ -23,6 +23,7 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
   const [samples, setSamples] = useState<Sample[]>([]);
   const [fixtureNotice, setFixtureNotice] = useState("");
   const [saved, setSaved] = useState<RequestSummary[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -41,7 +42,7 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
   useEffect(() => {
     let cancelled = false;
     api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); } }).catch(() => {});
-    api.list().then((r) => { if (!cancelled) setSaved(r); }).catch((e: unknown) => {
+    api.list().then((r) => { if (!cancelled) { setSaved(r.requests); setHasMore(r.has_more); } }).catch((e: unknown) => {
       if (!cancelled) setLoadError(e instanceof ApiError ? e.detail : "Saved requests could not be loaded.");
     });
     return () => { cancelled = true; };
@@ -113,6 +114,7 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
 
         <fieldset>
           <legend className="legend">Restrictions, in the order you add them</legend>
+          <p className="muted" style={{ marginTop: 0 }}>Restrictions are saved exactly as you add them here. They are not read out of your words.</p>
           {restrictions.length ? (
             <ol className="chips" aria-label="Your restrictions">
               {restrictions.map((r, i) => (
@@ -159,6 +161,7 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
         {loadError ? <p role="alert" className="error-text">{loadError}</p> : null}
         {saved === null && !loadError ? <p className="muted" role="status">Loading saved requests.</p> : null}
         {saved && saved.length === 0 ? <p className="muted">Nothing saved yet. Your requests appear here and stay after you close the page.</p> : null}
+        {hasMore ? <p className="muted" role="status">Showing your 50 most recent requests. Older ones are saved but not listed here yet.</p> : null}
         <div className="cards">
           {(saved ?? []).map((r) => {
             const copy = r.published ? OUTCOME_COPY.PUBLISHED : OUTCOME_COPY[r.outcome ?? "INVALID_INPUT"];
