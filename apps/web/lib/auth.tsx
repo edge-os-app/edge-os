@@ -47,7 +47,7 @@ export function useAuth(): AuthValue {
 /** The Privy bridge loads only when the production path runs. It makes no network call before then. */
 const PrivyBridge = dynamic(() => import("./privy-bridge"), { ssr: false });
 
-interface Source {
+export interface Source {
   ready: boolean;
   authenticated: boolean;
   getAccessToken(): Promise<string | null>;
@@ -127,7 +127,10 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
   }, [status]);
 
   // The service rejected the credential. Log the provider out too, so the next sign-in is a real one.
+  const rejectedAt = useRef(0);
   const rejectSession = useCallback(() => {
+    if (Date.now() - rejectedAt.current < 1000) return; // one rejection can be reported twice; log out once
+    rejectedAt.current = Date.now();
     setUserId(null);
     setSignInMessage(SESSION_REJECTED);
     setStatus("signed-out");

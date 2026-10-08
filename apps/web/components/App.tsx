@@ -48,7 +48,8 @@ function Signed() {
         <section className="panel" role="alert">
           <h2>Sign-in is unavailable</h2>
           <p>{auth.unavailableReason ?? "The service cannot verify sign-in right now."}</p>
-          <p className="muted">Your saved work is not affected. Reload to try again.</p>
+          <p className="muted">Your saved work is not affected.</p>
+          <div className="btn-row"><button className="btn btn-primary" type="button" onClick={() => window.location.reload()}>Reload and try again</button></div>
         </section>
       ) : (
         <section className="panel">

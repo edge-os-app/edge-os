@@ -25,8 +25,10 @@ Work from the repository root. Each step names its own done condition. The whole
    ```
 3. **Mapped path.** Done when every printed step is `PASS` and the final line says `"ok": true`. One command checks the lockfiles, starts PostgreSQL 18, migrates, starts the API, builds and starts the web app, drives the browser at 1280px and 390px, inspects the rows with SQL, restarts the API, reopens the record in a new browser context, scans logs and the production bundle, then removes its own resources. Add `--hold-seconds 300` to keep the instance up for your own SQL. The hold blocks the shell, so start the command in the background (for example with your shell's background option) and read its output file: the `HOLD {...}` JSON line holds the `psql` command and URLs. Use a fresh run ID for every run (`--run-id` takes 4 to 24 lowercase letters or digits; the default is generated). Keep the evidence outside a disposable clone with `--evidence-root <folder>`. A repeated run ID is refused and nothing is touched.
    ```bash
+   mkdir -p .scratch/p03
    (cd apps/api && uv run --frozen python ../../scripts/p03/verify_run.py --hold-seconds 300 > ../../.scratch/p03/verify.log 2>&1 &)
-   sleep 240; grep '^HOLD' .scratch/p03/verify.log    # the HOLD line holds the psql command and URLs
+   until grep -q '^HOLD' .scratch/p03/verify.log; do sleep 5; done   # waits for the hold, however long the build takes
+   grep '^HOLD' .scratch/p03/verify.log                              # the HOLD line holds the psql command and URLs
    ```
    Python 3.14 and Node 24 are required. The harness picks free loopback ports itself.
    Evidence lands in `.scratch/p03/evidence/<run_id>/`. Keep it. It is untracked.

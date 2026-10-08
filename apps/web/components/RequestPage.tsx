@@ -40,10 +40,12 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
   const [opened, setOpened] = useState<"loading" | "loaded">("loading");
 
   const [attempt, setAttempt] = useState(0);
+  const [retrying, setRetrying] = useState(false);
   useEffect(() => {
     let cancelled = false;
     api.get(id).then((b) => { if (!cancelled) { setBundle(b); setOpened("loaded"); setError(""); } })
-      .catch((e: unknown) => { if (!cancelled) setError(e instanceof ApiError && e.status === 404 ? "This request was not found." : "The request could not be loaded."); });
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof ApiError && e.status === 404 ? "This request was not found." : "The request could not be loaded."); })
+      .finally(() => { if (!cancelled) setRetrying(false); });
     return () => { cancelled = true; };
   }, [id, attempt]);
 
@@ -131,7 +133,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
         {error ? (
           <section className="panel" role="alert"><h2>{error}</h2>
             <div className="btn-row">
-              {error !== "This request was not found." ? <button className="btn btn-primary" type="button" onClick={() => { setError(""); setAttempt((n) => n + 1); }}>Try again</button> : null}
+              {error !== "This request was not found." ? <button className="btn btn-primary" type="button" onClick={() => { if (!retrying) { setRetrying(true); setAttempt((n) => n + 1); } }} aria-disabled={retrying || undefined}>{retrying ? "Trying again…" : "Try again"}</button> : null}
               <button className="btn btn-secondary" type="button" onClick={() => go("#/research")}>Back to Research</button>
             </div></section>
         ) : <p role="status" aria-busy="true" className="muted">Opening saved request.</p>}

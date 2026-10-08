@@ -142,3 +142,15 @@ def test_resource_comparison_ignores_other_runs_and_flags_unlabelled_changes():
     finally:
         harness.sh(["docker", "volume", "rm", stray], check=False)
         other.stop_and_remove()
+
+
+def test_a_start_that_fails_after_the_container_exists_is_cleaned_up_by_its_own_object(monkeypatch):
+    def never_ready(self, timeout=90.0):
+        raise RuntimeError("postgres did not become ready")
+    monkeypatch.setattr(harness.Postgres, "_wait_ready", never_ready)
+    pg = harness.Postgres(harness.new_run_id())
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        pg.start()
+    assert pg.created_container and pg.created_volume
+    pg.stop_and_remove()
+    assert pg.leftovers() == [] and not container_exists(pg.container) and not volume_exists(pg.volume)

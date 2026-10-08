@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import p02
+from .errors import finding as _finding
 from .interpreter import FixtureInterpreter, Scenario, clarification_text
 
 UNSUPPORTED_JOBS = {"SIMULATE", "OBSERVE_FORWARD", "REQUEST_LIVE"}
@@ -30,10 +31,6 @@ class Routed:
     @property
     def code(self) -> str:
         return CODES[self.outcome]
-
-
-def _finding(code: str, path: str, detail: str) -> dict[str, str]:
-    return {"code": code, "path": path, "detail": detail}
 
 
 def _invalid(path: str, detail: str, code: str = "invalid_value") -> Routed:

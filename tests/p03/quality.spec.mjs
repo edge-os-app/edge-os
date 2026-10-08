@@ -583,3 +583,32 @@ test("signing out removes the draft, and another person never sees it", async ({
   await expect(page.getByLabel("Your words", { exact: true })).toHaveValue("");
   await expect(page.getByRole("list", { name: "Your restrictions" })).toHaveCount(0);
 });
+
+test("a failed load of a saved request keeps the retry button, focus and a visible error", async ({ page }) => {
+  await open(page, tokens.c);
+  await sample(page, /Recent rises seem to keep running/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toBeVisible();
+  await page.getByRole("button", { name: "All requests" }).click();
+  await expect(page.locator("button.card-open").first()).toBeVisible();
+  await page.route("**/v1/research/requests/*", (route) => route.request().method() === "GET" ? route.fulfill(unavailable) : route.continue());
+  await page.locator("button.card-open").first().click();
+  await expect(alerts(page)).toContainText("could not be loaded");
+  const retry = page.getByRole("button", { name: "Try again" });
+  await retry.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible(); // the second attempt has finished (and failed)
+  await expect(alerts(page)).toContainText("could not be loaded"); // a second failure is still shown, never a silent state
+  await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeFocused();
+  await page.unroute("**/v1/research/requests/*");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Your request" })).toBeVisible();
+});
+
+test("a restriction that was typed but not added is kept with the request", async ({ page }) => {
+  await open(page, tokens.a);
+  await sample(page, "Specific thesis").click();
+  await page.getByLabel("Another restriction in your words").fill("never trade at night");
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByRole("list", { name: "Saved restrictions" })).toContainText("never trade at night");
+});

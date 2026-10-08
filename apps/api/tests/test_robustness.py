@@ -109,3 +109,15 @@ def test_a_database_outage_on_intake_tells_the_client_to_reconcile_not_to_retry_
         headers = {"Authorization": f"Bearer {signer.token('did:privy:outage-' + uuid.uuid4().hex)}"}
         body = assert_envelope(submit(quiet, headers, HUNCH, input_class="LOOSE_INTUITION"), 503)
     assert body["code"] == "service_unavailable" and body["retry"] == "RECONCILE"  # intake has no idempotency key
+
+
+def test_pool_exhaustion_is_a_503_with_a_retry_hint_not_a_500(settings, signer, monkeypatch):
+    from sqlalchemy.exc import TimeoutError as PoolTimeout
+
+    def exhausted(*_a, **_k):
+        raise PoolTimeout("QueuePool limit reached")
+    monkeypatch.setattr(service, "list_requests", exhausted)
+    with TestClient(create_app(settings)) as quiet:
+        headers = {"Authorization": f"Bearer {signer.token('did:privy:pool-' + uuid.uuid4().hex)}"}
+        body = assert_envelope(quiet.get("/v1/research/requests", headers=headers), 503)
+    assert body["code"] == "service_unavailable" and body["retry"] == "SAFE_SAME_KEY"

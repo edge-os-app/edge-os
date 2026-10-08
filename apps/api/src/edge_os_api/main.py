@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import DataError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 
 from . import p02, service
@@ -136,7 +137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return call()
         except SQLAlchemyError as error:
             session.rollback()
-            if isinstance(error, OperationalError):
+            if isinstance(error, (OperationalError, PoolTimeout)):  # refused connection or no free connection: the service is unavailable
                 raise service_unavailable(retry) from None
             if isinstance(error, DataError):  # for example U+0000 in a path segment
                 raise invalid("/", "A value cannot be stored as sent.", "invalid_character") from None

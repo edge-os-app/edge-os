@@ -27,8 +27,9 @@ def signer() -> TestSigner:
 @pytest.fixture(scope="session")
 def pg():
     before = harness.orphan_report()
-    instance = harness.Postgres(harness.new_run_id()).start()
+    instance = harness.Postgres(harness.new_run_id())
     try:
+        instance.start()  # inside the try: a start that fails after creating the container must still be cleaned up
         yield instance
     finally:
         instance.stop_and_remove()

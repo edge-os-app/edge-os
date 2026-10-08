@@ -2,16 +2,9 @@
 
 import { PrivyProvider, useLogin, usePrivy } from "@privy-io/react-auth";
 import { useState, type ReactNode } from "react";
+import type { Source } from "./auth";
 import { PRIVY_CONFIG } from "./privy-config";
 
-interface Source {
-  ready: boolean;
-  authenticated: boolean;
-  getAccessToken(): Promise<string | null>;
-  login(): void;
-  logout(): void;
-  loginErrors: number;
-}
 
 function Bridge({ render }: { render: (source: Source) => ReactNode }) {
   const { ready, authenticated, getAccessToken, logout } = usePrivy();

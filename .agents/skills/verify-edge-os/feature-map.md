@@ -26,9 +26,10 @@ Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column na
 | Check | Where it runs | Evidence |
 |---|---|---|
 | 44px minimum on every control, text and placeholder contrast, focus-ring contrast, no mid-word splits, no sideways scroll with long text, axe-core (home, needs-answer, review, saved, unresolved, mobile sheet) | desktop and 390px | `controls-*`, `contrast-*`, `focus-ring-*`, `split-words-*`, `overflow-*`, `axe-*` |
-| A failed first submit, a failed answer (main page, desktop side panel, modal sheet) and a failed save keep focus on the pressed button and show the error in that surface only, scrolled into view. A busy button reads "Saving…" and is dimmed | desktop and 390px | `failure-recovery-*`, `conversation-failure-*`, `intake-failure-*` |
+| A failed first submit, a failed answer (main page, desktop side panel, modal sheet) and a failed save keep focus on the pressed button and show the error in that surface only, scrolled into view. A busy button shows a Saving label and is dimmed | desktop and 390px | `failure-recovery-*`, `conversation-failure-*`, `intake-failure-*` |
 | A stale answer (another client answered first) shows its notice in the surface that acted, even after the reload removes the question, and moves focus into that surface. When the reload itself fails the message says so | desktop and 390px | `stale-*` |
-| A lost reply on the first submit says the request may be saved and refreshes the list | desktop and 390px | `lost-reply-*` |
+| A lost reply on the first submit says the request may be saved and refreshes the list. A restriction typed but not yet added is sent with the request. Choosing an example over typed words can be undone | desktop and 390px | `lost-reply-*`; `apps/web/tests/research-home.test.tsx` |
+| A failed load of the saved list or of one saved request keeps the retry button and a visible error through repeated failures | unit test (list), desktop and 390px (request) | `apps/web/tests/research-home.test.tsx`, `quality.spec.mjs` |
 | Sign-out returns to the sign-in heading and clears everything this app stored in the tab. Another person signing in sees an empty form. A rejected session shows a message with focus, keeps the same person's draft and signs in again for real | desktop and 390px (fixture session) | `session-rejected-*` |
 | A closed or failed real Privy sign-in window ends in a message. A slow sign-in offers Try again and keeps the window | unit tests with a mocked bridge only | `apps/web/tests/auth.test.tsx` |
 

@@ -1,21 +1,27 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchHome } from "../components/ResearchHome";
 import { draftKey } from "../lib/draft";
 
+const mocks = vi.hoisted(() => ({
+  list: vi.fn(), submit: vi.fn(),
+  samples: [{ scenario_id: "hunch", label: "Rough hunch", text: "SAMPLE TEXT", input_class: "LOOSE_INTUITION", requested_job: "CREATE_STRATEGY", restrictions: ["no leverage"], declared_market: null }],
+}));
 vi.mock("../lib/api", () => ({
-  ApiError: class extends Error {},
+  ApiError: class extends Error { status = 503; detail = "A required service is unavailable. Retry later."; },
   api: {
-    interpreter: () => Promise.resolve({ interpreter: { kind: "FIXTURE", id: "x", notice: "n" }, samples: [] }),
-    list: () => Promise.resolve({ requests: [], has_more: false }),
+    interpreter: () => Promise.resolve({ interpreter: { kind: "FIXTURE", id: "x", notice: "n" }, samples: mocks.samples }),
+    list: (...args: unknown[]) => mocks.list(...args),
+    submit: (...args: unknown[]) => mocks.submit(...args),
   },
 }));
 
 const draft = JSON.stringify({ text: "my private hunch", kind: "CONCRETE_THESIS", restrictions: ["no leverage"], custom: "", useMarket: false });
 const props = { go: vi.fn(), consumeReturn: () => null };
 
-beforeEach(() => window.sessionStorage.clear());
+beforeEach(() => { window.sessionStorage.clear(); mocks.list.mockReset(); mocks.submit.mockReset(); mocks.list.mockResolvedValue({ requests: [], has_more: false }); });
 
 describe("unsent draft", () => {
   it("is restored for the same person, also under StrictMode", async () => {
@@ -36,5 +42,45 @@ describe("unsent draft", () => {
     render(<ResearchHome userId="user-1" {...props} />);
     await waitFor(() => expect(screen.getByRole("heading", { name: "Research", level: 1 })).toBeInTheDocument());
     expect((screen.getByLabelText("Your words", { selector: "textarea" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("a failed retry of the saved list shows the error again and keeps the retry button", async () => {
+    const { ApiError } = await import("../lib/api");
+    mocks.list.mockRejectedValue(new ApiError(503, "service_unavailable", "A required service is unavailable. Retry later."));
+    const user = userEvent.setup();
+    render(<ResearchHome userId="user-1" {...props} />);
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await user.click(retry);
+    await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("alert")).toBeInTheDocument();           // still an error, never a silent "Loading"
+    expect(screen.queryByText("Loading saved requests.")).toBeNull();
+    expect(screen.getByRole("button", { name: /Try again|Trying again/ })).toBeInTheDocument();
+    mocks.list.mockResolvedValue({ requests: [], has_more: false });  // the service recovers
+    await user.click(screen.getByRole("button", { name: /Try again/ }));
+    await waitFor(() => expect(screen.getByText(/Nothing saved yet/)).toBeInTheDocument());
+  });
+
+  it("a restriction typed but not yet added is sent with the request, not dropped", async () => {
+    mocks.submit.mockResolvedValue({ intake: { record_id: "abc" } });
+    const user = userEvent.setup();
+    render(<ResearchHome userId="user-1" {...props} />);
+    await screen.findByText(/Nothing saved yet/);
+    await user.click(screen.getByRole("button", { name: /Add “no leverage”/ }));
+    await user.type(screen.getByLabelText("Your words", { selector: "textarea" }), "my long typed hunch");
+    await user.type(screen.getByLabelText("Another restriction in your words"), "never trade at night");
+    await user.click(screen.getByRole("button", { name: "Prepare request" }));
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalled());
+    expect(mocks.submit.mock.calls[0][0].restrictions).toEqual(["no leverage", "never trade at night"]);
+  });
+
+  it("choosing an example over typed words can be undone", async () => {
+    const user = userEvent.setup();
+    render(<ResearchHome userId="user-1" {...props} />);
+    const box = screen.getByLabelText("Your words", { selector: "textarea" }) as HTMLTextAreaElement;
+    await user.type(box, "my long typed hunch");
+    await user.click(await screen.findByRole("button", { name: /SAMPLE TEXT/ }));
+    expect(box.value).toBe("SAMPLE TEXT");
+    await user.click(screen.getByRole("button", { name: "Restore what I typed" }));
+    expect(box.value).toBe("my long typed hunch");
   });
 });
