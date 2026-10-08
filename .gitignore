@@ -18,3 +18,4 @@ coverage/
 
 # macOS metadata
 .DS_Store
+*.tsbuildinfo

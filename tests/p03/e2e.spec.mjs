@@ -116,6 +116,31 @@ test("hunch: keyboard choice, Tab order and Escape-free completion", async ({ pa
   await shot(page, project, "05-hunch-review");
 });
 
+test("cancelling keeps the saved work and returns focus", async ({ page }) => {
+  await open(page, tokens.a);
+  await sample(page, /Recent rises seem to keep running/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  const id = page.url().split("/research/")[1];
+  await page.getByRole("button", { name: "Not now" }).first().click();
+  await expect(page.locator(`#req-${id}`)).toBeFocused();
+  await expect(page.locator(`#req-${id}`)).toContainText("Needs your answer");
+  await page.locator(`#req-${id}`).click();
+  await expect(page.getByTestId("original-request")).toContainText("Recent rises seem to keep running");
+});
+
+test("loading states are announced while the service is slow", async ({ page }) => {
+  await injectAuth(page, tokens.b);
+  await page.route("**/v1/research/requests", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    return route.continue();
+  });
+  await page.goto("/");
+  await expect(page.getByText("Loading saved requests.")).toBeVisible();
+  await expect(page.getByText("Nothing saved yet.")).toBeVisible();
+});
+
 test("no thesis stays an investigation and shows no study progress", async ({ page }, info) => {
   const project = info.project.name;
   await open(page, tokens.a);

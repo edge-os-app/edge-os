@@ -124,6 +124,8 @@ def main() -> int:
     parser.add_argument("--run-id", default=harness.new_run_id())
     parser.add_argument("--evidence-root", default=str(harness.REPO / ".scratch" / "p03" / "evidence"))
     parser.add_argument("--skip-ui", action="store_true", help="skip the browser steps (not a full pass)")
+    parser.add_argument("--hold-seconds", type=int, default=0,
+                        help="keep the instance up this long after the drive so an inspector can run SQL, then clean up")
     args = parser.parse_args()
     run_id = args.run_id
     evidence = Path(args.evidence_root) / run_id
@@ -207,6 +209,13 @@ def main() -> int:
             ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
             after_restart = sql_inspection(pg, results)
             ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
+
+        if args.hold_seconds:
+            hold = {"web": web_url, "api": api_url, "token_owner_a": token_a,
+                    "psql": f"docker exec {pg.container} psql -U postgres -d {pg.database}", "seconds": args.hold_seconds}
+            print("HOLD " + json.dumps({k: v for k, v in hold.items() if not k.startswith("token")}), flush=True)
+            rec.write("hold.json", {k: v for k, v in hold.items() if not k.startswith("token")})
+            time.sleep(args.hold_seconds)
 
         logs = [p for p in (evidence / "logs").glob("*.log")]
         secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_bad, signer.private_pem))]

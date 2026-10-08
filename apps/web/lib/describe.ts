@@ -42,7 +42,23 @@ function percent(value: string): string {
   return `${Number.isInteger(n) ? n : n.toFixed(2).replace(/0+$/, "")}%`;
 }
 
-const COMPARE_WORDS: Record<string, string> = { gt: "more than", gte: "at least", lt: "less than", lte: "at most" };
+const COMPARE_WORDS: Record<string, string> = { gt: "above", gte: "at or above", lt: "below", lte: "at or below" };
+
+function pctOf(value: string): string { return percent(value.replace("-", "")); }
+
+/** Reads `price_return(n) <op> constant`. Never turns a sign around: the words follow the number. */
+function describeReturn(op: string, buckets: number, value: string): string {
+  const minutes = buckets * 5;
+  const v = Number(value);
+  const span = `over the last ${minutes} minutes`;
+  if (op === "gt" && v === 0) return `price rose ${span}`;
+  if (op === "lt" && v === 0) return `price fell ${span}`;
+  if (op === "gt" && v > 0) return `price rose more than ${pctOf(value)} ${span}`;
+  if (op === "gte" && v > 0) return `price rose at least ${pctOf(value)} ${span}`;
+  if (op === "lt" && v < 0) return `price fell more than ${pctOf(value)} ${span}`;
+  if (op === "lte" && v < 0) return `price fell at least ${pctOf(value)} ${span}`;
+  return `the ${minutes}-minute price return is ${COMPARE_WORDS[op]} ${v < 0 ? "-" : ""}${pctOf(value)}`;
+}
 
 /** Plain-words reading of a supported expression. Falls back to a labelled operator tree. */
 export function describeExpression(node: unknown): string {
@@ -52,12 +68,7 @@ export function describeExpression(node: unknown): string {
   if (expr.op in COMPARE_WORDS && args.length === 2) {
     const [left, right] = args;
     if (left.op === "price_return" && right.op === "constant") {
-      const minutes = Number(left.lookback_buckets) * 5;
-      const sign = expr.op.startsWith("g") ? "rose" : "fell";
-      const bound = percent(String(right.value));
-      return expr.op === "gt" || expr.op === "gte" || expr.op === "lt" || expr.op === "lte"
-        ? `price ${sign} ${COMPARE_WORDS[expr.op]} ${bound} over the last ${minutes} minutes`
-        : "";
+      return describeReturn(expr.op, Number(left.lookback_buckets), String(right.value));
     }
     return `${describeExpression(left)} is ${COMPARE_WORDS[expr.op]} ${describeExpression(right)}`;
   }

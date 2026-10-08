@@ -44,7 +44,9 @@
     ".next-p03e77aa174/types/**/*.ts",
     ".next-p03e77aa174/dev/types/**/*.ts",
     ".next-p034e964308/types/**/*.ts",
-    ".next-p034e964308/dev/types/**/*.ts"
+    ".next-p034e964308/dev/types/**/*.ts",
+    ".next-p03b96feb8b/types/**/*.ts",
+    ".next-p03b96feb8b/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
