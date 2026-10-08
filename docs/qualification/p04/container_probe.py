@@ -150,6 +150,17 @@ def _forbidden_text_present(messages: list[dict[str, object]], field: str, value
     return False
 
 
+def _json_snapshot_matches(actual: object, expected: object) -> bool:
+    try:
+        return json.dumps(
+            actual, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ) == json.dumps(
+            expected, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
     body = json.loads(request.content)
     messages = body.get("messages", [])
@@ -166,13 +177,13 @@ def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
             prompt_context = parsed
             break
     memory_entries = task.get("memory", {}).get("entries", [])
-    memory_snapshot_matches = prompt_context.get("memory") == task.get("memory")
+    memory_snapshot_matches = _json_snapshot_matches(prompt_context.get("memory"), task.get("memory"))
     expected_memory = bool(memory_entries) and memory_snapshot_matches
     source_ids = [source.get("source_id", "") for source in task.get("sources", [])]
-    source_snapshot_matches = prompt_context.get("sources", []) == task.get("sources", [])
+    source_snapshot_matches = _json_snapshot_matches(prompt_context.get("sources"), task.get("sources"))
     expected_sources = bool(source_ids) and source_snapshot_matches
     file_ids = [fixture_file.get("file_id", "") for fixture_file in task.get("files", [])]
-    file_snapshot_matches = prompt_context.get("files", []) == task.get("files", [])
+    file_snapshot_matches = _json_snapshot_matches(prompt_context.get("files"), task.get("files"))
     expected_files = bool(file_ids) and file_snapshot_matches
     forbidden = task.get("probe_forbidden", {})
     forbidden_owner_absent = not _forbidden_text_present(messages, "owner_id", forbidden.get("owner_id", ""))
@@ -192,7 +203,11 @@ def _record_request(request, mode: str, task: dict) -> tuple[dict, dict]:
         ).hexdigest(),
         "owner_fixture_present": prompt_context.get("owner_id") == task["owner_id"],
         "agent_fixture_present": prompt_context.get("agent_id") == task["agent_id"],
-        "memory_version_present": prompt_context.get("memory", {}).get("version") == task.get("memory", {}).get("version"),
+        "memory_version_present": (
+            type(prompt_context.get("memory", {}).get("version")) is int
+            and type(task.get("memory", {}).get("version")) is int
+            and prompt_context.get("memory", {}).get("version") == task.get("memory", {}).get("version")
+        ),
         "memory_snapshot_empty": prompt_context.get("memory", {}).get("entries") == [],
         "memory_snapshot_matches": memory_snapshot_matches,
         "only_expected_memory_present": expected_memory,

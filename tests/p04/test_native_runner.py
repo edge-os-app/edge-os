@@ -514,7 +514,7 @@ class NormalProcessLifecycleRegressionTests(unittest.TestCase):
 
 
 class ProviderBoundaryRegressionTests(unittest.TestCase):
-    def _run_normal_consumer(self, context, *, mutate_sent=None):
+    def _run_normal_consumer(self, context, *, mutate_sent=None, observed_receipts=None):
         import sys
 
         from docs.qualification.p04 import native_runner
@@ -552,7 +552,9 @@ class ProviderBoundaryRegressionTests(unittest.TestCase):
                 with patch.object(container_probe, "OUTPUT", task_dir / "output"), patch.dict(
                     "sys.modules", {"httpx": fake_httpx}
                 ):
-                    container_probe._record_request(request, "normal", task)
+                    receipt, _ = container_probe._record_request(request, "normal", task)
+                if observed_receipts is not None:
+                    observed_receipts.append(receipt)
 
                 result = json.loads(result_fixture.read_text(encoding="utf-8"))
                 result.update(job_id=task["job_id"], owner_id=task["owner_id"], agent_id=task["agent_id"])
@@ -606,6 +608,73 @@ class ProviderBoundaryRegressionTests(unittest.TestCase):
                 self.assertEqual(result["provider_receipt"]["agent_fixture_present"], True)
                 for snapshot in ("memory", "source", "file"):
                     self.assertTrue(result["provider_receipt"][f"{snapshot}_snapshot_matches"])
+
+    def test_normal_consumer_rejects_json_type_and_required_snapshot_presence_mismatches(self):
+        empty_context = {
+            "memory": {"version": 2, "enabled": False, "entries": []},
+            "sources": [], "files": [],
+        }
+        populated_context = {
+            "memory": {"version": 1, "enabled": True, "entries": ["authorized memory"]},
+            "sources": [{"source_id": "source-a", "content": "authorized source"}],
+            "files": [{"file_id": "file-a", "content": "authorized file"}],
+        }
+        cases = (
+            (
+                "cleared_memory_false_to_zero",
+                empty_context,
+                lambda sent: sent["memory"].update(enabled=0),
+                ("memory_snapshot_matches",),
+            ),
+            (
+                "populated_memory_true_to_one",
+                populated_context,
+                lambda sent: sent["memory"].update(enabled=1),
+                ("memory_snapshot_matches",),
+            ),
+            (
+                "memory_version_integer_to_boolean",
+                populated_context,
+                lambda sent: sent["memory"].update(version=True),
+                ("memory_version_present", "memory_snapshot_matches"),
+            ),
+            (
+                "missing_empty_memory_field",
+                empty_context,
+                lambda sent: sent.pop("memory"),
+                ("memory_snapshot_matches",),
+            ),
+            (
+                "missing_empty_sources_field",
+                empty_context,
+                lambda sent: sent.pop("sources"),
+                ("source_snapshot_matches",),
+            ),
+            (
+                "missing_empty_files_field",
+                empty_context,
+                lambda sent: sent.pop("files"),
+                ("file_snapshot_matches",),
+            ),
+        )
+        for name, context, mutation, false_receipt_fields in cases:
+            with self.subTest(mismatch=name):
+                observed_receipts = []
+                with self.assertRaises(AssertionError):
+                    self._run_normal_consumer(
+                        context, mutate_sent=mutation, observed_receipts=observed_receipts,
+                    )
+                self.assertEqual(len(observed_receipts), 1)
+                for field in false_receipt_fields:
+                    self.assertFalse(observed_receipts[0][field], field)
+                if name.startswith("missing_empty_"):
+                    snapshot = name.removeprefix("missing_empty_").removesuffix("_field")
+                    empty_field = {
+                        "memory": "memory_snapshot_empty",
+                        "sources": "source_snapshot_empty",
+                        "files": "file_snapshot_empty",
+                    }[snapshot]
+                    self.assertFalse(observed_receipts[0][empty_field])
 
     def test_disjoint_identity_controls_exclude_shared_owner_but_keep_other_agent(self):
         from docs.qualification.p04.native_runner import _forbidden_identity_values
