@@ -154,3 +154,10 @@ def test_m1_m2_migration_head_matches_models(env, migrated):
     assert check.returncode == 0 and "No new upgrade operations detected" in (check.stdout + check.stderr)
     again = harness.migrate(env)  # upgrade is idempotent at head
     assert again.returncode == 0
+
+
+@pytest.mark.parametrize("name", ["EDGE_OS_PRIVY_VERIFICATION_KEY", "EDGE_OS_PRIVY_APP_ID"])
+def test_an_empty_required_value_stops_startup_with_the_field_name(env, name):
+    with pytest.raises(ConfigError) as caught:
+        load_settings({**env, name: ""})
+    assert name.removeprefix("EDGE_OS_").lower() in str(caught.value)

@@ -7,6 +7,7 @@ import { QuestionForm } from "./QuestionForm";
 export interface ConversationContext {
   bundle: Bundle;
   busy: boolean;
+  message?: { kind: "error" | "notice"; text: string; surface: string };
   answer(questionId: string, choiceId: string, origin?: HTMLElement): void;
 }
 
@@ -25,7 +26,7 @@ export function Conversation({ context, idPrefix, showTitle = true }: { context:
       </>
     );
   }
-  const { bundle, busy, answer } = context;
+  const { bundle, busy, answer, message } = context;
   const { intake, clarifications, head } = bundle;
   const text = intake.content.original_request;
   // Say what the answer changed, in the words of the saved record, not the internal choice ID.
@@ -56,7 +57,7 @@ export function Conversation({ context, idPrefix, showTitle = true }: { context:
         {clarifications.length === 0 ? <p className="muted">No questions answered yet.</p> : null}
       </div>
       {head.outcome === "NEEDS_CLARIFICATION" ? (
-        <QuestionForm questions={head.questions} busy={busy} idPrefix={idPrefix} onAnswer={answer} />
+        <QuestionForm questions={head.questions} busy={busy} idPrefix={idPrefix} onAnswer={answer} message={message} />
       ) : (
         <p className="muted">No question is open for this revision.</p>
       )}

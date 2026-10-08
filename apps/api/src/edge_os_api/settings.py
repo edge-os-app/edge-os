@@ -47,14 +47,25 @@ class Settings(BaseSettings):
             raise ValueError("must not be empty")
         return value
 
-    @field_validator("privy_verification_key", "privy_verification_key_previous")
+    @field_validator("privy_verification_key")
     @classmethod
-    def _key(cls, value: str | None) -> str | None:
-        if value is None or value == "":
-            return None if value is None else value
+    def _key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
         try:
             parse_public_key(value)
         except Exception as error:  # noqa: BLE001 - message must not echo key material
+            raise ValueError("must load as an EC P-256 public key") from error
+        return value
+
+    @field_validator("privy_verification_key_previous")
+    @classmethod
+    def _previous_key(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None  # the previous key is optional; an empty value means none
+        try:
+            parse_public_key(value)
+        except Exception as error:  # noqa: BLE001
             raise ValueError("must load as an EC P-256 public key") from error
         return value
 

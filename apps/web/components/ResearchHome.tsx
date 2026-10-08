@@ -26,7 +26,9 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
   const [hasMore, setHasMore] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(""); // field validation, shown under the textarea
+  const [submitError, setSubmitError] = useState(""); // a failed request, shown beside the button
+  const submitMessage = useRef<HTMLParagraphElement>(null);
   const job = KINDS.find((k) => k.id === kind)!.job;
 
   // Focus returns to the control that opened the request. The saved list loads after mount, so wait for it,
@@ -61,10 +63,13 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
     setUseMarket(Boolean(sample.declared_market));
   };
 
+  useEffect(() => { if (submitError) submitMessage.current?.scrollIntoView({ block: "center" }); }, [submitError]);
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (busy) return;
     if (!text.trim()) { setError("Write your request first."); return; }
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setSubmitError("");
     try {
       const sample = samples.find((s) => s.declared_market)?.declared_market ?? null;
       const bundle = await api.submit({
@@ -73,7 +78,7 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
       });
       go(`#/research/${bundle.intake.record_id}`, "start-request");
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "The request was not saved. Try again.");
+      setSubmitError(e instanceof ApiError ? e.detail : "The request was not saved. Try again. Check the saved list first if you are unsure.");
       setBusy(false);
     }
   };
@@ -154,9 +159,10 @@ export function ResearchHome({ go, consumeReturn }: { go: (hash: string, from?: 
         </div>
 
         <div className="btn-row">
-          <button id="start-request" className="btn btn-primary" type="submit" disabled={busy}>{busy ? "Saving your words" : "Prepare request"}</button>
+          <button id="start-request" className="btn btn-primary" type="submit" aria-disabled={busy || undefined}>{busy ? "Saving your words…" : "Prepare request"}</button>
           <span className="muted" style={{ flex: "1 1 260px" }}>Preparing is free. We keep your words and restrictions, ask only what is missing, then show the rules for review. No study runs in this build.</span>
         </div>
+        {submitError ? <p role="alert" className="status err" ref={submitMessage} tabIndex={-1}>{submitError}</p> : null}
       </form>
 
       <section aria-labelledby="saved-title" className="stack">

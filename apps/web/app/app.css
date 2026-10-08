@@ -37,7 +37,8 @@ body { min-height: 100%; }
 textarea.input { min-height: 120px; line-height: 1.5; }
 .input::placeholder { color: color-mix(in srgb, var(--color-text) 76%, transparent); } /* 4.5:1 or better on --color-surface */
 .btn { min-height: var(--control-min); font-size: 15px; transition: transform 140ms var(--ease-out), background-color 120ms ease; }
-.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: scale(0.97); }
+.btn[aria-disabled="true"] { opacity: 0.6; cursor: progress; } /* busy: still focusable, clearly working */
 .btn-primary { background: var(--color-accent-700); color: var(--color-neutral-100); }
 .btn-primary:hover:not(:disabled) { background: var(--color-accent-800); }
 .btn-primary:active:not(:disabled) { background: var(--color-accent-900); }

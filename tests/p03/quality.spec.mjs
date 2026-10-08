@@ -253,7 +253,16 @@ test("no horizontal scroll with long unbroken text, at any width", async ({ page
 });
 
 const alerts = (page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
-const inView = (page, locator) => locator.evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+const inView = (page, locator) => locator.evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= -1 && r.bottom <= window.innerHeight + 1; });
+// The scroll happens in an effect right after the text appears, so wait for it rather than sampling once.
+const expectInView = async (page, locator, message) => {
+  try { await expect.poll(() => inView(page, locator), { message, timeout: 4000 }).toBe(true); }
+  catch (error) {
+    const metrics = await locator.evaluate((el) => { const r = el.getBoundingClientRect(); const dlg = el.closest("dialog"); return { top: r.top, bottom: r.bottom, innerHeight: window.innerHeight, scrollY: window.scrollY, docHeight: document.documentElement.scrollHeight, inDialog: !!dlg, dialogScrollTop: dlg?.scrollTop ?? null, dialogHeight: dlg?.getBoundingClientRect().height ?? null, text: el.textContent.slice(0, 60) }; });
+    fs.writeFileSync(path.join(outDir, `not-in-view-${Date.now()}.json`), JSON.stringify({ message, metrics }, null, 2));
+    throw error;
+  }
+};
 
 test("a failed answer or save keeps focus on the pressed button and shows the error in view", async ({ page }, info) => {
   await open(page, tokens.a);
@@ -268,7 +277,7 @@ test("a failed answer or save keeps focus on the pressed button and shows the er
   await page.keyboard.press("Enter");
   await expect(alerts(page)).toContainText("unavailable");
   await expect(adopt).toBeFocused();
-  expect(await inView(page, alerts(page).first()), "the error must be on screen").toBe(true);
+  await expectInView(page, alerts(page).first(), "the error must be on screen");
   await page.unroute("**/clarifications");
   await page.keyboard.press("Enter"); // retry works and the answer succeeds
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
@@ -279,7 +288,7 @@ test("a failed answer or save keeps focus on the pressed button and shows the er
   await page.keyboard.press("Enter");
   await expect(alerts(page)).toContainText("unavailable");
   await expect(save).toBeFocused();
-  expect(await inView(page, alerts(page).first()), "the save error must be on screen").toBe(true);
+  await expectInView(page, alerts(page).first(), "the save error must be on screen");
   await page.unroute("**/revisions");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("revision")).toBeVisible();
@@ -371,4 +380,65 @@ test("a late focus return never steals focus from a field the person is typing i
   await expect(words).toBeFocused();
   await expect(words).toHaveValue("still typing");
   await page.unroute("**/v1/research/requests");
+});
+
+const unavailable = { status: 503, contentType: "application/json", body: JSON.stringify({ code: "service_unavailable", findings: [{ detail: "A required service is unavailable. Retry later." }] }) };
+
+test("a failed answer inside the conversation surface shows its error there and keeps focus on the button", async ({ page }, info) => {
+  const modal = info.project.name === "mobile-390";
+  await open(page, tokens.a);
+  await sample(page, /Recent rises seem to keep running/).click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  let surface;
+  if (modal) {
+    await page.getByRole("button", { name: "Conversation" }).click();
+    surface = page.getByRole("dialog", { name: "Conversation" });
+  } else surface = page.locator(".convo-desktop");
+  await expect(surface).toBeVisible();
+  await page.route("**/clarifications", (route) => route.fulfill(unavailable));
+  const adopt = surface.getByRole("button", { name: "Adopt these settings" });
+  await adopt.focus();
+  await page.keyboard.press("Enter");
+  const message = surface.locator('[role="alert"]');
+  await expect(message).toContainText("unavailable"); // the error is inside the surface the person is using
+  await expectInView(page, message.first(), "the error must be on screen");
+  await expect(adopt).toBeFocused();
+  await page.unroute("**/clarifications");
+  await page.keyboard.press("Enter");
+  await expect(surface.locator('[role="alert"]')).toHaveCount(0); // success clears the message
+  await page.screenshot({ path: path.join(outDir, `conversation-failure-${info.project.name}.png`), fullPage: false });
+});
+
+test("a failed first submit keeps focus on the button and shows the error next to it", async ({ page }, info) => {
+  await open(page, tokens.a);
+  await sample(page, "Specific thesis").click();
+  await page.route("**/v1/research/requests", (route) => route.request().method() === "POST" ? route.fulfill(unavailable) : route.continue());
+  const prepare = page.getByRole("button", { name: "Prepare request" });
+  await prepare.focus();
+  await page.keyboard.press("Enter");
+  await expect(alerts(page)).toContainText("unavailable");
+  await expect(prepare).toBeFocused();
+  await expectInView(page, alerts(page).first(), "the submit error must be on screen");
+  await page.unroute("**/v1/research/requests");
+  await page.keyboard.press("Enter"); // the retry works and opens the saved request
+  await expect(page.getByRole("heading", { name: "Your request" })).toBeVisible();
+  await page.screenshot({ path: path.join(outDir, `intake-failure-${info.project.name}.png`), fullPage: false });
+});
+
+test("a pending action shows that it is working", async ({ page }) => {
+  await open(page, tokens.a);
+  await sample(page, "Specific thesis").click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.route("**/clarifications", async (route) => { await new Promise((r) => setTimeout(r, 1200)); await route.continue(); });
+  const adopt = page.locator("main").getByRole("button", { name: /Adopt these settings|Saving/ });
+  await adopt.focus();
+  await page.keyboard.press("Enter");
+  await expect(adopt).toHaveAttribute("aria-disabled", "true");
+  await expect(adopt).toContainText("Saving");
+  const opacity = await adopt.evaluate((el) => Number(getComputedStyle(el).opacity));
+  expect(opacity).toBeLessThan(1); // dimmed while busy
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  await page.unroute("**/clarifications");
 });

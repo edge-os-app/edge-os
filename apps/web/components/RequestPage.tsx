@@ -35,6 +35,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [answerMessage, setAnswerMessage] = useState<{ kind: "error" | "notice"; text: string; surface: string } | undefined>(undefined);
   const [verified, setVerified] = useState<null | boolean>(null);
   const [opened, setOpened] = useState<"loading" | "loaded">("loading");
 
@@ -56,15 +57,16 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
     if (!bundle?.head.interpretation_revision_id) return;
     // Remember which surface took the answer. After the state change, focus stays there.
     const surface = origin?.closest<HTMLElement>("[data-focus-surface]") ?? null;
-    setBusy(true); setError(""); setNotice("");
+    const surfaceName = surface?.dataset.focusSurface ?? "main";
+    setBusy(true); setAnswerMessage(undefined);
     try {
       setBundle(await api.answer(id, { previous_revision_id: bundle.head.interpretation_revision_id, question_id: questionId, choice_id: choiceId }));
       focusSurface.current = surface; // the answered form is gone; the layout effect lands focus on the new state
     } catch (e) {
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
-        setNotice("This request changed elsewhere. It was reloaded. Check the question and answer again.");
+        setAnswerMessage({ kind: "notice", surface: surfaceName, text: "This request changed elsewhere. It was reloaded. Check the question and answer again." });
         await reload();
-      } else setError(e instanceof ApiError ? e.detail : "Your answer was not saved.");
+      } else setAnswerMessage({ kind: "error", surface: surfaceName, text: e instanceof ApiError ? e.detail : "Your answer was not saved." });
     } finally { setBusy(false); }
   }, [bundle, id, reload]);
 
@@ -81,9 +83,9 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
   }, [bundle]);
 
   useEffect(() => {
-    setContext(bundle ? { bundle, busy, answer } : null);
+    setContext(bundle ? { bundle, busy, answer, message: answerMessage } : null);
     return () => setContext(null);
-  }, [bundle, busy, answer, setContext]);
+  }, [bundle, busy, answer, answerMessage, setContext]);
 
   const revision = bundle?.revisions[0];
   useEffect(() => {
@@ -182,7 +184,7 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
       {outcome === "NEEDS_CLARIFICATION" && (
         <section className="panel" aria-labelledby="q-title">
           <h2 id="q-title">What we need from you</h2>
-          <QuestionForm questions={head.questions} busy={busy} idPrefix="main" onAnswer={answer} onCancel={() => go("#/research", `req-${id}`)} />
+          <QuestionForm questions={head.questions} busy={busy} idPrefix="main" onAnswer={answer} message={answerMessage} onCancel={() => go("#/research", `req-${id}`)} />
         </section>
       )}
 

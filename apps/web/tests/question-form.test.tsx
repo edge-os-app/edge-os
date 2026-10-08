@@ -30,6 +30,20 @@ describe("question form", () => {
     expect(onAnswer).toHaveBeenCalledWith("adopt-suggested-settings", "adopt", expect.any(HTMLFormElement));
   });
 
+  it("shows a failure inside the form that was submitted, and says it is working while busy", () => {
+    const { rerender } = render(<QuestionForm questions={[adopt]} busy idPrefix="t" onAnswer={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /Saving/ })).toHaveAttribute("aria-disabled", "true");
+    const failure = { kind: "error" as const, surface: "t", text: "A required service is unavailable. Retry later." };
+    rerender(<QuestionForm questions={[adopt]} busy={false} idPrefix="t" onAnswer={vi.fn()} message={failure} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("unavailable");
+    expect(screen.getByRole("button", { name: "Adopt these settings" })).toBeInTheDocument();
+    rerender(<QuestionForm questions={[adopt]} busy={false} idPrefix="t" onAnswer={vi.fn()} message={{ kind: "notice", surface: "t", text: "This request changed elsewhere." }} />);
+    expect(screen.getByRole("status")).toHaveTextContent("changed elsewhere");
+    // another surface acted: this form stays quiet, so a failure is announced once
+    rerender(<QuestionForm questions={[adopt]} busy={false} idPrefix="t" onAnswer={vi.fn()} message={{ ...failure, surface: "sheet" }} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("offers a way out that keeps the work", async () => {
     const onCancel = vi.fn(); const user = userEvent.setup();
     render(<QuestionForm questions={[choice]} busy={false} idPrefix="t" onAnswer={vi.fn()} onCancel={onCancel} />);
@@ -41,7 +55,7 @@ describe("question form", () => {
   it("ignores a second answer while a save is in flight, without dropping keyboard focus", async () => {
     const onAnswer = vi.fn(); const user = userEvent.setup();
     render(<QuestionForm questions={[adopt]} busy idPrefix="t" onAnswer={onAnswer} />);
-    const button = screen.getByRole("button", { name: "Adopt these settings" });
+    const button = screen.getByRole("button", { name: /Saving/ });
     expect(button).toHaveAttribute("aria-disabled", "true");
     expect(button).not.toBeDisabled(); // a disabled button would lose focus on a failed save
     button.focus();

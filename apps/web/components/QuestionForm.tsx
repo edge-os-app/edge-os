@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ORIGIN_LABEL } from "../lib/describe";
 import type { FieldEvidence, Question } from "../lib/types";
 
@@ -10,15 +10,25 @@ export interface AnswerProps {
   idPrefix: string;
   onAnswer(questionId: string, choiceId: string, origin?: HTMLElement): void;
   onCancel?(): void;
+  message?: { kind: "error" | "notice"; text: string; surface: string };
 }
 
-export function QuestionForm({ questions, busy, idPrefix, onAnswer, onCancel }: AnswerProps) {
+export function QuestionForm({ questions, busy, idPrefix, onAnswer, onCancel, message: pending }: AnswerProps) {
+  // Only the surface where the person acted shows the message, so one failure is announced once.
+  const shown = pending && pending.surface === idPrefix ? pending : undefined;
+  const error = shown?.kind === "error" ? shown.text : "";
+  const notice = shown?.kind === "notice" ? shown.text : "";
+  const message = useRef<HTMLParagraphElement>(null);
+  // A failure must be visible in the surface where the person acted, next to the button they pressed.
+  useEffect(() => { if (error || notice) message.current?.scrollIntoView?.({ block: "center" }); }, [error, notice]);
   if (questions.length === 0) return null;
   return (
     <div className="stack">
       {questions.map((question) => (
         <One key={question.question_id} question={question} busy={busy} idPrefix={idPrefix} onAnswer={onAnswer} />
       ))}
+      {error ? <p role="alert" className="status err" ref={message} tabIndex={-1}>{error}</p> : null}
+      {!error && notice ? <p role="status" className="status ok" ref={message}>{notice}</p> : null}
       {onCancel ? (
         <div className="btn-row">
           <button type="button" className="btn btn-secondary" onClick={onCancel}>Not now</button>
@@ -70,7 +80,7 @@ function One({ question, busy, idPrefix, onAnswer }: { question: Question; busy:
       )}
       <div className="btn-row">
         <button type="submit" className="btn btn-primary" disabled={!choice} aria-disabled={busy || undefined}>
-          {question.kind === "ADOPT" ? "Adopt these settings" : "Save my answer"}
+          {busy ? "Saving…" : question.kind === "ADOPT" ? "Adopt these settings" : "Save my answer"}
         </button>
       </div>
     </form>
