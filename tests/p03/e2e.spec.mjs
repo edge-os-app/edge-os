@@ -1199,13 +1199,15 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await expect(page.getByText(/capital flow, not trading profit/i)).toBeVisible();
   await expect(page.getByText(/Account value, percent return, and drawdown are unavailable/)).toBeVisible();
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText(/Permission approval history/)).toBeVisible();
+  const permissionAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+  await expect(permissionAgent.getByText(/Permission approval history/)).toBeVisible();
   if (agentId === "agent-a") {
-    await expect(page.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/)).toBeVisible();
-    await page.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/).click();
-    await expect(page.getByText("Failed / cancelled").locator("..")).toContainText("2026-10-09T08:02:00Z");
+    const failedSnapshot = permissionAgent.locator("li").filter({ hasText: "approval-a-v5 · FAILED · NEVER_ACTIVE" });
+    await expect(failedSnapshot.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/)).toBeVisible();
+    await failedSnapshot.locator("summary").click();
+    await expect(failedSnapshot.locator("dd").nth(6)).toContainText("2026-10-09T08:02:00Z");
   } else {
-    await expect(page.getByText(/approval-b-v6 · CHANGE_APPLIED · ACTIVE/)).toBeVisible();
+    await expect(permissionAgent.getByText(/approval-b-v6 · CHANGE_APPLIED · ACTIVE/)).toBeVisible();
   }
   await shot(page, project, "p19-funds-synthetic");
   await page.getByRole("button", { name: "Research" }).click();
