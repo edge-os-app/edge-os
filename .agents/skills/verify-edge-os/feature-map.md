@@ -12,6 +12,7 @@ Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column na
 | P06 price/quote-volume compiler and review meaning | Scripted quote-volume, both opposite nested Boolean groupings, and exact positive/negative tiny-threshold inputs are typed, adopted, reviewed, saved, reopened, and checked after API restart; the provenance table opens with both exact thresholds at desktop and 390px without document overflow; mapped-only inputs do not appear among home examples; RSI rejection names Entry rule | same clarification/publication routes; `GET /v1/strategies/{id}/revisions/{revision_id}` | P06 StrategySpec schema/manifest, exact `relative_volume(2)` and grouped trees, full decimal thresholds, immutable content/manifest hashes | `ui-results.json` keys `volume-rule-*`, `grouped-rule-*`, `grouped-right-*`, `tiny-threshold-*`, `tiny-threshold-positive-*`; SQL inspection checks saved entry trees against labelled scripted fixtures; `ui-reopen.log` and `*-reopened-after-restart.png` capture post-restart assertions/screens; `apps/api/tests/test_p06_api.py` |
 | Rough hunch | Keyboard choice (arrow keys, Enter) then adopt | `POST …/clarifications` twice | two `Clarification` rows | screenshot `05`; the `USER_CONFIRMED` entry origin is asserted by `apps/api/tests/test_research_flow.py`, not by the mapped run |
 | Bounded no-thesis | Investigation stays an investigation, outcome Unresolved, no save button | `POST /v1/research/requests` | `Outcome` `UNRESOLVED`, no `StrategyDraft` | screenshot `06` |
+| P08 investigation adoption | Review original question, hypothesis/claim/falsification/alternatives/unknowns, fixture pool and limits; explicit adoption; save and reopen after API restart | `GET …/investigation-proposal`, `POST …/investigations`, owner-scoped `GET` list and exact declaration | append-only `investigation_declarations` and `investigation_access_events`; pre-outcome, unread outcomes, zero provider calls, no study, fixture-only and $0 | `ui-results.json` `investigation-*`, `sql-inspection.json`, `ownership-drive.json`, `ui-reopen.log`, `*-investigation-saved.png` |
 | Unsupported meaning or restriction | Outcome "Not supported yet", words and restrictions kept | same | `Outcome` `UNSUPPORTED` | screenshot `07` |
 | Unscripted text | Outcome "Could not be interpreted", not a verdict on the idea | same | `Outcome` `INVALID_INPUT` | `ui-e2e.log` |
 | Contextual conversation | Desktop side panel; 390px sheet with Escape, Tab wrap, focus return | same records as the page | none | screenshot `08` |
@@ -46,6 +47,11 @@ select content->>'original_request', content->'restrictions' from records where 
 select revision_id, strategy_id, parent_revision_id, content_sha256, manifest_sha256, created_at from strategy_revisions;
 select content->>'question', content->'changed_fields' from records where record_type = 'Clarification' order by seq;
 select count(*) from users;  -- one row per signed-in owner, nothing else created by login
+select d.declaration_id, d.intake_record_id, d.content->>'declaration_state', d.content->>'outcome_labels_read',
+       d.content->'configuration'->'permitted_access', d.content->'configuration'->'compute_limit'->>'max_cost_usd',
+       e.content->>'event', e.content->>'outcome_labels_read', e.content->>'provider_queries', e.content->>'study_started'
+from investigation_declarations d join investigation_access_events e
+  on e.owner_id=d.owner_id and e.declaration_id=d.declaration_id;
 ```
 
 The hash check: `strategy_canonical` from `strategy_revisions` hashes (SHA-256) to `content_sha256`.

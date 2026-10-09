@@ -274,6 +274,43 @@ test("no thesis stays an investigation and shows no study progress", async ({ pa
   await shot(page, project, "06-unresolved");
 });
 
+test("adopt and save a bounded pre-outcome investigation declaration", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill("Compare the descriptive launch cohorts in a synthetic fixture.");
+  await page.getByRole("radio").nth(2).check();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("investigation-review")).toBeVisible();
+  await expect(page.getByTestId("investigation-original-request")).toHaveText("Compare the descriptive launch cohorts in a synthetic fixture.");
+  await expect(page.getByText(/unqualified synthetic fixture/).first()).toBeVisible();
+  await expect(page.getByLabel("Unverified mechanism details and evidence gaps")).toHaveValue(/Participant identity and incentives are unverified\./);
+  await page.getByRole("checkbox", { name: /I reviewed the hypothesis and every required setting/ }).check();
+  await page.getByRole("button", { name: "Adopt and save declaration" }).click();
+  await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
+  await expect(page.getByTestId("investigation-saved")).toContainText("DECLARATION_SAVED");
+  await expect(page.getByTestId("investigation-saved")).toContainText("Outcome labels read");
+  const declarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
+  await page.getByTestId("investigation-saved").locator("summary").click();
+  const uiContent = JSON.parse(await page.getByTestId("investigation-saved").locator("details pre").innerText());
+  const intakeId = page.url().split("/research/").at(-1).split("?")[0].split("#")[0];
+  const exactResponse = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${declarationId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(exactResponse.status()).toBe(200);
+  const exact = await exactResponse.json();
+  expect(uiContent).toEqual(exact.declaration.content);
+  expect(exact.access_history[0]).toMatchObject({ event: "DECLARATION_SAVED", outcome_labels_read: false,
+    provider_queries: 0, study_started: false });
+  const requestUrl = page.url();
+  record(`investigation-${project}`, { url: requestUrl, declarationId, content: exact.declaration.content,
+    access: Object.fromEntries(["schema_version", "event", "outcome_labels_read", "provider_queries", "study_started"]
+      .map((field) => [field, exact.access_history[0][field]])),
+    original: "Compare the descriptive launch cohorts in a synthetic fixture." });
+  await shot(page, project, "investigation-saved");
+  await page.getByRole("button", { name: "Reopen saved declaration" }).click();
+  await expect(page.getByTestId("investigation-saved")).toContainText(declarationId);
+  await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
+});
+
 test("unsupported meaning and unsupported restriction are kept and block compilation", async ({ page }, info) => {
   const project = info.project.name;
   await open(page, tokens.a);

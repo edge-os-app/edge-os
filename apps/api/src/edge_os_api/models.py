@@ -101,3 +101,58 @@ class IdempotencyRecord(Base):
     __table_args__ = (
         CheckConstraint("length(idempotency_key) BETWEEN 1 AND 200", name="ck_idempotency_key_length"),
     )
+
+
+class InvestigationDeclaration(Base):
+    """Append-only P08 EdgeSpec and adopted research configuration."""
+
+    __tablename__ = "investigation_declarations"
+    declaration_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    intake_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    edge_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    edge_version: Mapped[int] = mapped_column(nullable=False)
+    parent_declaration_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "declaration_id", name="uq_investigation_owner_declaration"),
+        UniqueConstraint("owner_id", "intake_record_id", "declaration_id", name="uq_investigation_owner_intake_declaration"),
+        UniqueConstraint("owner_id", "intake_record_id", "idempotency_key", name="uq_investigation_owner_request_key"),
+        UniqueConstraint("owner_id", "operation_id", name="uq_investigation_owner_operation"),
+        UniqueConstraint("owner_id", "edge_id", "edge_version", name="uq_investigation_edge_version"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id"], ["records.owner_id", "records.record_id"],
+                             name="fk_investigation_intake"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id", "parent_declaration_id"],
+                             ["investigation_declarations.owner_id", "investigation_declarations.intake_record_id",
+                              "investigation_declarations.declaration_id"], name="fk_investigation_parent"),
+        ForeignKeyConstraint(["owner_id"], ["users.id"], name="fk_investigation_owner"),
+        CheckConstraint("edge_version >= 1", name="ck_investigation_edge_version"),
+        CheckConstraint("length(idempotency_key) BETWEEN 1 AND 200", name="ck_investigation_idempotency_key"),
+        CheckConstraint("fingerprint ~ '^[0-9a-f]{64}$'", name="ck_investigation_fingerprint"),
+        Index("ix_investigation_owner_intake", "owner_id", "intake_record_id", "created_at"),
+    )
+
+
+class InvestigationAccessEvent(Base):
+    """Append-only declaration-time access evidence; P08 never records outcome reads on save."""
+
+    __tablename__ = "investigation_access_events"
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    declaration_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False, unique=True)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["owner_id", "declaration_id"],
+                             ["investigation_declarations.owner_id", "investigation_declarations.declaration_id"],
+                             name="fk_investigation_access_declaration"),
+        UniqueConstraint("owner_id", "event_id", name="uq_investigation_access_owner_event"),
+        Index("ix_investigation_access_owner_declaration", "owner_id", "declaration_id", "sequence"),
+    )

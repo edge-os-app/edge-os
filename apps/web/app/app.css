@@ -88,6 +88,8 @@ table.records th, table.records td { text-align: left; padding: var(--space-2); 
 table.records td:nth-of-type(1) { overflow-wrap: break-word; }
 table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
 .cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+.investigation-review .input { min-height: 44px; }
+.investigation-review .records-json { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .card-open { display: flex; flex-direction: column; gap: var(--space-2); text-align: left; width: 100%; font: inherit; color: inherit; cursor: pointer;
   background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md); padding: var(--space-4);
   transition: transform 140ms var(--ease-out), border-color 120ms ease; }

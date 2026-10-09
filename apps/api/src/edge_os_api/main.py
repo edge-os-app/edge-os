@@ -15,12 +15,12 @@ from sqlalchemy.exc import DataError, OperationalError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 
-from . import p02, service
+from . import investigation_adoption, p02, service
 from .auth import Principal, Verifier, require_principal
 from .db import current_revision, make_engine, make_session_factory, require_head, script_head
 from .errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
 from .interpreter import samples
-from .schemas import ClarificationBody, IntakeBody, PublicationBody
+from .schemas import ClarificationBody, IntakeBody, InvestigationBody, PublicationBody
 from .settings import Settings, load_settings
 
 log = logging.getLogger("edge_os")
@@ -171,6 +171,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if parsed is None:
             raise not_found()
         return run(session, lambda: service.load_bundle(session, principal, parsed))
+
+    @private.get("/research/requests/{intake_id}/investigation-proposal")
+    def investigation_proposal(intake_id: str, principal: Principal = Depends(require_principal),
+                              session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_adoption.get_proposal(session, principal, intake_id))
+
+    @private.post("/research/requests/{intake_id}/investigations")
+    def save_investigation(intake_id: str, data: Any = Depends(read_json),
+                           principal: Principal = Depends(require_principal),
+                           session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(InvestigationBody, data)
+        status, result = run(session, lambda: investigation_adoption.create_declaration(
+            session, principal, intake_id, body), retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
+
+    @private.get("/research/requests/{intake_id}/investigations")
+    def get_investigations(intake_id: str, principal: Principal = Depends(require_principal),
+                           session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_adoption.list_declarations(session, principal, intake_id))
+
+    @private.get("/research/requests/{intake_id}/investigations/{declaration_id}")
+    def get_investigation(intake_id: str, declaration_id: str,
+                          principal: Principal = Depends(require_principal),
+                          session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_adoption.get_declaration(
+            session, principal, intake_id, declaration_id))
 
     @private.post("/research/requests/{intake_id}/clarifications", status_code=201)
     def answer(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),

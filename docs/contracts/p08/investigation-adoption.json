@@ -1,0 +1,95 @@
+{
+  "schema_version": "p08.investigation-declaration/1",
+  "record_type": "InvestigationDeclaration",
+  "proposal_version": "p08-bounded-review/1",
+  "budget_version": "p08-research-budget/1",
+  "access_event_version": "p08.investigation-access/1",
+  "append_only": true,
+  "owner": "verified-principal",
+  "source_record": "owner-owned IntakeRequest and current PromptInterpretation when one exists",
+  "required_adoption_fields": [
+    "edge_spec",
+    "question",
+    "pool_binding",
+    "variants",
+    "direction",
+    "horizons",
+    "sources",
+    "candidate_limit",
+    "parameter_limit",
+    "compute_limit",
+    "period",
+    "partitions",
+    "permitted_access",
+    "stopping_rule",
+    "budget_version",
+    "optional_tools"
+  ],
+  "field_origins": ["USER_STATED", "USER_CONFIRMED", "APPLICATION_CONFIGURED"],
+  "adoption": "Every required field has an origin, source reference, and ADOPTED status before save.",
+  "limits": {
+    "request_body_bytes": 262144,
+    "variants": 20,
+    "horizons": 20,
+    "sources": 20,
+    "candidate_limit": 100,
+    "parameter_limit": 1000,
+    "max_evaluations": 100,
+    "max_runtime_seconds": 3600,
+    "max_cost_usd": "0",
+    "period_timezone": "UTC",
+    "access_route": "FIXTURE_ONLY"
+  },
+  "pool_binding": {
+    "profile_id": "fixture-unqualified-pool/1",
+    "qualification": "UNQUALIFIED_FIXTURE",
+    "production_qualified": false
+  },
+  "declaration": {
+    "required": [
+      "original_request",
+      "restrictions",
+      "input_class",
+      "requested_job",
+      "interpretation_revision_id",
+      "edge_spec",
+      "configuration",
+      "adopted_fields",
+      "field_origins",
+      "trial_ids",
+      "evaluation_ids",
+      "declaration_state",
+      "outcome_labels_read"
+    ],
+    "pre_outcome_state": "PRE_OUTCOME_DECLARED",
+    "outcome_labels_read": false
+  },
+  "edge_spec": {
+    "identity": ["edge_id", "version", "parent_declaration_id"],
+    "required": ["hypothesis", "claim", "falsification", "alternatives", "unknowns"],
+    "new_hypothesis": "New edge_id and version 1",
+    "revision": "Same edge_id, parent declaration owned by the same user and request, version incremented by one",
+    "descriptive_status": "DESCRIPTIVE_ONLY",
+    "unknowns": "Explicitly name unverified participants/incentives, persistence/capacity, costs and evidence gaps; do not infer them."
+  },
+  "access_event": {
+    "event": "DECLARATION_SAVED",
+    "outcome_labels_read": false,
+    "provider_queries": 0,
+    "study_started": false
+  },
+  "optional_tools": {
+    "creator_history": ["UNAVAILABLE", "NOT_REQUIRED"],
+    "wallet_pnl": ["UNAVAILABLE", "NOT_REQUIRED"],
+    "social_signals": ["UNAVAILABLE", "NOT_REQUIRED"]
+  },
+  "errors": [
+    "required_setting_not_adopted",
+    "original_request_changed",
+    "interpretation_revision_conflict",
+    "parent_declaration_conflict",
+    "idempotency_key_reused",
+    "configuration_origin_mismatch",
+    "paid_access_not_permitted"
+  ]
+}
