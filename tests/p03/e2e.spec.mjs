@@ -184,6 +184,21 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(replay.getByTestId("spot-replay-result")).toContainText("SELL_FILLED");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("990.51132338308457711442786069651741293532338308458");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("no gas, spread, additional impact, or capacity model");
+  const summary = replay.getByRole("heading", { name: "Simulated replay summary" });
+  await expect(summary).toBeVisible();
+  const balanceChart = replay.getByRole("img", { name: "Account balance in quote over the replay window" });
+  await expect(balanceChart).toBeVisible();
+  await expect(balanceChart.locator("polyline")).toHaveCount(1);
+  await expect(replay.getByRole("list", { name: "Saved account value samples" }).locator("li")).toHaveCount(6);
+  const leadingOrder = await replay.evaluate((root) => {
+    const summaryElement = root.querySelector("#spot-replay-summary-title");
+    const chartElement = root.querySelector("[data-testid='spot-replay-balance-chart']");
+    const savedInputsElement = root.querySelector("[data-testid='spot-replay-saved-inputs']");
+    return Boolean(summaryElement && chartElement && savedInputsElement
+      && summaryElement.compareDocumentPosition(savedInputsElement) & Node.DOCUMENT_POSITION_FOLLOWING
+      && chartElement.compareDocumentPosition(savedInputsElement) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  expect(leadingOrder, "summary and chart must lead exact settings/details").toBe(true);
   const savedInputs = replay.getByTestId("spot-replay-saved-inputs");
   await expect(savedInputs).toContainText("p12.spot-replay/1");
   await expect(savedInputs).toContainText(revisionId);
@@ -192,11 +207,27 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(savedInputs).toContainText("price@0, price@-1");
   const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
   const replayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  const savedReplayResponse = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${replayId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(savedReplayResponse.status()).toBe(200);
+  const savedReplay = await savedReplayResponse.json();
+  const summaryText = await replay.locator(".spot-replay-summary").innerText();
+  for (const [metric, value] of Object.entries(savedReplay.content.result.metrics)) {
+    if (value !== null && savedReplay.content.result.metric_statuses[metric] === "AVAILABLE") {
+      expect(summaryText).toContain(String(value));
+    }
+  }
+  const samplesList = replay.getByRole("list", { name: "Saved account value samples" });
+  for (const sample of savedReplay.content.result.samples) {
+    if (sample.account_value_quote !== null) await expect(samplesList).toContainText(sample.account_value_quote);
+  }
   record(`spot-replay-${project}`, { url: requestUrl, revisionId, replayId, replayHash,
     expectedEntryDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -3 }],
     expectedExitDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -1 }],
     expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
-    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542",
+    expectedSamples: savedReplay.content.result.samples,
+    expectedMetrics: savedReplay.content.result.metrics });
   await shot(page, project, "05-spot-replay-saved");
 
   // Public API-created unavailable records exercise nullable saved binding shapes in the real UI.

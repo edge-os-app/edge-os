@@ -1,4 +1,5 @@
 import type { SpotReplayRecord } from "../lib/types";
+import { ReplayBalanceChart } from "./ReplayBalanceChart";
 
 interface Props { replay: SpotReplayRecord }
 
@@ -19,10 +20,32 @@ export function ReplayResult({ replay }: Props) {
     if (binding.essential_dependencies === null) return `${binding.state}: dependency list is null`;
     return `${binding.state}: ${binding.essential_dependencies.map(({ series, offset_buckets }) => `${series}@${offset_buckets}`).join(", ") || "no additional dependencies"}`;
   };
+  const summaryMetric = (name: "gain_loss_quote" | "completed_trade_pairs" | "largest_drawdown_quote", unit: string) => {
+    const value = result.metrics[name];
+    const status = result.metric_statuses[name] ?? "UNAVAILABLE";
+    const reasons = result.metric_reasons[name] ?? [];
+    if (status !== "AVAILABLE" || value === null || value === undefined) {
+      return `Unavailable${reasons.length ? `: ${reasons.join(", ")}` : ""}`;
+    }
+    const resolvedUnit = name === "completed_trade_pairs"
+      ? Number(value) === 1 ? "completed trade pair" : "completed trade pairs"
+      : unit;
+    return `${String(value)}${resolvedUnit ? ` ${resolvedUnit}` : ""}`;
+  };
   return (
     <section className={`status ${result.status === "COMPLETE" ? "ok" : "stop"}`} data-testid="spot-replay-result"
       aria-labelledby="spot-replay-result-title">
       <h3 id="spot-replay-result-title">Saved replay: {result.status === "COMPLETE" ? "complete" : "unavailable"}</h3>
+      {result.reason ? <p role="alert">{result.reason.code} at {result.reason.path}: {result.reason.detail}</p> : null}
+      <section className="spot-replay-summary" aria-labelledby="spot-replay-summary-title">
+        <h4 id="spot-replay-summary-title">Simulated replay summary</h4>
+        <dl className="kv">
+          <dt>Simulated gain/loss</dt><dd>{summaryMetric("gain_loss_quote", "quote")}</dd>
+          <dt>Completed trade pairs</dt><dd>{summaryMetric("completed_trade_pairs", "completed trade pairs")}</dd>
+          <dt>Largest drawdown</dt><dd>{summaryMetric("largest_drawdown_quote", "quote")}</dd>
+        </dl>
+      </section>
+      <ReplayBalanceChart samples={result.samples} />
       <dl className="kv">
         <dt>Replay ID</dt><dd className="mono" data-testid="spot-replay-id">{replay.replay_id}</dd>
         <dt>Saved hash</dt><dd className="mono">{replay.content_sha256}</dd>
@@ -46,7 +69,6 @@ export function ReplayResult({ replay }: Props) {
           <dt>Exit binding</dt><dd>{bindingSummary("exit")}</dd>
         </dl>
       </section>
-      {result.reason ? <p role="alert">{result.reason.code} at {result.reason.path}: {result.reason.detail}</p> : null}
       <div className="table-scroll">
         <table className="records" aria-label="Quote-denominated replay metrics">
           <thead><tr><th scope="col">Metric</th><th scope="col">Value</th><th scope="col">Status and reasons</th></tr></thead>

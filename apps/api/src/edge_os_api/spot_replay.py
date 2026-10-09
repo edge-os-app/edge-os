@@ -331,7 +331,7 @@ def _mandatory_timing_reasons(
             continue
         bucket = run.dataset.buckets[position]
         observation = _observation_for(bucket, series)
-        if observation is None or observation.value is None:
+        if observation is None:
             continue
         if (observation.bucket_end > decision_time
                 or observation.available_at is not None and observation.available_at > decision_time):

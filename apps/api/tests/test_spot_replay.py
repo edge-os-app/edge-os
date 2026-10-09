@@ -333,6 +333,121 @@ def test_spot_replay_blocks_future_or_unknown_timing_from_a_decisive_boolean_sib
                    for event in unknown_result.events)
 
 
+def test_present_null_consumed_observations_still_require_timing_before_reservation() -> None:
+    original, original_run, _ = _wc01_input()
+    quote_unit = f"QUOTE:{original['market']['research_binding']['quote_asset']}"
+    operands = (
+        ("price", {"op": "price"}, "price", 2, "PRICE"),
+        ("volume", {"op": "quote_volume"}, "quote_volume", 2, quote_unit),
+        ("lag-price", {"op": "lag", "value": {"op": "price"}, "buckets": 1}, "price", 1, "PRICE"),
+        ("lag-volume", {"op": "lag", "value": {"op": "quote_volume"}, "buckets": 1}, "quote_volume", 1, quote_unit),
+        ("sum-price", {"op": "sum", "value": {"op": "price"}, "buckets": 2}, "price", 1, "PRICE"),
+        ("mean-price", {"op": "mean", "value": {"op": "price"}, "buckets": 2}, "price", 1, "PRICE"),
+        ("sum-volume", {"op": "sum", "value": {"op": "quote_volume"}, "buckets": 2}, "quote_volume", 1, quote_unit),
+        ("mean-volume", {"op": "mean", "value": {"op": "quote_volume"}, "buckets": 2}, "quote_volume", 1, quote_unit),
+        ("price-return-endpoint", {"op": "price_return", "lookback_buckets": 2}, "price", 0, "DIMENSIONLESS"),
+        ("relative-volume-history", {"op": "relative_volume", "lookback_buckets": 2}, "quote_volume", 0, "DIMENSIONLESS"),
+    )
+    start = _moment("2026-10-01T12:00:00Z")
+    decision_time = start + timedelta(minutes=10)
+    for name, operand, series, position, unit in operands:
+        sibling_series = "quote_volume" if series == "price" else "price"
+        sibling_unit = quote_unit if sibling_series == "quote_volume" else "PRICE"
+        expression = {"op": "or", "args": [
+            {"op": "gt", "args": [operand, {"op": "constant", "value": "0", "unit": unit}]},
+            {"op": "gt", "args": [{"op": sibling_series}, {"op": "constant", "value": "0", "unit": sibling_unit}]},
+        ]}
+        strategy = _rebuild_strategy(
+            original, entry=expression, exit=expression, data_inputs=["price", "quote_volume"],
+        )
+        run = _scheduled_run(
+            strategy, original_run, ("8",) * 6, schedule_start=start,
+            window_start=decision_time, window_end=start + timedelta(minutes=30),
+        )
+        descriptor = copy.deepcopy(run.essential_evidence)
+        descriptor["fields"] = {
+            field: {"state": "BOUND", "essential_dependencies": []} for field in ("entry", "exit")
+        }
+        run = replace(run, essential_evidence=descriptor)
+        for action in ("BUY", "SELL"):
+            for delivery in ("timely", "late", "unknown"):
+                buckets = list(run.dataset.buckets)
+                bucket = buckets[position]
+                observation = getattr(bucket, series)
+                assert observation is not None, (name, position)
+                available_at = (
+                    bucket.bucket_end if delivery == "timely"
+                    else decision_time + timedelta(minutes=2) if delivery == "late"
+                    else None
+                )
+                buckets[position] = replace(bucket, **{
+                    series: replace(observation, value=None, available_at=available_at,
+                                    reasons=("AUTHORED_MISSING",)),
+                })
+                candidate = replace(
+                    run,
+                    dataset=replace(run.dataset, buckets=tuple(buckets)),
+                    initial_base_amount="0" if action == "BUY" else "25",
+                    initial_basis_quote="0" if action == "BUY" else "100",
+                )
+                result = run_spot_replay(strategy, candidate)
+                decision = next(event for event in result.events
+                                if event["kind"] == "DECISION" and event["at"] == decision_time)
+                field = "entry" if action == "BUY" else "exit"
+                assert decision[field]["value"] == "TRUE", (name, action, delivery)
+                assert "AUTHORED_MISSING" in decision[field]["reasons"], (name, action, delivery)
+                expected_reason = f"MISSING_PRICE:{position}" if series == "price" else f"MISSING_QUOTE_VOLUME:{position}"
+                assert expected_reason in decision[field]["reasons"], (name, action, delivery)
+                orders = [event for event in result.events
+                          if event["kind"] == "ORDER" and event["at"] == decision_time
+                          and event.get("side") == action]
+                reserved = any(event["status"] == "RESERVED" for event in orders)
+                if delivery == "timely":
+                    assert reserved, (name, action, delivery)
+                else:
+                    assert not reserved, (name, action, delivery, orders)
+                    assert decision[field]["eligible"] is False, (name, action, delivery)
+                    assert decision[field]["eligibility_status"] == "TIMING_UNAVAILABLE", (name, action, delivery)
+                    expected_timing_reason = (
+                        f"FUTURE_INFORMATION:{position}" if delivery == "late"
+                        else f"AVAILABILITY_UNKNOWN:{position}"
+                    )
+                    assert decision[field]["eligibility_reasons"] == (expected_timing_reason,), (name, action, delivery)
+
+
+def test_price_return_keeps_timing_of_its_two_endpoints_not_an_unused_gap() -> None:
+    strategy, replay_input, _ = _wc01_input()
+    strategy = _rebuild_strategy(
+        strategy,
+        data_inputs=["price"],
+        entry={"op": "gt", "args": [
+            {"op": "price_return", "lookback_buckets": 2},
+            {"op": "constant", "value": "0.05", "unit": "DIMENSIONLESS"},
+        ]},
+    )
+    start = _moment("2026-10-01T12:00:00Z")
+    replay_input = _scheduled_run(
+        strategy, replay_input, ("100", None, "110", "115"), schedule_start=start,
+        window_start=start + timedelta(minutes=10), window_end=start + timedelta(minutes=20),
+    )
+    descriptor = copy.deepcopy(replay_input.essential_evidence)
+    descriptor["fields"]["entry"]["essential_dependencies"] = []
+    replay_input = replace(replay_input, essential_evidence=descriptor)
+
+    result = run_spot_replay(strategy, replay_input)
+
+    decision = next(event for event in result.events if event["kind"] == "DECISION")
+    assert decision["entry"]["value"] == p06.Truth.TRUE
+    assert decision["entry"]["reasons"] == ("EMPTY_BUCKET_NO_CLOSE", "MISSING_PRICE:1")
+    assert decision["entry"]["eligible"] is True
+    assert not any(event["kind"] == "ORDER" and event["at"] == start + timedelta(minutes=10)
+                   and event.get("status") == "RESERVED" and event.get("side") == "SELL"
+                   for event in result.events)
+    assert any(event["kind"] == "ORDER" and event["at"] == start + timedelta(minutes=10)
+               and event.get("status") == "RESERVED" and event.get("side") == "BUY"
+               for event in result.events)
+
+
 def test_spot_replay_rejects_unknown_descriptor_fields_as_invalid_not_unresolved() -> None:
     strategy, replay_input, _ = _wc01_input()
     descriptor = copy.deepcopy(replay_input.essential_evidence)

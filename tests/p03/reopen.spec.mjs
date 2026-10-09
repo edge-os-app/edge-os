@@ -60,6 +60,9 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(replayPanel.getByTestId("spot-replay-id")).toHaveText(replay.replayId);
   await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.replayHash);
   await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.expectedEndingCashQuote);
+  await expect(replayPanel.getByRole("heading", { name: "Simulated replay summary" })).toBeVisible();
+  const reopenedChart = replayPanel.getByRole("img", { name: "Account balance in quote over the replay window" });
+  await expect(reopenedChart).toBeVisible();
   const savedInputs = replayPanel.getByTestId("spot-replay-saved-inputs");
   await expect(savedInputs).toContainText(replay.revisionId);
   await expect(savedInputs).toContainText("p13-config-");
@@ -83,6 +86,23 @@ test("after an API restart the saved rules reopen with their exact review text",
     .toEqual(replay.expectedEntryDependencies);
   expect(exactReplayBody.content.inputs.essential_evidence.fields.exit.essential_dependencies)
     .toEqual(replay.expectedExitDependencies);
+  expect(exactReplayBody.content.result.samples).toEqual(replay.expectedSamples);
+  expect(exactReplayBody.content.result.metrics).toEqual(replay.expectedMetrics);
+  const reopenedSampleList = replayPanel.getByRole("list", { name: "Saved account value samples" });
+  for (const sample of exactReplayBody.content.result.samples) {
+    if (sample.account_value_quote === null) {
+      await expect(reopenedSampleList).toContainText("Unavailable");
+      for (const reason of sample.mark_reasons ?? []) await expect(reopenedSampleList).toContainText(reason);
+    } else {
+      await expect(reopenedSampleList).toContainText(sample.account_value_quote);
+    }
+  }
+  const reopenedSummary = await replayPanel.locator(".spot-replay-summary").innerText();
+  for (const [metric, value] of Object.entries(exactReplayBody.content.result.metrics)) {
+    if (value !== null && exactReplayBody.content.result.metric_statuses[metric] === "AVAILABLE") {
+      expect(reopenedSummary).toContain(String(value));
+    }
+  }
   const saved = exactReplayBody.content.inputs;
   const visible = await savedInputs.innerText();
   const displayUtc = (value) => {
@@ -111,6 +131,8 @@ test("after an API restart the saved rules reopen with their exact review text",
     await expect(replayPanel.getByTestId("spot-replay-result")).toContainText("Saved replay: unavailable");
     await expect(replayPanel.getByRole("alert")).toContainText(reason);
     await expect(replayPanel.getByTestId("spot-replay-saved-inputs")).toContainText(summary);
+    await expect(replayPanel.getByRole("img", { name: "Account balance in quote over the replay window" })).toBeVisible();
+    await expect(replayPanel.getByText("No saved balance samples are available.")).toBeVisible();
     const exactUnavailable = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${unavailable.replayId}`,
       { headers: { Authorization: `Bearer ${tokens.a}` } });
     expect(exactUnavailable.status()).toBe(200);

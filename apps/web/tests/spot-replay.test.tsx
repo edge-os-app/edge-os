@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/api";
+import { ReplayResult } from "../components/ReplayResult";
 import { SpotReplayPanel } from "../components/SpotReplayPanel";
 import type { SpotReplayRecord, SpotReplayDependency } from "../lib/types";
 
@@ -63,6 +64,76 @@ beforeEach(() => {
 });
 
 describe("P13 spot replay", () => {
+  it("leads a saved result with quote metrics and an accessible balance chart that preserves unavailable gaps", () => {
+    const saved = JSON.parse(JSON.stringify(replay)) as any;
+    saved.content.result.samples = [
+      { at: "2026-10-01T12:05:00Z", cash_quote: "1000", base_amount: "0", account_value_quote: "1000" },
+      { at: "2026-10-01T12:10:00Z", cash_quote: "1100", base_amount: "0", account_value_quote: "1100" },
+      { at: "2026-10-01T12:15:00Z", cash_quote: "1100", base_amount: "5", account_value_quote: null, mark_reasons: ["LATE_INPUT"] },
+      { at: "2026-10-01T12:20:00Z", cash_quote: "950", base_amount: "0", account_value_quote: "950" },
+      { at: "2026-10-01T12:25:00Z", cash_quote: "900", base_amount: "0", account_value_quote: "900" },
+    ];
+    saved.content.result.metrics = {
+      gain_loss_quote: "-100", completed_trade_pairs: 1, largest_drawdown_quote: "200",
+    };
+    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+
+    expect(screen.getByRole("heading", { name: "Simulated replay summary" })).toBeInTheDocument();
+    expect(screen.getByText("-100 quote")).toBeInTheDocument();
+    expect(screen.getByText("1 completed trade pair")).toBeInTheDocument();
+    expect(screen.getByText("200 quote")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /account balance in quote over the replay window/i })).toBeInTheDocument();
+    const sampleList = screen.getByRole("list", { name: "Saved account value samples" });
+    expect(within(sampleList).getByText("2026-10-01 12:15:00 UTC")).toBeInTheDocument();
+    expect(within(sampleList).getByText("Unavailable")).toBeInTheDocument();
+    expect(within(sampleList).getByText("LATE_INPUT")).toBeInTheDocument();
+    const chart = screen.getByRole("img", { name: /account balance in quote over the replay window/i });
+    expect(chart.querySelectorAll("polyline")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Simulated replay summary" }).compareDocumentPosition(screen.getByTestId("spot-replay-saved-inputs")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows single, flat, open-position and all-missing samples without inventing a balance", () => {
+    const onePoint = JSON.parse(JSON.stringify(replay)) as any;
+    onePoint.content.result.open_position = { base_amount: "2", basis_quote: "400", last_mark_quote: "500" };
+    onePoint.content.result.samples = [
+      { at: "2026-10-01T12:25:00Z", cash_quote: "900", base_amount: "2", account_value_quote: "1000.000000000000000001" },
+    ];
+    const { unmount } = render(<ReplayResult replay={onePoint as SpotReplayRecord} />);
+    const firstChart = screen.getByRole("img", { name: /account balance in quote over the replay window/i });
+    expect(firstChart.querySelectorAll("circle")).toHaveLength(1);
+    expect(firstChart.querySelectorAll("polyline")).toHaveLength(0);
+    expect(screen.getByText("1000.000000000000000001 quote")).toBeInTheDocument();
+
+    unmount();
+    const flat = JSON.parse(JSON.stringify(replay)) as any;
+    flat.content.result.samples = [
+      { at: "2026-10-01T12:20:00Z", cash_quote: "1000", base_amount: "0", account_value_quote: "1000.00" },
+      { at: "2026-10-01T12:25:00Z", cash_quote: "1000", base_amount: "0", account_value_quote: "1000.00" },
+    ];
+    const flatView = render(<ReplayResult replay={flat as SpotReplayRecord} />);
+    const flatChart = screen.getByRole("img", { name: /account balance in quote over the replay window/i });
+    expect(flatChart.querySelectorAll("polyline")).toHaveLength(1);
+    expect(screen.getAllByText("1000.00 quote")).toHaveLength(2);
+
+    flatView.unmount();
+    const unavailable = JSON.parse(JSON.stringify(replay)) as any;
+    unavailable.content.result.status = "UNAVAILABLE";
+    unavailable.content.result.reason = { code: "MARK_UNAVAILABLE", path: "/samples/0", detail: "The saved quote mark is late." };
+    unavailable.content.result.samples = [
+      { at: "2026-10-01T12:20:00Z", cash_quote: "900", base_amount: "2", account_value_quote: null, mark_reasons: ["LATE_INPUT"] },
+    ];
+    unavailable.content.result.metrics = { gain_loss_quote: null, completed_trade_pairs: null, largest_drawdown_quote: null };
+    unavailable.content.result.metric_statuses = {
+      gain_loss_quote: "UNAVAILABLE", completed_trade_pairs: "UNAVAILABLE", largest_drawdown_quote: "UNAVAILABLE",
+    };
+    render(<ReplayResult replay={unavailable as SpotReplayRecord} />);
+    const missingChart = screen.getByRole("img", { name: /account balance in quote over the replay window/i });
+    expect(missingChart.querySelectorAll("circle, polyline")).toHaveLength(0);
+    expect(screen.getByText("No saved account-balance value is available to plot.")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Saved account value samples" })).toHaveTextContent("LATE_INPUT");
+  });
+
   it.each([
     ["entry", { state: "UNBOUND" }, "UNBOUND: dependency list not supplied", "UNRESOLVED_ESSENTIAL_EVIDENCE"],
     ["exit", { state: "UNBOUND", essential_dependencies: null }, "UNBOUND: dependency list is null", "UNRESOLVED_ESSENTIAL_EVIDENCE"],
