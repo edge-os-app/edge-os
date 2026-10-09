@@ -441,7 +441,7 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   const adoptionReplayEvents = (await afterAdoptionCollision.json()).events
     .filter((event) => event.content.kind === "RUN_ADOPTION_REPLAY");
   expect(adoptionReplayEvents).toHaveLength(1);
-  expect(adoptionReplayEvents[0].content).toMatchObject({ method: "POST", path: adoptionPath,
+  expect(adoptionReplayEvents[0].content).toMatchObject({ method: "POST", path: new URL(adoptionPath).pathname,
     operation_id: adoptionReplayRequest.operation_id, idempotency_key: adoptionReplayRequest.idempotency_key,
     outcome_accessed: false });
   expect((await afterAdoptionCollision.json()).events).toHaveLength(eventCountBeforeAdoptionCollision);
