@@ -6,10 +6,12 @@ import copy
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from httpx import Client
+import pytest
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from edge_os_api import p02
+from edge_os_api import effect_run, p02
 from conftest import run_threads
 from flows import NO_THESIS, submit
 from test_investigation_adoption import declaration_body
@@ -71,6 +73,180 @@ def _saved_effect_run(client, owner):
     saved = client.post(attempt_path, headers=owner, json=started_attempt)
     assert saved.status_code == 201, saved.text
     return intake_id, declaration_id, p08_body, adoption_path, run_id, attempt_path, saved.json()
+
+
+def _adopted_effect_run(client, owner):
+    bundle = submit(client, owner, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    intake_id = bundle["intake"]["record_id"]
+    p08_body = _p08_descriptive_body(bundle)
+    p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner, json=p08_body)
+    assert p08.status_code == 201, p08.text
+    declaration_id = p08.json()["declaration"]["record_id"]
+    adoption_path = f"/v1/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs"
+    adopted = client.post(adoption_path, headers=owner, json=_run_body(p08_body))
+    assert adopted.status_code == 201, adopted.text
+    run_id = adopted.json()["run"]["record_id"]
+    attempt_path = f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts"
+    return intake_id, declaration_id, run_id, attempt_path, adopted.json()
+
+
+def test_operational_report_save_failure_is_sanitized_and_recoverable(client, owner_a, owner_b, pg, monkeypatch):
+    intake_id, _, run_id, attempt_path, _ = _adopted_effect_run(client, owner_a)
+    attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"report-fault-{uuid.uuid4()}"}
+    original_commit = Session.commit
+    injected = {"report": False}
+
+    def fail_report_commit(session):
+        if not injected["report"] and any(type(item).__name__ == "EffectReport" for item in session.new):
+            injected["report"] = True
+            raise OperationalError("INSERT PRIVATE_SQL_SENTINEL", {"value": "PRIVATE_PARAMETER_SENTINEL"},
+                                   Exception("PRIVATE_DRIVER_SENTINEL connection refused"))
+        return original_commit(session)
+
+    monkeypatch.setattr(Session, "commit", fail_report_commit)
+    failed = client.post(attempt_path, headers=owner_a, json=attempt)
+
+    assert injected["report"] is True
+    assert failed.status_code == 503
+    assert failed.json()["code"] == "service_unavailable"
+    assert failed.json()["retry"] == "RECONCILE"
+    assert "PRIVATE_" not in failed.text
+    saved = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert saved["report"] is None
+    assert [event["content"]["kind"] for event in saved["events"]] == [
+        "RUN_ADOPTED", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED", "ATTEMPT_FAILED"]
+    assert saved["events"][-1]["content"]["outcome_accessed"] is True
+    assert pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'") == "0"
+    assert client.post(attempt_path, headers=owner_a, json=attempt).status_code == 409
+    assert client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_b).status_code == 404
+
+    monkeypatch.undo()
+    recovery = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"recover-{uuid.uuid4()}"}
+    recovered = client.post(attempt_path, headers=owner_a, json=recovery)
+    assert recovered.status_code == 201, recovered.text
+    event_count = len(recovered.json()["events"])
+    exact_retry = client.post(attempt_path, headers=owner_a, json=recovery)
+    assert exact_retry.status_code == 200
+    assert exact_retry.json()["report"] == recovered.json()["report"]
+    assert len(exact_retry.json()["events"]) == event_count
+    assert pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'") == "1"
+
+
+def test_profile_read_unavailable_is_sanitized_and_does_not_mark_access(client, owner_a, monkeypatch):
+    intake_id, _, run_id, attempt_path, _ = _adopted_effect_run(client, owner_a)
+    attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"profile-read-{uuid.uuid4()}"}
+
+    def inaccessible(_path):
+        raise OSError("PRIVATE_FILESYSTEM_SENTINEL /private/server/profile.md permission denied")
+
+    monkeypatch.setattr(effect_run, "_sha256", inaccessible)
+    failed = client.post(attempt_path, headers=owner_a, json=attempt)
+
+    assert failed.status_code == 503
+    assert failed.json()["code"] == "service_unavailable"
+    assert failed.json()["retry"] == "RECONCILE"
+    assert "PRIVATE_" not in failed.text
+    saved = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert saved["report"] is None
+    assert [event["content"]["kind"] for event in saved["events"]] == [
+        "RUN_ADOPTED", "ATTEMPT_STARTED", "ATTEMPT_FAILED"]
+    assert saved["events"][-1]["content"]["outcome_accessed"] is False
+
+    monkeypatch.undo()
+    recovered = client.post(attempt_path, headers=owner_a,
+                            json={"operation_id": str(uuid.uuid4()), "idempotency_key": f"profile-recover-{uuid.uuid4()}"})
+    assert recovered.status_code == 201, recovered.text
+    assert len(recovered.json()["events"]) == 6
+    assert recovered.json()["report"] is not None
+
+
+def test_failed_attempt_receipt_commit_keeps_access_marker_and_hides_database_details(
+        client, owner_a, owner_b, pg, monkeypatch):
+    intake_id, _, run_id, attempt_path, _ = _adopted_effect_run(client, owner_a)
+    attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"receipt-fault-{uuid.uuid4()}"}
+    original_commit = Session.commit
+    injected = {"report": False, "failure": False}
+
+    def fail_report_and_failure_receipts(session):
+        if any(type(item).__name__ == "EffectReport" for item in session.new):
+            injected["report"] = True
+            raise OperationalError("INSERT PRIVATE_SQL_SENTINEL", {"value": "PRIVATE_PARAMETER_SENTINEL"},
+                                   Exception("PRIVATE_DRIVER_SENTINEL connection refused"))
+        if injected["report"] and not injected["failure"] and any(
+                type(item).__name__ == "EffectRunEvent" and item.content.get("kind") == "ATTEMPT_FAILED"
+                for item in session.new):
+            injected["failure"] = True
+            raise OperationalError("INSERT PRIVATE_FAILURE_SQL_SENTINEL", {"value": "PRIVATE_FAILURE_PARAMETER"},
+                                   Exception("PRIVATE_FAILURE_DRIVER_SENTINEL connection refused"))
+        return original_commit(session)
+
+    monkeypatch.setattr(Session, "commit", fail_report_and_failure_receipts)
+    failed = client.post(attempt_path, headers=owner_a, json=attempt)
+
+    assert injected == {"report": True, "failure": True}
+    assert failed.status_code == 503
+    assert failed.json()["code"] == "service_unavailable"
+    assert failed.json()["retry"] == "RECONCILE"
+    assert "PRIVATE_" not in failed.text
+    saved = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert saved["report"] is None
+    assert [event["content"]["kind"] for event in saved["events"]] == [
+        "RUN_ADOPTED", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED"]
+    assert saved["events"][-1]["content"]["outcome_accessed"] is True
+    assert pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'") == "0"
+    assert client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_b).status_code == 404
+
+
+def test_unexpected_evaluation_failure_uses_sanitized_internal_error(client, owner_a, caplog, monkeypatch):
+    intake_id, _, run_id, attempt_path, _ = _adopted_effect_run(client, owner_a)
+
+    def explode(_path):
+        raise RuntimeError("PRIVATE_RUNTIME_SENTINEL /private/server/internal")
+
+    monkeypatch.setattr(effect_run, "_sha256", explode)
+    failed = client.post(attempt_path, headers=owner_a,
+                         json={"operation_id": str(uuid.uuid4()), "idempotency_key": f"runtime-fault-{uuid.uuid4()}"})
+
+    assert failed.status_code == 500
+    assert failed.json()["code"] == "service_unavailable"
+    assert failed.json()["retry"] == "RECONCILE"
+    assert "PRIVATE_" not in failed.text
+    assert "PRIVATE_" not in caplog.text
+    saved = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert saved["events"][-1]["content"]["kind"] == "ATTEMPT_FAILED"
+    assert saved["events"][-1]["content"]["outcome_accessed"] is False
+    assert saved["report"] is None
+
+
+@pytest.mark.parametrize("changed_path, expected_code", [
+    ("fixture", "fixture_configuration_changed"),
+    ("profile", "profile_configuration_changed"),
+])
+def test_changed_authored_files_keep_specific_safe_validation_reason(
+        client, owner_a, monkeypatch, changed_path, expected_code):
+    intake_id, _, _, attempt_path, adopted = _adopted_effect_run(client, owner_a)
+    original_fixture_hash = adopted["run"]["content"]["fixture_sha256"]
+    original_profile_hash = adopted["run"]["content"]["profile_sha256"]
+
+    def changed(path):
+        if changed_path == "fixture" and path == effect_run.FIXTURE_PATH:
+            return "0" * 64
+        if changed_path == "profile" and path == effect_run.PROFILE_PATH:
+            return "0" * 64
+        if path == effect_run.FIXTURE_PATH:
+            return original_fixture_hash
+        if path == effect_run.PROFILE_PATH:
+            return original_profile_hash
+        raise AssertionError("unexpected file hash request")
+
+    monkeypatch.setattr(effect_run, "_sha256", changed)
+    response = client.post(attempt_path, headers=owner_a,
+                          json={"operation_id": str(uuid.uuid4()), "idempotency_key": f"changed-{changed_path}-{uuid.uuid4()}"})
+
+    assert response.status_code == 422
+    assert response.json()["findings"][0]["code"] == expected_code
+    assert "PRIVATE_" not in response.text
 
 
 def test_explicit_run_adoption_precedes_fixture_access_and_report_reopens_exactly(
@@ -167,7 +343,7 @@ def test_held_out_p08_plan_is_refused_before_a_p09_run_is_saved(client, owner_a,
 
 
 def test_inspected_outcomes_are_recorded_when_report_persistence_rolls_back(
-        client, owner_a, pg, monkeypatch):
+        client, owner_a, pg, caplog, monkeypatch):
     bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
                     input_class="BOUNDED_NO_THESIS").json()
     intake_id = bundle["intake"]["record_id"]
@@ -187,7 +363,7 @@ def test_inspected_outcomes_are_recorded_when_report_persistence_rolls_back(
     def fail_report_commit(session):
         if not injected["done"] and any(type(item).__name__ == "EffectReport" for item in session.new):
             injected["done"] = True
-            raise RuntimeError("injected report persistence failure after outcome inspection")
+            raise RuntimeError("PRIVATE_RUNTIME_SENTINEL injected report persistence failure after outcome inspection")
         return original_commit(session)
 
     monkeypatch.setattr(Session, "commit", fail_report_commit)
@@ -195,7 +371,10 @@ def test_inspected_outcomes_are_recorded_when_report_persistence_rolls_back(
     attempt_path = f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts"
     failed = client.post(attempt_path, headers=owner_a, json=attempt)
     assert injected["done"] is True
-    assert failed.status_code == 422
+    assert failed.status_code == 500
+    assert failed.json()["retry"] == "RECONCILE"
+    assert "PRIVATE_RUNTIME_SENTINEL" not in failed.text
+    assert "PRIVATE_RUNTIME_SENTINEL" not in caplog.text
 
     saved = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a)
     assert saved.status_code == 200
@@ -661,7 +840,9 @@ def test_baseexception_after_access_boundary_keeps_durable_access_marker(client,
     monkeypatch.setattr("edge_os_api.effect_run.FIXTURE_PATH", InterruptFixture())
     response = client.post(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts",
                            headers=owner_a, json=attempt)
-    assert response.status_code == 422
+    assert response.status_code == 500
+    assert response.json()["code"] == "service_unavailable"
+    assert response.json()["retry"] == "RECONCILE"
     monkeypatch.undo()
     events = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()["events"]
     marker = next(event for event in events if event["content"]["kind"] == "OUTCOME_ACCESS_STARTED")

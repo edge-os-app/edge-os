@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from . import p02, p06
 from .auth import Principal
 from .effect_comparison import compare_effects, evaluate_p06_bindings, expression_inputs, parse_utc
-from .errors import AppError, finding, not_found
+from .errors import AppError, finding, internal_error, not_found, service_unavailable
 from .models import EffectReport, EffectRunDeclaration, EffectRunEvent, InvestigationDeclaration
 from .schemas import EffectAttemptBody, EffectRunBody
 from .service import get_owned, parse_uuid
@@ -395,9 +395,13 @@ def _execute_effect_run_locked(session: Session, principal: Principal, intake_id
     access_event_id: uuid.UUID | None = None
     try:
         if row.content["fixture_id"] != FIXTURE_ID or _sha256(FIXTURE_PATH) != row.content["fixture_sha256"]:
-            raise ValueError("The adopted fixture identity or bytes have changed.")
+            raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "fixture_configuration_changed",
+                           [finding("fixture_configuration_changed", "/fixture_id",
+                                    "The adopted fixture identity or bytes have changed. Re-adopt the authored fixture.")])
         if _sha256(PROFILE_PATH) != row.content["profile_sha256"]:
-            raise ValueError("The adopted P09 profile bytes have changed.")
+            raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "profile_configuration_changed",
+                           [finding("profile_configuration_changed", "/profile_id",
+                                    "The adopted P09 profile bytes have changed. Re-adopt the authored profile.")])
         _lock_p08_mapping(session, principal.user_id, row.p08_declaration_id)
         _assert_p08_mappings_compatible(
             session, principal, row, p08_declaration_id=row.p08_declaration_id,
@@ -432,7 +436,9 @@ def _execute_effect_run_locked(session: Session, principal: Principal, intake_id
                             if entry["evaluation_id"] == item["evaluation_id"])
             matching = [partition_by_id[partition_id] for partition_id in plan_row["partition_ids"]]
             if len(matching) != 1:
-                raise ValueError("P09 requires one explicitly adopted descriptive partition per evaluation.")
+                raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "p08_evaluation_partition_mapping",
+                               [finding("p08_evaluation_partition_mapping", "/evaluation_plan",
+                                        "Each P09 evaluation must map to one explicitly adopted descriptive partition.")])
             partition_bounds[item["evaluation_id"]] = {"start": matching[0]["start"], "end": matching[0]["end"]}
         decisions = evaluate_p06_bindings(schedule=adopted["schedule"], evaluation_plan=plan,
                                           bindings=adopted["bindings"], feature_rows=dataset["features"])
@@ -489,8 +495,13 @@ def _execute_effect_run_locked(session: Session, principal: Principal, intake_id
                                             "outcome_accessed": outcome_accessed},
                                    created_at=dt.datetime.now(dt.timezone.utc)))
         session.commit()
-        raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "effect_evaluation_failed",
-                       [finding("effect_evaluation_failed", "/", str(error)[:300])]) from None
+        if isinstance(error, AppError):
+            raise error from None
+        if isinstance(error, OSError):
+            raise service_unavailable("RECONCILE") from None
+        if isinstance(error, Exception):
+            raise
+        raise internal_error() from None
 
 
 def get_effect_run(session: Session, principal: Principal, intake_id: str,
