@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationProposal, InvestigationSaveResult } from "../lib/types";
+import { EffectComparisonPanel } from "./EffectComparisonPanel";
 
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
@@ -266,6 +267,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
             <pre className="records-json">{JSON.stringify(selected.declaration.content, null, 2)}</pre>
             <p className="muted">Sources, field origins, optional tools, trial identities and evaluation identities are saved with this declaration.</p>
           </details>
+          <EffectComparisonPanel intakeId={intakeId} saved={selected} />
         </div>
       ) : null}
 

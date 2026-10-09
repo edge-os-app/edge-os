@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import fs from "node:fs";
 import path from "node:path";
 import { injectAuth, tokens } from "./fixture-auth.mjs";
@@ -320,14 +321,69 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   expect(uiContent).toEqual(exact.declaration.content);
   expect(exact.access_history[0]).toMatchObject({ event: "DECLARATION_SAVED", outcome_labels_read: false,
     provider_queries: 0, study_started: false });
+
+  await page.getByRole("button", { name: "Load explicit synthetic example" }).click();
+  await expect(page.getByText(/This visible example was authored/)).toBeVisible();
+  const runAdoptionText = page.getByLabel(/I reviewed these exact P08 identities/);
+  await runAdoptionText.focus();
+  await page.keyboard.press("Space");
+  const runAdoptButton = page.getByRole("button", { name: "Adopt synthetic run declaration" });
+  await runAdoptButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText(/Run declaration saved\. No report exists yet/)).toBeVisible();
+  const runPath = `${process.env.P03_API_URL}/v1/research/requests/${intakeId}/effect-runs`;
+  const runsResponse = await page.request.get(runPath, { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(runsResponse.status()).toBe(200);
+  const runList = await runsResponse.json();
+  const exactRun = runList.runs.find((item) => item.run.p08_declaration_id === declarationId);
+  expect(exactRun).toBeTruthy();
+  expect(exactRun.report).toBeNull();
+  expect(exactRun.events.map((event) => event.content.kind)).toEqual(["RUN_ADOPTED"]);
+  const runId = exactRun.run.record_id;
+  const attemptFailures = [];
+  await page.route("**/effect-runs/*/attempts", async (route) => {
+    attemptFailures.push(route.request().url());
+    if (attemptFailures.length === 1) return route.fulfill({ status: 503, contentType: "application/json",
+      body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "Temporary evaluation failure. Retry the saved run." }] }) });
+    return route.continue();
+  });
+  await page.getByRole("button", { name: "Evaluate synthetic fixture" }).click();
+  await expect(page.getByTestId("effect-comparison").locator(".status.err")).toContainText("Temporary evaluation failure");
+  await page.getByRole("button", { name: "Evaluate synthetic fixture" }).click();
+  await expect(page.getByTestId("effect-report-saved")).toContainText("UNRESOLVED");
+  const reportId = (await page.getByTestId("effect-report-saved").locator("dd").first().innerText()).trim();
+  const reportResponse = await page.request.get(`${runPath}/${runId}`, { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(reportResponse.status()).toBe(200);
+  const exactRunAfter = await reportResponse.json();
+  expect(exactRunAfter.report.record_id).toBe(reportId);
+  expect(exactRunAfter.report.content.result.statistical_status).toBe("UNRESOLVED");
+  expect(exactRunAfter.events.map((event) => event.content.kind)).toEqual(["RUN_ADOPTED", "ATTEMPT_STARTED", "REPORT_SAVED"]);
+  await page.getByRole("button", { name: "Reopen saved report without rerunning" }).click();
+  await expect(page.getByTestId("effect-report-saved")).toContainText(reportId);
+  expect(attemptFailures).toHaveLength(2);
+  const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  const critical = axe.violations.filter((item) => item.impact === "serious" || item.impact === "critical");
+  const qualityDir = path.join(evidence, "quality");
+  fs.mkdirSync(qualityDir, { recursive: true });
+  fs.writeFileSync(path.join(qualityDir, `axe-effect-comparison-${project}.json`), JSON.stringify(axe, null, 2));
+  expect(critical, "P09 saved report has no serious or critical WCAG violations").toEqual([]);
+  await shot(page, project, "effect-report-saved");
+  await page.unroute("**/effect-runs/*/attempts");
+
   const requestUrl = page.url();
-  record(`investigation-${project}`, { url: requestUrl, declarationId, retry: { attempts: saveAttempts.length,
+  record(`investigation-${project}`, { url: requestUrl, declarationId, runId, reportId,
+    p09ConfigurationSha256: exactRunAfter.report.content.p09_configuration_sha256,
+    fixtureSha256: exactRunAfter.report.content.fixture_sha256,
+    profileSha256: exactRunAfter.report.content.profile_sha256,
+    retry: { attempts: saveAttempts.length,
     reused_operation_id: saveAttempts[1].operation_id === saveAttempts[0].operation_id,
     reused_idempotency_key: saveAttempts[1].idempotency_key === saveAttempts[0].idempotency_key,
     storage_fingerprint_sent: Object.hasOwn(saveAttempts[1], "fingerprint") }, content: exact.declaration.content,
     access: Object.fromEntries(["schema_version", "event", "outcome_labels_read", "provider_queries", "study_started"]
       .map((field) => [field, exact.access_history[0][field]])),
-    original: "Compare the descriptive launch cohorts in a synthetic fixture." });
+    original: "Compare the descriptive launch cohorts in a synthetic fixture.",
+    p09: { run: exactRun.run, report: exactRunAfter.report, events: exactRunAfter.events } });
   await shot(page, project, "investigation-saved");
   await page.getByRole("button", { name: "Reopen saved declaration" }).click();
   await expect(page.getByTestId("investigation-saved")).toContainText(declarationId);

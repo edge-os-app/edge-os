@@ -422,7 +422,49 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
         and v.get("version_two_contract") and v.get("declaration_semantics_consistent")
         and v.get("evaluation_plan_explicit_and_budgeted") and v.get("partition_boundaries_contained_and_ordered")
         for v in investigations)
-    return {"checks": checks, "all_checks_pass": passed and investigations_pass}
+    effect_runs = []
+    for key, saved in results.items():
+        if not key.startswith("investigation-") or not saved.get("runId"):
+            continue
+        run_id, report_id = saved["runId"], saved["reportId"]
+        found = rows(
+            "select r.owner_id, r.intake_record_id, r.p08_declaration_id, r.content run_content, "
+            "p.owner_id report_owner_id, p.content report_content "
+            "from effect_run_declarations r join effect_reports p on p.owner_id=r.owner_id and p.run_id=r.run_id "
+            f"where r.run_id='{run_id}' and p.report_id='{report_id}'")
+        events = rows(f"select content from effect_run_events where run_id='{run_id}' order by sequence")
+        item = {"key": key, "run_id": run_id, "report_id": report_id, "rows": len(found),
+                "events": [event["content"] for event in events]}
+        if found:
+            run_content, report_content = found[0]["run_content"], found[0]["report_content"]
+            p08 = rows(f"select content from investigation_declarations where declaration_id='{found[0]['p08_declaration_id']}'")
+            item.update({
+                "owner_matches_intake": bool(rows(
+                    f"select 1 from records where owner_id='{found[0]['owner_id']}' and record_id='{found[0]['intake_record_id']}'")),
+                "run_links_exact_p08_declaration": found[0]["p08_declaration_id"] == saved["declarationId"],
+                "run_plan_matches_p08": bool(p08) and run_content.get("p08_evaluation_plan") == p08[0]["content"].get("configuration", {}).get("evaluation_plan"),
+                "adoption_precedes_reads": bool(events) and events[0]["content"].get("kind") == "RUN_ADOPTED"
+                    and events[0]["content"].get("outcome_accessed") is False,
+                "attempt_and_report_order": [event["content"].get("kind") for event in events]
+                    == ["RUN_ADOPTED", "ATTEMPT_STARTED", "REPORT_SAVED"],
+                "exact_saved_report_matches_ui": report_content == saved["p09"]["report"]["content"],
+                "configuration_and_fixture_hashes_match_ui": run_content.get("configuration_sha256") == saved["p09ConfigurationSha256"]
+                    and report_content.get("fixture_sha256") == saved["fixtureSha256"]
+                    and report_content.get("profile_sha256") == saved["profileSha256"],
+                "report_remains_unresolved": report_content.get("result", {}).get("status") == "UNRESOLVED"
+                    and report_content.get("result", {}).get("statistical_status") == "UNRESOLVED",
+                "exact_run_and_report_counts": rows(f"select count(*) c from effect_run_declarations where run_id='{run_id}'")[0]["c"] == 1
+                    and rows(f"select count(*) c from effect_reports where run_id='{run_id}'")[0]["c"] == 1
+                    and len(events) == 3,
+            })
+        effect_runs.append(item)
+    checks["effect_comparisons"] = effect_runs
+    effect_runs_pass = bool(effect_runs) and all(v.get("rows") == 1 and v.get("owner_matches_intake")
+        and v.get("run_links_exact_p08_declaration") and v.get("run_plan_matches_p08")
+        and v.get("adoption_precedes_reads") and v.get("attempt_and_report_order")
+        and v.get("exact_saved_report_matches_ui") and v.get("configuration_and_fixture_hashes_match_ui")
+        and v.get("report_remains_unresolved") and v.get("exact_run_and_report_counts") for v in effect_runs)
+    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass}
 
 
 def sql_literal(text: str) -> str:
@@ -456,6 +498,7 @@ def ownership_drive(pg: harness.Postgres, api_url: str, token_a: str, token_b: s
     results["revisions_for_strategy_after_attacks"] = rows_unchanged
     investigation = json.loads(pg.psql("select coalesce(json_agg(t), '[]'::json) from (select intake_record_id, declaration_id from investigation_declarations order by created_at limit 1) t"))
     investigation_ok = not investigation
+    effect_ok = True
     if investigation:
         investigation = investigation[0]
         iid, did = investigation["intake_record_id"], investigation["declaration_id"]
@@ -479,8 +522,25 @@ def ownership_drive(pg: harness.Postgres, api_url: str, token_a: str, token_b: s
             and results["adopt_other_investigation"] == 404 \
             and results["owner_a_reads_investigation"] == 200 and before == results["investigation_count_before_after"][1] \
             and access_before == results["investigation_access_count_before_after"][1]
+    effect_rows = rows("select intake_record_id, run_id from effect_run_declarations order by created_at limit 1")
+    if effect_rows:
+        iid, run_id = effect_rows[0]["intake_record_id"], effect_rows[0]["run_id"]
+        results["read_other_effect_run"] = http("GET", f"{api_url}/v1/research/requests/{iid}/effect-runs/{run_id}", token_b)[0]
+        results["list_other_effect_runs"] = http("GET", f"{api_url}/v1/research/requests/{iid}/effect-runs", token_b)[0]
+        results["owner_a_reads_effect_run"] = http("GET", f"{api_url}/v1/research/requests/{iid}/effect-runs/{run_id}", token_a)[0]
+        before_events = pg.psql(f"select count(*) from effect_run_events where run_id='{run_id}'")
+        before_reports = pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'")
+        results["attempt_other_effect_run"] = http("POST", f"{api_url}/v1/research/requests/{iid}/effect-runs/{run_id}/attempts", token_b, {
+            "operation_id": "77777777-7777-4777-8777-777777777777", "idempotency_key": "foreign-effect-run-attack"})[0]
+        after_events = pg.psql(f"select count(*) from effect_run_events where run_id='{run_id}'")
+        after_reports = pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'")
+        results["effect_history_count_before_after"] = {"events": [before_events, after_events],
+                                                        "reports": [before_reports, after_reports]}
+        effect_ok = (results["read_other_effect_run"] == 404 and results["list_other_effect_runs"] == 404
+            and results["attempt_other_effect_run"] == 404 and results["owner_a_reads_effect_run"] == 200
+            and before_events == after_events and before_reports == after_reports)
     return {**results, "all_denied": all(c == 404 for c in denied) and results["publish_other_draft_real_body"] == 404
-            and results["owner_a_still_reads"] == 200 and rows_unchanged == "1" and investigation_ok}
+            and results["owner_a_still_reads"] == 200 and rows_unchanged == "1" and investigation_ok and effect_ok}
 
 
 if __name__ == "__main__":

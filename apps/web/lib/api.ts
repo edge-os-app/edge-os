@@ -1,4 +1,5 @@
-import type { Bundle, InvestigationProposal, InvestigationSaveResult, PublicationResult, RequestSummary, Sample } from "./types";
+import type { Bundle, EffectRunBody, EffectRunResult, InvestigationProposal, InvestigationSaveResult,
+  PublicationResult, RequestSummary, Sample } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: string, public findings: { path: string; detail: string }[] = []) {
@@ -63,6 +64,14 @@ export const api = {
   investigations: (id: string) => request<{ declarations: InvestigationSaveResult["declaration"][]; access_history: InvestigationSaveResult["access_history"] }>(`/v1/research/requests/${id}/investigations`).then((r) => r.body),
   investigation: (id: string, declarationId: string) => request<InvestigationSaveResult>(`/v1/research/requests/${id}/investigations/${declarationId}`).then((r) => r.body),
   saveInvestigation: (id: string, body: unknown) => request<InvestigationSaveResult>(`/v1/research/requests/${id}/investigations`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  effectRuns: (id: string) => request<{ runs: EffectRunResult[] }>(`/v1/research/requests/${id}/effect-runs`).then((r) => r.body),
+  effectRun: (id: string, runId: string) => request<EffectRunResult>(`/v1/research/requests/${id}/effect-runs/${runId}`).then((r) => r.body),
+  adoptEffectRun: (id: string, declarationId: string, body: EffectRunBody) =>
+    request<EffectRunResult>(`/v1/research/requests/${id}/investigations/${declarationId}/effect-runs`,
+      { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  executeEffectRun: (id: string, runId: string, body: { operation_id: string; idempotency_key: string }) =>
+    request<EffectRunResult>(`/v1/research/requests/${id}/effect-runs/${runId}/attempts`,
+      { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   submit: (body: unknown) => request<Bundle>("/v1/research/requests", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   answer: (id: string, body: { previous_revision_id: string; question_id: string; choice_id: string }) =>
     request<Bundle>(`/v1/research/requests/${id}/clarifications`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),

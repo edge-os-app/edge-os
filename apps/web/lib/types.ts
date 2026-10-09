@@ -243,6 +243,57 @@ export interface InvestigationSaveResult {
   idempotent_replay: boolean;
 }
 
+export interface EffectRunBinding {
+  evaluation_id: string;
+  trial_id: string;
+  variant_id: string;
+  price_expression: Expression;
+  volume_expression: Expression;
+  essential_inputs: ("price" | "quote_volume")[];
+}
+
+export interface EffectRunBody {
+  operation_id: string;
+  idempotency_key: string;
+  fixture_id: "synthetic-effect-comparison/1";
+  adoption: "ADOPT";
+  schedule: { version: "p09.decision-clock/1"; start: string; end: string; interval_seconds: number };
+  bindings: EffectRunBinding[];
+  incremental_volume_declared: boolean;
+}
+
+export interface EffectRunEnvelope {
+  schema_version: "p09.effect-run-declaration/1";
+  record_type: "EffectRunDeclaration";
+  record_id: string;
+  owner_id: string;
+  p08_declaration_id: string;
+  created_at: string;
+  content: Record<string, unknown>;
+}
+
+export interface EffectReportEnvelope {
+  schema_version: "p09.effect-report/1";
+  record_type: "EffectReport";
+  record_id: string;
+  owner_id: string;
+  created_at: string;
+  content: Record<string, any>;
+}
+
+export interface EffectRunEvent {
+  event_id: string;
+  sequence: number;
+  created_at: string;
+  content: Record<string, unknown>;
+}
+
+export interface EffectRunResult {
+  run: EffectRunEnvelope;
+  events: EffectRunEvent[];
+  report: EffectReportEnvelope | null;
+}
+
 export interface Sample {
   scenario_id: string;
   label: string;
