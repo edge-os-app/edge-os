@@ -165,7 +165,7 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
     seed_context("agent-a", "20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000101",
                  research_source_id, "2026-10-09T12:00:00Z")
     seed_context("agent-b", "20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000102",
-                 second_agent["record_id"], "2026-10-09T12:01:00Z")
+                 research_source_id, "2026-10-09T12:01:00Z")
     return {"owner_id": owner_id, "record_ids": [item["record_id"] for item in fixture],
             "agent_record_ids": {"agent-a": fixture[0]["record_id"], "agent-b": second_agent["record_id"]},
             "research_source_id": research_source_id,
