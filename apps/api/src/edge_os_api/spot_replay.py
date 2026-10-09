@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, DecimalException, localcontext
-from typing import Any
+from typing import Any, Sequence
 
 from edge_os_api import p02, p06
 
@@ -59,6 +59,8 @@ class ReplayInput:
     window_start: datetime
     window_end: datetime
     initial_cash_quote: str
+    initial_base_amount: str = "0"
+    initial_basis_quote: str = "0"
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,15 @@ class ReplayResult:
     metric_statuses: dict[str, str]
     metric_reasons: dict[str, tuple[str, ...]]
     open_position: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class QuoteMetrics:
+    """Independent quote-unit metrics and their availability state."""
+
+    values: dict[str, Decimal | int | None]
+    statuses: dict[str, str]
+    reasons: dict[str, tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -155,6 +166,11 @@ def _validate_descriptor(strategy: dict[str, Any], run: ReplayInput, market_id: 
 
 
 def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int, int, dict[str, list[dict[str, Any]]]]:
+    if strategy.get("additions") is not False or strategy.get("partial_exits") is not False:
+        raise _invalid("UNSUPPORTED_ACTION_SCOPE", "/strategy/action_scope", "P12/1 supports no additions or partial exits.")
+    costs = strategy.get("cost_assumptions")
+    if not isinstance(costs, dict) or not isinstance(costs.get("source_ref"), str) or not costs["source_ref"]:
+        raise _invalid("UNSUPPORTED_COST_ASSUMPTIONS", "/strategy/cost_assumptions/source_ref", "Retain a saved cost source.")
     p06.validate_strategy(strategy)
     if p02._checker.canonical_decimal(strategy["cost_assumptions"]["slippage_rate"]) == 1:
         raise _invalid("UNSUPPORTED_COST_ASSUMPTIONS", "/strategy/cost_assumptions/slippage_rate",
@@ -209,7 +225,15 @@ def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int,
     for index in decision_indices:
         if run.dataset.buckets[index].status not in _COMPLETE | {"INCOMPLETE", "UNQUALIFIED"}:
             raise _invalid("INVALID_REPLAY_BUCKET", f"/dataset/buckets/{index}/status", "The bucket status is malformed.")
-    cash = _decimal(run.initial_cash_quote, "/initial_cash_quote", positive=True)
+    cash = _decimal(run.initial_cash_quote, "/initial_cash_quote")
+    initial_base = _decimal(run.initial_base_amount, "/initial_base_amount")
+    initial_basis = _decimal(run.initial_basis_quote, "/initial_basis_quote")
+    if cash < 0 or initial_base < 0 or initial_basis < 0:
+        raise _invalid("INVALID_INITIAL_ACCOUNT", "/initial_state", "Starting balances and basis cannot be negative.")
+    if (initial_base == 0 and initial_basis != 0) or (initial_base > 0 and initial_basis <= 0):
+        raise _invalid("INVALID_INITIAL_ACCOUNT", "/initial_state", "An open starting position needs a positive basis; a flat state needs zero basis.")
+    if cash == 0 and initial_base == 0:
+        raise _invalid("INVALID_INITIAL_ACCOUNT", "/initial_state", "Starting capital or inventory must be positive.")
     return run.dataset.market_binding_id, start_index, decision_indices[-1], _validate_descriptor(strategy, run, run.dataset.market_binding_id)
 
 
@@ -295,6 +319,8 @@ def _fingerprint(strategy: dict[str, Any], run: ReplayInput) -> str:
         "window_start": p02.utc_string(run.window_start),
         "window_end": p02.utc_string(run.window_end),
         "initial_cash_quote": run.initial_cash_quote,
+        "initial_base_amount": run.initial_base_amount,
+        "initial_basis_quote": run.initial_basis_quote,
         "essential_evidence": run.essential_evidence,
         "buckets": [
             {
@@ -322,6 +348,49 @@ def _observation_payload(observation: p06.Observation | None) -> dict[str, Any] 
     }
 
 
+def calculate_quote_metrics(
+    samples: Sequence[dict[str, Any]], initial_capital_quote: Decimal | None, completed_trade_pairs: int,
+) -> QuoteMetrics:
+    """Calculate only adopted P12 quote metrics from the actual ordered samples."""
+    values = [sample["account_value_quote"] for sample in samples]
+    final_value = values[-1] if values else None
+    gain_available = isinstance(initial_capital_quote, Decimal) and isinstance(final_value, Decimal)
+    complete_samples = bool(values) and all(isinstance(value, Decimal) for value in values)
+    high_water: Decimal | None = None
+    largest_drawdown = Decimal(0)
+    if complete_samples:
+        with localcontext(p06.NUMERIC):
+            for value in values:
+                assert isinstance(value, Decimal)
+                high_water = value if high_water is None else max(high_water, value)
+                largest_drawdown = max(largest_drawdown, high_water - value)
+    unavailable_reasons = tuple(dict.fromkeys(
+        reason
+        for sample in samples if sample["account_value_quote"] is None
+        for reason in sample.get("mark_reasons", ())
+    ))
+    gain_reasons = () if gain_available else unavailable_reasons
+    drawdown_reasons = () if complete_samples else unavailable_reasons
+    with localcontext(p06.NUMERIC):
+        gain_loss = final_value - initial_capital_quote if gain_available else None
+    values_by_metric: dict[str, Decimal | int | None] = {
+        "gain_loss_quote": gain_loss,
+        "completed_trade_pairs": completed_trade_pairs,
+        "largest_drawdown_quote": largest_drawdown if complete_samples else None,
+    }
+    statuses = {
+        "gain_loss_quote": "AVAILABLE" if gain_available else "UNAVAILABLE",
+        "completed_trade_pairs": "AVAILABLE",
+        "largest_drawdown_quote": "AVAILABLE" if complete_samples else "UNAVAILABLE",
+    }
+    reasons = {
+        "gain_loss_quote": gain_reasons,
+        "completed_trade_pairs": (),
+        "largest_drawdown_quote": drawdown_reasons,
+    }
+    return QuoteMetrics(values_by_metric, statuses, reasons)
+
+
 def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
     """Replay one immutable P06 spot strategy against one qualified P07 schedule.
 
@@ -329,10 +398,13 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
     binding controls action eligibility; this function grants no execution permission.
     """
     market_id, first_index, last_index, essential = _validate_run(strategy, run)
-    cash = _decimal(run.initial_cash_quote, "/initial_cash_quote", positive=True)
-    initial_capital = cash
-    base = Decimal(0)
-    basis_quote = Decimal(0)
+    cash = _decimal(run.initial_cash_quote, "/initial_cash_quote")
+    initial_base = _decimal(run.initial_base_amount, "/initial_base_amount")
+    initial_basis = _decimal(run.initial_basis_quote, "/initial_basis_quote")
+    initial_capital: Decimal | None = None
+    base = initial_base
+    basis_quote = initial_basis
+    position_entry_at: datetime | None = None
     fee_rate = _decimal(strategy["cost_assumptions"]["fee_rate"], "/strategy/cost_assumptions/fee_rate")
     slippage_rate = _decimal(strategy["cost_assumptions"]["slippage_rate"], "/strategy/cost_assumptions/slippage_rate")
     quote_size = _decimal(strategy["sizing"]["amount"], "/strategy/sizing/amount", positive=True)
@@ -346,10 +418,6 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
     trades: list[dict[str, Any]] = []
     pending: _Order | None = None
     completed_pairs = 0
-    mark_failed = False
-    mark_failure_reasons: list[str] = []
-    high_water: Decimal | None = None
-    largest_drawdown = Decimal(0)
     reservation_quote = Decimal(0)
     reservation_base = Decimal(0)
 
@@ -375,6 +443,7 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                     cash -= quote_size + fee
                     base += acquired
                     basis_quote = quote_size + fee
+                    position_entry_at = schedule[pending.signal_index]
                 events.append({"kind": "ORDER", "at": moment, "status": "BUY_FILLED", "fill_price": fill_price,
                                "base_amount": acquired, "quote_notional": quote_size, "fee_quote": fee,
                                "cash_quote": cash, "base_balance": base})
@@ -388,11 +457,14 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                     realized = gross - fee - basis_quote
                     sold_base = base
                     cash += gross - fee
-                    trades.append({"entry_at": schedule[pending.signal_index], "exit_at": moment,
+                    trades.append({"entry_at": position_entry_at,
+                                   "entry_origin": "REPLAY_SIGNAL" if position_entry_at else "PREEXISTING_AT_RUN_START",
+                                   "exit_at": moment,
                                    "base_amount": sold_base, "entry_basis_quote": basis_quote,
                                    "gross_quote": gross, "exit_fee_quote": fee, "gain_loss_quote": realized})
                     base = Decimal(0)
                     basis_quote = Decimal(0)
+                    position_entry_at = None
                     completed_pairs += 1
                 events.append({"kind": "ORDER", "at": moment, "status": "SELL_FILLED", "fill_price": fill_price,
                                "base_amount": sold_base, "gross_quote": gross, "fee_quote": fee,
@@ -402,19 +474,15 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
             pending = None
 
         mark, mark_reasons = _account_mark(bucket, moment, market_id, index)
-        account_value: Decimal | None = cash + base * mark if mark is not None else None
-        if mark is None:
-            mark_failed = True
-            mark_failure_reasons.extend(mark_reasons)
+        with localcontext(p06.NUMERIC):
+            account_value: Decimal | None = cash + base * mark if mark is not None else None
         samples.append({"at": moment, "cash_quote": cash, "base_amount": base,
                         "reserved_quote": reservation_quote, "reserved_base": reservation_base,
                         "account_value_quote": account_value,
                         "mark_price": mark if base else None,
                         "mark_reasons": mark_reasons if mark is None else ()})
-        if account_value is not None:
-            high_water = account_value if high_water is None else max(high_water, account_value)
-            largest_drawdown = max(largest_drawdown, high_water - account_value)
-
+        if index == first_index and account_value is not None:
+            initial_capital = account_value
         context = p06.EvaluationContext(prices, volumes, schedule, market_id, moment, index)
         entry = p06.evaluate_expression(strategy["entry"], strategy["market"], context)
         exit_result = p06.evaluate_expression(strategy["exit"], strategy["market"], context)
@@ -459,25 +527,10 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
             events.append({"kind": "ORDER", "at": moment, "status": "RESERVED", "side": "BUY",
                            "reserved_quote": required_cash, "fill_at": schedule[index + 1]})
 
-    final_value = samples[-1]["account_value_quote"]
-    all_samples_available = not mark_failed and all(sample["account_value_quote"] is not None for sample in samples)
-    gain_loss_available = all_samples_available and final_value is not None
-    drawdown_available = all_samples_available
-    metrics: dict[str, Decimal | int | None] = {
-        "gain_loss_quote": final_value - initial_capital if gain_loss_available else None,
-        "completed_trade_pairs": completed_pairs,
-        "largest_drawdown_quote": largest_drawdown if drawdown_available else None,
-    }
-    unavailable_reasons = tuple(dict.fromkeys(mark_failure_reasons))
-    metric_statuses = {
-        "gain_loss_quote": "AVAILABLE" if gain_loss_available else "UNAVAILABLE",
-        "completed_trade_pairs": "AVAILABLE",
-        "largest_drawdown_quote": "AVAILABLE" if drawdown_available else "UNAVAILABLE",
-    }
-    metric_reasons = {
-        name: (() if status == "AVAILABLE" else unavailable_reasons)
-        for name, status in metric_statuses.items()
-    }
+    quote_metrics = calculate_quote_metrics(samples, initial_capital, completed_pairs)
+    metrics = quote_metrics.values
+    metric_statuses = quote_metrics.statuses
+    metric_reasons = quote_metrics.reasons
     last_observation = run.dataset.buckets[last_index].price
     open_position = None if base == 0 else {
         "base_amount": base,
