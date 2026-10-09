@@ -1,0 +1,35 @@
+{
+ "id": "truncated-cut-off",
+ "group": "TRUNCATION",
+ "purpose": "An answer cut off mid-object is rejected as truncated, not parsed. Its reported usage is still recorded.",
+ "intake": {
+  "original_request": "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only.",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "CONCRETE_THESIS"
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "length",
+  "usage": {
+   "prompt_tokens": 1423,
+   "completion_tokens": 611,
+   "total_tokens": 2034
+  },
+  "model_text": "{\"meaning_status\": \"SUPPORTED\", \"missing_capability\": null, \"evidence_readiness\": \"READY\", \"field_evidence\": [{\"field_name\": \"entry\", \"state\": \"KNOWN\", \"origin\": \"USER_STATED\", \"source_passage\": \"Buy when the 15-minute price return is above 1%\", \"value\": {\"op\": \"gt\", \"args\": [{\"op\": \"price_return\", \"lookback_buckets\": 3}, {\"op\": \"constant\", \"value\": \"0.01\", \"unit\": \"DIMENSIONLESS\"}]}}, {\"field_nam"
+ },
+ "expect": {
+  "result": "OutputRejected",
+  "reason_code": "truncated",
+  "attempts": 1,
+  "status": "TRUNCATED",
+  "completion": "TRUNCATED",
+  "usage": {
+   "input_tokens": 1423,
+   "output_tokens": 611,
+   "total_tokens": 2034
+  }
+ }
+}
