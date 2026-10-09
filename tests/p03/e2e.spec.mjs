@@ -1177,8 +1177,9 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await expect(page.getByText("position-a-1", { exact: false })).toBeVisible();
   await page.locator("summary", { hasText: "position-a-1" }).click();
   await expect(page.getByText("action-a-sale-1", { exact: false })).toBeVisible();
-  await expect(page.getByText(/Realized quote result/).locator("..")).toContainText("−2 monad:143/asset:USDC");
-  await expect(page.locator("details").filter({ hasText: "position-a-1" })).toContainText("proceeds 8 minus removed basis 10 equals realized result -2 USDC");
+  const closedPosition = page.locator("details").filter({ hasText: "position-a-1" });
+  await expect(closedPosition.getByText(/Realized quote result/).locator("..")).toContainText("−2 monad:143/asset:USDC");
+  await expect(closedPosition).toContainText("proceeds 8 minus removed basis 10 equals realized result -2 USDC");
   const precisePosition = page.locator("details").filter({ hasText: "position-a-2" });
   await precisePosition.locator("summary").click();
   await expect(precisePosition).toContainText("2.000000000000000001 monad:143/asset:USDC");
