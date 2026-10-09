@@ -1070,7 +1070,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await context.getByRole("button", { name: "Open source record" }).click();
   await expect(page).toHaveURL(new RegExp(`#\\/research\\/.*source=${process.env.P19_RESEARCH_SOURCE_ID}`));
   await expect(page.getByRole("heading", { name: "Your request", level: 1 })).toBeVisible();
-  await expect(page.getByText(`Opened source record ${process.env.P19_RESEARCH_SOURCE_ID}`, { exact: true })).toBeVisible();
+  await expect(page.getByText(`Opened source record ${process.env.P19_RESEARCH_SOURCE_ID}.`, { exact: true })).toBeVisible();
   await expect(page.getByTestId("original-request")).toContainText("Synthetic source for the P19 owner-context navigation test.");
   await page.goBack();
   const linkedAgentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
