@@ -7,6 +7,7 @@ interface ReplaySample {
 interface ChartPoint {
   at: string;
   value: string | null;
+  knownValue: boolean;
   numericValue: number | null;
   reasons: string[];
 }
@@ -20,12 +21,18 @@ function samplePoints(samples: Record<string, unknown>[]): ChartPoint[] {
     const replaySample = sample as ReplaySample;
     const rawValue = replaySample.account_value_quote;
     const value = typeof rawValue === "string" || typeof rawValue === "number" ? String(rawValue) : null;
-    const numericValue = value === null ? null : Number(value);
+    const isFiniteDecimal = typeof rawValue === "string"
+      ? /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(rawValue)
+      : typeof rawValue === "number" && Number.isFinite(rawValue);
+    const numericValue = isFiniteDecimal && value !== null ? Number(value) : null;
+    const decimalDigits = value?.split(/[eE]/, 1)[0].replace(/[+\-.]/g, "") ?? "";
+    const isExactZero = decimalDigits.length > 0 && !/[1-9]/.test(decimalDigits);
     const rawReasons = replaySample.mark_reasons;
     return {
       at: typeof replaySample.at === "string" ? replaySample.at : "Saved sample time unavailable",
       value,
-      numericValue: numericValue !== null && Number.isFinite(numericValue) ? numericValue : null,
+      knownValue: isFiniteDecimal,
+      numericValue: numericValue !== null && Number.isFinite(numericValue) && (numericValue !== 0 || isExactZero) ? numericValue : null,
       reasons: Array.isArray(rawReasons) ? rawReasons.filter((reason): reason is string => typeof reason === "string") : [],
     };
   });
@@ -73,10 +80,12 @@ function chartSegments(points: ChartPoint[]): number[][][] {
 export function ReplayBalanceChart({ samples }: Props) {
   const points = samplePoints(samples);
   const segments = chartSegments(points);
-  const availableCount = points.filter((point) => point.numericValue !== null).length;
+  const knownCount = points.filter((point) => point.knownValue).length;
+  const plottedCount = points.filter((point) => point.numericValue !== null).length;
+  const unplottedKnownCount = knownCount - plottedCount;
   const chartDescription = points.length === 0
     ? "No saved account-balance samples are available."
-    : `${availableCount} of ${points.length} saved account-balance samples have available quote values. Unavailable samples break the plotted line; no values are filled or carried.`;
+    : `${knownCount} of ${points.length} saved account-balance samples have known quote values; ${plottedCount} can be plotted safely. ${unplottedKnownCount} known ${unplottedKnownCount === 1 ? "value remains" : "values remain"} listed exactly below. Missing or invalid samples break the plotted line; no values are filled or carried.`;
 
   return (
     <figure className="spot-replay-balance" data-testid="spot-replay-balance-chart">
@@ -92,14 +101,15 @@ export function ReplayBalanceChart({ samples }: Props) {
         )))}
       </svg>
       {points.length === 0 ? <p>No saved balance samples are available.</p> : null}
-      {availableCount === 0 && points.length > 0 ? <p>No saved account-balance value is available to plot.</p> : null}
+      {plottedCount === 0 && knownCount === 0 && points.length > 0 ? <p>No saved account-balance value is available to plot.</p> : null}
+      {plottedCount === 0 && knownCount > 0 ? <p>Saved quote values are known, but none can be plotted safely. Their exact values remain listed below.</p> : null}
       <ol aria-label="Saved account value samples" className="spot-replay-sample-list">
         {points.map((point, index) => (
           <li key={`${point.at}-${index}`}>
             <span>{displayUtc(point.at)}</span>
-            <strong>{point.value === null || point.numericValue === null ? "Unavailable" : `${point.value} quote`}</strong>
-            {point.value !== null && point.numericValue === null ? <span>Value cannot be plotted safely.</span> : null}
-            {point.value === null && point.reasons.length ? <span>{point.reasons.join(", ")}</span> : null}
+            <strong>{!point.knownValue || point.value === null ? "Unavailable" : `${point.value} quote`}</strong>
+            {point.knownValue && point.numericValue === null ? <span>Known value; not plotted at this chart’s numeric scale.</span> : null}
+            {!point.knownValue && point.reasons.length ? <span>{point.reasons.join(", ")}</span> : null}
           </li>
         ))}
       </ol>

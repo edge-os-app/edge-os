@@ -92,6 +92,65 @@ describe("P13 spot replay", () => {
     expect(screen.getByRole("heading", { name: "Simulated replay summary" }).compareDocumentPosition(screen.getByTestId("spot-replay-saved-inputs")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("keeps exact finite quote values readable when they exceed the chart plotting range", () => {
+    const saved = JSON.parse(JSON.stringify(replay)) as any;
+    const knownValue = "1.0000000000000000000000000000000000000000000000000E+309";
+    saved.content.result.samples = [
+      "2026-10-01T12:05:00.000000Z", "2026-10-01T12:10:00.000000Z",
+      "2026-10-01T12:15:00.000000Z", "2026-10-01T12:20:00.000000Z",
+    ].map((at) => ({ at, cash_quote: knownValue, base_amount: "0", account_value_quote: knownValue, mark_reasons: [] }));
+    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+
+    const sampleList = screen.getByRole("list", { name: "Saved account value samples" });
+    expect(within(sampleList).getAllByText(`${knownValue} quote`)).toHaveLength(4);
+    expect(within(sampleList).queryByText("Unavailable")).not.toBeInTheDocument();
+    expect(within(sampleList).getByText("2026-10-01 12:05:00 UTC")).toBeInTheDocument();
+    const chart = screen.getByRole("img", { name: /account balance in quote over the replay window/i });
+    expect(chart.querySelector("desc")?.textContent).toMatch(/4 of 4 saved account-balance samples have known quote values; 0 can be plotted safely/i);
+    expect(chart.querySelectorAll("circle, polyline")).toHaveLength(0);
+    expect(screen.getByText(/exact values remain listed below/i)).toBeInTheDocument();
+  });
+
+  it("separates a known unplottable sample from a missing sample in a mixed series", () => {
+    const saved = JSON.parse(JSON.stringify(replay)) as any;
+    const knownValue = "1.0000000000000000000000000000000000000000000000000E+309";
+    saved.content.result.samples = [
+      { at: "2026-10-01T12:05:00Z", cash_quote: "1000", base_amount: "0", account_value_quote: "1000" },
+      { at: "2026-10-01T12:10:00Z", cash_quote: knownValue, base_amount: "0", account_value_quote: knownValue },
+      { at: "2026-10-01T12:15:00Z", cash_quote: "1000", base_amount: "0", account_value_quote: null, mark_reasons: ["LATE_INPUT"] },
+      { at: "2026-10-01T12:20:00Z", cash_quote: "1100", base_amount: "0", account_value_quote: "1100" },
+    ];
+    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+
+    const sampleList = screen.getByRole("list", { name: "Saved account value samples" });
+    expect(within(sampleList).getByText(`${knownValue} quote`)).toBeInTheDocument();
+    expect(within(sampleList).getByText("Known value; not plotted at this chart’s numeric scale.")).toBeInTheDocument();
+    expect(within(sampleList).getByText("Unavailable")).toBeInTheDocument();
+    expect(within(sampleList).getByText("LATE_INPUT")).toBeInTheDocument();
+    const chart = screen.getByRole("img", { name: /account balance in quote over the replay window/i });
+    expect(chart.querySelector("desc")?.textContent).toMatch(/3 of 4 saved account-balance samples have known quote values; 2 can be plotted safely\. 1 known value remains listed exactly below/i);
+    expect(chart.querySelectorAll("circle, polyline")).toHaveLength(2);
+    expect(chart.querySelectorAll("polyline")).toHaveLength(0);
+  });
+
+  it("does not plot underflowed nonzero decimals or count malformed values as known", () => {
+    const saved = JSON.parse(JSON.stringify(replay)) as any;
+    saved.content.result.samples = [
+      { at: "2026-10-01T12:05:00Z", account_value_quote: "1E-9999" },
+      { at: "2026-10-01T12:10:00Z", account_value_quote: "Infinity", mark_reasons: ["INVALID_SAVED_VALUE"] },
+    ];
+    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+
+    const sampleList = screen.getByRole("list", { name: "Saved account value samples" });
+    expect(within(sampleList).getByText("1E-9999 quote")).toBeInTheDocument();
+    expect(within(sampleList).getByText("Known value; not plotted at this chart’s numeric scale.")).toBeInTheDocument();
+    expect(within(sampleList).getByText("Unavailable")).toBeInTheDocument();
+    expect(within(sampleList).getByText("INVALID_SAVED_VALUE")).toBeInTheDocument();
+    const chart = screen.getByRole("img", { name: /account balance in quote over the replay window/i });
+    expect(chart.querySelector("desc")?.textContent).toMatch(/1 of 2 saved account-balance samples have known quote values; 0 can be plotted safely/i);
+    expect(chart.querySelectorAll("circle, polyline")).toHaveLength(0);
+  });
+
   it("shows single, flat, open-position and all-missing samples without inventing a balance", () => {
     const onePoint = JSON.parse(JSON.stringify(replay)) as any;
     onePoint.content.result.open_position = { base_amount: "2", basis_quote: "400", last_mark_quote: "500" };

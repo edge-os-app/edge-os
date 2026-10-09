@@ -230,6 +230,31 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
     expectedMetrics: savedReplay.content.result.metrics });
   await shot(page, project, "05-spot-replay-saved");
 
+  // Renderer-only finite Decimal fixture from the accepted public evaluator output.
+  const knownOverflowValue = "1.0000000000000000000000000000000000000000000000000E+309";
+  const rendererProbe = structuredClone(savedReplay);
+  rendererProbe.content.result.samples = rendererProbe.content.result.samples.slice(0, 4).map((sample) => ({
+    ...sample, cash_quote: knownOverflowValue, account_value_quote: knownOverflowValue,
+  }));
+  const overflowUrl = `**/v1/spot-replays/${replayId}`;
+  await page.route(overflowUrl, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rendererProbe) }));
+  await replay.getByLabel("Saved replay ID").fill(replayId);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  const overflowList = replay.getByRole("list", { name: "Saved account value samples" });
+  await expect(overflowList.getByText(`${knownOverflowValue} quote`).first()).toBeVisible();
+  await expect(overflowList.getByText("Unavailable")).toHaveCount(0);
+  const overflowChart = replay.getByRole("img", { name: "Account balance in quote over the replay window" });
+  await expect(overflowChart.locator("desc")).toContainText("4 of 4 saved account-balance samples have known quote values; 0 can be plotted safely");
+  await expect(overflowChart.locator("circle, polyline")).toHaveCount(0);
+  expect(await overflowList.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    `${project}: exact known Decimal values must not cause horizontal overflow`).toBe(true);
+  record(`spot-replay-known-overflow-${project}`, { replayId, value: knownOverflowValue, samples: 4,
+    rendererOnly: true, source: "accepted WC01 public evaluator output", horizontalOverflow: false });
+  await shot(page, project, "05-spot-replay-known-overflow");
+  await page.unroute(overflowUrl);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  await expect(overflowList.getByText("990.51132338308457711442786069651741293532338308458 quote")).toBeVisible();
+
   // Public API-created unavailable records exercise nullable saved binding shapes in the real UI.
   const unavailableCases = [
     { name: "unbound-entry", field: "entry", binding: { state: "UNBOUND" }, summary: "UNBOUND: dependency list is null", reason: "UNRESOLVED_ESSENTIAL_EVIDENCE" },
