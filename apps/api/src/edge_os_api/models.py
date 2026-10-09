@@ -156,3 +156,78 @@ class InvestigationAccessEvent(Base):
         UniqueConstraint("owner_id", "event_id", name="uq_investigation_access_owner_event"),
         Index("ix_investigation_access_owner_declaration", "owner_id", "declaration_id", "sequence"),
     )
+
+
+class EffectRunDeclaration(Base):
+    """Immutable, explicitly adopted P09 mapping from a P08 plan to P06 rules and a fixture."""
+
+    __tablename__ = "effect_run_declarations"
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    intake_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    p08_declaration_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "run_id", name="uq_effect_run_owner_run"),
+        UniqueConstraint("owner_id", "intake_record_id", "run_id", name="uq_effect_run_owner_intake_run"),
+        UniqueConstraint("owner_id", "intake_record_id", "idempotency_key", name="uq_effect_run_owner_request_key"),
+        UniqueConstraint("owner_id", "operation_id", name="uq_effect_run_owner_operation"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id"], ["records.owner_id", "records.record_id"],
+                             name="fk_effect_run_intake"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id", "p08_declaration_id"],
+                             ["investigation_declarations.owner_id", "investigation_declarations.intake_record_id",
+                              "investigation_declarations.declaration_id"], name="fk_effect_run_p08_declaration"),
+        ForeignKeyConstraint(["owner_id"], ["users.id"], name="fk_effect_run_owner"),
+        CheckConstraint("length(idempotency_key) BETWEEN 1 AND 200", name="ck_effect_run_idempotency_key"),
+        CheckConstraint("fingerprint ~ '^[0-9a-f]{64}$'", name="ck_effect_run_fingerprint"),
+        Index("ix_effect_run_owner_intake", "owner_id", "intake_record_id", "created_at"),
+    )
+
+
+class EffectRunEvent(Base):
+    """Append-only adoption, attempt, failure, and replay evidence for P09."""
+
+    __tablename__ = "effect_run_events"
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False, unique=True)
+    attempt_idempotency_key: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["owner_id", "run_id"], ["effect_run_declarations.owner_id",
+                                                         "effect_run_declarations.run_id"],
+                             name="fk_effect_run_event_run"),
+        ForeignKeyConstraint(["owner_id"], ["users.id"], name="fk_effect_run_event_owner"),
+        UniqueConstraint("owner_id", "event_id", name="uq_effect_run_event_owner_event"),
+        UniqueConstraint("owner_id", "run_id", "attempt_idempotency_key", name="uq_effect_run_event_attempt_key"),
+        Index("ix_effect_run_event_owner_run", "owner_id", "run_id", "sequence"),
+    )
+
+
+class EffectReport(Base):
+    """One immutable descriptive result, saved only after a separately adopted run."""
+
+    __tablename__ = "effect_reports"
+    report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["owner_id", "run_id"], ["effect_run_declarations.owner_id",
+                                                         "effect_run_declarations.run_id"],
+                             name="fk_effect_report_run"),
+        ForeignKeyConstraint(["owner_id"], ["users.id"], name="fk_effect_report_owner"),
+        UniqueConstraint("owner_id", "report_id", name="uq_effect_report_owner_report"),
+        UniqueConstraint("owner_id", "run_id", name="uq_effect_report_owner_run"),
+        Index("ix_effect_report_owner_created", "owner_id", "created_at"),
+    )
