@@ -13,6 +13,7 @@ browser context, log scan, production-bundle scan, then cleanup of exactly the r
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import re
@@ -366,6 +367,35 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
         if rows_for_declaration:
             content = rows_for_declaration[0]["content"]
             access = rows_for_declaration[0]["access_content"]
+            configuration = content.get("configuration", {})
+            partitions = configuration.get("partitions", [])
+            partition_by_id = {part.get("partition_id"): part for part in partitions}
+            plan = configuration.get("evaluation_plan", [])
+            start = datetime.fromisoformat(configuration.get("period", {}).get("start", "").replace("Z", "+00:00"))
+            end = datetime.fromisoformat(configuration.get("period", {}).get("end", "").replace("Z", "+00:00"))
+            intervals = [(datetime.fromisoformat(part["start"].replace("Z", "+00:00")),
+                          datetime.fromisoformat(part["end"].replace("Z", "+00:00"))) for part in partitions]
+            plan_bound = (len({row.get("evaluation_id") for row in plan}) == len(plan)
+                and {row.get("evaluation_id") for row in plan} == set(content.get("evaluation_ids", []))
+                and {row.get("trial_id") for row in plan} == set(content.get("trial_ids", []))
+                and configuration.get("compute_limit", {}).get("max_evaluations", 0) >= len(plan)
+                and all(row.get("variant_id") in {item.get("variant_id") for item in configuration.get("variants", [])}
+                    and row.get("partition_ids") and set(row["partition_ids"]).issubset(partition_by_id)
+                    and (row.get("horizon", {}).get("value"), row.get("horizon", {}).get("unit"))
+                        in {(item.get("value"), item.get("unit")) for item in configuration.get("horizons", [])}
+                    for row in plan))
+            semantics_bound = ((content.get("edge_spec", {}).get("claim", {}).get("status") == "DESCRIPTIVE_ONLY"
+                and content.get("edge_spec", {}).get("falsification", {}).get("status") == "DESCRIPTIVE_ONLY"
+                and configuration.get("direction") == "DESCRIPTIVE") or
+                (content.get("edge_spec", {}).get("claim", {}).get("status") == "HYPOTHESIS"
+                and content.get("edge_spec", {}).get("falsification", {}).get("status") == "DECLARED"
+                and configuration.get("direction") in {"OUTPERFORM", "UNDERPERFORM"}))
+            temporal_bound = (bool(intervals) and all(start <= left < right <= end for left, right in intervals)
+                and all(previous[1] <= current[0] for previous, current in zip(intervals, intervals[1:]))
+                and (configuration.get("direction") != "DESCRIPTIVE" or
+                     len(intervals) == 1 and intervals[0] == (start, end) and partitions[0].get("role") == "DESCRIPTIVE")
+                and (configuration.get("direction") == "DESCRIPTIVE" or
+                     {part.get("role") for part in partitions}.issuperset({"TRAINING", "VALIDATION", "HOLDOUT"})))
             item.update({
                 "original_request_matches_ui": content.get("original_request") == saved["original"],
                 "saved_content_matches_ui_and_api": content == saved.get("content"),
@@ -375,6 +405,10 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                 "no_provider_or_study": access.get("provider_queries") == 0 and access.get("study_started") is False,
                 "fixture_only_zero_cost": content.get("configuration", {}).get("permitted_access") == ["FIXTURE_ONLY"]
                     and content.get("configuration", {}).get("compute_limit", {}).get("max_cost_usd") == "0",
+                "version_two_contract": rows_for_declaration[0]["content"].get("schema_version") == "p08.investigation-declaration/2",
+                "declaration_semantics_consistent": semantics_bound,
+                "evaluation_plan_explicit_and_budgeted": plan_bound,
+                "partition_boundaries_contained_and_ordered": temporal_bound,
                 "owner_matches_intake": bool(rows(f"select 1 from records r join investigation_declarations d "
                     f"on d.owner_id=r.owner_id where r.record_id='{intake_id}' and d.declaration_id='{declaration_id}'")),
                 "access_event_count": rows(f"select count(*) c from investigation_access_events where declaration_id='{declaration_id}'")[0]["c"],
@@ -385,6 +419,8 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
         and v.get("saved_content_matches_ui_and_api") and v.get("access_event_matches_ui_and_api")
         and v.get("state_is_pre_outcome") and v.get("labels_unread") and v.get("no_provider_or_study")
         and v.get("fixture_only_zero_cost") and v.get("owner_matches_intake") and v.get("access_event_count") == 1
+        and v.get("version_two_contract") and v.get("declaration_semantics_consistent")
+        and v.get("evaluation_plan_explicit_and_budgeted") and v.get("partition_boundaries_contained_and_ordered")
         for v in investigations)
     return {"checks": checks, "all_checks_pass": passed and investigations_pass}
 

@@ -276,6 +276,14 @@ test("no thesis stays an investigation and shows no study progress", async ({ pa
 
 test("adopt and save a bounded pre-outcome investigation declaration", async ({ page }, info) => {
   const project = info.project.name;
+  const saveAttempts = [];
+  await page.route("**/v1/research/requests/*/investigations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    saveAttempts.push(JSON.parse(route.request().postData() ?? "{}"));
+    if (saveAttempts.length === 1) return route.fulfill({ status: 503, contentType: "application/json",
+      body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "Temporary fixture failure." }] }) });
+    return route.continue();
+  });
   await open(page, tokens.a);
   await page.getByLabel("Your words", { exact: true }).fill("Compare the descriptive launch cohorts in a synthetic fixture.");
   await page.getByRole("radio").nth(2).check();
@@ -284,9 +292,17 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   await expect(page.getByTestId("investigation-original-request")).toHaveText("Compare the descriptive launch cohorts in a synthetic fixture.");
   await expect(page.getByText(/unqualified synthetic fixture/).first()).toBeVisible();
   await expect(page.getByLabel("Unverified mechanism details and evidence gaps")).toHaveValue(/Participant identity and incentives are unverified\./);
+  await expect(page.getByLabel("Outcome horizon (positive integer)")).toHaveValue("15");
+  await expect(page.getByText(/Descriptive work covers the complete period without an invented holdout/)).toBeVisible();
   await page.getByRole("checkbox", { name: /I reviewed the hypothesis and every required setting/ }).check();
-  await page.getByRole("button", { name: "Adopt and save declaration" }).click();
+  const save = page.getByRole("button", { name: "Adopt and save declaration" });
+  await save.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Temporary fixture failure.", { exact: true })).toBeVisible();
+  await save.focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
+  await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
   await expect(page.getByTestId("investigation-saved")).toContainText("DECLARATION_SAVED");
   await expect(page.getByTestId("investigation-saved")).toContainText("Outcome labels read");
   const declarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
@@ -297,11 +313,18 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
     { headers: { Authorization: `Bearer ${tokens.a}` } });
   expect(exactResponse.status()).toBe(200);
   const exact = await exactResponse.json();
+  expect(saveAttempts).toHaveLength(2);
+  expect(saveAttempts[1]).not.toHaveProperty("fingerprint");
+  expect(saveAttempts[1].operation_id).toBe(saveAttempts[0].operation_id);
+  expect(saveAttempts[1].idempotency_key).toBe(saveAttempts[0].idempotency_key);
   expect(uiContent).toEqual(exact.declaration.content);
   expect(exact.access_history[0]).toMatchObject({ event: "DECLARATION_SAVED", outcome_labels_read: false,
     provider_queries: 0, study_started: false });
   const requestUrl = page.url();
-  record(`investigation-${project}`, { url: requestUrl, declarationId, content: exact.declaration.content,
+  record(`investigation-${project}`, { url: requestUrl, declarationId, retry: { attempts: saveAttempts.length,
+    reused_operation_id: saveAttempts[1].operation_id === saveAttempts[0].operation_id,
+    reused_idempotency_key: saveAttempts[1].idempotency_key === saveAttempts[0].idempotency_key,
+    storage_fingerprint_sent: Object.hasOwn(saveAttempts[1], "fingerprint") }, content: exact.declaration.content,
     access: Object.fromEntries(["schema_version", "event", "outcome_labels_read", "provider_queries", "study_started"]
       .map((field) => [field, exact.access_history[0][field]])),
     original: "Compare the descriptive launch cohorts in a synthetic fixture." });

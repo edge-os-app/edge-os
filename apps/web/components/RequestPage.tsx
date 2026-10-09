@@ -196,7 +196,8 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
         )}
       </section>
 
-      {intake.requested_job === "INVESTIGATE_EFFECT" ? <InvestigationReview intakeId={id} /> : null}
+      {intake.requested_job === "INVESTIGATE_EFFECT" ? <InvestigationReview intakeId={id}
+        interpretationRevisionId={head.interpretation_revision_id} /> : null}
 
       {outcome === "NEEDS_CLARIFICATION" && (
         <section className="panel" aria-labelledby="q-title">

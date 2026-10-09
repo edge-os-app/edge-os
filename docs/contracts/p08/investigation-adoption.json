@@ -1,8 +1,8 @@
 {
-  "schema_version": "p08.investigation-declaration/1",
+  "schema_version": "p08.investigation-declaration/2",
   "record_type": "InvestigationDeclaration",
-  "proposal_version": "p08-bounded-review/1",
-  "budget_version": "p08-research-budget/1",
+  "proposal_version": "p08-bounded-review/2",
+  "budget_version": "p08-research-budget/2",
   "access_event_version": "p08.investigation-access/1",
   "append_only": true,
   "owner": "verified-principal",
@@ -22,6 +22,7 @@
     "partitions",
     "permitted_access",
     "stopping_rule",
+    "evaluation_plan",
     "budget_version",
     "optional_tools"
   ],
@@ -38,6 +39,8 @@
     "max_runtime_seconds": 3600,
     "max_cost_usd": "0",
     "period_timezone": "UTC",
+    "horizon": {"representation": {"value": "positive integer", "unit": ["SECONDS", "MINUTES", "HOURS", "DAYS"]}},
+    "partitions": {"membership": "explicit UTC start/end", "within_period": true, "ordered": true, "non_overlapping": true},
     "access_route": "FIXTURE_ONLY"
   },
   "pool_binding": {
@@ -58,6 +61,7 @@
       "field_origins",
       "trial_ids",
       "evaluation_ids",
+      "configuration.evaluation_plan",
       "declaration_state",
       "outcome_labels_read"
     ],
@@ -69,6 +73,10 @@
     "required": ["hypothesis", "claim", "falsification", "alternatives", "unknowns"],
     "new_hypothesis": "New edge_id and version 1",
     "revision": "Same edge_id, parent declaration owned by the same user and request, version incremented by one",
+    "meaning_compatibility": {
+      "HYPOTHESIS": {"falsification": "DECLARED", "direction": ["OUTPERFORM", "UNDERPERFORM"]},
+      "DESCRIPTIVE_ONLY": {"falsification": "DESCRIPTIVE_ONLY", "direction": "DESCRIPTIVE"}
+    },
     "descriptive_status": "DESCRIPTIVE_ONLY",
     "unknowns": "Explicitly name unverified participants/incentives, persistence/capacity, costs and evidence gaps; do not infer them."
   },
@@ -83,6 +91,18 @@
     "wallet_pnl": ["UNAVAILABLE", "NOT_REQUIRED"],
     "social_signals": ["UNAVAILABLE", "NOT_REQUIRED"]
   },
+  "evaluation_plan": {
+    "row": ["evaluation_id", "trial_id", "variant_id", "horizon", "partition_ids"],
+    "identity_binding": "Exactly one plan row per declared evaluation ID; every trial ID is referenced.",
+    "budget": "max_evaluations must cover the number of explicit plan rows.",
+    "expansion": "Rows are the exact adopted plan. No Cartesian product or implicit extra evaluation is generated.",
+    "origin": "Explicitly user-confirmed with source reference investigation-review/2."
+  },
+  "temporal_partitions": {
+    "descriptive": "One DESCRIPTIVE interval exactly covers the declared period. No holdout is invented.",
+    "predictive": "TRAINING, VALIDATION, and HOLDOUT intervals are required with explicit ordered UTC boundaries within the period. Intervals cannot overlap.",
+    "evaluation_mapping": "Every plan row names exact declared variant, horizon, and partition identities. Each mapped interval must be at least as long as its horizon."
+  },
   "errors": [
     "required_setting_not_adopted",
     "original_request_changed",
@@ -90,6 +110,11 @@
     "parent_declaration_conflict",
     "idempotency_key_reused",
     "configuration_origin_mismatch",
+    "declaration_semantics_conflict",
+    "predictive_partitions_incomplete",
+    "evaluation_plan_identity_mismatch",
+    "trial_plan_identity_mismatch",
+    "text_not_nfc",
     "paid_access_not_permitted"
   ]
 }

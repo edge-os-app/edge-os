@@ -16,15 +16,15 @@ from .auth import Principal
 from .errors import AppError, finding, invalid, not_found
 from .models import InvestigationAccessEvent, InvestigationDeclaration
 from .schemas import InvestigationBody, InvestigationConfiguration
-from .service import get_owned, head_interpretation, intake_rows, parse_uuid
+from .service import get_owned, head_interpretation, intake_rows, lock_intake, parse_uuid
 
-SCHEMA_VERSION = "p08.investigation-declaration/1"
-PROPOSAL_VERSION = "p08-bounded-review/1"
-BUDGET_VERSION = "p08-research-budget/1"
+SCHEMA_VERSION = "p08.investigation-declaration/2"
+PROPOSAL_VERSION = "p08-bounded-review/2"
+BUDGET_VERSION = "p08-research-budget/2"
 FIXTURE_PROFILE = "fixture-unqualified-pool/1"
 CONFIGURATION_FIELDS = (
     "question", "pool_binding", "variants", "direction", "horizons", "sources", "candidate_limit",
-    "parameter_limit", "compute_limit", "period", "partitions", "permitted_access", "stopping_rule",
+    "parameter_limit", "compute_limit", "period", "partitions", "permitted_access", "stopping_rule", "evaluation_plan",
     "budget_version", "optional_tools",
 )
 
@@ -42,13 +42,22 @@ def _proposal_configuration(question: str) -> dict[str, Any]:
             {"variant_id": "comparison", "hypothesis": "Declared comparison group."},
         ],
         "direction": "DESCRIPTIVE",
-        "horizons": ["15 minutes"],
+        "horizons": [{"value": 15, "unit": "MINUTES"}],
         "sources": [FIXTURE_PROFILE],
         "candidate_limit": 2,
         "parameter_limit": 4,
         "compute_limit": {"max_evaluations": 2, "max_runtime_seconds": 60, "max_cost_usd": "0"},
         "period": {"start": "2026-01-01T00:00:00Z", "end": "2026-01-03T00:00:00Z"},
-        "partitions": [{"partition_id": "descriptive", "role": "DESCRIPTIVE"}],
+        "partitions": [{"partition_id": "descriptive", "role": "DESCRIPTIVE",
+                        "start": "2026-01-01T00:00:00Z", "end": "2026-01-03T00:00:00Z"}],
+        "evaluation_plan": [
+            {"evaluation_id": "00000000-0000-4000-8000-000000000001",
+             "trial_id": "00000000-0000-4000-8000-000000000000", "variant_id": "primary",
+             "horizon": {"value": 15, "unit": "MINUTES"}, "partition_ids": ["descriptive"]},
+            {"evaluation_id": "00000000-0000-4000-8000-000000000002",
+             "trial_id": "00000000-0000-4000-8000-000000000000", "variant_id": "comparison",
+             "horizon": {"value": 15, "unit": "MINUTES"}, "partition_ids": ["descriptive"]},
+        ],
         "permitted_access": ["FIXTURE_ONLY"],
         "stopping_rule": "Stop after the two declared comparisons; no outcome is evaluated by this save.",
         "budget_version": BUDGET_VERSION,
@@ -60,7 +69,15 @@ def _proposal_configuration(question: str) -> dict[str, Any]:
 def proposal_for(intake: Any, interpretation: Any | None) -> dict[str, Any]:
     """Return a bounded, explicitly unadopted fixture proposal for one saved request."""
     question = intake.content["original_request"]
+    trial_ids = [str(uuid.uuid4())]
+    evaluation_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
     configuration = _proposal_configuration(question)
+    configuration["evaluation_plan"] = [
+        {"evaluation_id": evaluation_ids[0], "trial_id": trial_ids[0], "variant_id": "primary",
+         "horizon": {"value": 15, "unit": "MINUTES"}, "partition_ids": ["descriptive"]},
+        {"evaluation_id": evaluation_ids[1], "trial_id": trial_ids[0], "variant_id": "comparison",
+         "horizon": {"value": 15, "unit": "MINUTES"}, "partition_ids": ["descriptive"]},
+    ]
     fields = {
         name: {"origin": "USER_STATED" if name == "question" else "APPLICATION_CONFIGURED",
                "source_ref": "original_request" if name == "question" else f"proposal:{PROPOSAL_VERSION}",
@@ -86,8 +103,8 @@ def proposal_for(intake: Any, interpretation: Any | None) -> dict[str, Any]:
         "configuration": configuration,
         "adopted_fields": [],
         "field_origins": fields,
-        "trial_ids": [str(uuid.uuid4())],
-        "evaluation_ids": [str(uuid.uuid4())],
+        "trial_ids": trial_ids,
+        "evaluation_ids": evaluation_ids,
         "notice": "This is a fixture-only proposal. Adoption saves a pre-outcome declaration; it does not run a study.",
     }
 
@@ -122,6 +139,30 @@ def _response(session: Session, row: InvestigationDeclaration, *, replay: bool =
             "study_started": False, "idempotent_replay": replay}
 
 
+def _request_fingerprint(principal: Principal, intake_id: uuid.UUID, body: InvestigationBody) -> str:
+    canonical_body = p02.canonical_bytes(body.model_dump(mode="json")).decode("utf-8")
+    return p02.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake_id),
+                          "body": canonical_body})
+
+
+def _existing_for_key(session: Session, principal: Principal, intake_id: uuid.UUID,
+                      key: str) -> InvestigationDeclaration | None:
+    return session.execute(select(InvestigationDeclaration).where(
+        InvestigationDeclaration.owner_id == principal.user_id,
+        InvestigationDeclaration.intake_record_id == intake_id,
+        InvestigationDeclaration.idempotency_key == key)).scalar_one_or_none()
+
+
+def _replay_or_conflict(session: Session, row: InvestigationDeclaration | None, fingerprint: str) -> tuple[int, dict[str, Any]] | None:
+    if row is None:
+        return None
+    session.rollback()
+    if row.fingerprint != fingerprint:
+        raise AppError(409, "INVESTIGATION", "CONFLICTED", "idempotency_key_reused", [finding(
+            "idempotency_key_reused", "/idempotency_key", "This key was used for a different declaration.")])
+    return 200, _response(session, row, replay=True)
+
+
 def create_declaration(session: Session, principal: Principal, intake_id: str,
                        body: InvestigationBody) -> tuple[int, dict[str, Any]]:
     """Validate and atomically append one adopted declaration and its first access event."""
@@ -129,10 +170,24 @@ def create_declaration(session: Session, principal: Principal, intake_id: str,
     if intake.content["requested_job"] != "INVESTIGATE_EFFECT":
         raise invalid("/requested_job", "Only an investigation request can save this declaration.",
                       "investigation_job_required")
+    fingerprint = _request_fingerprint(principal, intake.record_id, body)
+    existing = _existing_for_key(session, principal, intake.record_id, body.idempotency_key)
+    replay = _replay_or_conflict(session, existing, fingerprint)
+    if replay is not None:
+        return replay
+
+    # Observe before acquiring the shared lock, then serialize and re-read the head below.
+    intake_rows(session, principal, intake.record_id)
+    intake = lock_intake(session, principal, intake_id)
     rows = intake_rows(session, principal, intake.record_id)
     interpretation = head_interpretation(rows)
     current_revision_id = interpretation.content["interpretation_revision_id"] if interpretation is not None else None
+    existing = _existing_for_key(session, principal, intake.record_id, body.idempotency_key)
+    replay = _replay_or_conflict(session, existing, fingerprint)
+    if replay is not None:
+        return replay
     if body.expected_interpretation_revision_id != current_revision_id:
+        session.rollback()
         raise AppError(409, "INVESTIGATION", "CONFLICTED", "interpretation_revision_conflict", [finding(
             "interpretation_revision_conflict", "/expected_interpretation_revision_id",
             "The request changed. Reload it and review the current settings before saving.")])
@@ -155,7 +210,7 @@ def create_declaration(session: Session, principal: Principal, intake_id: str,
     provided = body.configuration.model_dump(mode="json")
     for field_name, origin in body.field_origins.items():
         if field_name == "edge_spec":
-            if origin.origin not in {"USER_STATED", "USER_CONFIRMED"} or origin.source_ref != "investigation-review/1":
+            if origin.origin not in {"USER_STATED", "USER_CONFIRMED"} or origin.source_ref != "investigation-review/2":
                 raise invalid("/field_origins/edge_spec", "Review and adopt the hypothesis or descriptive status.",
                               "edge_spec_not_adopted")
             continue
@@ -169,7 +224,7 @@ def create_declaration(session: Session, principal: Principal, intake_id: str,
                 raise invalid(f"/field_origins/{field_name}",
                               "An edited setting must be recorded as user-confirmed with its review source.",
                               "configuration_origin_mismatch")
-        elif origin.origin not in {"USER_STATED", "USER_CONFIRMED"} or origin.source_ref != "investigation-review/1":
+        elif origin.origin not in {"USER_STATED", "USER_CONFIRMED"} or origin.source_ref != "investigation-review/2":
             raise invalid(f"/field_origins/{field_name}", "The setting source does not match the saved review.",
                           "configuration_origin_mismatch")
 
@@ -211,21 +266,6 @@ def create_declaration(session: Session, principal: Principal, intake_id: str,
         "declaration_state": "PRE_OUTCOME_DECLARED",
         "outcome_labels_read": False,
     }
-    canonical = p02.canonical_bytes(content).decode("utf-8")
-    fingerprint = p02.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake.record_id),
-                                  "expected_interpretation_revision_id": body.expected_interpretation_revision_id,
-                                  "content": canonical})
-    existing = session.execute(select(InvestigationDeclaration).where(
-        InvestigationDeclaration.owner_id == principal.user_id,
-        InvestigationDeclaration.intake_record_id == intake.record_id,
-        InvestigationDeclaration.idempotency_key == body.idempotency_key)).scalar_one_or_none()
-    if existing is not None:
-        session.rollback()
-        if existing.fingerprint != fingerprint:
-            raise AppError(409, "INVESTIGATION", "CONFLICTED", "idempotency_key_reused", [finding(
-                "idempotency_key_reused", "/idempotency_key", "This key was used for a different declaration.")])
-        return 200, _response(session, existing, replay=True)
-
     row = InvestigationDeclaration(
         declaration_id=declaration_id, owner_id=principal.user_id, intake_record_id=intake.record_id,
         edge_id=uuid.UUID(edge.edge_id), edge_version=edge.version, parent_declaration_id=parent_id,

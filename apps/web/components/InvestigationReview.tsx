@@ -6,7 +6,7 @@ import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationPr
 
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
-  "stopping_rule", "budget_version", "optional_tools"];
+  "stopping_rule", "evaluation_plan", "budget_version", "optional_tools"];
 function datetimeValue(value: string): string {
   return new Date(value).toISOString().slice(0, 16);
 }
@@ -22,9 +22,9 @@ function saveKeys(intakeId: string, body: Record<string, unknown>): { operation_
     const saved = window.sessionStorage.getItem(key);
     if (saved) {
       const parsed = JSON.parse(saved) as { fingerprint?: string; operation_id?: string; idempotency_key?: string };
-      if (parsed.fingerprint === fingerprint && parsed.operation_id && parsed.idempotency_key) return parsed as {
-        operation_id: string; idempotency_key: string;
-      };
+      if (parsed.fingerprint === fingerprint && parsed.operation_id && parsed.idempotency_key) {
+        return { operation_id: parsed.operation_id, idempotency_key: parsed.idempotency_key };
+      }
     }
   } catch { /* a new key remains safe because edge identity and version are unique */ }
   const keys = { operation_id: crypto.randomUUID(), idempotency_key: `ui-${crypto.randomUUID()}` };
@@ -36,7 +36,7 @@ function errorDetail(error: unknown): string {
   return error instanceof ApiError ? error.detail : "The declaration could not be saved.";
 }
 
-export function InvestigationReview({ intakeId }: { intakeId: string }) {
+export function InvestigationReview({ intakeId, interpretationRevisionId }: { intakeId: string; interpretationRevisionId: string | null }) {
   const [proposal, setProposal] = useState<InvestigationProposal | null>(null);
   const [declarations, setDeclarations] = useState<InvestigationEnvelope[] | null>(null);
   const [selected, setSelected] = useState<InvestigationSaveResult | null>(null);
@@ -45,36 +45,69 @@ export function InvestigationReview({ intakeId }: { intakeId: string }) {
   const [adopted, setAdopted] = useState(false);
   const [error, setError] = useState("");
   const errorRef = useRef<HTMLParagraphElement>(null);
+  const savedHeading = useRef<HTMLHeadingElement>(null);
+  const hasSavedDeclarations = useRef(false);
+  const [proposalError, setProposalError] = useState("");
+  const [refreshingProposal, setRefreshingProposal] = useState(false);
+  const [refreshNotice, setRefreshNotice] = useState("");
+  const [savedReadFailed, setSavedReadFailed] = useState(false);
+  const [reopenId, setReopenId] = useState("");
   const [configuration, setConfiguration] = useState<InvestigationConfiguration | null>(null);
   const [edgeSpec, setEdgeSpec] = useState<InvestigationProposal["edge_spec"] | null>(null);
 
   useEffect(() => {
     let current = true;
-    Promise.all([api.investigations(intakeId), api.investigationProposal(intakeId)]).then(([saved, next]) => {
+    setLoading(true); setError(""); setProposalError(""); setSavedReadFailed(false);
+    api.investigations(intakeId).then((saved) => {
       if (!current) return;
       setDeclarations(saved.declarations);
+      hasSavedDeclarations.current = saved.declarations.length > 0;
       if (saved.declarations.length) {
         setSelected({ declaration: saved.declarations[0], access_history: saved.access_history,
           study_started: false, idempotent_replay: false });
         setProposal(null);
-      } else {
-        setProposal(next);
-        setConfiguration(next.configuration);
-        setEdgeSpec(next.edge_spec);
       }
-    }).catch((cause: unknown) => { if (current) setError(errorDetail(cause)); })
+    }).catch((cause: unknown) => { if (current) { setError(errorDetail(cause)); setSavedReadFailed(true); } })
       .finally(() => { if (current) setLoading(false); });
+    void api.investigationProposal(intakeId).then((next) => {
+      if (!current) return;
+      if (hasSavedDeclarations.current) return;
+      setProposal(next);
+      setConfiguration((existing) => existing ?? next.configuration);
+      setEdgeSpec((existing) => existing ?? next.edge_spec);
+    }).catch((cause: unknown) => { if (current) setProposalError(errorDetail(cause)); });
     return () => { current = false; };
   }, [intakeId]);
+
+  const refreshProposal = async (replaceDraft: boolean) => {
+    setProposalError(""); setAdopted(false); setRefreshingProposal(true);
+    try {
+      const next = await api.investigationProposal(intakeId);
+      setProposal(next);
+      if (replaceDraft || !configuration || !edgeSpec) {
+        setConfiguration(next.configuration); setEdgeSpec(next.edge_spec); setAdopted(false);
+      } else {
+        setAdopted(false);
+        setRefreshNotice("The request interpretation changed. Your unsaved edits remain in place. Review them against this current declaration before saving.");
+      }
+      return true;
+    } catch (cause) { setProposalError(errorDetail(cause)); return false; }
+    finally { setRefreshingProposal(false); }
+  };
+
+  useEffect(() => {
+    if (loading || !proposal || proposal.interpretation_revision_id === interpretationRevisionId) return;
+    void refreshProposal(false);
+    // The current proposal is the revision guard; edits remain visible during refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interpretationRevisionId, loading]);
 
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
 
   const beginAnother = async () => {
     setBusy(true); setError(""); setSelected(null); setAdopted(false);
-    try {
-      const next = await api.investigationProposal(intakeId);
-      setProposal(next); setConfiguration(next.configuration); setEdgeSpec(next.edge_spec);
-    } catch (cause) { setError(errorDetail(cause)); }
+    setRefreshNotice("");
+    try { await refreshProposal(true); }
     finally { setBusy(false); }
   };
 
@@ -82,15 +115,22 @@ export function InvestigationReview({ intakeId }: { intakeId: string }) {
     setConfiguration((current) => current ? { ...current, [key]: value } : current);
   };
 
+  const updatePeriod = (period: InvestigationConfiguration["period"]) => {
+    setConfiguration((current) => current ? { ...current, period,
+      partitions: current.direction === "DESCRIPTIVE" && current.partitions[0]
+        ? [{ ...current.partitions[0], start: period.start, end: period.end }]
+        : current.partitions } : current);
+  };
+
   const save = async () => {
-    if (!proposal || !configuration || !edgeSpec || !adopted || busy) return;
+    if (!proposal || !configuration || !edgeSpec || !adopted || busy || refreshingProposal) return;
     const fieldOrigins = Object.fromEntries(ADOPTED_FIELDS.map((field) => {
-      if (field === "edge_spec") return [field, { origin: "USER_CONFIRMED", source_ref: "investigation-review/1", adoption: "ADOPTED" }];
+      if (field === "edge_spec" || field === "evaluation_plan") return [field, { origin: "USER_CONFIRMED", source_ref: "investigation-review/2", adoption: "ADOPTED" }];
       if (field === "question") return [field, { origin: "USER_STATED", source_ref: "original_request", adoption: "ADOPTED" }];
       const changed = JSON.stringify(configuration[field as keyof InvestigationConfiguration]) !==
         JSON.stringify(proposal.configuration[field as keyof InvestigationConfiguration]);
       return [field, { origin: changed ? "USER_CONFIRMED" : "APPLICATION_CONFIGURED",
-        source_ref: changed ? "investigation-review/1" : `proposal:${proposal.proposal_version}`, adoption: "ADOPTED" }];
+        source_ref: changed ? "investigation-review/2" : `proposal:${proposal.proposal_version}`, adoption: "ADOPTED" }];
     }));
     const body = {
       expected_interpretation_revision_id: proposal.interpretation_revision_id,
@@ -109,15 +149,54 @@ export function InvestigationReview({ intakeId }: { intakeId: string }) {
         : [result.declaration]);
       setSelected(result); setProposal(null); setAdopted(false);
       try { window.sessionStorage.removeItem(`edge-os:investigation:${intakeId}`); } catch { /* ignore */ }
-    } catch (cause) { setError(errorDetail(cause)); }
+      requestAnimationFrame(() => savedHeading.current?.focus());
+    } catch (cause) {
+      setError(errorDetail(cause));
+      if (cause instanceof ApiError && cause.code === "interpretation_revision_conflict") await refreshProposal(false);
+    }
     finally { setBusy(false); }
   };
 
   const reopen = async (declarationId: string) => {
     setBusy(true); setError("");
-    try { setSelected(await api.investigation(intakeId, declarationId)); }
-    catch (cause) { setError(errorDetail(cause)); }
+    try { setSelected(await api.investigation(intakeId, declarationId)); setReopenId(""); }
+    catch (cause) { setError(errorDetail(cause)); setReopenId(declarationId); }
     finally { setBusy(false); }
+  };
+
+  const retrySavedReads = async () => {
+    setBusy(true); setError(""); setSavedReadFailed(false);
+    try {
+      const saved = await api.investigations(intakeId);
+      setDeclarations(saved.declarations);
+      hasSavedDeclarations.current = saved.declarations.length > 0;
+      if (saved.declarations.length) setSelected({ declaration: saved.declarations[0], access_history: saved.access_history,
+        study_started: false, idempotent_replay: false });
+      else await refreshProposal(false);
+    } catch (cause) { setError(errorDetail(cause)); setSavedReadFailed(true); }
+    finally { setBusy(false); }
+  };
+
+  const changeClaimStatus = (status: InvestigationProposal["edge_spec"]["claim"]["status"]) => {
+    if (!edgeSpec || !configuration) return;
+    const descriptive = status === "DESCRIPTIVE_ONLY";
+    const start = Date.parse(configuration.period.start);
+    const end = Date.parse(configuration.period.end);
+    const third = Math.floor((end - start) / 3);
+    const partitions = descriptive ? [{ partition_id: "descriptive", role: "DESCRIPTIVE" as const,
+      start: configuration.period.start, end: configuration.period.end }] : [
+      { partition_id: "training", role: "TRAINING" as const, start: new Date(start).toISOString(), end: new Date(start + third).toISOString() },
+      { partition_id: "validation", role: "VALIDATION" as const, start: new Date(start + third).toISOString(), end: new Date(start + 2 * third).toISOString() },
+      { partition_id: "holdout", role: "HOLDOUT" as const, start: new Date(start + 2 * third).toISOString(), end: new Date(end).toISOString() },
+    ];
+    setEdgeSpec({ ...edgeSpec,
+      claim: { status, text: descriptive ? "Describe only. No predictive claim is declared." : "The primary group outperforms its comparison." },
+      falsification: { status: descriptive ? "DESCRIPTIVE_ONLY" : "DECLARED",
+        criteria: descriptive ? "No outcome claim is evaluated." : "The effect is absent in the declared comparison." },
+    });
+    setConfiguration({ ...configuration, direction: descriptive ? "DESCRIPTIVE" : "OUTPERFORM", partitions,
+      evaluation_plan: configuration.evaluation_plan.map((item) => ({ ...item,
+        partition_ids: [descriptive ? "descriptive" : "validation"] })) });
   };
 
   if (loading) return <section className="panel" aria-busy="true"><h2>Investigation plan</h2><p role="status">Loading the saved plan.</p></section>;
@@ -129,6 +208,11 @@ export function InvestigationReview({ intakeId }: { intakeId: string }) {
         <p className="muted">Review the proposed scope and adoption sources. Saving records a pre-outcome declaration. It does not read data, run a study or start a trade.</p>
       </div>
       {error ? <p className="status err" role="alert" tabIndex={-1} ref={errorRef}>{error}</p> : null}
+      {refreshingProposal ? <p role="status" aria-busy="true">Refreshing the current review. Your edits are unchanged.</p> : null}
+      {proposalError ? <div className="status err" role="alert"><p>{proposalError}</p><button className="btn btn-secondary" type="button" onClick={() => void refreshProposal(false)} disabled={busy || refreshingProposal}>Retry proposal</button></div> : null}
+      {reopenId ? <button className="btn btn-secondary" type="button" onClick={() => void reopen(reopenId)} disabled={busy}>Retry opening saved declaration</button> : null}
+      {refreshNotice ? <p className="status stop" role="status">{refreshNotice}</p> : null}
+      {savedReadFailed ? <button className="btn btn-secondary" type="button" onClick={() => void retrySavedReads()} disabled={busy}>Retry saved declarations</button> : null}
 
       {declarations?.length ? (
         <div className="stack">
@@ -150,7 +234,8 @@ export function InvestigationReview({ intakeId }: { intakeId: string }) {
 
       {selected ? (
         <div className="status ok" data-testid="investigation-saved">
-          <h3>Declaration saved</h3>
+          <p className="visually-hidden" role="status">Declaration saved before outcome review. No study started.</p>
+          <h3 ref={savedHeading} tabIndex={-1}>Declaration saved</h3>
           <p>Saved before outcome review. No study started. This profile uses an unqualified synthetic fixture.</p>
           <dl className="kv">
             <dt>Declaration ID</dt><dd className="mono">{selected.declaration.record_id}</dd>
@@ -183,13 +268,7 @@ export function InvestigationReview({ intakeId }: { intakeId: string }) {
               <select id="edge-claim-status" className="input" value={edgeSpec.claim.status}
                 onChange={(event) => {
                   const status = event.target.value as typeof edgeSpec.claim.status;
-                  const descriptive = status === "DESCRIPTIVE_ONLY";
-                  setEdgeSpec({ ...edgeSpec,
-                    claim: { status, text: descriptive ? "Describe only. No predictive claim is declared." : "The primary group outperforms its comparison." },
-                    falsification: { status: descriptive ? "DESCRIPTIVE_ONLY" : "DECLARED",
-                      criteria: descriptive ? "No outcome claim is evaluated." : "The effect is absent in the declared comparison." },
-                  });
-                  updateConfiguration("direction", descriptive ? "DESCRIPTIVE" : "OUTPERFORM");
+                  changeClaimStatus(status);
                 }}>
                 <option value="DESCRIPTIVE_ONLY">Descriptive only</option>
                 <option value="HYPOTHESIS">Test a stated hypothesis</option>
@@ -245,25 +324,59 @@ export function InvestigationReview({ intakeId }: { intakeId: string }) {
               <label htmlFor="investigation-direction">Expected direction</label>
               <select id="investigation-direction" className="input" value={configuration.direction}
                 onChange={(event) => updateConfiguration("direction", event.target.value as InvestigationConfiguration["direction"])}>
-                <option value="DESCRIPTIVE">Descriptive, no prediction</option>
+                {edgeSpec.claim.status === "DESCRIPTIVE_ONLY" ? <option value="DESCRIPTIVE">Descriptive, no prediction</option> : null}
                 <option value="OUTPERFORM">Primary group outperforms comparison</option>
                 <option value="UNDERPERFORM">Primary group underperforms comparison</option>
               </select>
             </div>
             <div className="field">
-              <label htmlFor="investigation-horizon">Outcome horizon</label>
-              <input id="investigation-horizon" className="input" value={configuration.horizons.join(", ")}
-                onChange={(event) => updateConfiguration("horizons", event.target.value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 20))} />
+              <label htmlFor="investigation-horizon">Outcome horizon (positive integer)</label>
+              <input id="investigation-horizon" className="input" type="number" min={1} step={1} value={configuration.horizons[0]?.value ?? 1}
+                onChange={(event) => {
+                  const horizon = { ...(configuration.horizons[0] ?? { value: 15, unit: "MINUTES" as const }), value: Number(event.target.value) };
+                  setConfiguration({ ...configuration, horizons: [horizon], evaluation_plan: configuration.evaluation_plan.map((item) => ({ ...item, horizon })) });
+                }} />
+              <label htmlFor="investigation-horizon-unit">Horizon unit</label>
+              <select id="investigation-horizon-unit" className="input" value={configuration.horizons[0]?.unit ?? "MINUTES"}
+                onChange={(event) => {
+                  const horizon = { ...(configuration.horizons[0] ?? { value: 15, unit: "MINUTES" as const }), unit: event.target.value as InvestigationConfiguration["horizons"][number]["unit"] };
+                  setConfiguration({ ...configuration, horizons: [horizon], evaluation_plan: configuration.evaluation_plan.map((item) => ({ ...item, horizon })) });
+                }}>
+                <option value="SECONDS">Seconds</option><option value="MINUTES">Minutes</option>
+                <option value="HOURS">Hours</option><option value="DAYS">Days</option>
+              </select>
             </div>
             <div className="field">
               <label htmlFor="period-start">Period start (UTC)</label>
               <input id="period-start" className="input" type="datetime-local" value={datetimeValue(configuration.period.start)}
-                onChange={(event) => { if (event.target.value) updateConfiguration("period", { ...configuration.period, start: utcValue(event.target.value) }); }} />
+                onChange={(event) => { if (event.target.value) updatePeriod({ ...configuration.period, start: utcValue(event.target.value) }); }} />
             </div>
+            <fieldset>
+              <legend className="legend">Temporal partitions in UTC</legend>
+              <p className="muted">Every interval is explicit. Predictive review keeps training, validation and holdout separate. Descriptive work covers the complete period without an invented holdout.</p>
+              {configuration.partitions.map((partition) => (
+                <div className="field" key={partition.partition_id}>
+                  <strong>{partition.role} · {partition.partition_id}</strong>
+                  <label htmlFor={`partition-${partition.partition_id}-start`}>Start</label>
+                  <input id={`partition-${partition.partition_id}-start`} className="input" type="datetime-local" value={datetimeValue(partition.start)}
+                    onChange={(event) => { if (event.target.value) updateConfiguration("partitions", configuration.partitions.map((item) => item.partition_id === partition.partition_id ? { ...item, start: utcValue(event.target.value) } : item)); }} />
+                  <label htmlFor={`partition-${partition.partition_id}-end`}>End</label>
+                  <input id={`partition-${partition.partition_id}-end`} className="input" type="datetime-local" value={datetimeValue(partition.end)}
+                    onChange={(event) => { if (event.target.value) updateConfiguration("partitions", configuration.partitions.map((item) => item.partition_id === partition.partition_id ? { ...item, end: utcValue(event.target.value) } : item)); }} />
+                </div>
+              ))}
+            </fieldset>
+            <section aria-labelledby="evaluation-plan-title" className="stack">
+              <h4 id="evaluation-plan-title">Explicit proposed evaluations</h4>
+              <p className="muted">Each row binds one evaluation identity to one trial, variant, horizon and exact partition. Rows are adopted individually as listed; no combinations are generated.</p>
+              {configuration.evaluation_plan.map((item) => (
+                <p className="mono" key={item.evaluation_id}>{item.evaluation_id} · trial {item.trial_id} · {item.variant_id} · {item.horizon.value} {item.horizon.unit.toLowerCase()} · {item.partition_ids.join(", ")}</p>
+              ))}
+            </section>
             <div className="field">
               <label htmlFor="period-end">Period end (UTC)</label>
               <input id="period-end" className="input" type="datetime-local" value={datetimeValue(configuration.period.end)}
-                onChange={(event) => { if (event.target.value) updateConfiguration("period", { ...configuration.period, end: utcValue(event.target.value) }); }} />
+                onChange={(event) => { if (event.target.value) updatePeriod({ ...configuration.period, end: utcValue(event.target.value) }); }} />
             </div>
             <div className="field">
               <label htmlFor="candidate-limit">Candidate limit</label>
@@ -312,7 +425,7 @@ export function InvestigationReview({ intakeId }: { intakeId: string }) {
             <span>I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.</span>
           </label>
           <div className="btn-row">
-            <button className="btn btn-primary" type="button" onClick={() => void save()} disabled={!adopted || busy}>
+            <button className="btn btn-primary" type="button" onClick={() => void save()} disabled={!adopted || busy || refreshingProposal}>
               {busy ? "Saving declaration…" : "Adopt and save declaration"}
             </button>
             <span className="muted">Save records the plan before outcomes. It starts no study and grants no provider, wallet or financial permission.</span>

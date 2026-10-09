@@ -136,21 +136,37 @@ export interface RequestSummary {
   published: boolean;
 }
 
+export interface InvestigationHorizon { value: number; unit: "SECONDS" | "MINUTES" | "HOURS" | "DAYS" }
+export interface InvestigationPartition {
+  partition_id: string;
+  role: "DESCRIPTIVE" | "TRAINING" | "VALIDATION" | "HOLDOUT";
+  start: string;
+  end: string;
+}
+export interface InvestigationEvaluation {
+  evaluation_id: string;
+  trial_id: string;
+  variant_id: string;
+  horizon: InvestigationHorizon;
+  partition_ids: string[];
+}
+
 export interface InvestigationConfiguration {
   question: string;
   pool_binding: { profile_id: string; qualification: "UNQUALIFIED_FIXTURE"; limitations: string[] };
   variants: { variant_id: string; hypothesis: string }[];
   direction: "OUTPERFORM" | "UNDERPERFORM" | "DESCRIPTIVE";
-  horizons: string[];
+  horizons: InvestigationHorizon[];
   sources: string[];
   candidate_limit: number;
   parameter_limit: number;
   compute_limit: { max_evaluations: number; max_runtime_seconds: number; max_cost_usd: "0" };
   period: { start: string; end: string };
-  partitions: { partition_id: string; role: "DESCRIPTIVE" | "TRAINING" | "VALIDATION" | "HOLDOUT" }[];
+  partitions: InvestigationPartition[];
   permitted_access: "FIXTURE_ONLY"[];
   stopping_rule: string;
-  budget_version: "p08-research-budget/1";
+  evaluation_plan: InvestigationEvaluation[];
+  budget_version: "p08-research-budget/2";
   optional_tools: { creator_history: "UNAVAILABLE" | "NOT_REQUIRED"; wallet_pnl: "UNAVAILABLE" | "NOT_REQUIRED"; social_signals: "UNAVAILABLE" | "NOT_REQUIRED" };
 }
 
@@ -172,7 +188,7 @@ export interface FieldAdoption {
 }
 
 export interface InvestigationProposal {
-  schema_version: "p08.investigation-declaration/1";
+  schema_version: "p08.investigation-declaration/2";
   proposal_version: string;
   interpretation_revision_id: string | null;
   request_record_id: string;
@@ -186,7 +202,7 @@ export interface InvestigationProposal {
 }
 
 export interface InvestigationEnvelope {
-  schema_version: "p08.investigation-declaration/1";
+  schema_version: "p08.investigation-declaration/2";
   record_type: "InvestigationDeclaration";
   record_id: string;
   owner_id: string;
