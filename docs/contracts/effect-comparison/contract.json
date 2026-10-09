@@ -1,0 +1,45 @@
+{
+  "identity": {
+    "schema": "p09.effect-comparison/1",
+    "run_declaration": "p09.effect-run-declaration/1",
+    "report": "p09.effect-report/1",
+    "decision_clock": "p09.decision-clock/1",
+    "input_contract": "p08.investigation-declaration/2",
+    "rule_engine": "p06.expression/1"
+  },
+  "access": {
+    "adoption_before_outcomes": true,
+    "p08_mapping_identity": ["owner_id", "declaration_id", "evaluation_id", "trial_id", "variant_id", "horizon", "partition_ids"],
+    "one_immutable_executable_mapping_per_registered_identity": true,
+    "same_mapping_repeat_recovers_registered_run": true,
+    "changed_mapping_requires_distinct_p08_evaluation_identity_and_lineage": true,
+    "supported_dataset": "synthetic-effect-comparison/1",
+    "real_data_status": "UNAVAILABLE_P07_HISTORY_UNRESOLVED",
+    "protected_partition_access": false,
+    "provider_calls": false
+  },
+  "outcomes": {
+    "start_window_seconds": 60,
+    "end_window_seconds": 60,
+    "windows": "[d,d+1m) and [d+H,d+H+1m)",
+    "reference_order": ["block_number", "transaction_index", "log_index"],
+    "response": "end_price / start_price - 1",
+    "fill_or_portfolio_meaning": false
+  },
+  "qualification": {
+    "three_valued_logic": ["TRUE", "FALSE", "UNKNOWN"],
+    "unknown_and_missing_essential_evidence": "EXCLUDED_WITH_REASONS",
+    "price_return_required_dependencies": "qualified_current_and_lookback_endpoint_prices",
+    "price_return_intermediate_gaps": "RETAINED_AS_DIAGNOSTICS_NOT_REQUIRED_DEPENDENCIES",
+    "rolling_and_relative_volume_dependencies": "EVERY_CONSUMED_OBSERVATION_REQUIRED",
+    "incremental_volume": "SEPARATE_PREDECLARED_COMPARISON_WITH_PRICE_TRUE",
+    "primary_contrast": "TRIGGERED_MEAN_MINUS_CONTROL_MEAN",
+    "statistical_status": "UNRESOLVED_UNTIL_P42"
+  },
+  "limits": {
+    "p_values": false,
+    "confidence_or_support_probability": false,
+    "causal_alpha_or_net_return_claim": false,
+    "hypothesis_text_is_executable": false
+  }
+}

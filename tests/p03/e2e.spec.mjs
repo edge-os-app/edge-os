@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import fs from "node:fs";
 import path from "node:path";
 import { injectAuth, tokens } from "./fixture-auth.mjs";
@@ -42,6 +43,60 @@ const TINY_ENTRY = { op: "gt", args: [{ op: "price_return", lookback_buckets: 1 
 
 async function shot(page, project, name) {
   await page.screenshot({ path: path.join(shots, `${project}-${name}.png`), fullPage: true });
+}
+
+async function checkP09Interface(page) {
+  return page.getByTestId("effect-comparison").evaluate((root) => {
+    const parse = (value) => {
+      const match = value.match(/^rgba?\(([^)]+)\)$/);
+      if (match) {
+        const parts = match[1].split(/[ ,/]+/).filter(Boolean).map(Number);
+        return { r: parts[0], g: parts[1], b: parts[2], a: parts[3] ?? 1 };
+      }
+      const color = value.match(/^color\(srgb ([^)]+)\)$/);
+      if (color) {
+        const parts = color[1].split(/[ /]+/).filter(Boolean).map(Number);
+        return { r: parts[0] * 255, g: parts[1] * 255, b: parts[2] * 255, a: parts[3] ?? 1 };
+      }
+      return null;
+    };
+    const lum = ({ r, g, b }) => {
+      const channel = (value) => { value /= 255; return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    };
+    const bg = (element) => {
+      const layers = [];
+      for (let node = element; node && node !== root.parentElement; node = node.parentElement) {
+        const color = parse(getComputedStyle(node).backgroundColor);
+        if (color && color.a > 0) { layers.push(color); if (color.a === 1) break; }
+      }
+      let base = { r: 255, g: 255, b: 255, a: 1 };
+      for (const layer of layers.reverse()) base = { r: layer.r * layer.a + base.r * (1 - layer.a),
+        g: layer.g * layer.a + base.g * (1 - layer.a), b: layer.b * layer.a + base.b * (1 - layer.a), a: 1 };
+      return base;
+    };
+    const ratio = (a, b) => (Math.max(lum(a), lum(b) ) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+    const controls = [...root.querySelectorAll('button, summary, input[type="checkbox"]')].filter((el) => {
+      const style = getComputedStyle(el);
+      return style.display !== "none" && style.visibility !== "hidden" && el.getBoundingClientRect().width > 0;
+    });
+    const sizes = controls.map((el) => {
+      const box = el.matches('input[type="checkbox"]') ? el.closest("label").getBoundingClientRect() : el.getBoundingClientRect();
+      return { label: (el.textContent || el.getAttribute("aria-label") || el.type || "").trim().slice(0, 48),
+        width: box.width, height: box.height };
+    });
+    const text = [...root.querySelectorAll("p, dt, dd, label, button, summary, th, td")].filter((el) => {
+      const box = el.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && el.textContent.trim();
+    }).map((el) => {
+      const style = getComputedStyle(el), foreground = parse(style.color), background = bg(el);
+      if (!foreground) return null;
+      const large = parseFloat(style.fontSize) >= 24 || (parseFloat(style.fontSize) >= 18.66 && Number(style.fontWeight) >= 700);
+      return { text: el.textContent.trim().slice(0, 48), ratio: foreground ? ratio(foreground, background) : 0,
+        minimum: large ? 3 : 4.5 };
+    }).filter((item) => item && item.ratio < item.minimum);
+    return { sizes, lowContrast: text };
+  });
 }
 
 async function open(page, token) {
@@ -104,6 +159,225 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   const requestUrl = page.url();
   record(`thesis-${project}`, { url: requestUrl, revisionId, original: THESIS });
   await shot(page, project, "04-saved");
+  const replay = page.getByTestId("spot-replay");
+  await expect(replay).toContainText("p13.wc01/1 · synthetic only");
+  const replayPosts = [];
+  const replayStatuses = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/v1/spot-replays") replayPosts.push(request.postDataJSON());
+  });
+  page.on("response", (response) => {
+    if (response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays") replayStatuses.push(response.status());
+  });
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByLabel("entry dependency offset 2").fill("-3");
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByLabel("exit dependency offset 2").fill("-1");
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByLabel("I reviewed the exit dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("SYNTHETIC_FIXTURE");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("BUY_FILLED");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("SELL_FILLED");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("990.51132338308457711442786069651741293532338308458");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("no gas, spread, additional impact, or capacity model");
+  const summary = replay.getByRole("heading", { name: "Simulated replay summary" });
+  await expect(summary).toBeVisible();
+  const balanceChart = replay.getByRole("img", { name: "Account balance in quote over the replay window" });
+  await expect(balanceChart).toBeVisible();
+  await expect(balanceChart.locator("polyline")).toHaveCount(1);
+  await expect(replay.getByRole("list", { name: "Saved account value samples" }).locator("li")).toHaveCount(6);
+  const leadingOrder = await replay.evaluate((root) => {
+    const summaryElement = root.querySelector("#spot-replay-summary-title");
+    const chartElement = root.querySelector("[data-testid='spot-replay-balance-chart']");
+    const savedInputsElement = root.querySelector("[data-testid='spot-replay-saved-inputs']");
+    return Boolean(summaryElement && chartElement && savedInputsElement
+      && summaryElement.compareDocumentPosition(savedInputsElement) & Node.DOCUMENT_POSITION_FOLLOWING
+      && chartElement.compareDocumentPosition(savedInputsElement) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  expect(leadingOrder, "summary and chart must lead exact settings/details").toBe(true);
+  const savedInputs = replay.getByTestId("spot-replay-saved-inputs");
+  await expect(savedInputs).toContainText("p12.spot-replay/1");
+  await expect(savedInputs).toContainText(revisionId);
+  await expect(savedInputs).toContainText("p13-config-");
+  await expect(savedInputs).toContainText("price@0, price@-3");
+  await expect(savedInputs).toContainText("price@0, price@-1");
+  const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
+  const replayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  const savedReplayResponse = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${replayId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(savedReplayResponse.status()).toBe(200);
+  const savedReplay = await savedReplayResponse.json();
+  const summaryText = await replay.locator(".spot-replay-summary").innerText();
+  for (const [metric, value] of Object.entries(savedReplay.content.result.metrics)) {
+    if (value !== null && savedReplay.content.result.metric_statuses[metric] === "AVAILABLE") {
+      expect(summaryText).toContain(String(value));
+    }
+  }
+  const samplesList = replay.getByRole("list", { name: "Saved account value samples" });
+  for (const sample of savedReplay.content.result.samples) {
+    if (sample.account_value_quote !== null) await expect(samplesList).toContainText(sample.account_value_quote);
+  }
+  record(`spot-replay-${project}`, { url: requestUrl, revisionId, replayId, replayHash,
+    expectedEntryDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -3 }],
+    expectedExitDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -1 }],
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542",
+    expectedSamples: savedReplay.content.result.samples,
+    expectedMetrics: savedReplay.content.result.metrics });
+  await shot(page, project, "05-spot-replay-saved");
+
+  // Renderer-only finite Decimal fixture from the accepted public evaluator output.
+  const knownOverflowValue = "1.0000000000000000000000000000000000000000000000000E+309";
+  const rendererProbe = structuredClone(savedReplay);
+  rendererProbe.content.result.samples = rendererProbe.content.result.samples.slice(0, 4).map((sample) => ({
+    ...sample, cash_quote: knownOverflowValue, account_value_quote: knownOverflowValue,
+  }));
+  const overflowUrl = `**/v1/spot-replays/${replayId}`;
+  await page.route(overflowUrl, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rendererProbe) }));
+  await replay.getByLabel("Saved replay ID").fill(replayId);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  const overflowList = replay.getByRole("list", { name: "Saved account value samples" });
+  await expect(overflowList.getByText(`${knownOverflowValue} quote`).first()).toBeVisible();
+  await expect(overflowList.getByText("Unavailable")).toHaveCount(0);
+  const overflowChart = replay.getByRole("img", { name: "Account balance in quote over the replay window" });
+  await expect(overflowChart.locator("desc")).toContainText("4 of 4 saved account-balance samples have known quote values; 0 can be plotted safely");
+  await expect(overflowChart.locator("circle, polyline")).toHaveCount(0);
+  expect(await overflowList.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    `${project}: exact known Decimal values must not cause horizontal overflow`).toBe(true);
+  record(`renderer-known-overflow-${project}`, { replayId, value: knownOverflowValue, samples: 4,
+    rendererOnly: true, source: "accepted WC01 public evaluator output", horizontalOverflow: false });
+  await shot(page, project, "05-spot-replay-known-overflow");
+  await page.unroute(overflowUrl);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  await expect(overflowList.getByText("990.51132338308457711442786069651741293532338308458 quote")).toBeVisible();
+
+  // Public API-created unavailable records exercise nullable saved binding shapes in the real UI.
+  const unavailableCases = [
+    { name: "unbound-entry", field: "entry", binding: { state: "UNBOUND" }, summary: "UNBOUND: dependency list is null", reason: "UNRESOLVED_ESSENTIAL_EVIDENCE" },
+    { name: "bound-exit-null", field: "exit", binding: { state: "BOUND", essential_dependencies: null }, summary: "BOUND: dependency list is null", reason: "INVALID_ESSENTIAL_BINDING" },
+  ];
+  for (const item of unavailableCases) {
+    const unavailableBody = structuredClone(replayPosts[0]);
+    unavailableBody.idempotency_key = `p13-r3-${project}-${item.name}`;
+    unavailableBody.run_configuration_id = `p13-r3-${project}-${item.name}`;
+    unavailableBody.essential_fields[item.field] = item.binding;
+    const unavailableResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+      headers: { Authorization: `Bearer ${tokens.a}` }, data: unavailableBody });
+    expect(unavailableResponse.status()).toBe(201);
+    const unavailableRecord = await unavailableResponse.json();
+    expect(unavailableRecord.content.result.status).toBe("UNAVAILABLE");
+    expect(unavailableRecord.content.result.reason.code).toBe(item.reason);
+    await replay.getByLabel("Saved replay ID").fill(unavailableRecord.replay_id);
+    await replay.getByRole("button", { name: "Load saved replay" }).click();
+    await expect(replay.getByTestId("spot-replay-id")).toHaveText(unavailableRecord.replay_id);
+    await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: unavailable");
+    await expect(replay.getByRole("alert")).toContainText(item.reason);
+    await expect(replay.getByTestId("spot-replay-saved-inputs")).toContainText(item.summary);
+    await expect(replay.getByTestId("spot-replay-result")).toContainText("No trading permission is granted.");
+    const unavailableMetrics = replay.getByRole("table", { name: "Quote-denominated replay metrics" });
+    for (const [metric, status] of Object.entries(unavailableRecord.content.result.metric_statuses)) {
+      await expect(unavailableMetrics).toContainText(metric.replaceAll("_", " "));
+      await expect(unavailableMetrics).toContainText(status);
+    }
+    await replay.getByText("Saved events, trades, and samples").click();
+    const visibleEvents = JSON.parse((await replay.locator(".spot-replay-json").textContent()) ?? "");
+    expect(visibleEvents.events).toEqual(unavailableRecord.content.result.events);
+    expect(visibleEvents.samples).toEqual(unavailableRecord.content.result.samples);
+    const unavailableAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    const seriousAxe = unavailableAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+    expect(seriousAxe, JSON.stringify(seriousAxe, null, 2)).toEqual([]);
+    record(`spot-replay-unavailable-${item.name}-${project}`, { url: requestUrl, revisionId,
+      replayId: unavailableRecord.replay_id, replayHash: unavailableRecord.content_sha256,
+      expectedEntryDependencies: unavailableRecord.content.inputs.essential_evidence.fields.entry.essential_dependencies ?? null,
+      expectedExitDependencies: unavailableRecord.content.inputs.essential_evidence.fields.exit.essential_dependencies ?? null,
+      expectedStatus: "UNAVAILABLE", expectedReason: item.reason, expectedSummary: item.summary,
+      seriousAxeViolations: seriousAxe });
+    await shot(page, project, `spot-replay-${item.name}`);
+  }
+
+  // A definitive 422 rejects only this body. Correcting it starts a new key/body.
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  const rejectedOffset = replay.getByLabel("entry dependency offset 3");
+  await rejectedOffset.fill("1");
+  await replay.getByLabel("I reviewed the entry dependency set").uncheck();
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.locator(".status.err")).toContainText("rejected before it was saved");
+  await expect(replay.getByRole("button", { name: "Save synthetic replay" })).toBeVisible();
+  await rejectedOffset.fill("-2");
+  const correctedResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  const correctedResponse = await correctedResponsePromise;
+  expect([200, 201]).toContain(correctedResponse.status());
+  const correctedRecord = await correctedResponse.json();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(correctedRecord.replay_id);
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  expect(replayPosts[1].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(1);
+  expect(replayPosts[2].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(-2);
+  expect(replayPosts[2].idempotency_key).not.toBe(replayPosts[1].idempotency_key);
+  expect(replayStatuses).toContain(422);
+  const correctedReplayId = correctedRecord.replay_id;
+  const correctedReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  record(`spot-replay-corrected-${project}`, { url: requestUrl, revisionId, replayId: correctedReplayId,
+    replayHash: correctedReplayHash,
+    expectedEntryDependencies: replayPosts[2].essential_fields.entry.essential_dependencies,
+    expectedExitDependencies: replayPosts[2].essential_fields.exit.essential_dependencies,
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
+
+  // Lose the response after the API commits. Retrying must reuse the exact request and recover one row.
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  const uncertainOffset = replay.getByLabel("entry dependency offset 4");
+  await uncertainOffset.fill("-1");
+  let dropCommittedResponse = true;
+  await page.route("**/v1/spot-replays", async (route) => {
+    if (route.request().method() === "POST" && dropCommittedResponse) {
+      dropCommittedResponse = false;
+      await route.fetch();
+      await route.abort();
+    } else await route.continue();
+  });
+  await replay.getByLabel("I reviewed the entry dependency set").uncheck();
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
+  const uncertainRequest = replayPosts[3];
+  const postCountAfterCommitLoss = replayPosts.length;
+  await replay.getByLabel("Saved replay ID").fill(correctedReplayId);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(correctedReplayId);
+  await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
+  await expect(replay.getByText(/uncertain outcome/)).toBeVisible();
+  await expect(replay).toContainText("Loaded the exact saved result. The replay did not run again.");
+  expect(replayPosts).toHaveLength(postCountAfterCommitLoss);
+  await uncertainOffset.fill("-2");
+  const recoveredResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
+  await replay.getByRole("button", { name: "Retry same replay" }).click();
+  const recoveredResponse = await recoveredResponsePromise;
+  expect(recoveredResponse.status()).toBe(200);
+  const recoveredRecord = await recoveredResponse.json();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(recoveredRecord.replay_id);
+  expect(recoveredRecord.replay_id).not.toBe(correctedReplayId);
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  expect(replayPosts).toHaveLength(5);
+  expect(replayPosts[4]).toEqual(uncertainRequest);
+  expect(replayPosts[4].idempotency_key).toBe(uncertainRequest.idempotency_key);
+  const recoveredId = recoveredRecord.replay_id;
+  const uncertainReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  record(`spot-replay-uncertain-${project}`, { url: requestUrl, revisionId, replayId: recoveredId,
+    replayHash: uncertainReplayHash,
+    expectedIdempotencyKey: uncertainRequest.idempotency_key,
+    expectedEntryDependencies: uncertainRequest.essential_fields.entry.essential_dependencies,
+    expectedExitDependencies: uncertainRequest.essential_fields.exit.essential_dependencies,
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
+
   // reopen in a brand new context: nothing in this browser can supply the record
   const fresh = await page.context().browser().newContext({ viewport: page.viewportSize() });
   const again = await fresh.newPage();
@@ -304,7 +578,7 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
   await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
   await expect(page.getByTestId("investigation-saved")).toContainText("DECLARATION_SAVED");
-  await expect(page.getByTestId("investigation-saved")).toContainText("Outcome labels read");
+  await expect(page.getByTestId("investigation-saved")).toContainText("P08 declaration-time outcome labels read");
   const declarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
   await page.getByTestId("investigation-saved").locator("summary").click();
   const uiContent = JSON.parse(await page.getByTestId("investigation-saved").locator("details pre").innerText());
@@ -320,14 +594,185 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   expect(uiContent).toEqual(exact.declaration.content);
   expect(exact.access_history[0]).toMatchObject({ event: "DECLARATION_SAVED", outcome_labels_read: false,
     provider_queries: 0, study_started: false });
+
+  await page.getByRole("button", { name: "Load explicit synthetic example" }).click();
+  await expect(page.getByText(/This visible example was authored/)).toBeVisible();
+  const runAdoptionText = page.getByLabel(/I reviewed these exact P08 identities/);
+  await runAdoptionText.focus();
+  await page.keyboard.press("Space");
+  const runAdoptButton = page.getByRole("button", { name: "Adopt synthetic run declaration" });
+  const beforeRun = await checkP09Interface(page);
+  expect(beforeRun.sizes.every((item) => item.height >= 44), JSON.stringify(beforeRun.sizes)).toBe(true);
+  expect(beforeRun.lowContrast).toEqual([]);
+  const p09Checkbox = page.getByLabel(/I reviewed these exact P08 identities/);
+  const p09Focus = await p09Checkbox.evaluate((el) => {
+    const parse = (value) => { const match = value.match(/^rgba?\(([^)]+)\)$/); if (!match) return null;
+      const parts = match[1].split(/[ ,/]+/).filter(Boolean).map(Number); return { r: parts[0], g: parts[1], b: parts[2], a: parts[3] ?? 1 }; };
+    const luminance = ({ r, g, b }) => { const c = (value) => { value /= 255; return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * c(r) + 0.7152 * c(g) + 0.0722 * c(b); };
+    const label = el.closest("label"), style = getComputedStyle(label);
+    const ring = parse(style.outlineColor);
+    let background = { r: 255, g: 255, b: 255 };
+    for (let node = label; node; node = node.parentElement) {
+      const color = parse(getComputedStyle(node).backgroundColor);
+      if (color?.a === 1) { background = color; break; }
+    }
+    const ratio = ring ? (Math.max(luminance(ring), luminance(background)) + 0.05)
+      / (Math.min(luminance(ring), luminance(background)) + 0.05) : 0;
+    return { visible: el.matches(":focus-visible"), outline: style.outlineStyle,
+      outlineWidth: parseFloat(style.outlineWidth), color: style.outlineColor, contrast: ratio };
+  });
+  expect(p09Focus.visible).toBe(true);
+  expect(p09Focus.outline).not.toBe("none");
+  expect(p09Focus.outlineWidth).toBeGreaterThanOrEqual(2);
+  expect(p09Focus.contrast).toBeGreaterThanOrEqual(3);
+  await runAdoptButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText(/Run declaration saved\. No report exists yet/)).toBeVisible();
+  const runPath = `${process.env.P03_API_URL}/v1/research/requests/${intakeId}/effect-runs`;
+  const runsResponse = await page.request.get(runPath, { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(runsResponse.status()).toBe(200);
+  const runList = await runsResponse.json();
+  const exactRun = runList.runs.find((item) => item.run.p08_declaration_id === declarationId);
+  expect(exactRun).toBeTruthy();
+  expect(exactRun.report).toBeNull();
+  expect(exactRun.events.map((event) => event.content.kind)).toEqual(["RUN_ADOPTED"]);
+  const runId = exactRun.run.record_id;
+  const adoptionPath = `${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${declarationId}/effect-runs`;
+  const adoptionReplayRequest = { ...exactRun.run.content.configuration, operation_id: crypto.randomUUID(),
+    idempotency_key: `p09-repeat-${crypto.randomUUID()}` };
+  const exactRepeat = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
+    data: adoptionReplayRequest });
+  expect(exactRepeat.status()).toBe(200);
+  const exactRepeatBody = await exactRepeat.json();
+  expect(exactRepeatBody.run.record_id).toBe(runId);
+  const adoptionReplayRepeat = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
+    data: adoptionReplayRequest });
+  expect(adoptionReplayRepeat.status()).toBe(200);
+  const beforeAdoptionCollision = await page.request.get(`${runPath}/${runId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` } });
+  const eventCountBeforeAdoptionCollision = (await beforeAdoptionCollision.json()).events.length;
+  const adoptionCollision = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...adoptionReplayRequest, operation_id: crypto.randomUUID() } });
+  expect(adoptionCollision.status()).toBe(409);
+  const afterAdoptionCollision = await page.request.get(`${runPath}/${runId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` } });
+  const adoptionReplayEvents = (await afterAdoptionCollision.json()).events
+    .filter((event) => event.content.kind === "RUN_ADOPTION_REPLAY");
+  expect(adoptionReplayEvents).toHaveLength(1);
+  expect(adoptionReplayEvents[0].content).toMatchObject({ method: "POST", path: new URL(adoptionPath).pathname,
+    operation_id: adoptionReplayRequest.operation_id, idempotency_key: adoptionReplayRequest.idempotency_key,
+    outcome_accessed: false });
+  expect((await afterAdoptionCollision.json()).events).toHaveLength(eventCountBeforeAdoptionCollision);
+  const attemptFailures = [];
+  await page.route("**/effect-runs/*/attempts", async (route) => {
+    attemptFailures.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    if (attemptFailures.length === 1) return route.fulfill({ status: 503, contentType: "application/json",
+      body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "Temporary evaluation failure. Retry the saved run." }] }) });
+    const savedResponse = await route.fetch();
+    expect(savedResponse.status()).toBe(201);
+    return route.fulfill({ response: savedResponse, status: 503, contentType: "application/json",
+      body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "The reply was lost after the server saved the report." }] }) });
+  });
+  await page.getByRole("button", { name: "Evaluate synthetic fixture" }).click();
+  await expect(page.getByTestId("effect-comparison").locator(".status.err")).toContainText("Temporary evaluation failure");
+  await page.getByRole("button", { name: "Evaluate synthetic fixture" }).click();
+  await expect(page.getByTestId("effect-report-saved")).toContainText("UNRESOLVED");
+  const reportQuality = await checkP09Interface(page);
+  expect(reportQuality.sizes.every((item) => item.height >= 44), JSON.stringify(reportQuality.sizes)).toBe(true);
+  expect(reportQuality.lowContrast).toEqual([]);
+  await expect(page.getByTestId("effect-comparison").locator(".status.err")).toContainText("reply was lost");
+  await expect(page.getByText(/P09 outcome access: recorded at event sequence/)).toBeVisible();
+  const reportId = (await page.getByTestId("effect-report-saved").locator("dd").first().innerText()).trim();
+  const reportResponse = await page.request.get(`${runPath}/${runId}`, { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(reportResponse.status()).toBe(200);
+  const exactRunAfter = await reportResponse.json();
+  expect(exactRunAfter.report.record_id).toBe(reportId);
+  expect(exactRunAfter.report.content.result.statistical_status).toBe("UNRESOLVED");
+  expect(exactRunAfter.events.map((event) => event.content.kind)).toEqual([
+    "RUN_ADOPTED", "RUN_ADOPTION_REPLAY", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED", "REPORT_SAVED"]);
+  const primary = exactRunAfter.report.content.result.variants[0];
+  expect(primary.general_comparison).toMatchObject({ triggered: { mean: "0.1" }, control: { mean: "-0.1" },
+    triggered_minus_control_mean: "0.2" });
+  expect(exactRunAfter.report.content.result.missing_outcome_count).toBe(4);
+  const eventCountBeforeKeyCollision = exactRunAfter.events.length;
+  const keyCollision = await page.request.post(`${runPath}/${runId}/attempts`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...attemptFailures[1].body, operation_id: crypto.randomUUID() } });
+  expect(keyCollision.status()).toBe(409);
+  const afterKeyCollision = await page.request.get(`${runPath}/${runId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect((await afterKeyCollision.json()).events).toHaveLength(eventCountBeforeKeyCollision);
+  const reportReplayRequest = { operation_id: crypto.randomUUID(), idempotency_key: `p09-report-replay-${crypto.randomUUID()}` };
+  const reportReplay = await page.request.post(`${runPath}/${runId}/attempts`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: reportReplayRequest });
+  expect(reportReplay.status()).toBe(200);
+  const reportReplayBody = await reportReplay.json();
+  expect(reportReplayBody.report.record_id).toBe(reportId);
+  const reportReplayEventCount = reportReplayBody.events.length;
+  const reportReplayRepeat = await page.request.post(`${runPath}/${runId}/attempts`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: reportReplayRequest });
+  expect(reportReplayRepeat.status()).toBe(200);
+  expect((await reportReplayRepeat.json()).events).toHaveLength(reportReplayEventCount);
+  const reportReplayCollision = await page.request.post(`${runPath}/${runId}/attempts`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...reportReplayRequest, operation_id: crypto.randomUUID() } });
+  expect(reportReplayCollision.status()).toBe(409);
+  const afterReportReplayCollision = await page.request.get(`${runPath}/${runId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` } });
+  const finalReportReplayState = await afterReportReplayCollision.json();
+  expect(finalReportReplayState.events).toHaveLength(reportReplayEventCount);
+  const alternateConfiguration = structuredClone(exactRun.run.content.configuration);
+  alternateConfiguration.bindings[0].volume_expression.args[1].value = "7";
+  const alternateMapping = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...alternateConfiguration, operation_id: crypto.randomUUID(),
+      idempotency_key: `p09-alternate-${crypto.randomUUID()}` } });
+  expect(alternateMapping.status()).toBe(409);
+  const runsAfterRejectedMapping = await page.request.get(runPath, { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect((await runsAfterRejectedMapping.json()).runs).toHaveLength(1);
+  await page.getByRole("button", { name: "Reopen saved report without rerunning" }).click();
+  await expect(page.getByTestId("effect-report-saved")).toContainText(reportId);
+  expect(attemptFailures).toHaveLength(2);
+  const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  const critical = axe.violations.filter((item) => item.impact === "serious" || item.impact === "critical");
+  const qualityDir = path.join(evidence, "quality");
+  fs.mkdirSync(qualityDir, { recursive: true });
+  fs.writeFileSync(path.join(qualityDir, `axe-effect-comparison-${project}.json`), JSON.stringify(axe, null, 2));
+  expect(critical, "P09 saved report has no serious or critical WCAG violations").toEqual([]);
+  await shot(page, project, "effect-report-saved");
+  await page.unroute("**/effect-runs/*/attempts");
+
   const requestUrl = page.url();
-  record(`investigation-${project}`, { url: requestUrl, declarationId, retry: { attempts: saveAttempts.length,
+  record(`investigation-${project}`, { url: requestUrl, declarationId, runId, reportId,
+    p09ConfigurationSha256: exactRunAfter.report.content.p09_configuration_sha256,
+    fixtureSha256: exactRunAfter.report.content.fixture_sha256,
+    profileSha256: exactRunAfter.report.content.profile_sha256,
+    retry: { attempts: saveAttempts.length,
     reused_operation_id: saveAttempts[1].operation_id === saveAttempts[0].operation_id,
     reused_idempotency_key: saveAttempts[1].idempotency_key === saveAttempts[0].idempotency_key,
     storage_fingerprint_sent: Object.hasOwn(saveAttempts[1], "fingerprint") }, content: exact.declaration.content,
     access: Object.fromEntries(["schema_version", "event", "outcome_labels_read", "provider_queries", "study_started"]
       .map((field) => [field, exact.access_history[0][field]])),
-    original: "Compare the descriptive launch cohorts in a synthetic fixture." });
+    original: "Compare the descriptive launch cohorts in a synthetic fixture.",
+    p09: { run: exactRun.run, report: exactRunAfter.report, events: finalReportReplayState.events,
+      identityProof: { exactRepeatStatus: exactRepeat.status(), exactRepeatRunId: exactRepeatBody.run.record_id,
+        adoptionReplayRepeatStatus: adoptionReplayRepeat.status(), adoptionChangedOperationStatus: adoptionCollision.status(),
+        adoptionReceiptCount: adoptionReplayEvents.length,
+        adoptionReceiptOperationId: adoptionReplayEvents[0].content.operation_id,
+        adoptionReceiptKey: adoptionReplayEvents[0].content.idempotency_key,
+        adoptionChangedOperationLeftEventsUnchanged:
+          (await afterAdoptionCollision.json()).events.length === eventCountBeforeAdoptionCollision,
+        changedOperationStatus: keyCollision.status(), changedOperationLeftEventsUnchanged:
+          (await afterKeyCollision.json()).events.length === eventCountBeforeKeyCollision,
+        reportReplayStatus: reportReplay.status(), reportReplayRepeatStatus: reportReplayRepeat.status(),
+        reportReplayReportId: reportReplayBody.report.record_id,
+        reportReplayEventCount, reportReplayReceiptKey: reportReplayRequest.idempotency_key,
+        reportReplayReceiptOperationId: reportReplayRequest.operation_id,
+        reportReplayChangedOperationStatus: reportReplayCollision.status(),
+        reportReplayChangedOperationLeftEventsUnchanged: finalReportReplayState.events.length === reportReplayEventCount,
+        finalEventKinds: finalReportReplayState.events.map((event) => event.content.kind),
+        alternateMappingStatus: alternateMapping.status(), runCountAfterRejectedMapping: 1 } } });
   await shot(page, project, "investigation-saved");
   await page.getByRole("button", { name: "Reopen saved declaration" }).click();
   await expect(page.getByTestId("investigation-saved")).toContainText(declarationId);

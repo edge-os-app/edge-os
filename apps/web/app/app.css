@@ -90,6 +90,30 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
 .cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
 .investigation-review .input { min-height: 44px; }
 .investigation-review .records-json { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.effect-comparison { min-width: 0; }
+.effect-comparison .table-scroll { max-width: 100%; overflow-x: auto; }
+.effect-comparison table.records { min-width: 760px; }
+.effect-comparison code { overflow-wrap: anywhere; }
+.spot-replay { min-width: 0; }
+.spot-replay .field { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.spot-replay .spot-replay-field { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.spot-replay .spot-replay-field legend { margin-bottom: var(--space-2); font-weight: 700; }
+.spot-replay-dependency { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: var(--space-3); align-items: end; }
+.spot-replay-dependency .input, .spot-replay .input { width: 100%; min-width: 0; }
+.spot-replay .table-scroll { max-width: 100%; overflow-x: auto; }
+.spot-replay-json { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.spot-replay-summary { margin: var(--space-4) 0; }
+.spot-replay-summary h4 { margin: 0 0 var(--space-2); font-size: 16px; }
+.spot-replay-balance { margin: 0 0 var(--space-4); min-width: 0; }
+.spot-replay-balance figcaption { color: var(--color-text); font-weight: 600; margin-bottom: var(--space-2); }
+.spot-replay-balance svg { display: block; width: 100%; height: auto; overflow: visible; }
+.spot-replay-balance polyline { fill: none; stroke: var(--color-accent-700); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.spot-replay-balance circle { fill: var(--color-accent-700); }
+.spot-replay-chart-axis { stroke: var(--color-divider); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.spot-replay-sample-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--space-2) var(--space-4); margin: var(--space-3) 0 0; padding-left: var(--space-5); font-size: 13px; }
+.spot-replay-sample-list li { min-width: 0; padding-left: var(--space-1); }
+.spot-replay-sample-list span, .spot-replay-sample-list strong { display: block; overflow-wrap: anywhere; }
+.spot-replay-sample-list strong { font-variant-numeric: tabular-nums; }
 .card-open { display: flex; flex-direction: column; gap: var(--space-2); text-align: left; width: 100%; font: inherit; color: inherit; cursor: pointer;
   background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md); padding: var(--space-4);
   transition: transform 140ms var(--ease-out), border-color 120ms ease; }
@@ -140,6 +164,7 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
   .main { padding: var(--space-6) var(--space-4); }
   .main h1 { font-size: 32px; }
   .panel { padding: var(--space-4); border-radius: var(--radius-md); }
+  .spot-replay-dependency { grid-template-columns: minmax(0, 1fr); }
   .sheet { width: 100vw; border-radius: 0; }
   table.records { font-size: 12px; }
   table.records tr > :nth-child(1) { width: 27%; }

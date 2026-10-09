@@ -8,6 +8,7 @@ import type { ConversationContext } from "./Conversation";
 import { AnswerMessage, QuestionForm } from "./QuestionForm";
 import { RulesReview } from "./RulesReview";
 import { InvestigationReview } from "./InvestigationReview";
+import { SpotReplayPanel } from "./SpotReplayPanel";
 
 interface Props {
   id: string;
@@ -235,6 +236,9 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
           </dl>
         </section>
       )}
+
+      {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
+        strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}
 
       <details>
         <summary>Where each setting came from</summary>

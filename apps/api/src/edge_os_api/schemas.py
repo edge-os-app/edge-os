@@ -62,6 +62,37 @@ class PublicationBody(StrictModel):
     strategy: dict[str, Any]
 
 
+class SpotReplayDependency(StrictModel):
+    series: Literal["price", "quote_volume"]
+    offset_buckets: int = Field(le=0)
+
+
+class SpotReplayEssentialField(StrictModel):
+    state: Literal["BOUND", "UNBOUND"]
+    essential_dependencies: list[SpotReplayDependency] | None = Field(default=None, max_length=64)
+
+
+class SpotReplayEssentialFields(StrictModel):
+    entry: SpotReplayEssentialField
+    exit: SpotReplayEssentialField
+
+
+class SpotReplayBody(StrictModel):
+    model_config = ConfigDict(extra="forbid", strict=False)
+
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    strategy_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    strategy_revision_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F-]{36}$")]
+    dataset_fixture_id: Literal["p13.wc01/1"]
+    run_configuration_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    window_start: datetime
+    window_end: datetime
+    initial_cash_quote: Annotated[str, StringConstraints(min_length=1, max_length=100)]
+    initial_base_amount: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
+    initial_basis_quote: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
+    essential_fields: SpotReplayEssentialFields
+
+
 class EdgeClaim(StrictModel):
     status: Literal["HYPOTHESIS", "DESCRIPTIVE_ONLY"]
     text: ReviewText
@@ -280,3 +311,62 @@ class InvestigationBody(StrictModel):
             raise PydanticCustomError("declaration_semantics_conflict",
                                       "Claim, falsification status, and direction must describe the same work.")
         return self
+
+
+class EffectRunSchedule(StrictModel):
+    model_config = ConfigDict(extra="forbid", strict=False)
+
+    version: Literal["p09.decision-clock/1"]
+    start: datetime
+    end: datetime
+    interval_seconds: int = Field(ge=1, le=3600)
+
+    @model_validator(mode="after")
+    def ordered_utc_schedule(self) -> "EffectRunSchedule":
+        if (self.start.tzinfo is None or self.end.tzinfo is None or self.start.utcoffset() is None
+                or self.end.utcoffset() is None or self.start.utcoffset().total_seconds() != 0
+                or self.end.utcoffset().total_seconds() != 0 or self.start >= self.end
+                or (self.end - self.start).total_seconds() % self.interval_seconds):
+            raise ValueError("Decision schedule bounds must be ordered UTC instants containing whole intervals.")
+        if (self.start.microsecond or self.end.microsecond
+                or int(self.start.timestamp()) % self.interval_seconds
+                or int(self.end.timestamp()) % self.interval_seconds):
+            raise ValueError("Decision times must align to the declared interval.")
+        return self
+
+
+class EffectRunBinding(StrictModel):
+    evaluation_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+    trial_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+    variant_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
+    price_expression: dict[str, Any]
+    volume_expression: dict[str, Any]
+    essential_inputs: list[Literal["price", "quote_volume"]] = Field(min_length=1, max_length=2)
+
+    @model_validator(mode="after")
+    def unique_essential_inputs(self) -> "EffectRunBinding":
+        if len(set(self.essential_inputs)) != len(self.essential_inputs):
+            raise ValueError("Essential input mappings must be unique.")
+        return self
+
+
+class EffectRunBody(StrictModel):
+    operation_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+    fixture_id: Literal["synthetic-effect-comparison/1"]
+    adoption: Literal["ADOPT"]
+    schedule: EffectRunSchedule
+    bindings: list[EffectRunBinding] = Field(min_length=1, max_length=100)
+    incremental_volume_declared: bool
+
+    @model_validator(mode="after")
+    def unique_binding_ids(self) -> "EffectRunBody":
+        ids = [item.evaluation_id for item in self.bindings]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Each adopted evaluation identity must have exactly one P06 binding.")
+        return self
+
+
+class EffectAttemptBody(StrictModel):
+    operation_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]

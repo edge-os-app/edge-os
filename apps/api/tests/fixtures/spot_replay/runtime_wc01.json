@@ -1,0 +1,31 @@
+{
+  "dataset_revision_id": "synthetic-dataset-p13-runtime-v1",
+  "evidence_class": "SYNTHETIC_FIXTURE",
+  "qualification": "QUALIFIED_FOR_LOGIC_ONLY",
+  "coverage_complete": true,
+  "buckets": [
+    {"bucket_end": "2026-10-01T11:50:00Z", "status": "COMPLETE_OCCUPIED", "price": "8", "quote_volume": "10", "available_at": "2026-10-01T11:50:00Z"},
+    {"bucket_end": "2026-10-01T11:55:00Z", "status": "COMPLETE_OCCUPIED", "price": "8", "quote_volume": "10", "available_at": "2026-10-01T11:55:00Z"},
+    {"bucket_end": "2026-10-01T12:00:00Z", "status": "COMPLETE_OCCUPIED", "price": "8", "quote_volume": "10", "available_at": "2026-10-01T12:00:00Z"},
+    {"bucket_end": "2026-10-01T12:05:00Z", "status": "COMPLETE_OCCUPIED", "price": "8", "quote_volume": "10", "available_at": "2026-10-01T12:05:00Z"},
+    {"bucket_end": "2026-10-01T12:10:00Z", "status": "COMPLETE_OCCUPIED", "price": "8", "quote_volume": "10", "available_at": "2026-10-01T12:10:00Z"},
+    {"bucket_end": "2026-10-01T12:15:00Z", "status": "COMPLETE_OCCUPIED", "price": "9", "quote_volume": "10", "available_at": "2026-10-01T12:15:00Z"},
+    {"bucket_end": "2026-10-01T12:20:00Z", "status": "COMPLETE_OCCUPIED", "price": "10", "quote_volume": "10", "available_at": "2026-10-01T12:20:00Z"},
+    {"bucket_end": "2026-10-01T12:25:00Z", "status": "COMPLETE_OCCUPIED", "price": "9.5", "quote_volume": "10", "available_at": "2026-10-01T12:25:00Z"},
+    {"bucket_end": "2026-10-01T12:30:00Z", "status": "COMPLETE_OCCUPIED", "price": "9.2", "quote_volume": "10", "available_at": "2026-10-01T12:30:00Z"}
+  ],
+  "expected": {
+    "status": "COMPLETE",
+    "orders": ["BUY_FILLED", "SELL_FILLED"],
+    "completed_trade_pairs": 1,
+    "initial_cash_quote": "1000",
+    "buy_fill_price": "10.050",
+    "buy_fee_quote": "0.300",
+    "buy_basis_quote": "100.300",
+    "sell_fill_price": "9.1540",
+    "sell_fee_quote": "0.27325373134328358208955223880597014925373134328358",
+    "ending_cash_quote": "990.51132338308457711442786069651741293532338308458",
+    "gain_loss_quote": "-9.48867661691542288557213930348258706467661691542",
+    "evidence_class": "SYNTHETIC_FIXTURE"
+  }
+}

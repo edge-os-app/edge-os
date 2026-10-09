@@ -21,6 +21,32 @@ async function open(page, token) {
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
 
+async function saveSpotReplay(page) {
+  const replay = page.getByTestId("spot-replay");
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByLabel("entry dependency offset 2").fill("-3");
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByLabel("exit dependency offset 2").fill("-1");
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByLabel("I reviewed the exit dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  return replay;
+}
+
+async function publishSpotReplayStrategy(page) {
+  await page.getByRole("button", { name: "All requests" }).click();
+  await sample(page, "Specific thesis").click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toBeVisible();
+}
+
 /** Visible interactive controls whose hit area is smaller than the accepted 44px minimum. */
 async function smallControls(page) {
   return page.evaluate((min) => {
@@ -61,8 +87,11 @@ test("accepted 44px minimum holds on every control in the main states", async ({
     results.conversationSheet = await smallControls(page);
     await page.keyboard.press("Escape");
   }
+  await publishSpotReplayStrategy(page);
+  await saveSpotReplay(page);
+  results.spotReplay = await smallControls(page);
   fs.writeFileSync(path.join(outDir, `controls-${info.project.name}.json`), JSON.stringify(results, null, 2));
-  expect(results, JSON.stringify(results)).toEqual({ homeWithRestrictions: [], requestWithDetailsOpen: [], ...(info.project.name === "mobile-390" ? { conversationSheet: [] } : {}) });
+  expect(results, JSON.stringify(results)).toEqual({ homeWithRestrictions: [], requestWithDetailsOpen: [], spotReplay: [], ...(info.project.name === "mobile-390" ? { conversationSheet: [] } : {}) });
 });
 
 test("smoke: the main path raises no console error, page error or failed request", async ({ page }, info) => {
@@ -107,6 +136,7 @@ test("axe: no serious or critical WCAG 2.2 AA violation in the main states", asy
   await scan("review");
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
+  await saveSpotReplay(page);
   await scan("saved");
   await page.getByRole("button", { name: "All requests" }).click();
   await sample(page, /I have no view/).click();
@@ -238,6 +268,7 @@ test("text and placeholder contrast meet 4.5:1 (3:1 for large text) in the main 
   failures.compiled = await lowContrast(page);
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
+  await saveSpotReplay(page);
   failures.saved = await lowContrast(page);
   await page.getByRole("button", { name: "All requests" }).click();
   await sample(page, /I have no view/).click();
@@ -378,6 +409,7 @@ test("no word segment is split in the middle in the main states", async ({ page 
   found.review = await splitWords(page);
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
+  await saveSpotReplay(page);
   await page.locator("summary", { hasText: "Where each setting came from" }).click();
   found.saved = await splitWords(page);
   fs.writeFileSync(path.join(outDir, `split-words-${info.project.name}.json`), JSON.stringify(found, null, 2));

@@ -15,12 +15,13 @@ from sqlalchemy.exc import DataError, OperationalError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 
-from . import investigation_adoption, p02, service
+from . import effect_run, investigation_adoption, p02, service, spot_replay_api
 from .auth import Principal, Verifier, require_principal
 from .db import current_revision, make_engine, make_session_factory, require_head, script_head
 from .errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
 from .interpreter import samples
-from .schemas import ClarificationBody, IntakeBody, InvestigationBody, PublicationBody
+from .schemas import (ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody,
+                      InvestigationBody, PublicationBody, SpotReplayBody)
 from .settings import Settings, load_settings
 
 log = logging.getLogger("edge_os")
@@ -151,6 +152,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def interpreter_info() -> dict[str, Any]:
         return {"interpreter": service.INTERPRETER.label(), "samples": samples()}
 
+    @private.post("/spot-replays")
+    def create_spot_replay(data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
+                           session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(SpotReplayBody, data)
+        status, result = run(session, lambda: spot_replay_api.create_spot_replay(session, principal, body),
+                             retry="RECONCILE")
+        headers = {"Idempotent-Replay": "true"} if status == 200 else {}
+        return JSONResponse(result, status_code=status, headers=headers)
+
+    @private.get("/spot-replays/{replay_id}")
+    def get_spot_replay(replay_id: str, principal: Principal = Depends(require_principal),
+                        session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: spot_replay_api.get_spot_replay(session, principal, replay_id))
+
     @private.post("/research/requests", status_code=201)
     def create_request(data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
                        session: Session = Depends(get_session)) -> Any:
@@ -197,6 +212,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                           session: Session = Depends(get_session)) -> Any:
         return run(session, lambda: investigation_adoption.get_declaration(
             session, principal, intake_id, declaration_id))
+
+    @private.post("/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs")
+    def adopt_effect_run(intake_id: str, declaration_id: str, data: Any = Depends(read_json),
+                         principal: Principal = Depends(require_principal),
+                         session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(EffectRunBody, data)
+        status, result = run(session, lambda: effect_run.adopt_effect_run(
+            session, principal, intake_id, declaration_id, body), retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
+
+    @private.get("/research/requests/{intake_id}/effect-runs")
+    def list_effect_runs(intake_id: str, principal: Principal = Depends(require_principal),
+                         session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: effect_run.list_effect_runs(session, principal, intake_id))
+
+    @private.post("/research/requests/{intake_id}/effect-runs/{run_id}/attempts")
+    def execute_effect_run(intake_id: str, run_id: str, data: Any = Depends(read_json),
+                           principal: Principal = Depends(require_principal),
+                           session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(EffectAttemptBody, data)
+        status, result = run(session, lambda: effect_run.execute_effect_run(
+            session, principal, intake_id, run_id, body), retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
+
+    @private.get("/research/requests/{intake_id}/effect-runs/{run_id}")
+    def get_effect_run(intake_id: str, run_id: str, principal: Principal = Depends(require_principal),
+                       session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: effect_run.get_effect_run(session, principal, intake_id, run_id))
 
     @private.post("/research/requests/{intake_id}/clarifications", status_code=201)
     def answer(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
