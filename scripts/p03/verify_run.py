@@ -432,9 +432,10 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
             "p.owner_id report_owner_id, p.content report_content "
             "from effect_run_declarations r join effect_reports p on p.owner_id=r.owner_id and p.run_id=r.run_id "
             f"where r.run_id='{run_id}' and p.report_id='{report_id}'")
-        events = rows(f"select content from effect_run_events where run_id='{run_id}' order by sequence")
+        events = rows(f"select event_id, content from effect_run_events where run_id='{run_id}' order by sequence")
+        event_content = [event["content"] for event in events]
         item = {"key": key, "run_id": run_id, "report_id": report_id, "rows": len(found),
-                "events": [event["content"] for event in events]}
+                "events": event_content}
         if found:
             run_content, report_content = found[0]["run_content"], found[0]["report_content"]
             p08 = rows(f"select content from investigation_declarations where declaration_id='{found[0]['p08_declaration_id']}'")
@@ -446,24 +447,38 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                 "adoption_precedes_reads": bool(events) and events[0]["content"].get("kind") == "RUN_ADOPTED"
                     and events[0]["content"].get("outcome_accessed") is False,
                 "attempt_and_report_order": [event["content"].get("kind") for event in events]
-                    == ["RUN_ADOPTED", "ATTEMPT_STARTED", "REPORT_SAVED"],
+                    == ["RUN_ADOPTED", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED", "REPORT_SAVED"],
+                "durable_access_marker_matches_report": len(events) == 4
+                    and event_content[2].get("outcome_accessed") is True
+                    and event_content[2].get("p09_configuration_sha256") == run_content.get("configuration_sha256")
+                    and event_content[3].get("access_marker_event_id") == str(events[2]["event_id"]),
                 "exact_saved_report_matches_ui": report_content == saved["p09"]["report"]["content"],
                 "configuration_and_fixture_hashes_match_ui": run_content.get("configuration_sha256") == saved["p09ConfigurationSha256"]
                     and report_content.get("fixture_sha256") == saved["fixtureSha256"]
                     and report_content.get("profile_sha256") == saved["profileSha256"],
                 "report_remains_unresolved": report_content.get("result", {}).get("status") == "UNRESOLVED"
                     and report_content.get("result", {}).get("statistical_status") == "UNRESOLVED",
+                "synthetic_comparison_and_unavailable_buckets_match": bool(report_content.get("result", {}).get("variants"))
+                    and all(variant.get("general_comparison", {}).get("triggered", {}).get("mean") == "0.1"
+                            and variant.get("general_comparison", {}).get("control", {}).get("mean") == "-0.1"
+                            and variant.get("general_comparison", {}).get("triggered_minus_control_mean") == "0.2"
+                            and variant.get("incremental_volume_comparison", {}).get("triggered_minus_control_mean") == "0.2"
+                            for variant in report_content["result"]["variants"])
+                    and report_content.get("result", {}).get("excluded_count") == 4
+                    and report_content.get("result", {}).get("missing_outcome_count") == 4,
                 "exact_run_and_report_counts": rows(f"select count(*) c from effect_run_declarations where run_id='{run_id}'")[0]["c"] == 1
                     and rows(f"select count(*) c from effect_reports where run_id='{run_id}'")[0]["c"] == 1
-                    and len(events) == 3,
+                    and len(events) == 4,
             })
         effect_runs.append(item)
     checks["effect_comparisons"] = effect_runs
     effect_runs_pass = bool(effect_runs) and all(v.get("rows") == 1 and v.get("owner_matches_intake")
         and v.get("run_links_exact_p08_declaration") and v.get("run_plan_matches_p08")
         and v.get("adoption_precedes_reads") and v.get("attempt_and_report_order")
+        and v.get("durable_access_marker_matches_report")
         and v.get("exact_saved_report_matches_ui") and v.get("configuration_and_fixture_hashes_match_ui")
-        and v.get("report_remains_unresolved") and v.get("exact_run_and_report_counts") for v in effect_runs)
+        and v.get("report_remains_unresolved") and v.get("synthetic_comparison_and_unavailable_buckets_match")
+        and v.get("exact_run_and_report_counts") for v in effect_runs)
     return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass}
 
 

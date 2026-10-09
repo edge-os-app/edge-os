@@ -21,7 +21,7 @@ function exampleBody(saved: InvestigationSaveResult): EffectRunBody {
   return {
     ...operationKeys("p09-run"), fixture_id: "synthetic-effect-comparison/1", adoption: "ADOPT",
     schedule: { version: "p09.decision-clock/1", start: FIXTURE_START,
-      end: "2026-01-01T00:02:00Z", interval_seconds: 60 },
+      end: "2026-01-01T00:20:00Z", interval_seconds: 300 },
     bindings: plan.map((item, index) => ({
       evaluation_id: item.evaluation_id, trial_id: item.trial_id, variant_id: item.variant_id,
       price_expression: price,
@@ -47,8 +47,9 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
     const matching = response.runs.filter((item) => item.run.p08_declaration_id === saved.declaration.record_id);
     setRuns(matching);
     const latest = matching[matching.length - 1] ?? null;
-    setSelected((current) => current && matching.some((item) => item.run.record_id === current.run.record_id)
-      ? current : latest);
+    setSelected((current) => current
+      ? matching.find((item) => item.run.record_id === current.run.record_id) ?? latest
+      : latest);
   };
 
   useEffect(() => {
@@ -124,10 +125,10 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
         <p className="status stop" role="note">This visible example was authored for the synthetic fixture. It is a new P09 run declaration, not an inference from P08 hypothesis text. Saving it does not read outcomes.</p>
         <dl className="kv">
           <dt>Fixture</dt><dd>{body.fixture_id} · logic only</dd>
-          <dt>Decision schedule</dt><dd>{body.schedule.start} to {body.schedule.end} · every {body.schedule.interval_seconds} seconds</dd>
+          <dt>Decision schedule</dt><dd>{body.schedule.start} to {body.schedule.end} · every {body.schedule.interval_seconds} seconds; two authored feature buckets and two intentionally unavailable buckets</dd>
           <dt>P08 declaration</dt><dd className="mono">{saved.declaration.record_id}</dd>
-          <dt>Primary contrast</dt><dd>Qualified TRUE versus qualified FALSE, same decision schedule and outcome clock.</dd>
-          <dt>Incremental volume</dt><dd>Predeclared, with the same price condition TRUE.</dd>
+          <dt>Primary contrast</dt><dd>Both authored variants split at 00:00 and 00:05: quote volume 3 yields −0.1; quote volume 8 yields +0.1 over the 15-minute outcome horizon. The 00:10 and 00:15 buckets are absent and remain unavailable. Expected synthetic contrast: +0.2.</dd>
+          <dt>Incremental volume</dt><dd>Predeclared price-only versus quote-volume-only mapping, with price fixed at TRUE.</dd>
         </dl>
         <div className="table-scroll">
           <table className="records">
@@ -155,8 +156,11 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
 
       {selected ? <div className="stack" data-testid="effect-run-selected">
         <p className="mono">P09 run {selected.run.record_id}</p>
+        <p className="status" role="status">P09 outcome access: {selected.events.some((event) => event.content.outcome_accessed === true)
+          ? `recorded at event sequence ${selected.events.find((event) => event.content.kind === "OUTCOME_ACCESS_STARTED")?.sequence ?? "unknown"}`
+          : "not recorded"}. P08 declaration-time labels remain a separate snapshot.</p>
         {!selected.report ? <>
-          <p className="status stop" role="status">Run declaration saved. No report exists yet. Review the failed-attempt history, then evaluate the named synthetic fixture as a separate action.</p>
+        <p className="status stop" role="status">Run declaration saved. No report exists yet. Review the attempt and outcome-access history, then evaluate the named synthetic fixture as a separate action.</p>
           <details><summary>Run declaration and append-only attempt history</summary><pre className="records-json">{JSON.stringify({ content: selected.run.content, events: selected.events }, null, 2)}</pre></details>
           <button className="btn btn-primary" type="button" onClick={() => void evaluate()} disabled={busy}>
             {busy ? "Evaluating synthetic fixture…" : selected.events.some((event) => event.content.kind === "ATTEMPT_FAILED") ? "Retry synthetic evaluation" : "Evaluate synthetic fixture"}

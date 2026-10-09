@@ -45,6 +45,60 @@ async function shot(page, project, name) {
   await page.screenshot({ path: path.join(shots, `${project}-${name}.png`), fullPage: true });
 }
 
+async function checkP09Interface(page) {
+  return page.getByTestId("effect-comparison").evaluate((root) => {
+    const parse = (value) => {
+      const match = value.match(/^rgba?\(([^)]+)\)$/);
+      if (match) {
+        const parts = match[1].split(/[ ,/]+/).filter(Boolean).map(Number);
+        return { r: parts[0], g: parts[1], b: parts[2], a: parts[3] ?? 1 };
+      }
+      const color = value.match(/^color\(srgb ([^)]+)\)$/);
+      if (color) {
+        const parts = color[1].split(/[ /]+/).filter(Boolean).map(Number);
+        return { r: parts[0] * 255, g: parts[1] * 255, b: parts[2] * 255, a: parts[3] ?? 1 };
+      }
+      return null;
+    };
+    const lum = ({ r, g, b }) => {
+      const channel = (value) => { value /= 255; return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    };
+    const bg = (element) => {
+      const layers = [];
+      for (let node = element; node && node !== root.parentElement; node = node.parentElement) {
+        const color = parse(getComputedStyle(node).backgroundColor);
+        if (color && color.a > 0) { layers.push(color); if (color.a === 1) break; }
+      }
+      let base = { r: 255, g: 255, b: 255, a: 1 };
+      for (const layer of layers.reverse()) base = { r: layer.r * layer.a + base.r * (1 - layer.a),
+        g: layer.g * layer.a + base.g * (1 - layer.a), b: layer.b * layer.a + base.b * (1 - layer.a), a: 1 };
+      return base;
+    };
+    const ratio = (a, b) => (Math.max(lum(a), lum(b) ) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+    const controls = [...root.querySelectorAll('button, summary, input[type="checkbox"]')].filter((el) => {
+      const style = getComputedStyle(el);
+      return style.display !== "none" && style.visibility !== "hidden" && el.getBoundingClientRect().width > 0;
+    });
+    const sizes = controls.map((el) => {
+      const box = el.matches('input[type="checkbox"]') ? el.closest("label").getBoundingClientRect() : el.getBoundingClientRect();
+      return { label: (el.textContent || el.getAttribute("aria-label") || el.type || "").trim().slice(0, 48),
+        width: box.width, height: box.height };
+    });
+    const text = [...root.querySelectorAll("p, dt, dd, label, button, summary, th, td")].filter((el) => {
+      const box = el.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && el.textContent.trim();
+    }).map((el) => {
+      const style = getComputedStyle(el), foreground = parse(style.color), background = bg(el);
+      if (!foreground) return null;
+      const large = parseFloat(style.fontSize) >= 24 || (parseFloat(style.fontSize) >= 18.66 && Number(style.fontWeight) >= 700);
+      return { text: el.textContent.trim().slice(0, 48), ratio: foreground ? ratio(foreground, background) : 0,
+        minimum: large ? 3 : 4.5 };
+    }).filter((item) => item && item.ratio < item.minimum);
+    return { sizes, lowContrast: text };
+  });
+}
+
 async function open(page, token) {
   await injectAuth(page, token);
   await page.goto("/");
@@ -305,7 +359,7 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
   await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
   await expect(page.getByTestId("investigation-saved")).toContainText("DECLARATION_SAVED");
-  await expect(page.getByTestId("investigation-saved")).toContainText("Outcome labels read");
+  await expect(page.getByTestId("investigation-saved")).toContainText("P08 declaration-time outcome labels read");
   const declarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
   await page.getByTestId("investigation-saved").locator("summary").click();
   const uiContent = JSON.parse(await page.getByTestId("investigation-saved").locator("details pre").innerText());
@@ -328,6 +382,31 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   await runAdoptionText.focus();
   await page.keyboard.press("Space");
   const runAdoptButton = page.getByRole("button", { name: "Adopt synthetic run declaration" });
+  const beforeRun = await checkP09Interface(page);
+  expect(beforeRun.sizes.every((item) => item.height >= 44), JSON.stringify(beforeRun.sizes)).toBe(true);
+  expect(beforeRun.lowContrast).toEqual([]);
+  const p09Checkbox = page.getByLabel(/I reviewed these exact P08 identities/);
+  const p09Focus = await p09Checkbox.evaluate((el) => {
+    const parse = (value) => { const match = value.match(/^rgba?\(([^)]+)\)$/); if (!match) return null;
+      const parts = match[1].split(/[ ,/]+/).filter(Boolean).map(Number); return { r: parts[0], g: parts[1], b: parts[2], a: parts[3] ?? 1 }; };
+    const luminance = ({ r, g, b }) => { const c = (value) => { value /= 255; return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * c(r) + 0.7152 * c(g) + 0.0722 * c(b); };
+    const label = el.closest("label"), style = getComputedStyle(label);
+    const ring = parse(style.outlineColor);
+    let background = { r: 255, g: 255, b: 255 };
+    for (let node = label; node; node = node.parentElement) {
+      const color = parse(getComputedStyle(node).backgroundColor);
+      if (color?.a === 1) { background = color; break; }
+    }
+    const ratio = ring ? (Math.max(luminance(ring), luminance(background)) + 0.05)
+      / (Math.min(luminance(ring), luminance(background)) + 0.05) : 0;
+    return { visible: el.matches(":focus-visible"), outline: style.outlineStyle,
+      outlineWidth: parseFloat(style.outlineWidth), color: style.outlineColor, contrast: ratio };
+  });
+  expect(p09Focus.visible).toBe(true);
+  expect(p09Focus.outline).not.toBe("none");
+  expect(p09Focus.outlineWidth).toBeGreaterThanOrEqual(2);
+  expect(p09Focus.contrast).toBeGreaterThanOrEqual(3);
   await runAdoptButton.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText(/Run declaration saved\. No report exists yet/)).toBeVisible();
@@ -345,19 +424,32 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
     attemptFailures.push(route.request().url());
     if (attemptFailures.length === 1) return route.fulfill({ status: 503, contentType: "application/json",
       body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "Temporary evaluation failure. Retry the saved run." }] }) });
-    return route.continue();
+    const savedResponse = await route.fetch();
+    expect(savedResponse.status()).toBe(201);
+    return route.fulfill({ response: savedResponse, status: 503, contentType: "application/json",
+      body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "The reply was lost after the server saved the report." }] }) });
   });
   await page.getByRole("button", { name: "Evaluate synthetic fixture" }).click();
   await expect(page.getByTestId("effect-comparison").locator(".status.err")).toContainText("Temporary evaluation failure");
   await page.getByRole("button", { name: "Evaluate synthetic fixture" }).click();
   await expect(page.getByTestId("effect-report-saved")).toContainText("UNRESOLVED");
+  const reportQuality = await checkP09Interface(page);
+  expect(reportQuality.sizes.every((item) => item.height >= 44), JSON.stringify(reportQuality.sizes)).toBe(true);
+  expect(reportQuality.lowContrast).toEqual([]);
+  await expect(page.getByTestId("effect-comparison").locator(".status.err")).toContainText("reply was lost");
+  await expect(page.getByText(/P09 outcome access: recorded at event sequence/)).toBeVisible();
   const reportId = (await page.getByTestId("effect-report-saved").locator("dd").first().innerText()).trim();
   const reportResponse = await page.request.get(`${runPath}/${runId}`, { headers: { Authorization: `Bearer ${tokens.a}` } });
   expect(reportResponse.status()).toBe(200);
   const exactRunAfter = await reportResponse.json();
   expect(exactRunAfter.report.record_id).toBe(reportId);
   expect(exactRunAfter.report.content.result.statistical_status).toBe("UNRESOLVED");
-  expect(exactRunAfter.events.map((event) => event.content.kind)).toEqual(["RUN_ADOPTED", "ATTEMPT_STARTED", "REPORT_SAVED"]);
+  expect(exactRunAfter.events.map((event) => event.content.kind)).toEqual([
+    "RUN_ADOPTED", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED", "REPORT_SAVED"]);
+  const primary = exactRunAfter.report.content.result.variants[0];
+  expect(primary.general_comparison).toMatchObject({ triggered: { mean: "0.1" }, control: { mean: "-0.1" },
+    triggered_minus_control_mean: "0.2" });
+  expect(exactRunAfter.report.content.result.missing_outcome_count).toBe(4);
   await page.getByRole("button", { name: "Reopen saved report without rerunning" }).click();
   await expect(page.getByTestId("effect-report-saved")).toContainText(reportId);
   expect(attemptFailures).toHaveLength(2);

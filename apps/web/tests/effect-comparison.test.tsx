@@ -80,6 +80,7 @@ describe("P09 effect comparison", () => {
     expect(body.bindings.map((binding: { evaluation_id: string }) => binding.evaluation_id)).toEqual(
       saved.declaration.content.configuration.evaluation_plan.map((item) => item.evaluation_id));
 
+    mocks.effectRuns.mockImplementation(async () => ({ runs: [await mocks.execute.mock.results[0]?.value ?? run()] }));
     await user.click(screen.getByRole("button", { name: "Evaluate synthetic fixture" }));
     expect(await screen.findByTestId("effect-report-saved")).toHaveTextContent("UNRESOLVED");
     expect(screen.getAllByText(/STAT_Q01_PROFILE_NOT_QUALIFIED/).length).toBeGreaterThan(0);
@@ -95,5 +96,23 @@ describe("P09 effect comparison", () => {
     render(<EffectComparisonPanel intakeId="request-1" saved={protectedSaved} />);
     expect(await screen.findByText(/does not access training, validation, or holdout rows/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load explicit synthetic example" })).toBeNull();
+  });
+
+  it("refreshes the selected run from durable failed-attempt history after a lost response", async () => {
+    const failedRun = run();
+    failedRun.events = [{ event_id: "event-1", sequence: 1, created_at: "2026-01-01T00:01:00Z",
+      content: { kind: "ATTEMPT_STARTED" } },
+    { event_id: "event-2", sequence: 2, created_at: "2026-01-01T00:02:00Z",
+      content: { kind: "ATTEMPT_FAILED", outcome_accessed: true } }];
+    mocks.effectRuns.mockResolvedValueOnce({ runs: [run()] }).mockResolvedValueOnce({ runs: [failedRun] });
+    mocks.execute.mockRejectedValueOnce(new Error("response lost after server commit"));
+    const user = userEvent.setup();
+    render(<EffectComparisonPanel intakeId="request-1" saved={saved} />);
+    await screen.findByRole("button", { name: "Evaluate synthetic fixture" });
+    await user.click(screen.getByRole("button", { name: "Evaluate synthetic fixture" }));
+    expect(await screen.findByRole("button", { name: "Retry synthetic evaluation" })).toBeInTheDocument();
+    expect(screen.getByText(/P09 outcome access: recorded at event sequence/)).toBeInTheDocument();
+    await user.click(screen.getByText("Run declaration and append-only attempt history"));
+    expect(screen.getByText(/OUTCOME_ACCESS_STARTED|outcome_accessed/)).toBeInTheDocument();
   });
 });

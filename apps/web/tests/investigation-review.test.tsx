@@ -297,6 +297,7 @@ describe("investigation declaration adoption", () => {
       await user.click(screen.getByRole("checkbox"));
       await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
       await screen.findByRole("heading", { name: "Declaration saved" });
+      expect(screen.queryByText(/unsaved edits remain in place/)).toBeNull();
       const body = mocks.save.mock.calls.at(-1)?.[1];
       expect(body.expected_interpretation_revision_id).toBe(refreshPath === "clarifications on the same intake" ? "revision-3" : "revision-2");
       expect(body.configuration.stopping_rule).toBe("Keep my reviewed edits across each current review.");

@@ -10,13 +10,13 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import p02, p06
 from .auth import Principal
-from .effect_comparison import compare_effects, evaluate_p06_bindings, parse_utc
+from .effect_comparison import compare_effects, evaluate_p06_bindings, expression_inputs, parse_utc
 from .errors import AppError, finding, not_found
 from .models import EffectReport, EffectRunDeclaration, EffectRunEvent, InvestigationDeclaration
 from .schemas import EffectAttemptBody, EffectRunBody
@@ -102,6 +102,17 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
                        [finding("schedule_outside_descriptive_partition", "/schedule",
                                 "The decision schedule must remain inside the adopted descriptive partition.")])
     plan = config["evaluation_plan"]
+    partitions_by_id = {item["partition_id"]: item for item in config["partitions"]}
+    for index, evaluation in enumerate(plan):
+        partition_ids = evaluation.get("partition_ids", [])
+        if len(partition_ids) != 1 or partition_ids[0] not in partitions_by_id:
+            raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "p08_evaluation_partition_mapping",
+                           [finding("p08_evaluation_partition_mapping", f"/p08_configuration/evaluation_plan/{index}/partition_ids",
+                                    "Each P09 evaluation must bind exactly one known P08 partition.")])
+        if partitions_by_id[partition_ids[0]]["role"] != "DESCRIPTIVE":
+            raise AppError(409, "EFFECT_COMPARISON", "UNAVAILABLE", "protected_partition_not_authorized",
+                           [finding("protected_partition_not_authorized", f"/p08_configuration/evaluation_plan/{index}/partition_ids",
+                                    "P09 does not access training, validation, or holdout partitions.")])
     plan_by_id = {item["evaluation_id"]: item for item in plan}
     bindings = [item.model_dump(mode="json") for item in body.bindings]
     if set(plan_by_id) != {item["evaluation_id"] for item in bindings}:
@@ -115,18 +126,45 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
                            [finding("p08_identity_binding_mismatch", "/bindings",
                                     "Each P06 rule binding must retain the exact adopted evaluation, trial, and variant identities.")])
         try:
-            for expression in (binding["price_expression"], binding["volume_expression"]):
-                if p06.expression_info(expression, p02.FIXTURE_STRATEGY["market"]).kind != "BOOLEAN":
-                    raise ValueError("conditions must be typed Boolean P06 expressions")
+            for name in ("price_expression", "volume_expression"):
+                if p06.expression_info(binding[name], p02.FIXTURE_STRATEGY["market"], f"/bindings/{binding['evaluation_id']}/{name}").kind != "BOOLEAN":
+                    raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "p06_condition_not_boolean",
+                                   [finding("p06_condition_not_boolean", f"/bindings/{binding['evaluation_id']}/{name}",
+                                            "Each adopted P06 condition must be Boolean.")])
         except p06.CompilerError as error:
             raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "unsupported_p06_expression",
                            [finding(error.code, error.path, error.detail)]) from None
+    if body.incremental_volume_declared:
+        invalid = [binding["evaluation_id"] for binding in bindings
+                   if expression_inputs(binding["price_expression"]) != {"price"}
+                   or expression_inputs(binding["volume_expression"]) != {"quote_volume"}]
+        if invalid:
+            raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "incremental_volume_mapping_unsupported",
+                           [finding("incremental_volume_mapping_unsupported", "/bindings",
+                                    "Incremental volume comparison requires a price-only rule and a quote-volume-only rule for every evaluation.")])
 
     try:
         fixture_hash, profile_hash = _sha256(FIXTURE_PATH), _sha256(PROFILE_PATH)
     except OSError:
         raise AppError(503, "EFFECT_COMPARISON", "UNAVAILABLE", "fixture_profile_unavailable", []) from None
     body_json = body.model_dump(mode="json")
+    binding_config = {key: value for key, value in body_json.items()
+                      if key not in {"operation_id", "idempotency_key"}}
+    prior_runs = list(session.execute(select(EffectRunDeclaration).where(
+        EffectRunDeclaration.owner_id == principal.user_id,
+        EffectRunDeclaration.intake_record_id == intake.record_id,
+        EffectRunDeclaration.p08_declaration_id == declaration.declaration_id)).scalars())
+    for prior in prior_runs:
+        prior_events = _events(session, prior)
+        accessed = any(event.content.get("outcome_accessed") is True for event in prior_events)
+        report_exists = session.execute(select(EffectReport.report_id).where(
+            EffectReport.owner_id == principal.user_id, EffectReport.run_id == prior.run_id)).scalar_one_or_none()
+        prior_config = {key: value for key, value in prior.content["configuration"].items()
+                        if key not in {"operation_id", "idempotency_key"}}
+        if (accessed or report_exists is not None) and prior_config != binding_config:
+            raise AppError(409, "EFFECT_COMPARISON", "CONFLICTED", "p08_run_rebind_after_outcome_access",
+                           [finding("p08_run_rebind_after_outcome_access", "/bindings",
+                                    "P09 bindings for this P08 declaration cannot change after outcome access. Adopt a new P08 declaration with new evaluation identities.")])
     fingerprint = p02.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake.record_id),
                                   "p08_declaration_id": str(declaration.declaration_id), "body": body_json})
     existing = session.execute(select(EffectRunDeclaration).where(
@@ -176,6 +214,25 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
 
 def execute_effect_run(session: Session, principal: Principal, intake_id: str, run_id: str,
                        body: EffectAttemptBody) -> tuple[int, dict[str, Any]]:
+    """Serialize one run on PostgreSQL while allowing committed recovery evidence."""
+    row = _owned_run(session, principal, intake_id, run_id)
+    lock_bytes = hashlib.sha256(f"{principal.user_id}:{row.run_id}".encode()).digest()[:8]
+    lock_key = int.from_bytes(lock_bytes, "big", signed=True)
+    engine = session.get_bind()
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key})
+            result = _execute_effect_run_locked(session, principal, intake_id, run_id, body)
+            transaction.commit()
+            return result
+        except BaseException:
+            transaction.rollback()
+            raise
+
+
+def _execute_effect_run_locked(session: Session, principal: Principal, intake_id: str, run_id: str,
+                               body: EffectAttemptBody) -> tuple[int, dict[str, Any]]:
     """Record a started attempt before fixture access, then save one exact immutable report."""
     row = _owned_run(session, principal, intake_id, run_id)
     existing_report = session.execute(select(EffectReport).where(
@@ -185,7 +242,13 @@ def execute_effect_run(session: Session, principal: Principal, intake_id: str, r
                                       content={"kind": "ATTEMPT_REPLAY", "operation_id": body.operation_id,
                                                "idempotency_key": body.idempotency_key,
                                                "report_id": str(existing_report.report_id),
-                                               "outcome_accessed": False},
+                                               "p08_declaration_id": str(row.p08_declaration_id),
+                                               "p08_configuration_sha256": row.content["p08_configuration_sha256"],
+                                               "p09_configuration_sha256": row.content["configuration_sha256"],
+                                               "evaluation_identities": [{key: plan[key] for key in
+                                                   ("evaluation_id", "trial_id", "variant_id", "horizon")}
+                                                   for plan in row.content["p08_evaluation_plan"]],
+                                               "outcome_accessed": True},
                                       created_at=dt.datetime.now(dt.timezone.utc))
         session.add(replay_event)
         session.commit()
@@ -211,7 +274,11 @@ def execute_effect_run(session: Session, principal: Principal, intake_id: str, r
                                  content={"kind": "ATTEMPT_STARTED", "operation_id": body.operation_id,
                                           "idempotency_key": body.idempotency_key,
                                           "p08_declaration_id": str(row.p08_declaration_id),
-                                          "configuration_sha256": row.content["configuration_sha256"]},
+                                          "p08_configuration_sha256": row.content["p08_configuration_sha256"],
+                                          "p09_configuration_sha256": row.content["configuration_sha256"],
+                                          "evaluation_identities": [{key: plan[key] for key in
+                                              ("evaluation_id", "trial_id", "variant_id", "horizon")}
+                                              for plan in row.content["p08_evaluation_plan"]]},
                                  created_at=dt.datetime.now(dt.timezone.utc))
         session.add(started)
         try:
@@ -223,21 +290,52 @@ def execute_effect_run(session: Session, principal: Principal, intake_id: str, r
             if raced is None or raced.content.get("operation_id") != body.operation_id:
                 raise AppError(409, "EFFECT_COMPARISON", "CONFLICTED", "attempt_key_reused", []) from None
             started = raced
-    outcome_accessed = False
+    outcome_accessed = any(event.content.get("kind") == "OUTCOME_ACCESS_STARTED"
+                           and event.content.get("attempt_idempotency_key") == body.idempotency_key
+                           for event in _events(session, row))
+    access_event_id: uuid.UUID | None = None
     try:
         if row.content["fixture_id"] != FIXTURE_ID or _sha256(FIXTURE_PATH) != row.content["fixture_sha256"]:
             raise ValueError("The adopted fixture identity or bytes have changed.")
         if _sha256(PROFILE_PATH) != row.content["profile_sha256"]:
             raise ValueError("The adopted P09 profile bytes have changed.")
+        pending_access_event_id = uuid.uuid4()
+        access_marker = EffectRunEvent(
+            event_id=pending_access_event_id, owner_id=principal.user_id, run_id=row.run_id,
+            content={"kind": "OUTCOME_ACCESS_STARTED", "attempt_idempotency_key": body.idempotency_key,
+                     "operation_id": body.operation_id, "p08_declaration_id": str(row.p08_declaration_id),
+                     "p08_configuration_sha256": row.content["p08_configuration_sha256"],
+                     "p09_configuration_sha256": row.content["configuration_sha256"],
+                     "evaluation_identities": [{key: plan[key] for key in
+                         ("evaluation_id", "trial_id", "variant_id", "horizon")}
+                         for plan in row.content["p08_evaluation_plan"]],
+                     "outcome_accessed": True},
+            created_at=dt.datetime.now(dt.timezone.utc))
+        session.add(access_marker)
+        session.commit()
+        access_event_id = pending_access_event_id
         outcome_accessed = True
         dataset = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
         adopted = row.content["configuration"]
         plan = row.content["p08_evaluation_plan"]
+        p08_config = session.execute(select(InvestigationDeclaration.content).where(
+            InvestigationDeclaration.owner_id == principal.user_id,
+            InvestigationDeclaration.declaration_id == row.p08_declaration_id)).scalar_one()["configuration"]
+        partition_by_id = {item["partition_id"]: item for item in p08_config["partitions"]}
+        partition_bounds = {}
+        for item in plan:
+            plan_row = next(entry for entry in p08_config["evaluation_plan"]
+                            if entry["evaluation_id"] == item["evaluation_id"])
+            matching = [partition_by_id[partition_id] for partition_id in plan_row["partition_ids"]]
+            if len(matching) != 1:
+                raise ValueError("P09 requires one explicitly adopted descriptive partition per evaluation.")
+            partition_bounds[item["evaluation_id"]] = {"start": matching[0]["start"], "end": matching[0]["end"]}
         decisions = evaluate_p06_bindings(schedule=adopted["schedule"], evaluation_plan=plan,
                                           bindings=adopted["bindings"], feature_rows=dataset["features"])
         result = compare_effects(schedule=adopted["schedule"], evaluation_plan=plan,
                                  decisions=decisions, trades=dataset["trades"],
-                                 incremental_volume_declared=adopted["incremental_volume_declared"])
+                                 incremental_volume_declared=adopted["incremental_volume_declared"],
+                                 partition_bounds_by_evaluation=partition_bounds)
         report_content = {
             "schema_version": REPORT_VERSION, "run_id": str(row.run_id),
             "owner_id": str(principal.user_id), "request_record_id": row.content["p08_request_record_id"],
@@ -257,16 +355,32 @@ def execute_effect_run(session: Session, principal: Principal, intake_id: str, r
         session.add(report)
         session.add(EffectRunEvent(event_id=uuid.uuid4(), owner_id=principal.user_id, run_id=row.run_id,
                                    content={"kind": "REPORT_SAVED", "report_id": str(report.report_id),
+                                            "operation_id": body.operation_id,
+                                            "idempotency_key": body.idempotency_key,
+                                            "p08_declaration_id": str(row.p08_declaration_id),
+                                            "p08_configuration_sha256": row.content["p08_configuration_sha256"],
+                                            "p09_configuration_sha256": row.content["configuration_sha256"],
+                                            "access_marker_event_id": str(access_event_id),
+                                            "evaluation_identities": [{key: plan[key] for key in
+                                                ("evaluation_id", "trial_id", "variant_id", "horizon")}
+                                                for plan in row.content["p08_evaluation_plan"]],
                                             "outcome_accessed": True,
                                             "fixture_sha256": row.content["fixture_sha256"]},
                                    created_at=report.created_at))
         session.commit()
         return 201, _response(row, _events(session, row), report)
-    except Exception as error:
+    except BaseException as error:
         session.rollback()
         session.add(EffectRunEvent(event_id=uuid.uuid4(), owner_id=principal.user_id, run_id=row.run_id,
                                    content={"kind": "ATTEMPT_FAILED", "operation_id": body.operation_id,
                                             "idempotency_key": body.idempotency_key,
+                                            "p08_declaration_id": str(row.p08_declaration_id),
+                                            "p08_configuration_sha256": row.content["p08_configuration_sha256"],
+                                            "p09_configuration_sha256": row.content["configuration_sha256"],
+                                            "access_marker_event_id": None if access_event_id is None else str(access_event_id),
+                                            "evaluation_identities": [{key: plan[key] for key in
+                                                ("evaluation_id", "trial_id", "variant_id", "horizon")}
+                                                for plan in row.content["p08_evaluation_plan"]],
                                             "error_type": type(error).__name__,
                                             "outcome_accessed": outcome_accessed},
                                    created_at=dt.datetime.now(dt.timezone.utc)))

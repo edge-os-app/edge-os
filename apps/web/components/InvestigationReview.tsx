@@ -159,6 +159,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
       setDeclarations((current) => current ? [...current.filter((item) => item.record_id !== result.declaration.record_id), result.declaration]
         : [result.declaration]);
       setSelected(result); setProposal(null); setAdopted(false);
+      setRefreshNotice("");
       try { window.sessionStorage.removeItem(`edge-os:investigation:${intakeId}`); } catch { /* ignore */ }
       requestAnimationFrame(() => savedHeading.current?.focus());
     } catch (cause) {
@@ -258,7 +259,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
           <dl className="kv">
             <dt>Declaration ID</dt><dd className="mono">{selected.declaration.record_id}</dd>
             <dt>Budget version</dt><dd>{selected.declaration.content.configuration.budget_version}</dd>
-            <dt>Outcome labels read</dt><dd>{selected.declaration.content.outcome_labels_read ? "Yes" : "No"}</dd>
+            <dt>P08 declaration-time outcome labels read</dt><dd>{selected.declaration.content.outcome_labels_read ? "Yes" : "No"}</dd>
             <dt>Provider queries</dt><dd>{selected.access_history[0]?.provider_queries ?? 0}</dd>
             <dt>Saved access event</dt><dd>{selected.access_history[0]?.event ?? "Unavailable"}</dd>
           </dl>

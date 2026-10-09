@@ -110,6 +110,7 @@ def compare_effects(
     decisions: list[dict[str, Any]],
     trades: list[dict[str, Any]],
     incremental_volume_declared: bool,
+    partition_bounds_by_evaluation: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Compare P06 truth outputs on a frozen schedule and preserve every opportunity."""
     start, end = parse_utc(schedule["start"]), parse_utc(schedule["end"])
@@ -123,9 +124,6 @@ def compare_effects(
     plan_by_id = {row["evaluation_id"]: row for row in evaluation_plan}
     if len(plan_by_id) != len(evaluation_plan):
         raise ValueError("evaluation identities must be unique")
-    known_variants = {row["variant_id"] for row in evaluation_plan}
-    if len(known_variants) != len(evaluation_plan):
-        raise ValueError("each comparison row must identify one declared variant")
     scheduled_set = set(scheduled)
     decision_by_key: dict[tuple[str, datetime], dict[str, Any]] = {}
     for decision in decisions:
@@ -176,21 +174,34 @@ def compare_effects(
             elif not reasons:
                 reasons.append("UNKNOWN_OR_UNQUALIFIED_SIGNAL")
 
-            first = reference_trade(trades, decision_time, 0)
-            last = reference_trade(trades, decision_time, horizon_seconds)
+            bounds = (partition_bounds_by_evaluation or {}).get(plan["evaluation_id"])
+            first_allowed = last_allowed = True
+            if bounds is not None:
+                lower, upper = parse_utc(bounds["start"]), parse_utc(bounds["end"])
+                first_start, first_end = decision_time, decision_time + timedelta(seconds=60)
+                last_start, last_end = (decision_time + timedelta(seconds=horizon_seconds),
+                                        decision_time + timedelta(seconds=horizon_seconds + 60))
+                first_allowed = lower <= first_start and first_end <= upper
+                last_allowed = lower <= last_start and last_end <= upper
+            first = reference_trade(trades, decision_time, 0) if first_allowed else None
+            last = reference_trade(trades, decision_time, horizon_seconds) if last_allowed else None
             response = _response(first, last, horizon_seconds)
+            if not first_allowed or not last_allowed:
+                response["missing_reasons"].append("OUTCOME_WINDOW_OUTSIDE_PARTITION")
             row = {
                 "opportunity_id": f"{plan['evaluation_id']}:{decision_time.isoformat().replace('+00:00', 'Z')}",
                 "decision_id": decision["decision_id"] if decision else None,
                 "evaluation_id": plan["evaluation_id"],
                 "trial_id": plan["trial_id"],
                 "variant_id": plan["variant_id"],
+                "horizon": dict(plan["horizon"]),
                 "decision_time": decision_time.isoformat().replace("+00:00", "Z"),
                 "price_state": price_state,
                 "volume_state": volume_state,
                 "rule_state": rule_state,
                 "group": group if response["response"] is not None else "MISSING_OUTCOME",
                 "eligibility_group": group,
+                "input_evidence": copy_input_evidence(decision),
                 "reasons": list(dict.fromkeys(reasons + response["missing_reasons"])),
                 **response,
             }
@@ -234,14 +245,21 @@ def compare_effects(
         })
 
     event_uses: dict[str, int] = {}
+    input_uses: dict[str, int] = {}
     for row in all_opportunities:
         for trade in (row["start_trade"], row["end_trade"]):
             if trade is not None:
                 event_uses[trade["event_id"]] = event_uses.get(trade["event_id"], 0) + 1
+        for input_id in {evidence.get("input_dependency_id") for evidence in row["input_evidence"]}:
+            if input_id is not None:
+                input_uses[input_id] = input_uses.get(input_id, 0) + 1
     shared = sorted(event_id for event_id, count in event_uses.items() if count > 1)
+    shared_inputs = sorted(input_id for input_id, count in input_uses.items() if count > 1)
     for row in all_opportunities:
         ids = {trade["event_id"] for trade in (row["start_trade"], row["end_trade"]) if trade is not None}
         row["shared_event_ids"] = sorted(ids & set(shared))
+        input_ids = {item.get("input_dependency_id") for item in row["input_evidence"]}
+        row["shared_input_dependency_ids"] = sorted(input_ids & set(shared_inputs))
     intervals: list[tuple[datetime, datetime, str, str | None]] = []
     for row in all_opportunities:
         if row["start_trade"] is not None and row["end_trade"] is not None:
@@ -270,10 +288,117 @@ def compare_effects(
         "statistical_status": "UNRESOLVED",
         "statistical_reasons": ["STAT_Q01_PROFILE_NOT_QUALIFIED"],
         "shared_event_ids": shared,
+        "shared_input_dependency_ids": shared_inputs,
         "opportunity_count": len(all_opportunities),
         "excluded_count": sum(row["eligibility_group"] == "EXCLUDED" for row in all_opportunities),
         "missing_outcome_count": sum(row["response"] is None for row in all_opportunities),
     }
+
+
+def copy_input_evidence(decision: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Copy exact P06 input dependencies onto the persisted opportunity row."""
+    if decision is None:
+        return []
+    evidence = decision.get("input_evidence", [])
+    result = []
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        copied = dict(item)
+        copied.setdefault("input_dependency_id", p02.sha256_hex({
+            "input": copied.get("input"), "bucket_end": copied.get("bucket_end"),
+            "available_at": copied.get("available_at"), "value": copied.get("value"),
+        }))
+        copied.setdefault("dependency_identity_basis", "synthetic_input_observation_key")
+        result.append(copied)
+    return result
+
+
+def _input_dependencies(node: dict[str, Any], position: int, path: str = "") -> list[dict[str, Any]]:
+    """Mirror P06's dependency positions so truth and timing readiness remain distinct."""
+    op = node["op"]
+    if op == "constant":
+        return []
+    if op in {"price", "quote_volume"}:
+        return [{"input": op, "dependency_position": position, "expression_path": path or "/"}]
+    if op == "price_return":
+        n = node["lookback_buckets"]
+        return [{"input": "price", "dependency_position": index, "expression_path": path or "/"}
+                for index in range(position - n, position + 1)]
+    if op == "relative_volume":
+        n = node["lookback_buckets"]
+        return [{"input": "quote_volume", "dependency_position": index, "expression_path": path or "/"}
+                for index in range(position - n, position + 1)]
+    if op == "lag":
+        return _input_dependencies(node["value"], position - node["buckets"], f"{path}/value")
+    if op in {"sum", "mean"}:
+        return [dependency for index in range(position - node["buckets"] + 1, position + 1)
+                for dependency in _input_dependencies(node["value"], index, f"{path}/value")]
+    if op == "not":
+        return _input_dependencies(node["value"], position, f"{path}/value")
+    if op in {"and", "or", "gt", "gte", "lt", "lte"}:
+        return [dependency for index, child in enumerate(node["args"])
+                for dependency in _input_dependencies(child, position, f"{path}/args/{index}")]
+    raise ValueError(f"unsupported P06 dependency operation: {op}")
+
+
+def _dependency_evidence(
+    dependencies: list[dict[str, Any]], *, buckets: list[datetime], features: dict[datetime, dict[str, Any]],
+    decision_time: datetime, market_id: str,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for dependency in dependencies:
+        position = dependency["dependency_position"]
+        bucket = buckets[position] if 0 <= position < len(buckets) else None
+        feature = features.get(bucket) if bucket is not None else None
+        item = None if feature is None else feature.get(dependency["input"])
+        available_at = (None if item is None or item.get("available_at") is None
+                        else parse_utc(item["available_at"]))
+        reasons = [] if item is None else list(item.get("reasons", []))
+        qualified = (item is not None and item.get("qualified") is True and item.get("value") is not None
+                     and bucket is not None and bucket <= decision_time
+                     and (available_at is None or available_at <= decision_time))
+        if bucket is None:
+            reasons.append("MISSING_SCHEDULED_BUCKET")
+        elif item is None:
+            reasons.append("MISSING_INPUT_OBSERVATION")
+        elif available_at is not None and available_at > decision_time:
+            reasons.append("FUTURE_INPUT_AVAILABILITY")
+        elif item.get("qualified") is not True:
+            reasons.append("UNQUALIFIED_INPUT_OBSERVATION")
+        evidence = {
+            **dependency,
+            "bucket_end": None if bucket is None else bucket.isoformat().replace("+00:00", "Z"),
+            "value": None if item is None else item.get("value"),
+            "available_at": None if available_at is None else available_at.isoformat().replace("+00:00", "Z"),
+            "qualified": qualified,
+            "market_binding_id": market_id if item is not None else None,
+            "reasons": list(dict.fromkeys(reasons)),
+        }
+        evidence["input_dependency_id"] = p02.sha256_hex({
+            "input": evidence["input"], "bucket_end": evidence["bucket_end"],
+            "available_at": evidence["available_at"], "value": evidence["value"],
+        })
+        evidence["dependency_identity_basis"] = "synthetic_input_observation_key"
+        result.append(evidence)
+    return result
+
+
+def expression_inputs(node: dict[str, Any]) -> set[str]:
+    """Return the source fields used by a P06 expression without interpreting P08 prose."""
+    op = node["op"]
+    if op in {"price", "price_return"}:
+        return {"price"}
+    if op in {"quote_volume", "relative_volume"}:
+        return {"quote_volume"}
+    if op == "constant":
+        return set()
+    children: list[dict[str, Any]]
+    if op in {"lag", "sum", "mean", "not"}:
+        children = [node["value"]]
+    else:
+        children = node.get("args", [])
+    return set().union(*(expression_inputs(child) for child in children)) if children else set()
 
 
 def evaluate_p06_bindings(
@@ -313,15 +438,26 @@ def evaluate_p06_bindings(
         if bucket_end in parsed_features:
             raise ValueError("P06 feature buckets must be unique")
         parsed_features[bucket_end] = feature
-    ordered_buckets = sorted(parsed_features)
-    if any(right - left != timedelta(minutes=5) for left, right in zip(ordered_buckets, ordered_buckets[1:])):
-        raise ValueError("P06 feature buckets must be contiguous; represent gaps as missing observations")
     market_id = p06.market_binding_id(market)
+    history = max((p06.expression_info(expression, market).history
+                   for binding in bindings
+                   for expression in (binding["price_expression"], binding["volume_expression"])), default=0)
+    first_decision_bucket = min(times).replace(minute=(min(times).minute // 5) * 5, second=0, microsecond=0)
+    last_decision_bucket = max(times).replace(minute=(max(times).minute // 5) * 5, second=0, microsecond=0)
+    first_bucket = first_decision_bucket - timedelta(minutes=5 * history)
+    if parsed_features:
+        first_bucket = min(first_bucket, min(parsed_features))
+    buckets: list[datetime] = []
+    cursor = first_bucket
+    while cursor <= last_decision_bucket:
+        buckets.append(cursor)
+        cursor += timedelta(minutes=5)
+    slot_by_bucket = {bucket: index for index, bucket in enumerate(buckets)}
     observations: dict[str, list[p06.Observation | None]] = {"price": [], "quote_volume": []}
-    for bucket in ordered_buckets:
-        feature = parsed_features[bucket]
+    for bucket in buckets:
+        feature = parsed_features.get(bucket)
         for source in observations:
-            raw = feature.get(source)
+            raw = None if feature is None else feature.get(source)
             if raw is None:
                 observations[source].append(None)
                 continue
@@ -340,49 +476,66 @@ def evaluate_p06_bindings(
         essentials = binding.get("essential_inputs")
         if not isinstance(essentials, list) or not essentials or len(set(essentials)) != len(essentials) or not set(essentials) <= set(observations):
             raise ValueError("each P06 binding needs an explicit unique essential-input mapping")
+        expression_info: dict[str, p06.ExpressionInfo] = {}
         for name in ("price_expression", "volume_expression"):
             info = p06.expression_info(binding[name], market, f"/{name}")
             if info.kind != "BOOLEAN":
                 raise ValueError("each adopted P06 comparison condition must be Boolean")
+            expression_info[name] = info
         horizon = plan["horizon"]
         horizon_seconds = horizon["value"] * {"SECONDS": 1, "MINUTES": 60, "HOURS": 3600, "DAYS": 86400}[horizon["unit"]]
         if horizon_seconds <= 0:
             raise ValueError("adopted outcome horizons must be positive")
         for decision_time in times:
-            eligible_buckets = [bucket for bucket in ordered_buckets if bucket <= decision_time]
-            if not eligible_buckets:
-                position, scheduled = 0, ()
-                prices, volumes = (), ()
-            else:
-                current = eligible_buckets[-1]
-                position = ordered_buckets.index(current)
-                scheduled = tuple(ordered_buckets)
-                prices, volumes = observations["price"], observations["quote_volume"]
+            current = decision_time.replace(minute=(decision_time.minute // 5) * 5, second=0, microsecond=0)
+            position = slot_by_bucket[current]
+            scheduled = tuple(buckets)
+            prices, volumes = observations["price"], observations["quote_volume"]
             context = p06.EvaluationContext(prices, volumes, scheduled, market_id, decision_time, position)
             price_result = p06.evaluate_expression(binding["price_expression"], market, context)
             volume_result = p06.evaluate_expression(binding["volume_expression"], market, context)
             reasons = list(dict.fromkeys((*price_result.reasons, *volume_result.reasons)))
             essential_qualified = True
-            input_evidence: list[dict[str, Any]] = []
+            dependencies = [dependency for field_name in ("price_expression", "volume_expression")
+                            for dependency in _input_dependencies(binding[field_name], position, f"/{field_name}")]
+            input_evidence = _dependency_evidence(dependencies, buckets=buckets, features=parsed_features,
+                                                  decision_time=decision_time, market_id=market_id)
+            dependency_qualified = all(item["qualified"] for item in input_evidence)
             availability = [decision_time]
+            availability.extend(parse_utc(item["available_at"]) for item in input_evidence
+                                 if item["available_at"] is not None)
             for name in essentials:
-                bucket = eligible_buckets[-1] if eligible_buckets else None
-                feature = None if bucket is None else parsed_features[bucket].get(name)
+                bucket = current
+                feature = parsed_features.get(bucket)
+                feature = None if feature is None else feature.get(name)
                 available_at = None if feature is None or feature.get("available_at") is None else parse_utc(feature["available_at"])
                 if available_at is not None:
                     availability.append(available_at)
                 input_evidence.append({
                     "input": name,
+                    "dependency_position": position,
+                    "expression_path": f"/essential_inputs/{name}",
                     "bucket_end": None if bucket is None else bucket.isoformat().replace("+00:00", "Z"),
+                    "value": None if feature is None else feature.get("value"),
                     "available_at": None if available_at is None else available_at.isoformat().replace("+00:00", "Z"),
-                    "qualified": feature is not None and feature.get("qualified") is True,
+                    "qualified": feature is not None and feature.get("qualified") is True
+                                and feature.get("value") is not None and (available_at is None or available_at <= decision_time),
+                    "market_binding_id": market_id if feature is not None else None,
                     "reasons": [] if feature is None else list(feature.get("reasons", [])),
+                    "input_dependency_id": p02.sha256_hex({
+                        "input": name, "bucket_end": bucket.isoformat().replace("+00:00", "Z"),
+                        "available_at": None if available_at is None else available_at.isoformat().replace("+00:00", "Z"),
+                        "value": None if feature is None else feature.get("value"),
+                    }),
+                    "dependency_identity_basis": "synthetic_input_observation_key",
                 })
                 qualified = (feature is not None and feature.get("qualified") is True
                              and feature.get("value") is not None and (available_at is None or available_at <= decision_time))
                 if not qualified:
                     essential_qualified = False
                     reasons.append(f"MISSING_ESSENTIAL_EVIDENCE:{name}")
+            if not dependency_qualified:
+                reasons.append("MISSING_OR_UNQUALIFIED_EXPRESSION_DEPENDENCY")
             outputs.append({
                 "decision_id": f"{plan['evaluation_id']}:{decision_time.isoformat()}",
                 "evaluation_id": plan["evaluation_id"], "trial_id": plan["trial_id"],
@@ -391,7 +544,7 @@ def evaluate_p06_bindings(
                 "available_at": max(availability).isoformat().replace("+00:00", "Z"),
                 "price_state": price_result.state,
                 "volume_state": volume_result.state,
-                "qualified": essential_qualified,
+                "qualified": essential_qualified and dependency_qualified,
                 "essential_evidence_qualified": essential_qualified,
                 "input_evidence": input_evidence,
                 "reasons": list(dict.fromkeys(reasons)),
