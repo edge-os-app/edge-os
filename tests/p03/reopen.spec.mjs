@@ -35,4 +35,15 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
   await expect(page.getByTestId("investigation-saved")).toContainText("DECLARATION_SAVED");
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-investigation-reopened-after-restart.png`), fullPage: true });
+  expect(investigation.runId, "P09 must save its adopted run before the restart").toBeTruthy();
+  await expect(page.getByTestId("effect-report-saved")).toContainText(investigation.reportId);
+  const exactRun = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${investigation.url.split("/research/").at(-1).split("?")[0]}/effect-runs/${investigation.runId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(exactRun.status()).toBe(200);
+  const exactRunBody = await exactRun.json();
+  expect(exactRunBody.report.record_id).toBe(investigation.reportId);
+  expect(exactRunBody.report.content.result.statistical_status).toBe("UNRESOLVED");
+  await page.getByRole("button", { name: "Reopen saved report without rerunning" }).click();
+  await expect(page.getByTestId("effect-report-saved")).toContainText(investigation.reportId);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-effect-report-reopened-after-restart.png`), fullPage: true });
 });

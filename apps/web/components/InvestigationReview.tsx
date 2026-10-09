@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationProposal, InvestigationSaveResult } from "../lib/types";
+import { EffectComparisonPanel } from "./EffectComparisonPanel";
 
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
@@ -158,6 +159,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
       setDeclarations((current) => current ? [...current.filter((item) => item.record_id !== result.declaration.record_id), result.declaration]
         : [result.declaration]);
       setSelected(result); setProposal(null); setAdopted(false);
+      setRefreshNotice("");
       try { window.sessionStorage.removeItem(`edge-os:investigation:${intakeId}`); } catch { /* ignore */ }
       requestAnimationFrame(() => savedHeading.current?.focus());
     } catch (cause) {
@@ -257,7 +259,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
           <dl className="kv">
             <dt>Declaration ID</dt><dd className="mono">{selected.declaration.record_id}</dd>
             <dt>Budget version</dt><dd>{selected.declaration.content.configuration.budget_version}</dd>
-            <dt>Outcome labels read</dt><dd>{selected.declaration.content.outcome_labels_read ? "Yes" : "No"}</dd>
+            <dt>P08 declaration-time outcome labels read</dt><dd>{selected.declaration.content.outcome_labels_read ? "Yes" : "No"}</dd>
             <dt>Provider queries</dt><dd>{selected.access_history[0]?.provider_queries ?? 0}</dd>
             <dt>Saved access event</dt><dd>{selected.access_history[0]?.event ?? "Unavailable"}</dd>
           </dl>
@@ -266,6 +268,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
             <pre className="records-json">{JSON.stringify(selected.declaration.content, null, 2)}</pre>
             <p className="muted">Sources, field origins, optional tools, trial identities and evaluation identities are saved with this declaration.</p>
           </details>
+          <EffectComparisonPanel intakeId={intakeId} saved={selected} />
         </div>
       ) : null}
 

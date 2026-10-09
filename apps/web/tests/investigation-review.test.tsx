@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InvestigationReview } from "../components/InvestigationReview";
 
 const mocks = vi.hoisted(() => ({ proposal: vi.fn(), list: vi.fn(), save: vi.fn(), get: vi.fn(),
+  effectRuns: vi.fn(), adoptEffectRun: vi.fn(), executeEffectRun: vi.fn(), getEffectRun: vi.fn(),
   ApiError: class extends Error { status = 503; detail = "Unavailable"; code = "service_unavailable"; } }));
 vi.mock("../lib/api", () => ({
   ApiError: mocks.ApiError,
@@ -12,6 +13,10 @@ vi.mock("../lib/api", () => ({
     investigations: (...args: unknown[]) => mocks.list(...args),
     saveInvestigation: (...args: unknown[]) => mocks.save(...args),
     investigation: (...args: unknown[]) => mocks.get(...args),
+    effectRuns: (...args: unknown[]) => mocks.effectRuns(...args),
+    adoptEffectRun: (...args: unknown[]) => mocks.adoptEffectRun(...args),
+    executeEffectRun: (...args: unknown[]) => mocks.executeEffectRun(...args),
+    effectRun: (...args: unknown[]) => mocks.getEffectRun(...args),
   },
 }));
 
@@ -86,6 +91,10 @@ beforeEach(() => {
   mocks.list.mockResolvedValue({ declarations: [], access_history: [] });
   mocks.save.mockResolvedValue(saved);
   mocks.get.mockResolvedValue(saved);
+  mocks.effectRuns.mockResolvedValue({ runs: [] });
+  mocks.adoptEffectRun.mockResolvedValue({ run: {}, events: [], report: null });
+  mocks.executeEffectRun.mockResolvedValue({ run: {}, events: [], report: null });
+  mocks.getEffectRun.mockResolvedValue({ run: {}, events: [], report: null });
 });
 
 describe("investigation declaration adoption", () => {
@@ -288,6 +297,7 @@ describe("investigation declaration adoption", () => {
       await user.click(screen.getByRole("checkbox"));
       await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
       await screen.findByRole("heading", { name: "Declaration saved" });
+      expect(screen.queryByText(/unsaved edits remain in place/)).toBeNull();
       const body = mocks.save.mock.calls.at(-1)?.[1];
       expect(body.expected_interpretation_revision_id).toBe(refreshPath === "clarifications on the same intake" ? "revision-3" : "revision-2");
       expect(body.configuration.stopping_rule).toBe("Keep my reviewed edits across each current review.");
