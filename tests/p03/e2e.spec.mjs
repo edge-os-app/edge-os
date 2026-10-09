@@ -248,7 +248,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(overflowChart.locator("circle, polyline")).toHaveCount(0);
   expect(await overflowList.evaluate((element) => element.scrollWidth <= element.clientWidth),
     `${project}: exact known Decimal values must not cause horizontal overflow`).toBe(true);
-  record(`spot-replay-known-overflow-${project}`, { replayId, value: knownOverflowValue, samples: 4,
+  record(`renderer-known-overflow-${project}`, { replayId, value: knownOverflowValue, samples: 4,
     rendererOnly: true, source: "accepted WC01 public evaluator output", horizontalOverflow: false });
   await shot(page, project, "05-spot-replay-known-overflow");
   await page.unroute(overflowUrl);
