@@ -8,11 +8,11 @@ import { AgentContext } from "../components/AgentContext";
 import { FundRecords } from "../components/FundRecords";
 import { PositionRecords } from "../components/PositionRecords";
 
-const mocks = vi.hoisted(() => ({ adopt: vi.fn(), correct: vi.fn(), disable: vi.fn(), clear: vi.fn(), load: vi.fn() }));
+const mocks = vi.hoisted(() => ({ adopt: vi.fn(), correct: vi.fn(), disable: vi.fn(), clear: vi.fn(), get: vi.fn(), load: vi.fn() }));
 vi.mock("../lib/account-views", async (importOriginal) => {
   const original = await importOriginal<typeof import("../lib/account-views")>();
   return { ...original, loadAccountViews: (...args: unknown[]) => mocks.load(...args), agentContextApi: {
-    get: vi.fn(), adopt: (...args: unknown[]) => mocks.adopt(...args), correct: (...args: unknown[]) => mocks.correct(...args),
+    get: (...args: unknown[]) => mocks.get(...args), adopt: (...args: unknown[]) => mocks.adopt(...args), correct: (...args: unknown[]) => mocks.correct(...args),
     disable: (...args: unknown[]) => mocks.disable(...args), clear: (...args: unknown[]) => mocks.clear(...args),
   } };
 });
@@ -39,7 +39,7 @@ const wrongAssetSale: AccountViewRecord = { record_id: "wrong-asset-sale-record"
 } };
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   mocks.load.mockResolvedValue({ records: [], next_offset: null });
 });
 
@@ -108,6 +108,62 @@ describe("direct account records", () => {
     await user.click(screen.getByRole("button", { name: "Adopt suggestion" }));
     expect(mocks.adopt).toHaveBeenCalledWith("agent-a", 1, "lesson-1");
     expect(onChange).toHaveBeenCalledWith(adopted);
+  });
+
+  it("resolves context source links to the rendered owner-scoped record", async () => {
+    const context: AgentContextRecord = { owner_id: "owner-a", agent_id: "agent-a", memory_version: 1, state: "ACTIVE", entries: [
+      { context_id: "preference-1", kind: "PREFERENCE", status: "ADOPTED", text: "See the source.", source_refs: ["source-record-id"] },
+    ] };
+    mocks.get.mockResolvedValue(context);
+    const agent: AccountViewRecord = { record_id: "source-record-id", owner_id: "owner-a", content: {
+      owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: "AGENT", agent_id: "agent-a",
+      wallet_id: "wallet-a", network_id: "monad:143", status: "STOPPED", updated_at: "2026-10-09T11:00:00Z",
+    } };
+    render(<AgentRecords records={[agent]} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Inspect agent context" }));
+    const link = await screen.findByRole("link", { name: "Open source record" });
+    expect(link).toHaveAttribute("href", "#record-source-record-id");
+    expect(document.getElementById("record-source-record-id")).not.toBeNull();
+  });
+
+  it("keeps failed edits visible, then versions correction, disable, and confirmed clear", async () => {
+    const user = userEvent.setup();
+    const context: AgentContextRecord = { owner_id: "owner-a", agent_id: "agent-a", memory_version: 1, state: "ACTIVE", entries: [
+      { context_id: "preference-1", kind: "PREFERENCE", status: "ADOPTED", text: "Show evidence.", source_refs: [] },
+    ] };
+    const corrected: AgentContextRecord = { ...context, memory_version: 2, entries: [
+      { ...context.entries[0], kind: "CORRECTION", text: "Show dated evidence." },
+    ] };
+    const disabled: AgentContextRecord = { ...corrected, memory_version: 3, state: "DISABLED" };
+    const cleared: AgentContextRecord = { ...disabled, memory_version: 4, state: "CLEARED", entries: [] };
+    mocks.correct.mockRejectedValueOnce(new Error("stale version")).mockResolvedValueOnce(corrected);
+    mocks.disable.mockResolvedValueOnce(disabled);
+    mocks.clear.mockResolvedValueOnce(cleared);
+    const onChange = vi.fn();
+    const onClose = vi.fn();
+    const view = render(<AgentContext record={context} onChange={onChange} onClose={onClose} />);
+
+    await user.click(screen.getByRole("button", { name: "Correct context" }));
+    const editor = screen.getByLabelText("Corrected context");
+    await user.clear(editor);
+    await user.type(editor, "Show dated evidence.");
+    await user.click(screen.getByRole("button", { name: "Save correction" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload it and check the current version.");
+    expect(onChange).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Save correction" }));
+    expect(onChange).toHaveBeenLastCalledWith(corrected);
+
+    view.rerender(<AgentContext record={corrected} onChange={onChange} onClose={onClose} />);
+    await user.click(screen.getByRole("button", { name: "Disable future context" }));
+    expect(mocks.disable).toHaveBeenCalledWith("agent-a", 2);
+    expect(onChange).toHaveBeenLastCalledWith(disabled);
+
+    view.rerender(<AgentContext record={disabled} onChange={onChange} onClose={onClose} />);
+    await user.click(screen.getByRole("button", { name: "Clear context" }));
+    expect(screen.getByRole("group", { name: "Confirm clear context" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+    expect(mocks.clear).toHaveBeenCalledWith("agent-a", 3);
+    expect(onChange).toHaveBeenLastCalledWith(cleared);
   });
 
   it("opens the direct Funds view and retries a failed account load", async () => {

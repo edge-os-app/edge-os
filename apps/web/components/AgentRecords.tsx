@@ -33,7 +33,7 @@ export function AgentRecords({ records }: { records: AccountViewRecord[] }) {
           && record.content.agent_id === content.agent_id
           && record.content.wallet_id === content.wallet_id
           && record.content.network_id === content.network_id);
-        return <section className="panel" key={record_id}>
+        return <section className="panel" id={`record-${record_id}`} key={record_id}>
           <h2>{content.agent_id}</h2>
           <p><strong>Wallet.</strong> {content.wallet_id} · {content.network_id}</p>
           <p><strong>Worker state.</strong> {content.status} · {content.health} · authored fixture</p>

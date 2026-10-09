@@ -57,6 +57,11 @@ class AdoptionBody(VersionBody):
     context_id: str = Field(min_length=1, max_length=200)
 
 
+def _validate_agent_id(agent_id: str) -> None:
+    if not agent_id or len(agent_id) > 200:
+        raise invalid("/agent_id", "The agent ID must contain between 1 and 200 characters.")
+
+
 def get_session(request: Request) -> Generator[Session, None, None]:
     with request.app.state.session_factory() as session:
         yield session
@@ -96,10 +101,14 @@ def _verify_sources(session: Session, principal: Principal, content: ContextCont
     source_ids = _source_ids(content)
     if not source_ids:
         return
-    found = set(session.execute(select(Record.record_id).where(
-        Record.owner_id == principal.user_id,
-        Record.record_id.in_(source_ids),
-    )).scalars())
+    try:
+        found = set(session.execute(select(Record.record_id).where(
+            Record.owner_id == principal.user_id,
+            Record.record_id.in_(source_ids),
+        )).scalars())
+    except SQLAlchemyError:
+        session.rollback()
+        raise service_unavailable("RECONCILE") from None
     if found != set(source_ids):
         raise not_found("context source")
 
@@ -114,6 +123,7 @@ def _response(session: Session, principal: Principal, content: ContextContent) -
 
 
 def _current(session: Session, principal: Principal, agent_id: str) -> ContextContent:
+    _validate_agent_id(agent_id)
     try:
         return _content(_latest(session, principal.user_id, agent_id), principal.user_id, agent_id)
     except SQLAlchemyError:
@@ -129,6 +139,7 @@ def _write(
     state: Literal["ACTIVE", "DISABLED", "CLEARED"] | None = None,
     entries: list[ContextEntry] | None = None,
 ) -> ContextContent:
+    _validate_agent_id(agent_id)
     try:
         session.execute(select(User.id).where(User.id == principal.user_id).with_for_update()).scalar_one()
         current_row = _latest(session, principal.user_id, agent_id)
@@ -249,6 +260,7 @@ def retrieve_agent_context(
     """Return adopted text only for the agent authorized by the caller's trusted task scope."""
     if not authorized_agent_id or requested_agent_id != authorized_agent_id:
         raise not_found("agent context")
+    _validate_agent_id(authorized_agent_id)
     content = _current(session, principal, authorized_agent_id)
     _verify_sources(session, principal, content)
     if content.state != "ACTIVE":
