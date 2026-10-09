@@ -81,6 +81,7 @@ describe("P13 spot replay", () => {
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("saved-config-9");
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("saved-revision-9");
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("1250");
+    expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("2026-10-01 12:05:00 UTC to 2026-10-01 12:25:00 UTC");
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("250");
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("saved-cost-source-9");
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("price@0, price@-3");

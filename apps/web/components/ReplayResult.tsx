@@ -2,6 +2,13 @@ import type { SpotReplayRecord } from "../lib/types";
 
 interface Props { replay: SpotReplayRecord }
 
+function displayUtc(value: string): string {
+  const normalized = new Date(value);
+  if (Number.isNaN(normalized.valueOf())) return value;
+  const iso = normalized.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+}
+
 export function ReplayResult({ replay }: Props) {
   const result = replay.content.result;
   const inputs = replay.content.inputs;
@@ -28,7 +35,7 @@ export function ReplayResult({ replay }: Props) {
           <dt>Run configuration</dt><dd className="mono">{inputs.run_configuration_id}</dd>
           <dt>Fixture and dataset</dt><dd>{inputs.dataset_fixture_id} · {inputs.dataset_revision_id}</dd>
           <dt>Evidence</dt><dd>{inputs.evidence_class} · {inputs.dataset_qualification}</dd>
-          <dt>Window</dt><dd>{inputs.window_start} to {inputs.window_end}</dd>
+          <dt>Window</dt><dd>{displayUtc(inputs.window_start)} to {displayUtc(inputs.window_end)}</dd>
           <dt>Starting balances</dt><dd>{inputs.initial_cash_quote} quote cash · {inputs.initial_base_amount} base · {inputs.initial_basis_quote} quote basis</dd>
           <dt>Trade size</dt><dd>{inputs.strategy.sizing.amount} {inputs.strategy.sizing.unit}</dd>
           <dt>Warm-up</dt><dd>{inputs.strategy.warmup_buckets} scheduled buckets</dd>

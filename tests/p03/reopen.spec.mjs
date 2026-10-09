@@ -64,7 +64,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(savedInputs).toContainText(replay.revisionId);
   await expect(savedInputs).toContainText("p13-config-");
   await expect(savedInputs).toContainText("p13.wc01/1");
-  await expect(savedInputs).toContainText("2026-10-01T12:05:00Z to 2026-10-01T12:35:00Z");
+  await expect(savedInputs).toContainText("2026-10-01 12:05:00 UTC to 2026-10-01 12:35:00 UTC");
   await expect(savedInputs).toContainText("1000 quote cash");
   await expect(savedInputs).toContainText("100 QUOTE:0x2222222222222222222222222222222222222222");
   await expect(savedInputs).toContainText("3 scheduled buckets");
@@ -85,8 +85,12 @@ test("after an API restart the saved rules reopen with their exact review text",
     .toEqual(replay.expectedExitDependencies);
   const saved = exactReplayBody.content.inputs;
   const visible = await savedInputs.innerText();
+  const displayUtc = (value) => {
+    const iso = new Date(value).toISOString();
+    return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+  };
   for (const value of [saved.profile_version, saved.strategy_revision_id, saved.run_configuration_id,
-    saved.dataset_fixture_id, saved.dataset_revision_id, saved.window_start, saved.window_end,
+    saved.dataset_fixture_id, saved.dataset_revision_id, displayUtc(saved.window_start), displayUtc(saved.window_end),
     saved.initial_cash_quote, saved.initial_base_amount, saved.initial_basis_quote,
     saved.strategy.sizing.amount, saved.strategy.sizing.unit, String(saved.strategy.warmup_buckets),
     saved.strategy.cost_assumptions.source_ref, saved.strategy.cost_assumptions.fee_rate,

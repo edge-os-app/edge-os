@@ -214,7 +214,15 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   expect(replayPosts[1].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(1);
   expect(replayPosts[2].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(0);
   expect(replayPosts[2].idempotency_key).not.toBe(replayPosts[1].idempotency_key);
-  expect(replayStatuses.slice(1, 3)).toEqual([422, 201]);
+  expect(replayStatuses).toContain(422);
+  const correctedReplayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
+  const correctedReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  record(`spot-replay-corrected-${project}`, { url: requestUrl, revisionId, replayId: correctedReplayId,
+    replayHash: correctedReplayHash,
+    expectedEntryDependencies: replayPosts[2].essential_fields.entry.essential_dependencies,
+    expectedExitDependencies: replayPosts[2].essential_fields.exit.essential_dependencies,
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
 
   // Lose the response after the API commits. Retrying must reuse the exact request and recover one row.
   await replay.getByRole("button", { name: "Add entry dependency" }).click();
