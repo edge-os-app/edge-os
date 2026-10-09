@@ -122,10 +122,10 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
       </button> : null}
 
       {body ? <div className="stack">
-        <p className="status stop" role="note">This visible example was authored for the synthetic fixture. It is a new P09 run declaration, not an inference from P08 hypothesis text. Saving it does not read outcomes.</p>
+        <p className="status stop" role="note">This visible example was authored for the synthetic fixture. It is a new P09 run declaration, not an inference from P08 hypothesis text. Each registered P08 evaluation identity has one immutable P06 rule mapping across P09 runs; a different rule needs a distinct P08 evaluation identity. Saving it does not read outcomes.</p>
         <dl className="kv">
           <dt>Fixture</dt><dd>{body.fixture_id} · logic only</dd>
-          <dt>Decision schedule</dt><dd>{body.schedule.start} to {body.schedule.end} · every {body.schedule.interval_seconds} seconds; two authored feature buckets and two intentionally unavailable buckets</dd>
+          <dt>Decision schedule</dt><dd>{body.schedule.start} to {body.schedule.end} · every {body.schedule.interval_seconds} seconds; four opportunities per evaluation, with two authored feature buckets and two intentionally unavailable buckets</dd>
           <dt>P08 declaration</dt><dd className="mono">{saved.declaration.record_id}</dd>
           <dt>Primary contrast</dt><dd>Both authored variants split at 00:00 and 00:05: quote volume 3 yields −0.1; quote volume 8 yields +0.1 over the 15-minute outcome horizon. The 00:10 and 00:15 buckets are absent and remain unavailable. Expected synthetic contrast: +0.2.</dd>
           <dt>Incremental volume</dt><dd>Predeclared price-only versus quote-volume-only mapping, with price fixed at TRUE.</dd>

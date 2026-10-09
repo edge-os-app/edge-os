@@ -238,6 +238,91 @@ def test_incremental_volume_requires_distinct_supported_source_mapping(client, o
     assert pg.psql(f"select count(*) from effect_run_declarations where intake_record_id = '{intake_id}'") == "0"
 
 
+def test_p08_evaluation_identity_cannot_be_pre_adopted_with_a_second_rule_mapping(client, owner_a, pg):
+    bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    intake_id = bundle["intake"]["record_id"]
+    p08_body = _p08_descriptive_body(bundle)
+    p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner_a, json=p08_body)
+    assert p08.status_code == 201, p08.text
+    declaration_id = p08.json()["declaration"]["record_id"]
+    path = f"/v1/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs"
+    original = _run_body(p08_body)
+    adopted = client.post(path, headers=owner_a, json=original)
+    assert adopted.status_code == 201, adopted.text
+
+    changed = _run_body(p08_body)
+    changed["bindings"][0]["volume_expression"]["args"][1]["value"] = "7"
+    response = client.post(path, headers=owner_a, json=changed)
+
+    assert response.status_code == 409
+    assert "p08_evaluation_mapping_conflict" in response.text
+    assert pg.psql(f"select count(*) from effect_run_declarations where p08_declaration_id = '{declaration_id}'") == "1"
+
+
+def test_saved_report_attempt_key_rejects_a_changed_operation_without_new_event(client, owner_a, pg):
+    bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    intake_id = bundle["intake"]["record_id"]
+    p08_body = _p08_descriptive_body(bundle)
+    p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner_a, json=p08_body)
+    assert p08.status_code == 201, p08.text
+    declaration_id = p08.json()["declaration"]["record_id"]
+    path = f"/v1/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs"
+    adopted = client.post(path, headers=owner_a, json=_run_body(p08_body))
+    assert adopted.status_code == 201, adopted.text
+    run_id = adopted.json()["run"]["record_id"]
+    attempt_path = f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts"
+    attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"saved-key-{uuid.uuid4()}"}
+    saved = client.post(attempt_path, headers=owner_a, json=attempt)
+    assert saved.status_code == 201, saved.text
+    before = pg.psql(f"select count(*) from effect_run_events where run_id = '{run_id}'")
+
+    changed_operation = client.post(attempt_path, headers=owner_a,
+                                    json={**attempt, "operation_id": str(uuid.uuid4())})
+
+    assert changed_operation.status_code == 409
+    assert "attempt_key_reused" in changed_operation.text
+    assert pg.psql(f"select count(*) from effect_run_events where run_id = '{run_id}'") == before
+
+
+def test_concurrent_p08_mapping_adoption_and_outcome_access_keep_one_registered_meaning(client, owner_a, pg):
+    bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    intake_id = bundle["intake"]["record_id"]
+    p08_body = _p08_descriptive_body(bundle)
+    p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner_a, json=p08_body)
+    assert p08.status_code == 201, p08.text
+    declaration_id = p08.json()["declaration"]["record_id"]
+    path = f"/v1/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs"
+    first_mapping = _run_body(p08_body)
+    second_mapping = _run_body(p08_body)
+    second_mapping["bindings"][0]["volume_expression"]["args"][1]["value"] = "7"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        adoptions = list(pool.map(lambda body: client.post(path, headers=owner_a, json=body),
+                                  (first_mapping, second_mapping)))
+    assert sorted(response.status_code for response in adoptions) == [201, 409]
+    winner = next(response.json() for response in adoptions if response.status_code == 201)
+    winning_mapping = first_mapping if winner["run"]["content"]["configuration"]["bindings"] == first_mapping["bindings"] else second_mapping
+    run_id = winner["run"]["record_id"]
+    attempt_path = f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts"
+    attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"race-{uuid.uuid4()}"}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        evaluation = pool.submit(client.post, attempt_path, headers=owner_a, json=attempt)
+        alternate = pool.submit(client.post, path, headers=owner_a, json={
+            **(second_mapping if winning_mapping is first_mapping else first_mapping),
+            "operation_id": str(uuid.uuid4()), "idempotency_key": f"alternate-{uuid.uuid4()}"})
+        evaluation_response, alternate_response = evaluation.result(), alternate.result()
+
+    assert evaluation_response.status_code == 201, evaluation_response.text
+    assert alternate_response.status_code == 409, alternate_response.text
+    assert "p08_evaluation_mapping_conflict" in alternate_response.text
+    assert pg.psql(f"select count(*) from effect_run_declarations where p08_declaration_id = '{declaration_id}'") == "1"
+    assert pg.psql(f"select count(*) from effect_reports where run_id = '{run_id}'") == "1"
+
+
 def test_same_p08_cannot_rebind_after_outcome_access(client, owner_a, pg):
     bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
                     input_class="BOUNDED_NO_THESIS").json()
@@ -259,7 +344,7 @@ def test_same_p08_cannot_rebind_after_outcome_access(client, owner_a, pg):
     response = client.post(path, headers=owner_a, json=changed)
 
     assert response.status_code == 409
-    assert "p08_run_rebind_after_outcome_access" in response.text
+    assert "p08_evaluation_mapping_conflict" in response.text
     assert pg.psql(f"select count(*) from effect_run_declarations where p08_declaration_id = '{declaration_id}'") == "1"
 
 

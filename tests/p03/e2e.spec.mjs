@@ -419,9 +419,16 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   expect(exactRun.report).toBeNull();
   expect(exactRun.events.map((event) => event.content.kind)).toEqual(["RUN_ADOPTED"]);
   const runId = exactRun.run.record_id;
+  const adoptionPath = `${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${declarationId}/effect-runs`;
+  const exactRepeat = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...exactRun.run.content.configuration, operation_id: crypto.randomUUID(),
+      idempotency_key: `p09-repeat-${crypto.randomUUID()}` } });
+  expect(exactRepeat.status()).toBe(200);
+  const exactRepeatBody = await exactRepeat.json();
+  expect(exactRepeatBody.run.record_id).toBe(runId);
   const attemptFailures = [];
   await page.route("**/effect-runs/*/attempts", async (route) => {
-    attemptFailures.push(route.request().url());
+    attemptFailures.push({ url: route.request().url(), body: route.request().postDataJSON() });
     if (attemptFailures.length === 1) return route.fulfill({ status: 503, contentType: "application/json",
       body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "Temporary evaluation failure. Retry the saved run." }] }) });
     const savedResponse = await route.fetch();
@@ -450,6 +457,22 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   expect(primary.general_comparison).toMatchObject({ triggered: { mean: "0.1" }, control: { mean: "-0.1" },
     triggered_minus_control_mean: "0.2" });
   expect(exactRunAfter.report.content.result.missing_outcome_count).toBe(4);
+  const eventCountBeforeKeyCollision = exactRunAfter.events.length;
+  const keyCollision = await page.request.post(`${runPath}/${runId}/attempts`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...attemptFailures[1].body, operation_id: crypto.randomUUID() } });
+  expect(keyCollision.status()).toBe(409);
+  const afterKeyCollision = await page.request.get(`${runPath}/${runId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect((await afterKeyCollision.json()).events).toHaveLength(eventCountBeforeKeyCollision);
+  const alternateConfiguration = structuredClone(exactRun.run.content.configuration);
+  alternateConfiguration.bindings[0].volume_expression.args[1].value = "7";
+  const alternateMapping = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...alternateConfiguration, operation_id: crypto.randomUUID(),
+      idempotency_key: `p09-alternate-${crypto.randomUUID()}` } });
+  expect(alternateMapping.status()).toBe(409);
+  const runsAfterRejectedMapping = await page.request.get(runPath, { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect((await runsAfterRejectedMapping.json()).runs).toHaveLength(1);
   await page.getByRole("button", { name: "Reopen saved report without rerunning" }).click();
   await expect(page.getByTestId("effect-report-saved")).toContainText(reportId);
   expect(attemptFailures).toHaveLength(2);
@@ -475,7 +498,11 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
     access: Object.fromEntries(["schema_version", "event", "outcome_labels_read", "provider_queries", "study_started"]
       .map((field) => [field, exact.access_history[0][field]])),
     original: "Compare the descriptive launch cohorts in a synthetic fixture.",
-    p09: { run: exactRun.run, report: exactRunAfter.report, events: exactRunAfter.events } });
+    p09: { run: exactRun.run, report: exactRunAfter.report, events: exactRunAfter.events,
+      identityProof: { exactRepeatStatus: exactRepeat.status(), exactRepeatRunId: exactRepeatBody.run.record_id,
+        changedOperationStatus: keyCollision.status(), changedOperationLeftEventsUnchanged:
+          (await afterKeyCollision.json()).events.length === eventCountBeforeKeyCollision,
+        alternateMappingStatus: alternateMapping.status(), runCountAfterRejectedMapping: 1 } } });
   await shot(page, project, "investigation-saved");
   await page.getByRole("button", { name: "Reopen saved declaration" }).click();
   await expect(page.getByTestId("investigation-saved")).toContainText(declarationId);

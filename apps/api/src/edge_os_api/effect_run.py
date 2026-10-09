@@ -68,6 +68,57 @@ def _events(session: Session, row: EffectRunDeclaration) -> list[EffectRunEvent]
         .order_by(EffectRunEvent.sequence)).scalars())
 
 
+def _lock_p08_mapping(session: Session, owner_id: uuid.UUID, p08_declaration_id: uuid.UUID) -> None:
+    """Serialize mapping adoption and the first outcome-access transition for one P08 record."""
+    lock_bytes = hashlib.sha256(f"{owner_id}:{p08_declaration_id}".encode()).digest()[:8]
+    lock_key = int.from_bytes(lock_bytes, "big", signed=True)
+    session.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key})
+
+
+def _evaluation_mappings(plan: list[dict[str, Any]], configuration: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    bindings = {item["evaluation_id"]: item for item in configuration["bindings"]}
+    mappings: dict[str, dict[str, Any]] = {}
+    for item in plan:
+        evaluation_id = item["evaluation_id"]
+        binding = bindings[evaluation_id]
+        mappings[evaluation_id] = {
+            "p08_identity": {key: item[key] for key in
+                             ("evaluation_id", "trial_id", "variant_id", "horizon", "partition_ids")},
+            "p06_mapping": {key: binding[key] for key in
+                            ("price_expression", "volume_expression", "essential_inputs")},
+        }
+    return mappings
+
+
+def _assert_p08_mappings_compatible(session: Session, principal: Principal, row: EffectRunDeclaration | None,
+                                    *, p08_declaration_id: uuid.UUID, intake_record_id: uuid.UUID,
+                                    plan: list[dict[str, Any]], configuration: dict[str, Any]) -> None:
+    """Reject changed P09 meaning or configuration for registered P08 evaluation identities."""
+    candidate = _evaluation_mappings(plan, configuration)
+    candidate_config = {key: value for key, value in configuration.items()
+                        if key not in {"operation_id", "idempotency_key"}}
+    runs = session.execute(select(EffectRunDeclaration).where(
+        EffectRunDeclaration.owner_id == principal.user_id,
+        EffectRunDeclaration.intake_record_id == intake_record_id,
+        EffectRunDeclaration.p08_declaration_id == p08_declaration_id)).scalars()
+    for prior in runs:
+        if row is not None and prior.run_id == row.run_id:
+            continue
+        prior_config = prior.content["configuration"]
+        prior_run_config = {key: value for key, value in prior_config.items()
+                            if key not in {"operation_id", "idempotency_key"}}
+        prior_mappings = _evaluation_mappings(prior.content["p08_evaluation_plan"], prior_config)
+        if any(evaluation_id in prior_mappings and prior_mappings[evaluation_id] != mapping
+               for evaluation_id, mapping in candidate.items()):
+            raise AppError(409, "EFFECT_COMPARISON", "CONFLICTED", "p08_evaluation_mapping_conflict",
+                           [finding("p08_evaluation_mapping_conflict", "/bindings",
+                                    "A registered P08 evaluation identity already has an immutable P06 rule and essential-input mapping. Use a distinct P08 evaluation identity for a different mapping.")])
+        if prior_run_config != candidate_config:
+            raise AppError(409, "EFFECT_COMPARISON", "CONFLICTED", "p08_run_configuration_conflict",
+                           [finding("p08_run_configuration_conflict", "/",
+                                    "A P08 declaration already has one immutable P09 schedule, fixture, mapping, and comparison configuration. Adopt a distinct P08 evaluation identity and lineage for a changed configuration.")])
+
+
 def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
                      p08_declaration_id: str, body: EffectRunBody) -> tuple[int, dict[str, Any]]:
     """Persist an explicit P09 binding. This operation reads no outcome data."""
@@ -150,21 +201,13 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
     body_json = body.model_dump(mode="json")
     binding_config = {key: value for key, value in body_json.items()
                       if key not in {"operation_id", "idempotency_key"}}
+    _lock_p08_mapping(session, principal.user_id, declaration.declaration_id)
     prior_runs = list(session.execute(select(EffectRunDeclaration).where(
         EffectRunDeclaration.owner_id == principal.user_id,
         EffectRunDeclaration.intake_record_id == intake.record_id,
         EffectRunDeclaration.p08_declaration_id == declaration.declaration_id)).scalars())
-    for prior in prior_runs:
-        prior_events = _events(session, prior)
-        accessed = any(event.content.get("outcome_accessed") is True for event in prior_events)
-        report_exists = session.execute(select(EffectReport.report_id).where(
-            EffectReport.owner_id == principal.user_id, EffectReport.run_id == prior.run_id)).scalar_one_or_none()
-        prior_config = {key: value for key, value in prior.content["configuration"].items()
-                        if key not in {"operation_id", "idempotency_key"}}
-        if (accessed or report_exists is not None) and prior_config != binding_config:
-            raise AppError(409, "EFFECT_COMPARISON", "CONFLICTED", "p08_run_rebind_after_outcome_access",
-                           [finding("p08_run_rebind_after_outcome_access", "/bindings",
-                                    "P09 bindings for this P08 declaration cannot change after outcome access. Adopt a new P08 declaration with new evaluation identities.")])
+    _assert_p08_mappings_compatible(session, principal, None, p08_declaration_id=declaration.declaration_id,
+                                    intake_record_id=intake.record_id, plan=plan, configuration=body_json)
     fingerprint = p02.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake.record_id),
                                   "p08_declaration_id": str(declaration.declaration_id), "body": body_json})
     existing = session.execute(select(EffectRunDeclaration).where(
@@ -177,6 +220,11 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
                            [finding("idempotency_key_reused", "/idempotency_key",
                                     "This key was used for a different adopted run configuration.")])
         return 200, _response(existing, _events(session, existing))
+    exact_mapping = next((prior for prior in prior_runs
+                          if {key: value for key, value in prior.content["configuration"].items()
+                              if key not in {"operation_id", "idempotency_key"}} == binding_config), None)
+    if exact_mapping is not None:
+        return 200, _response(exact_mapping, _events(session, exact_mapping))
 
     now = dt.datetime.now(dt.timezone.utc)
     row = EffectRunDeclaration(
@@ -235,6 +283,17 @@ def _execute_effect_run_locked(session: Session, principal: Principal, intake_id
                                body: EffectAttemptBody) -> tuple[int, dict[str, Any]]:
     """Record a started attempt before fixture access, then save one exact immutable report."""
     row = _owned_run(session, principal, intake_id, run_id)
+    _lock_p08_mapping(session, principal.user_id, row.p08_declaration_id)
+    _assert_p08_mappings_compatible(
+        session, principal, row, p08_declaration_id=row.p08_declaration_id,
+        intake_record_id=row.intake_record_id, plan=row.content["p08_evaluation_plan"],
+        configuration=row.content["configuration"])
+    events = _events(session, row)
+    started = next((event for event in events if event.attempt_idempotency_key == body.idempotency_key), None)
+    if started is not None and started.content.get("operation_id") != body.operation_id:
+        raise AppError(409, "EFFECT_COMPARISON", "CONFLICTED", "attempt_key_reused",
+                       [finding("attempt_key_reused", "/idempotency_key",
+                                "This attempt key belongs to a different operation identity.")])
     existing_report = session.execute(select(EffectReport).where(
         EffectReport.owner_id == principal.user_id, EffectReport.run_id == row.run_id)).scalar_one_or_none()
     if existing_report is not None:
@@ -299,6 +358,11 @@ def _execute_effect_run_locked(session: Session, principal: Principal, intake_id
             raise ValueError("The adopted fixture identity or bytes have changed.")
         if _sha256(PROFILE_PATH) != row.content["profile_sha256"]:
             raise ValueError("The adopted P09 profile bytes have changed.")
+        _lock_p08_mapping(session, principal.user_id, row.p08_declaration_id)
+        _assert_p08_mappings_compatible(
+            session, principal, row, p08_declaration_id=row.p08_declaration_id,
+            intake_record_id=row.intake_record_id, plan=row.content["p08_evaluation_plan"],
+            configuration=row.content["configuration"])
         pending_access_event_id = uuid.uuid4()
         access_marker = EffectRunEvent(
             event_id=pending_access_event_id, owner_id=principal.user_id, run_id=row.run_id,

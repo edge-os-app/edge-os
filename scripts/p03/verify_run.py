@@ -458,6 +458,22 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                     and report_content.get("profile_sha256") == saved["profileSha256"],
                 "report_remains_unresolved": report_content.get("result", {}).get("status") == "UNRESOLVED"
                     and report_content.get("result", {}).get("statistical_status") == "UNRESOLVED",
+                "mapping_identity_proof_matches_ui": saved.get("p09", {}).get("identityProof", {}).get("exactRepeatStatus") == 200
+                    and saved.get("p09", {}).get("identityProof", {}).get("exactRepeatRunId") == run_id
+                    and saved.get("p09", {}).get("identityProof", {}).get("changedOperationStatus") == 409
+                    and saved.get("p09", {}).get("identityProof", {}).get("changedOperationLeftEventsUnchanged") is True
+                    and saved.get("p09", {}).get("identityProof", {}).get("alternateMappingStatus") == 409
+                    and saved.get("p09", {}).get("identityProof", {}).get("runCountAfterRejectedMapping") == 1,
+                "p08_mapping_identity_is_unique": rows(
+                    "select count(*) c from (select binding->>'evaluation_id' evaluation_id "
+                    "from effect_run_declarations r cross join lateral "
+                    "jsonb_array_elements(r.content->'configuration'->'bindings') binding "
+                    f"where r.p08_declaration_id='{found[0]['p08_declaration_id']}' "
+                    "group by binding->>'evaluation_id' having count(distinct md5(binding::text)) <> 1) conflicts"
+                )[0]["c"] == 0 and rows(
+                    "select count(*) c from effect_run_declarations "
+                    f"where p08_declaration_id='{found[0]['p08_declaration_id']}'"
+                )[0]["c"] == 1,
                 "synthetic_comparison_and_unavailable_buckets_match": bool(report_content.get("result", {}).get("variants"))
                     and all(variant.get("general_comparison", {}).get("triggered", {}).get("mean") == "0.1"
                             and variant.get("general_comparison", {}).get("control", {}).get("mean") == "-0.1"
@@ -477,7 +493,9 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
         and v.get("adoption_precedes_reads") and v.get("attempt_and_report_order")
         and v.get("durable_access_marker_matches_report")
         and v.get("exact_saved_report_matches_ui") and v.get("configuration_and_fixture_hashes_match_ui")
-        and v.get("report_remains_unresolved") and v.get("synthetic_comparison_and_unavailable_buckets_match")
+        and v.get("report_remains_unresolved") and v.get("mapping_identity_proof_matches_ui")
+        and v.get("p08_mapping_identity_is_unique")
+        and v.get("synthetic_comparison_and_unavailable_buckets_match")
         and v.get("exact_run_and_report_counts") for v in effect_runs)
     return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass}
 

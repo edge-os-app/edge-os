@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from edge_os_api import p02
@@ -25,6 +26,26 @@ def test_reference_trade_uses_half_open_window_and_chain_order() -> None:
     assert end["price"] == "120"
     assert (datetime.fromisoformat(end["event_time"].replace("Z", "+00:00")) -
             datetime.fromisoformat(start["event_time"].replace("Z", "+00:00"))).total_seconds() == 29 * 60 + 45
+
+
+def test_synthetic_fixture_chain_order_is_monotonic_and_references_keep_authored_arithmetic() -> None:
+    fixture = json.loads((FIXTURES / "synthetic_effect_comparison_v1.json").read_text())
+    trades = fixture["trades"]
+    ordered = sorted(trades, key=lambda row: (row["block_number"], row["transaction_index"], row["log_index"]))
+    instants = [datetime.fromisoformat(row["event_time"].replace("Z", "+00:00")) for row in ordered]
+    assert all(left < right for left, right in zip(instants, instants[1:]))
+    assert [row["event_id"] for row in ordered] == [
+        "fixture-start-0", "fixture-start-1", "fixture-end-0", "fixture-end-1"]
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first = reference_trade(trades, base, 0)
+    end = reference_trade(trades, base, 15 * 60)
+    second_first = reference_trade(trades, base + timedelta(minutes=5), 0)
+    second_end = reference_trade(trades, base + timedelta(minutes=5), 15 * 60)
+    assert (first["event_id"], end["event_id"], second_first["event_id"], second_end["event_id"]) == (
+        "fixture-start-0", "fixture-end-0", "fixture-start-1", "fixture-end-1")
+    assert [format(Decimal(end["price"]) / Decimal(first["price"]) - Decimal(1), "f"),
+            format(Decimal(second_end["price"]) / Decimal(second_first["price"]) - Decimal(1), "f")] == [
+        "-0.1", "0.1"]
 
 
 def test_comparison_keeps_unknown_future_and_missing_opportunities_out_of_controls() -> None:
@@ -310,6 +331,90 @@ def test_missing_historical_dependency_under_true_or_is_not_a_qualified_signal()
     assert result[0]["qualified"] is False
     assert any(item.get("dependency_position") == 0 and item.get("qualified") is False
                for item in result[0]["input_evidence"])
+
+
+def test_price_return_middle_gap_is_diagnostic_not_a_required_dependency() -> None:
+    schedule = {"version": "decision-clock/1", "start": "2026-01-01T00:10:00Z",
+                "end": "2026-01-01T00:11:00Z", "interval_seconds": 60}
+    plan = [{"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
+             "horizon": {"value": 1, "unit": "MINUTES"}}]
+    quote_unit = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    comparison = {"op": "gt", "args": [
+        {"op": "price_return", "lookback_buckets": 2},
+        {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"},
+    ]}
+    binding = {"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
+               "price_expression": comparison,
+               "volume_expression": {"op": "gt", "args": [{"op": "quote_volume"},
+                   {"op": "constant", "value": "4", "unit": quote_unit}]},
+               "essential_inputs": ["price", "quote_volume"]}
+    features = [
+        {"bucket_end": "2026-01-01T00:00:00Z", "price": {"value": "100", "qualified": True}},
+        {"bucket_end": "2026-01-01T00:10:00Z", "price": {"value": "110", "qualified": True},
+         "quote_volume": {"value": "5", "qualified": True}},
+    ]
+
+    result = evaluate_p06_bindings(schedule=schedule, evaluation_plan=plan, bindings=[binding], feature_rows=features)
+
+    row = result[0]
+    assert row["price_state"] == "TRUE"
+    assert row["qualified"] is True
+    assert "MISSING_POSITION:1" in row["reasons"]
+    gap = next(item for item in row["input_evidence"] if item["dependency_position"] == 1)
+    assert gap["required_for_qualification"] is False
+    assert gap["qualified"] is False
+
+    future_gap_features = [*features, {"bucket_end": "2026-01-01T00:05:00Z",
+                                      "price": {"value": "105", "qualified": True,
+                                                "available_at": "2026-01-01T00:11:00Z"}}]
+    future_gap = evaluate_p06_bindings(schedule=schedule, evaluation_plan=plan, bindings=[binding],
+                                       feature_rows=future_gap_features)[0]
+    assert future_gap["qualified"] is True
+    assert future_gap["available_at"] == "2026-01-01T00:10:00Z"
+    assert "FUTURE_INFORMATION:1" in future_gap["reasons"]
+
+
+def test_nested_price_return_uses_only_nested_endpoints_but_mean_keeps_each_bucket_required() -> None:
+    schedule = {"version": "decision-clock/1", "start": "2026-01-01T00:15:00Z",
+                "end": "2026-01-01T00:16:00Z", "interval_seconds": 60}
+    plan = [{"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
+             "horizon": {"value": 1, "unit": "MINUTES"}}]
+    quote_unit = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    def binding(price_expression):
+        return {"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
+                "price_expression": price_expression,
+                "volume_expression": {"op": "gt", "args": [{"op": "quote_volume"},
+                    {"op": "constant", "value": "4", "unit": quote_unit}]},
+                "essential_inputs": ["price", "quote_volume"]}
+    features = [
+        {"bucket_end": "2026-01-01T00:00:00Z", "price": {"value": "100", "qualified": True}},
+        {"bucket_end": "2026-01-01T00:10:00Z", "price": {"value": "110", "qualified": True}},
+        {"bucket_end": "2026-01-01T00:15:00Z", "price": {"value": "120", "qualified": True},
+         "quote_volume": {"value": "5", "qualified": True}},
+    ]
+    nested = {"op": "gt", "args": [
+        {"op": "lag", "buckets": 1, "value": {"op": "price_return", "lookback_buckets": 2}},
+        {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"},
+    ]}
+    nested_result = evaluate_p06_bindings(schedule=schedule, evaluation_plan=plan, bindings=[binding(nested)],
+                                          feature_rows=features)[0]
+    assert nested_result["price_state"] == "TRUE"
+    assert nested_result["qualified"] is True
+    nested_gap = next(item for item in nested_result["input_evidence"]
+                      if item["dependency_position"] == 1)
+    assert nested_gap["required_for_qualification"] is False
+
+    rolling = {"op": "gt", "args": [
+        {"op": "mean", "buckets": 3, "value": {"op": "price"}},
+        {"op": "constant", "value": "0", "unit": "PRICE"},
+    ]}
+    rolling_result = evaluate_p06_bindings(schedule=schedule, evaluation_plan=plan, bindings=[binding(rolling)],
+                                           feature_rows=features)[0]
+    assert rolling_result["price_state"] == "UNKNOWN"
+    assert rolling_result["qualified"] is False
+    missing_middle = next(item for item in rolling_result["input_evidence"]
+                          if item["dependency_position"] == 1)
+    assert missing_middle["required_for_qualification"] is True
 
 
 def test_future_historical_dependency_under_true_or_is_not_available_at_decision() -> None:

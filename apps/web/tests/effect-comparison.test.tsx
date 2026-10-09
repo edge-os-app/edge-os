@@ -68,6 +68,8 @@ describe("P09 effect comparison", () => {
     expect(screen.getByText(saved.declaration.record_id)).toBeInTheDocument();
     expect(screen.getByText("33333333-3333-4333-8333-333333333333")).toBeInTheDocument();
     expect(screen.getByText(/This visible example was authored/)).toBeInTheDocument();
+    expect(screen.getByText(/one immutable P06 rule mapping across P09 runs/)).toBeInTheDocument();
+    expect(screen.getByText(/four opportunities per evaluation/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Adopt synthetic run declaration" })).toBeDisabled();
     await user.click(screen.getByRole("checkbox"));
     mocks.effectRuns.mockResolvedValue({ runs: [run()] });

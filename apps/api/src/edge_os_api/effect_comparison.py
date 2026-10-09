@@ -323,8 +323,15 @@ def _input_dependencies(node: dict[str, Any], position: int, path: str = "") -> 
         return [{"input": op, "dependency_position": position, "expression_path": path or "/"}]
     if op == "price_return":
         n = node["lookback_buckets"]
-        return [{"input": "price", "dependency_position": index, "expression_path": path or "/"}
-                for index in range(position - n, position + 1)]
+        return [
+            {"input": "price", "dependency_position": position - n,
+             "expression_path": path or "/", "required_for_qualification": True},
+            *[{"input": "price", "dependency_position": index,
+               "expression_path": path or "/", "required_for_qualification": False}
+              for index in range(position - n + 1, position)],
+            {"input": "price", "dependency_position": position,
+             "expression_path": path or "/", "required_for_qualification": True},
+        ]
     if op == "relative_volume":
         n = node["lookback_buckets"]
         return [{"input": "quote_volume", "dependency_position": index, "expression_path": path or "/"}
@@ -368,6 +375,7 @@ def _dependency_evidence(
             reasons.append("UNQUALIFIED_INPUT_OBSERVATION")
         evidence = {
             **dependency,
+            "required_for_qualification": dependency.get("required_for_qualification", True),
             "bucket_end": None if bucket is None else bucket.isoformat().replace("+00:00", "Z"),
             "value": None if item is None else item.get("value"),
             "available_at": None if available_at is None else available_at.isoformat().replace("+00:00", "Z"),
@@ -500,10 +508,11 @@ def evaluate_p06_bindings(
                             for dependency in _input_dependencies(binding[field_name], position, f"/{field_name}")]
             input_evidence = _dependency_evidence(dependencies, buckets=buckets, features=parsed_features,
                                                   decision_time=decision_time, market_id=market_id)
-            dependency_qualified = all(item["qualified"] for item in input_evidence)
+            dependency_qualified = all(item["qualified"] for item in input_evidence
+                                       if item["required_for_qualification"])
             availability = [decision_time]
             availability.extend(parse_utc(item["available_at"]) for item in input_evidence
-                                 if item["available_at"] is not None)
+                                 if item["required_for_qualification"] and item["available_at"] is not None)
             for name in essentials:
                 bucket = current
                 feature = parsed_features.get(bucket)
