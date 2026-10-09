@@ -4,7 +4,7 @@ P13 implements a deterministic local calculation seam in `apps/api/src/edge_os_a
 
 The implementation preserves P06 truth values and reasons. It evaluates entry and exit essential bindings separately. It uses the next scheduled bucket close for a fill, requires that close to be qualified and available, and releases an unavailable fill reservation once. It uses the saved fee and slippage fractions. It retains cash, inventory, fee-inclusive basis, chronological events, metric status and reasons, and open-position marks.
 
-The run preflight checks exact descriptor identities, explicit entry and exit bindings, non-positive scheduled-relative offsets, market and schedule identity, UTC five-minute timing, interval coverage, warm-up position, saved invalidation subset, complete-empty bucket semantics and canonical decimal observations. It rejects unsupported cost assumptions before action. It does not replace missing observations or reasons with defaults.
+The run preflight checks exact descriptor identities, explicit entry and exit bindings, non-positive scheduled-relative offsets, UTC five-minute timing, interval coverage, warm-up position, saved invalidation subset, complete-empty bucket semantics and canonical decimal observations. P06 retains market or schedule mismatch reasons, and an affected essential dependency is ineligible. The replay rejects unsupported cost assumptions before action. It does not replace missing observations or reasons with defaults.
 
 ## Synthetic evidence
 
