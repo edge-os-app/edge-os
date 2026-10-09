@@ -197,6 +197,40 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(restartedSourcePosition).toHaveCount(1);
   await expect(restartedSourcePosition).toBeVisible();
   await expect(restartedSourcePosition).toContainText(p19.agentId === "agent-a" ? "action-a-failed-2 · REVERTED" : "action-b-failed-paged · REVERTED");
+  for (const [name, sourceId] of Object.entries(p19.orphanSourceIds)) {
+    const exactSourceResponse = await page.request.get(`${process.env.P03_API_URL}/v1/account-views/${sourceId}`, {
+      headers: { Authorization: `Bearer ${tokens.a}` },
+    });
+    expect(exactSourceResponse.status()).toBe(200);
+    const source = await exactSourceResponse.json();
+    expect(source.record_id).toBe(sourceId);
+    const exactSourceResolver = await page.request.get(`${process.env.P03_API_URL}/v1/account-views/source/${sourceId}`, {
+      headers: { Authorization: `Bearer ${tokens.a}` },
+    });
+    expect(exactSourceResolver.status()).toBe(200);
+    expect((await exactSourceResolver.json()).destination_record_id).toBe(sourceId);
+    await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${sourceId}`);
+    const reopenedExactSource = page.locator(`#record-${sourceId}`);
+    await expect(reopenedExactSource).toHaveCount(1);
+    await expect(reopenedExactSource).toBeVisible();
+    for (const value of [source.owner_id, source.content.agent_id, source.content.wallet_id,
+      source.content.network_id, source.content.strategy_revision, source.content.mandate_id,
+      source.content.status, source.content.updated_at]) await expect(reopenedExactSource).toContainText(value);
+    if (source.content.record_kind === "MONITORING") {
+      await expect(reopenedExactSource).toContainText(source.content.next_work);
+      await expect(reopenedExactSource).toContainText(source.content.blocking_reason);
+      await expect(reopenedExactSource).toContainText(`${source.content.evaluation_attempts} attempts / ${source.content.evaluation_completions} completions`);
+    } else {
+      await expect(reopenedExactSource).toContainText(source.content.approval_id);
+      await expect(reopenedExactSource).toContainText(source.content.terms_hash);
+      await expect(reopenedExactSource).toContainText(source.content.signer_binding);
+      await expect(reopenedExactSource).toContainText(source.content.policy_binding);
+      for (const value of [source.content.terms.expiry, ...source.content.terms.supported_assets,
+        ...source.content.terms.supported_routes, ...source.content.terms.actions, ...source.content.terms.stop_effects])
+        await expect(reopenedExactSource).toContainText(value);
+    }
+    await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-${name}-source-reopened-after-restart.png`), fullPage: true });
+  }
   expect(p19Writes, "reopen after API restart must only issue reads").toBe(0);
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-account-context-reopened-after-restart.png`), fullPage: true });
 });

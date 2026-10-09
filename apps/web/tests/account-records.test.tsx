@@ -47,6 +47,99 @@ beforeEach(() => {
 });
 
 describe("direct account records", () => {
+  it.each(["MONITORING", "PERMISSION_SNAPSHOT"] as const)(
+    "shows an exact %s source beside unrelated agents without inferring its parent",
+    (recordKind) => {
+      const unrelated: AccountViewRecord = { record_id: "unrelated-agent-record", owner_id: "owner-a", content: {
+        owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: "AGENT", agent_id: "unrelated-agent",
+        wallet_id: "unrelated-wallet", network_id: "monad:143", status: "STOPPED", updated_at: "2026-10-09T11:00:00Z",
+      } };
+      const source: AccountViewRecord = recordKind === "MONITORING" ? { record_id: "orphan-monitoring-record", owner_id: "owner-a", content: {
+        owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: recordKind, agent_id: "orphan-monitoring-agent",
+        wallet_id: "orphan-monitoring-wallet", network_id: "monad:143", strategy_revision: "strategy-orphan-v4",
+        mandate_id: "mandate-orphan-v2", status: "STALE", health: "SYNTHETIC_HEALTH", updated_at: "2026-10-09T12:00:00Z",
+        input_updated_at: "2026-10-09T11:00:00Z", evaluation_attempts: 7, evaluation_completions: 3,
+        next_work: "inspect orphan monitoring", blocking_reason: "no matching agent summary", pending_reconciliation: true,
+      } } : { record_id: "orphan-permission-record", owner_id: "owner-a", content: {
+        owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: recordKind, agent_id: "orphan-permission-agent",
+        wallet_id: "orphan-permission-wallet", network_id: "monad:143", strategy_revision: "strategy-orphan-v4",
+        mandate_id: "mandate-orphan-v2", status: "FAILED", approval_id: "approval-orphan-v1", predecessor_approval_id: null,
+        successor_approval_id: null, activation_state: "NEVER_ACTIVE", updated_at: "2026-10-09T12:00:00Z",
+        terms_hash: `sha256:${"a".repeat(64)}`, signer_binding: "signer-orphan-v1", policy_binding: "policy-orphan-v1",
+        requested_at: "2026-10-09T11:00:00Z", checked_at: "2026-10-09T11:30:00Z", approved_at: null,
+        applied_at: null, failed_at: "2026-10-09T12:00:00Z", cancelled_at: null,
+        terms: { adopted_capital: [{ asset_id: "quote:USD", raw: "17", decimals: 0 }], supported_assets: ["asset:ORPHAN"],
+          supported_routes: ["route-orphan"], actions: ["BUY"], limits: [{ name: "max action", amount: { asset_id: "quote:USD", raw: "9", decimals: 0 } }],
+          expiry: "2027-01-01T00:00:00Z", stop_effects: ["STOP_NEW_ENTRIES"] },
+      } };
+
+      render(<AgentRecords records={[unrelated, source]} sourceRecordId={source.record_id} />);
+
+      const exactSource = document.getElementById(`record-${source.record_id}`);
+      expect(exactSource).not.toBeNull();
+      expect(exactSource).toHaveTextContent(source.owner_id);
+      expect(exactSource).toHaveTextContent(source.content.agent_id);
+      expect(exactSource).toHaveTextContent(source.content.wallet_id!);
+      expect(exactSource).toHaveTextContent(source.content.network_id!);
+      expect(exactSource).toHaveTextContent(source.content.strategy_revision!);
+      expect(exactSource).toHaveTextContent(source.content.mandate_id!);
+      expect(exactSource).toHaveTextContent(source.content.updated_at);
+      if (recordKind === "MONITORING") {
+        expect(exactSource).toHaveTextContent("inspect orphan monitoring");
+        expect(exactSource).toHaveTextContent("7 attempts / 3 completions");
+        expect(exactSource).toHaveTextContent("no matching agent summary · Yes");
+      } else {
+        expect(exactSource).toHaveTextContent(source.content.terms_hash!);
+        expect(exactSource).toHaveTextContent("quote:USD");
+        expect(exactSource).toHaveTextContent("No owner approval recorded");
+      }
+      expect(screen.getByRole("heading", { name: "unrelated-agent" })).toBeInTheDocument();
+      expect(exactSource).not.toHaveTextContent("current permission is inferred");
+      expect(document.querySelectorAll(`[id="record-${source.record_id}"]`)).toHaveLength(1);
+    },
+  );
+
+  it.each([false, true])("shows a selected monitoring source without relying on unrelated summaries (matching agent: %s)", (matching) => {
+    const source: AccountViewRecord = { record_id: "selected-monitoring", owner_id: "owner-a", content: {
+      owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: "MONITORING", agent_id: "source-agent",
+      wallet_id: "source-wallet", network_id: "monad:143", status: "STALE", strategy_revision: "source-revision",
+      mandate_id: "source-mandate", updated_at: "2026-10-09T12:00:00Z", evaluation_attempts: 2, evaluation_completions: 1,
+    } };
+    const agent = (agentId: string, walletId: string): AccountViewRecord => ({
+      record_id: `${agentId}-record`, owner_id: "owner-a", content: {
+        owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: "AGENT", agent_id: agentId,
+        wallet_id: walletId, network_id: "monad:143", status: "STOPPED", updated_at: "2026-10-09T11:00:00Z",
+      },
+    });
+    const rows = [agent("unrelated-agent", "unrelated-wallet"), ...(matching ? [agent("source-agent", "source-wallet")] : []), source];
+    render(<AgentRecords records={rows} sourceRecordId={source.record_id} />);
+
+    expect(document.querySelectorAll(`[id="record-${source.record_id}"]`)).toHaveLength(1);
+    if (matching) {
+      const matchingAgent = screen.getByRole("heading", { name: "source-agent" }).closest("section.panel");
+      expect(screen.queryByRole("region", { name: "Exact agent source" })).toBeNull();
+      expect(matchingAgent).toHaveTextContent("No saved permission approval snapshots.");
+      expect(matchingAgent).toHaveTextContent("2 attempts / 1 completions");
+    } else {
+      const exactSource = screen.getByRole("region", { name: "Exact agent source" });
+      expect(exactSource).toHaveTextContent("source-agent · source-wallet · monad:143");
+      expect(exactSource).toHaveTextContent("source-revision · source-mandate");
+      expect(screen.getByRole("heading", { name: "unrelated-agent" })).toBeInTheDocument();
+    }
+  });
+
+  it("shows an exact selected source when no agent summaries exist", () => {
+    const source: AccountViewRecord = { record_id: "source-without-agents", owner_id: "owner-a", content: {
+      owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: "MONITORING", agent_id: "saved-agent",
+      wallet_id: "saved-wallet", network_id: "monad:143", status: "STALE", updated_at: "2026-10-09T12:00:00Z",
+    } };
+    render(<AgentRecords records={[source]} sourceRecordId={source.record_id} />);
+    const sourceRegion = screen.getByRole("region", { name: "Exact agent source" });
+    expect(sourceRegion).toHaveTextContent("saved-agent · saved-wallet · monad:143");
+    expect(screen.queryByText("No saved agent records.")).toBeNull();
+    expect(document.querySelectorAll(`[id="record-${source.record_id}"]`)).toHaveLength(1);
+  });
+
   it("formats P19 signed quote results without losing raw precision or unknown state", async () => {
     expect(formatResult({ state: "KNOWN", amount: { asset_id: "quote:USD", raw: "-2000000", decimals: 6 } })).toBe("−2");
     expect(formatResult({ state: "KNOWN", amount: { asset_id: "quote:USD", raw: "1000000000000000001", decimals: 18 } })).toBe("1.000000000000000001");

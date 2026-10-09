@@ -8,6 +8,10 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
   const agents = records.filter((record) => record.content.record_kind === "AGENT");
   const unmatchedSource = records.find((record) => record.record_id === sourceRecordId
     && (record.content.record_kind === "MONITORING" || record.content.record_kind === "PERMISSION_SNAPSHOT"));
+  const sourceHasMatchingAgent = unmatchedSource && agents.some((record) => record.owner_id === unmatchedSource.owner_id
+    && record.content.agent_id === unmatchedSource.content.agent_id
+    && record.content.wallet_id === unmatchedSource.content.wallet_id
+    && record.content.network_id === unmatchedSource.content.network_id);
   const [selected, setSelected] = useState<string | null>(null);
   const [context, setContext] = useState<AgentContextRecord | null>(null);
   const [contextError, setContextError] = useState("");
@@ -26,24 +30,37 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
     return () => { current = false; };
   }, [selected, refresh]);
 
-  if (!agents.length) return unmatchedSource ? <section className="panel" id={`record-${unmatchedSource.record_id}`} aria-label="Exact agent source">
-    <h2>Exact saved {unmatchedSource.content.record_kind === "MONITORING" ? "monitoring" : "permission"} source</h2>
-    <p>The related agent summary is unavailable. This exact saved record is shown without inferring a relationship.</p>
-    <dl>
-      <dt>Owner / agent / wallet / network</dt><dd>{unmatchedSource.owner_id} · {unmatchedSource.content.agent_id} · {unmatchedSource.content.wallet_id} · {unmatchedSource.content.network_id}</dd>
-      <dt>Status / updated</dt><dd>{unmatchedSource.content.status} · {unmatchedSource.content.updated_at}</dd>
-      {unmatchedSource.content.record_kind === "MONITORING" && <>
-        <dt>Health / evaluations</dt><dd>{unmatchedSource.content.health ?? "Unknown"} · {unmatchedSource.content.evaluation_attempts ?? "Unknown"} attempts / {unmatchedSource.content.evaluation_completions ?? "Unknown"} completions</dd>
-      </>}
-      {unmatchedSource.content.record_kind === "PERMISSION_SNAPSHOT" && <>
-        <dt>Approval / activation</dt><dd>{unmatchedSource.content.approval_id} · {unmatchedSource.content.activation_state}</dd>
-        <dt>Terms hash</dt><dd>{unmatchedSource.content.terms_hash}</dd>
-      </>}
-    </dl>
-    <p>Record ID: <code>{unmatchedSource.record_id}</code></p>
-  </section> : <p className="muted">No saved agent records.</p>;
+  if (!agents.length && !unmatchedSource) return <p className="muted">No saved agent records.</p>;
   return (
     <div className="stack">
+      {unmatchedSource && !sourceHasMatchingAgent && <section className="panel" id={`record-${unmatchedSource.record_id}`} aria-label="Exact agent source">
+        <h2>Exact saved {unmatchedSource.content.record_kind === "MONITORING" ? "monitoring" : "permission"} source</h2>
+        <p>The related agent summary is unavailable. This exact saved record is shown without inferring a relationship or current permission.</p>
+        <dl className="kv">
+          <dt>Owner / agent / wallet / network</dt><dd>{unmatchedSource.owner_id} · {unmatchedSource.content.agent_id} · {unmatchedSource.content.wallet_id} · {unmatchedSource.content.network_id}</dd>
+          <dt>Strategy revision / mandate</dt><dd>{unmatchedSource.content.strategy_revision ?? "Not recorded"} · {unmatchedSource.content.mandate_id ?? "Not recorded"}</dd>
+          <dt>Status / updated</dt><dd>{unmatchedSource.content.status} · {unmatchedSource.content.updated_at}</dd>
+          {unmatchedSource.content.record_kind === "MONITORING" && <>
+            <dt>Health / evaluations</dt><dd>{unmatchedSource.content.health ?? "Unknown"} · {unmatchedSource.content.evaluation_attempts ?? "Unknown"} attempts / {unmatchedSource.content.evaluation_completions ?? "Unknown"} completions</dd>
+            <dt>Inputs / next work</dt><dd>{unmatchedSource.content.input_updated_at ?? "Input time not recorded"} · {unmatchedSource.content.next_work ?? "Not recorded"}</dd>
+            <dt>Block / reconciliation</dt><dd>{unmatchedSource.content.blocking_reason ?? "No block recorded"} · {unmatchedSource.content.pending_reconciliation == null ? "Unknown" : unmatchedSource.content.pending_reconciliation ? "Yes" : "No"}</dd>
+          </>}
+          {unmatchedSource.content.record_kind === "PERMISSION_SNAPSHOT" && <>
+            <dt>Approval / activation</dt><dd>{unmatchedSource.content.approval_id} · {unmatchedSource.content.activation_state}</dd>
+            <dt>Predecessor / successor</dt><dd>{unmatchedSource.content.predecessor_approval_id ?? "No predecessor recorded"} · {unmatchedSource.content.successor_approval_id ?? "No successor recorded"}</dd>
+            <dt>Signer / policy binding</dt><dd>{unmatchedSource.content.signer_binding ?? "Not recorded"} · {unmatchedSource.content.policy_binding ?? "Not recorded"}</dd>
+            <dt>Requested / checked</dt><dd>{unmatchedSource.content.requested_at ?? "Not recorded"} · {unmatchedSource.content.checked_at ?? "Not recorded"}</dd>
+            <dt>Approved / applied</dt><dd>{unmatchedSource.content.approved_at ?? "No owner approval recorded"} · {unmatchedSource.content.applied_at ?? "Not applied / not recorded"}</dd>
+            <dt>Failed / cancelled</dt><dd>{unmatchedSource.content.failed_at ?? "No failure recorded"} · {unmatchedSource.content.cancelled_at ?? "No cancellation recorded"}</dd>
+            <dt>Terms hash</dt><dd>{unmatchedSource.content.terms_hash}</dd>
+            <dt>Adopted capital</dt><dd>{unmatchedSource.content.terms?.adopted_capital.map((amount) => `${formatAmount(amount)} ${amount.asset_id}`).join("; ") ?? "Not recorded"}</dd>
+            <dt>Supported assets / routes</dt><dd>{unmatchedSource.content.terms?.supported_assets.join(", ") ?? "Not recorded"} · {unmatchedSource.content.terms?.supported_routes.join(", ") ?? "Not recorded"}</dd>
+            <dt>Actions / expiry</dt><dd>{unmatchedSource.content.terms?.actions.join(", ") ?? "Not recorded"} · {unmatchedSource.content.terms?.expiry ?? "Not recorded"}</dd>
+            <dt>Limits / stop effects</dt><dd>{unmatchedSource.content.terms?.limits.map((limit) => `${limit.name}: ${formatAmount(limit.amount)} ${limit.amount.asset_id}`).join("; ") ?? "Not recorded"} · {unmatchedSource.content.terms?.stop_effects.join(", ") ?? "Not recorded"}</dd>
+          </>}
+        </dl>
+        <p>Record ID: <code>{unmatchedSource.record_id}</code></p>
+      </section>}
       {agents.map(({ record_id, owner_id, content }) => {
         const monitoring = records.filter((record) => record.owner_id === owner_id
           && record.content.record_kind === "MONITORING"
@@ -83,7 +100,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
                 <summary style={{ minHeight: 44, cursor: "pointer" }}>
                   {item.approval_id} · {item.status} · {item.status === "CHANGE_APPLIED" ? "ACTIVE AT APPLICATION" : item.activation_state}
                 </summary>
-                <dl>
+                <dl className="kv">
                   <dt>Owner / agent / wallet / network</dt><dd>{snapshot.owner_id} · {item.agent_id} · {item.wallet_id} · {item.network_id}</dd>
                   <dt>Strategy revision / mandate</dt><dd>{item.strategy_revision} · {item.mandate_id}</dd>
                   <dt>Predecessor / successor approval</dt><dd>{item.predecessor_approval_id ?? (item.status === "FAILED" || item.status === "CANCELLED" ? "No earlier approval (initial attempt)" : "No predecessor recorded")} · {item.successor_approval_id ?? "No successor recorded"}</dd>

@@ -133,6 +133,34 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
     second_agent["content"].update(agent_id="agent-b", wallet_id="wallet-b", status="STOPPED",
                                    permission_state="REMOVED", updated_at="2026-10-09T12:01:00Z")
     fixture.append(second_agent)
+    orphan_source_ids = {
+        "monitoring_first_page": "00000000-0000-4000-8000-000000000301",
+        "permission_first_page": "00000000-0000-4000-8000-000000000302",
+        "monitoring_later_page": "00000000-0000-4000-8000-000000000303",
+        "permission_later_page": "00000000-0000-4000-8000-000000000304",
+    }
+    def orphan_source(kind: str, agent_id: str, wallet_id: str, record_id: str, updated_at: str) -> dict:
+        template = next(item for item in fixture if item["content"].get("record_kind") == kind)
+        source = json.loads(json.dumps(template))
+        source["record_id"] = record_id
+        source["operation_id"] = record_id.replace("00000000", "10000000")
+        source["content"].update(agent_id=agent_id, wallet_id=wallet_id, updated_at=updated_at,
+                                 strategy_revision=f"strategy-{agent_id}-v4", mandate_id=f"mandate-{agent_id}-v2")
+        if kind == "MONITORING":
+            source["content"].update(next_work=f"inspect saved {agent_id}", blocking_reason="synthetic source has no agent summary")
+        else:
+            source["content"].update(approval_id=f"approval-{agent_id}-v1", predecessor_approval_id=None,
+                                      successor_approval_id=None, signer_binding=f"signer-{agent_id}-v1",
+                                      policy_binding=f"policy-{agent_id}-v1")
+            canonical_terms = json.dumps(source["content"]["terms"], sort_keys=True, separators=(",", ":"))
+            source["content"]["terms_hash"] = "sha256:" + hashlib.sha256(canonical_terms.encode("utf-8")).hexdigest()
+        return source
+    fixture.extend([
+        orphan_source("MONITORING", "orphan-monitoring-first", "wallet-orphan-monitoring-first",
+                      orphan_source_ids["monitoring_first_page"], "2026-10-09T12:02:00Z"),
+        orphan_source("PERMISSION_SNAPSHOT", "orphan-permission-first", "wallet-orphan-permission-first",
+                      orphan_source_ids["permission_first_page"], "2026-10-09T12:03:00Z"),
+    ])
     target_position = next(item for item in fixture if item["content"].get("record_kind") == "POSITION"
                            and item["content"].get("position_id") == "position-a-2")
     target_action = next(item for item in fixture if item["content"].get("record_kind") == "ACTION"
@@ -158,7 +186,11 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
     target_action_b["content"].update(agent_id="agent-b", wallet_id="wallet-b", position_id="position-b-paged",
                                        strategy_revision="strategy-b-v1", mandate_id="mandate-b-v1",
                                        action_id="action-b-failed-paged")
-    fixture.extend([target_position, target_action, target_position_b, target_action_b])
+    fixture.extend([target_position, target_action, target_position_b, target_action_b,
+        orphan_source("MONITORING", "orphan-monitoring-later", "wallet-orphan-monitoring-later",
+                      orphan_source_ids["monitoring_later_page"], "2026-10-09T13:30:00Z"),
+        orphan_source("PERMISSION_SNAPSHOT", "orphan-permission-later", "wallet-orphan-permission-later",
+                      orphan_source_ids["permission_later_page"], "2026-10-09T13:31:00Z")])
     for item in fixture:
         content = {**item["content"], "owner_id": owner_id}
         statement = (
@@ -183,6 +215,7 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
         saved_context = json.loads(json.dumps(context))
         saved_context.update(agent_id=agent_id)
         saved_context["entries"][-1]["source_refs"] = [source_id, research_source_id]
+        saved_context["entries"][-1]["source_refs"].extend(orphan_source_ids.values())
         pg.psql(
             "insert into records(record_id, owner_id, record_type, schema_version, operation_id, created_at, content) values ("
             f"'{record_id}', '{owner_id}', 'AgentContextRecord', 'agent-context/1', '{operation_id}', "
@@ -195,6 +228,7 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
     return {"owner_id": owner_id, "record_ids": [item["record_id"] for item in fixture],
             "agent_record_ids": {"agent-a": fixture[0]["record_id"], "agent-b": second_agent["record_id"]},
             "research_source_id": research_source_id,
+            "orphan_source_ids": orphan_source_ids,
             "source_action_ids": {"agent-a": target_action["record_id"], "agent-b": target_action_b["record_id"]},
             "source_position_ids": {"agent-a": target_position["record_id"], "agent-b": target_position_b["record_id"]},
             "position_record_ids": {"position-a-1": next(item["record_id"] for item in fixture if item["content"].get("position_id") == "position-a-1"),
@@ -322,7 +356,7 @@ def main() -> int:
         p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
         rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
         ok &= rec.step("P19 authored account and context fixtures seeded for the verified owner",
-                       len(p19_fixtures["record_ids"]) == len(json.loads((harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json").read_text())) + 103,
+                       len(p19_fixtures["record_ids"]) == len(json.loads((harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json").read_text())) + 107,
                        {"records": len(p19_fixtures["record_ids"])})
 
         status_none, _ = http("GET", f"{api_url}/v1/me")
@@ -339,6 +373,7 @@ def main() -> int:
                       "P19_SOURCE_ACTION_B_ID": p19_fixtures["source_action_ids"]["agent-b"],
                       "P19_SOURCE_POSITION_ID": p19_fixtures["source_position_ids"]["agent-a"],
                       "P19_SOURCE_POSITION_B_ID": p19_fixtures["source_position_ids"]["agent-b"],
+                      "P19_ORPHAN_SOURCE_IDS": json.dumps(p19_fixtures["orphan_source_ids"]),
                       "P19_RESEARCH_SOURCE_ID": p19_fixtures["research_source_id"],
                       "P19_ACCOUNT_RECORD_COUNT": str(len(p19_fixtures["record_ids"])),
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}

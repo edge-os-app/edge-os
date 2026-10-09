@@ -711,3 +711,70 @@ test("P19 account surface keeps controls usable and meets accessibility checks",
   expect([...agentSerious, ...positionSerious, ...fundSerious].map((v) => ({ id: v.id, help: v.help }))).toEqual([]);
   expect([...agentContrast, ...positionContrast, ...fundContrast]).toEqual([]);
 });
+
+test("P19 expanded permission histories keep every saved value inside the viewport", async ({ page }, info) => {
+  const width = info.project.name === "desktop" ? 1280 : 390;
+  await page.setViewportSize({ width, height: 900 });
+  await open(page, tokens.a);
+  const accountHeaders = { Authorization: `Bearer ${tokens.a}` };
+  const response = await page.request.get(`${process.env.P03_API_URL}/v1/account-views?limit=500&record_kind=PERMISSION_SNAPSHOT`,
+    { headers: accountHeaders });
+  expect(response.status()).toBe(200);
+  const rows = (await response.json()).records;
+  const states = [
+    ["CURRENT", "approval-a-v4"], ["CHANGE_PENDING", "approval-a-change-pending-v7"],
+    ["FAILED", "approval-a-v5"], ["CANCELLED", "approval-a-change-cancelled-v8"],
+  ];
+  const measurements = [];
+  await page.getByRole("button", { name: "Agents" }).click();
+  const agent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "agent-a", level: 2 }) });
+  await expect(agent.getByText(/Permission approval history/)).toBeVisible();
+  for (const [state, approvalId] of states) {
+    const saved = rows.find((row) => row.content.approval_id === approvalId);
+    expect(saved, `${state} permission source is present in the saved account view`).toBeTruthy();
+    const stateLabel = saved.content.status === "CHANGE_APPLIED" ? "ACTIVE AT APPLICATION" : saved.content.activation_state;
+    const summary = agent.getByText(`${approvalId} · ${saved.content.status} · ${stateLabel}`, { exact: true });
+    await expect(summary).toHaveCount(1);
+    const details = summary.locator("xpath=..");
+    await expect(details).toHaveCount(1);
+    const item = details.locator("xpath=..");
+    await summary.focus();
+    await expect(summary).toBeFocused();
+    const summaryBox = await summary.boundingBox();
+    expect(summaryBox?.height ?? 0).toBeGreaterThanOrEqual(MIN);
+    await page.keyboard.press("Enter");
+    await expect(details).toHaveAttribute("open", "");
+    const viewport = await page.evaluate(() => ({ innerWidth: window.innerWidth, documentWidth: document.documentElement.scrollWidth }));
+    const cellWidths = await item.locator("dd").evaluateAll((values) => values.map((value) => ({ scrollWidth: value.scrollWidth, clientWidth: value.clientWidth })));
+    const measurement = {
+      approvalId, state, viewport, termsHash: saved.content.terms_hash,
+      identities: { ownerId: saved.owner_id, agentId: saved.content.agent_id, walletId: saved.content.wallet_id,
+        networkId: saved.content.network_id, strategyRevision: saved.content.strategy_revision, mandateId: saved.content.mandate_id },
+      cellWidths, fullTermsRetained: false,
+    };
+    measurements.push(measurement);
+    fs.writeFileSync(path.join(outDir, `p19-permission-expanded-${info.project.name}.json`), JSON.stringify(measurements, null, 2));
+    await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-expanded-${state.toLowerCase()}.png`), fullPage: true });
+    await expect(item.locator("dd").nth(0)).toContainText(saved.owner_id);
+    await expect(item.locator("dd").nth(0)).toContainText(saved.content.agent_id);
+    await expect(item.locator("dd").nth(0)).toContainText(saved.content.wallet_id);
+    await expect(item.locator("dd").nth(0)).toContainText(saved.content.network_id);
+    await expect(item.locator("dd").nth(1)).toContainText(saved.content.strategy_revision);
+    await expect(item.locator("dd").nth(1)).toContainText(saved.content.mandate_id);
+    await expect(item.locator("dd").nth(3)).toContainText(saved.content.signer_binding);
+    await expect(item.locator("dd").nth(3)).toContainText(saved.content.policy_binding);
+    await expect(item.locator("dd").nth(7)).toHaveText(saved.content.terms_hash);
+    const termsText = item.locator("dl");
+    for (const value of [saved.content.terms.expiry, ...saved.content.terms.supported_assets,
+      ...saved.content.terms.supported_routes, ...saved.content.terms.actions, ...saved.content.terms.stop_effects,
+      ...saved.content.terms.adopted_capital.map((amount) => `${amount.raw} ${amount.asset_id}`),
+      ...saved.content.terms.limits.flatMap((limit) => [limit.name, `${limit.amount.raw} ${limit.amount.asset_id}`])])
+      await expect(termsText).toContainText(value);
+    measurement.fullTermsRetained = true;
+    fs.writeFileSync(path.join(outDir, `p19-permission-expanded-${info.project.name}.json`), JSON.stringify(measurements, null, 2));
+    expect(viewport.innerWidth).toBe(width);
+    expect(viewport.documentWidth, `${state} expanded permission history must not widen the page`).toBeLessThanOrEqual(width);
+    expect(cellWidths.every((value) => value.scrollWidth <= value.clientWidth))
+      .toBe(true);
+  }
+});

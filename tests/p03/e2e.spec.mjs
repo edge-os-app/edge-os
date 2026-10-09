@@ -1030,6 +1030,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   const project = info.project.name;
   const agentId = project === "desktop" ? "agent-a" : "agent-b";
   const agentRecordId = project === "desktop" ? process.env.P19_AGENT_RECORD_ID : process.env.P19_AGENT_B_RECORD_ID;
+  const orphanSourceIds = JSON.parse(process.env.P19_ORPHAN_SOURCE_IDS);
   await open(page, tokens.a);
   let failAccountLoad = true;
   await page.route("**/v1/account-views**", async (route) => {
@@ -1065,7 +1066,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   const context = page.getByRole("region", { name: `${agentId} context` });
   await expect(context).toContainText("Agent context · version 1");
   await expect(context).toContainText("SUGGESTED");
-  await expect(context.getByRole("button", { name: "Open source record" })).toHaveCount(2);
+  await expect(context.getByRole("button", { name: "Open source record" })).toHaveCount(6);
   await shot(page, project, "p19-agent-context-before-adoption");
   const sourceActionId = agentId === "agent-a" ? process.env.P19_SOURCE_ACTION_ID : process.env.P19_SOURCE_ACTION_B_ID;
   const sourcePositionId = agentId === "agent-a" ? process.env.P19_SOURCE_POSITION_ID : process.env.P19_SOURCE_POSITION_B_ID;
@@ -1097,8 +1098,77 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await page.goBack();
   const linkedAgentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
   await linkedAgentCard.getByRole("button", { name: "Inspect agent context" }).click();
-  const reopenedContext = page.getByRole("region", { name: `${agentId} context` });
+  let reopenedContext = page.getByRole("region", { name: `${agentId} context` });
   await expect(reopenedContext).toContainText("Agent context · version 1");
+  {
+    const orphanCases = [
+      ["monitoring_first_page", "MONITORING"], ["permission_first_page", "PERMISSION_SNAPSHOT"],
+      ["monitoring_later_page", "MONITORING"], ["permission_later_page", "PERMISSION_SNAPSHOT"],
+    ];
+    const firstPage = await page.request.get(`${accountPath}?limit=100`, { headers: accountHeaders });
+    expect(firstPage.status()).toBe(200);
+    const firstPageIds = new Set((await firstPage.json()).records.map((row) => row.record_id));
+    const allAccountRows = financialBefore.records;
+    for (const [index, [name, kind]] of orphanCases.entries()) {
+      const sourceId = orphanSourceIds[name];
+      const source = allAccountRows.find((row) => row.record_id === sourceId);
+      expect(source, `seeded ${name} source must exist in the owner's saved set`).toBeTruthy();
+      expect(source.content.record_kind).toBe(kind);
+      expect(firstPageIds.has(sourceId)).toBe(index < 2);
+      const exactResponse = await page.request.get(`${accountPath}/${sourceId}`, { headers: accountHeaders });
+      const sourceResponse = await page.request.get(`${accountPath}/source/${sourceId}`, { headers: accountHeaders });
+      expect(exactResponse.status()).toBe(200);
+      expect(sourceResponse.status()).toBe(200);
+      expect((await exactResponse.json()).content).toEqual(source.content);
+      expect((await sourceResponse.json()).destination_record_id).toBe(sourceId);
+      const relatedAgentResponse = await page.request.get(
+        `${accountPath}?limit=100&record_kind=AGENT&agent_id=${encodeURIComponent(source.content.agent_id)}&wallet_id=${encodeURIComponent(source.content.wallet_id)}&network_id=${encodeURIComponent(source.content.network_id)}`,
+        { headers: accountHeaders },
+      );
+      expect(relatedAgentResponse.status()).toBe(200);
+      expect((await relatedAgentResponse.json()).records).toEqual([]);
+      expect(allAccountRows.some((row) => row.content.record_kind === "AGENT"
+        && row.content.agent_id !== source.content.agent_id)).toBe(true);
+
+      await reopenedContext.getByRole("button", { name: "Open source record" }).nth(index + 2).click();
+      await expect(page).toHaveURL(new RegExp(`#\\/agents\\?record=${sourceId}`));
+      const target = page.locator(`#record-${sourceId}`);
+      await expect(target).toHaveCount(1);
+      await expect(target).toBeVisible();
+      await expect(target).toContainText(source.content.agent_id);
+      await expect(target).toContainText(source.content.wallet_id);
+      await expect(target).toContainText(source.content.network_id);
+      await expect(target).toContainText(source.content.strategy_revision);
+      await expect(target).toContainText(source.content.mandate_id);
+      await expect(page.getByRole("heading", { name: "agent-a", level: 2 })).toBeVisible();
+      if (kind === "MONITORING") {
+        await expect(target).toContainText(source.content.next_work);
+        await expect(target).toContainText(source.content.blocking_reason);
+        await expect(target).toContainText(`${source.content.evaluation_attempts} attempts / ${source.content.evaluation_completions} completions`);
+      } else {
+        await expect(target).toContainText(source.content.terms_hash);
+        await expect(target).toContainText(source.content.signer_binding);
+        await expect(target).toContainText(source.content.policy_binding);
+        for (const value of [source.content.approval_id, source.content.terms.expiry,
+          ...source.content.terms.supported_assets, ...source.content.terms.supported_routes,
+          ...source.content.terms.actions, ...source.content.terms.stop_effects]) await expect(target).toContainText(value);
+      }
+      await shot(page, project, `p19-${name}-source`);
+      await page.getByRole("button", { name: "Load more records" }).click();
+      await expect(target).toHaveCount(1);
+      await expect(target).toBeVisible();
+      record(`p19-orphan-source-${project}-${name}`, { sourceId, kind, sourceIdentity: {
+        ownerId: source.owner_id, agentId: source.content.agent_id, walletId: source.content.wallet_id,
+        networkId: source.content.network_id, strategyRevision: source.content.strategy_revision,
+        mandateId: source.content.mandate_id,
+      }, firstPage: index < 2, targetCountBeforeAndAfterLoadMore: 1, ownerGet: exactResponse.status(), sourceGet: sourceResponse.status() });
+      await page.goBack();
+      const sourceAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+      await sourceAgent.getByRole("button", { name: "Inspect agent context" }).click();
+      reopenedContext = page.getByRole("region", { name: `${agentId} context` });
+      await expect(reopenedContext).toBeVisible();
+    }
+  }
   const adoptionPath = `**/v1/agents/${agentId}/context/suggestions/adopt`;
   let adoptionAttempts = 0;
   await page.route(adoptionPath, async (route) => {
@@ -1190,6 +1260,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   record(`p19-context-${project}`, { ownerId: financialBefore.records[0].owner_id, agentId, agentRecordId,
     contextVersions: [1, 2, 3, 4, 5], statuses: ["SUGGESTED", "ADOPTED"], failedCorrectionPreservedVersion: 2,
     sourceActionId, sourcePositionId,
+    orphanSourceIds,
     researchSourceId: process.env.P19_RESEARCH_SOURCE_ID,
     finalState: "CLEARED", financialRecordsUnchanged: true, foreignRecordStatus: foreign.status(), url: accountUrl.toString() });
 
