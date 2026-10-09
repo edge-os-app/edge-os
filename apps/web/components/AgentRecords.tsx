@@ -36,7 +36,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
       {unmatchedSource && !sourceHasMatchingAgent && <section className="panel" id={`record-${unmatchedSource.record_id}`} aria-label="Exact agent source">
         <h2>Exact saved {unmatchedSource.content.record_kind === "MONITORING" ? "monitoring" : "permission"} source</h2>
         <p>The related agent summary is unavailable. This exact saved record is shown without inferring a relationship or current permission.</p>
-        <dl className="kv">
+        <dl className="kv" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr)" }}>
           <dt>Owner / agent / wallet / network</dt><dd>{unmatchedSource.owner_id} · {unmatchedSource.content.agent_id} · {unmatchedSource.content.wallet_id} · {unmatchedSource.content.network_id}</dd>
           <dt>Strategy revision / mandate</dt><dd>{unmatchedSource.content.strategy_revision ?? "Not recorded"} · {unmatchedSource.content.mandate_id ?? "Not recorded"}</dd>
           <dt>Status / updated</dt><dd>{unmatchedSource.content.status} · {unmatchedSource.content.updated_at}</dd>
@@ -100,7 +100,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
                 <summary style={{ minHeight: 44, cursor: "pointer" }}>
                   {item.approval_id} · {item.status} · {item.status === "CHANGE_APPLIED" ? "ACTIVE AT APPLICATION" : item.activation_state}
                 </summary>
-                <dl className="kv">
+                <dl className="kv" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr)" }}>
                   <dt>Owner / agent / wallet / network</dt><dd>{snapshot.owner_id} · {item.agent_id} · {item.wallet_id} · {item.network_id}</dd>
                   <dt>Strategy revision / mandate</dt><dd>{item.strategy_revision} · {item.mandate_id}</dd>
                   <dt>Predecessor / successor approval</dt><dd>{item.predecessor_approval_id ?? (item.status === "FAILED" || item.status === "CANCELLED" ? "No earlier approval (initial attempt)" : "No predecessor recorded")} · {item.successor_approval_id ?? "No successor recorded"}</dd>
