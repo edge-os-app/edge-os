@@ -1,12 +1,67 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { getAccountView, loadAccountViews, type AccountViewRecord } from "../lib/account-views";
+import { getAccountView, loadAccountViews, type AccountViewRecord, type PositionFilters } from "../lib/account-views";
 import { AgentRecords } from "./AgentRecords";
 import { FundRecords } from "./FundRecords";
 import { PositionRecords } from "./PositionRecords";
 
 export type AccountViewName = "Agents" | "Positions" | "Funds";
+
+function mergeAccountRecords(...groups: AccountViewRecord[][]): AccountViewRecord[] {
+  const byId = new Map<string, AccountViewRecord>();
+  for (const record of groups.flat()) if (!byId.has(record.record_id)) byId.set(record.record_id, record);
+  return [...byId.values()];
+}
+
+function relatedQueries(source: AccountViewRecord): PositionFilters[] {
+  const item = source.content;
+  switch (item.record_kind) {
+    case "ACTION":
+      return item.position_id ? [{ record_kind: "POSITION", agent_id: item.agent_id, wallet_id: item.wallet_id ?? undefined,
+        network_id: item.network_id ?? undefined, asset_id: item.asset_id ?? undefined,
+        position_id: item.position_id, strategy_revision: item.strategy_revision ?? undefined }]
+        : item.flow_id ? [{ record_kind: "CAPITAL_FLOW", agent_id: item.agent_id, wallet_id: item.wallet_id ?? undefined,
+          network_id: item.network_id ?? undefined, flow_id: item.flow_id }] : [];
+    case "POSITION":
+      return [{ record_kind: "ACTION", agent_id: item.agent_id, wallet_id: item.wallet_id ?? undefined,
+        network_id: item.network_id ?? undefined, asset_id: item.asset_id ?? undefined,
+        position_id: item.position_id ?? undefined, strategy_revision: item.strategy_revision ?? undefined }];
+    case "CAPITAL_FLOW":
+      return [{ record_kind: "ACTION", agent_id: item.agent_id, wallet_id: item.wallet_id ?? undefined,
+        network_id: item.network_id ?? undefined, flow_id: item.flow_id ?? undefined }];
+    case "EDGE_EVIDENCE":
+      return [{ record_kind: "POSITION", agent_id: item.agent_id, strategy_revision: item.strategy_revision ?? undefined }];
+    case "AGENT":
+    case "MONITORING":
+    case "PERMISSION_SNAPSHOT":
+      return ["AGENT", "MONITORING", "PERMISSION_SNAPSHOT"].filter((kind) => kind !== item.record_kind)
+        .map((kind) => ({ record_kind: kind as PositionFilters["record_kind"], agent_id: item.agent_id, wallet_id: item.wallet_id ?? undefined,
+          network_id: item.network_id ?? undefined }));
+  }
+}
+
+function relatedRecordMatches(source: AccountViewRecord, candidate: AccountViewRecord): boolean {
+  if (candidate.owner_id !== source.owner_id) return false;
+  const item = source.content;
+  const row = candidate.content;
+  if (item.record_kind === "ACTION" && item.position_id && row.record_kind === "POSITION") return row.agent_id === item.agent_id
+    && row.wallet_id === item.wallet_id && row.network_id === item.network_id && row.asset_id === item.asset_id
+    && row.position_id === item.position_id && row.strategy_revision === item.strategy_revision
+    && row.mandate_id === item.mandate_id;
+  if (item.record_kind === "POSITION" && row.record_kind === "ACTION") return row.agent_id === item.agent_id
+    && row.wallet_id === item.wallet_id && row.network_id === item.network_id && row.asset_id === item.asset_id
+    && row.position_id === item.position_id && row.strategy_revision === item.strategy_revision
+    && row.mandate_id === item.mandate_id;
+  if (item.record_kind === "CAPITAL_FLOW" && row.record_kind === "ACTION") return row.agent_id === item.agent_id
+    && row.wallet_id === item.wallet_id && row.network_id === item.network_id && row.position_id == null
+    && row.flow_id === item.flow_id;
+  if (item.record_kind === "ACTION" && !item.position_id && row.record_kind === "CAPITAL_FLOW") return row.agent_id === item.agent_id
+    && row.wallet_id === item.wallet_id && row.network_id === item.network_id && row.flow_id === item.flow_id;
+  if (item.record_kind === "EDGE_EVIDENCE" && row.record_kind === "POSITION") return row.agent_id === item.agent_id
+    && row.strategy_revision === item.strategy_revision;
+  return row.agent_id === item.agent_id && row.wallet_id === item.wallet_id && row.network_id === item.network_id;
+}
 
 export function AccountViews({ initialView = "Agents", sourceRecordId }: { initialView?: AccountViewName; sourceRecordId?: string }) {
   const [view, setView] = useState<AccountViewName>(initialView);
@@ -15,6 +70,7 @@ export function AccountViews({ initialView = "Agents", sourceRecordId }: { initi
   const [error, setError] = useState("");
   const [moreError, setMoreError] = useState("");
   const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [relatedIncomplete, setRelatedIncomplete] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -24,12 +80,27 @@ export function AccountViews({ initialView = "Agents", sourceRecordId }: { initi
     setMoreError("");
     setRecords([]);
     setNextOffset(null);
+    setRelatedIncomplete(false);
     try {
       const page = await loadAccountViews();
       let nextRecords = page.records;
-      if (sourceRecordId && !nextRecords.some((record) => record.record_id === sourceRecordId)) {
-        const source = await getAccountView(sourceRecordId);
-        nextRecords = [...nextRecords, source];
+      let source = sourceRecordId ? nextRecords.find((record) => record.record_id === sourceRecordId) : undefined;
+      if (sourceRecordId && !source) {
+        source = await getAccountView(sourceRecordId);
+        nextRecords = mergeAccountRecords(nextRecords, [source]);
+      }
+      if (source) {
+        const resolvedSource = source;
+        const queries = relatedQueries(resolvedSource);
+        const relatedResults = await Promise.all(queries.map(async (filters) => {
+          try { return await loadAccountViews(filters); } catch { return null; }
+        }));
+        const relatedPages = relatedResults.filter((related) => related !== null);
+        const exactRelated = relatedPages.flatMap((related) => related.records)
+          .filter((record) => relatedRecordMatches(resolvedSource, record));
+        nextRecords = mergeAccountRecords(nextRecords, exactRelated);
+        setRelatedIncomplete(relatedResults.some((related) => related === null)
+          || relatedPages.some((related) => related.next_offset != null));
       }
       setRecords(nextRecords);
       setNextOffset(page.next_offset);
@@ -61,7 +132,7 @@ export function AccountViews({ initialView = "Agents", sourceRecordId }: { initi
     setMoreError("");
     try {
       const page = await loadAccountViews({}, nextOffset);
-      setRecords((current) => [...current, ...page.records]);
+      setRecords((current) => mergeAccountRecords(current, page.records));
       setNextOffset(page.next_offset);
     } catch {
       setMoreError("More account records could not be loaded. Existing records remain unchanged.");
@@ -90,9 +161,10 @@ export function AccountViews({ initialView = "Agents", sourceRecordId }: { initi
         <p>{error} Existing records remain unchanged.</p>
         <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button>
       </section>}
-      {!loading && !error && view === "Agents" && <AgentRecords records={records} />}
-      {!loading && !error && view === "Positions" && <PositionRecords records={records} />}
+      {!loading && !error && view === "Agents" && <AgentRecords records={records} sourceRecordId={sourceRecordId} />}
+      {!loading && !error && view === "Positions" && <PositionRecords records={records} sourceRecordId={sourceRecordId} />}
       {!loading && !error && view === "Funds" && <FundRecords records={records} />}
+      {!loading && !error && relatedIncomplete && <p role="status" aria-live="polite">Related history exceeds this bounded page. The exact saved source remains visible; load more records to inspect additional rows.</p>}
       {!loading && !error && <p className="muted">Account summaries do not pool wallet balances or permission. Account value, percent return, and drawdown are unavailable.</p>}
       {!loading && !error && nextOffset != null && <div>
         {moreError && <p role="alert">{moreError}</p>}

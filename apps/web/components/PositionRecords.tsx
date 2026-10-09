@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { actionsForPosition, filterPositions, formatAmount, formatResult, formatValue, type AccountViewRecord } from "../lib/account-views";
 
-export function PositionRecords({ records }: { records: AccountViewRecord[] }) {
+export function PositionRecords({ records, sourceRecordId }: { records: AccountViewRecord[]; sourceRecordId?: string }) {
   const [agentId, setAgentId] = useState("");
   const [walletId, setWalletId] = useState("");
   const [assetId, setAssetId] = useState("");
@@ -16,6 +16,19 @@ export function PositionRecords({ records }: { records: AccountViewRecord[] }) {
   const wallets = [...new Set(records.filter((row) => row.content.record_kind === "POSITION").map((row) => row.content.wallet_id).filter((value): value is string => Boolean(value)))];
   const assets = [...new Set(records.filter((row) => row.content.record_kind === "POSITION").map((row) => row.content.asset_id).filter((value): value is string => Boolean(value)))];
   const revisions = [...new Set(records.filter((row) => row.content.record_kind === "POSITION").map((row) => row.content.strategy_revision).filter((value): value is string => Boolean(value)))];
+  const sourceAction = records.find((record) => record.record_id === sourceRecordId
+    && record.content.record_kind === "ACTION" && record.content.position_id);
+  const sourceActionPosition = sourceAction && records.find((row) => row.content.record_kind === "POSITION"
+    && row.owner_id === sourceAction.owner_id && row.content.agent_id === sourceAction.content.agent_id
+    && row.content.wallet_id === sourceAction.content.wallet_id && row.content.network_id === sourceAction.content.network_id
+    && row.content.asset_id === sourceAction.content.asset_id && row.content.position_id === sourceAction.content.position_id
+    && row.content.strategy_revision === sourceAction.content.strategy_revision
+    && row.content.mandate_id === sourceAction.content.mandate_id);
+  const unmatchedSourceAction = sourceAction && !sourceActionPosition ? sourceAction : undefined;
+  const sourceEdge = records.find((record) => record.record_id === sourceRecordId && record.content.record_kind === "EDGE_EVIDENCE");
+  const sourceEdgePosition = sourceEdge && positions.find((position) => position.owner_id === sourceEdge.owner_id
+    && position.content.agent_id === sourceEdge.content.agent_id
+    && position.content.strategy_revision === sourceEdge.content.strategy_revision);
 
   return (
     <div className="stack">
@@ -42,6 +55,21 @@ export function PositionRecords({ records }: { records: AccountViewRecord[] }) {
         </label>
       </div>
       {!positions.length && <p className="muted">No positions match these filters.</p>}
+      {unmatchedSourceAction && <section className="panel" aria-label="Exact source action">
+        <h2>Exact saved source action</h2>
+        <p>The owner-matched parent position is unavailable. This saved action is shown without inferring or assigning a position relationship.</p>
+        <ul><li id={`record-${unmatchedSourceAction.record_id}`}>
+          {unmatchedSourceAction.content.action_id} · {unmatchedSourceAction.content.status} · {unmatchedSourceAction.content.updated_at}
+          {unmatchedSourceAction.content.reason && <p>{unmatchedSourceAction.content.reason}</p>}
+        </li></ul>
+      </section>}
+      {sourceEdge && !sourceEdgePosition && <section className="panel" id={`record-${sourceEdge.record_id}`} aria-label="Exact edge evidence source">
+        <h2>Exact saved revision evidence</h2>
+        <p>No matching position is available in the bounded account page. This saved evidence is shown without assigning it to a position.</p>
+        <p>{sourceEdge.content.agent_id} · {sourceEdge.content.strategy_revision} · {sourceEdge.content.edge_revision} · {sourceEdge.content.edge_evidence_status ?? sourceEdge.content.status} · {sourceEdge.content.updated_at}</p>
+        {sourceEdge.content.reason && <p>{sourceEdge.content.reason}</p>}
+        <p>Record ID: <code>{sourceEdge.record_id}</code></p>
+      </section>}
       {positions.map((position) => {
         const { content } = position;
         const actions = actionsForPosition(records, position);

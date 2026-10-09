@@ -1048,7 +1048,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
 
   const accountHeaders = { Authorization: `Bearer ${tokens.a}` };
   const accountPath = `${process.env.P03_API_URL}/v1/account-views`;
-  const beforeResponse = await page.request.get(accountPath, { headers: accountHeaders });
+  const beforeResponse = await page.request.get(`${accountPath}?limit=500`, { headers: accountHeaders });
   expect(beforeResponse.status()).toBe(200);
   const financialBefore = await beforeResponse.json();
   expect(financialBefore.records).toHaveLength(Number(process.env.P19_ACCOUNT_RECORD_COUNT));
@@ -1057,7 +1057,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
     headers: { Authorization: `Bearer ${tokens.b}` },
   });
   expect(foreign.status()).toBe(404);
-  const ownerB = await page.request.get(accountPath, { headers: { Authorization: `Bearer ${tokens.b}` } });
+  const ownerB = await page.request.get(`${accountPath}?limit=500`, { headers: { Authorization: `Bearer ${tokens.b}` } });
   expect((await ownerB.json()).records).toEqual([]);
 
   const agentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
@@ -1065,9 +1065,31 @@ test("P19 account views, exact owner scope, context controls and financial histo
   const context = page.getByRole("region", { name: `${agentId} context` });
   await expect(context).toContainText("Agent context · version 1");
   await expect(context).toContainText("SUGGESTED");
-  await expect(context.getByRole("button", { name: "Open source record" })).toHaveCount(1);
+  await expect(context.getByRole("button", { name: "Open source record" })).toHaveCount(2);
   await shot(page, project, "p19-agent-context-before-adoption");
-  await context.getByRole("button", { name: "Open source record" }).click();
+  const sourceActionId = agentId === "agent-a" ? process.env.P19_SOURCE_ACTION_ID : process.env.P19_SOURCE_ACTION_B_ID;
+  const sourcePositionId = agentId === "agent-a" ? process.env.P19_SOURCE_POSITION_ID : process.env.P19_SOURCE_POSITION_B_ID;
+  await context.getByRole("button", { name: "Open source record" }).nth(0).click();
+  await expect(page).toHaveURL(new RegExp(`#\\/agents\\?record=${sourceActionId}`));
+  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  const exactSourceAction = page.locator(`#record-${sourceActionId}`);
+  await expect(exactSourceAction).toHaveCount(1);
+  await expect(exactSourceAction).toBeVisible();
+  await expect(exactSourceAction).toContainText(agentId === "agent-a" ? "action-a-failed-2 · REVERTED" : "action-b-failed-paged · REVERTED");
+  const exactSourcePosition = page.locator(`#record-${sourcePositionId}`);
+  await expect(exactSourcePosition).toHaveCount(1);
+  await expect(exactSourcePosition).toContainText(agentId === "agent-a" ? "position-a-2" : "position-b-paged");
+  await expect(exactSourcePosition).toContainText(agentId === "agent-a" ? "action-a-failed-2 · REVERTED" : "action-b-failed-paged · REVERTED");
+  await page.getByRole("button", { name: "Load more records" }).click();
+  await expect(exactSourceAction).toHaveCount(1);
+  await expect(exactSourcePosition).toHaveCount(1);
+  await expect(exactSourceAction).toBeVisible();
+  await page.goBack();
+  const contextCardForResearch = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+  await contextCardForResearch.getByRole("button", { name: "Inspect agent context" }).click();
+  const contextForResearch = page.getByRole("region", { name: `${agentId} context` });
+  await expect(contextForResearch).toContainText("Agent context · version 1");
+  await contextForResearch.getByRole("button", { name: "Open source record" }).nth(1).click();
   await expect(page).toHaveURL(new RegExp(`#\\/research\\/.*source=${process.env.P19_RESEARCH_SOURCE_ID}`));
   await expect(page.getByRole("heading", { name: "Your request", level: 1 })).toBeVisible();
   await expect(page.getByText(`Opened source record ${process.env.P19_RESEARCH_SOURCE_ID}.`, { exact: true })).toBeVisible();
@@ -1161,16 +1183,18 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await expect(reopenedContext).toContainText("Agent context · version 5");
   await expect(reopenedContext).toContainText("CLEARED");
   await expect(reopenedContext.getByRole("listitem")).toHaveCount(0);
-  const afterContext = await page.request.get(accountPath, { headers: accountHeaders });
+  const afterContext = await page.request.get(`${accountPath}?limit=500`, { headers: accountHeaders });
   expect(await afterContext.json()).toEqual(financialBefore);
   const accountUrl = new URL(page.url());
   accountUrl.hash = "#/agents";
   record(`p19-context-${project}`, { ownerId: financialBefore.records[0].owner_id, agentId, agentRecordId,
     contextVersions: [1, 2, 3, 4, 5], statuses: ["SUGGESTED", "ADOPTED"], failedCorrectionPreservedVersion: 2,
+    sourceActionId, sourcePositionId,
     researchSourceId: process.env.P19_RESEARCH_SOURCE_ID,
     finalState: "CLEARED", financialRecordsUnchanged: true, foreignRecordStatus: foreign.status(), url: accountUrl.toString() });
 
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Positions" }).click();
+  await page.getByRole("button", { name: "Load more records" }).click();
   await page.getByLabel("Agent").selectOption("agent-a");
   await page.getByLabel("Wallet").selectOption("wallet-a");
   await expect(page.locator("summary")).toHaveCount(2);
@@ -1207,10 +1231,30 @@ test("P19 account views, exact owner scope, context controls and financial histo
     const failedSnapshot = permissionAgent.locator("li").filter({ hasText: "approval-a-v5 · FAILED · NEVER_ACTIVE" });
     await expect(failedSnapshot.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/)).toBeVisible();
     await failedSnapshot.locator("summary").click();
-    await expect(failedSnapshot.locator("dd").nth(6)).toContainText("2026-10-09T08:02:00Z");
+    await expect(failedSnapshot.locator("dd").nth(6)).toContainText("2026-10-09T11:02:00Z");
+    const pendingSnapshot = permissionAgent.locator("li").filter({ hasText: "approval-a-change-pending-v7 · CHANGE_PENDING · NEVER_ACTIVE" });
+    await pendingSnapshot.locator("summary").click();
+    await expect(pendingSnapshot).toContainText("Not yet checked");
+    await expect(pendingSnapshot).toContainText("2026-10-09T13:01:00Z");
+    await expect(pendingSnapshot).toContainText("Not applied (never active)");
+    await expect(pendingSnapshot).toContainText("approval-a-v4");
+    const cancelledChange = permissionAgent.locator("li").filter({ hasText: "approval-a-change-cancelled-v8 · CANCELLED · NEVER_ACTIVE" });
+    await cancelledChange.locator("summary").click();
+    await expect(cancelledChange).toContainText("Not checked before cancellation");
+    await expect(cancelledChange).toContainText("2026-10-09T14:02:00Z");
   } else {
-    await expect(permissionAgent.getByText(/approval-b-v6 · CHANGE_APPLIED · ACTIVE/)).toBeVisible();
+    await expect(permissionAgent.getByText(/approval-b-v6 · CHANGE_APPLIED · ACTIVE AT APPLICATION/)).toBeVisible();
   }
+  const initialAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "agent-c", level: 2 }) });
+  const failedInitial = initialAgent.locator("li").filter({ hasText: "approval-c-initial-failed-v1 · FAILED · NEVER_ACTIVE" });
+  await failedInitial.locator("summary").click();
+  await expect(failedInitial).toContainText("No earlier approval (initial attempt)");
+  await expect(failedInitial).toContainText("2026-10-09T15:02:00Z");
+  const cancelledInitial = initialAgent.locator("li").filter({ hasText: "approval-c-initial-cancelled-v1 · CANCELLED · NEVER_ACTIVE" });
+  await cancelledInitial.locator("summary").click();
+  await expect(cancelledInitial).toContainText("No owner approval recorded");
+  await expect(cancelledInitial).toContainText("Not checked before cancellation");
+  await expect(cancelledInitial).toContainText("2026-10-09T16:01:00Z");
   await shot(page, project, "p19-permission-history");
   await page.getByRole("button", { name: "Research" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();

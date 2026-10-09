@@ -101,8 +101,12 @@ export interface AccountViewRecord {
 export interface PositionFilters {
   agent_id?: string;
   wallet_id?: string;
+  network_id?: string;
   asset_id?: string;
   strategy_revision?: string;
+  position_id?: string;
+  flow_id?: string;
+  record_kind?: RecordKind;
 }
 
 export interface ContextEntry {

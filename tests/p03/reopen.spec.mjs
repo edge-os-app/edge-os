@@ -172,7 +172,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   });
   expect(exactContext.status()).toBe(200);
   expect(await exactContext.json()).toMatchObject({ memory_version: 5, state: "CLEARED", entries: [] });
-  const exactAccounts = await page.request.get(`${process.env.P03_API_URL}/v1/account-views`, {
+  const exactAccounts = await page.request.get(`${process.env.P03_API_URL}/v1/account-views?limit=500`, {
     headers: { Authorization: `Bearer ${tokens.a}` },
   });
   expect(exactAccounts.status()).toBe(200);
@@ -189,6 +189,14 @@ test("after an API restart the saved rules reopen with their exact review text",
     headers: { Authorization: `Bearer ${tokens.a}` },
   });
   expect(reopenedResearch.status()).toBe(200);
+  await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${p19.sourceActionId}`);
+  const restartedSourceAction = page.locator(`#record-${p19.sourceActionId}`);
+  const restartedSourcePosition = page.locator(`#record-${p19.sourcePositionId}`);
+  await expect(restartedSourceAction).toHaveCount(1);
+  await expect(restartedSourceAction).toBeVisible();
+  await expect(restartedSourcePosition).toHaveCount(1);
+  await expect(restartedSourcePosition).toBeVisible();
+  await expect(restartedSourcePosition).toContainText(p19.agentId === "agent-a" ? "action-a-failed-2 · REVERTED" : "action-b-failed-paged · REVERTED");
   expect(p19Writes, "reopen after API restart must only issue reads").toBe(0);
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-account-context-reopened-after-restart.png`), fullPage: true });
 });

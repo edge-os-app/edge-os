@@ -157,7 +157,7 @@ class AccountViewContent(StrictModel):
             "EDGE_EVIDENCE": (self.strategy_revision, self.edge_revision, self.edge_evidence_status),
             "PERMISSION_SNAPSHOT": (self.wallet_id, self.network_id, self.strategy_revision, self.mandate_id,
                                     self.approval_id, self.activation_state, self.terms, self.terms_hash,
-                                    self.signer_binding, self.policy_binding, self.requested_at, self.checked_at),
+                                    self.signer_binding, self.policy_binding, self.requested_at),
         }[self.record_kind]
         if any(value is None for value in required):
             raise ValueError(f"{self.record_kind} is missing a required identity or state")
@@ -185,18 +185,25 @@ class AccountViewContent(StrictModel):
         if self.record_kind == "PERMISSION_SNAPSHOT":
             active = self.status in {"CURRENT", "CHANGE_APPLIED"}
             ended = self.status in {"EARLIER", "REMOVED"}
-            if active and (self.activation_state != "ACTIVE" or not self.approved_at or not self.applied_at):
+            if active and (self.activation_state != "ACTIVE" or not self.approved_at or not self.checked_at or not self.applied_at):
                 raise ValueError("current permission snapshots require applied approval times")
-            if ended and (self.activation_state != "ENDED" or not self.approved_at or not self.applied_at):
+            if ended and (self.activation_state != "ENDED" or not self.approved_at or not self.checked_at or not self.applied_at):
                 raise ValueError("earlier permission snapshots require their original approval times")
             if self.status in {"CHANGE_PENDING", "FAILED", "CANCELLED"} and self.activation_state != "NEVER_ACTIVE":
                 raise ValueError("unapplied permission changes must remain never active")
-            if self.status == "FAILED" and not self.failed_at:
-                raise ValueError("failed permission snapshots require a failure time")
-            if self.status == "CANCELLED" and not self.cancelled_at:
-                raise ValueError("cancelled permission snapshots require a cancellation time")
-            if self.status in {"EARLIER", "CHANGE_APPLIED", "CHANGE_PENDING", "FAILED", "CANCELLED", "REMOVED"} and not self.predecessor_approval_id:
-                raise ValueError("permission history entries require their predecessor approval")
+            if self.status in {"CHANGE_APPLIED", "CHANGE_PENDING"} and not self.predecessor_approval_id:
+                raise ValueError("permission changes require their predecessor approval")
+            if self.status == "CHANGE_PENDING":
+                if not self.approved_at or self.checked_at or self.applied_at or self.failed_at or self.cancelled_at:
+                    raise ValueError("pending permission changes require owner approval and no completed outcome")
+            if self.status == "FAILED":
+                if not self.checked_at or not self.failed_at or self.applied_at or self.cancelled_at:
+                    raise ValueError("failed permission attempts require a completed failed check and no application")
+            if self.status == "CANCELLED":
+                if not self.cancelled_at or self.applied_at or self.failed_at:
+                    raise ValueError("cancelled permission attempts require cancellation and no application")
+            if self.status in {"EARLIER", "REMOVED"} and self.applied_at is None:
+                raise ValueError("ended approval snapshots require their original application time")
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.terms_hash or ""):
                 raise ValueError("permission terms require a canonical SHA256 digest")
             canonical_terms = json.dumps(self.terms.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
@@ -282,9 +289,11 @@ def _list_records(
 def list_account_records(
     agent_id: str | None = Query(default=None, max_length=200),
     wallet_id: str | None = Query(default=None, max_length=200),
+    network_id: str | None = Query(default=None, max_length=200),
     asset_id: str | None = Query(default=None, max_length=200),
     position_id: str | None = Query(default=None, max_length=200),
     strategy_revision: str | None = Query(default=None, max_length=200),
+    flow_id: str | None = Query(default=None, max_length=200),
     record_kind: str | None = Query(default=None, max_length=80),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0, le=1_000_000),
@@ -293,8 +302,9 @@ def list_account_records(
 ) -> dict[str, Any]:
     """List records for the verified owner and apply exact identity filters."""
     records, next_offset = _list_records(session, principal, {
-        "agent_id": agent_id, "wallet_id": wallet_id, "asset_id": asset_id,
-        "position_id": position_id, "strategy_revision": strategy_revision, "record_kind": record_kind,
+        "agent_id": agent_id, "wallet_id": wallet_id, "network_id": network_id, "asset_id": asset_id,
+        "position_id": position_id, "strategy_revision": strategy_revision, "flow_id": flow_id,
+        "record_kind": record_kind,
     }, limit, offset)
     return {"records": records, "next_offset": next_offset}
 

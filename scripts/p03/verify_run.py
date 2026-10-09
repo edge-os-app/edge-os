@@ -133,6 +133,32 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
     second_agent["content"].update(agent_id="agent-b", wallet_id="wallet-b", status="STOPPED",
                                    permission_state="REMOVED", updated_at="2026-10-09T12:01:00Z")
     fixture.append(second_agent)
+    target_position = next(item for item in fixture if item["content"].get("record_kind") == "POSITION"
+                           and item["content"].get("position_id") == "position-a-2")
+    target_action = next(item for item in fixture if item["content"].get("record_kind") == "ACTION"
+                         and item["content"].get("action_id") == "action-a-failed-2")
+    fixture.remove(target_position)
+    fixture.remove(target_action)
+    filler_template = next(item for item in fixture if item["content"].get("record_kind") == "MONITORING")
+    for index in range(100):
+        filler = json.loads(json.dumps(filler_template))
+        filler["record_id"] = f"00000000-0000-4000-8000-{index + 100:012d}"
+        filler["operation_id"] = f"10000000-0000-4000-8000-{index + 100:012d}"
+        filler["content"].update(agent_id=f"fixture-monitor-{index:03d}", wallet_id=f"fixture-wallet-{index:03d}",
+                                  updated_at=f"2026-10-09T13:{index // 60:02d}:{index % 60:02d}Z")
+        fixture.append(filler)
+    target_position_b = json.loads(json.dumps(target_position))
+    target_position_b["record_id"] = "00000000-0000-4000-8000-000000000200"
+    target_position_b["operation_id"] = "10000000-0000-4000-8000-000000000200"
+    target_position_b["content"].update(agent_id="agent-b", wallet_id="wallet-b", position_id="position-b-paged",
+                                         strategy_revision="strategy-b-v1", mandate_id="mandate-b-v1")
+    target_action_b = json.loads(json.dumps(target_action))
+    target_action_b["record_id"] = "00000000-0000-4000-8000-000000000201"
+    target_action_b["operation_id"] = "10000000-0000-4000-8000-000000000201"
+    target_action_b["content"].update(agent_id="agent-b", wallet_id="wallet-b", position_id="position-b-paged",
+                                       strategy_revision="strategy-b-v1", mandate_id="mandate-b-v1",
+                                       action_id="action-b-failed-paged")
+    fixture.extend([target_position, target_action, target_position_b, target_action_b])
     for item in fixture:
         content = {**item["content"], "owner_id": owner_id}
         statement = (
@@ -152,23 +178,27 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
         raise RuntimeError("authenticated synthetic Research source did not reopen")
     context = json.loads((fixture_path.parent / "agent-context-v1.json").read_text())
     context.update(owner_id=owner_id, agent_id="agent-a")
-    context["entries"][-1]["source_refs"] = [research_source_id]
+    context["entries"][-1]["source_refs"] = [target_action["record_id"], research_source_id]
     def seed_context(agent_id: str, record_id: str, operation_id: str, source_id: str, created_at: str) -> None:
         saved_context = json.loads(json.dumps(context))
         saved_context.update(agent_id=agent_id)
-        saved_context["entries"][-1]["source_refs"] = [source_id]
+        saved_context["entries"][-1]["source_refs"] = [source_id, research_source_id]
         pg.psql(
             "insert into records(record_id, owner_id, record_type, schema_version, operation_id, created_at, content) values ("
             f"'{record_id}', '{owner_id}', 'AgentContextRecord', 'agent-context/1', '{operation_id}', "
             f"'{created_at}'::timestamptz, {sql_literal(json.dumps(saved_context, separators=(',', ':')))}::jsonb)"
         )
     seed_context("agent-a", "20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000101",
-                 research_source_id, "2026-10-09T12:00:00Z")
+                 target_action["record_id"], "2026-10-09T12:00:00Z")
     seed_context("agent-b", "20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000102",
-                 research_source_id, "2026-10-09T12:01:00Z")
+                 target_action_b["record_id"], "2026-10-09T12:01:00Z")
     return {"owner_id": owner_id, "record_ids": [item["record_id"] for item in fixture],
             "agent_record_ids": {"agent-a": fixture[0]["record_id"], "agent-b": second_agent["record_id"]},
             "research_source_id": research_source_id,
+            "source_action_ids": {"agent-a": target_action["record_id"], "agent-b": target_action_b["record_id"]},
+            "source_position_ids": {"agent-a": target_position["record_id"], "agent-b": target_position_b["record_id"]},
+            "position_record_ids": {"position-a-1": next(item["record_id"] for item in fixture if item["content"].get("position_id") == "position-a-1"),
+                                     "position-a-2": target_position["record_id"]},
             "financial_fixture": fixture,
             "account_snapshot": account_history_snapshot(pg, owner_id)}
 
@@ -292,7 +322,7 @@ def main() -> int:
         p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
         rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
         ok &= rec.step("P19 authored account and context fixtures seeded for the verified owner",
-                       len(p19_fixtures["record_ids"]) == len(json.loads((harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json").read_text())) + 1,
+                       len(p19_fixtures["record_ids"]) == len(json.loads((harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json").read_text())) + 103,
                        {"records": len(p19_fixtures["record_ids"])})
 
         status_none, _ = http("GET", f"{api_url}/v1/me")
@@ -303,9 +333,12 @@ def main() -> int:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
                       "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
                       "P19_AGENT_B_RECORD_ID": p19_fixtures["agent_record_ids"]["agent-b"],
-                      "P19_FIRST_POSITION_ID": p19_fixtures["record_ids"][1],
-                      "P19_SECOND_POSITION_ID": p19_fixtures["record_ids"][2],
-                      "P19_SOURCE_ACTION_ID": p19_fixtures["record_ids"][4],
+                      "P19_FIRST_POSITION_ID": p19_fixtures["position_record_ids"]["position-a-1"],
+                      "P19_SECOND_POSITION_ID": p19_fixtures["position_record_ids"]["position-a-2"],
+                      "P19_SOURCE_ACTION_ID": p19_fixtures["source_action_ids"]["agent-a"],
+                      "P19_SOURCE_ACTION_B_ID": p19_fixtures["source_action_ids"]["agent-b"],
+                      "P19_SOURCE_POSITION_ID": p19_fixtures["source_position_ids"]["agent-a"],
+                      "P19_SOURCE_POSITION_B_ID": p19_fixtures["source_position_ids"]["agent-b"],
                       "P19_RESEARCH_SOURCE_ID": p19_fixtures["research_source_id"],
                       "P19_ACCOUNT_RECORD_COUNT": str(len(p19_fixtures["record_ids"])),
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}

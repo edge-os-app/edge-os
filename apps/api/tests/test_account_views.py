@@ -49,6 +49,20 @@ def test_account_views_keep_same_asset_positions_and_sales_attributed(client, ow
     }
     wallet_a = client.get("/v1/account-views?wallet_id=wallet-a&position_id=position-a-2", headers=owner_a)
     assert {row["content"]["position_id"] for row in wallet_a.json()["records"]} == {"position-a-2"}
+    exact_position = client.get(
+        "/v1/account-views?record_kind=POSITION&agent_id=agent-a&wallet_id=wallet-a&network_id=monad%3A143"
+        "&asset_id=monad%3A143%2Fasset%3AMOE&position_id=position-a-1&strategy_revision=strategy-a-v3",
+        headers=owner_a,
+    )
+    assert exact_position.status_code == 200
+    assert {row["content"]["record_kind"] for row in exact_position.json()["records"]} == {"POSITION"}
+    assert {row["content"]["position_id"] for row in exact_position.json()["records"]} == {"position-a-1"}
+    exact_flow = client.get(
+        "/v1/account-views?record_kind=CAPITAL_FLOW&agent_id=agent-a&wallet_id=wallet-a"
+        "&network_id=monad%3A143&flow_id=flow-a-deposit-1", headers=owner_a,
+    )
+    assert exact_flow.status_code == 200
+    assert {row["content"]["flow_id"] for row in exact_flow.json()["records"]} == {"flow-a-deposit-1"}
     revision = client.get("/v1/account-views?strategy_revision=strategy-a-v3", headers=owner_a)
     assert {row["content"].get("position_id") for row in revision.json()["records"] if row["content"]["record_kind"] == "POSITION"} == {"position-a-1"}
     actions = [row["content"] for row in rows if row["content"]["record_kind"] == "ACTION"]
@@ -177,6 +191,79 @@ def test_owner_can_read_current_earlier_changed_and_never_active_permission_snap
     assert failed["checked_at"] and failed["failed_at"] and failed["terms_hash"]
     foreign = client.get(f"/v1/account-views/{failed_record['record_id']}", headers=owner_b)
     assert foreign.status_code == 404 and foreign.json()["code"] == "not_found"
+
+
+def test_truthful_permission_lifecycle_states_are_readable_without_invented_history(client, owner_a):
+    from edge_os_api.account_views import SCHEMA_VERSION
+
+    fixture = _seed(client, owner_a)
+    source = next(row["content"] for row in fixture
+                  if row["content"]["record_kind"] == "PERMISSION_SNAPSHOT"
+                  and row["content"]["status"] == "FAILED")
+    owner_id = client.get("/v1/me", headers=owner_a).json()["user_id"]
+    cases = [
+        ("pending-change", {
+            "status": "CHANGE_PENDING", "activation_state": "NEVER_ACTIVE",
+            "approval_id": "approval-a-change-pending", "predecessor_approval_id": "approval-a-v4",
+            "requested_at": "2026-10-09T13:00:00Z", "approved_at": "2026-10-09T13:01:00Z",
+            "checked_at": None, "applied_at": None, "failed_at": None, "cancelled_at": None,
+            "updated_at": "2026-10-09T13:01:00Z",
+        }),
+        ("cancelled-change-before-check", {
+            "status": "CANCELLED", "activation_state": "NEVER_ACTIVE",
+            "approval_id": "approval-a-change-cancelled", "predecessor_approval_id": "approval-a-v4",
+            "requested_at": "2026-10-09T14:00:00Z", "approved_at": "2026-10-09T14:01:00Z",
+            "checked_at": None, "applied_at": None, "failed_at": None,
+            "cancelled_at": "2026-10-09T14:02:00Z", "updated_at": "2026-10-09T14:02:00Z",
+        }),
+        ("failed-initial-approval", {
+            "status": "FAILED", "activation_state": "NEVER_ACTIVE",
+            "approval_id": "approval-a-initial-failed", "predecessor_approval_id": None,
+            "requested_at": "2026-10-09T15:00:00Z", "approved_at": "2026-10-09T15:01:00Z",
+            "checked_at": "2026-10-09T15:02:00Z", "applied_at": None,
+            "failed_at": "2026-10-09T15:03:00Z", "cancelled_at": None,
+            "updated_at": "2026-10-09T15:03:00Z",
+        }),
+        ("cancelled-initial-attempt", {
+            "status": "CANCELLED", "activation_state": "NEVER_ACTIVE",
+            "approval_id": "approval-a-initial-cancelled", "predecessor_approval_id": None,
+            "requested_at": "2026-10-09T16:00:00Z", "approved_at": None,
+            "checked_at": None, "applied_at": None, "failed_at": None,
+            "cancelled_at": "2026-10-09T16:01:00Z", "updated_at": "2026-10-09T16:01:00Z",
+        }),
+    ]
+    record_ids: dict[str, str] = {}
+    with client.app.state.session_factory() as session:
+        for index, (case_name, updates) in enumerate(cases, start=1):
+            record_id = uuid.uuid4()
+            record_ids[case_name] = str(record_id)
+            content = {**source, **updates, "owner_id": owner_id}
+            session.add(Record(
+                record_id=record_id, owner_id=uuid.UUID(owner_id), record_type="AccountViewRecord",
+                schema_version=SCHEMA_VERSION, operation_id=uuid.uuid4(),
+                created_at=dt.datetime(2026, 10, 9, 17, index, tzinfo=dt.timezone.utc), content=content,
+            ))
+        session.commit()
+
+    for case_name, record_id in record_ids.items():
+        exact = client.get(f"/v1/account-views/{record_id}", headers=owner_a)
+        assert exact.status_code == 200, case_name
+        exact_content = exact.json()["content"]
+        expected = next(updates for name, updates in cases if name == case_name)
+        assert exact_content["approval_id"] == expected["approval_id"]
+        assert exact_content["predecessor_approval_id"] == expected["predecessor_approval_id"]
+        assert exact_content["checked_at"] == expected["checked_at"]
+        assert exact_content["applied_at"] is None
+        assert exact_content["terms_hash"] == source["terms_hash"]
+        assert exact_content["terms"] == source["terms"]
+        source_read = client.get(f"/v1/account-views/source/{record_id}", headers=owner_a)
+        assert source_read.status_code == 200, case_name
+        assert source_read.json()["destination_record_id"] == record_id
+
+    listed = client.get("/v1/account-views?record_kind=PERMISSION_SNAPSHOT", headers=owner_a)
+    assert listed.status_code == 200
+    listed_ids = {record["record_id"] for record in listed.json()["records"]}
+    assert set(record_ids.values()) <= listed_ids
 
 
 def test_filtering_never_reads_another_owners_records(client, owner_a, owner_b):

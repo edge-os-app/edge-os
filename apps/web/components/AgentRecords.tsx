@@ -4,8 +4,10 @@ import { useEffect, useState } from "react";
 import { agentContextApi, formatAmount, type AccountViewRecord, type AgentContextRecord } from "../lib/account-views";
 import { AgentContext } from "./AgentContext";
 
-export function AgentRecords({ records }: { records: AccountViewRecord[] }) {
+export function AgentRecords({ records, sourceRecordId }: { records: AccountViewRecord[]; sourceRecordId?: string }) {
   const agents = records.filter((record) => record.content.record_kind === "AGENT");
+  const unmatchedSource = records.find((record) => record.record_id === sourceRecordId
+    && (record.content.record_kind === "MONITORING" || record.content.record_kind === "PERMISSION_SNAPSHOT"));
   const [selected, setSelected] = useState<string | null>(null);
   const [context, setContext] = useState<AgentContextRecord | null>(null);
   const [contextError, setContextError] = useState("");
@@ -24,7 +26,22 @@ export function AgentRecords({ records }: { records: AccountViewRecord[] }) {
     return () => { current = false; };
   }, [selected, refresh]);
 
-  if (!agents.length) return <p className="muted">No saved agent records.</p>;
+  if (!agents.length) return unmatchedSource ? <section className="panel" id={`record-${unmatchedSource.record_id}`} aria-label="Exact agent source">
+    <h2>Exact saved {unmatchedSource.content.record_kind === "MONITORING" ? "monitoring" : "permission"} source</h2>
+    <p>The related agent summary is unavailable. This exact saved record is shown without inferring a relationship.</p>
+    <dl>
+      <dt>Owner / agent / wallet / network</dt><dd>{unmatchedSource.owner_id} · {unmatchedSource.content.agent_id} · {unmatchedSource.content.wallet_id} · {unmatchedSource.content.network_id}</dd>
+      <dt>Status / updated</dt><dd>{unmatchedSource.content.status} · {unmatchedSource.content.updated_at}</dd>
+      {unmatchedSource.content.record_kind === "MONITORING" && <>
+        <dt>Health / evaluations</dt><dd>{unmatchedSource.content.health ?? "Unknown"} · {unmatchedSource.content.evaluation_attempts ?? "Unknown"} attempts / {unmatchedSource.content.evaluation_completions ?? "Unknown"} completions</dd>
+      </>}
+      {unmatchedSource.content.record_kind === "PERMISSION_SNAPSHOT" && <>
+        <dt>Approval / activation</dt><dd>{unmatchedSource.content.approval_id} · {unmatchedSource.content.activation_state}</dd>
+        <dt>Terms hash</dt><dd>{unmatchedSource.content.terms_hash}</dd>
+      </>}
+    </dl>
+    <p>Record ID: <code>{unmatchedSource.record_id}</code></p>
+  </section> : <p className="muted">No saved agent records.</p>;
   return (
     <div className="stack">
       {agents.map(({ record_id, owner_id, content }) => {
@@ -57,22 +74,23 @@ export function AgentRecords({ records }: { records: AccountViewRecord[] }) {
               : <div role="status" aria-live="polite">{contextError || "Loading agent context…"}{contextError && <button className="btn btn-ghost" type="button" style={{ minHeight: 44 }} onClick={() => setRefresh((value) => value + 1)}>Try again</button>}</div>
           )}
           <h3>Permission approval history · synthetic records</h3>
+          <p>Each snapshot records history at its own time. It does not prove current permission. A change marked active was active when applied; the agent summary above shows the current saved permission state.</p>
           {!permissions.length && <p>No saved permission approval snapshots.</p>}
           <ul>{permissions.map((snapshot) => {
             const item = snapshot.content;
             return <li id={`record-${snapshot.record_id}`} key={snapshot.record_id}>
               <details>
                 <summary style={{ minHeight: 44, cursor: "pointer" }}>
-                  {item.approval_id} · {item.status} · {item.activation_state}
+                  {item.approval_id} · {item.status} · {item.status === "CHANGE_APPLIED" ? "ACTIVE AT APPLICATION" : item.activation_state}
                 </summary>
                 <dl>
                   <dt>Owner / agent / wallet / network</dt><dd>{snapshot.owner_id} · {item.agent_id} · {item.wallet_id} · {item.network_id}</dd>
                   <dt>Strategy revision / mandate</dt><dd>{item.strategy_revision} · {item.mandate_id}</dd>
-                  <dt>Predecessor / successor approval</dt><dd>{item.predecessor_approval_id ?? "none"} · {item.successor_approval_id ?? "none"}</dd>
+                  <dt>Predecessor / successor approval</dt><dd>{item.predecessor_approval_id ?? (item.status === "FAILED" || item.status === "CANCELLED" ? "No earlier approval (initial attempt)" : "No predecessor recorded")} · {item.successor_approval_id ?? "No successor recorded"}</dd>
                   <dt>Signer / policy binding</dt><dd>{item.signer_binding} · {item.policy_binding}</dd>
-                  <dt>Requested / checked</dt><dd>{item.requested_at} · {item.checked_at}</dd>
-                  <dt>Approved / applied</dt><dd>{item.approved_at ?? "not approved"} · {item.applied_at ?? "not applied"}</dd>
-                  <dt>Failed / cancelled</dt><dd>{item.failed_at ?? "none"} · {item.cancelled_at ?? "none"}</dd>
+                  <dt>Requested / completed check</dt><dd>{item.requested_at ?? "Not recorded"} · {item.checked_at ?? (item.status === "CHANGE_PENDING" ? "Not yet checked" : item.status === "CANCELLED" ? "Not checked before cancellation" : "Not recorded")}</dd>
+                  <dt>Approved / applied</dt><dd>{item.approved_at ?? "No owner approval recorded"} · {item.applied_at ?? (item.activation_state === "NEVER_ACTIVE" ? "Not applied (never active)" : "Not recorded")}</dd>
+                  <dt>Failed / cancelled</dt><dd>{item.failed_at ?? "No failure recorded"} · {item.cancelled_at ?? "No cancellation recorded"}</dd>
                   <dt>Terms hash</dt><dd>{item.terms_hash}</dd>
                   <dt>Adopted capital</dt><dd>{item.terms?.adopted_capital.map((amount) => `${formatAmount(amount)} ${amount.asset_id}`).join("; ")}</dd>
                   <dt>Supported assets / routes</dt><dd>{item.terms?.supported_assets.join(", ")} · {item.terms?.supported_routes.join(", ")}</dd>

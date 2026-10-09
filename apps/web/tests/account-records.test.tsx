@@ -183,15 +183,34 @@ describe("direct account records", () => {
     const otherWallet: AccountViewRecord = { ...snapshot, record_id: "permission-other-wallet", content: {
       ...snapshot.content, wallet_id: "wallet-b", approval_id: "approval-b-v1",
     } };
+    const pending: AccountViewRecord = { ...snapshot, record_id: "permission-pending", content: {
+      ...snapshot.content, approval_id: "approval-a-change-pending", predecessor_approval_id: "approval-a-v4",
+      status: "CHANGE_PENDING", approved_at: "2026-10-09T13:01:00Z", checked_at: null, applied_at: null,
+      failed_at: null, cancelled_at: null,
+    } };
+    const failedInitial: AccountViewRecord = { ...snapshot, record_id: "permission-first-failed", content: {
+      ...snapshot.content, approval_id: "approval-a-initial-failed", predecessor_approval_id: null,
+      approved_at: "2026-10-09T15:01:00Z", checked_at: "2026-10-09T15:02:00Z",
+    } };
     const user = userEvent.setup();
-    render(<AgentRecords records={[agent, snapshot, otherWallet]} />);
+    render(<AgentRecords records={[agent, snapshot, otherWallet, pending, failedInitial]} />);
     expect(screen.getByText("Permission approval history · synthetic records")).toBeInTheDocument();
     expect(screen.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/)).toBeInTheDocument();
+    expect(screen.getByText(/approval-a-initial-failed · FAILED · NEVER_ACTIVE/)).toBeInTheDocument();
     expect(screen.queryByText(/approval-b-v1/)).toBeNull();
     await user.click(screen.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/));
-    expect(screen.getByText("Owner / agent / wallet / network").parentElement).toHaveTextContent("owner-a · agent-a · wallet-a · monad:143");
-    expect(screen.getByText("Adopted capital").parentElement).toHaveTextContent("600 quote:USD");
-    expect(screen.getByText("Failed / cancelled").parentElement).toHaveTextContent("2026-10-09T08:02:00Z");
+    const failedSnapshot = screen.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/).closest("details");
+    expect(failedSnapshot).not.toBeNull();
+    expect(failedSnapshot?.querySelector("dl")).toHaveTextContent("owner-a · agent-a · wallet-a · monad:143");
+    expect(failedSnapshot?.querySelector("dl")).toHaveTextContent("600 quote:USD");
+    expect(failedSnapshot?.querySelector("dl")).toHaveTextContent("2026-10-09T08:02:00Z");
+    await user.click(screen.getByText(/approval-a-initial-failed · FAILED · NEVER_ACTIVE/));
+    expect(screen.getByText(/No earlier approval \(initial attempt\)/)).toBeInTheDocument();
+    await user.click(screen.getByText(/approval-a-change-pending · CHANGE_PENDING · NEVER_ACTIVE/));
+    const pendingSnapshot = screen.getByText(/approval-a-change-pending · CHANGE_PENDING · NEVER_ACTIVE/).closest("details");
+    expect(pendingSnapshot).not.toBeNull();
+    expect(pendingSnapshot?.querySelector("dl")).toHaveTextContent("Not yet checked");
+    expect(pendingSnapshot?.querySelector("dl")).toHaveTextContent("Not applied (never active)");
   });
 
   it("keeps a lesson suggested until the owner adopts it", async () => {
@@ -313,6 +332,44 @@ describe("direct account records", () => {
     expect(await screen.findByText(/action-source-1 · SUBMISSION_UNKNOWN/)).toBeInTheDocument();
     expect(screen.getByText("Wallet actions whose flow is not loaded")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Funds" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("opens an exact paginated position action with its owner-matched parent and deduplicates Load more", async () => {
+    const user = userEvent.setup();
+    mocks.load.mockResolvedValueOnce({ records: [], next_offset: 100 })
+      .mockResolvedValueOnce({ records: [position, ownedSale], next_offset: null })
+      .mockResolvedValueOnce({ records: [position, ownedSale], next_offset: null });
+    mocks.getAccountView.mockResolvedValue(ownedSale);
+
+    render(<AccountViews initialView="Agents" sourceRecordId={ownedSale.record_id} />);
+
+    expect(await screen.findByText(/action-a-sale-1 · SUBMITTED/)).toBeInTheDocument();
+    expect(screen.getByText(/position-a-1 · monad:143\/asset:MOE · OPEN/)).toBeInTheDocument();
+    expect(screen.getAllByText(/action-a-sale-1 · SUBMITTED/)).toHaveLength(1);
+    expect(mocks.load).toHaveBeenNthCalledWith(2, {
+      agent_id: "agent-a", wallet_id: "wallet-a", network_id: "monad:143", asset_id: "monad:143/asset:MOE",
+      position_id: "position-a-1", strategy_revision: "strategy-a-v3", record_kind: "POSITION",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Load more records" }));
+    expect(await screen.findByText(/action-a-sale-1 · SUBMITTED/)).toBeInTheDocument();
+    expect(screen.getAllByText(/action-a-sale-1 · SUBMITTED/)).toHaveLength(1);
+    expect(document.querySelectorAll(`#record-${ownedSale.record_id}`)).toHaveLength(1);
+  });
+
+  it("keeps an exact source action visible without assigning an owner-mismatched position", async () => {
+    const foreignPosition = { ...position, record_id: "foreign-position-record", owner_id: "owner-b",
+      content: { ...position.content, owner_id: "owner-b" } };
+    mocks.load.mockResolvedValueOnce({ records: [], next_offset: 100 })
+      .mockResolvedValueOnce({ records: [foreignPosition], next_offset: null });
+    mocks.getAccountView.mockResolvedValue(ownedSale);
+    render(<AccountViews initialView="Agents" sourceRecordId={ownedSale.record_id} />);
+
+    const exactSource = await screen.findByRole("region", { name: "Exact source action" });
+    expect(exactSource).toContainElement(document.getElementById(`record-${ownedSale.record_id}`));
+    expect(exactSource).toHaveTextContent("The owner-matched parent position is unavailable");
+    expect(screen.queryByText(/position-a-1 · monad:143\/asset:MOE · OPEN/)).toBeNull();
+    expect(document.getElementById(`record-${foreignPosition.record_id}`)).toBeNull();
   });
 
   it("opens an exact wallet-level action from Funds even when its flow is not loaded", async () => {
