@@ -15,6 +15,8 @@ export function ReplayResult({ replay }: Props) {
   const dependencies = (field: "entry" | "exit") => inputs.essential_evidence.fields[field];
   const bindingSummary = (field: "entry" | "exit") => {
     const binding = dependencies(field);
+    if (binding.essential_dependencies === undefined) return `${binding.state}: dependency list not supplied`;
+    if (binding.essential_dependencies === null) return `${binding.state}: dependency list is null`;
     return `${binding.state}: ${binding.essential_dependencies.map(({ series, offset_buckets }) => `${series}@${offset_buckets}`).join(", ") || "no additional dependencies"}`;
   };
   return (

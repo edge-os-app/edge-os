@@ -199,6 +199,50 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
     expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
   await shot(page, project, "05-spot-replay-saved");
 
+  // Public API-created unavailable records exercise nullable saved binding shapes in the real UI.
+  const unavailableCases = [
+    { name: "unbound-entry", field: "entry", binding: { state: "UNBOUND" }, summary: "UNBOUND: dependency list is null", reason: "UNRESOLVED_ESSENTIAL_EVIDENCE" },
+    { name: "bound-exit-null", field: "exit", binding: { state: "BOUND", essential_dependencies: null }, summary: "BOUND: dependency list is null", reason: "INVALID_ESSENTIAL_BINDING" },
+  ];
+  for (const item of unavailableCases) {
+    const unavailableBody = structuredClone(replayPosts[0]);
+    unavailableBody.idempotency_key = `p13-r3-${project}-${item.name}`;
+    unavailableBody.run_configuration_id = `p13-r3-${project}-${item.name}`;
+    unavailableBody.essential_fields[item.field] = item.binding;
+    const unavailableResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+      headers: { Authorization: `Bearer ${tokens.a}` }, data: unavailableBody });
+    expect(unavailableResponse.status()).toBe(201);
+    const unavailableRecord = await unavailableResponse.json();
+    expect(unavailableRecord.content.result.status).toBe("UNAVAILABLE");
+    expect(unavailableRecord.content.result.reason.code).toBe(item.reason);
+    await replay.getByLabel("Saved replay ID").fill(unavailableRecord.replay_id);
+    await replay.getByRole("button", { name: "Load saved replay" }).click();
+    await expect(replay.getByTestId("spot-replay-id")).toHaveText(unavailableRecord.replay_id);
+    await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: unavailable");
+    await expect(replay.getByRole("alert")).toContainText(item.reason);
+    await expect(replay.getByTestId("spot-replay-saved-inputs")).toContainText(item.summary);
+    await expect(replay.getByTestId("spot-replay-result")).toContainText("No trading permission is granted.");
+    const unavailableMetrics = replay.getByRole("table", { name: "Quote-denominated replay metrics" });
+    for (const [metric, status] of Object.entries(unavailableRecord.content.result.metric_statuses)) {
+      await expect(unavailableMetrics).toContainText(metric.replaceAll("_", " "));
+      await expect(unavailableMetrics).toContainText(status);
+    }
+    await replay.getByText("Saved events, trades, and samples").click();
+    const visibleEvents = JSON.parse((await replay.locator(".spot-replay-json").textContent()) ?? "");
+    expect(visibleEvents.events).toEqual(unavailableRecord.content.result.events);
+    expect(visibleEvents.samples).toEqual(unavailableRecord.content.result.samples);
+    const unavailableAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    const seriousAxe = unavailableAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+    expect(seriousAxe, JSON.stringify(seriousAxe, null, 2)).toEqual([]);
+    record(`spot-replay-unavailable-${item.name}-${project}`, { url: requestUrl, revisionId,
+      replayId: unavailableRecord.replay_id, replayHash: unavailableRecord.content_sha256,
+      expectedEntryDependencies: unavailableRecord.content.inputs.essential_evidence.fields.entry.essential_dependencies ?? null,
+      expectedExitDependencies: unavailableRecord.content.inputs.essential_evidence.fields.exit.essential_dependencies ?? null,
+      expectedStatus: "UNAVAILABLE", expectedReason: item.reason, expectedSummary: item.summary,
+      seriousAxeViolations: seriousAxe });
+    await shot(page, project, `spot-replay-${item.name}`);
+  }
+
   // A definitive 422 rejects only this body. Correcting it starts a new key/body.
   await replay.getByRole("button", { name: "Add entry dependency" }).click();
   const rejectedOffset = replay.getByLabel("entry dependency offset 3");
@@ -206,7 +250,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await replay.getByLabel("I reviewed the entry dependency set").uncheck();
   await replay.getByLabel("I reviewed the entry dependency set").check();
   await replay.getByRole("button", { name: "Save synthetic replay" }).click();
-  await expect(replay.getByRole("alert")).toContainText("rejected before it was saved");
+  await expect(replay.locator(".status.err")).toContainText("rejected before it was saved");
   await expect(replay.getByRole("button", { name: "Save synthetic replay" })).toBeVisible();
   await rejectedOffset.fill("-2");
   const correctedResponsePromise = page.waitForResponse((response) =>
@@ -247,6 +291,14 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await replay.getByRole("button", { name: "Save synthetic replay" }).click();
   await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
   const uncertainRequest = replayPosts[3];
+  const postCountAfterCommitLoss = replayPosts.length;
+  await replay.getByLabel("Saved replay ID").fill(correctedReplayId);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(correctedReplayId);
+  await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
+  await expect(replay.getByText(/uncertain outcome/)).toBeVisible();
+  await expect(replay).toContainText("Loaded the exact saved result. The replay did not run again.");
+  expect(replayPosts).toHaveLength(postCountAfterCommitLoss);
   await uncertainOffset.fill("-2");
   const recoveredResponsePromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
@@ -264,6 +316,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   const uncertainReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
   record(`spot-replay-uncertain-${project}`, { url: requestUrl, revisionId, replayId: recoveredId,
     replayHash: uncertainReplayHash,
+    expectedIdempotencyKey: uncertainRequest.idempotency_key,
     expectedEntryDependencies: uncertainRequest.essential_fields.entry.essential_dependencies,
     expectedExitDependencies: uncertainRequest.essential_fields.exit.essential_dependencies,
     expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",

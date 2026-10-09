@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/api";
 import { SpotReplayPanel } from "../components/SpotReplayPanel";
-import type { SpotReplayRecord } from "../lib/types";
+import type { SpotReplayRecord, SpotReplayDependency } from "../lib/types";
 
 const mocks = vi.hoisted(() => ({ create: vi.fn(), get: vi.fn() }));
 vi.mock("../lib/api", () => ({
@@ -43,6 +43,19 @@ const replay = {
   },
 } as unknown as SpotReplayRecord;
 
+type SavedBinding = { state: "BOUND" | "UNBOUND"; essential_dependencies?: SpotReplayDependency[] | null };
+
+function recordWithSavedBinding(field: "entry" | "exit", binding: SavedBinding): SpotReplayRecord {
+  const saved = JSON.parse(JSON.stringify(replay)) as any;
+  saved.replay_id = field === "entry" ? "33333333-3333-4333-8333-333333333333" : "44444444-4444-4444-8444-444444444444";
+  saved.content.inputs.essential_evidence.fields[field] = binding;
+  saved.content.result.status = "UNAVAILABLE";
+  saved.content.result.reason = binding.state === "UNBOUND"
+    ? { code: "UNRESOLVED_ESSENTIAL_EVIDENCE", path: `/essential_evidence/fields/${field}`, detail: "Bind entry and exit separately." }
+    : { code: "INVALID_ESSENTIAL_BINDING", path: `/essential_evidence/fields/${field}/essential_dependencies`, detail: "Use a dependency list." };
+  return saved as SpotReplayRecord;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.create.mockResolvedValue(replay);
@@ -50,6 +63,45 @@ beforeEach(() => {
 });
 
 describe("P13 spot replay", () => {
+  it.each([
+    ["entry", { state: "UNBOUND" }, "UNBOUND: dependency list not supplied", "UNRESOLVED_ESSENTIAL_EVIDENCE"],
+    ["exit", { state: "UNBOUND", essential_dependencies: null }, "UNBOUND: dependency list is null", "UNRESOLVED_ESSENTIAL_EVIDENCE"],
+    ["entry", { state: "BOUND" }, "BOUND: dependency list not supplied", "INVALID_ESSENTIAL_BINDING"],
+    ["exit", { state: "BOUND" }, "BOUND: dependency list not supplied", "INVALID_ESSENTIAL_BINDING"],
+    ["entry", { state: "BOUND", essential_dependencies: null }, "BOUND: dependency list is null", "INVALID_ESSENTIAL_BINDING"],
+    ["exit", { state: "BOUND", essential_dependencies: null }, "BOUND: dependency list is null", "INVALID_ESSENTIAL_BINDING"],
+  ] as const)("loads unavailable %s binding with its %s list state intact", async (field, binding, expectedText, reasonCode) => {
+    const saved = recordWithSavedBinding(field, binding);
+    const user = userEvent.setup();
+    mocks.get.mockResolvedValueOnce(saved);
+    expect(() => render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "100", unit: "QUOTE:WMON" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />)).not.toThrow();
+
+    await user.type(screen.getByRole("textbox", { name: "Saved replay ID" }), saved.replay_id);
+    await user.click(screen.getByRole("button", { name: "Load saved replay" }));
+
+    expect(await screen.findByRole("heading", { name: "Saved replay: unavailable" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(reasonCode);
+    expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent(expectedText);
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["entry", "exit"] as const)("keeps an explicitly empty BOUND %s list distinct from an omitted list", async (field) => {
+    const saved = JSON.parse(JSON.stringify(replay)) as any;
+    saved.content.inputs.essential_evidence.fields[field] = { state: "BOUND", essential_dependencies: [] };
+    const user = userEvent.setup();
+    mocks.get.mockResolvedValueOnce(saved as SpotReplayRecord);
+    render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "100", unit: "QUOTE:WMON" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
+
+    await user.type(screen.getByRole("textbox", { name: "Saved replay ID" }), saved.replay_id);
+    await user.click(screen.getByRole("button", { name: "Load saved replay" }));
+
+    expect(await screen.findByTestId("spot-replay-saved-inputs")).toHaveTextContent("BOUND: no additional dependencies");
+  });
+
   it("saves an explicitly reviewed fixture run and can load its exact saved result", async () => {
     const user = userEvent.setup();
     render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "100", unit: "QUOTE:WMON" }, warmup_buckets: 3,
@@ -132,5 +184,37 @@ describe("P13 spot replay", () => {
     await screen.findByTestId("spot-replay-result");
     expect(mocks.create).toHaveBeenCalledTimes(2);
     expect(mocks.create.mock.calls[1][0]).toEqual(mocks.create.mock.calls[0][0]);
+  });
+
+  it("keeps an uncertain attempt when loading an unrelated saved replay, then retries the original body", async () => {
+    const user = userEvent.setup();
+    const unrelated = { ...replay, replay_id: "55555555-5555-4555-8555-555555555555" };
+    const committed = { ...replay, replay_id: "66666666-6666-4666-8666-666666666666" };
+    mocks.create.mockRejectedValueOnce(new Error("The response was lost."));
+    mocks.create.mockResolvedValueOnce(committed);
+    mocks.get.mockResolvedValueOnce(unrelated);
+    render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "100", unit: "QUOTE:WMON" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
+    await user.click(screen.getByRole("button", { name: "Add entry dependency" }));
+    await user.click(screen.getByRole("button", { name: "Add exit dependency" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
+    await user.click(screen.getByRole("button", { name: "Save synthetic replay" }));
+    expect(await screen.findByRole("button", { name: "Retry same replay" })).toBeInTheDocument();
+    const uncertainBody = mocks.create.mock.calls[0][0];
+
+    await user.type(screen.getByRole("textbox", { name: "Saved replay ID" }), unrelated.replay_id);
+    await user.click(screen.getByRole("button", { name: "Load saved replay" }));
+    expect(await screen.findByTestId("spot-replay-id")).toHaveTextContent(unrelated.replay_id);
+    expect(screen.queryByRole("button", { name: "Retry same replay" })).toBeInTheDocument();
+    expect(screen.getByText(/uncertain outcome/)).toBeInTheDocument();
+    expect(screen.getByText("Loaded the exact saved result. The replay did not run again.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry same replay" }));
+    await waitFor(() => expect(screen.getByTestId("spot-replay-id")).toHaveTextContent(committed.replay_id));
+    expect(mocks.get).toHaveBeenCalledWith(unrelated.replay_id);
+    expect(mocks.create).toHaveBeenCalledTimes(2);
+    expect(mocks.create.mock.calls[1][0]).toEqual(uncertainBody);
   });
 });

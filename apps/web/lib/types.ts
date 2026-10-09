@@ -358,8 +358,8 @@ export interface SpotReplayInputSnapshot {
   initial_basis_quote: string;
   essential_evidence: {
     fields: Record<"entry" | "exit", {
-      state: string;
-      essential_dependencies: SpotReplayDependency[];
+      state: "BOUND" | "UNBOUND";
+      essential_dependencies?: SpotReplayDependency[] | null;
     }>;
   };
 }

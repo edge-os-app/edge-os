@@ -97,5 +97,34 @@ test("after an API restart the saved rules reopen with their exact review text",
     saved.strategy.cost_assumptions.slippage_rate]) {
     expect(visible).toContain(value);
   }
+
+  const unavailableCases = [
+    ["unbound-entry", "UNRESOLVED_ESSENTIAL_EVIDENCE", "UNBOUND: dependency list is null"],
+    ["bound-exit-null", "INVALID_ESSENTIAL_BINDING", "BOUND: dependency list is null"],
+  ];
+  for (const [name, reason, summary] of unavailableCases) {
+    const unavailable = results[`spot-replay-unavailable-${name}-${info.project.name}`];
+    expect(unavailable, `the first browser drive must save ${name}`).toBeTruthy();
+    await replayPanel.getByLabel("Saved replay ID").fill(unavailable.replayId);
+    await replayPanel.getByRole("button", { name: "Load saved replay" }).click();
+    await expect(replayPanel.getByTestId("spot-replay-id")).toHaveText(unavailable.replayId);
+    await expect(replayPanel.getByTestId("spot-replay-result")).toContainText("Saved replay: unavailable");
+    await expect(replayPanel.getByRole("alert")).toContainText(reason);
+    await expect(replayPanel.getByTestId("spot-replay-saved-inputs")).toContainText(summary);
+    const exactUnavailable = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${unavailable.replayId}`,
+      { headers: { Authorization: `Bearer ${tokens.a}` } });
+    expect(exactUnavailable.status()).toBe(200);
+    const unavailableBody = await exactUnavailable.json();
+    expect(unavailableBody.replay_id).toBe(unavailable.replayId);
+    expect(unavailableBody.content_sha256).toBe(unavailable.replayHash);
+    expect(unavailableBody.content.result.status).toBe("UNAVAILABLE");
+    expect(unavailableBody.content.result.reason.code).toBe(reason);
+    expect(unavailableBody.content.inputs.essential_evidence.fields.entry.essential_dependencies ?? null)
+      .toEqual(unavailable.expectedEntryDependencies);
+    expect(unavailableBody.content.inputs.essential_evidence.fields.exit.essential_dependencies ?? null)
+      .toEqual(unavailable.expectedExitDependencies);
+    await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-${name}-reopened-after-restart.png`), fullPage: true });
+  }
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-spot-replay-reopened-after-restart.png`), fullPage: true });
+  expect(createReplayRequests, "all P13 reopen paths after restart must only retrieve, never recompute").toBe(0);
 });

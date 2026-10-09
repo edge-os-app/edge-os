@@ -82,7 +82,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
     setBusy(true); setError(""); setLoadNotice("");
     try {
       const saved = await api.spotReplay(replayId.trim());
-      setRecord(saved); setReplayId(saved.replay_id); setPendingBody(null);
+      setRecord(saved); setReplayId(saved.replay_id);
       setLoadNotice("Loaded the exact saved result. The replay did not run again.");
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.detail : "The saved replay could not be loaded. Check the ID and retry.");

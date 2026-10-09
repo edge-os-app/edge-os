@@ -373,27 +373,36 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                 "owner_matches_saved_revision": bool(row["owner_id"]),
                 "method_and_path_match": row["method"] == "POST" and row["path"] == "/v1/spot-replays",
                 "idempotency_key_present": bool(row["idempotency_key"]),
+                "idempotency_key_matches_browser": not saved.get("expectedIdempotencyKey")
+                    or row["idempotency_key"] == saved["expectedIdempotencyKey"],
                 "request_fingerprint_is_sha256": bool(re.fullmatch(r"[0-9a-f]{64}", row["fingerprint"])),
                 "stored_hash_matches_browser": row["content_sha256"] == saved["replayHash"],
                 "stored_hash_recomputed": hashlib.sha256(json.dumps(
                     content, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
                 ).encode("utf-8")).hexdigest() == row["content_sha256"],
-                "entry_dependencies_match_browser": row["fields"]["entry"]["essential_dependencies"] == saved["expectedEntryDependencies"],
-                "exit_dependencies_match_browser": row["fields"]["exit"]["essential_dependencies"] == saved["expectedExitDependencies"],
+                "entry_dependencies_match_browser": row["fields"]["entry"].get("essential_dependencies") == saved["expectedEntryDependencies"],
+                "exit_dependencies_match_browser": row["fields"]["exit"].get("essential_dependencies") == saved["expectedExitDependencies"],
+                "expected_result_status": row["result_status"] == saved.get("expectedStatus", "COMPLETE"),
+                "expected_unavailable_reason": saved.get("expectedStatus", "COMPLETE") != "UNAVAILABLE"
+                    or content["result"].get("reason", {}).get("code") == saved.get("expectedReason"),
+                "synthetic_evidence_class": row["evidence_class"] == "SYNTHETIC_FIXTURE",
                 "complete_synthetic_result": row["result_status"] == "COMPLETE" and row["evidence_class"] == "SYNTHETIC_FIXTURE",
-                "expected_accounting": row["metrics"].get("gain_loss_quote") == saved["expectedGainLossQuote"]
+                "expected_accounting": saved.get("expectedStatus", "COMPLETE") != "COMPLETE" or
+                    (row["metrics"].get("gain_loss_quote") == saved["expectedGainLossQuote"]
                     and content["result"]["samples"][-1]["cash_quote"] == saved["expectedEndingCashQuote"]
-                    and row["metrics"].get("completed_trade_pairs") == 1,
+                    and row["metrics"].get("completed_trade_pairs") == 1),
                 "no_trade_permission_notice": "No trading permission is granted." in content["notice"],
             })
         spot_replays.append(item)
     checks["spot_replays"] = spot_replays
     spot_replays_pass = bool(spot_replays) and all(
         item.get("rows") == 1 and item.get("owner_matches_saved_revision") and item.get("method_and_path_match")
-        and item.get("idempotency_key_present") and item.get("request_fingerprint_is_sha256")
+        and item.get("idempotency_key_present") and item.get("idempotency_key_matches_browser")
+        and item.get("request_fingerprint_is_sha256")
         and item.get("stored_hash_matches_browser") and item.get("stored_hash_recomputed")
         and item.get("entry_dependencies_match_browser") and item.get("exit_dependencies_match_browser")
-        and item.get("complete_synthetic_result") and item.get("expected_accounting")
+        and item.get("expected_result_status") and item.get("expected_unavailable_reason")
+        and item.get("synthetic_evidence_class") and item.get("expected_accounting")
         and item.get("no_trade_permission_notice") for item in spot_replays)
     investigations = []
     for key, saved in results.items():
