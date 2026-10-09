@@ -48,6 +48,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
   const savedHeading = useRef<HTMLHeadingElement>(null);
   const hasSavedDeclarations = useRef(false);
   const [proposalError, setProposalError] = useState("");
+  const [proposalRetryReplacesDraft, setProposalRetryReplacesDraft] = useState(false);
   const [refreshingProposal, setRefreshingProposal] = useState(false);
   const [refreshNotice, setRefreshNotice] = useState("");
   const [savedReadFailed, setSavedReadFailed] = useState(false);
@@ -94,8 +95,13 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
         setAdopted(false);
         setRefreshNotice("The request interpretation changed. Your unsaved edits remain in place. Review them against this current declaration before saving.");
       }
+      setProposalRetryReplacesDraft(false);
       return true;
-    } catch (cause) { setProposalError(errorDetail(cause)); return false; }
+    } catch (cause) {
+      setProposalRetryReplacesDraft(replaceDraft);
+      setProposalError(errorDetail(cause));
+      return false;
+    }
     finally { setRefreshingProposal(false); }
   };
 
@@ -213,7 +219,14 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
       </div>
       {error ? <p className="status err" role="alert" tabIndex={-1} ref={errorRef}>{error}</p> : null}
       {refreshingProposal ? <p role="status" aria-busy="true">Refreshing the current review. Your edits are unchanged.</p> : null}
-      {proposalError ? <div className="status err" role="alert"><p>{proposalError}</p><button className="btn btn-secondary" type="button" onClick={() => void refreshProposal(false)} disabled={busy || refreshingProposal}>Retry proposal</button></div> : null}
+      {proposalError ? <div className="status err" role="alert">
+        <p>{proposalRetryReplacesDraft
+          ? `A new hypothesis could not be prepared. ${proposalError} The saved declaration is unchanged.`
+          : proposalError}</p>
+        <button className="btn btn-secondary" type="button" onClick={() => void refreshProposal(proposalRetryReplacesDraft)} disabled={busy || refreshingProposal}>
+          {proposalRetryReplacesDraft ? "Retry new hypothesis" : "Retry proposal"}
+        </button>
+      </div> : null}
       {reopenId ? <button className="btn btn-secondary" type="button" onClick={() => void reopen(reopenId)} disabled={busy}>Retry opening saved declaration</button> : null}
       {refreshNotice ? <p className="status stop" role="status">{refreshNotice}</p> : null}
       {savedReadFailed ? <button className="btn btn-secondary" type="button" onClick={() => void retrySavedReads()} disabled={busy}>Retry saved declarations</button> : null}

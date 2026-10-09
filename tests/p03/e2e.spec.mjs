@@ -406,6 +406,99 @@ test("clarification refresh keeps a reviewed draft's regenerated-ID plan saveabl
   await shot(page, project, "investigation-refresh-saved");
 });
 
+test("replacement retry saves one coherent new declaration after repeated proposal outages", async ({ page }, info) => {
+  const project = info.project.name;
+  const proposals = [];
+  const replacementSaveBodies = [];
+  let proposalCalls = 0;
+  await page.route("**/v1/research/requests/*/investigation-proposal", async (route) => {
+    proposalCalls += 1;
+    if (proposalCalls === 2 || proposalCalls === 3) {
+      return route.fulfill({ status: 503, contentType: "application/json",
+        body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "Temporary replacement proposal failure." }] }) });
+    }
+    const response = await route.fetch();
+    const proposal = await response.json();
+    proposals.push(proposal);
+    return route.fulfill({ response, body: JSON.stringify(proposal) });
+  });
+  await page.route("**/v1/research/requests/*/investigations", async (route) => {
+    if (route.request().method() === "POST") replacementSaveBodies.push(JSON.parse(route.request().postData() ?? "{}"));
+    return route.continue();
+  });
+
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill("Compare the descriptive launch cohorts in a synthetic fixture.");
+  await page.getByRole("radio").nth(2).check();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("investigation-review")).toBeVisible();
+  await expect.poll(() => proposals.length).toBe(1);
+  const originalProposal = proposals[0];
+  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.").check();
+  await page.getByRole("button", { name: "Adopt and save declaration" }).click();
+  await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
+  const firstDeclarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
+  const intakeId = page.url().split("/research/").at(-1).split("?")[0].split("#")[0];
+  const auth = { headers: { Authorization: `Bearer ${tokens.a}` } };
+  const firstRead = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${firstDeclarationId}`, auth);
+  expect(firstRead.status()).toBe(200);
+  const firstSaved = await firstRead.json();
+
+  await page.getByRole("button", { name: "Review another hypothesis" }).click();
+  const replacementError = page.getByTestId("investigation-review").locator(".status.err").first();
+  await expect(replacementError).toContainText("Temporary replacement proposal failure.");
+  await expect(page.getByRole("button", { name: "Retry new hypothesis" })).toBeVisible();
+  await expect(replacementError).toContainText("The saved declaration is unchanged.");
+  await page.getByRole("button", { name: "Retry new hypothesis" }).click();
+  await expect(replacementError).toContainText("Temporary replacement proposal failure.");
+  await expect(page.getByRole("button", { name: "Retry new hypothesis" })).toBeVisible();
+  await page.getByRole("button", { name: "Retry new hypothesis" }).click();
+  await expect.poll(() => proposals.length).toBe(2);
+  await expect(page.getByTestId("investigation-original-request")).toHaveText("Compare the descriptive launch cohorts in a synthetic fixture.");
+  await expect(page.getByText(/request interpretation changed/i)).toHaveCount(0);
+  const replacementProposal = proposals[1];
+  expect(replacementProposal.edge_spec.edge_id).not.toBe(originalProposal.edge_spec.edge_id);
+  expect(replacementProposal.trial_ids).not.toEqual(originalProposal.trial_ids);
+  expect(replacementProposal.evaluation_ids).not.toEqual(originalProposal.evaluation_ids);
+  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.").check();
+  await page.getByRole("button", { name: "Adopt and save declaration" }).click();
+  await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
+  expect(replacementSaveBodies).toHaveLength(2);
+  const newSave = replacementSaveBodies[1];
+  expect(newSave.edge_spec.edge_id).toBe(replacementProposal.edge_spec.edge_id);
+  expect(newSave.trial_ids).toEqual(replacementProposal.trial_ids);
+  expect(newSave.evaluation_ids).toEqual(replacementProposal.evaluation_ids);
+  expect(newSave.configuration.evaluation_plan).toEqual(replacementProposal.configuration.evaluation_plan);
+  const secondDeclarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
+  expect(secondDeclarationId).not.toBe(firstDeclarationId);
+  const secondRead = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${secondDeclarationId}`, auth);
+  expect(secondRead.status()).toBe(200);
+  const secondSaved = await secondRead.json();
+  expect(secondSaved.declaration.content.edge_spec.edge_id).toBe(replacementProposal.edge_spec.edge_id);
+  expect(secondSaved.declaration.content.configuration.evaluation_plan).toEqual(replacementProposal.configuration.evaluation_plan);
+  expect(secondSaved.access_history[0]).toMatchObject({ outcome_labels_read: false, provider_queries: 0, study_started: false });
+  const oldReadAfterSave = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${firstDeclarationId}`, auth);
+  expect(oldReadAfterSave.status()).toBe(200);
+  expect((await oldReadAfterSave.json()).declaration.content).toEqual(firstSaved.declaration.content);
+  const reopenButtons = page.getByRole("button", { name: "Reopen saved declaration" });
+  await reopenButtons.first().click();
+  await expect(page.getByTestId("investigation-saved")).toContainText(firstDeclarationId);
+  await reopenButtons.nth(1).click();
+  await expect(page.getByTestId("investigation-saved")).toContainText(secondDeclarationId);
+  record(`investigation-replacement-retry-${project}`, { url: page.url(), declarationId: secondDeclarationId,
+    content: secondSaved.declaration.content,
+    access: Object.fromEntries(["schema_version", "event", "outcome_labels_read", "provider_queries", "study_started"]
+      .map((field) => [field, secondSaved.access_history[0][field]])), original: "Compare the descriptive launch cohorts in a synthetic fixture.",
+    firstDeclarationId, secondDeclarationId,
+    proposalCalls, failedReplacementAttempts: 2, replacementEdgeChanged: true,
+    savedEdgeId: secondSaved.declaration.content.edge_spec.edge_id,
+    savedTrialIds: secondSaved.declaration.content.trial_ids,
+    savedEvaluationIds: secondSaved.declaration.content.evaluation_ids,
+    savedPlan: secondSaved.declaration.content.configuration.evaluation_plan,
+    firstDeclarationUnchanged: true, reopenedBothDeclarations: true });
+  await shot(page, project, "investigation-replacement-retry-saved");
+});
+
 test("unsupported meaning and unsupported restriction are kept and block compilation", async ({ page }, info) => {
   const project = info.project.name;
   await open(page, tokens.a);

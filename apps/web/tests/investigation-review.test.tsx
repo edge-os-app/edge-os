@@ -182,6 +182,60 @@ describe("investigation declaration adoption", () => {
     expect(retryBody.idempotency_key).toBe(firstBody.idempotency_key);
   });
 
+  it("keeps replacement intent across repeated proposal failures and saves a fresh hypothesis", async () => {
+    const user = userEvent.setup();
+    const replacement = {
+      ...proposalWithIds(proposal, "revision-new", "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
+      edge_spec: { ...proposal.edge_spec, edge_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        hypothesis: "A separately reviewed descriptive question." },
+    };
+    mocks.proposal.mockReset().mockResolvedValueOnce(proposal)
+      .mockRejectedValueOnce(new mocks.ApiError("replacement unavailable"))
+      .mockRejectedValueOnce(new mocks.ApiError("replacement still unavailable"))
+      .mockResolvedValueOnce(replacement);
+    const replacementSaved = {
+      ...saved,
+      declaration: { ...saved.declaration, record_id: "66666666-6666-4666-8666-666666666666",
+        content: { ...saved.declaration.content, edge_spec: replacement.edge_spec,
+          configuration: replacement.configuration, trial_ids: replacement.trial_ids,
+          evaluation_ids: replacement.evaluation_ids } },
+    };
+    mocks.save.mockReset().mockResolvedValueOnce(saved).mockResolvedValueOnce(replacementSaved);
+
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await user.click(await screen.findByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
+    await screen.findByRole("heading", { name: "Declaration saved" });
+    await user.click(screen.getByRole("button", { name: "Review another hypothesis" }));
+
+    expect(await screen.findByText(/A new hypothesis could not be prepared/)).toBeInTheDocument();
+    expect(screen.getByText(/The saved declaration is unchanged/)).toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Retry new hypothesis" });
+    await user.click(retry);
+    await screen.findByText(/A new hypothesis could not be prepared\. Unavailable/);
+    expect(screen.getByRole("button", { name: "Retry new hypothesis" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry new hypothesis" }));
+
+    expect(await screen.findByLabelText("Hypothesis or descriptive question")).toHaveValue(
+      "A separately reviewed descriptive question.");
+    expect(screen.queryByText(/request interpretation changed/)).toBeNull();
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
+    await screen.findByRole("heading", { name: "Declaration saved" });
+
+    expect(mocks.proposal).toHaveBeenCalledTimes(4);
+    expect(mocks.save).toHaveBeenCalledTimes(2);
+    const initialBody = mocks.save.mock.calls[0][1];
+    const replacementBody = mocks.save.mock.calls[1][1];
+    expect(replacementBody.edge_spec.edge_id).not.toBe(initialBody.edge_spec.edge_id);
+    expect(replacementBody.trial_ids).toEqual(replacement.trial_ids);
+    expect(replacementBody.evaluation_ids).toEqual(replacement.evaluation_ids);
+    expect(replacementBody.configuration.evaluation_plan).toEqual(replacement.configuration.evaluation_plan);
+    expect(replacementBody.expected_interpretation_revision_id).toBe("revision-new");
+    expect(screen.getByTestId("investigation-saved")).toHaveTextContent(replacementSaved.declaration.record_id);
+  });
+
   it.each(["stale save", "proposal retry", "clarifications on the same intake"] as const)(
     "keeps a retained draft's regenerated identities coherent after %s and saves it",
     async (refreshPath) => {
