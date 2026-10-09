@@ -167,6 +167,37 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(persistedContext).toContainText("Agent context · version 5");
   await expect(persistedContext).toContainText("CLEARED");
   await expect(persistedContext.getByRole("listitem")).toHaveCount(0);
+  const longMonitoring = results[`p19-long-monitoring-${info.project.name}`];
+  expect(longMonitoring, "the first browser drive must capture full matching monitoring fields at both viewports").toBeTruthy();
+  const longMonitoringResponse = await page.request.get(
+    `${process.env.P03_API_URL}/v1/account-views/${longMonitoring.recordId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(longMonitoringResponse.status()).toBe(200);
+  const savedLongMonitoring = (await longMonitoringResponse.json()).content;
+  expect(savedLongMonitoring.owner_id).toBe(longMonitoring.identity.ownerId);
+  expect(savedLongMonitoring.agent_id).toBe(longMonitoring.identity.agentId);
+  expect(savedLongMonitoring.wallet_id).toBe(longMonitoring.identity.walletId);
+  expect(savedLongMonitoring.network_id).toBe(longMonitoring.identity.networkId);
+  expect(savedLongMonitoring.next_work).toBe(longMonitoring.nextWork);
+  expect(savedLongMonitoring.blocking_reason).toBe(longMonitoring.blockingReason);
+  await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${longMonitoring.recordId}`);
+  const reopenedLongMonitoring = page.locator(`#record-${longMonitoring.recordId}`);
+  await expect(reopenedLongMonitoring).toHaveCount(1);
+  await expect(reopenedLongMonitoring).toBeVisible();
+  await expect(reopenedLongMonitoring).toContainText(savedLongMonitoring.next_work);
+  await expect(reopenedLongMonitoring).toContainText(savedLongMonitoring.blocking_reason);
+  const reopenedLongMonitoringLayout = await page.evaluate((id) => {
+    const row = document.getElementById(`record-${id}`);
+    const paragraphs = [...row.querySelectorAll("p")].filter((paragraph) =>
+      paragraph.textContent.includes("Synthetic next work:") || paragraph.textContent.includes("Gate pending receipt"));
+    return { viewport: innerWidth, document: document.documentElement.scrollWidth,
+      fields: paragraphs.map((paragraph) => ({ text: paragraph.textContent,
+        overflowWrap: getComputedStyle(paragraph).overflowWrap })) };
+  }, longMonitoring.recordId);
+  expect(reopenedLongMonitoringLayout.fields).toHaveLength(2);
+  expect(reopenedLongMonitoringLayout.fields.every((field) => field.overflowWrap === "anywhere")).toBe(true);
+  expect(reopenedLongMonitoringLayout.document).toBeLessThanOrEqual(reopenedLongMonitoringLayout.viewport);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-long-monitoring-reopened-after-restart.png`), fullPage: true });
   const exactContext = await page.request.get(`${process.env.P03_API_URL}/v1/agents/${p19.agentId}/context`, {
     headers: { Authorization: `Bearer ${tokens.a}` },
   });
