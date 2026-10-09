@@ -499,6 +499,25 @@ def test_spot_replay_requires_the_saved_strategy_warmup_before_window_start() ->
         raise AssertionError("the replay window cannot start before its saved strategy warm-up")
 
 
+def test_spot_replay_rejects_missing_trailing_scheduled_coverage() -> None:
+    strategy, source, _ = _wc01_input()
+    truncated_one = replace(source, dataset=replace(source.dataset, buckets=source.dataset.buckets[:-1]))
+    truncated_two = replace(source, dataset=replace(source.dataset, buckets=source.dataset.buckets[:-2]))
+    extended_window = replace(source, window_end=source.window_end + timedelta(minutes=5))
+    valid_half_open = replace(source, window_end=source.window_end - timedelta(minutes=3))
+
+    for incomplete in (truncated_one, truncated_two, extended_window):
+        try:
+            run_spot_replay(strategy, incomplete)
+        except ValueError as error:
+            assert getattr(error, "code") == "DATASET_COVERAGE_UNPROVEN"
+        else:
+            raise AssertionError("the declared half-open window needs every scheduled point before its end")
+
+    valid_result = run_spot_replay(strategy, valid_half_open)
+    assert valid_result.samples[-1]["at"] == source.dataset.buckets[-1].bucket_end
+
+
 def test_wc05_reports_absolute_quote_drawdown_from_independent_samples() -> None:
     from edge_os_api.spot_replay import calculate_quote_metrics
 
@@ -879,14 +898,19 @@ def test_wc07_preserves_late_future_empty_and_incomplete_input_reasons() -> None
     assert list(empty_price.reasons) == case["empty_price_reasons"]
     assert str(empty_volume.value) == case["empty_quote_volume_value"]
 
-    incomplete_run = _scheduled_run(
-        strategy, replay_input, ("110",), schedule_start=start, window_start=start,
-        window_end=start + timedelta(minutes=5), statuses=("INCOMPLETE",),
-    )
-    result = run_spot_replay(strategy, incomplete_run)
-    decision = next(event for event in result.events if event["kind"] == "DECISION")
-    assert decision["entry"]["eligibility_reasons"] == (case["incomplete_reason"],)
-    assert not any(event.get("side") == "BUY" and event.get("status") == "RESERVED" for event in result.events)
+    for status, expected_reason in (
+        ("INCOMPLETE", case["incomplete_reason"]),
+        ("UNQUALIFIED", "UNQUALIFIED_RECORDS"),
+    ):
+        scheduled_gap = _scheduled_run(
+            strategy, replay_input, ("110",), schedule_start=start, window_start=start,
+            window_end=start + timedelta(minutes=5), statuses=(status,),
+        )
+        result = run_spot_replay(strategy, scheduled_gap)
+        decision = next(event for event in result.events if event["kind"] == "DECISION")
+        assert decision["entry"]["eligibility_reasons"] == (expected_reason,)
+        assert not any(event.get("side") == "BUY" and event.get("status") == "RESERVED"
+                       for event in result.events)
 
 
 def test_wc08_late_fill_releases_once_and_does_not_retry_or_mark() -> None:

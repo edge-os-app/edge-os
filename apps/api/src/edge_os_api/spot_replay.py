@@ -222,6 +222,13 @@ def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int,
     decision_indices = [index for index, moment in enumerate(schedule) if run.window_start <= moment < run.window_end]
     if not decision_indices or decision_indices[-1] != len(schedule) - 1:
         raise _invalid("INVALID_REPLAY_SCHEDULE", "/dataset/buckets", "Include every in-window scheduled point and no exclusive-end point.")
+    expected_terminal = run.window_end - timedelta(microseconds=1)
+    expected_terminal = expected_terminal.replace(
+        minute=expected_terminal.minute // 5 * 5, second=0, microsecond=0,
+    )
+    if schedule[decision_indices[-1]] != expected_terminal:
+        raise _invalid("DATASET_COVERAGE_UNPROVEN", "/dataset/buckets",
+                       "Include the final scheduled point inside the half-open run window.")
     for index in decision_indices:
         if run.dataset.buckets[index].status not in _COMPLETE | {"INCOMPLETE", "UNQUALIFIED"}:
             raise _invalid("INVALID_REPLAY_BUCKET", f"/dataset/buckets/{index}/status", "The bucket status is malformed.")
