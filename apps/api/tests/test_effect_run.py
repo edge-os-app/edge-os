@@ -198,11 +198,13 @@ def test_failed_attempt_receipt_commit_keeps_access_marker_and_hides_database_de
     assert client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_b).status_code == 404
 
 
-def test_unexpected_evaluation_failure_uses_sanitized_internal_error(client, owner_a, caplog, monkeypatch):
+@pytest.mark.parametrize("failure_type", [ValueError, RuntimeError])
+def test_unexpected_evaluation_failure_uses_sanitized_internal_error(
+        client, owner_a, caplog, monkeypatch, failure_type):
     intake_id, _, run_id, attempt_path, _ = _adopted_effect_run(client, owner_a)
 
     def explode(_path):
-        raise RuntimeError("PRIVATE_RUNTIME_SENTINEL /private/server/internal")
+        raise failure_type("PRIVATE_RUNTIME_SENTINEL /private/server/internal")
 
     monkeypatch.setattr(effect_run, "_sha256", explode)
     failed = client.post(attempt_path, headers=owner_a,
@@ -216,6 +218,7 @@ def test_unexpected_evaluation_failure_uses_sanitized_internal_error(client, own
     saved = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
     assert saved["events"][-1]["content"]["kind"] == "ATTEMPT_FAILED"
     assert saved["events"][-1]["content"]["outcome_accessed"] is False
+    assert saved["events"][-1]["content"]["error_type"] == failure_type.__name__
     assert saved["report"] is None
 
 
