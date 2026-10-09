@@ -231,3 +231,33 @@ class EffectReport(Base):
         UniqueConstraint("owner_id", "run_id", name="uq_effect_report_owner_run"),
         Index("ix_effect_report_owner_created", "owner_id", "created_at"),
     )
+
+
+class SpotReplayRun(Base):
+    """One immutable owner-scoped P13 replay, including its exact inputs and result."""
+
+    __tablename__ = "spot_replay_runs"
+    replay_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    strategy_id: Mapped[str] = mapped_column(Text, nullable=False)
+    strategy_revision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    method: Mapped[str] = mapped_column(Text, nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=NOW)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["owner_id", "strategy_id", "strategy_revision_id"],
+                             ["strategy_revisions.owner_id", "strategy_revisions.strategy_id",
+                              "strategy_revisions.revision_id"], name="fk_spot_replay_strategy_revision"),
+        ForeignKeyConstraint(["owner_id"], ["users.id"], name="fk_spot_replay_owner"),
+        UniqueConstraint("owner_id", "replay_id", name="uq_spot_replay_owner_id"),
+        UniqueConstraint("owner_id", "method", "path", "idempotency_key", name="uq_spot_replay_idempotency"),
+        CheckConstraint("length(idempotency_key) BETWEEN 1 AND 200", name="ck_spot_replay_idempotency_key"),
+        CheckConstraint("fingerprint ~ '^[0-9a-f]{64}$' AND content_sha256 ~ '^[0-9a-f]{64}$'",
+                        name="ck_spot_replay_hashes"),
+        Index("ix_spot_replay_owner_created", "owner_id", "created_at"),
+    )

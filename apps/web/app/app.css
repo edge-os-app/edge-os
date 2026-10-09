@@ -94,6 +94,14 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
 .effect-comparison .table-scroll { max-width: 100%; overflow-x: auto; }
 .effect-comparison table.records { min-width: 760px; }
 .effect-comparison code { overflow-wrap: anywhere; }
+.spot-replay { min-width: 0; }
+.spot-replay .field { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.spot-replay .spot-replay-field { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.spot-replay .spot-replay-field legend { margin-bottom: var(--space-2); font-weight: 700; }
+.spot-replay-dependency { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: var(--space-3); align-items: end; }
+.spot-replay-dependency .input, .spot-replay .input { width: 100%; min-width: 0; }
+.spot-replay .table-scroll { max-width: 100%; overflow-x: auto; }
+.spot-replay-json { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .card-open { display: flex; flex-direction: column; gap: var(--space-2); text-align: left; width: 100%; font: inherit; color: inherit; cursor: pointer;
   background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md); padding: var(--space-4);
   transition: transform 140ms var(--ease-out), border-color 120ms ease; }
@@ -144,6 +152,7 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
   .main { padding: var(--space-6) var(--space-4); }
   .main h1 { font-size: 32px; }
   .panel { padding: var(--space-4); border-radius: var(--radius-md); }
+  .spot-replay-dependency { grid-template-columns: minmax(0, 1fr); }
   .sheet { width: 100vw; border-radius: 0; }
   table.records { font-size: 12px; }
   table.records tr > :nth-child(1) { width: 27%; }

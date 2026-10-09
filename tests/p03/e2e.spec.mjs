@@ -159,6 +159,31 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   const requestUrl = page.url();
   record(`thesis-${project}`, { url: requestUrl, revisionId, original: THESIS });
   await shot(page, project, "04-saved");
+  const replay = page.getByTestId("spot-replay");
+  await expect(replay).toContainText("p13.wc01/1 · synthetic only");
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByLabel("entry dependency offset 2").fill("-3");
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByLabel("exit dependency offset 2").fill("-1");
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByLabel("I reviewed the exit dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("SYNTHETIC_FIXTURE");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("BUY_FILLED");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("SELL_FILLED");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("990.51132338308457711442786069651741293532338308458");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("no gas, spread, additional impact, or capacity model");
+  const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
+  const replayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  record(`spot-replay-${project}`, { url: requestUrl, revisionId, replayId, replayHash,
+    expectedEntryDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -3 }],
+    expectedExitDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -1 }],
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
+  await shot(page, project, "05-spot-replay-saved");
   // reopen in a brand new context: nothing in this browser can supply the record
   const fresh = await page.context().browser().newContext({ viewport: page.viewportSize() });
   const again = await fresh.newPage();

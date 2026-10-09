@@ -62,6 +62,37 @@ class PublicationBody(StrictModel):
     strategy: dict[str, Any]
 
 
+class SpotReplayDependency(StrictModel):
+    series: Literal["price", "quote_volume"]
+    offset_buckets: int = Field(le=0)
+
+
+class SpotReplayEssentialField(StrictModel):
+    state: Literal["BOUND", "UNBOUND"]
+    essential_dependencies: list[SpotReplayDependency] | None = Field(default=None, max_length=64)
+
+
+class SpotReplayEssentialFields(StrictModel):
+    entry: SpotReplayEssentialField
+    exit: SpotReplayEssentialField
+
+
+class SpotReplayBody(StrictModel):
+    model_config = ConfigDict(extra="forbid", strict=False)
+
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    strategy_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    strategy_revision_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F-]{36}$")]
+    dataset_fixture_id: Literal["p13.wc01/1"]
+    run_configuration_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    window_start: datetime
+    window_end: datetime
+    initial_cash_quote: Annotated[str, StringConstraints(min_length=1, max_length=100)]
+    initial_base_amount: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
+    initial_basis_quote: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
+    essential_fields: SpotReplayEssentialFields
+
+
 class EdgeClaim(StrictModel):
     status: Literal["HYPOTHESIS", "DESCRIPTIVE_ONLY"]
     text: ReviewText

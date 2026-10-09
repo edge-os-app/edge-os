@@ -46,4 +46,31 @@ test("after an API restart the saved rules reopen with their exact review text",
   await page.getByRole("button", { name: "Reopen saved report without rerunning" }).click();
   await expect(page.getByTestId("effect-report-saved")).toContainText(investigation.reportId);
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-effect-report-reopened-after-restart.png`), fullPage: true });
+
+  const replay = results[`spot-replay-${info.project.name}`];
+  expect(replay, "the first browser drive must save a P13 synthetic replay").toBeTruthy();
+  let createReplayRequests = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/v1/spot-replays") createReplayRequests += 1;
+  });
+  await page.goto(replay.url);
+  const replayPanel = page.getByTestId("spot-replay");
+  await replayPanel.getByLabel("Saved replay ID").fill(replay.replayId);
+  await replayPanel.getByRole("button", { name: "Load saved replay" }).click();
+  await expect(replayPanel.getByTestId("spot-replay-id")).toHaveText(replay.replayId);
+  await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.replayHash);
+  await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.expectedEndingCashQuote);
+  await expect(replayPanel).toContainText("Loaded the exact saved result. The replay did not run again.");
+  expect(createReplayRequests, "reopening after restart must only retrieve, never recompute").toBe(0);
+  const exactReplay = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${replay.replayId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(exactReplay.status()).toBe(200);
+  const exactReplayBody = await exactReplay.json();
+  expect(exactReplayBody.replay_id).toBe(replay.replayId);
+  expect(exactReplayBody.content_sha256).toBe(replay.replayHash);
+  expect(exactReplayBody.content.inputs.essential_evidence.fields.entry.essential_dependencies)
+    .toEqual(replay.expectedEntryDependencies);
+  expect(exactReplayBody.content.inputs.essential_evidence.fields.exit.essential_dependencies)
+    .toEqual(replay.expectedExitDependencies);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-spot-replay-reopened-after-restart.png`), fullPage: true });
 });
