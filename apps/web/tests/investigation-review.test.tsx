@@ -47,6 +47,21 @@ const proposal = {
   notice: "Fixture-only proposal. No study runs.",
 };
 
+function proposalWithIds(source: typeof proposal, revision: string, trialId: string, evaluationId: string) {
+  return {
+    ...source,
+    interpretation_revision_id: revision,
+    trial_ids: [trialId],
+    evaluation_ids: [evaluationId],
+    configuration: {
+      ...source.configuration,
+      evaluation_plan: source.configuration.evaluation_plan.map((row) => ({
+        ...row, trial_id: trialId, evaluation_id: evaluationId,
+      })),
+    },
+  };
+}
+
 const saved = {
   declaration: {
   schema_version: "p08.investigation-declaration/2", record_type: "InvestigationDeclaration",
@@ -131,12 +146,16 @@ describe("investigation declaration adoption", () => {
     fireEvent.change(claim, { target: { value: "HYPOTHESIS" } });
     expect(screen.getByLabelText("Expected direction")).toHaveValue("OUTPERFORM");
     expect(screen.queryByRole("option", { name: "Descriptive, no prediction" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Primary group outperforms comparison" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Primary group underperforms comparison" })).toBeInTheDocument();
     expect(screen.getByText(/TRAINING · training/)).toBeInTheDocument();
     expect(screen.getByText(/VALIDATION · validation/)).toBeInTheDocument();
     expect(screen.getByText(/HOLDOUT · holdout/)).toBeInTheDocument();
     fireEvent.change(claim, { target: { value: "DESCRIPTIVE_ONLY" } });
     expect(screen.getByLabelText("Expected direction")).toHaveValue("DESCRIPTIVE");
     expect(screen.queryByText(/HOLDOUT · holdout/)).toBeNull();
+    expect(screen.getByLabelText("Expected direction").querySelectorAll("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: "Descriptive, no prediction" })).toBeInTheDocument();
     expect(screen.getByLabelText("Outcome horizon (positive integer)")).toHaveValue(15);
   });
 
@@ -163,23 +182,70 @@ describe("investigation declaration adoption", () => {
     expect(retryBody.idempotency_key).toBe(firstBody.idempotency_key);
   });
 
-  it("refreshes the interpretation basis after a stale save and preserves unsaved edits through a later clarification", async () => {
-    const user = userEvent.setup();
-    const first = { ...proposal, interpretation_revision_id: "revision-1" };
-    const second = { ...proposal, interpretation_revision_id: "revision-2" };
-    mocks.proposal.mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValue(second);
-    mocks.save.mockRejectedValueOnce(Object.assign(new mocks.ApiError("stale"), { code: "interpretation_revision_conflict" }));
-    const { rerender } = render(<InvestigationReview intakeId="intake-1" interpretationRevisionId="revision-1" />);
-    const stopping = await screen.findByLabelText("Stopping rule");
-    await user.clear(stopping);
-    await user.type(stopping, "Keep my reviewed edits.");
-    await user.click(screen.getByRole("checkbox"));
-    await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
-    await screen.findByText(/unsaved edits remain in place/);
-    expect(stopping).toHaveValue("Keep my reviewed edits.");
-    rerender(<InvestigationReview intakeId="intake-1" interpretationRevisionId="revision-3" />);
-    await waitFor(() => expect(mocks.proposal).toHaveBeenCalledTimes(3));
-    expect(stopping).toHaveValue("Keep my reviewed edits.");
-    expect(screen.getByText(/unsaved edits remain in place/)).toBeInTheDocument();
-  });
+  it.each(["stale save", "proposal retry", "clarifications on the same intake"] as const)(
+    "keeps a retained draft's regenerated identities coherent after %s and saves it",
+    async (refreshPath) => {
+      const user = userEvent.setup();
+      const original = proposalWithIds(proposal, "revision-1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+      const regenerated = proposalWithIds(proposal, "revision-2", "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+      const regeneratedAgain = proposalWithIds(proposal, "revision-3", "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "ffffffff-ffff-4fff-8fff-ffffffffffff");
+      mocks.proposal.mockReset();
+      mocks.proposal.mockResolvedValueOnce(original);
+      if (refreshPath === "stale save") {
+        mocks.proposal.mockResolvedValueOnce(regenerated);
+        mocks.save.mockRejectedValueOnce(Object.assign(new mocks.ApiError("stale"), { code: "interpretation_revision_conflict" }));
+      } else if (refreshPath === "proposal retry") {
+        mocks.proposal.mockRejectedValueOnce(new mocks.ApiError("proposal refresh unavailable"));
+        mocks.proposal.mockResolvedValueOnce(regenerated);
+      } else {
+        mocks.proposal.mockResolvedValueOnce(regenerated).mockResolvedValueOnce(regeneratedAgain);
+      }
+      mocks.save.mockResolvedValue(saved);
+
+      const { rerender } = render(<InvestigationReview intakeId="intake-1" interpretationRevisionId="revision-1" />);
+      const stopping = await screen.findByLabelText("Stopping rule");
+      await user.clear(stopping);
+      await user.type(stopping, "Keep my reviewed edits across each current review.");
+
+      if (refreshPath === "stale save") {
+        await user.click(screen.getByRole("checkbox"));
+        await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
+        await screen.findByText(/unsaved edits remain in place/);
+        expect(screen.getByRole("checkbox")).not.toBeChecked();
+        expect(stopping).toHaveValue("Keep my reviewed edits across each current review.");
+      } else if (refreshPath === "proposal retry") {
+        rerender(<InvestigationReview intakeId="intake-1" interpretationRevisionId="revision-2" />);
+        await screen.findByText("Unavailable", { selector: "p" });
+        await user.click(screen.getByRole("button", { name: "Retry proposal" }));
+        await screen.findByText(/unsaved edits remain in place/);
+        expect(stopping).toHaveValue("Keep my reviewed edits across each current review.");
+      } else {
+        rerender(<InvestigationReview intakeId="intake-1" interpretationRevisionId="revision-2" />);
+        await waitFor(() => expect(mocks.proposal).toHaveBeenCalledTimes(2));
+        rerender(<InvestigationReview intakeId="intake-1" interpretationRevisionId="revision-3" />);
+        await waitFor(() => expect(mocks.proposal).toHaveBeenCalledTimes(3));
+        expect(stopping).toHaveValue("Keep my reviewed edits across each current review.");
+      }
+
+      expect(screen.getByRole("checkbox")).not.toBeChecked();
+      await user.click(screen.getByRole("checkbox"));
+      await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
+      await screen.findByRole("heading", { name: "Declaration saved" });
+      const body = mocks.save.mock.calls.at(-1)?.[1];
+      expect(body.expected_interpretation_revision_id).toBe(refreshPath === "clarifications on the same intake" ? "revision-3" : "revision-2");
+      expect(body.configuration.stopping_rule).toBe("Keep my reviewed edits across each current review.");
+      expect(body.trial_ids).toEqual(original.trial_ids);
+      expect(body.evaluation_ids).toEqual(original.evaluation_ids);
+      expect(body.configuration.evaluation_plan.map((row: { trial_id: string; evaluation_id: string }) =>
+        [row.trial_id, row.evaluation_id])).toEqual([[original.trial_ids[0], original.evaluation_ids[0]]]);
+      expect(body.trial_ids).not.toEqual(regenerated.trial_ids);
+      expect(body.evaluation_ids).not.toEqual(regenerated.evaluation_ids);
+      if (refreshPath === "stale save") expect(mocks.save).toHaveBeenCalledTimes(2);
+      else expect(mocks.save).toHaveBeenCalledOnce();
+    },
+  );
+
 });

@@ -219,6 +219,11 @@ def create_declaration(session: Session, principal: Principal, intake_id: str,
                 raise invalid("/field_origins/question", "Keep the original question bound to its saved source.",
                               "configuration_origin_mismatch")
             continue
+        if field_name == "evaluation_plan":
+            if origin.origin != "USER_CONFIRMED" or origin.source_ref != "investigation-review/2":
+                raise invalid("/field_origins/evaluation_plan", "Confirm the exact evaluation plan in this review.",
+                              "configuration_origin_mismatch")
+            continue
         if origin.origin == "APPLICATION_CONFIGURED":
             if provided[field_name] != proposal[field_name] or origin.source_ref != f"proposal:{PROPOSAL_VERSION}":
                 raise invalid(f"/field_origins/{field_name}",

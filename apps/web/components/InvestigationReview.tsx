@@ -83,7 +83,11 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
     setProposalError(""); setAdopted(false); setRefreshingProposal(true);
     try {
       const next = await api.investigationProposal(intakeId);
-      setProposal(next);
+      const keepingDraft = !replaceDraft && Boolean(configuration && edgeSpec && proposal);
+      const reviewedProposal = keepingDraft && proposal
+        ? { ...next, trial_ids: proposal.trial_ids, evaluation_ids: proposal.evaluation_ids }
+        : next;
+      setProposal(reviewedProposal);
       if (replaceDraft || !configuration || !edgeSpec) {
         setConfiguration(next.configuration); setEdgeSpec(next.edge_spec); setAdopted(false);
       } else {
@@ -324,9 +328,12 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
               <label htmlFor="investigation-direction">Expected direction</label>
               <select id="investigation-direction" className="input" value={configuration.direction}
                 onChange={(event) => updateConfiguration("direction", event.target.value as InvestigationConfiguration["direction"])}>
-                {edgeSpec.claim.status === "DESCRIPTIVE_ONLY" ? <option value="DESCRIPTIVE">Descriptive, no prediction</option> : null}
-                <option value="OUTPERFORM">Primary group outperforms comparison</option>
-                <option value="UNDERPERFORM">Primary group underperforms comparison</option>
+                {edgeSpec.claim.status === "DESCRIPTIVE_ONLY" ? (
+                  <option value="DESCRIPTIVE">Descriptive, no prediction</option>
+                ) : <>
+                  <option value="OUTPERFORM">Primary group outperforms comparison</option>
+                  <option value="UNDERPERFORM">Primary group underperforms comparison</option>
+                </>}
               </select>
             </div>
             <div className="field">

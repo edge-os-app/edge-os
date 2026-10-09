@@ -334,6 +334,78 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
 });
 
+test("clarification refresh keeps a reviewed draft's regenerated-ID plan saveable", async ({ page }, info) => {
+  const project = info.project.name;
+  const proposals = [];
+  const saveBodies = [];
+  await page.route("**/v1/research/requests/*/investigation-proposal", async (route) => {
+    const response = await route.fetch();
+    const proposal = await response.json();
+    proposals.push(proposal);
+    return route.fulfill({ response, body: JSON.stringify(proposal) });
+  });
+  await page.route("**/v1/research/requests/*/investigations", async (route) => {
+    if (route.request().method() === "POST") saveBodies.push(JSON.parse(route.request().postData() ?? "{}"));
+    return route.continue();
+  });
+  await open(page, tokens.a);
+  await sample(page, /I have no view/).click();
+  await expect(page.getByLabel(/Use the synthetic fixture market/)).toBeChecked();
+  await page.getByLabel(/Use the synthetic fixture market/).uncheck();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("investigation-review")).toBeVisible();
+  const question = page.getByRole("region", { name: "What we need from you" }).locator('[data-question="choose-market"]');
+  await expect(question).toBeVisible();
+  await expect.poll(() => proposals.length).toBe(1);
+
+  const initial = proposals[0];
+  const intakeId = page.url().split("/research/").at(-1).split("?")[0].split("#")[0];
+  const stopping = page.getByLabel("Stopping rule");
+  await stopping.fill("Keep my reviewed stopping rule through clarification.");
+  await expect(stopping).toHaveValue("Keep my reviewed stopping rule through clarification.");
+  await question.getByRole("radio").check();
+  await question.getByRole("button", { name: "Save my answer" }).click();
+  await expect(page.getByText(/Your unsaved edits remain in place/)).toBeVisible();
+  await expect.poll(() => proposals.length).toBe(2);
+  await expect(stopping).toHaveValue("Keep my reviewed stopping rule through clarification.");
+  await expect(page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.")).not.toBeChecked();
+
+  const refreshed = proposals[1];
+  expect(refreshed.interpretation_revision_id).not.toBe(initial.interpretation_revision_id);
+  expect(refreshed.trial_ids).not.toEqual(initial.trial_ids);
+  expect(refreshed.evaluation_ids).not.toEqual(initial.evaluation_ids);
+  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.").check();
+  await page.getByRole("button", { name: "Adopt and save declaration" }).click();
+  await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
+  await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
+  expect(saveBodies).toHaveLength(1);
+  expect(saveBodies[0].expected_interpretation_revision_id).toBe(refreshed.interpretation_revision_id);
+  expect(saveBodies[0].configuration.stopping_rule).toBe("Keep my reviewed stopping rule through clarification.");
+  expect(saveBodies[0].trial_ids).toEqual(initial.trial_ids);
+  expect(saveBodies[0].evaluation_ids).toEqual(initial.evaluation_ids);
+  expect(saveBodies[0].configuration.evaluation_plan.map(({ trial_id, evaluation_id }) => [trial_id, evaluation_id]))
+    .toEqual(initial.configuration.evaluation_plan.map(({ trial_id, evaluation_id }) => [trial_id, evaluation_id]));
+  expect(saveBodies[0].field_origins.evaluation_plan).toMatchObject({ origin: "USER_CONFIRMED",
+    source_ref: "investigation-review/2", adoption: "ADOPTED" });
+
+  const declarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
+  const exactResponse = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${declarationId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(exactResponse.status()).toBe(200);
+  const exact = await exactResponse.json();
+  expect(exact.declaration.content.trial_ids).toEqual(initial.trial_ids);
+  expect(exact.declaration.content.evaluation_ids).toEqual(initial.evaluation_ids);
+  expect(exact.declaration.content.configuration.evaluation_plan).toEqual(saveBodies[0].configuration.evaluation_plan);
+  expect(exact.declaration.content.interpretation_revision_id).toBe(refreshed.interpretation_revision_id);
+  expect(exact.access_history[0]).toMatchObject({ outcome_labels_read: false, provider_queries: 0, study_started: false });
+  record(`investigation-refresh-${project}`, { url: page.url(), declarationId, content: exact.declaration.content,
+    access: Object.fromEntries(["schema_version", "event", "outcome_labels_read", "provider_queries", "study_started"]
+      .map((field) => [field, exact.access_history[0][field]])), original: initial.configuration.question,
+    identity_refresh: { trial_ids_changed_on_proposal: true, evaluation_ids_changed_on_proposal: true,
+      saved_plan_retained: true, current_interpretation_saved: true } });
+  await shot(page, project, "investigation-refresh-saved");
+});
+
 test("unsupported meaning and unsupported restriction are kept and block compilation", async ({ page }, info) => {
   const project = info.project.name;
   await open(page, tokens.a);

@@ -318,6 +318,52 @@ def test_stale_interpretation_and_unknown_parent_are_rejected(client, owner_a, p
     assert pg.psql("select count(*) from investigation_declarations") == before
 
 
+def test_retained_plan_ids_from_an_earlier_proposal_save_against_current_interpretation(client, owner_a, pg):
+    bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    intake_id = bundle["intake"]["record_id"]
+    path = f"/v1/research/requests/{intake_id}/investigations"
+    first_proposal = client.get(f"/v1/research/requests/{intake_id}/investigation-proposal", headers=owner_a).json()
+    clarification = answer(client, owner_a, bundle, "choose-market", "fixture-market")
+    assert clarification.status_code == 201, clarification.text
+    current_proposal = client.get(f"/v1/research/requests/{intake_id}/investigation-proposal", headers=owner_a).json()
+    assert first_proposal["trial_ids"] != current_proposal["trial_ids"]
+    assert first_proposal["evaluation_ids"] != current_proposal["evaluation_ids"]
+
+    body = declaration_body(bundle)
+    body["expected_interpretation_revision_id"] = clarification.json()["head"]["interpretation_revision_id"]
+    body["edge_spec"] = first_proposal["edge_spec"]
+    body["configuration"] = first_proposal["configuration"]
+    body["trial_ids"] = first_proposal["trial_ids"]
+    body["evaluation_ids"] = first_proposal["evaluation_ids"]
+    body["configuration"]["evaluation_plan"] = first_proposal["configuration"]["evaluation_plan"]
+    body["configuration"]["stopping_rule"] = "Retain the reviewed plan after clarification."
+    response = client.post(path, headers=owner_a, json=body)
+    assert response.status_code == 201, response.text
+    content = response.json()["declaration"]["content"]
+    assert content["interpretation_revision_id"] == clarification.json()["head"]["interpretation_revision_id"]
+    assert content["trial_ids"] == first_proposal["trial_ids"]
+    assert content["evaluation_ids"] == first_proposal["evaluation_ids"]
+    assert content["configuration"]["evaluation_plan"] == first_proposal["configuration"]["evaluation_plan"]
+    assert content["configuration"]["stopping_rule"] == "Retain the reviewed plan after clarification."
+    assert pg.psql(f"select count(*) from investigation_declarations where intake_record_id = '{intake_id}'") == "1"
+    assert pg.psql(f"select count(*) from investigation_access_events e join investigation_declarations d using (declaration_id) where d.intake_record_id = '{intake_id}'") == "1"
+
+
+def test_evaluation_plan_requires_user_confirmation_with_review_source(client, owner_a, pg):
+    bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    body = declaration_body(bundle)
+    body["field_origins"]["evaluation_plan"] = {
+        "origin": "USER_STATED", "source_ref": "investigation-review/2", "adoption": "ADOPTED",
+    }
+    response = client.post(f"/v1/research/requests/{bundle['intake']['record_id']}/investigations",
+                           headers=owner_a, json=body)
+    assert response.status_code == 422
+    assert any(item["path"] == "/field_origins/evaluation_plan" for item in response.json()["findings"])
+    assert pg.psql(f"select count(*) from investigation_declarations where intake_record_id = '{bundle['intake']['record_id']}'") == "0"
+
+
 def test_concurrent_same_key_save_commits_one_declaration_and_access_event(client, owner_a, pg):
     bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
                     input_class="BOUNDED_NO_THESIS").json()
