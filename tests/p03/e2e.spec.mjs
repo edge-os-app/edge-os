@@ -1196,7 +1196,8 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await expect(page.getByText("action-a-withdrawal-unknown", { exact: false })).toBeVisible();
   await expect(page.getByText("action-a-withdrawal-confirmed", { exact: false })).toBeVisible();
   await expect(page.getByText("action-a-withdrawal-failed", { exact: false })).toBeVisible();
-  await expect(page.getByText(/capital flow, not trading profit/i)).toBeVisible();
+  await expect(page.locator("li").filter({ hasText: "flow-a-deposit-1" })).toContainText("Capital flow, not trading profit.");
+  await expect(page.locator("li").filter({ hasText: "flow-a-withdrawal-1" })).toContainText("Capital flow, not trading profit.");
   await expect(page.getByText(/Account value, percent return, and drawdown are unavailable/)).toBeVisible();
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Agents" }).click();
   const permissionAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
