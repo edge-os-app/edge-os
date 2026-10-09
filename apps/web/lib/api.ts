@@ -1,4 +1,4 @@
-import type { Bundle, PublicationResult, RequestSummary, Sample } from "./types";
+import type { Bundle, InvestigationProposal, InvestigationSaveResult, PublicationResult, RequestSummary, Sample } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: string, public findings: { path: string; detail: string }[] = []) {
@@ -59,6 +59,10 @@ export const api = {
   interpreter: () => request<{ interpreter: { kind: string; id: string; notice: string }; samples: Sample[] }>("/v1/interpreter").then((r) => r.body),
   list: () => request<{ requests: RequestSummary[]; has_more: boolean }>("/v1/research/requests").then((r) => r.body),
   get: (id: string) => request<Bundle>(`/v1/research/requests/${id}`).then((r) => r.body),
+  investigationProposal: (id: string) => request<InvestigationProposal>(`/v1/research/requests/${id}/investigation-proposal`).then((r) => r.body),
+  investigations: (id: string) => request<{ declarations: InvestigationSaveResult["declaration"][]; access_history: InvestigationSaveResult["access_history"] }>(`/v1/research/requests/${id}/investigations`).then((r) => r.body),
+  investigation: (id: string, declarationId: string) => request<InvestigationSaveResult>(`/v1/research/requests/${id}/investigations/${declarationId}`).then((r) => r.body),
+  saveInvestigation: (id: string, body: unknown) => request<InvestigationSaveResult>(`/v1/research/requests/${id}/investigations`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   submit: (body: unknown) => request<Bundle>("/v1/research/requests", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   answer: (id: string, body: { previous_revision_id: string; question_id: string; choice_id: string }) =>
     request<Bundle>(`/v1/research/requests/${id}/clarifications`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),

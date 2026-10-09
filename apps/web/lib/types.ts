@@ -136,6 +136,113 @@ export interface RequestSummary {
   published: boolean;
 }
 
+export interface InvestigationHorizon { value: number; unit: "SECONDS" | "MINUTES" | "HOURS" | "DAYS" }
+export interface InvestigationPartition {
+  partition_id: string;
+  role: "DESCRIPTIVE" | "TRAINING" | "VALIDATION" | "HOLDOUT";
+  start: string;
+  end: string;
+}
+export interface InvestigationEvaluation {
+  evaluation_id: string;
+  trial_id: string;
+  variant_id: string;
+  horizon: InvestigationHorizon;
+  partition_ids: string[];
+}
+
+export interface InvestigationConfiguration {
+  question: string;
+  pool_binding: { profile_id: string; qualification: "UNQUALIFIED_FIXTURE"; limitations: string[] };
+  variants: { variant_id: string; hypothesis: string }[];
+  direction: "OUTPERFORM" | "UNDERPERFORM" | "DESCRIPTIVE";
+  horizons: InvestigationHorizon[];
+  sources: string[];
+  candidate_limit: number;
+  parameter_limit: number;
+  compute_limit: { max_evaluations: number; max_runtime_seconds: number; max_cost_usd: "0" };
+  period: { start: string; end: string };
+  partitions: InvestigationPartition[];
+  permitted_access: "FIXTURE_ONLY"[];
+  stopping_rule: string;
+  evaluation_plan: InvestigationEvaluation[];
+  budget_version: "p08-research-budget/2";
+  optional_tools: { creator_history: "UNAVAILABLE" | "NOT_REQUIRED"; wallet_pnl: "UNAVAILABLE" | "NOT_REQUIRED"; social_signals: "UNAVAILABLE" | "NOT_REQUIRED" };
+}
+
+export interface InvestigationEdgeSpec {
+  edge_id: string;
+  version: number;
+  parent_declaration_id: string | null;
+  hypothesis: string;
+  claim: { status: "HYPOTHESIS" | "DESCRIPTIVE_ONLY"; text: string };
+  falsification: { status: "DECLARED" | "DESCRIPTIVE_ONLY"; criteria: string };
+  alternatives: string[];
+  unknowns: string[];
+}
+
+export interface FieldAdoption {
+  origin: "USER_STATED" | "USER_CONFIRMED" | "APPLICATION_CONFIGURED" | "AGENT_PROPOSED";
+  source_ref: string;
+  adoption: "PENDING" | "ADOPTED";
+}
+
+export interface InvestigationProposal {
+  schema_version: "p08.investigation-declaration/2";
+  proposal_version: string;
+  interpretation_revision_id: string | null;
+  request_record_id: string;
+  edge_spec: InvestigationEdgeSpec;
+  configuration: InvestigationConfiguration;
+  adopted_fields: string[];
+  field_origins: Record<string, FieldAdoption>;
+  trial_ids: string[];
+  evaluation_ids: string[];
+  notice: string;
+}
+
+export interface InvestigationEnvelope {
+  schema_version: "p08.investigation-declaration/2";
+  record_type: "InvestigationDeclaration";
+  record_id: string;
+  owner_id: string;
+  operation_id: string;
+  created_at: string;
+  content: {
+    original_request: string;
+    restrictions: string[];
+    input_class: InputClass;
+    requested_job: Job;
+    interpretation_revision_id: string | null;
+    edge_spec: InvestigationEdgeSpec;
+    configuration: InvestigationConfiguration;
+    adopted_fields: string[];
+    field_origins: Record<string, Omit<FieldAdoption, "adoption"> & { adoption: "ADOPTED" }>;
+    trial_ids: string[];
+    evaluation_ids: string[];
+    declaration_state: "PRE_OUTCOME_DECLARED";
+    outcome_labels_read: false;
+  };
+}
+
+export interface InvestigationAccessEvent {
+  event_id: string;
+  declaration_id: string;
+  created_at: string;
+  schema_version: "p08.investigation-access/1";
+  event: "DECLARATION_SAVED";
+  outcome_labels_read: false;
+  provider_queries: 0;
+  study_started: false;
+}
+
+export interface InvestigationSaveResult {
+  declaration: InvestigationEnvelope;
+  access_history: InvestigationAccessEvent[];
+  study_started: false;
+  idempotent_replay: boolean;
+}
+
 export interface Sample {
   scenario_id: string;
   label: string;

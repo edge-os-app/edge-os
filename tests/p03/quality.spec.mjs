@@ -118,6 +118,21 @@ test("axe: no serious or critical WCAG 2.2 AA violation in the main states", asy
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
 });
 
+test("P08 investigation review controls and accessibility", async ({ page }, info) => {
+  await open(page, tokens.a);
+  await page.getByLabel("Your words", { exact: true }).fill("Compare bounded descriptive cohorts in a synthetic fixture.");
+  await page.getByRole("radio").nth(2).check();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("investigation-review")).toBeVisible();
+  const small = await smallControls(page);
+  const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  const serious = result.violations.filter((v) => ["serious", "critical"].includes(v.impact ?? ""));
+  fs.writeFileSync(path.join(outDir, `p08-review-${info.project.name}.json`), JSON.stringify({ small,
+    violations: result.violations.map((v) => ({ id: v.id, impact: v.impact, help: v.help })) }, null, 2));
+  expect(small, JSON.stringify(small)).toEqual([]);
+  expect(serious, JSON.stringify(serious.map((v) => ({ id: v.id, help: v.help, impact: v.impact })), null, 2)).toEqual([]);
+});
+
 test("modal conversation keeps focus after an answer and after adoption", async ({ page }, info) => {
   test.skip(info.project.name !== "mobile-390", "the modal sheet exists below 1181px");
   await open(page, tokens.a);

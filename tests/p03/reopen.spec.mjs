@@ -26,4 +26,13 @@ test("after an API restart the saved rules reopen with their exact review text",
     await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-${name}-reopened-after-restart.png`), fullPage: true });
   }
   provenanceMeasurements.forEach(expectProvenanceFits);
+  const investigation = results[`investigation-${info.project.name}`];
+  expect(investigation, "the first run must have saved a P08 declaration").toBeTruthy();
+  await page.goto(investigation.url);
+  await expect(page.getByTestId("investigation-saved")).toContainText(investigation.declarationId);
+  await expect(page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.")).toHaveCount(0);
+  await page.getByRole("button", { name: "Reopen saved declaration" }).click();
+  await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
+  await expect(page.getByTestId("investigation-saved")).toContainText("DECLARATION_SAVED");
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-investigation-reopened-after-restart.png`), fullPage: true });
 });

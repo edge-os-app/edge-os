@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import unicodedata
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic_core import PydanticCustomError
 
 
 class StrictModel(BaseModel):
@@ -15,6 +18,20 @@ Job = Literal["COMPARE", "INVESTIGATE_EFFECT", "CREATE_STRATEGY", "SIMULATE", "O
 InputClass = Literal["CONCRETE_THESIS", "LOOSE_INTUITION", "BOUNDED_NO_THESIS"]
 Restriction = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+def _nfc_text(value: str) -> str:
+    if not unicodedata.is_normalized("NFC", value):
+        raise PydanticCustomError("text_not_nfc", "Text must use composed Unicode characters (NFC).")
+    return value
+
+
+def _bounded_text(max_length: int) -> Any:
+    return Annotated[str, StringConstraints(min_length=1, max_length=max_length), AfterValidator(_nfc_text)]
+
+
+ReviewText = _bounded_text(2000)
+ShortReviewText = _bounded_text(1000)
 
 
 class DeclaredMarket(StrictModel):
@@ -43,3 +60,223 @@ class PublicationBody(StrictModel):
     expected_parent_revision_id: Identifier | None
     draft_id: Identifier
     strategy: dict[str, Any]
+
+
+class EdgeClaim(StrictModel):
+    status: Literal["HYPOTHESIS", "DESCRIPTIVE_ONLY"]
+    text: ReviewText
+
+
+class EdgeFalsification(StrictModel):
+    status: Literal["DECLARED", "DESCRIPTIVE_ONLY"]
+    criteria: ReviewText
+
+
+class InvestigationEdgeSpec(StrictModel):
+    edge_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+    version: int = Field(ge=1, le=1000)
+    parent_declaration_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")] | None
+    hypothesis: ReviewText
+    claim: EdgeClaim
+    falsification: EdgeFalsification
+    alternatives: list[ShortReviewText] = Field(min_length=1, max_length=10)
+    unknowns: list[ShortReviewText] = Field(min_length=1, max_length=20)
+
+
+class InvestigationPoolBinding(StrictModel):
+    profile_id: Literal["fixture-unqualified-pool/1"]
+    qualification: Literal["UNQUALIFIED_FIXTURE"]
+    limitations: list[ShortReviewText] = Field(min_length=1, max_length=20)
+
+
+class InvestigationVariant(StrictModel):
+    variant_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
+    hypothesis: ShortReviewText
+
+
+class InvestigationHorizon(StrictModel):
+    value: int = Field(gt=0)
+    unit: Literal["SECONDS", "MINUTES", "HOURS", "DAYS"]
+
+
+class InvestigationEvaluationPlan(StrictModel):
+    evaluation_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+    trial_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+    variant_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
+    horizon: InvestigationHorizon
+    partition_ids: list[Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def partitions_are_unique(self) -> "InvestigationEvaluationPlan":
+        if len(set(self.partition_ids)) != len(self.partition_ids):
+            raise ValueError("Evaluation partition references must be unique.")
+        return self
+
+
+class InvestigationComputeLimit(StrictModel):
+    max_evaluations: int = Field(ge=1, le=100)
+    max_runtime_seconds: int = Field(ge=1, le=3600)
+    max_cost_usd: Literal["0"]
+
+
+class InvestigationPeriod(StrictModel):
+    model_config = ConfigDict(extra="forbid", strict=False)
+
+    start: datetime
+    end: datetime
+
+    @model_validator(mode="after")
+    def period_is_ordered_and_utc(self) -> "InvestigationPeriod":
+        if self.start.tzinfo is None or self.end.tzinfo is None:
+            raise ValueError("Period timestamps must include a UTC offset.")
+        if self.start.utcoffset() is None or self.end.utcoffset() is None:
+            raise ValueError("Period timestamps must include a UTC offset.")
+        if self.start.utcoffset().total_seconds() != 0 or self.end.utcoffset().total_seconds() != 0:
+            raise ValueError("Period timestamps must use UTC.")
+        if self.start >= self.end:
+            raise ValueError("Period start must be before period end.")
+        return self
+
+
+class InvestigationPartition(StrictModel):
+    model_config = ConfigDict(extra="forbid", strict=False)
+
+    partition_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
+    role: Literal["DESCRIPTIVE", "TRAINING", "VALIDATION", "HOLDOUT"]
+    start: datetime
+    end: datetime
+
+    @model_validator(mode="after")
+    def interval_is_ordered_and_utc(self) -> "InvestigationPartition":
+        if (self.start.tzinfo is None or self.end.tzinfo is None or self.start.utcoffset() is None
+                or self.end.utcoffset() is None or self.start.utcoffset().total_seconds() != 0
+                or self.end.utcoffset().total_seconds() != 0 or self.start >= self.end):
+            raise ValueError("Partition boundaries must be ordered UTC timestamps.")
+        return self
+
+
+OptionalTool = Literal["UNAVAILABLE", "NOT_REQUIRED"]
+
+
+class OptionalResearchTools(StrictModel):
+    creator_history: OptionalTool
+    wallet_pnl: OptionalTool
+    social_signals: OptionalTool
+
+
+class InvestigationConfiguration(StrictModel):
+    question: Annotated[str, StringConstraints(min_length=1, max_length=10000), AfterValidator(_nfc_text)]
+    pool_binding: InvestigationPoolBinding
+    variants: list[InvestigationVariant] = Field(min_length=2, max_length=20)
+    direction: Literal["OUTPERFORM", "UNDERPERFORM", "DESCRIPTIVE"]
+    horizons: list[InvestigationHorizon] = Field(min_length=1, max_length=20)
+    sources: list[Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]] = Field(min_length=1, max_length=20)
+    candidate_limit: int = Field(ge=1, le=100)
+    parameter_limit: int = Field(ge=1, le=1000)
+    compute_limit: InvestigationComputeLimit
+    period: InvestigationPeriod
+    partitions: list[InvestigationPartition] = Field(min_length=1, max_length=10)
+    permitted_access: list[Literal["FIXTURE_ONLY"]] = Field(min_length=1, max_length=1)
+    stopping_rule: ReviewText
+    evaluation_plan: list[InvestigationEvaluationPlan] = Field(min_length=1, max_length=100)
+    budget_version: Literal["p08-research-budget/2"]
+    optional_tools: OptionalResearchTools
+
+    @model_validator(mode="after")
+    def identities_are_unique(self) -> "InvestigationConfiguration":
+        if len({item.variant_id for item in self.variants}) != len(self.variants):
+            raise ValueError("Variant identities must be unique.")
+        if len({item.partition_id for item in self.partitions}) != len(self.partitions):
+            raise ValueError("Partition identities must be unique.")
+        horizon_ids = [(item.value, item.unit) for item in self.horizons]
+        if len(set(horizon_ids)) != len(horizon_ids) or len(set(self.sources)) != len(self.sources):
+            raise ValueError("Horizons and sources must be unique.")
+        if self.pool_binding.profile_id not in self.sources:
+            raise ValueError("The selected pool binding must appear in the declared sources.")
+        if self.candidate_limit < len(self.variants):
+            raise ValueError("Candidate limit must cover every declared variant.")
+        period_start, period_end = self.period.start, self.period.end
+        ordered = self.partitions
+        if any(item.start < period_start or item.end > period_end for item in ordered):
+            raise ValueError("Partition boundaries must be contained within the declared period.")
+        if any(left.start > right.start or left.end > right.start for left, right in zip(ordered, ordered[1:])):
+            raise ValueError("Partition boundaries must be ordered and non-overlapping.")
+        roles = {item.role for item in self.partitions}
+        if self.direction == "DESCRIPTIVE":
+            if (len(ordered) != 1 or ordered[0].role != "DESCRIPTIVE" or ordered[0].start != period_start
+                    or ordered[0].end != period_end):
+                raise ValueError("Descriptive work must declare one partition covering the full period.")
+        elif not {"TRAINING", "VALIDATION", "HOLDOUT"}.issubset(roles) or "DESCRIPTIVE" in roles:
+            raise PydanticCustomError("predictive_partitions_incomplete",
+                                      "Predictive adoption requires bounded training, validation, and holdout partitions.")
+        partition_ids = {item.partition_id for item in self.partitions}
+        variant_ids = {item.variant_id for item in self.variants}
+        horizon_set = set(horizon_ids)
+        plan_evaluation_ids = [item.evaluation_id for item in self.evaluation_plan]
+        if len(plan_evaluation_ids) != len(set(plan_evaluation_ids)):
+            raise ValueError("Each evaluation identity must have one explicit plan row.")
+        if any(item.variant_id not in variant_ids or (item.horizon.value, item.horizon.unit) not in horizon_set
+               or not set(item.partition_ids).issubset(partition_ids) for item in self.evaluation_plan):
+            raise ValueError("Each evaluation plan must reference declared variants, horizons, and partitions.")
+        seconds_per_unit = {"SECONDS": 1, "MINUTES": 60, "HOURS": 3600, "DAYS": 86400}
+        partitions_by_id = {item.partition_id: item for item in self.partitions}
+        if any(item.horizon.value * seconds_per_unit[item.horizon.unit] >
+               (partitions_by_id[partition_id].end - partitions_by_id[partition_id].start).total_seconds()
+               for item in self.evaluation_plan for partition_id in item.partition_ids):
+            raise ValueError("Each evaluation horizon must fit within every mapped temporal partition.")
+        if self.compute_limit.max_evaluations < len(self.evaluation_plan):
+            raise ValueError("Evaluation limit must cover every explicit evaluation plan row.")
+        return self
+
+
+AdoptedField = Literal[
+    "edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources", "candidate_limit",
+    "parameter_limit", "compute_limit", "period", "partitions", "permitted_access", "stopping_rule",
+    "evaluation_plan", "budget_version", "optional_tools",
+]
+
+
+class FieldAdoption(StrictModel):
+    origin: Literal["USER_STATED", "USER_CONFIRMED", "APPLICATION_CONFIGURED", "AGENT_PROPOSED"]
+    source_ref: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+    adoption: Literal["ADOPTED"]
+
+
+class InvestigationBody(StrictModel):
+    operation_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+    expected_interpretation_revision_id: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)] | None
+    edge_spec: InvestigationEdgeSpec
+    configuration: InvestigationConfiguration
+    adopted_fields: list[AdoptedField] = Field(min_length=1, max_length=18)
+    field_origins: dict[AdoptedField, FieldAdoption]
+    trial_ids: list[Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]] = Field(min_length=1, max_length=20)
+    evaluation_ids: list[Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def all_required_fields_are_adopted(self) -> "InvestigationBody":
+        required = set(InvestigationConfiguration.model_fields) | {"edge_spec"}
+        if set(self.adopted_fields) != required or len(self.adopted_fields) != len(required):
+            raise PydanticCustomError("required_setting_not_adopted",
+                                      "Every required setting needs explicit adoption before saving.")
+        if set(self.field_origins) != required:
+            raise PydanticCustomError("required_setting_not_adopted",
+                                      "Every required setting needs a source and origin.")
+        if len(set(self.trial_ids)) != len(self.trial_ids) or len(set(self.evaluation_ids)) != len(self.evaluation_ids):
+            raise ValueError("Trial and evaluation identities must be unique.")
+        plan = self.configuration.evaluation_plan
+        if {item.evaluation_id for item in plan} != set(self.evaluation_ids):
+            raise PydanticCustomError("evaluation_plan_identity_mismatch",
+                                      "Every declared evaluation identity needs exactly one explicit plan row.")
+        if {item.trial_id for item in plan} != set(self.trial_ids):
+            raise PydanticCustomError("trial_plan_identity_mismatch",
+                                      "Every declared trial identity must be bound by the explicit evaluation plan.")
+        descriptive = self.edge_spec.claim.status == "DESCRIPTIVE_ONLY"
+        semantic_match = ((descriptive and self.edge_spec.falsification.status == "DESCRIPTIVE_ONLY"
+                           and self.configuration.direction == "DESCRIPTIVE")
+                          or (not descriptive and self.edge_spec.falsification.status == "DECLARED"
+                              and self.configuration.direction in {"OUTPERFORM", "UNDERPERFORM"}))
+        if not semantic_match:
+            raise PydanticCustomError("declaration_semantics_conflict",
+                                      "Claim, falsification status, and direction must describe the same work.")
+        return self

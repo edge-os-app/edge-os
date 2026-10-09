@@ -7,6 +7,7 @@ import type { Bundle, Finding, Strategy } from "../lib/types";
 import type { ConversationContext } from "./Conversation";
 import { AnswerMessage, QuestionForm } from "./QuestionForm";
 import { RulesReview } from "./RulesReview";
+import { InvestigationReview } from "./InvestigationReview";
 
 interface Props {
   id: string;
@@ -194,6 +195,9 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
           </>
         )}
       </section>
+
+      {intake.requested_job === "INVESTIGATE_EFFECT" ? <InvestigationReview intakeId={id}
+        interpretationRevisionId={head.interpretation_revision_id} /> : null}
 
       {outcome === "NEEDS_CLARIFICATION" && (
         <section className="panel" aria-labelledby="q-title">

@@ -13,6 +13,7 @@ browser context, log scan, production-bundle scan, then cleanup of exactly the r
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import re
@@ -350,7 +351,78 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                                          v.get("relative_volume_baseline") == {"op": "relative_volume", "lookback_buckets": 2})
                                     and ("entry_tree_matches_ui_fixture" not in v or v["entry_tree_matches_ui_fixture"])
                                     for v in verdicts)
-    return {"checks": checks, "all_checks_pass": passed}
+    investigations = []
+    for key, saved in results.items():
+        if not key.startswith("investigation-"):
+            continue
+        intake_id = saved["url"].split("/research/")[-1].split("?")[0].split("#")[0]
+        declaration_id = saved["declarationId"]
+        rows_for_declaration = rows(
+            "select d.declaration_id, d.owner_id, d.intake_record_id, d.content, e.content access_content "
+            "from investigation_declarations d join investigation_access_events e "
+            "on e.owner_id=d.owner_id and e.declaration_id=d.declaration_id "
+            f"where d.declaration_id='{declaration_id}' and d.intake_record_id='{intake_id}'")
+        item = {"key": key, "intake_id": intake_id, "declaration_id": declaration_id,
+                "rows": len(rows_for_declaration)}
+        if rows_for_declaration:
+            content = rows_for_declaration[0]["content"]
+            access = rows_for_declaration[0]["access_content"]
+            configuration = content.get("configuration", {})
+            partitions = configuration.get("partitions", [])
+            partition_by_id = {part.get("partition_id"): part for part in partitions}
+            plan = configuration.get("evaluation_plan", [])
+            start = datetime.fromisoformat(configuration.get("period", {}).get("start", "").replace("Z", "+00:00"))
+            end = datetime.fromisoformat(configuration.get("period", {}).get("end", "").replace("Z", "+00:00"))
+            intervals = [(datetime.fromisoformat(part["start"].replace("Z", "+00:00")),
+                          datetime.fromisoformat(part["end"].replace("Z", "+00:00"))) for part in partitions]
+            plan_bound = (len({row.get("evaluation_id") for row in plan}) == len(plan)
+                and {row.get("evaluation_id") for row in plan} == set(content.get("evaluation_ids", []))
+                and {row.get("trial_id") for row in plan} == set(content.get("trial_ids", []))
+                and configuration.get("compute_limit", {}).get("max_evaluations", 0) >= len(plan)
+                and all(row.get("variant_id") in {item.get("variant_id") for item in configuration.get("variants", [])}
+                    and row.get("partition_ids") and set(row["partition_ids"]).issubset(partition_by_id)
+                    and (row.get("horizon", {}).get("value"), row.get("horizon", {}).get("unit"))
+                        in {(item.get("value"), item.get("unit")) for item in configuration.get("horizons", [])}
+                    for row in plan))
+            semantics_bound = ((content.get("edge_spec", {}).get("claim", {}).get("status") == "DESCRIPTIVE_ONLY"
+                and content.get("edge_spec", {}).get("falsification", {}).get("status") == "DESCRIPTIVE_ONLY"
+                and configuration.get("direction") == "DESCRIPTIVE") or
+                (content.get("edge_spec", {}).get("claim", {}).get("status") == "HYPOTHESIS"
+                and content.get("edge_spec", {}).get("falsification", {}).get("status") == "DECLARED"
+                and configuration.get("direction") in {"OUTPERFORM", "UNDERPERFORM"}))
+            temporal_bound = (bool(intervals) and all(start <= left < right <= end for left, right in intervals)
+                and all(previous[1] <= current[0] for previous, current in zip(intervals, intervals[1:]))
+                and (configuration.get("direction") != "DESCRIPTIVE" or
+                     len(intervals) == 1 and intervals[0] == (start, end) and partitions[0].get("role") == "DESCRIPTIVE")
+                and (configuration.get("direction") == "DESCRIPTIVE" or
+                     {part.get("role") for part in partitions}.issuperset({"TRAINING", "VALIDATION", "HOLDOUT"})))
+            item.update({
+                "original_request_matches_ui": content.get("original_request") == saved["original"],
+                "saved_content_matches_ui_and_api": content == saved.get("content"),
+                "access_event_matches_ui_and_api": access == saved.get("access"),
+                "state_is_pre_outcome": content.get("declaration_state") == "PRE_OUTCOME_DECLARED",
+                "labels_unread": content.get("outcome_labels_read") is False and access.get("outcome_labels_read") is False,
+                "no_provider_or_study": access.get("provider_queries") == 0 and access.get("study_started") is False,
+                "fixture_only_zero_cost": content.get("configuration", {}).get("permitted_access") == ["FIXTURE_ONLY"]
+                    and content.get("configuration", {}).get("compute_limit", {}).get("max_cost_usd") == "0",
+                "version_two_contract": rows_for_declaration[0]["content"].get("schema_version") == "p08.investigation-declaration/2",
+                "declaration_semantics_consistent": semantics_bound,
+                "evaluation_plan_explicit_and_budgeted": plan_bound,
+                "partition_boundaries_contained_and_ordered": temporal_bound,
+                "owner_matches_intake": bool(rows(f"select 1 from records r join investigation_declarations d "
+                    f"on d.owner_id=r.owner_id where r.record_id='{intake_id}' and d.declaration_id='{declaration_id}'")),
+                "access_event_count": rows(f"select count(*) c from investigation_access_events where declaration_id='{declaration_id}'")[0]["c"],
+            })
+        investigations.append(item)
+    checks["investigations"] = investigations
+    investigations_pass = bool(investigations) and all(v.get("rows") == 1 and v.get("original_request_matches_ui")
+        and v.get("saved_content_matches_ui_and_api") and v.get("access_event_matches_ui_and_api")
+        and v.get("state_is_pre_outcome") and v.get("labels_unread") and v.get("no_provider_or_study")
+        and v.get("fixture_only_zero_cost") and v.get("owner_matches_intake") and v.get("access_event_count") == 1
+        and v.get("version_two_contract") and v.get("declaration_semantics_consistent")
+        and v.get("evaluation_plan_explicit_and_budgeted") and v.get("partition_boundaries_contained_and_ordered")
+        for v in investigations)
+    return {"checks": checks, "all_checks_pass": passed and investigations_pass}
 
 
 def sql_literal(text: str) -> str:
@@ -358,6 +430,9 @@ def sql_literal(text: str) -> str:
 
 
 def ownership_drive(pg: harness.Postgres, api_url: str, token_a: str, token_b: str) -> dict:
+    def rows(sql: str):
+        return json.loads(pg.psql(f"select coalesce(json_agg(t), '[]'::json) from ({sql}) t"))
+
     row = json.loads(pg.psql("select coalesce(json_agg(t), '[]'::json) from (select r.record_id, d.record_id draft_id, "
                              "d.content->>'strategy_id' strategy_id from records r join records d on d.intake_record_id = r.record_id "
                              "where r.record_type='IntakeRequest' and d.record_type='StrategyDraft' limit 1) t"))
@@ -379,8 +454,33 @@ def ownership_drive(pg: harness.Postgres, api_url: str, token_a: str, token_b: s
         "expected_parent_revision_id": None, "draft_id": draft, "strategy": real})[0]
     rows_unchanged = pg.psql(f"select count(*) from strategy_revisions where strategy_id = '{sid}'")
     results["revisions_for_strategy_after_attacks"] = rows_unchanged
+    investigation = json.loads(pg.psql("select coalesce(json_agg(t), '[]'::json) from (select intake_record_id, declaration_id from investigation_declarations order by created_at limit 1) t"))
+    investigation_ok = not investigation
+    if investigation:
+        investigation = investigation[0]
+        iid, did = investigation["intake_record_id"], investigation["declaration_id"]
+        results["read_other_investigation"] = http("GET", f"{api_url}/v1/research/requests/{iid}/investigations/{did}", token_b)[0]
+        results["list_other_investigations"] = http("GET", f"{api_url}/v1/research/requests/{iid}/investigations", token_b)[0]
+        stored = rows(f"select content from investigation_declarations where declaration_id='{did}'")[0]["content"]
+        attack = {"operation_id": "66666666-6666-4666-8666-666666666666", "idempotency_key": "foreign-investigation-attack",
+                  "expected_interpretation_revision_id": stored["interpretation_revision_id"],
+                  "edge_spec": stored["edge_spec"], "configuration": stored["configuration"],
+                  "adopted_fields": stored["adopted_fields"], "field_origins": stored["field_origins"],
+                  "trial_ids": stored["trial_ids"], "evaluation_ids": stored["evaluation_ids"]}
+        results["adopt_other_investigation"] = http("POST", f"{api_url}/v1/research/requests/{iid}/investigations", token_b, attack)[0]
+        results["owner_a_reads_investigation"] = http("GET", f"{api_url}/v1/research/requests/{iid}/investigations/{did}", token_a)[0]
+        before = pg.psql(f"select count(*) from investigation_declarations where declaration_id='{did}'")
+        access_before = pg.psql(f"select count(*) from investigation_access_events where declaration_id='{did}'")
+        results["investigation_count_before_after"] = [before, pg.psql(
+            f"select count(*) from investigation_declarations where declaration_id='{did}'")]
+        results["investigation_access_count_before_after"] = [access_before, pg.psql(
+            f"select count(*) from investigation_access_events where declaration_id='{did}'")]
+        investigation_ok = results["read_other_investigation"] == 404 and results["list_other_investigations"] == 404 \
+            and results["adopt_other_investigation"] == 404 \
+            and results["owner_a_reads_investigation"] == 200 and before == results["investigation_count_before_after"][1] \
+            and access_before == results["investigation_access_count_before_after"][1]
     return {**results, "all_denied": all(c == 404 for c in denied) and results["publish_other_draft_real_body"] == 404
-            and results["owner_a_still_reads"] == 200 and rows_unchanged == "1"}
+            and results["owner_a_still_reads"] == 200 and rows_unchanged == "1" and investigation_ok}
 
 
 if __name__ == "__main__":

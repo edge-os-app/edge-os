@@ -76,6 +76,21 @@ def get_owned(session: Session, principal: Principal, record_id: str, record_typ
     return row
 
 
+def lock_intake(session: Session, principal: Principal, intake_id: str) -> Record:
+    """Lock one owner-scoped intake row for the complete head-read/write transaction."""
+    parsed = parse_uuid(intake_id)
+    if parsed is None:
+        raise not_found()
+    row = session.execute(select(Record).where(
+        Record.owner_id == principal.user_id,
+        Record.record_id == parsed,
+        Record.record_type == "IntakeRequest",
+    ).execution_options(populate_existing=True).with_for_update(of=Record)).scalar_one_or_none()
+    if row is None:
+        raise not_found()
+    return row
+
+
 def intake_rows(session: Session, principal: Principal, intake_id: uuid.UUID) -> list[Record]:
     return list(session.execute(select(Record).where(
         Record.owner_id == principal.user_id,
@@ -170,7 +185,7 @@ def head_interpretation(rows: list[Record]) -> Record | None:
 
 
 def answer_question(session: Session, principal: Principal, intake_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    intake = get_owned(session, principal, intake_id, "IntakeRequest")
+    intake = lock_intake(session, principal, intake_id)
     rows = intake_rows(session, principal, intake.record_id)
     head = head_interpretation(rows)
     if head is None:
