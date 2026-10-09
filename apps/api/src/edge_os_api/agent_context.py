@@ -138,13 +138,14 @@ def _write(
     expected_version: int,
     state: Literal["ACTIVE", "DISABLED", "CLEARED"] | None = None,
     entries: list[ContextEntry] | None = None,
+    snapshot_version: int | None = None,
 ) -> ContextContent:
     _validate_agent_id(agent_id)
     try:
         session.execute(select(User.id).where(User.id == principal.user_id).with_for_update()).scalar_one()
         current_row = _latest(session, principal.user_id, agent_id)
         current = _content(current_row, principal.user_id, agent_id)
-        if current.memory_version != expected_version:
+        if current.memory_version != expected_version or snapshot_version not in (None, expected_version):
             raise AppError(409, "WRITE", "CONFLICTED", "context_version_conflict",
                            [finding("context_version_conflict", "/expected_version",
                                     "Context changed. Reload it and review the current version.")])
@@ -202,7 +203,10 @@ def correct_context(
             updated.append(entry)
     if not changed:
         raise not_found("adopted context")
-    next_content = _write(session, principal, agent_id, body.expected_version, entries=updated)
+    next_content = _write(
+        session, principal, agent_id, body.expected_version, entries=updated,
+        snapshot_version=current.memory_version,
+    )
     return _response(session, principal, next_content)
 
 
@@ -224,7 +228,10 @@ def adopt_suggestion(
             updated.append(entry)
     if not changed:
         raise not_found("suggested context")
-    next_content = _write(session, principal, agent_id, body.expected_version, entries=updated)
+    next_content = _write(
+        session, principal, agent_id, body.expected_version, entries=updated,
+        snapshot_version=current.memory_version,
+    )
     return _response(session, principal, next_content)
 
 

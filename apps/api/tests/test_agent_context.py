@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -176,6 +178,90 @@ def test_concurrent_edits_with_one_expected_version_commit_exactly_one_successor
     assert winning_text in replacements
     loser = next(response for response in responses if response.status_code == 409)
     assert loser.json()["code"] == "context_version_conflict"
+
+
+@pytest.mark.parametrize(
+    ("stale_path", "stale_body", "concurrent_path", "concurrent_body", "preserved_entry", "preserved_value"),
+    [
+        (
+            "/v1/agents/agent-a/context/corrections",
+            {"expected_version": 2, "context_id": "preference-1", "replacement": "Prepared from old state."},
+            "/v1/agents/agent-a/context/suggestions/adopt",
+            {"expected_version": 1, "context_id": "lesson-1"},
+            "lesson-1",
+            "ADOPTED",
+        ),
+        (
+            "/v1/agents/agent-a/context/suggestions/adopt",
+            {"expected_version": 2, "context_id": "lesson-1"},
+            "/v1/agents/agent-a/context/corrections",
+            {"expected_version": 1, "context_id": "preference-1", "replacement": "Concurrent correction."},
+            "preference-1",
+            "Concurrent correction.",
+        ),
+    ],
+)
+def test_update_from_stale_context_snapshot_cannot_overwrite_newer_version(
+    client,
+    owner_a,
+    monkeypatch,
+    stale_path,
+    stale_body,
+    concurrent_path,
+    concurrent_body,
+    preserved_entry,
+    preserved_value,
+):
+    import edge_os_api.agent_context as context_api
+
+    _mount_context(client)
+    owner_id = _owner(client, owner_a)
+    _seed_context(client, owner_a)
+    _seed_account_history(client, owner_id)
+    financial_before = _financial_snapshot(client, owner_id)
+    captured = threading.Event()
+    resume = threading.Event()
+    first_read_lock = threading.Lock()
+    paused = False
+    original_current = context_api._current
+
+    def pause_first_snapshot(session, principal, agent_id):
+        nonlocal paused
+        snapshot = original_current(session, principal, agent_id)
+        with first_read_lock:
+            should_pause = not paused
+            if should_pause:
+                paused = True
+        if should_pause:
+            assert snapshot.memory_version == 1
+            captured.set()
+            assert resume.wait(timeout=10)
+        return snapshot
+
+    monkeypatch.setattr(context_api, "_current", pause_first_snapshot)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_update = executor.submit(
+            client.post, stale_path, headers=owner_a, json=stale_body
+        )
+        try:
+            assert captured.wait(timeout=10)
+            concurrent_update = client.post(concurrent_path, headers=owner_a, json=concurrent_body)
+            assert concurrent_update.status_code == 200, concurrent_update.text
+            assert concurrent_update.json()["memory_version"] == 2
+        finally:
+            resume.set()
+        stale_response = stale_update.result(timeout=15)
+
+    latest = client.get("/v1/agents/agent-a/context", headers=owner_a)
+    assert stale_response.status_code == 409
+    assert stale_response.json()["code"] == "context_version_conflict"
+    assert latest.status_code == 200
+    assert latest.json()["memory_version"] == 2
+    preserved = next(entry for entry in latest.json()["entries"] if entry["context_id"] == preserved_entry)
+    observed_value = preserved["status"] if preserved_entry == "lesson-1" else preserved["text"]
+    assert observed_value == preserved_value
+    assert [row["memory_version"] for row in _context_versions(client, owner_id)] == [1, 2]
+    assert _financial_snapshot(client, owner_id) == financial_before
 
 
 def test_commit_failure_rolls_back_and_lost_commit_reply_reconciles_before_retry(client, owner_a):
