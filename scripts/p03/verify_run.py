@@ -133,6 +133,17 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
     second_agent["content"].update(agent_id="agent-b", wallet_id="wallet-b", status="STOPPED",
                                    permission_state="REMOVED", updated_at="2026-10-09T12:01:00Z")
     fixture.append(second_agent)
+    long_monitoring = json.loads(json.dumps(next(
+        item for item in fixture if item["content"].get("record_kind") == "MONITORING")))
+    long_monitoring["record_id"] = "00000000-0000-4000-8000-000000000305"
+    long_monitoring["operation_id"] = "10000000-0000-4000-8000-000000000305"
+    long_monitoring["content"].update(
+        agent_id="agent-a", wallet_id="wallet-a", status="BLOCKED", health="SYNTHETIC_BLOCKED",
+        updated_at="2026-10-09T12:04:00Z", input_updated_at="2026-10-09T12:03:59Z",
+        evaluation_attempts=17, evaluation_completions=11,
+        next_work=f"Synthetic next work: {'n' * 120}",
+        blocking_reason=f"Gate pending receipt {'b' * 100}", pending_reconciliation=True)
+    fixture.append(long_monitoring)
     orphan_source_ids = {
         "monitoring_first_page": "00000000-0000-4000-8000-000000000301",
         "permission_first_page": "00000000-0000-4000-8000-000000000302",
@@ -227,6 +238,7 @@ def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> d
                  target_action_b["record_id"], "2026-10-09T12:01:00Z")
     return {"owner_id": owner_id, "record_ids": [item["record_id"] for item in fixture],
             "agent_record_ids": {"agent-a": fixture[0]["record_id"], "agent-b": second_agent["record_id"]},
+            "long_monitoring_record_id": long_monitoring["record_id"],
             "research_source_id": research_source_id,
             "orphan_source_ids": orphan_source_ids,
             "source_action_ids": {"agent-a": target_action["record_id"], "agent-b": target_action_b["record_id"]},
@@ -356,7 +368,7 @@ def main() -> int:
         p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
         rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
         ok &= rec.step("P19 authored account and context fixtures seeded for the verified owner",
-                       len(p19_fixtures["record_ids"]) == len(json.loads((harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json").read_text())) + 107,
+                       len(p19_fixtures["record_ids"]) == len(json.loads((harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json").read_text())) + 108,
                        {"records": len(p19_fixtures["record_ids"])})
 
         status_none, _ = http("GET", f"{api_url}/v1/me")
@@ -367,6 +379,7 @@ def main() -> int:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
                       "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
                       "P19_AGENT_B_RECORD_ID": p19_fixtures["agent_record_ids"]["agent-b"],
+                      "P19_LONG_MONITORING_RECORD_ID": p19_fixtures["long_monitoring_record_id"],
                       "P19_FIRST_POSITION_ID": p19_fixtures["position_record_ids"]["position-a-1"],
                       "P19_SECOND_POSITION_ID": p19_fixtures["position_record_ids"]["position-a-2"],
                       "P19_SOURCE_ACTION_ID": p19_fixtures["source_action_ids"]["agent-a"],

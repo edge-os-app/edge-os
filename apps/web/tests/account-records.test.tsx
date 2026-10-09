@@ -257,6 +257,29 @@ describe("direct account records", () => {
     expect(screen.getByText(/edge-a-r2 · UNRESOLVED/)).toBeInTheDocument();
   });
 
+  it("wraps complete matching monitoring next-work and blocking text", () => {
+    const nextWork = `Synthetic next work: ${"n".repeat(120)}`;
+    const blockingReason = `Gate pending receipt ${"b".repeat(100)}`;
+    const agent: AccountViewRecord = { record_id: "long-monitor-agent", owner_id: "owner-a", content: {
+      owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: "AGENT", agent_id: "agent-long",
+      wallet_id: "wallet-long", network_id: "monad:143", status: "RUNNING", updated_at: "2026-10-10T10:00:00Z",
+    } };
+    const monitoring: AccountViewRecord = { record_id: "long-monitor-record", owner_id: "owner-a", content: {
+      ...agent.content, record_kind: "MONITORING", status: "BLOCKED", health: "SYNTHETIC_BLOCKED",
+      evaluation_attempts: 17, evaluation_completions: 11, input_updated_at: "2026-10-10T10:00:00Z",
+      next_work: nextWork, blocking_reason: blockingReason, pending_reconciliation: true,
+    } };
+
+    render(<AgentRecords records={[agent, monitoring]} />);
+
+    const nextWorkParagraph = screen.getByText(`Next work: ${nextWork}`, { exact: true });
+    const blockingParagraph = screen.getByText(`Blocked: ${blockingReason}`, { exact: true });
+    expect(nextWorkParagraph.tagName).toBe("P");
+    expect(blockingParagraph.tagName).toBe("P");
+    expect(nextWorkParagraph).toHaveStyle({ overflowWrap: "anywhere" });
+    expect(blockingParagraph).toHaveStyle({ overflowWrap: "anywhere" });
+  });
+
   it("renders exact permission snapshot history and never-active failed approval terms", async () => {
     const agent: AccountViewRecord = { record_id: "agent-permission", owner_id: "owner-a", content: {
       owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: "AGENT", agent_id: "agent-a",

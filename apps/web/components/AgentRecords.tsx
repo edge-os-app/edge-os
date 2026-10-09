@@ -126,8 +126,8 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
               {` · ${item.content.evaluation_attempts ?? "Unknown"} attempts / ${item.content.evaluation_completions ?? "Unknown"} completions`}
               {item.content.input_updated_at && <> · inputs updated <time dateTime={item.content.input_updated_at}>{item.content.input_updated_at}</time></>}
               {` · record updated ${item.content.updated_at}`}
-              {item.content.next_work && <p>Next work: {item.content.next_work}</p>}
-              {item.content.blocking_reason && <p>Blocked: {item.content.blocking_reason}</p>}
+              {item.content.next_work && <p style={{ overflowWrap: "anywhere" }}>Next work: {item.content.next_work}</p>}
+              {item.content.blocking_reason && <p style={{ overflowWrap: "anywhere" }}>Blocked: {item.content.blocking_reason}</p>}
               <p>Pending reconciliation: {item.content.pending_reconciliation == null ? "Unknown" : item.content.pending_reconciliation ? "Yes" : "No"}</p>
             </li>
           ))}</ul>

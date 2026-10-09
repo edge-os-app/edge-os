@@ -1061,6 +1061,38 @@ test("P19 account views, exact owner scope, context controls and financial histo
   const ownerB = await page.request.get(`${accountPath}?limit=500`, { headers: { Authorization: `Bearer ${tokens.b}` } });
   expect((await ownerB.json()).records).toEqual([]);
 
+  const longMonitoringId = process.env.P19_LONG_MONITORING_RECORD_ID;
+  const longMonitoringResponse = await page.request.get(`${accountPath}/${longMonitoringId}`, { headers: accountHeaders });
+  expect(longMonitoringResponse.status()).toBe(200);
+  const longMonitoring = (await longMonitoringResponse.json()).content;
+  expect(longMonitoring.record_kind).toBe("MONITORING");
+  expect(longMonitoring.evidence_class).toBe("SYNTHETIC_AUTHORED");
+  expect(longMonitoring.owner_id).toBe(financialBefore.records[0].owner_id);
+  expect(longMonitoring.agent_id).toBe("agent-a");
+  expect(longMonitoring.wallet_id).toBe("wallet-a");
+  expect(longMonitoring.network_id).toBe("monad:143");
+  const longMonitoringRow = page.locator(`#record-${longMonitoringId}`);
+  await expect(longMonitoringRow).toHaveCount(1);
+  await expect(longMonitoringRow).toBeVisible();
+  await expect(longMonitoringRow).toContainText(longMonitoring.next_work);
+  await expect(longMonitoringRow).toContainText(longMonitoring.blocking_reason);
+  const longMonitoringLayout = await page.evaluate((id) => {
+    const row = document.getElementById(`record-${id}`);
+    const paragraphs = [...row.querySelectorAll("p")].filter((paragraph) =>
+      paragraph.textContent.includes("Synthetic next work:") || paragraph.textContent.includes("Gate pending receipt"));
+    return { viewport: innerWidth, document: document.documentElement.scrollWidth,
+      fields: paragraphs.map((paragraph) => ({ text: paragraph.textContent,
+        overflowWrap: getComputedStyle(paragraph).overflowWrap })) };
+  }, longMonitoringId);
+  expect(longMonitoringLayout.fields).toHaveLength(2);
+  expect(longMonitoringLayout.fields.every((field) => field.overflowWrap === "anywhere")).toBe(true);
+  expect(longMonitoringLayout.document).toBeLessThanOrEqual(longMonitoringLayout.viewport);
+  await shot(page, project, "p19-long-monitoring-wrapped");
+  record(`p19-long-monitoring-${project}`, { recordId: longMonitoringId, identity: {
+    ownerId: longMonitoring.owner_id, agentId: longMonitoring.agent_id,
+    walletId: longMonitoring.wallet_id, networkId: longMonitoring.network_id,
+  }, nextWork: longMonitoring.next_work, blockingReason: longMonitoring.blocking_reason, layout: longMonitoringLayout });
+
   const agentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
   await agentCard.getByRole("button", { name: "Inspect agent context" }).click();
   const context = page.getByRole("region", { name: `${agentId} context` });
