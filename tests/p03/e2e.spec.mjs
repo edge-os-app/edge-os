@@ -1199,6 +1199,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await expect(page.locator("li").filter({ hasText: "flow-a-deposit-1" })).toContainText("Capital flow, not trading profit.");
   await expect(page.locator("li").filter({ hasText: "flow-a-withdrawal-1" })).toContainText("Capital flow, not trading profit.");
   await expect(page.getByText(/Account value, percent return, and drawdown are unavailable/)).toBeVisible();
+  await shot(page, project, "p19-funds-synthetic");
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Agents" }).click();
   const permissionAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
   await expect(permissionAgent.getByText(/Permission approval history/)).toBeVisible();
@@ -1210,7 +1211,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   } else {
     await expect(permissionAgent.getByText(/approval-b-v6 · CHANGE_APPLIED · ACTIVE/)).toBeVisible();
   }
-  await shot(page, project, "p19-funds-synthetic");
+  await shot(page, project, "p19-permission-history");
   await page.getByRole("button", { name: "Research" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 });
