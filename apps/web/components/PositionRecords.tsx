@@ -64,7 +64,7 @@ export function PositionRecords({ records }: { records: AccountViewRecord[] }) {
             <h3>Revision-linked edge evidence</h3>
             {!edgeEvidence.length && <p>No saved edge evidence for this revision.</p>}
             <ul>{edgeEvidence.map((item) => (
-              <li key={item.record_id}>
+              <li id={`record-${item.record_id}`} key={item.record_id}>
                 {item.content.edge_revision} · {item.content.edge_evidence_status ?? item.content.status} · {item.content.updated_at}
                 {item.content.reason && <p>{item.content.reason}</p>}
               </li>

@@ -111,7 +111,7 @@ test("smoke: the main path raises no console error, page error or failed request
   await page.getByRole("button", { name: "All requests" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   for (const area of ["Agents", "Positions", "Funds", "Research"]) {
-    await page.getByRole("button", { name: area, exact: true }).click();
+    await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: area, exact: true }).click();
   }
   fs.writeFileSync(path.join(outDir, `smoke-${info.project.name}.json`), JSON.stringify({ problems }, null, 2));
   expect(problems).toEqual([]);
@@ -667,4 +667,47 @@ test("a restriction that was typed but not added is kept with the request", asyn
   await page.getByLabel("Another restriction in your words").fill("never trade at night");
   await page.getByRole("button", { name: "Prepare request" }).click();
   await expect(page.getByRole("list", { name: "Saved restrictions" })).toContainText("never trade at night");
+});
+
+test("P19 account surface keeps controls usable and meets accessibility checks", async ({ page }, info) => {
+  await open(page, tokens.a);
+  await page.getByRole("button", { name: "Agents" }).click();
+  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "agent-a", level: 2 })).toBeVisible();
+  const agentControls = await smallControls(page);
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+  const agentAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  const agentSerious = agentAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+  const agentContrast = await lowContrast(page);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-quality-agents.png`), fullPage: true });
+  const views = page.getByRole("group", { name: "Account views" });
+  await views.getByRole("button", { name: "Positions" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(views.getByRole("button", { name: "Positions" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Position filters")).toBeVisible();
+  const positionControls = await smallControls(page);
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+  const positionAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  const positionSerious = positionAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+  const positionContrast = await lowContrast(page);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-quality-positions.png`), fullPage: true });
+  await views.getByRole("button", { name: "Funds" }).click();
+  const fundControls = await smallControls(page);
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+  const fundAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  const fundSerious = fundAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+  const fundContrast = await lowContrast(page);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-quality-funds.png`), fullPage: true });
+  const evidencePath = path.join(outDir, `p19-accessibility-${info.project.name}.json`);
+  const axeDetails = (items) => items.map((v) => ({ id: v.id, help: v.help,
+    nodes: v.nodes.map((node) => ({ target: node.target, html: node.html, failureSummary: node.failureSummary })) }));
+  const report = { agents: { small: agentControls, serious: axeDetails(agentSerious), contrast: agentContrast },
+    positions: { small: positionControls, serious: axeDetails(positionSerious), contrast: positionContrast },
+    funds: { small: fundControls, serious: axeDetails(fundSerious), contrast: fundContrast } };
+  fs.writeFileSync(evidencePath, JSON.stringify(report, null, 2));
+  expect(report.agents.small, JSON.stringify(report.agents.small)).toEqual([]);
+  expect(report.positions.small, JSON.stringify(report.positions.small)).toEqual([]);
+  expect(report.funds.small, JSON.stringify(report.funds.small)).toEqual([]);
+  expect([...agentSerious, ...positionSerious, ...fundSerious].map((v) => ({ id: v.id, help: v.help }))).toEqual([]);
+  expect([...agentContrast, ...positionContrast, ...fundContrast]).toEqual([]);
 });

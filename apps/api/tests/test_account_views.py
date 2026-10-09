@@ -84,3 +84,15 @@ def test_filtering_never_reads_another_owners_records(client, owner_a, owner_b):
     response = client.get("/v1/account-views?agent_id=agent-a", headers=owner_b)
     assert response.status_code == 200
     assert response.json()["records"] == []
+
+
+def test_account_views_are_mounted_on_a_fresh_application(client, owner_a):
+    """The production app must expose the feature without test-only include_router calls."""
+    from fastapi.testclient import TestClient
+
+    from edge_os_api.main import create_app
+
+    with TestClient(create_app(client.app.state.settings)) as mounted_client:
+        response = mounted_client.get("/v1/account-views", headers=owner_a)
+    assert response.status_code == 200
+    assert response.json() == {"records": [], "next_offset": None}

@@ -54,7 +54,7 @@ export function AgentRecords({ records }: { records: AccountViewRecord[] }) {
           <h3>Monitoring · synthetic fixture</h3>
           {!monitoring.length && <p>No saved monitoring records.</p>}
           <ul>{monitoring.map((item) => (
-            <li key={item.record_id}>
+            <li id={`record-${item.record_id}`} key={item.record_id}>
               <strong>{item.content.status}</strong> · {item.content.health ?? "health unknown"}
               {` · ${item.content.evaluation_attempts ?? "Unknown"} attempts / ${item.content.evaluation_completions ?? "Unknown"} completions`}
               {item.content.input_updated_at && <> · inputs updated <time dateTime={item.content.input_updated_at}>{item.content.input_updated_at}</time></>}

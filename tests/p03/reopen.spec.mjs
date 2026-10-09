@@ -149,4 +149,36 @@ test("after an API restart the saved rules reopen with their exact review text",
   }
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-spot-replay-reopened-after-restart.png`), fullPage: true });
   expect(createReplayRequests, "all P13 reopen paths after restart must only retrieve, never recompute").toBe(0);
+
+  const p19 = results[`p19-context-${info.project.name}`];
+  expect(p19, "the first browser drive must exercise mounted P19 context controls at both viewports").toBeTruthy();
+  let p19Writes = 0;
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() !== "GET" && (pathname.startsWith("/v1/account-views") || pathname.startsWith("/v1/agents/agent-a/context"))) p19Writes += 1;
+  });
+  await page.goto(p19.url);
+  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: p19.agentId, level: 2 })).toBeVisible();
+  await expect(page.locator(`#record-${p19.agentRecordId}`)).toBeVisible();
+  const reopenedAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: p19.agentId, level: 2 }) });
+  await reopenedAgent.getByRole("button", { name: "Inspect agent context" }).click();
+  const persistedContext = page.getByRole("region", { name: `${p19.agentId} context` });
+  await expect(persistedContext).toContainText("Agent context · version 5");
+  await expect(persistedContext).toContainText("CLEARED");
+  await expect(persistedContext.getByRole("listitem")).toHaveCount(0);
+  const exactContext = await page.request.get(`${process.env.P03_API_URL}/v1/agents/${p19.agentId}/context`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+  });
+  expect(exactContext.status()).toBe(200);
+  expect(await exactContext.json()).toMatchObject({ memory_version: 5, state: "CLEARED", entries: [] });
+  const exactAccounts = await page.request.get(`${process.env.P03_API_URL}/v1/account-views`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+  });
+  expect(exactAccounts.status()).toBe(200);
+  const persistedAccounts = await exactAccounts.json();
+  expect(persistedAccounts.records).toHaveLength(11);
+  expect(persistedAccounts.records.map((row) => row.record_id)).toContain(p19.agentRecordId);
+  expect(p19Writes, "reopen after API restart must only issue reads").toBe(0);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-account-context-reopened-after-restart.png`), fullPage: true });
 });

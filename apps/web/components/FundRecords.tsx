@@ -25,7 +25,7 @@ export function FundRecords({ records }: { records: AccountViewRecord[] }) {
         {!flows.length && <p>No saved capital flows.</p>}
         <ul>{flows.map(({ record_id, content }) => (
           <li id={`record-${record_id}`} key={record_id}>
-            {content.agent_id} · {content.wallet_id} · {content.flow_kind} · {content.status}
+            {content.agent_id} · {content.wallet_id} · {content.flow_id} · {content.flow_kind} · {content.status}
             {content.quantity && ` · ${formatAmount(content.quantity)} ${content.quantity.asset_id}`}
             {` · ${content.updated_at}. Capital flow, not trading profit.`}
           </li>

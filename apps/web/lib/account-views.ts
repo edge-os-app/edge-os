@@ -129,6 +129,10 @@ export interface AccountViewPage {
   next_offset: number | null;
 }
 
+export async function getAccountView(recordId: string): Promise<AccountViewRecord> {
+  return request<AccountViewRecord>(`/v1/account-views/${encodeURIComponent(recordId)}`).then((result) => result.body);
+}
+
 export async function loadAccountViews(filters: PositionFilters = {}, offset = 0): Promise<AccountViewPage> {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);

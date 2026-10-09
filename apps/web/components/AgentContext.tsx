@@ -52,7 +52,9 @@ export function AgentContext({
           <li key={entry.context_id}>
             <p><strong>{entry.status === "SUGGESTED" ? "Suggested lesson" : entry.kind}</strong> · {entry.status}</p>
             <p>{entry.text}</p>
-            {entry.source_refs.map((source) => <a key={source} href={`#record-${encodeURIComponent(source)}`}>Open source record</a>)}
+            {entry.source_refs.map((source) => <a key={source} className="btn btn-ghost"
+              style={{ minHeight: 44, display: "inline-flex", alignItems: "center" }}
+              href={`#/agents?record=${encodeURIComponent(source)}`}>Open source record</a>)}
             {entry.status === "SUGGESTED" ? (
               <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy}
                 onClick={() => void save(() => agentContextApi.adopt(record.agent_id, record.memory_version, entry.context_id))}>

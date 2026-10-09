@@ -1,15 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { loadAccountViews, type AccountViewRecord } from "../lib/account-views";
+import { getAccountView, loadAccountViews, type AccountViewRecord } from "../lib/account-views";
 import { AgentRecords } from "./AgentRecords";
 import { FundRecords } from "./FundRecords";
 import { PositionRecords } from "./PositionRecords";
 
-type View = "Agents" | "Positions" | "Funds";
+export type AccountViewName = "Agents" | "Positions" | "Funds";
 
-export function AccountViews({ initialView = "Agents" }: { initialView?: View }) {
-  const [view, setView] = useState<View>(initialView);
+export function AccountViews({ initialView = "Agents", sourceRecordId }: { initialView?: AccountViewName; sourceRecordId?: string }) {
+  const [view, setView] = useState<AccountViewName>(initialView);
   const [records, setRecords] = useState<AccountViewRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -26,14 +26,34 @@ export function AccountViews({ initialView = "Agents" }: { initialView?: View })
     setNextOffset(null);
     try {
       const page = await loadAccountViews();
-      setRecords(page.records);
+      let nextRecords = page.records;
+      if (sourceRecordId && !nextRecords.some((record) => record.record_id === sourceRecordId)) {
+        const source = await getAccountView(sourceRecordId);
+        nextRecords = [...nextRecords, source];
+      }
+      setRecords(nextRecords);
       setNextOffset(page.next_offset);
     } catch {
       setError("Account records could not be loaded.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sourceRecordId]);
+
+  useEffect(() => {
+    if (!sourceRecordId || !records.length) return;
+    const source = records.find((record) => record.record_id === sourceRecordId);
+    if (!source) return;
+    const kind = source.content.record_kind;
+    setView(kind === "AGENT" || kind === "MONITORING" ? "Agents"
+      : kind === "CAPITAL_FLOW" ? "Funds" : "Positions");
+    const timer = window.setTimeout(() => {
+      const target = document.getElementById(`record-${sourceRecordId}`);
+      target?.closest("details")?.setAttribute("open", "");
+      target?.scrollIntoView?.({ block: "center" });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [sourceRecordId, records]);
 
   const loadMore = async () => {
     if (nextOffset == null || loadingMore) return;
@@ -56,13 +76,15 @@ export function AccountViews({ initialView = "Agents" }: { initialView?: View })
     <div className="stack">
       <h1>Account</h1>
       <p className="muted">Authored synthetic records. They do not show live wallets, balances, worker health, marks, or receipts.</p>
-      <nav aria-label="Account views" role="tablist" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+      <div aria-label="Account views" role="group" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {(["Agents", "Positions", "Funds"] as const).map((name) => (
           <button key={name} className={view === name ? "btn btn-primary" : "btn btn-secondary"}
-            style={{ minHeight: 44 }} type="button" role="tab" aria-selected={view === name}
+            style={{ minHeight: 44, backgroundColor: view === name ? "var(--color-accent-800)" : "var(--color-neutral-100)",
+              color: view === name ? "var(--color-neutral-100)" : "var(--color-text)" }}
+            type="button" aria-pressed={view === name}
             onClick={() => setView(name)}>{name}</button>
         ))}
-      </nav>
+      </div>
       {loading && <p role="status" aria-live="polite">Loading saved account records…</p>}
       {!loading && error && <section className="panel" role="alert">
         <p>{error} Existing records remain unchanged.</p>

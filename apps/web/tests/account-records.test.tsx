@@ -8,10 +8,11 @@ import { AgentContext } from "../components/AgentContext";
 import { FundRecords } from "../components/FundRecords";
 import { PositionRecords } from "../components/PositionRecords";
 
-const mocks = vi.hoisted(() => ({ adopt: vi.fn(), correct: vi.fn(), disable: vi.fn(), clear: vi.fn(), get: vi.fn(), load: vi.fn() }));
+const mocks = vi.hoisted(() => ({ adopt: vi.fn(), correct: vi.fn(), disable: vi.fn(), clear: vi.fn(), get: vi.fn(), load: vi.fn(), getAccountView: vi.fn() }));
 vi.mock("../lib/account-views", async (importOriginal) => {
   const original = await importOriginal<typeof import("../lib/account-views")>();
-  return { ...original, loadAccountViews: (...args: unknown[]) => mocks.load(...args), agentContextApi: {
+  return { ...original, loadAccountViews: (...args: unknown[]) => mocks.load(...args),
+    getAccountView: (...args: unknown[]) => mocks.getAccountView(...args), agentContextApi: {
     get: (...args: unknown[]) => mocks.get(...args), adopt: (...args: unknown[]) => mocks.adopt(...args), correct: (...args: unknown[]) => mocks.correct(...args),
     disable: (...args: unknown[]) => mocks.disable(...args), clear: (...args: unknown[]) => mocks.clear(...args),
   } };
@@ -122,8 +123,18 @@ describe("direct account records", () => {
     render(<AgentRecords records={[agent]} />);
     await userEvent.setup().click(screen.getByRole("button", { name: "Inspect agent context" }));
     const link = await screen.findByRole("link", { name: "Open source record" });
-    expect(link).toHaveAttribute("href", "#record-source-record-id");
+    expect(link).toHaveAttribute("href", "#/agents?record=source-record-id");
     expect(document.getElementById("record-source-record-id")).not.toBeNull();
+  });
+
+  it("loads an exact saved source row when it is outside the current account page", async () => {
+    const ownerScopedSource = { ...position, record_id: "older-source-record" };
+    mocks.load.mockResolvedValue({ records: [], next_offset: 100 });
+    mocks.getAccountView.mockResolvedValue(ownerScopedSource);
+    render(<AccountViews initialView="Funds" sourceRecordId="older-source-record" />);
+    expect(await screen.findByRole("heading", { name: "Account", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByText(/position-a-1/)).toBeInTheDocument();
+    expect(mocks.getAccountView).toHaveBeenCalledWith("older-source-record");
   });
 
   it("keeps failed edits visible, then versions correction, disable, and confirmed clear", async () => {
@@ -172,7 +183,7 @@ describe("direct account records", () => {
     render(<AccountViews />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Account records could not be loaded.");
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    await user.click(await screen.findByRole("tab", { name: "Funds" }));
+    await user.click(await screen.findByRole("button", { name: "Funds" }));
     expect(screen.getByText("No saved fund records.")).toBeInTheDocument();
     expect(mocks.load).toHaveBeenCalledTimes(2);
   });

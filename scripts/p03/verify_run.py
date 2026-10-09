@@ -119,6 +119,50 @@ def scan_bundle(dist: Path) -> dict:
     }
 
 
+def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> dict:
+    """Seed authored P19 rows after verified fixture owners exist; never expose a production write route."""
+    owner = http("GET", f"{api_url}/v1/me", token_a)
+    if owner[0] != 200:
+        raise RuntimeError("could not resolve the verified P19 fixture owner")
+    owner_id = owner[1]["user_id"]
+    fixture_path = harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json"
+    fixture = json.loads(fixture_path.read_text())
+    second_agent = json.loads(json.dumps(fixture[0]))
+    second_agent["record_id"] = "00000000-0000-4000-8000-000000000011"
+    second_agent["operation_id"] = "10000000-0000-4000-8000-000000000011"
+    second_agent["content"].update(agent_id="agent-b", wallet_id="wallet-b", status="STOPPED",
+                                   permission_state="REMOVED", updated_at="2026-10-09T12:01:00Z")
+    fixture.append(second_agent)
+    for item in fixture:
+        content = {**item["content"], "owner_id": owner_id}
+        statement = (
+            "insert into records(record_id, owner_id, record_type, schema_version, operation_id, created_at, content) values ("
+            f"'{item['record_id']}', '{owner_id}', 'AccountViewRecord', 'account-view/1', '{item['operation_id']}', "
+            f"'{item['content']['updated_at']}'::timestamptz, {sql_literal(json.dumps(content, separators=(',', ':')))}::jsonb)"
+        )
+        pg.psql(statement)
+    context = json.loads((fixture_path.parent / "agent-context-v1.json").read_text())
+    context.update(owner_id=owner_id, agent_id="agent-a")
+    context["entries"][-1]["source_refs"] = [fixture[0]["record_id"]]
+    def seed_context(agent_id: str, record_id: str, operation_id: str, source_id: str, created_at: str) -> None:
+        saved_context = json.loads(json.dumps(context))
+        saved_context.update(agent_id=agent_id)
+        saved_context["entries"][-1]["source_refs"] = [source_id]
+        pg.psql(
+            "insert into records(record_id, owner_id, record_type, schema_version, operation_id, created_at, content) values ("
+            f"'{record_id}', '{owner_id}', 'AgentContextRecord', 'agent-context/1', '{operation_id}', "
+            f"'{created_at}'::timestamptz, {sql_literal(json.dumps(saved_context, separators=(',', ':')))}::jsonb)"
+        )
+    seed_context("agent-a", "20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000101",
+                 fixture[0]["record_id"], "2026-10-09T12:00:00Z")
+    seed_context("agent-b", "20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000102",
+                 second_agent["record_id"], "2026-10-09T12:01:00Z")
+    return {"owner_id": owner_id, "record_ids": [item["record_id"] for item in fixture],
+            "agent_record_ids": {"agent-a": fixture[0]["record_id"], "agent-b": second_agent["record_id"]},
+            "financial_fixture": fixture,
+            "account_snapshot": account_history_snapshot(pg, owner_id)}
+
+
 def run_playwright(specs: list[str], env_extra: dict[str, str], log: Path) -> int:
     env = harness.base_env()
     env.update(env_extra)
@@ -235,6 +279,10 @@ def main() -> int:
 
         token_a, token_b, token_c = signer.token(OWNER_A), signer.token(OWNER_B), signer.token(OWNER_C)
         token_bad = TestSigner().token(OWNER_A)
+        p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
+        rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
+        ok &= rec.step("P19 authored account and context fixtures seeded for the verified owner",
+                       len(p19_fixtures["record_ids"]) == 11, {"records": len(p19_fixtures["record_ids"])})
 
         status_none, _ = http("GET", f"{api_url}/v1/me")
         status_bad, _ = http("GET", f"{api_url}/v1/me", token_bad)
@@ -242,13 +290,18 @@ def main() -> int:
 
         if not args.skip_ui:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
+                      "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
+                      "P19_AGENT_B_RECORD_ID": p19_fixtures["agent_record_ids"]["agent-b"],
+                      "P19_FIRST_POSITION_ID": p19_fixtures["record_ids"][1],
+                      "P19_SECOND_POSITION_ID": p19_fixtures["record_ids"][2],
+                      "P19_SOURCE_ACTION_ID": p19_fixtures["record_ids"][4],
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}
             code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs", "provenance.spec.mjs"], ui_env, evidence / "ui-e2e.log")
             ok &= rec.step("browser drive (desktop and 390px)", code == 0, {"exit": code})
 
             results_path = evidence / "ui" / "ui-results.json"
             results = json.loads(results_path.read_text()) if results_path.exists() else {}
-            inspection = sql_inspection(pg, results)
+            inspection = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
             rec.write("sql-inspection.json", inspection)
             ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
 
@@ -264,7 +317,7 @@ def main() -> int:
             ok &= rec.step("API restarted on the same database", True)
             code = run_playwright(["reopen.spec.mjs"], ui_env, evidence / "ui-reopen.log")
             ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
-            after_restart = sql_inspection(pg, results)
+            after_restart = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
             ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
 
         if args.hold_seconds:
@@ -306,7 +359,14 @@ def main() -> int:
     return 0 if ok else 1
 
 
-def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
+def account_history_snapshot(pg: harness.Postgres, owner_id: str) -> list[dict]:
+    return json.loads(pg.psql(
+        "select coalesce(json_agg(to_jsonb(r) order by r.seq), '[]'::json) from records r "
+        f"where r.owner_id='{owner_id}' and r.record_type='AccountViewRecord'"
+    ))
+
+
+def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_account_snapshot: list[dict]) -> dict:
     checks: dict[str, object] = {}
     def rows(sql: str):
         return json.loads(pg.psql(f"select coalesce(json_agg(t), '[]'::json) from ({sql}) t"))
@@ -314,6 +374,26 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
     checks["records_by_type"] = {r["record_type"]: r["c"] for r in rows(
         "select record_type, count(*) c from records group by record_type order by 1")}
     checks["revisions"] = rows("select count(*) c from strategy_revisions")[0]["c"]
+    current_p19_accounts = account_history_snapshot(pg, p19_owner_id)
+    def context_history(agent_id: str) -> dict:
+        versions = rows(
+            "select record_id::text, content from records where owner_id='" + p19_owner_id + "' "
+            "and record_type='AgentContextRecord' and content->>'agent_id'='" + agent_id + "' order by seq"
+        )
+        return {
+            "versions": [row["content"]["memory_version"] for row in versions],
+            "states": [row["content"]["state"] for row in versions],
+            "suggestion_adopted": any(any(entry["context_id"] == "lesson-1" and entry["status"] == "ADOPTED"
+                for entry in row["content"]["entries"]) for row in versions),
+            "final_cleared": bool(versions) and versions[-1]["content"]["state"] == "CLEARED"
+                and not versions[-1]["content"]["entries"],
+        }
+    checks["p19_account_history"] = {
+        "exact_immutable_snapshot": current_p19_accounts == p19_account_snapshot,
+        "row_count": len(current_p19_accounts),
+        "rows": current_p19_accounts,
+    }
+    checks["p19_context_history"] = {agent_id: context_history(agent_id) for agent_id in ("agent-a", "agent-b")}
     verdicts = []
     for key, saved in results.items():
         if not key.startswith(("thesis-", "volume-rule-", "grouped-rule-", "grouped-right-", "tiny-threshold-")):
@@ -572,7 +652,11 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
         and v.get("p08_mapping_identity_is_unique")
         and v.get("synthetic_comparison_and_unavailable_buckets_match")
         and v.get("exact_run_and_report_counts") for v in effect_runs)
-    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass and spot_replays_pass}
+    p19_ok = checks["p19_account_history"]["exact_immutable_snapshot"] and checks["p19_account_history"]["row_count"] == 11 \
+        and all(checks["p19_context_history"][agent_id]["versions"] == [1, 2, 3, 4, 5]
+                and checks["p19_context_history"][agent_id]["suggestion_adopted"]
+                and checks["p19_context_history"][agent_id]["final_cleared"] for agent_id in ("agent-a", "agent-b"))
+    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass and spot_replays_pass and p19_ok}
 
 
 def sql_literal(text: str) -> str:

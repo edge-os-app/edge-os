@@ -1026,10 +1026,105 @@ test("conversation: same record, focus handling, Escape and Tab containment", as
   }
 });
 
-test("sections other than Research say what is unavailable", async ({ page }) => {
+test("P19 account views, exact owner scope, context controls and financial history", async ({ page }, info) => {
+  const project = info.project.name;
+  const agentId = project === "desktop" ? "agent-a" : "agent-b";
+  const agentRecordId = project === "desktop" ? process.env.P19_AGENT_RECORD_ID : process.env.P19_AGENT_B_RECORD_ID;
   await open(page, tokens.a);
-  await page.getByRole("button", { name: "Funds" }).click();
-  await expect(page.getByText("Not available in this build")).toBeVisible();
+  let failAccountLoad = true;
+  await page.route("**/v1/account-views**", async (route) => {
+    if (failAccountLoad && route.request().method() === "GET" && new URL(route.request().url()).pathname === "/v1/account-views") {
+      failAccountLoad = false;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ code: "service_unavailable", findings: [{ detail: "Retry the saved account read." }] }) });
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Agents" }).click();
+  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  await expect(alerts(page)).toContainText("Account records could not be loaded");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { name: "agent-a", level: 2 })).toBeVisible();
+
+  const accountHeaders = { Authorization: `Bearer ${tokens.a}` };
+  const accountPath = `${process.env.P03_API_URL}/v1/account-views`;
+  const beforeResponse = await page.request.get(accountPath, { headers: accountHeaders });
+  expect(beforeResponse.status()).toBe(200);
+  const financialBefore = await beforeResponse.json();
+  expect(financialBefore.records).toHaveLength(11);
+  expect(financialBefore.records.map((row) => row.record_id)).toContain(agentRecordId);
+  const foreign = await page.request.get(`${accountPath}/${agentRecordId}`, {
+    headers: { Authorization: `Bearer ${tokens.b}` },
+  });
+  expect(foreign.status()).toBe(404);
+  const ownerB = await page.request.get(accountPath, { headers: { Authorization: `Bearer ${tokens.b}` } });
+  expect((await ownerB.json()).records).toEqual([]);
+
+  const agentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+  await agentCard.getByRole("button", { name: "Inspect agent context" }).click();
+  const context = page.getByRole("region", { name: `${agentId} context` });
+  await expect(context).toContainText("Agent context · version 1");
+  await expect(context).toContainText("SUGGESTED");
+  await expect(context.getByRole("link", { name: "Open source record" })).toHaveCount(1);
+  await shot(page, project, "p19-agent-context-before-adoption");
+  await context.getByRole("link", { name: "Open source record" }).click();
+  await expect(page).toHaveURL(new RegExp(`record=${agentRecordId}`));
+  await expect(page.locator(`#record-${agentRecordId}`)).toBeVisible();
+  const linkedAgentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+  await linkedAgentCard.getByRole("button", { name: "Inspect agent context" }).click();
+  const reopenedContext = page.getByRole("region", { name: `${agentId} context` });
+  await expect(reopenedContext).toContainText("Agent context · version 1");
+  await reopenedContext.getByRole("button", { name: "Adopt suggestion" }).click();
+  await expect(reopenedContext).toContainText("Agent context · version 2");
+  await expect(reopenedContext.locator("li").nth(1)).toContainText("ADOPTED");
+  await reopenedContext.getByRole("button", { name: "Correct context" }).first().click();
+  const correction = reopenedContext.getByLabel("Corrected context");
+  await correction.fill("Use exact saved account evidence and keep all claims synthetic.");
+  let failCorrection = true;
+  await page.route(`**/v1/agents/${agentId}/context/corrections`, async (route) => {
+    if (failCorrection && route.request().method() === "POST") {
+      failCorrection = false;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ code: "service_unavailable", findings: [{ detail: "Retry this context update." }] }) });
+      return;
+    }
+    await route.continue();
+  });
+  await reopenedContext.getByRole("button", { name: "Save correction" }).click();
+  await expect(alerts(page)).toContainText("Context was not updated");
+  const contextPath = `${process.env.P03_API_URL}/v1/agents/${agentId}/context`;
+  const unchangedVersion = await (await page.request.get(contextPath, { headers: accountHeaders })).json();
+  expect(unchangedVersion.memory_version).toBe(2);
+  await reopenedContext.getByRole("button", { name: "Save correction" }).click();
+  await expect(reopenedContext).toContainText("Agent context · version 3");
+  await reopenedContext.getByRole("button", { name: "Disable future context" }).click();
+  await expect(reopenedContext).toContainText("Agent context · version 4");
+  await reopenedContext.getByRole("button", { name: "Clear context" }).click();
+  await reopenedContext.getByRole("button", { name: "Confirm clear" }).click();
+  await expect(reopenedContext).toContainText("Agent context · version 5");
+  await expect(reopenedContext).toContainText("CLEARED");
+  await expect(reopenedContext.getByRole("listitem")).toHaveCount(0);
+  const afterContext = await page.request.get(accountPath, { headers: accountHeaders });
+  expect(await afterContext.json()).toEqual(financialBefore);
+  const accountUrl = new URL(page.url());
+  accountUrl.hash = "#/agents";
+  record(`p19-context-${project}`, { ownerId: financialBefore.records[0].owner_id, agentId, agentRecordId,
+    contextVersions: [1, 2, 3, 4, 5], statuses: ["SUGGESTED", "ADOPTED"], failedCorrectionPreservedVersion: 2,
+    finalState: "CLEARED", financialRecordsUnchanged: true, foreignRecordStatus: foreign.status(), url: accountUrl.toString() });
+
+  await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Positions" }).click();
+  await page.getByLabel("Agent").selectOption("agent-a");
+  await page.getByLabel("Wallet").selectOption("wallet-a");
+  await expect(page.locator("summary")).toHaveCount(2);
+  await expect(page.getByText("position-a-1", { exact: false })).toBeVisible();
+  await page.locator("summary", { hasText: "position-a-1" }).click();
+  await expect(page.getByText("action-a-sale-1", { exact: false })).toBeVisible();
+  await shot(page, project, "p19-positions-exact-filter");
+
+  await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Funds" }).click();
+  await expect(page.getByText("flow-a-deposit-1", { exact: false })).toBeVisible();
+  await expect(page.getByText(/capital flow, not trading profit/i)).toBeVisible();
+  await expect(page.getByText(/Account value, percent return, and drawdown are unavailable/)).toBeVisible();
+  await shot(page, project, "p19-funds-synthetic");
   await page.getByRole("button", { name: "Research" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 });
