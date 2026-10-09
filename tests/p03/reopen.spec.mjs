@@ -68,7 +68,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(savedInputs).toContainText("1000 quote cash");
   await expect(savedInputs).toContainText("100 QUOTE:0x2222222222222222222222222222222222222222");
   await expect(savedInputs).toContainText("3 scheduled buckets");
-  await expect(savedInputs).toContainText("p02.cost-assumptions");
+  await expect(savedInputs).toContainText("synthetic:adopted-cost-profile");
   await expect(savedInputs).toContainText("price@0, price@-3");
   await expect(savedInputs).toContainText("price@0, price@-1");
   await expect(replayPanel).toContainText("Loaded the exact saved result. The replay did not run again.");
