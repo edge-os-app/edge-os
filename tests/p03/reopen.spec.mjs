@@ -46,4 +46,107 @@ test("after an API restart the saved rules reopen with their exact review text",
   await page.getByRole("button", { name: "Reopen saved report without rerunning" }).click();
   await expect(page.getByTestId("effect-report-saved")).toContainText(investigation.reportId);
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-effect-report-reopened-after-restart.png`), fullPage: true });
+
+  const replay = results[`spot-replay-${info.project.name}`];
+  expect(replay, "the first browser drive must save a P13 synthetic replay").toBeTruthy();
+  let createReplayRequests = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/v1/spot-replays") createReplayRequests += 1;
+  });
+  await page.goto(replay.url);
+  const replayPanel = page.getByTestId("spot-replay");
+  await replayPanel.getByLabel("Saved replay ID").fill(replay.replayId);
+  await replayPanel.getByRole("button", { name: "Load saved replay" }).click();
+  await expect(replayPanel.getByTestId("spot-replay-id")).toHaveText(replay.replayId);
+  await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.replayHash);
+  await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.expectedEndingCashQuote);
+  await expect(replayPanel.getByRole("heading", { name: "Simulated replay summary" })).toBeVisible();
+  const reopenedChart = replayPanel.getByRole("img", { name: "Account balance in quote over the replay window" });
+  await expect(reopenedChart).toBeVisible();
+  const savedInputs = replayPanel.getByTestId("spot-replay-saved-inputs");
+  await expect(savedInputs).toContainText(replay.revisionId);
+  await expect(savedInputs).toContainText("p13-config-");
+  await expect(savedInputs).toContainText("p13.wc01/1");
+  await expect(savedInputs).toContainText("2026-10-01 12:05:00 UTC to 2026-10-01 12:35:00 UTC");
+  await expect(savedInputs).toContainText("1000 quote cash");
+  await expect(savedInputs).toContainText("100 QUOTE:0x2222222222222222222222222222222222222222");
+  await expect(savedInputs).toContainText("3 scheduled buckets");
+  await expect(savedInputs).toContainText("synthetic:adopted-cost-profile");
+  await expect(savedInputs).toContainText("price@0, price@-3");
+  await expect(savedInputs).toContainText("price@0, price@-1");
+  await expect(replayPanel).toContainText("Loaded the exact saved result. The replay did not run again.");
+  expect(createReplayRequests, "reopening after restart must only retrieve, never recompute").toBe(0);
+  const exactReplay = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${replay.replayId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(exactReplay.status()).toBe(200);
+  const exactReplayBody = await exactReplay.json();
+  expect(exactReplayBody.replay_id).toBe(replay.replayId);
+  expect(exactReplayBody.content_sha256).toBe(replay.replayHash);
+  expect(exactReplayBody.content.inputs.essential_evidence.fields.entry.essential_dependencies)
+    .toEqual(replay.expectedEntryDependencies);
+  expect(exactReplayBody.content.inputs.essential_evidence.fields.exit.essential_dependencies)
+    .toEqual(replay.expectedExitDependencies);
+  expect(exactReplayBody.content.result.samples).toEqual(replay.expectedSamples);
+  expect(exactReplayBody.content.result.metrics).toEqual(replay.expectedMetrics);
+  const reopenedSampleList = replayPanel.getByRole("list", { name: "Saved account value samples" });
+  for (const sample of exactReplayBody.content.result.samples) {
+    if (sample.account_value_quote === null) {
+      await expect(reopenedSampleList).toContainText("Unavailable");
+      for (const reason of sample.mark_reasons ?? []) await expect(reopenedSampleList).toContainText(reason);
+    } else {
+      await expect(reopenedSampleList).toContainText(sample.account_value_quote);
+    }
+  }
+  const reopenedSummary = await replayPanel.locator(".spot-replay-summary").innerText();
+  for (const [metric, value] of Object.entries(exactReplayBody.content.result.metrics)) {
+    if (value !== null && exactReplayBody.content.result.metric_statuses[metric] === "AVAILABLE") {
+      expect(reopenedSummary).toContain(String(value));
+    }
+  }
+  const saved = exactReplayBody.content.inputs;
+  const visible = await savedInputs.innerText();
+  const displayUtc = (value) => {
+    const iso = new Date(value).toISOString();
+    return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+  };
+  for (const value of [saved.profile_version, saved.strategy_revision_id, saved.run_configuration_id,
+    saved.dataset_fixture_id, saved.dataset_revision_id, displayUtc(saved.window_start), displayUtc(saved.window_end),
+    saved.initial_cash_quote, saved.initial_base_amount, saved.initial_basis_quote,
+    saved.strategy.sizing.amount, saved.strategy.sizing.unit, String(saved.strategy.warmup_buckets),
+    saved.strategy.cost_assumptions.source_ref, saved.strategy.cost_assumptions.fee_rate,
+    saved.strategy.cost_assumptions.slippage_rate]) {
+    expect(visible).toContain(value);
+  }
+
+  const unavailableCases = [
+    ["unbound-entry", "UNRESOLVED_ESSENTIAL_EVIDENCE", "UNBOUND: dependency list is null"],
+    ["bound-exit-null", "INVALID_ESSENTIAL_BINDING", "BOUND: dependency list is null"],
+  ];
+  for (const [name, reason, summary] of unavailableCases) {
+    const unavailable = results[`spot-replay-unavailable-${name}-${info.project.name}`];
+    expect(unavailable, `the first browser drive must save ${name}`).toBeTruthy();
+    await replayPanel.getByLabel("Saved replay ID").fill(unavailable.replayId);
+    await replayPanel.getByRole("button", { name: "Load saved replay" }).click();
+    await expect(replayPanel.getByTestId("spot-replay-id")).toHaveText(unavailable.replayId);
+    await expect(replayPanel.getByTestId("spot-replay-result")).toContainText("Saved replay: unavailable");
+    await expect(replayPanel.getByRole("alert")).toContainText(reason);
+    await expect(replayPanel.getByTestId("spot-replay-saved-inputs")).toContainText(summary);
+    await expect(replayPanel.getByRole("img", { name: "Account balance in quote over the replay window" })).toBeVisible();
+    await expect(replayPanel.getByText("No saved balance samples are available.")).toBeVisible();
+    const exactUnavailable = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${unavailable.replayId}`,
+      { headers: { Authorization: `Bearer ${tokens.a}` } });
+    expect(exactUnavailable.status()).toBe(200);
+    const unavailableBody = await exactUnavailable.json();
+    expect(unavailableBody.replay_id).toBe(unavailable.replayId);
+    expect(unavailableBody.content_sha256).toBe(unavailable.replayHash);
+    expect(unavailableBody.content.result.status).toBe("UNAVAILABLE");
+    expect(unavailableBody.content.result.reason.code).toBe(reason);
+    expect(unavailableBody.content.inputs.essential_evidence.fields.entry.essential_dependencies ?? null)
+      .toEqual(unavailable.expectedEntryDependencies);
+    expect(unavailableBody.content.inputs.essential_evidence.fields.exit.essential_dependencies ?? null)
+      .toEqual(unavailable.expectedExitDependencies);
+    await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-${name}-reopened-after-restart.png`), fullPage: true });
+  }
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-spot-replay-reopened-after-restart.png`), fullPage: true });
+  expect(createReplayRequests, "all P13 reopen paths after restart must only retrieve, never recompute").toBe(0);
 });

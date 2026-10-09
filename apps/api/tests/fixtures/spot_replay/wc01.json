@@ -1,0 +1,37 @@
+{
+  "strategy_revision_id": "synthetic-strategy-wc01-v1",
+  "run_configuration_id": "synthetic-config-wc01-v1",
+  "dataset_revision_id": "synthetic-dataset-wc01-v1",
+  "window_start": "2026-10-01T12:05:00Z",
+  "window_end": "2026-10-01T12:25:00Z",
+  "initial_cash_quote": "1000",
+  "essential_evidence": {
+    "schema_version": "p12.essential-evidence/1",
+    "strategy_revision": "synthetic-strategy-wc01-v1",
+    "run_configuration_id": "synthetic-config-wc01-v1",
+    "dataset_revision": "synthetic-dataset-wc01-v1",
+    "market_binding_id": "filled-by-test-from-saved-strategy",
+    "fields": {
+      "entry": {
+        "state": "BOUND",
+        "essential_dependencies": [{"series": "price", "offset_buckets": 0}]
+      },
+      "exit": {"state": "BOUND", "essential_dependencies": [{"series": "price", "offset_buckets": 0}]}
+    }
+  },
+  "buckets": [
+    {"bucket_end": "2026-10-01T12:05:00Z", "status": "COMPLETE_OCCUPIED", "price": "8", "quote_volume": "10", "available_at": "2026-10-01T12:05:00Z"},
+    {"bucket_end": "2026-10-01T12:10:00Z", "status": "COMPLETE_OCCUPIED", "price": "8", "quote_volume": "10", "available_at": "2026-10-01T12:10:00Z"},
+    {"bucket_end": "2026-10-01T12:15:00Z", "status": "COMPLETE_OCCUPIED", "price": "9", "quote_volume": "10", "available_at": "2026-10-01T12:15:00Z"},
+    {"bucket_end": "2026-10-01T12:20:00Z", "status": "COMPLETE_OCCUPIED", "price": "10", "quote_volume": "10", "available_at": "2026-10-01T12:20:00Z"}
+  ],
+  "expected": {
+    "cash_by_sample": ["1000", "599.6", "599.6", "1099.1"],
+    "base_by_sample": ["0", "50", "50", "0"],
+    "account_value_by_sample": ["1000", "999.6", "1049.6", "1099.1"],
+    "orders": ["BUY_FILLED", "SELL_FILLED", "NO_NEXT_BUCKET"],
+    "gain_loss_quote": "99.1",
+    "completed_trade_pairs": 1,
+    "largest_drawdown_quote": "0.4"
+  }
+}
