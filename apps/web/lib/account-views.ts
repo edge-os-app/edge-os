@@ -1,6 +1,6 @@
 import { request } from "./api";
 
-export type RecordKind = "AGENT" | "POSITION" | "ACTION" | "CAPITAL_FLOW" | "MONITORING" | "EDGE_EVIDENCE";
+export type RecordKind = "AGENT" | "POSITION" | "ACTION" | "CAPITAL_FLOW" | "MONITORING" | "EDGE_EVIDENCE" | "PERMISSION_SNAPSHOT";
 
 export interface AssetAmount {
   asset_id: string;
@@ -11,6 +11,23 @@ export interface AssetAmount {
 export interface ValueState {
   state: "KNOWN" | "UNKNOWN";
   amount?: AssetAmount;
+}
+
+export interface SignedAssetAmount extends AssetAmount {}
+
+export interface ResultState {
+  state: "KNOWN" | "UNKNOWN";
+  amount?: SignedAssetAmount | null;
+}
+
+export interface ApprovalTerms {
+  adopted_capital: AssetAmount[];
+  supported_assets: string[];
+  supported_routes: string[];
+  actions: string[];
+  limits: { name: string; amount: AssetAmount }[];
+  expiry: string;
+  stop_effects: string[];
 }
 
 export interface AccountViewContent {
@@ -38,10 +55,26 @@ export interface AccountViewContent {
   basis?: ValueState | null;
   realized?: ValueState | null;
   unrealized?: ValueState | null;
+  realized_result?: ResultState | null;
+  estimated_unrealized_result?: ResultState | null;
   mark?: ValueState | null;
   position_state?: "OPEN" | "CLOSED" | null;
   health?: string | null;
   permission_state?: string | null;
+  approval_id?: string | null;
+  predecessor_approval_id?: string | null;
+  successor_approval_id?: string | null;
+  activation_state?: "ACTIVE" | "ENDED" | "NEVER_ACTIVE" | null;
+  terms?: ApprovalTerms | null;
+  terms_hash?: string | null;
+  signer_binding?: string | null;
+  policy_binding?: string | null;
+  requested_at?: string | null;
+  checked_at?: string | null;
+  approved_at?: string | null;
+  applied_at?: string | null;
+  failed_at?: string | null;
+  cancelled_at?: string | null;
   flow_kind?: "DEPOSIT" | "WITHDRAWAL" | "TRANSFER_IN" | "TRANSFER_OUT" | null;
   included_in_realized_result?: boolean | null;
   reason?: string | null;
@@ -88,6 +121,14 @@ export interface AgentContextRecord {
   entries: ContextEntry[];
 }
 
+export interface ContextSourceResolution {
+  source_record_id: string;
+  source_record_type: string;
+  destination_type: "ACCOUNT" | "RESEARCH" | "UNSUPPORTED";
+  destination_record_id: string | null;
+  record_kind?: RecordKind;
+}
+
 export function formatAmount(amount: AssetAmount): string {
   if (!/^(0|[1-9][0-9]*)$/.test(amount.raw) || !Number.isInteger(amount.decimals) || amount.decimals < 0 || amount.decimals > 255) return "Unknown";
   const digits = BigInt(amount.raw).toString();
@@ -100,6 +141,15 @@ export function formatAmount(amount: AssetAmount): string {
 
 export function formatValue(value?: ValueState | null): string {
   return value?.state === "KNOWN" && value.amount ? formatAmount(value.amount) : "Unknown";
+}
+
+export function formatResult(value?: ResultState | null): string {
+  if (value?.state !== "KNOWN" || !value.amount) return "Unknown";
+  const { raw } = value.amount;
+  if (!/^(?:0|[1-9][0-9]*|-[1-9][0-9]*)$/.test(raw)) return "Unknown";
+  const negative = raw.startsWith("-");
+  const formatted = formatAmount({ ...value.amount, raw: negative ? raw.slice(1) : raw });
+  return formatted === "Unknown" ? formatted : `${negative ? "−" : ""}${formatted}`;
 }
 
 export function filterPositions(records: AccountViewRecord[], filters: PositionFilters): AccountViewRecord[] {
@@ -124,6 +174,18 @@ export function actionsForPosition(records: AccountViewRecord[], position: Accou
     && content.mandate_id === target.mandate_id);
 }
 
+export function actionsForFlow(records: AccountViewRecord[], flow: AccountViewRecord): AccountViewRecord[] {
+  const target = flow.content;
+  if (target.record_kind !== "CAPITAL_FLOW") return [];
+  return records.filter(({ owner_id, content }) => content.record_kind === "ACTION"
+    && owner_id === flow.owner_id
+    && content.agent_id === target.agent_id
+    && content.wallet_id === target.wallet_id
+    && content.network_id === target.network_id
+    && content.position_id == null
+    && content.flow_id === target.flow_id);
+}
+
 export interface AccountViewPage {
   records: AccountViewRecord[];
   next_offset: number | null;
@@ -131,6 +193,10 @@ export interface AccountViewPage {
 
 export async function getAccountView(recordId: string): Promise<AccountViewRecord> {
   return request<AccountViewRecord>(`/v1/account-views/${encodeURIComponent(recordId)}`).then((result) => result.body);
+}
+
+export async function resolveContextSource(recordId: string): Promise<ContextSourceResolution> {
+  return request<ContextSourceResolution>(`/v1/account-views/source/${encodeURIComponent(recordId)}`).then((result) => result.body);
 }
 
 export async function loadAccountViews(filters: PositionFilters = {}, offset = 0): Promise<AccountViewPage> {

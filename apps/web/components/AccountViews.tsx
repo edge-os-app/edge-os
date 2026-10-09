@@ -45,8 +45,8 @@ export function AccountViews({ initialView = "Agents", sourceRecordId }: { initi
     const source = records.find((record) => record.record_id === sourceRecordId);
     if (!source) return;
     const kind = source.content.record_kind;
-    setView(kind === "AGENT" || kind === "MONITORING" ? "Agents"
-      : kind === "CAPITAL_FLOW" ? "Funds" : "Positions");
+    setView(kind === "AGENT" || kind === "MONITORING" || kind === "PERMISSION_SNAPSHOT" ? "Agents"
+      : kind === "CAPITAL_FLOW" || (kind === "ACTION" && !source.content.position_id) ? "Funds" : "Positions");
     const timer = window.setTimeout(() => {
       const target = document.getElementById(`record-${sourceRecordId}`);
       target?.closest("details")?.setAttribute("open", "");

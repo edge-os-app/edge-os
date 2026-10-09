@@ -9,14 +9,15 @@ import { RequestPage } from "./RequestPage";
 import { Later } from "./Later";
 import { AccountViews, type AccountViewName } from "./AccountViews";
 
-type Route = { name: "research" } | { name: "request"; id: string }
+type Route = { name: "research" } | { name: "request"; id: string; sourceRecordId?: string }
   | { name: "later"; area: "Agents" | "Positions" | "Funds" }
   | { name: "account"; area: AccountViewName; recordId?: string };
 
 function parse(hash: string): Route {
   const [path, query = ""] = hash.replace(/^#\/?/, "").split("?");
   const parts = path.split("/");
-  if (parts[0] === "research" && parts[1]) return { name: "request", id: parts[1] };
+  if (parts[0] === "research" && parts[1]) return { name: "request", id: parts[1],
+    sourceRecordId: new URLSearchParams(query).get("source") ?? undefined };
   const area = parts[0] === "agents" ? "Agents" : parts[0] === "positions" ? "Positions" : parts[0] === "funds" ? "Funds" : null;
   if (area) {
     const recordId = new URLSearchParams(query).get("record") ?? undefined;
@@ -88,7 +89,7 @@ export function Shell() {
       <main id="main" className="main" tabIndex={-1}>
         {route.name === "research" && <ResearchHome userId={auth.userId} go={go} consumeReturn={consumeReturn} />}
         {route.name === "request" && (
-          <RequestPage key={route.id} id={route.id} go={go} setContext={setBundleContext}
+          <RequestPage key={`${route.id}:${route.sourceRecordId ?? ""}`} id={route.id} sourceRecordId={route.sourceRecordId} go={go} setContext={setBundleContext}
             openConversation={openSheet} />
         )}
         {route.name === "later" && <Later area={route.area} />}

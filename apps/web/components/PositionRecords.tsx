@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { actionsForPosition, filterPositions, formatAmount, formatValue, type AccountViewRecord } from "../lib/account-views";
+import { actionsForPosition, filterPositions, formatAmount, formatResult, formatValue, type AccountViewRecord } from "../lib/account-views";
 
 export function PositionRecords({ records }: { records: AccountViewRecord[] }) {
   const [agentId, setAgentId] = useState("");
@@ -56,10 +56,15 @@ export function PositionRecords({ records }: { records: AccountViewRecord[] }) {
             </summary>
             <p><strong>Wallet and network.</strong> {content.wallet_id} · {content.network_id}</p>
             <p><strong>Strategy and mandate.</strong> {content.strategy_revision} · {content.mandate_id}</p>
-            <p><strong>Attributed quantity.</strong> {content.quantity ? `${formatAmount(content.quantity)} ${content.quantity.asset_id}` : "Unknown"}</p>
+            <p><strong>{content.position_state === "CLOSED" ? "Historical attributed quantity." : "Attributed quantity."}</strong> {content.quantity ? `${formatAmount(content.quantity)} ${content.quantity.asset_id}` : "Unknown"}{content.position_state === "CLOSED" && " Current residual wallet inventory is unavailable."}</p>
             <p><strong>Acquisition basis.</strong> {formatValue(content.basis)}{content.basis?.amount && ` ${content.basis.amount.asset_id}`}</p>
-            <p><strong>Realized result.</strong> {formatValue(content.realized)}{content.realized?.amount && ` ${content.realized.amount.asset_id}`}</p>
-            <p><strong>Estimated unrealized result.</strong> {formatValue(content.unrealized)}{content.unrealized?.amount && ` ${content.unrealized.amount.asset_id}`}</p>
+            <p><strong>Realized quote result.</strong> {content.realized_result
+              ? formatResult(content.realized_result) : formatValue(content.realized)}{(content.realized_result?.amount ?? content.realized?.amount) &&
+                ` ${(content.realized_result?.amount ?? content.realized?.amount)?.asset_id}`}</p>
+            <p><strong>Estimated unrealized quote result.</strong> {content.estimated_unrealized_result
+              ? formatResult(content.estimated_unrealized_result) : formatValue(content.unrealized)}{(content.estimated_unrealized_result?.amount ?? content.unrealized?.amount) &&
+                ` ${(content.estimated_unrealized_result?.amount ?? content.unrealized?.amount)?.asset_id}`}</p>
+            {content.reason && <p><strong>Saved note.</strong> {content.reason}</p>}
             <p><strong>Mark.</strong> {formatValue(content.mark)} · {content.updated_at}</p>
             <h3>Revision-linked edge evidence</h3>
             {!edgeEvidence.length && <p>No saved edge evidence for this revision.</p>}

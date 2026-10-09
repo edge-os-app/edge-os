@@ -1051,7 +1051,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   const beforeResponse = await page.request.get(accountPath, { headers: accountHeaders });
   expect(beforeResponse.status()).toBe(200);
   const financialBefore = await beforeResponse.json();
-  expect(financialBefore.records).toHaveLength(11);
+  expect(financialBefore.records).toHaveLength(Number(process.env.P19_ACCOUNT_RECORD_COUNT));
   expect(financialBefore.records.map((row) => row.record_id)).toContain(agentRecordId);
   const foreign = await page.request.get(`${accountPath}/${agentRecordId}`, {
     headers: { Authorization: `Bearer ${tokens.b}` },
@@ -1065,41 +1065,99 @@ test("P19 account views, exact owner scope, context controls and financial histo
   const context = page.getByRole("region", { name: `${agentId} context` });
   await expect(context).toContainText("Agent context · version 1");
   await expect(context).toContainText("SUGGESTED");
-  await expect(context.getByRole("link", { name: "Open source record" })).toHaveCount(1);
+  await expect(context.getByRole("button", { name: "Open source record" })).toHaveCount(1);
   await shot(page, project, "p19-agent-context-before-adoption");
-  await context.getByRole("link", { name: "Open source record" }).click();
-  await expect(page).toHaveURL(new RegExp(`record=${agentRecordId}`));
-  await expect(page.locator(`#record-${agentRecordId}`)).toBeVisible();
+  await context.getByRole("button", { name: "Open source record" }).click();
+  await expect(page).toHaveURL(new RegExp(`#\\/research\\/.*source=${process.env.P19_RESEARCH_SOURCE_ID}`));
+  await expect(page.getByRole("heading", { name: "Your request", level: 1 })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText(`Opened source record ${process.env.P19_RESEARCH_SOURCE_ID}`);
+  await expect(page.getByTestId("original-request")).toContainText("Synthetic source for the P19 owner-context navigation test.");
+  await page.goBack();
   const linkedAgentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
   await linkedAgentCard.getByRole("button", { name: "Inspect agent context" }).click();
   const reopenedContext = page.getByRole("region", { name: `${agentId} context` });
   await expect(reopenedContext).toContainText("Agent context · version 1");
+  const adoptionPath = `**/v1/agents/${agentId}/context/suggestions/adopt`;
+  let adoptionAttempts = 0;
+  await page.route(adoptionPath, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    adoptionAttempts += 1;
+    if (adoptionAttempts === 1) {
+      const requestBody = route.request().postDataJSON();
+      const staleResponse = await route.fetch({ postData: JSON.stringify({ ...requestBody, expected_version: 0 }) });
+      expect(staleResponse.status()).toBe(409);
+      return route.fulfill({ response: staleResponse });
+    }
+    const committed = await route.fetch();
+    expect(committed.status()).toBe(200);
+    await route.abort("failed");
+  });
   await reopenedContext.getByRole("button", { name: "Adopt suggestion" }).click();
+  await expect(alerts(page)).toContainText("Context changed before this save");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
+  await expect(reopenedContext).toContainText("version 1 was checked");
+  expect(adoptionAttempts).toBe(1);
+  await reopenedContext.getByRole("button", { name: "Adopt suggestion" }).click();
+  await expect(alerts(page)).toContainText("outcome is not confirmed");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
   await expect(reopenedContext).toContainText("Agent context · version 2");
+  await expect(reopenedContext).toContainText("contains the requested change");
   await expect(reopenedContext.locator("li").nth(1)).toContainText("ADOPTED");
   await reopenedContext.getByRole("button", { name: "Correct context" }).first().click();
   const correction = reopenedContext.getByLabel("Corrected context");
   await correction.fill("Use exact saved account evidence and keep all claims synthetic.");
-  let failCorrection = true;
+  let correctionAttempts = 0;
   await page.route(`**/v1/agents/${agentId}/context/corrections`, async (route) => {
-    if (failCorrection && route.request().method() === "POST") {
-      failCorrection = false;
-      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ code: "service_unavailable", findings: [{ detail: "Retry this context update." }] }) });
-      return;
-    }
-    await route.continue();
+    if (route.request().method() !== "POST") return route.continue();
+    correctionAttempts += 1;
+    if (correctionAttempts === 1) return route.fulfill({ status: 422, contentType: "application/json",
+      body: JSON.stringify({ code: "invalid", findings: [{ path: "/replacement", detail: "Synthetic pre-commit rejection." }] }) });
+    const committed = await route.fetch();
+    expect(committed.status()).toBe(200);
+    await route.abort("failed");
   });
   await reopenedContext.getByRole("button", { name: "Save correction" }).click();
-  await expect(alerts(page)).toContainText("Context was not updated");
+  await expect(alerts(page)).toContainText("The save was rejected");
+  await expect(correction).toHaveValue("Use exact saved account evidence and keep all claims synthetic.");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
   const contextPath = `${process.env.P03_API_URL}/v1/agents/${agentId}/context`;
   const unchangedVersion = await (await page.request.get(contextPath, { headers: accountHeaders })).json();
   expect(unchangedVersion.memory_version).toBe(2);
   await reopenedContext.getByRole("button", { name: "Save correction" }).click();
+  await expect(alerts(page)).toContainText("outcome is not confirmed");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
   await expect(reopenedContext).toContainText("Agent context · version 3");
+  expect(correctionAttempts).toBe(2);
+  let disableDropped = false;
+  await page.route(`**/v1/agents/${agentId}/context/disable`, async (route) => {
+    if (!disableDropped && route.request().method() === "POST") {
+      disableDropped = true;
+      const committed = await route.fetch();
+      expect(committed.status()).toBe(200);
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
   await reopenedContext.getByRole("button", { name: "Disable future context" }).click();
+  await expect(alerts(page)).toContainText("outcome is not confirmed");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
   await expect(reopenedContext).toContainText("Agent context · version 4");
   await reopenedContext.getByRole("button", { name: "Clear context" }).click();
+  let clearDropped = false;
+  await page.route(`**/v1/agents/${agentId}/context/clear`, async (route) => {
+    if (!clearDropped && route.request().method() === "POST") {
+      clearDropped = true;
+      const committed = await route.fetch();
+      expect(committed.status()).toBe(200);
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
   await reopenedContext.getByRole("button", { name: "Confirm clear" }).click();
+  await expect(alerts(page)).toContainText("outcome is not confirmed");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
   await expect(reopenedContext).toContainText("Agent context · version 5");
   await expect(reopenedContext).toContainText("CLEARED");
   await expect(reopenedContext.getByRole("listitem")).toHaveCount(0);
@@ -1109,6 +1167,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   accountUrl.hash = "#/agents";
   record(`p19-context-${project}`, { ownerId: financialBefore.records[0].owner_id, agentId, agentRecordId,
     contextVersions: [1, 2, 3, 4, 5], statuses: ["SUGGESTED", "ADOPTED"], failedCorrectionPreservedVersion: 2,
+    researchSourceId: process.env.P19_RESEARCH_SOURCE_ID,
     finalState: "CLEARED", financialRecordsUnchanged: true, foreignRecordStatus: foreign.status(), url: accountUrl.toString() });
 
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Positions" }).click();
@@ -1118,12 +1177,35 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await expect(page.getByText("position-a-1", { exact: false })).toBeVisible();
   await page.locator("summary", { hasText: "position-a-1" }).click();
   await expect(page.getByText("action-a-sale-1", { exact: false })).toBeVisible();
+  await expect(page.getByText(/Realized quote result/).locator("..")).toContainText("−2 monad:143/asset:USDC");
+  await expect(page.locator("details").filter({ hasText: "position-a-1" })).toContainText("proceeds 8 minus removed basis 10 equals realized result -2 USDC");
+  const precisePosition = page.locator("details").filter({ hasText: "position-a-2" });
+  await precisePosition.locator("summary").click();
+  await expect(precisePosition).toContainText("2.000000000000000001 monad:143/asset:USDC");
+  await expect(precisePosition).toContainText("Estimated unrealized quote result. 0 monad:143/asset:USDC");
+  await expect(precisePosition).toContainText("action-a-position-confirmed-2 · CONFIRMED");
+  await expect(precisePosition).toContainText("action-a-position-unknown-2 · SUBMISSION_UNKNOWN");
+  await expect(precisePosition).toContainText("action-a-failed-2 · REVERTED");
   await shot(page, project, "p19-positions-exact-filter");
 
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Funds" }).click();
   await expect(page.getByText("flow-a-deposit-1", { exact: false })).toBeVisible();
+  await expect(page.getByText("flow-a-withdrawal-1", { exact: false })).toBeVisible();
+  await expect(page.getByText("action-a-deposit-queued", { exact: false })).toBeVisible();
+  await expect(page.getByText("action-a-withdrawal-unknown", { exact: false })).toBeVisible();
+  await expect(page.getByText("action-a-withdrawal-confirmed", { exact: false })).toBeVisible();
+  await expect(page.getByText("action-a-withdrawal-failed", { exact: false })).toBeVisible();
   await expect(page.getByText(/capital flow, not trading profit/i)).toBeVisible();
   await expect(page.getByText(/Account value, percent return, and drawdown are unavailable/)).toBeVisible();
+  await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Agents" }).click();
+  await expect(page.getByText(/Permission approval history/)).toBeVisible();
+  if (agentId === "agent-a") {
+    await expect(page.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/)).toBeVisible();
+    await page.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/).click();
+    await expect(page.getByText("Failed / cancelled").locator("..")).toContainText("2026-10-09T08:02:00Z");
+  } else {
+    await expect(page.getByText(/approval-b-v6 · CHANGE_APPLIED · ACTIVE/)).toBeVisible();
+  }
   await shot(page, project, "p19-funds-synthetic");
   await page.getByRole("button", { name: "Research" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();

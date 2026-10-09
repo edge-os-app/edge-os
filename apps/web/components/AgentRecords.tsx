@@ -33,6 +33,11 @@ export function AgentRecords({ records }: { records: AccountViewRecord[] }) {
           && record.content.agent_id === content.agent_id
           && record.content.wallet_id === content.wallet_id
           && record.content.network_id === content.network_id);
+        const permissions = records.filter((record) => record.owner_id === owner_id
+          && record.content.record_kind === "PERMISSION_SNAPSHOT"
+          && record.content.agent_id === content.agent_id
+          && record.content.wallet_id === content.wallet_id
+          && record.content.network_id === content.network_id);
         return <section className="panel" id={`record-${record_id}`} key={record_id}>
           <h2>{content.agent_id}</h2>
           <p><strong>Wallet.</strong> {content.wallet_id} · {content.network_id}</p>
@@ -51,6 +56,33 @@ export function AgentRecords({ records }: { records: AccountViewRecord[] }) {
             context ? <AgentContext record={context} onChange={setContext} onClose={() => setSelected(null)} />
               : <div role="status" aria-live="polite">{contextError || "Loading agent context…"}{contextError && <button className="btn btn-ghost" type="button" style={{ minHeight: 44 }} onClick={() => setRefresh((value) => value + 1)}>Try again</button>}</div>
           )}
+          <h3>Permission approval history · synthetic records</h3>
+          {!permissions.length && <p>No saved permission approval snapshots.</p>}
+          <ul>{permissions.map((snapshot) => {
+            const item = snapshot.content;
+            return <li id={`record-${snapshot.record_id}`} key={snapshot.record_id}>
+              <details>
+                <summary style={{ minHeight: 44, cursor: "pointer" }}>
+                  {item.approval_id} · {item.status} · {item.activation_state}
+                </summary>
+                <dl>
+                  <dt>Owner / agent / wallet / network</dt><dd>{snapshot.owner_id} · {item.agent_id} · {item.wallet_id} · {item.network_id}</dd>
+                  <dt>Strategy revision / mandate</dt><dd>{item.strategy_revision} · {item.mandate_id}</dd>
+                  <dt>Predecessor / successor approval</dt><dd>{item.predecessor_approval_id ?? "none"} · {item.successor_approval_id ?? "none"}</dd>
+                  <dt>Signer / policy binding</dt><dd>{item.signer_binding} · {item.policy_binding}</dd>
+                  <dt>Requested / checked</dt><dd>{item.requested_at} · {item.checked_at}</dd>
+                  <dt>Approved / applied</dt><dd>{item.approved_at ?? "not approved"} · {item.applied_at ?? "not applied"}</dd>
+                  <dt>Failed / cancelled</dt><dd>{item.failed_at ?? "none"} · {item.cancelled_at ?? "none"}</dd>
+                  <dt>Terms hash</dt><dd>{item.terms_hash}</dd>
+                  <dt>Adopted capital</dt><dd>{item.terms?.adopted_capital.map((amount) => `${formatAmount(amount)} ${amount.asset_id}`).join("; ")}</dd>
+                  <dt>Supported assets / routes</dt><dd>{item.terms?.supported_assets.join(", ")} · {item.terms?.supported_routes.join(", ")}</dd>
+                  <dt>Actions / expiry</dt><dd>{item.terms?.actions.join(", ")} · {item.terms?.expiry}</dd>
+                  <dt>Limits</dt><dd>{item.terms?.limits.map((limit) => `${limit.name}: ${formatAmount(limit.amount)} ${limit.amount.asset_id}`).join("; ")}</dd>
+                  <dt>Stop effects</dt><dd>{item.terms?.stop_effects.join(", ")}</dd>
+                </dl>
+              </details>
+            </li>;
+          })}</ul>
           <h3>Monitoring · synthetic fixture</h3>
           {!monitoring.length && <p>No saved monitoring records.</p>}
           <ul>{monitoring.map((item) => (

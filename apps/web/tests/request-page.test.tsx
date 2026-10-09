@@ -42,4 +42,10 @@ describe("stored revision verification", () => {
     expect(await screen.findByText("Could not be confirmed.")).toBeInTheDocument();
     expect(screen.queryByText("Read back from the database. Its hash matches.")).toBeNull();
   });
+
+  it("shows the exact owner-verified source record on its saved Research detail", async () => {
+    render(<RequestPage id="intake-1" sourceRecordId="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByText((_, element) => element?.tagName === "P" && element.textContent?.includes("Opened source record intake-1."))).toBeInTheDocument();
+    expect(screen.getByText("test request")).toBeInTheDocument();
+  });
 });

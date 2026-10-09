@@ -155,7 +155,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   let p19Writes = 0;
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
-    if (request.method() !== "GET" && (pathname.startsWith("/v1/account-views") || pathname.startsWith("/v1/agents/agent-a/context"))) p19Writes += 1;
+    if (request.method() !== "GET" && (pathname.startsWith("/v1/account-views") || pathname.startsWith(`/v1/agents/${p19.agentId}/context`))) p19Writes += 1;
   });
   await page.goto(p19.url);
   await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
@@ -177,8 +177,18 @@ test("after an API restart the saved rules reopen with their exact review text",
   });
   expect(exactAccounts.status()).toBe(200);
   const persistedAccounts = await exactAccounts.json();
-  expect(persistedAccounts.records).toHaveLength(11);
+  expect(persistedAccounts.records).toHaveLength(Number(process.env.P19_ACCOUNT_RECORD_COUNT));
   expect(persistedAccounts.records.map((row) => row.record_id)).toContain(p19.agentRecordId);
+  const resolvedSource = await page.request.get(`${process.env.P03_API_URL}/v1/account-views/source/${p19.researchSourceId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+  });
+  expect(resolvedSource.status()).toBe(200);
+  expect(await resolvedSource.json()).toMatchObject({ source_record_type: "IntakeRequest", destination_type: "RESEARCH",
+    destination_record_id: p19.researchSourceId });
+  const reopenedResearch = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${p19.researchSourceId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+  });
+  expect(reopenedResearch.status()).toBe(200);
   expect(p19Writes, "reopen after API restart must only issue reads").toBe(0);
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-account-context-reopened-after-restart.png`), fullPage: true });
 });
