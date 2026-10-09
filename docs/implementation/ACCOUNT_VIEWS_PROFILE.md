@@ -1,0 +1,9 @@
+# Account views and agent context profile
+
+P19 stores account-view and per-agent context records as append-only P02 envelopes with P19-owned `AccountViewRecord` and `AgentContextRecord` content schemas. The account view reads only rows whose `owner_id` comes from verified authentication. Exact filters use the saved agent, wallet, asset, position, strategy revision, and record-kind identities. Pages are owner-scoped and bounded to 100 by default (500 maximum).
+
+P15 controls all account meanings. Each amount keeps its asset ID, raw integer string, and decimals. Gas stays separate. The views do not total unlike assets or add account-value, percent-return, or drawdown metrics. Unknown costs and marks stay unknown. Capital flows do not count as trading results. Actions appear only under their saved owner, agent, wallet, network, asset, position, strategy, and mandate identities. Monitoring and edge evidence are shown separately, with edge evidence linked to the exact strategy revision. Fixture evidence is labelled synthetic.
+
+The context store appends a new memory version for a correction, suggestion adoption, disable, or clear. A stale expected version receives a conflict. Future task retrieval returns only adopted entries for the trusted authorized agent while its context state is active. Suggestions remain suggestions until the owner adopts them. Source record reads use the same owner scope. The current task does not connect this helper to Hermes; P04/P31 retain runtime retrieval qualification.
+
+P19 does not create provider records, wallets, permissions, transactions, or live balances. It does not qualify P15 accounting, P16 signer isolation, P20 submission, P21 exit capacity, P27 operation, or real marks. Shared route registration, migration ownership, app-shell navigation, browser runtime, direct SQL, process restart, and final end-to-end verification remain with the serial shared-wiring lease.

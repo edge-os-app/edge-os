@@ -1,0 +1,16 @@
+{
+  "contract_id": "edge-os.agent-context",
+  "version": "1.0.0",
+  "record_type": "AgentContextRecord",
+  "schema_version": "agent-context/1",
+  "envelope": ["schema_version", "record_type", "record_id", "owner_id", "operation_id", "created_at", "content"],
+  "scope": ["owner_id", "agent_id", "memory_version"],
+  "states": ["ACTIVE", "DISABLED", "CLEARED"],
+  "entry_kinds": ["PREFERENCE", "CORRECTION", "LESSON"],
+  "entry_statuses": ["ADOPTED", "SUGGESTED"],
+  "owner_operations": ["inspect", "correct", "adopt_suggestion", "disable", "clear"],
+  "future_retrieval": "ADOPTED entries only while state is ACTIVE",
+  "clearing": "append an empty version; retain financial records and past actions",
+  "source_links": "each source record must belong to the verified owner",
+  "authority": "context cannot change strategy, mandate, wallet, permission, balance, position, reservation, or pending action"
+}
