@@ -133,6 +133,8 @@ def _validate_descriptor(strategy: dict[str, Any], run: ReplayInput, market_id: 
     if any(descriptor.get(key) != value for key, value in identities.items()):
         raise _invalid("ESSENTIAL_BINDING_IDENTITY_MISMATCH", "/essential_evidence", "The descriptor names another saved run input.")
     fields = descriptor.get("fields")
+    if isinstance(fields, dict) and set(fields) - {"entry", "exit"}:
+        raise _invalid("INVALID_ESSENTIAL_BINDING", "/essential_evidence/fields", "The descriptor contains an unknown action field.")
     if not isinstance(fields, dict) or set(fields) != {"entry", "exit"}:
         raise _invalid("UNRESOLVED_ESSENTIAL_EVIDENCE", "/essential_evidence/fields", "Bind entry and exit separately.")
     normalized: dict[str, list[dict[str, Any]]] = {}
@@ -283,6 +285,59 @@ def _essential_reasons(
         elif observation.available_at > decision_time:
             reasons.extend(observation.reasons)
             reasons.append("LATE_INPUT")
+    return tuple(dict.fromkeys(reasons))
+
+
+def _expression_observations(node: dict[str, Any], position: int) -> tuple[tuple[str, int], ...]:
+    """Return primitive observations P06 actually consumes, including both Boolean branches."""
+    op = node["op"]
+    if op == "price":
+        return (("price", position),)
+    if op == "quote_volume":
+        return (("quote_volume", position),)
+    if op == "price_return":
+        lookback = node["lookback_buckets"]
+        return (("price", position), ("price", position - lookback))
+    if op == "relative_volume":
+        lookback = node["lookback_buckets"]
+        return (("quote_volume", position),) + tuple(
+            ("quote_volume", prior) for prior in range(position - lookback, position)
+        )
+    if op == "lag":
+        return _expression_observations(node["value"], position - node["buckets"])
+    if op in {"sum", "mean"}:
+        return tuple(
+            dependency
+            for current in range(position - node["buckets"] + 1, position + 1)
+            for dependency in _expression_observations(node["value"], current)
+        )
+    if op == "not":
+        return _expression_observations(node["value"], position)
+    if op in {"gt", "gte", "lt", "lte", "and", "or"}:
+        return tuple(
+            dependency
+            for child in node["args"]
+            for dependency in _expression_observations(child, position)
+        )
+    return ()
+
+
+def _mandatory_timing_reasons(
+    expression: dict[str, Any], index: int, decision_time: datetime, run: ReplayInput,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    for series, position in _expression_observations(expression, index):
+        if position < 0 or position >= len(run.dataset.buckets):
+            continue
+        bucket = run.dataset.buckets[position]
+        observation = _observation_for(bucket, series)
+        if observation is None or observation.value is None:
+            continue
+        if (observation.bucket_end > decision_time
+                or observation.available_at is not None and observation.available_at > decision_time):
+            reasons.append(f"FUTURE_INFORMATION:{position}")
+        elif observation.available_at is None:
+            reasons.append(f"AVAILABILITY_UNKNOWN:{position}")
     return tuple(dict.fromkeys(reasons))
 
 
@@ -495,15 +550,23 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
         exit_result = p06.evaluate_expression(strategy["exit"], strategy["market"], context)
         entry_reasons = _essential_reasons(essential["entry"], index, moment, run)
         exit_reasons = _essential_reasons(essential["exit"], index, moment, run)
-        entry_eligible = not entry_reasons
-        exit_eligible = not exit_reasons
+        entry_timing = _mandatory_timing_reasons(strategy["entry"], index, moment, run)
+        exit_timing = _mandatory_timing_reasons(strategy["exit"], index, moment, run)
+        entry_eligible = not entry_reasons and not entry_timing
+        exit_eligible = not exit_reasons and not exit_timing
+        entry_eligibility_reasons = tuple(dict.fromkeys(entry_reasons + entry_timing))
+        exit_eligibility_reasons = tuple(dict.fromkeys(exit_reasons + exit_timing))
+        entry_status = ("ESSENTIAL_EVIDENCE_UNAVAILABLE" if entry_reasons else
+                        "TIMING_UNAVAILABLE" if entry_timing else "ELIGIBLE")
+        exit_status = ("ESSENTIAL_EVIDENCE_UNAVAILABLE" if exit_reasons else
+                       "TIMING_UNAVAILABLE" if exit_timing else "ELIGIBLE")
         events.append({"kind": "DECISION", "at": moment,
                        "entry": {"value": entry.value, "reasons": entry.reasons, "eligible": entry_eligible,
-                                 "eligibility_status": "ELIGIBLE" if entry_eligible else "ESSENTIAL_EVIDENCE_UNAVAILABLE",
-                                 "eligibility_reasons": entry_reasons},
+                                 "eligibility_status": entry_status,
+                                 "eligibility_reasons": entry_eligibility_reasons},
                        "exit": {"value": exit_result.value, "reasons": exit_result.reasons, "eligible": exit_eligible,
-                                "eligibility_status": "ELIGIBLE" if exit_eligible else "ESSENTIAL_EVIDENCE_UNAVAILABLE",
-                                "eligibility_reasons": exit_reasons}})
+                                "eligibility_status": exit_status,
+                                "eligibility_reasons": exit_eligibility_reasons}})
 
         if pending is not None:
             continue

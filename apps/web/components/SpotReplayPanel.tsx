@@ -68,7 +68,12 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       const saved = await api.createSpotReplay(body);
       setRecord(saved); setReplayId(saved.replay_id); setPendingBody(null);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.detail : "The replay may have saved. Retry with the same key or load its saved ID.");
+      if (cause instanceof ApiError && cause.status === 422) {
+        setPendingBody(null);
+        setError(`${cause.detail} This request was rejected before it was saved. Correct the editable settings and submit again.`);
+      } else {
+        setError(cause instanceof ApiError ? cause.detail : "The replay may have saved. Retry with the same key or load its saved ID.");
+      }
     } finally { setBusy(false); }
   };
 
@@ -88,9 +93,15 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
     <section className="panel spot-replay" aria-labelledby="spot-replay-title" data-testid="spot-replay">
       <h2 id="spot-replay-title">Test the saved strategy on synthetic prices</h2>
       <p className="muted">The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
+      <h3>New run settings (editable)</h3>
       <dl className="kv">
         <dt>Fixture</dt><dd className="mono">p13.wc01/1 · synthetic only</dd>
         <dt>Window</dt><dd>2026-10-01 12:05 to 12:35 UTC</dd>
+        <dt>Starting capital (quote)</dt><dd>1000. This fixed amount will be used for a new run.</dd>
+        <dt>Starting base amount</dt><dd>0</dd>
+        <dt>Starting cost basis</dt><dd>0</dd>
+        <dt>Trade size</dt><dd>{strategy.sizing.amount} {strategy.sizing.unit}</dd>
+        <dt>Warm-up</dt><dd>{strategy.warmup_buckets} scheduled buckets</dd>
         <dt>Saved cost source</dt><dd>{strategy.cost_assumptions.source_ref}; fee {strategy.cost_assumptions.fee_rate}; slippage {strategy.cost_assumptions.slippage_rate}</dd>
         <dt>Execution effects</dt><dd>Gas, spread, extra impact, and capacity are not modeled.</dd>
       </dl>
@@ -132,6 +143,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
         disabled={!reviewed.entry || !reviewed.exit}>
         {busy ? "Saving replay…" : pendingBody ? "Retry same replay" : "Save synthetic replay"}
       </button>
+      {pendingBody ? <p role="status" className="muted">This attempt has an uncertain outcome. Retry uses its original inputs and key; edits above apply only to a new attempt.</p> : null}
       {error ? <p role="alert" className="status err">{error}</p> : null}
       {loadNotice ? <p role="status" className="status ok">{loadNotice}</p> : null}
 

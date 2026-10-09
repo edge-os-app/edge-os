@@ -336,6 +336,34 @@ export interface SpotReplayBody {
   };
 }
 
+export interface SpotReplayInputSnapshot {
+  profile_version: string;
+  strategy_revision_id: string;
+  strategy_id: string;
+  strategy_sha256: string;
+  strategy: {
+    sizing: { amount: string; unit: string };
+    warmup_buckets: number;
+    cost_assumptions: { fee_rate: string; slippage_rate: string; source_ref: string };
+  };
+  run_configuration_id: string;
+  dataset_fixture_id: string;
+  dataset_revision_id: string;
+  dataset_qualification: string;
+  evidence_class: string;
+  window_start: string;
+  window_end: string;
+  initial_cash_quote: string;
+  initial_base_amount: string;
+  initial_basis_quote: string;
+  essential_evidence: {
+    fields: Record<"entry" | "exit", {
+      state: string;
+      essential_dependencies: SpotReplayDependency[];
+    }>;
+  };
+}
+
 export interface SpotReplayRecord {
   schema_version: "p13.spot-replay-run/1";
   record_type: "SpotReplayRun";
@@ -347,7 +375,7 @@ export interface SpotReplayRecord {
     strategy_revision_id: string;
     dataset_fixture_id: string;
     run_configuration_id: string;
-    inputs: Record<string, unknown>;
+    inputs: SpotReplayInputSnapshot;
     result: {
       status: "COMPLETE" | "UNAVAILABLE";
       reason?: { code: string; path: string; detail: string };

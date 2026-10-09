@@ -60,6 +60,17 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(replayPanel.getByTestId("spot-replay-id")).toHaveText(replay.replayId);
   await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.replayHash);
   await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.expectedEndingCashQuote);
+  const savedInputs = replayPanel.getByTestId("spot-replay-saved-inputs");
+  await expect(savedInputs).toContainText(replay.revisionId);
+  await expect(savedInputs).toContainText("p13-config-");
+  await expect(savedInputs).toContainText("p13.wc01/1");
+  await expect(savedInputs).toContainText("2026-10-01T12:05:00Z to 2026-10-01T12:35:00Z");
+  await expect(savedInputs).toContainText("1000 quote cash");
+  await expect(savedInputs).toContainText("100 QUOTE:0x2222222222222222222222222222222222222222");
+  await expect(savedInputs).toContainText("3 scheduled buckets");
+  await expect(savedInputs).toContainText("p02.cost-assumptions");
+  await expect(savedInputs).toContainText("price@0, price@-3");
+  await expect(savedInputs).toContainText("price@0, price@-1");
   await expect(replayPanel).toContainText("Loaded the exact saved result. The replay did not run again.");
   expect(createReplayRequests, "reopening after restart must only retrieve, never recompute").toBe(0);
   const exactReplay = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${replay.replayId}`,
@@ -72,5 +83,15 @@ test("after an API restart the saved rules reopen with their exact review text",
     .toEqual(replay.expectedEntryDependencies);
   expect(exactReplayBody.content.inputs.essential_evidence.fields.exit.essential_dependencies)
     .toEqual(replay.expectedExitDependencies);
+  const saved = exactReplayBody.content.inputs;
+  const visible = await savedInputs.innerText();
+  for (const value of [saved.profile_version, saved.strategy_revision_id, saved.run_configuration_id,
+    saved.dataset_fixture_id, saved.dataset_revision_id, saved.window_start, saved.window_end,
+    saved.initial_cash_quote, saved.initial_base_amount, saved.initial_basis_quote,
+    saved.strategy.sizing.amount, saved.strategy.sizing.unit, String(saved.strategy.warmup_buckets),
+    saved.strategy.cost_assumptions.source_ref, saved.strategy.cost_assumptions.fee_rate,
+    saved.strategy.cost_assumptions.slippage_rate]) {
+    expect(visible).toContain(value);
+  }
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-spot-replay-reopened-after-restart.png`), fullPage: true });
 });

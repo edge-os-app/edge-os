@@ -8,8 +8,10 @@ from decimal import Decimal, localcontext
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from edge_os_api import p02, p06
-from edge_os_api.spot_replay import ReplayBucket, ReplayDataset, ReplayInput, run_spot_replay
+from edge_os_api.spot_replay import ReplayBucket, ReplayDataset, ReplayError, ReplayInput, run_spot_replay
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "spot_replay" / "wc01.json"
 REFERENCE_CASES_PATH = Path(__file__).parent / "fixtures" / "spot_replay" / "p12_reference_cases.json"
@@ -282,8 +284,63 @@ def test_spot_replay_preserves_true_or_unknown_and_blocks_only_essential_missing
     assert decision["entry"]["eligible"] is False
     assert decision["entry"]["eligibility_status"] == "ESSENTIAL_EVIDENCE_UNAVAILABLE"
     assert not any(event.get("at") == _moment("2026-10-01T12:05:00Z")
-                    and event.get("status") == "RESERVED" and event.get("side") == "BUY"
-                    for event in result.events)
+                   and event.get("status") == "RESERVED" and event.get("side") == "BUY"
+                   for event in result.events)
+
+
+def test_spot_replay_blocks_future_or_unknown_timing_from_a_decisive_boolean_sibling() -> None:
+    strategy, replay_input, _ = _wc01_input()
+    expression = {
+        "op": "or",
+        "args": [
+            {"op": "gt", "args": [{"op": "price"}, {"op": "constant", "value": "7", "unit": "PRICE"}]},
+            {"op": "gt", "args": [{"op": "quote_volume"}, {"op": "constant", "value": "1", "unit": f"QUOTE:{strategy['market']['research_binding']['quote_asset']}"}]},
+        ],
+    }
+    strategy = _rebuild_strategy(strategy, entry=expression, exit=expression, data_inputs=["price", "quote_volume"])
+    first = replay_input.dataset.buckets[0]
+    assert first.quote_volume is not None
+    late = replace(first.quote_volume, available_at=first.bucket_end + timedelta(minutes=2))
+    late_input = replace(
+        replay_input,
+        dataset=replace(replay_input.dataset, buckets=(replace(first, quote_volume=late),) + replay_input.dataset.buckets[1:]),
+    )
+
+    late_result = run_spot_replay(strategy, late_input)
+    late_decision = next(event for event in late_result.events if event["kind"] == "DECISION")
+    for field_name in ("entry", "exit"):
+        assert late_decision[field_name]["value"] == "TRUE"
+        assert "FUTURE_INFORMATION:0" in late_decision[field_name]["reasons"]
+        assert late_decision[field_name]["eligible"] is False
+        assert late_decision[field_name]["eligibility_status"] == "TIMING_UNAVAILABLE"
+        assert "FUTURE_INFORMATION:0" in late_decision[field_name]["eligibility_reasons"]
+    assert not any(event.get("at") == first.bucket_end and event.get("status") == "RESERVED"
+                   for event in late_result.events)
+
+    unknown = replace(first.quote_volume, available_at=None)
+    unknown_input = replace(
+        replay_input,
+        dataset=replace(replay_input.dataset, buckets=(replace(first, quote_volume=unknown),) + replay_input.dataset.buckets[1:]),
+    )
+    unknown_result = run_spot_replay(strategy, unknown_input)
+    unknown_decision = next(event for event in unknown_result.events if event["kind"] == "DECISION")
+    for field_name in ("entry", "exit"):
+        assert unknown_decision[field_name]["value"] == "TRUE"
+        assert unknown_decision[field_name]["eligible"] is False
+        assert unknown_decision[field_name]["eligibility_status"] == "TIMING_UNAVAILABLE"
+        assert "AVAILABILITY_UNKNOWN:0" in unknown_decision[field_name]["eligibility_reasons"]
+    assert not any(event.get("at") == first.bucket_end and event.get("status") == "RESERVED"
+                   for event in unknown_result.events)
+
+
+def test_spot_replay_rejects_unknown_descriptor_fields_as_invalid_not_unresolved() -> None:
+    strategy, replay_input, _ = _wc01_input()
+    descriptor = copy.deepcopy(replay_input.essential_evidence)
+    assert descriptor is not None
+    descriptor["fields"]["invalidation"] = {"state": "BOUND", "essential_dependencies": []}
+    with pytest.raises(ReplayError) as captured:
+        run_spot_replay(strategy, replace(replay_input, essential_evidence=descriptor))
+    assert captured.value.code == "INVALID_ESSENTIAL_BINDING"
 
 
 def test_spot_replay_preserves_p06_market_mismatch_and_fails_essential_binding() -> None:

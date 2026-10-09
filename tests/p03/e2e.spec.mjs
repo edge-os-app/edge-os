@@ -161,6 +161,14 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await shot(page, project, "04-saved");
   const replay = page.getByTestId("spot-replay");
   await expect(replay).toContainText("p13.wc01/1 · synthetic only");
+  const replayPosts = [];
+  const replayStatuses = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/v1/spot-replays") replayPosts.push(request.postDataJSON());
+  });
+  page.on("response", (response) => {
+    if (response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays") replayStatuses.push(response.status());
+  });
   await replay.getByRole("button", { name: "Add entry dependency" }).click();
   await replay.getByRole("button", { name: "Add entry dependency" }).click();
   await replay.getByLabel("entry dependency offset 2").fill("-3");
@@ -176,6 +184,12 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(replay.getByTestId("spot-replay-result")).toContainText("SELL_FILLED");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("990.51132338308457711442786069651741293532338308458");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("no gas, spread, additional impact, or capacity model");
+  const savedInputs = replay.getByTestId("spot-replay-saved-inputs");
+  await expect(savedInputs).toContainText("p12.spot-replay/1");
+  await expect(savedInputs).toContainText(revisionId);
+  await expect(savedInputs).toContainText("p13-config-");
+  await expect(savedInputs).toContainText("price@0, price@-3");
+  await expect(savedInputs).toContainText("price@0, price@-1");
   const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
   const replayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
   record(`spot-replay-${project}`, { url: requestUrl, revisionId, replayId, replayHash,
@@ -184,6 +198,55 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
     expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
     expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
   await shot(page, project, "05-spot-replay-saved");
+
+  // A definitive 422 rejects only this body. Correcting it starts a new key/body.
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  const rejectedOffset = replay.getByLabel("entry dependency offset 3");
+  await rejectedOffset.fill("1");
+  await replay.getByLabel("I reviewed the entry dependency set").uncheck();
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByRole("alert")).toContainText("rejected before it was saved");
+  await expect(replay.getByRole("button", { name: "Save synthetic replay" })).toBeVisible();
+  await rejectedOffset.fill("0");
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  expect(replayPosts[1].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(1);
+  expect(replayPosts[2].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(0);
+  expect(replayPosts[2].idempotency_key).not.toBe(replayPosts[1].idempotency_key);
+  expect(replayStatuses.slice(1, 3)).toEqual([422, 201]);
+
+  // Lose the response after the API commits. Retrying must reuse the exact request and recover one row.
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  const uncertainOffset = replay.getByLabel("entry dependency offset 4");
+  let dropCommittedResponse = true;
+  await page.route("**/v1/spot-replays", async (route) => {
+    if (route.request().method() === "POST" && dropCommittedResponse) {
+      dropCommittedResponse = false;
+      await route.fetch();
+      await route.abort();
+    } else await route.continue();
+  });
+  await replay.getByLabel("I reviewed the entry dependency set").uncheck();
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
+  const uncertainRequest = replayPosts[3];
+  await uncertainOffset.fill("-2");
+  await replay.getByRole("button", { name: "Retry same replay" }).click();
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  expect(replayPosts).toHaveLength(5);
+  expect(replayPosts[4]).toEqual(uncertainRequest);
+  expect(replayPosts[4].idempotency_key).toBe(uncertainRequest.idempotency_key);
+  const recoveredId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
+  const uncertainReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  record(`spot-replay-uncertain-${project}`, { url: requestUrl, revisionId, replayId: recoveredId,
+    replayHash: uncertainReplayHash,
+    expectedEntryDependencies: uncertainRequest.essential_fields.entry.essential_dependencies,
+    expectedExitDependencies: uncertainRequest.essential_fields.exit.essential_dependencies,
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
+
   // reopen in a brand new context: nothing in this browser can supply the record
   const fresh = await page.context().browser().newContext({ viewport: page.viewportSize() });
   const again = await fresh.newPage();

@@ -20,6 +20,12 @@ The deterministic result contains:
 
 An unavailable sample does not change known cash or base. Gain/loss and full-period drawdown become unavailable when a required mark is missing. Each unavailable result retains the ordered source reasons. The completed-pair count reports only pairs that did complete during this replay.
 
+## Action timing and saved inputs
+
+The runtime preserves P06 results and reasons, then evaluates action eligibility separately. It checks delivery timing for each primitive observation consumed by the full entry or exit expression, including both sides of a Boolean expression and the operands of supported history operators. A decisive sibling cannot hide a future observation or a value whose delivery time is unknown. Such a field is ineligible for that decision, while its original P06 truth value and reasons remain unchanged. P06 reasons that arise from missing or operation-unused inputs are not blanket filters; the adopted WC-06 and WC-14 cases remain distinct. The separately declared P12 essential dependencies remain an additional, independent eligibility check.
+
+Retrieved runs display the exact immutable input snapshot returned by the API. In particular, the saved bindings are not reconstructed from current editor values. A definitive HTTP 422 input rejection is safe to correct and submit as a new attempt. For an uncertain outcome, the original idempotency key and body remain paired; edits do not change the retry payload.
+
 ## Version boundary
 
 `p12.spot-replay/1` and `p12.essential-evidence/1` remain exact adopted inputs. Their saved identities and terms are not rewritten by this result record. A future result schema change requires a new version and an explicit migration or compatibility rule. This document does not grant trading permission or qualify data, fills or costs.

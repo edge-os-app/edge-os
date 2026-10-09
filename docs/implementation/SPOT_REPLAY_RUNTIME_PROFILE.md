@@ -1,24 +1,22 @@
 # P13 spot replay runtime profile
 
-P13 implements a deterministic local calculation seam in `apps/api/src/edge_os_api/spot_replay.py`. It evaluates one accepted P06 spot strategy against one immutable P07 schedule. It consumes the adopted `p12.spot-replay/1` and `p12.essential-evidence/1` terms. It does not alter P02, P06, P07 or P12.
+P13 implements the adopted `p12.spot-replay/1` and `p12.essential-evidence/1` profile over an authored synthetic fixture. The public pure replay module preserves each P06 value and reason, validates both explicit essential bindings, and separately checks every primitive observation used by each full entry and exit expression. A decisive Boolean sibling does not hide future or unknown-delivery timing. Missing or operation-unused P06 reasons alone do not become a blanket action block; the adopted WC-06 and WC-14 distinctions remain in the regression suite.
 
-The implementation preserves P06 truth values and reasons. It evaluates entry and exit essential bindings separately. It uses the next scheduled bucket close for a fill, requires that close to be qualified and available, and releases an unavailable fill reservation once. It uses the saved fee and slippage fractions. It retains cash, inventory, fee-inclusive basis, chronological events, metric status and reasons, and open-position marks.
+The authenticated API creates an immutable owner-bound replay snapshot and returns that same snapshot for an identical idempotency key and input fingerprint. It stores the exact strategy revision, run configuration, fixture and dataset identity, window, balances, essential bindings, costs, calculation results and SHA-256 content identity. Retrieval checks ownership and content integrity and returns the stored result; it does not re-evaluate the strategy. The replay API uses the existing application auth and persistence wiring. It adds no provider, wallet, transaction or execution-permission path.
 
-The run preflight checks exact descriptor identities, explicit entry and exit bindings, non-positive scheduled-relative offsets, UTC five-minute timing, interval coverage, warm-up position, saved invalidation subset, complete-empty bucket semantics and canonical decimal observations. P06 retains market or schedule mismatch reasons, and an affected essential dependency is ineligible. The replay rejects unsupported cost assumptions before action. It does not replace missing observations or reasons with defaults.
+The web panel shows the new-run settings separately from the exact saved settings returned by retrieval, including the saved profile, revision/configuration/fixture, interval, starting balances, size, warm-up, costs and entry/exit bindings. A definitive HTTP 422 validation response releases that rejected body so corrected inputs can be submitted with a new key. Other uncertain outcomes retain the original body and key; editing visible fields does not change a retry. Reopening a saved result performs retrieval only.
 
-## Synthetic evidence
+The calculation remains a single-position synthetic replay. It settles a prior order, values the current sample, then evaluates signals. A next scheduled close is only an assumed fill proxy when explicitly qualified and available. The simulator uses saved fee and slippage fractions; unavailable next fills release reservations once. It reports quote-denominated balances, fee-inclusive basis, event history, metric states/reasons, and open-position marks. Gas, separate spread, routing, impact beyond the saved slippage proxy, capacity, real market-history qualification and executable fills remain outside scope. Synthetic results are not profitability claims or permission to trade.
 
-The authored WC-01 test uses invented identities, strategy values, prices, capital, fee and zero slippage. The test labels its dataset `SYNTHETIC_FIXTURE`. The literal expectations come from `tests/fixtures/spot_replay/wc01.json`, not from a captured replay result. Passing these tests checks local arithmetic and ordering only.
+## Verification boundary
 
-## Remaining runtime boundary
+Pure tests cover the adopted WC-01 through WC-14 cases and P12 distinction cases. API, web and mapped P03 checks cover owner separation, immutable/idempotent create and retrieval, saved settings display, correction after a definitive rejection, same-key retry after uncertainty, database integrity, restart retrieval and no replay POST on reopen. These checks establish local synthetic implementation behavior only; they do not establish external data or execution quality.
 
-This feature slice does not yet store or retrieve a replay through an authenticated API. It does not prove idempotency, atomic persistence, cross-owner denial, same-database restart, UI reopening, browser accessibility, real dataset qualification or fill/cost qualification. Those checks require the P09 shared wiring lease and must be recorded in the separate shared-wiring request before any existing shared file changes.
-
-The local focused check is:
+From the repository root, the relevant local commands are:
 
 ```sh
-cd apps/api
-uv run --frozen pytest tests/test_spot_replay.py -q
+(cd apps/api && .venv/bin/pytest -q)
+(cd apps/web && npm test -- --run && npm run typecheck && npm run build)
 ```
 
-This command does not complete the P13 issue acceptance criteria.
+The assigned implementation report records the exact candidate and any mapped P03 command/evidence. A passing local test suite is not real-data qualification, fill qualification, cost qualification, financial approval or deployment authority.
