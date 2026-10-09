@@ -116,15 +116,26 @@ export function AccountViews({ initialView = "Agents", sourceRecordId }: { initi
     const source = records.find((record) => record.record_id === sourceRecordId);
     if (!source) return;
     const kind = source.content.record_kind;
-    setView(kind === "AGENT" || kind === "MONITORING" || kind === "PERMISSION_SNAPSHOT" ? "Agents"
-      : kind === "CAPITAL_FLOW" || (kind === "ACTION" && !source.content.position_id) ? "Funds" : "Positions");
-    const timer = window.setTimeout(() => {
+    const targetView = kind === "AGENT" || kind === "MONITORING" || kind === "PERMISSION_SNAPSHOT" ? "Agents"
+      : kind === "CAPITAL_FLOW" || (kind === "ACTION" && !source.content.position_id) ? "Funds" : "Positions";
+    setView(targetView);
+  }, [sourceRecordId, records]);
+
+  useEffect(() => {
+    if (!sourceRecordId || !records.length) return;
+    const source = records.find((record) => record.record_id === sourceRecordId);
+    if (!source) return;
+    const kind = source.content.record_kind;
+    const targetView = kind === "AGENT" || kind === "MONITORING" || kind === "PERMISSION_SNAPSHOT" ? "Agents"
+      : kind === "CAPITAL_FLOW" || (kind === "ACTION" && !source.content.position_id) ? "Funds" : "Positions";
+    if (view !== targetView) return;
+    const frame = window.requestAnimationFrame(() => {
       const target = document.getElementById(`record-${sourceRecordId}`);
       target?.closest("details")?.setAttribute("open", "");
       target?.scrollIntoView?.({ block: "center" });
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [sourceRecordId, records]);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sourceRecordId, records, view]);
 
   const loadMore = async () => {
     if (nextOffset == null || loadingMore) return;
