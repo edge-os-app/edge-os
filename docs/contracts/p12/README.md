@@ -1,6 +1,6 @@
 # P12 spot replay profile — decision draft
 
-Status: proposed profile; not complete. Builder adoption is required before this can be used as a production simulation contract. The private `ADOPTION_REQUEST_R3.md` is the current request. It corrects the P02 status and limits the recommendation to the accepted one-position strategy shape. P12 does not qualify a market dataset or a realistic execution route.
+Proposed version: `p12.spot-replay/1`. Status: not adopted and not complete. Builder adoption is required before any run can use this profile. P12 does not qualify a market dataset or an execution route.
 
 This draft keeps three evidence states separate:
 
@@ -10,11 +10,15 @@ This draft keeps three evidence states separate:
 
 The saved strategy revision, P07 dataset revision, replay configuration and this profile version must be recorded by identity. A profile cannot make an unqualified dataset or unsupported strategy eligible.
 
-## Recommended narrow option
+## Proposed first replay scope
 
-The recommended terms and alternatives are in the private `ADOPTION_REQUEST_R3.md` returned with this candidate. The accepted P02 strategy shape has one position per instance, fixed quote sizing, no additions and no partial exits. The recommendation reuses that shape and keeps partial-exit and competing-reservation arithmetic as clearly labeled conformance cases outside runtime support. This does not prove the current P12 acceptance is satisfied. If those cases must describe production behavior, the builder must authorize a strategy/portfolio extension and P08 coordination.
+Reuse the accepted P02 shape: one strategy instance, one pool, one open position, fixed positive quote size, full exits only, no additions and no partial exits. Do not add duplicate strategy slots or new portfolio behavior to make a test case pass.
 
-Every value that affects user choice must be adopted before a run. Example fees and example capital in `docs/qualification/p12/WORKED_CASES.md` are not defaults. The partial-exit and competing-reservation cases are arithmetic illustrations until the corresponding strategy and portfolio behavior is adopted and implemented. This draft does not satisfy those P12 acceptance items.
+Keep the partial-exit and competing-reservation cases as independent accounting conformance examples. They do not add runtime support. The simulator must reject a strategy that asks for partial exits or multiple positions with a specific unsupported or unavailable result. It must preserve the saved strategy meaning.
+
+This scope is the smallest match to current P02 behavior. Builder confirmation is still required because P12 asks for partial-exit and competing-reservation cases. If those requirements mean runtime support, define a separate strategy or portfolio contract before expanding this profile.
+
+The proposed fill, fee, valuation and missing-data rules below are complete profile terms. Each term requires adoption before a run. The 10 bps fee, capital, prices, fills and marks in `docs/qualification/p12/WORKED_CASES.md` are synthetic examples, not defaults.
 
 ## Proposed replay rules
 
@@ -23,10 +27,23 @@ Every value that affects user choice must be adopted before a run. Example fees 
 3. At each bucket end, first settle any order decided at the prior bucket end. Then value the account. Then evaluate the current bucket's signal. An order decided at time `t` cannot use that signal bucket's close as its fill. The proposed fill proxy is the last qualified close of the next five-minute bucket, known at that bucket's end. This is a declared price proxy, not a claim of executable liquidity, latency, capacity or Kuru fills. If that close is unavailable, record no fill, release its reservation, and do not carry the old signal forward. A decision without a fully covered next bucket receives `NO_NEXT_BUCKET` and cannot fill.
 4. While a position is open, evaluate its exit first. If the exit condition is true, reserve the full attributed base amount for an exit and do not also create an entry from that decision. When flat, evaluate entry and reserve quote notional plus fee from free cash. Reservations do not change account value until fill. Never reserve the same cash or base twice. A reservation that cannot be fully funded is rejected as `INSUFFICIENT_CASH`; no smaller order is inferred. This one-instance profile has no production multi-position tie-break. WC-02's stable slot-ID ordering is a separate hypothetical conformance example, not a supported portfolio model.
 5. The accepted P02 subset is a fixed positive quote amount per entry, one open position per strategy instance, full exit only, `additions=false`, and `partial_exits=false`. Preserve that exact meaning. Requests for another action return an explicit unavailable/unsupported result before replay; the engine must not rewrite the strategy. The separate partial-exit arithmetic case does not add support.
-6. The account denomination is the declared quote asset. Prices are quote/base, trade size and cash are quote units, holdings are base units, and fees are quote units. A buy debits quote notional plus fee and acquires `quote_notional / fill_price` base. A sell credits `base_sold * fill_price - fee`. Fees are deducted from cash and included once in net account value. This draft does not convert to USD or include unqualified gas, spread, routing, price impact or capacity.
+6. The account denomination is the declared quote asset. Prices are quote/base, trade size and cash are quote units, holdings are base units, and fees are quote units. For an adopted fee of `f` basis points, `fee_quote = quote_notional * f / 10000`. A buy debits quote notional plus fee and acquires `quote_notional / fill_price` base. A sell credits `base_sold * fill_price - fee`. Fees are deducted from cash and included once in net account value. Track weighted-average acquisition cost per position and include entry fees in basis. Allocate basis proportionally on each exit and subtract each exit fee once from proceeds. This draft does not convert to USD or include unqualified gas, spread, routing, price impact or capacity.
 7. At each scheduled valuation point, account value is `cash_quote + open_base * qualified_mark_quote_per_base`. The proposed mark is that valuation bucket's own qualified close. No earlier mark is carried into a later time. If a required mark is missing, keep cash and inventory, set account value to unavailable with its reason, and suppress total gain/loss and drawdown that depend on the gap. An unknown fee model makes the run unavailable; it is never treated as zero.
 8. Record initial capital as the starting account value. This profile has no deposits or withdrawals. Gain/loss is final account value minus initial capital, in quote units. Trade count counts completed entry/exit pairs. Largest drawdown is the maximum peak-to-later-trough fall in the sampled account-value series, an absolute quote amount; missing account values make that metric unavailable. No percentage return or annualization is proposed.
 9. Preserve open end inventory. Show its base quantity, acquisition basis, last mark and mark time separately. Do not call an unknown mark zero or realized profit. Keep proposed orders, rejections, fills, fees, quote/base reservations, cash, holdings, marks and reasons in chronological records.
+
+## Decisions and consequences
+
+| Choice | Proposed term | Alternative and consequence |
+|---|---|---|
+| Fill timing | Fill at the next five-minute bucket's qualified close after the decision | Same-bucket close can use information from after the signal. Event-level fills need a separate trade-level model. Each choice changes results. |
+| Dataset | Bind the exact P07-qualified dataset revision and evaluation window per run. No real pool is selected here. | Pinning a pool now would imply qualification that P07 has not established. Synthetic-only input cannot prove real historical coverage. |
+| Fee | Require an adopted quote-denominated fee rate per side. Label output as net of that declared fee only. | A venue schedule needs source evidence. Zero fees would produce gross output, not net output. Gas, spread, routing, impact and capacity stay outside this profile. |
+| Mark and metrics | Use the close of each valuation bucket. Report quote-unit account value, gain/loss, trade count and absolute quote drawdown. | A stale mark hides missing data. Percent return and annualization need additional sampling and cash-flow choices. |
+| Partial exit and competing reservations | Keep their calculations as conformance examples outside the one-position runtime. Reject unsupported requests. | Runtime support needs an adopted strategy or portfolio contract. The builder must decide whether the examples meet P12's acceptance checks. |
+| First replay scope | One P02 strategy instance with fixed quote size, one position, full exit, no additions and no partial exits. | Broader support changes strategy meaning. A smaller scope than P02 or accepted release requires explicit builder approval. |
+
+No term in this table has builder adoption. A change to any term needs a versioned profile update and new independent calculations.
 
 ## Acceptance mapping
 
@@ -42,4 +59,4 @@ Every value that affects user choice must be adopted before a run. Example fees 
 | Partial exits and open end inventory | Partial exit is rejected under recommended subset; open inventory remains marked or unvalued | If partial exits are required, adopt a precise fraction/cost-basis rule before expanding |
 | Simulated execution vs Flow | Separate deterministic replay records from live orders, receipts and wallet accounting | No Flow behavior is implied |
 
-See [`../qualification/p12/WORKED_CASES.md`](../qualification/p12/WORKED_CASES.md) for independent literals and [`../implementation/P12_SPOT_REPLAY_PROFILE.md`](../implementation/P12_SPOT_REPLAY_PROFILE.md) for the current status and repeatable local checks.
+See [`../../qualification/p12/WORKED_CASES.md`](../../qualification/p12/WORKED_CASES.md) for independent literals and [`../../implementation/P12_SPOT_REPLAY_PROFILE.md`](../../implementation/P12_SPOT_REPLAY_PROFILE.md) for the current status and repeatable local checks.
