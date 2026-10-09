@@ -208,11 +208,11 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await replay.getByRole("button", { name: "Save synthetic replay" }).click();
   await expect(replay.getByRole("alert")).toContainText("rejected before it was saved");
   await expect(replay.getByRole("button", { name: "Save synthetic replay" })).toBeVisible();
-  await rejectedOffset.fill("0");
+  await rejectedOffset.fill("-2");
   await replay.getByRole("button", { name: "Save synthetic replay" }).click();
   await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
   expect(replayPosts[1].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(1);
-  expect(replayPosts[2].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(0);
+  expect(replayPosts[2].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(-2);
   expect(replayPosts[2].idempotency_key).not.toBe(replayPosts[1].idempotency_key);
   expect(replayStatuses).toContain(422);
   const correctedReplayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
@@ -227,6 +227,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   // Lose the response after the API commits. Retrying must reuse the exact request and recover one row.
   await replay.getByRole("button", { name: "Add entry dependency" }).click();
   const uncertainOffset = replay.getByLabel("entry dependency offset 4");
+  await uncertainOffset.fill("-1");
   let dropCommittedResponse = true;
   await page.route("**/v1/spot-replays", async (route) => {
     if (route.request().method() === "POST" && dropCommittedResponse) {
