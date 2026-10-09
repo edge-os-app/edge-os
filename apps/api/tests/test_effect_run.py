@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from httpx import Client
@@ -9,6 +10,7 @@ from httpx import Client
 from sqlalchemy.orm import Session
 
 from edge_os_api import p02
+from conftest import run_threads
 from flows import NO_THESIS, submit
 from test_investigation_adoption import declaration_body
 
@@ -50,6 +52,25 @@ def _run_body(p08_body):
         ],
         "incremental_volume_declared": True,
     }
+
+
+def _saved_effect_run(client, owner):
+    bundle = submit(client, owner, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    intake_id = bundle["intake"]["record_id"]
+    p08_body = _p08_descriptive_body(bundle)
+    p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner, json=p08_body)
+    assert p08.status_code == 201, p08.text
+    declaration_id = p08.json()["declaration"]["record_id"]
+    adoption_path = f"/v1/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs"
+    adopted = client.post(adoption_path, headers=owner, json=_run_body(p08_body))
+    assert adopted.status_code == 201, adopted.text
+    run_id = adopted.json()["run"]["record_id"]
+    attempt_path = f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts"
+    started_attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"original-{uuid.uuid4()}"}
+    saved = client.post(attempt_path, headers=owner, json=started_attempt)
+    assert saved.status_code == 201, saved.text
+    return intake_id, declaration_id, p08_body, adoption_path, run_id, attempt_path, saved.json()
 
 
 def test_explicit_run_adoption_precedes_fixture_access_and_report_reopens_exactly(
@@ -284,6 +305,250 @@ def test_saved_report_attempt_key_rejects_a_changed_operation_without_new_event(
     assert changed_operation.status_code == 409
     assert "attempt_key_reused" in changed_operation.text
     assert pg.psql(f"select count(*) from effect_run_events where run_id = '{run_id}'") == before
+
+
+def test_fresh_report_replay_key_recovers_after_response_loss_and_rejects_changed_operation(client, owner_a, pg):
+    intake_id, _, _, _, run_id, attempt_path, saved = _saved_effect_run(client, owner_a)
+    replay = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"replay-{uuid.uuid4()}"}
+
+    # The server commits this replay receipt; the caller drops its response and retries after reconnect.
+    client.post(attempt_path, headers=owner_a, json=replay)
+    recovered = client.post(attempt_path, headers=owner_a, json=replay)
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["report"] == saved["report"]
+    assert [event["content"]["kind"] for event in recovered.json()["events"]].count("ATTEMPT_REPLAY") == 1
+    before = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert before["events"] == recovered.json()["events"]
+
+    changed = client.post(attempt_path, headers=owner_a,
+                          json={**replay, "operation_id": str(uuid.uuid4())})
+
+    assert changed.status_code == 409
+    assert changed.json()["code"] == "attempt_key_reused"
+    after = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert after["events"] == before["events"]
+    assert after["report"] == saved["report"]
+    assert pg.psql(f"select count(*) from effect_run_events where run_id='{run_id}' "
+                   f"and attempt_idempotency_key='{replay['idempotency_key']}'") == "1"
+    assert pg.psql(f"select count(distinct content->>'operation_id') from effect_run_events "
+                   f"where run_id='{run_id}' and attempt_idempotency_key='{replay['idempotency_key']}'") == "1"
+    assert pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'") == "1"
+
+
+def test_concurrent_fresh_report_replay_exact_and_conflicting_requests_commit_one_receipt(client, owner_a, pg):
+    intake_id, _, _, _, run_id, attempt_path, saved = _saved_effect_run(client, owner_a)
+    body = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"concurrent-replay-{uuid.uuid4()}"}
+
+    exact = run_threads(2, lambda _index: client.post(attempt_path, headers=owner_a, json=body))
+    assert [response.status_code for response in exact] == [200, 200]
+    assert all(response.json()["report"] == saved["report"] for response in exact)
+    persisted = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert sum(event["content"].get("idempotency_key") == body["idempotency_key"]
+               for event in persisted["events"]) == 1
+    before_events = persisted["events"]
+
+    conflicting = run_threads(2, lambda index: client.post(
+        attempt_path, headers=owner_a,
+        json=body if index == 0 else {**body, "operation_id": str(uuid.uuid4())}))
+
+    assert sorted(response.status_code for response in conflicting) == [200, 409]
+    after = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert after["events"] == before_events
+    assert pg.psql(f"select count(*) from effect_run_events where run_id='{run_id}' "
+                   f"and attempt_idempotency_key='{body['idempotency_key']}'") == "1"
+    assert pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'") == "1"
+
+
+def test_json_only_legacy_replay_key_still_rejects_a_changed_operation(client, owner_a, pg):
+    intake_id, _, _, _, run_id, attempt_path, saved = _saved_effect_run(client, owner_a)
+    legacy_replay = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"legacy-replay-{uuid.uuid4()}"}
+    content = p02.canonical_bytes({"kind": "ATTEMPT_REPLAY", **legacy_replay,
+                                   "report_id": saved["report"]["record_id"], "outcome_accessed": True}).decode()
+    pg.psql(f"insert into effect_run_events(event_id, owner_id, run_id, content, created_at) "
+            f"select '{uuid.uuid4()}', owner_id, run_id, '{content}'::jsonb, now() "
+            f"from effect_run_declarations where run_id='{run_id}'")
+    before = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+
+    exact = client.post(attempt_path, headers=owner_a, json=legacy_replay)
+    collision = client.post(attempt_path, headers=owner_a,
+                            json={**legacy_replay, "operation_id": str(uuid.uuid4())})
+
+    assert exact.status_code == 200
+    assert exact.json()["report"] == saved["report"]
+    assert collision.status_code == 409
+    after = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert after["events"] == before["events"]
+    assert pg.psql(f"select count(*) from effect_run_events where run_id='{run_id}' "
+                   f"and content->>'idempotency_key'='{legacy_replay['idempotency_key']}'") == "1"
+
+
+def test_exact_semantic_adoption_retry_retains_request_identity_and_path_scope(client, owner_a, pg):
+    bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    intake_id = bundle["intake"]["record_id"]
+    p08_body = _p08_descriptive_body(bundle)
+    p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner_a, json=p08_body)
+    assert p08.status_code == 201, p08.text
+    declaration_id = p08.json()["declaration"]["record_id"]
+    adoption_path = f"/v1/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs"
+    first = client.post(adoption_path, headers=owner_a, json=_run_body(p08_body))
+    assert first.status_code == 201, first.text
+    run_id = first.json()["run"]["record_id"]
+    run_content = copy.deepcopy(first.json()["run"]["content"])
+    replay = _run_body(p08_body)
+
+    # Drop the successful response as a client would after a connection loss.
+    client.post(adoption_path, headers=owner_a, json=replay)
+    recovered = client.post(adoption_path, headers=owner_a, json=replay)
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["run"]["record_id"] == run_id
+    assert recovered.json()["run"]["content"] == run_content
+    assert recovered.json()["report"] is None
+    replay_events = [event for event in recovered.json()["events"]
+                     if event["content"].get("kind") == "RUN_ADOPTION_REPLAY"
+                     and event["content"].get("idempotency_key") == replay["idempotency_key"]]
+    assert len(replay_events) == 1
+    assert replay_events[0]["content"]["operation_id"] == replay["operation_id"]
+    assert replay_events[0]["content"]["outcome_accessed"] is False
+    before_events = recovered.json()["events"]
+
+    changed = client.post(adoption_path, headers=owner_a,
+                          json={**replay, "operation_id": str(uuid.uuid4())})
+
+    assert changed.status_code == 409
+    assert changed.json()["code"] == "idempotency_key_reused"
+    after = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert after["events"] == before_events
+    assert after["report"] is None
+    assert after["run"]["content"] == run_content
+    assert pg.psql(f"select count(*) from effect_run_declarations where p08_declaration_id='{declaration_id}'") == "1"
+    assert pg.psql(f"select count(*) from effect_run_events where run_id='{run_id}' "
+                   f"and content->>'kind'='RUN_ADOPTION_REPLAY' "
+                   f"and content->>'idempotency_key'='{replay['idempotency_key']}'") == "1"
+    assert pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'") == "0"
+
+    # The same string key on a different P08 route is not the same P02 method/path request.
+    child = _p08_descriptive_body(bundle)
+    child["edge_spec"].update({"edge_id": p08.json()["declaration"]["content"]["edge_spec"]["edge_id"],
+                               "version": 2, "parent_declaration_id": declaration_id})
+    child["edge_spec"]["hypothesis"] = "A separately adopted synthetic revision."
+    trial_id = str(uuid.uuid4())
+    child["trial_ids"] = [trial_id]
+    child["evaluation_ids"] = []
+    for plan in child["configuration"]["evaluation_plan"]:
+        plan["evaluation_id"], plan["trial_id"] = str(uuid.uuid4()), trial_id
+        child["evaluation_ids"].append(plan["evaluation_id"])
+    child_p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner_a, json=child)
+    assert child_p08.status_code == 201, child_p08.text
+    child_run = _run_body(child)
+    child_run["idempotency_key"] = replay["idempotency_key"]
+    child_path = (f"/v1/research/requests/{intake_id}/investigations/"
+                  f"{child_p08.json()['declaration']['record_id']}/effect-runs")
+    child_adoption = client.post(child_path, headers=owner_a, json=child_run)
+    assert child_adoption.status_code == 201, child_adoption.text
+    assert child_adoption.json()["run"]["record_id"] != run_id
+
+
+def test_concurrent_exact_and_conflicting_adoption_recovery_retain_one_receipt(client, owner_a, pg):
+    bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
+                    input_class="BOUNDED_NO_THESIS").json()
+    intake_id = bundle["intake"]["record_id"]
+    p08_body = _p08_descriptive_body(bundle)
+    p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner_a, json=p08_body)
+    assert p08.status_code == 201, p08.text
+    declaration_id = p08.json()["declaration"]["record_id"]
+    path = f"/v1/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs"
+    first = client.post(path, headers=owner_a, json=_run_body(p08_body))
+    assert first.status_code == 201, first.text
+    run_id = first.json()["run"]["record_id"]
+    body = _run_body(p08_body)
+
+    exact = run_threads(2, lambda _index: client.post(path, headers=owner_a, json=body))
+    assert [response.status_code for response in exact] == [200, 200]
+    assert all(response.json()["run"]["record_id"] == run_id for response in exact)
+    persisted = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert sum(event["content"].get("idempotency_key") == body["idempotency_key"]
+               and event["content"].get("kind") == "RUN_ADOPTION_REPLAY"
+               for event in persisted["events"]) == 1
+    before_events = persisted["events"]
+
+    conflicts = run_threads(2, lambda index: client.post(
+        path, headers=owner_a,
+        json=body if index == 0 else {**body, "operation_id": str(uuid.uuid4())}))
+
+    assert sorted(response.status_code for response in conflicts) == [200, 409]
+    after = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}", headers=owner_a).json()
+    assert after["events"] == before_events
+    assert pg.psql(f"select count(*) from effect_run_declarations where p08_declaration_id='{declaration_id}'") == "1"
+    assert pg.psql(f"select count(*) from effect_run_events where run_id='{run_id}' "
+                   f"and content->>'kind'='RUN_ADOPTION_REPLAY' "
+                   f"and content->>'idempotency_key'='{body['idempotency_key']}'") == "1"
+
+
+def test_fresh_adoption_and_report_replay_receipts_survive_api_restart(live_api, owner_a, pg):
+    with Client(base_url=live_api.url) as client:
+        bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
+                        input_class="BOUNDED_NO_THESIS").json()
+        intake_id = bundle["intake"]["record_id"]
+        p08_body = _p08_descriptive_body(bundle)
+        p08 = client.post(f"/v1/research/requests/{intake_id}/investigations", headers=owner_a, json=p08_body)
+        assert p08.status_code == 201, p08.text
+        declaration_id = p08.json()["declaration"]["record_id"]
+        adoption_path = f"/v1/research/requests/{intake_id}/investigations/{declaration_id}/effect-runs"
+        first = client.post(adoption_path, headers=owner_a, json=_run_body(p08_body))
+        assert first.status_code == 201, first.text
+        run_id = first.json()["run"]["record_id"]
+        adoption_replay = _run_body(p08_body)
+        # Discard the response to exercise restart-safe retry of the exact request identity.
+        client.post(adoption_path, headers=owner_a, json=adoption_replay)
+        adopted_again = client.post(adoption_path, headers=owner_a, json=adoption_replay)
+        assert adopted_again.status_code == 200
+        attempt_path = f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts"
+        original_attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"restart-original-{uuid.uuid4()}"}
+        evaluated = client.post(attempt_path, headers=owner_a, json=original_attempt)
+        assert evaluated.status_code == 201, evaluated.text
+        replay_attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"restart-replay-{uuid.uuid4()}"}
+        # Drop this recovery response; its committed receipt must survive process restart.
+        client.post(attempt_path, headers=owner_a, json=replay_attempt)
+        before_restart = client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}",
+                                    headers=owner_a).json()
+        expected_report = evaluated.json()["report"]
+        assert before_restart["report"] == expected_report
+    live_api.stop()
+    live_api.start()
+    with Client(base_url=live_api.url) as restarted_client:
+        adopted = restarted_client.post(adoption_path, headers=owner_a, json=adoption_replay)
+        assert adopted.status_code == 200, adopted.text
+        assert adopted.json()["run"]["record_id"] == run_id
+        assert sum(event["content"].get("idempotency_key") == adoption_replay["idempotency_key"]
+                   for event in adopted.json()["events"]) == 1
+        adoption_before = adopted.json()["events"]
+        adoption_conflict = restarted_client.post(
+            adoption_path, headers=owner_a,
+            json={**adoption_replay, "operation_id": str(uuid.uuid4())})
+        assert adoption_conflict.status_code == 409
+        assert restarted_client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}",
+                                    headers=owner_a).json()["events"] == adoption_before
+
+        recovered = restarted_client.post(attempt_path, headers=owner_a, json=replay_attempt)
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["report"] == expected_report
+        events_after_retry = recovered.json()["events"]
+        assert sum(event["content"].get("idempotency_key") == replay_attempt["idempotency_key"]
+                   for event in events_after_retry) == 1
+        replay_conflict = restarted_client.post(
+            attempt_path, headers=owner_a,
+            json={**replay_attempt, "operation_id": str(uuid.uuid4())})
+        assert replay_conflict.status_code == 409
+        final = restarted_client.get(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}",
+                                     headers=owner_a).json()
+        assert final["events"] == events_after_retry
+        assert final["report"] == expected_report
+    assert pg.psql(f"select count(*) from effect_reports where run_id='{run_id}'") == "1"
+    assert pg.psql(f"select count(*) from effect_run_events where run_id='{run_id}' "
+                   f"and content->>'kind' in ('RUN_ADOPTION_REPLAY','ATTEMPT_REPLAY') "
+                   f"and content->>'idempotency_key' in ('{adoption_replay['idempotency_key']}',"
+                   f"'{replay_attempt['idempotency_key']}')") == "2"
 
 
 def test_concurrent_p08_mapping_adoption_and_outcome_access_keep_one_registered_meaning(client, owner_a, pg):

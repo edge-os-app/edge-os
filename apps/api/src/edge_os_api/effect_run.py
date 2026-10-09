@@ -68,6 +68,18 @@ def _events(session: Session, row: EffectRunDeclaration) -> list[EffectRunEvent]
         .order_by(EffectRunEvent.sequence)).scalars())
 
 
+def _attempt_key_events(events: list[EffectRunEvent], idempotency_key: str) -> list[EffectRunEvent]:
+    """Return receipts for this run's attempt path, including legacy JSON-only replay rows."""
+    attempt_event_kinds = {
+        "ATTEMPT_STARTED", "ATTEMPT_REPLAY", "OUTCOME_ACCESS_STARTED", "REPORT_SAVED", "ATTEMPT_FAILED",
+    }
+    return [event for event in events
+            if event.attempt_idempotency_key == idempotency_key
+            or (event.content.get("kind") in attempt_event_kinds
+                and (event.content.get("idempotency_key") == idempotency_key
+                     or event.content.get("attempt_idempotency_key") == idempotency_key))]
+
+
 def _lock_p08_mapping(session: Session, owner_id: uuid.UUID, p08_declaration_id: uuid.UUID) -> None:
     """Serialize mapping adoption and the first outcome-access transition for one P08 record."""
     lock_bytes = hashlib.sha256(f"{owner_id}:{p08_declaration_id}".encode()).digest()[:8]
@@ -224,6 +236,28 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
                           if {key: value for key, value in prior.content["configuration"].items()
                               if key not in {"operation_id", "idempotency_key"}} == binding_config), None)
     if exact_mapping is not None:
+        adoption_path = (f"/v1/research/requests/{intake.record_id}/investigations/"
+                         f"{declaration.declaration_id}/effect-runs")
+        replay = next((event for event in _events(session, exact_mapping)
+                       if event.content.get("kind") == "RUN_ADOPTION_REPLAY"
+                       and event.content.get("method") == "POST"
+                       and event.content.get("path") == adoption_path
+                       and event.content.get("idempotency_key") == body.idempotency_key), None)
+        if replay is not None:
+            if replay.content.get("fingerprint") != fingerprint:
+                raise AppError(409, "EFFECT_COMPARISON", "CONFLICTED", "idempotency_key_reused",
+                               [finding("idempotency_key_reused", "/idempotency_key",
+                                        "This key was used for a different request at this adoption endpoint.")])
+            return 200, _response(exact_mapping, _events(session, exact_mapping))
+        now = dt.datetime.now(dt.timezone.utc)
+        session.add(EffectRunEvent(
+            event_id=uuid.uuid4(), owner_id=principal.user_id, run_id=exact_mapping.run_id,
+            content={"kind": "RUN_ADOPTION_REPLAY", "method": "POST", "path": adoption_path,
+                     "operation_id": body.operation_id, "idempotency_key": body.idempotency_key,
+                     "fingerprint": fingerprint, "p08_declaration_id": str(declaration.declaration_id),
+                     "configuration_sha256": p02.sha256_hex(body_json), "outcome_accessed": False},
+            created_at=now))
+        session.commit()
         return 200, _response(exact_mapping, _events(session, exact_mapping))
 
     now = dt.datetime.now(dt.timezone.utc)
@@ -289,15 +323,21 @@ def _execute_effect_run_locked(session: Session, principal: Principal, intake_id
         intake_record_id=row.intake_record_id, plan=row.content["p08_evaluation_plan"],
         configuration=row.content["configuration"])
     events = _events(session, row)
+    key_events = _attempt_key_events(events, body.idempotency_key)
+    operation_ids = {event.content.get("operation_id") for event in key_events
+                     if event.content.get("operation_id") is not None}
     started = next((event for event in events if event.attempt_idempotency_key == body.idempotency_key), None)
-    if started is not None and started.content.get("operation_id") != body.operation_id:
+    if len(operation_ids) > 1 or any(operation_id != body.operation_id for operation_id in operation_ids):
         raise AppError(409, "EFFECT_COMPARISON", "CONFLICTED", "attempt_key_reused",
                        [finding("attempt_key_reused", "/idempotency_key",
                                 "This attempt key belongs to a different operation identity.")])
     existing_report = session.execute(select(EffectReport).where(
         EffectReport.owner_id == principal.user_id, EffectReport.run_id == row.run_id)).scalar_one_or_none()
     if existing_report is not None:
+        if key_events:
+            return 200, _response(row, events, existing_report)
         replay_event = EffectRunEvent(event_id=uuid.uuid4(), owner_id=principal.user_id, run_id=row.run_id,
+                                      attempt_idempotency_key=body.idempotency_key,
                                       content={"kind": "ATTEMPT_REPLAY", "operation_id": body.operation_id,
                                                "idempotency_key": body.idempotency_key,
                                                "report_id": str(existing_report.report_id),

@@ -432,7 +432,7 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
             "p.owner_id report_owner_id, p.content report_content "
             "from effect_run_declarations r join effect_reports p on p.owner_id=r.owner_id and p.run_id=r.run_id "
             f"where r.run_id='{run_id}' and p.report_id='{report_id}'")
-        events = rows(f"select event_id, content from effect_run_events where run_id='{run_id}' order by sequence")
+        events = rows(f"select event_id, attempt_idempotency_key, content from effect_run_events where run_id='{run_id}' order by sequence")
         event_content = [event["content"] for event in events]
         item = {"key": key, "run_id": run_id, "report_id": report_id, "rows": len(found),
                 "events": event_content}
@@ -447,11 +447,12 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                 "adoption_precedes_reads": bool(events) and events[0]["content"].get("kind") == "RUN_ADOPTED"
                     and events[0]["content"].get("outcome_accessed") is False,
                 "attempt_and_report_order": [event["content"].get("kind") for event in events]
-                    == ["RUN_ADOPTED", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED", "REPORT_SAVED"],
-                "durable_access_marker_matches_report": len(events) == 4
-                    and event_content[2].get("outcome_accessed") is True
-                    and event_content[2].get("p09_configuration_sha256") == run_content.get("configuration_sha256")
-                    and event_content[3].get("access_marker_event_id") == str(events[2]["event_id"]),
+                    == ["RUN_ADOPTED", "RUN_ADOPTION_REPLAY", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED",
+                        "REPORT_SAVED", "ATTEMPT_REPLAY"],
+                "durable_access_marker_matches_report": len(events) == 6
+                    and event_content[3].get("outcome_accessed") is True
+                    and event_content[3].get("p09_configuration_sha256") == run_content.get("configuration_sha256")
+                    and event_content[4].get("access_marker_event_id") == str(events[3]["event_id"]),
                 "exact_saved_report_matches_ui": report_content == saved["p09"]["report"]["content"],
                 "configuration_and_fixture_hashes_match_ui": run_content.get("configuration_sha256") == saved["p09ConfigurationSha256"]
                     and report_content.get("fixture_sha256") == saved["fixtureSha256"]
@@ -460,8 +461,29 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                     and report_content.get("result", {}).get("statistical_status") == "UNRESOLVED",
                 "mapping_identity_proof_matches_ui": saved.get("p09", {}).get("identityProof", {}).get("exactRepeatStatus") == 200
                     and saved.get("p09", {}).get("identityProof", {}).get("exactRepeatRunId") == run_id
+                    and saved.get("p09", {}).get("identityProof", {}).get("adoptionReplayRepeatStatus") == 200
+                    and saved.get("p09", {}).get("identityProof", {}).get("adoptionChangedOperationStatus") == 409
+                    and saved.get("p09", {}).get("identityProof", {}).get("adoptionReceiptCount") == 1
+                    and saved.get("p09", {}).get("identityProof", {}).get("adoptionReceiptOperationId")
+                        == event_content[1].get("operation_id")
+                    and saved.get("p09", {}).get("identityProof", {}).get("adoptionReceiptKey")
+                        == event_content[1].get("idempotency_key")
+                    and event_content[1].get("kind") == "RUN_ADOPTION_REPLAY"
+                    and event_content[1].get("outcome_accessed") is False
                     and saved.get("p09", {}).get("identityProof", {}).get("changedOperationStatus") == 409
                     and saved.get("p09", {}).get("identityProof", {}).get("changedOperationLeftEventsUnchanged") is True
+                    and saved.get("p09", {}).get("identityProof", {}).get("reportReplayStatus") == 200
+                    and saved.get("p09", {}).get("identityProof", {}).get("reportReplayRepeatStatus") == 200
+                    and saved.get("p09", {}).get("identityProof", {}).get("reportReplayChangedOperationStatus") == 409
+                    and saved.get("p09", {}).get("identityProof", {}).get("reportReplayChangedOperationLeftEventsUnchanged") is True
+                    and saved.get("p09", {}).get("identityProof", {}).get("reportReplayReportId") == report_id
+                    and saved.get("p09", {}).get("identityProof", {}).get("reportReplayEventCount") == len(events)
+                    and saved.get("p09", {}).get("identityProof", {}).get("reportReplayReceiptOperationId")
+                        == event_content[5].get("operation_id")
+                    and saved.get("p09", {}).get("identityProof", {}).get("reportReplayReceiptKey")
+                        == event_content[5].get("idempotency_key")
+                    and events[5].get("attempt_idempotency_key") == event_content[5].get("idempotency_key")
+                    and event_content[5].get("kind") == "ATTEMPT_REPLAY"
                     and saved.get("p09", {}).get("identityProof", {}).get("alternateMappingStatus") == 409
                     and saved.get("p09", {}).get("identityProof", {}).get("runCountAfterRejectedMapping") == 1,
                 "p08_mapping_identity_is_unique": rows(
@@ -484,7 +506,7 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
                     and report_content.get("result", {}).get("missing_outcome_count") == 4,
                 "exact_run_and_report_counts": rows(f"select count(*) c from effect_run_declarations where run_id='{run_id}'")[0]["c"] == 1
                     and rows(f"select count(*) c from effect_reports where run_id='{run_id}'")[0]["c"] == 1
-                    and len(events) == 4,
+                    and len(events) == 6,
             })
         effect_runs.append(item)
     checks["effect_comparisons"] = effect_runs

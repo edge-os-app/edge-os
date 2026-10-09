@@ -420,12 +420,31 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   expect(exactRun.events.map((event) => event.content.kind)).toEqual(["RUN_ADOPTED"]);
   const runId = exactRun.run.record_id;
   const adoptionPath = `${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${declarationId}/effect-runs`;
+  const adoptionReplayRequest = { ...exactRun.run.content.configuration, operation_id: crypto.randomUUID(),
+    idempotency_key: `p09-repeat-${crypto.randomUUID()}` };
   const exactRepeat = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
-    data: { ...exactRun.run.content.configuration, operation_id: crypto.randomUUID(),
-      idempotency_key: `p09-repeat-${crypto.randomUUID()}` } });
+    data: adoptionReplayRequest });
   expect(exactRepeat.status()).toBe(200);
   const exactRepeatBody = await exactRepeat.json();
   expect(exactRepeatBody.run.record_id).toBe(runId);
+  const adoptionReplayRepeat = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
+    data: adoptionReplayRequest });
+  expect(adoptionReplayRepeat.status()).toBe(200);
+  const beforeAdoptionCollision = await page.request.get(`${runPath}/${runId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` } });
+  const eventCountBeforeAdoptionCollision = (await beforeAdoptionCollision.json()).events.length;
+  const adoptionCollision = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...adoptionReplayRequest, operation_id: crypto.randomUUID() } });
+  expect(adoptionCollision.status()).toBe(409);
+  const afterAdoptionCollision = await page.request.get(`${runPath}/${runId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` } });
+  const adoptionReplayEvents = (await afterAdoptionCollision.json()).events
+    .filter((event) => event.content.kind === "RUN_ADOPTION_REPLAY");
+  expect(adoptionReplayEvents).toHaveLength(1);
+  expect(adoptionReplayEvents[0].content).toMatchObject({ method: "POST", path: adoptionPath,
+    operation_id: adoptionReplayRequest.operation_id, idempotency_key: adoptionReplayRequest.idempotency_key,
+    outcome_accessed: false });
+  expect((await afterAdoptionCollision.json()).events).toHaveLength(eventCountBeforeAdoptionCollision);
   const attemptFailures = [];
   await page.route("**/effect-runs/*/attempts", async (route) => {
     attemptFailures.push({ url: route.request().url(), body: route.request().postDataJSON() });
@@ -452,7 +471,7 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   expect(exactRunAfter.report.record_id).toBe(reportId);
   expect(exactRunAfter.report.content.result.statistical_status).toBe("UNRESOLVED");
   expect(exactRunAfter.events.map((event) => event.content.kind)).toEqual([
-    "RUN_ADOPTED", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED", "REPORT_SAVED"]);
+    "RUN_ADOPTED", "RUN_ADOPTION_REPLAY", "ATTEMPT_STARTED", "OUTCOME_ACCESS_STARTED", "REPORT_SAVED"]);
   const primary = exactRunAfter.report.content.result.variants[0];
   expect(primary.general_comparison).toMatchObject({ triggered: { mean: "0.1" }, control: { mean: "-0.1" },
     triggered_minus_control_mean: "0.2" });
@@ -465,6 +484,25 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   const afterKeyCollision = await page.request.get(`${runPath}/${runId}`, {
     headers: { Authorization: `Bearer ${tokens.a}` } });
   expect((await afterKeyCollision.json()).events).toHaveLength(eventCountBeforeKeyCollision);
+  const reportReplayRequest = { operation_id: crypto.randomUUID(), idempotency_key: `p09-report-replay-${crypto.randomUUID()}` };
+  const reportReplay = await page.request.post(`${runPath}/${runId}/attempts`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: reportReplayRequest });
+  expect(reportReplay.status()).toBe(200);
+  const reportReplayBody = await reportReplay.json();
+  expect(reportReplayBody.report.record_id).toBe(reportId);
+  const reportReplayEventCount = reportReplayBody.events.length;
+  const reportReplayRepeat = await page.request.post(`${runPath}/${runId}/attempts`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: reportReplayRequest });
+  expect(reportReplayRepeat.status()).toBe(200);
+  expect((await reportReplayRepeat.json()).events).toHaveLength(reportReplayEventCount);
+  const reportReplayCollision = await page.request.post(`${runPath}/${runId}/attempts`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+    data: { ...reportReplayRequest, operation_id: crypto.randomUUID() } });
+  expect(reportReplayCollision.status()).toBe(409);
+  const afterReportReplayCollision = await page.request.get(`${runPath}/${runId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` } });
+  const finalReportReplayState = await afterReportReplayCollision.json();
+  expect(finalReportReplayState.events).toHaveLength(reportReplayEventCount);
   const alternateConfiguration = structuredClone(exactRun.run.content.configuration);
   alternateConfiguration.bindings[0].volume_expression.args[1].value = "7";
   const alternateMapping = await page.request.post(adoptionPath, { headers: { Authorization: `Bearer ${tokens.a}` },
@@ -498,10 +536,23 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
     access: Object.fromEntries(["schema_version", "event", "outcome_labels_read", "provider_queries", "study_started"]
       .map((field) => [field, exact.access_history[0][field]])),
     original: "Compare the descriptive launch cohorts in a synthetic fixture.",
-    p09: { run: exactRun.run, report: exactRunAfter.report, events: exactRunAfter.events,
+    p09: { run: exactRun.run, report: exactRunAfter.report, events: finalReportReplayState.events,
       identityProof: { exactRepeatStatus: exactRepeat.status(), exactRepeatRunId: exactRepeatBody.run.record_id,
+        adoptionReplayRepeatStatus: adoptionReplayRepeat.status(), adoptionChangedOperationStatus: adoptionCollision.status(),
+        adoptionReceiptCount: adoptionReplayEvents.length,
+        adoptionReceiptOperationId: adoptionReplayEvents[0].content.operation_id,
+        adoptionReceiptKey: adoptionReplayEvents[0].content.idempotency_key,
+        adoptionChangedOperationLeftEventsUnchanged:
+          (await afterAdoptionCollision.json()).events.length === eventCountBeforeAdoptionCollision,
         changedOperationStatus: keyCollision.status(), changedOperationLeftEventsUnchanged:
           (await afterKeyCollision.json()).events.length === eventCountBeforeKeyCollision,
+        reportReplayStatus: reportReplay.status(), reportReplayRepeatStatus: reportReplayRepeat.status(),
+        reportReplayReportId: reportReplayBody.report.record_id,
+        reportReplayEventCount, reportReplayReceiptKey: reportReplayRequest.idempotency_key,
+        reportReplayReceiptOperationId: reportReplayRequest.operation_id,
+        reportReplayChangedOperationStatus: reportReplayCollision.status(),
+        reportReplayChangedOperationLeftEventsUnchanged: finalReportReplayState.events.length === reportReplayEventCount,
+        finalEventKinds: finalReportReplayState.events.map((event) => event.content.kind),
         alternateMappingStatus: alternateMapping.status(), runCountAfterRejectedMapping: 1 } } });
   await shot(page, project, "investigation-saved");
   await page.getByRole("button", { name: "Reopen saved declaration" }).click();
