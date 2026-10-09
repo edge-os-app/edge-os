@@ -209,13 +209,19 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(replay.getByRole("alert")).toContainText("rejected before it was saved");
   await expect(replay.getByRole("button", { name: "Save synthetic replay" })).toBeVisible();
   await rejectedOffset.fill("-2");
+  const correctedResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
   await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  const correctedResponse = await correctedResponsePromise;
+  expect([200, 201]).toContain(correctedResponse.status());
+  const correctedRecord = await correctedResponse.json();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(correctedRecord.replay_id);
   await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
   expect(replayPosts[1].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(1);
   expect(replayPosts[2].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(-2);
   expect(replayPosts[2].idempotency_key).not.toBe(replayPosts[1].idempotency_key);
   expect(replayStatuses).toContain(422);
-  const correctedReplayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
+  const correctedReplayId = correctedRecord.replay_id;
   const correctedReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
   record(`spot-replay-corrected-${project}`, { url: requestUrl, revisionId, replayId: correctedReplayId,
     replayHash: correctedReplayHash,
@@ -242,12 +248,19 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
   const uncertainRequest = replayPosts[3];
   await uncertainOffset.fill("-2");
+  const recoveredResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
   await replay.getByRole("button", { name: "Retry same replay" }).click();
+  const recoveredResponse = await recoveredResponsePromise;
+  expect(recoveredResponse.status()).toBe(200);
+  const recoveredRecord = await recoveredResponse.json();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(recoveredRecord.replay_id);
+  expect(recoveredRecord.replay_id).not.toBe(correctedReplayId);
   await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
   expect(replayPosts).toHaveLength(5);
   expect(replayPosts[4]).toEqual(uncertainRequest);
   expect(replayPosts[4].idempotency_key).toBe(uncertainRequest.idempotency_key);
-  const recoveredId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
+  const recoveredId = recoveredRecord.replay_id;
   const uncertainReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
   record(`spot-replay-uncertain-${project}`, { url: requestUrl, revisionId, replayId: recoveredId,
     replayHash: uncertainReplayHash,
