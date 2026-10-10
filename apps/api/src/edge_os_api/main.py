@@ -15,7 +15,7 @@ from sqlalchemy.exc import DataError, OperationalError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 
-from . import effect_run, investigation_adoption, p02, service, spot_replay_api
+from . import account_views, agent_context, effect_run, investigation_adoption, p02, service, spot_replay_api
 from .auth import Principal, Verifier, require_principal
 from .db import current_revision, make_engine, make_session_factory, require_head, script_head
 from .errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
@@ -268,4 +268,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(public)
     app.include_router(private)
+    app.include_router(account_views.router)
+    app.include_router(agent_context.router)
     return app

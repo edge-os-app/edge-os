@@ -149,4 +149,119 @@ test("after an API restart the saved rules reopen with their exact review text",
   }
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-spot-replay-reopened-after-restart.png`), fullPage: true });
   expect(createReplayRequests, "all P13 reopen paths after restart must only retrieve, never recompute").toBe(0);
+
+  const p19 = results[`p19-context-${info.project.name}`];
+  expect(p19, "the first browser drive must exercise mounted P19 context controls at both viewports").toBeTruthy();
+  let p19Writes = 0;
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() !== "GET" && (pathname.startsWith("/v1/account-views") || pathname.startsWith(`/v1/agents/${p19.agentId}/context`))) p19Writes += 1;
+  });
+  await page.goto(p19.url);
+  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: p19.agentId, level: 2 })).toBeVisible();
+  await expect(page.locator(`#record-${p19.agentRecordId}`)).toBeVisible();
+  const reopenedAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: p19.agentId, level: 2 }) });
+  await reopenedAgent.getByRole("button", { name: "Inspect agent context" }).click();
+  const persistedContext = page.getByRole("region", { name: `${p19.agentId} context` });
+  await expect(persistedContext).toContainText("Agent context · version 5");
+  await expect(persistedContext).toContainText("CLEARED");
+  await expect(persistedContext.getByRole("listitem")).toHaveCount(0);
+  const longMonitoring = results[`p19-long-monitoring-${info.project.name}`];
+  expect(longMonitoring, "the first browser drive must capture full matching monitoring fields at both viewports").toBeTruthy();
+  const longMonitoringResponse = await page.request.get(
+    `${process.env.P03_API_URL}/v1/account-views/${longMonitoring.recordId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(longMonitoringResponse.status()).toBe(200);
+  const savedLongMonitoring = (await longMonitoringResponse.json()).content;
+  expect(savedLongMonitoring.owner_id).toBe(longMonitoring.identity.ownerId);
+  expect(savedLongMonitoring.agent_id).toBe(longMonitoring.identity.agentId);
+  expect(savedLongMonitoring.wallet_id).toBe(longMonitoring.identity.walletId);
+  expect(savedLongMonitoring.network_id).toBe(longMonitoring.identity.networkId);
+  expect(savedLongMonitoring.next_work).toBe(longMonitoring.nextWork);
+  expect(savedLongMonitoring.blocking_reason).toBe(longMonitoring.blockingReason);
+  await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${longMonitoring.recordId}`);
+  const reopenedLongMonitoring = page.locator(`#record-${longMonitoring.recordId}`);
+  await expect(reopenedLongMonitoring).toHaveCount(1);
+  await expect(reopenedLongMonitoring).toBeVisible();
+  await expect(reopenedLongMonitoring).toContainText(savedLongMonitoring.next_work);
+  await expect(reopenedLongMonitoring).toContainText(savedLongMonitoring.blocking_reason);
+  const reopenedLongMonitoringLayout = await page.evaluate((id) => {
+    const row = document.getElementById(`record-${id}`);
+    const paragraphs = [...row.querySelectorAll("p")].filter((paragraph) =>
+      paragraph.textContent.includes("Synthetic next work:") || paragraph.textContent.includes("Gate pending receipt"));
+    return { viewport: innerWidth, document: document.documentElement.scrollWidth,
+      fields: paragraphs.map((paragraph) => ({ text: paragraph.textContent,
+        overflowWrap: getComputedStyle(paragraph).overflowWrap })) };
+  }, longMonitoring.recordId);
+  expect(reopenedLongMonitoringLayout.fields).toHaveLength(2);
+  expect(reopenedLongMonitoringLayout.fields.every((field) => field.overflowWrap === "anywhere")).toBe(true);
+  expect(reopenedLongMonitoringLayout.document).toBeLessThanOrEqual(reopenedLongMonitoringLayout.viewport);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-long-monitoring-reopened-after-restart.png`), fullPage: true });
+  const exactContext = await page.request.get(`${process.env.P03_API_URL}/v1/agents/${p19.agentId}/context`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+  });
+  expect(exactContext.status()).toBe(200);
+  expect(await exactContext.json()).toMatchObject({ memory_version: 5, state: "CLEARED", entries: [] });
+  const exactAccounts = await page.request.get(`${process.env.P03_API_URL}/v1/account-views?limit=500`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+  });
+  expect(exactAccounts.status()).toBe(200);
+  const persistedAccounts = await exactAccounts.json();
+  expect(persistedAccounts.records).toHaveLength(Number(process.env.P19_ACCOUNT_RECORD_COUNT));
+  expect(persistedAccounts.records.map((row) => row.record_id)).toContain(p19.agentRecordId);
+  const resolvedSource = await page.request.get(`${process.env.P03_API_URL}/v1/account-views/source/${p19.researchSourceId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+  });
+  expect(resolvedSource.status()).toBe(200);
+  expect(await resolvedSource.json()).toMatchObject({ source_record_type: "IntakeRequest", destination_type: "RESEARCH",
+    destination_record_id: p19.researchSourceId });
+  const reopenedResearch = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${p19.researchSourceId}`, {
+    headers: { Authorization: `Bearer ${tokens.a}` },
+  });
+  expect(reopenedResearch.status()).toBe(200);
+  await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${p19.sourceActionId}`);
+  const restartedSourceAction = page.locator(`#record-${p19.sourceActionId}`);
+  const restartedSourcePosition = page.locator(`#record-${p19.sourcePositionId}`);
+  await expect(restartedSourceAction).toHaveCount(1);
+  await expect(restartedSourceAction).toBeVisible();
+  await expect(restartedSourcePosition).toHaveCount(1);
+  await expect(restartedSourcePosition).toBeVisible();
+  await expect(restartedSourcePosition).toContainText(p19.agentId === "agent-a" ? "action-a-failed-2 · REVERTED" : "action-b-failed-paged · REVERTED");
+  for (const [name, sourceId] of Object.entries(p19.orphanSourceIds)) {
+    const exactSourceResponse = await page.request.get(`${process.env.P03_API_URL}/v1/account-views/${sourceId}`, {
+      headers: { Authorization: `Bearer ${tokens.a}` },
+    });
+    expect(exactSourceResponse.status()).toBe(200);
+    const source = await exactSourceResponse.json();
+    expect(source.record_id).toBe(sourceId);
+    const exactSourceResolver = await page.request.get(`${process.env.P03_API_URL}/v1/account-views/source/${sourceId}`, {
+      headers: { Authorization: `Bearer ${tokens.a}` },
+    });
+    expect(exactSourceResolver.status()).toBe(200);
+    expect((await exactSourceResolver.json()).destination_record_id).toBe(sourceId);
+    await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${sourceId}`);
+    const reopenedExactSource = page.locator(`#record-${sourceId}`);
+    await expect(reopenedExactSource).toHaveCount(1);
+    await expect(reopenedExactSource).toBeVisible();
+    for (const value of [source.owner_id, source.content.agent_id, source.content.wallet_id,
+      source.content.network_id, source.content.strategy_revision, source.content.mandate_id,
+      source.content.status, source.content.updated_at]) await expect(reopenedExactSource).toContainText(value);
+    if (source.content.record_kind === "MONITORING") {
+      await expect(reopenedExactSource).toContainText(source.content.next_work);
+      await expect(reopenedExactSource).toContainText(source.content.blocking_reason);
+      await expect(reopenedExactSource).toContainText(`${source.content.evaluation_attempts} attempts / ${source.content.evaluation_completions} completions`);
+    } else {
+      await expect(reopenedExactSource).toContainText(source.content.approval_id);
+      await expect(reopenedExactSource).toContainText(source.content.terms_hash);
+      await expect(reopenedExactSource).toContainText(source.content.signer_binding);
+      await expect(reopenedExactSource).toContainText(source.content.policy_binding);
+      for (const value of [source.content.terms.expiry, ...source.content.terms.supported_assets,
+        ...source.content.terms.supported_routes, ...source.content.terms.actions, ...source.content.terms.stop_effects])
+        await expect(reopenedExactSource).toContainText(value);
+    }
+    await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-${name}-source-reopened-after-restart.png`), fullPage: true });
+  }
+  expect(p19Writes, "reopen after API restart must only issue reads").toBe(0);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-account-context-reopened-after-restart.png`), fullPage: true });
 });

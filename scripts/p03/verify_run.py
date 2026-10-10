@@ -119,6 +119,136 @@ def scan_bundle(dist: Path) -> dict:
     }
 
 
+def seed_account_fixtures(pg: harness.Postgres, api_url: str, token_a: str) -> dict:
+    """Seed authored P19 rows after verified fixture owners exist; never expose a production write route."""
+    owner = http("GET", f"{api_url}/v1/me", token_a)
+    if owner[0] != 200:
+        raise RuntimeError("could not resolve the verified P19 fixture owner")
+    owner_id = owner[1]["user_id"]
+    fixture_path = harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json"
+    fixture = json.loads(fixture_path.read_text())
+    second_agent = json.loads(json.dumps(fixture[0]))
+    second_agent["record_id"] = "00000000-0000-4000-8000-000000000021"
+    second_agent["operation_id"] = "10000000-0000-4000-8000-000000000021"
+    second_agent["content"].update(agent_id="agent-b", wallet_id="wallet-b", status="STOPPED",
+                                   permission_state="REMOVED", updated_at="2026-10-09T12:01:00Z")
+    fixture.append(second_agent)
+    long_monitoring = json.loads(json.dumps(next(
+        item for item in fixture if item["content"].get("record_kind") == "MONITORING")))
+    long_monitoring["record_id"] = "00000000-0000-4000-8000-000000000305"
+    long_monitoring["operation_id"] = "10000000-0000-4000-8000-000000000305"
+    long_monitoring["content"].update(
+        agent_id="agent-a", wallet_id="wallet-a", status="BLOCKED", health="SYNTHETIC_BLOCKED",
+        updated_at="2026-10-09T12:04:00Z", input_updated_at="2026-10-09T12:03:59Z",
+        evaluation_attempts=17, evaluation_completions=11,
+        next_work=f"Synthetic next work: {'n' * 120}",
+        blocking_reason=f"Gate pending receipt {'b' * 100}", pending_reconciliation=True)
+    fixture.append(long_monitoring)
+    orphan_source_ids = {
+        "monitoring_first_page": "00000000-0000-4000-8000-000000000301",
+        "permission_first_page": "00000000-0000-4000-8000-000000000302",
+        "monitoring_later_page": "00000000-0000-4000-8000-000000000303",
+        "permission_later_page": "00000000-0000-4000-8000-000000000304",
+    }
+    def orphan_source(kind: str, agent_id: str, wallet_id: str, record_id: str, updated_at: str) -> dict:
+        template = next(item for item in fixture if item["content"].get("record_kind") == kind)
+        source = json.loads(json.dumps(template))
+        source["record_id"] = record_id
+        source["operation_id"] = record_id.replace("00000000", "10000000")
+        source["content"].update(agent_id=agent_id, wallet_id=wallet_id, updated_at=updated_at,
+                                 strategy_revision=f"strategy-{agent_id}-v4", mandate_id=f"mandate-{agent_id}-v2")
+        if kind == "MONITORING":
+            source["content"].update(next_work=f"inspect saved {agent_id}", blocking_reason="synthetic source has no agent summary")
+        else:
+            source["content"].update(approval_id=f"approval-{agent_id}-v1", predecessor_approval_id=None,
+                                      successor_approval_id=None, signer_binding=f"signer-{agent_id}-v1",
+                                      policy_binding=f"policy-{agent_id}-v1")
+            canonical_terms = json.dumps(source["content"]["terms"], sort_keys=True, separators=(",", ":"))
+            source["content"]["terms_hash"] = "sha256:" + hashlib.sha256(canonical_terms.encode("utf-8")).hexdigest()
+        return source
+    fixture.extend([
+        orphan_source("MONITORING", "orphan-monitoring-first", "wallet-orphan-monitoring-first",
+                      orphan_source_ids["monitoring_first_page"], "2026-10-09T12:02:00Z"),
+        orphan_source("PERMISSION_SNAPSHOT", "orphan-permission-first", "wallet-orphan-permission-first",
+                      orphan_source_ids["permission_first_page"], "2026-10-09T12:03:00Z"),
+    ])
+    target_position = next(item for item in fixture if item["content"].get("record_kind") == "POSITION"
+                           and item["content"].get("position_id") == "position-a-2")
+    target_action = next(item for item in fixture if item["content"].get("record_kind") == "ACTION"
+                         and item["content"].get("action_id") == "action-a-failed-2")
+    fixture.remove(target_position)
+    fixture.remove(target_action)
+    filler_template = next(item for item in fixture if item["content"].get("record_kind") == "MONITORING")
+    for index in range(100):
+        filler = json.loads(json.dumps(filler_template))
+        filler["record_id"] = f"00000000-0000-4000-8000-{index + 100:012d}"
+        filler["operation_id"] = f"10000000-0000-4000-8000-{index + 100:012d}"
+        filler["content"].update(agent_id=f"fixture-monitor-{index:03d}", wallet_id=f"fixture-wallet-{index:03d}",
+                                  updated_at=f"2026-10-09T13:{index // 60:02d}:{index % 60:02d}Z")
+        fixture.append(filler)
+    target_position_b = json.loads(json.dumps(target_position))
+    target_position_b["record_id"] = "00000000-0000-4000-8000-000000000200"
+    target_position_b["operation_id"] = "10000000-0000-4000-8000-000000000200"
+    target_position_b["content"].update(agent_id="agent-b", wallet_id="wallet-b", position_id="position-b-paged",
+                                         strategy_revision="strategy-b-v1", mandate_id="mandate-b-v1")
+    target_action_b = json.loads(json.dumps(target_action))
+    target_action_b["record_id"] = "00000000-0000-4000-8000-000000000201"
+    target_action_b["operation_id"] = "10000000-0000-4000-8000-000000000201"
+    target_action_b["content"].update(agent_id="agent-b", wallet_id="wallet-b", position_id="position-b-paged",
+                                       strategy_revision="strategy-b-v1", mandate_id="mandate-b-v1",
+                                       action_id="action-b-failed-paged")
+    fixture.extend([target_position, target_action, target_position_b, target_action_b,
+        orphan_source("MONITORING", "orphan-monitoring-later", "wallet-orphan-monitoring-later",
+                      orphan_source_ids["monitoring_later_page"], "2026-10-09T13:30:00Z"),
+        orphan_source("PERMISSION_SNAPSHOT", "orphan-permission-later", "wallet-orphan-permission-later",
+                      orphan_source_ids["permission_later_page"], "2026-10-09T13:31:00Z")])
+    for item in fixture:
+        content = {**item["content"], "owner_id": owner_id}
+        statement = (
+            "insert into records(record_id, owner_id, record_type, schema_version, operation_id, created_at, content) values ("
+            f"'{item['record_id']}', '{owner_id}', 'AccountViewRecord', '{item.get('schema_version', 'account-view/1')}', '{item['operation_id']}', "
+            f"'{item['content']['updated_at']}'::timestamptz, {sql_literal(json.dumps(content, separators=(',', ':')))}::jsonb)"
+        )
+        pg.psql(statement)
+    research_status, research_bundle = http("POST", f"{api_url}/v1/research/requests", token_a, {
+        "original_request": "Synthetic source for the P19 owner-context navigation test.",
+        "restrictions": ["synthetic fixture only"], "requested_job": "CREATE_STRATEGY", "input_class": "CONCRETE_THESIS",
+    })
+    if research_status != 201:
+        raise RuntimeError("could not create the authenticated synthetic Research source")
+    research_source_id = research_bundle["intake"]["record_id"]
+    if http("GET", f"{api_url}/v1/research/requests/{research_source_id}", token_a)[0] != 200:
+        raise RuntimeError("authenticated synthetic Research source did not reopen")
+    context = json.loads((fixture_path.parent / "agent-context-v1.json").read_text())
+    context.update(owner_id=owner_id, agent_id="agent-a")
+    context["entries"][-1]["source_refs"] = [target_action["record_id"], research_source_id]
+    def seed_context(agent_id: str, record_id: str, operation_id: str, source_id: str, created_at: str) -> None:
+        saved_context = json.loads(json.dumps(context))
+        saved_context.update(agent_id=agent_id)
+        saved_context["entries"][-1]["source_refs"] = [source_id, research_source_id]
+        saved_context["entries"][-1]["source_refs"].extend(orphan_source_ids.values())
+        pg.psql(
+            "insert into records(record_id, owner_id, record_type, schema_version, operation_id, created_at, content) values ("
+            f"'{record_id}', '{owner_id}', 'AgentContextRecord', 'agent-context/1', '{operation_id}', "
+            f"'{created_at}'::timestamptz, {sql_literal(json.dumps(saved_context, separators=(',', ':')))}::jsonb)"
+        )
+    seed_context("agent-a", "20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000101",
+                 target_action["record_id"], "2026-10-09T12:00:00Z")
+    seed_context("agent-b", "20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000102",
+                 target_action_b["record_id"], "2026-10-09T12:01:00Z")
+    return {"owner_id": owner_id, "record_ids": [item["record_id"] for item in fixture],
+            "agent_record_ids": {"agent-a": fixture[0]["record_id"], "agent-b": second_agent["record_id"]},
+            "long_monitoring_record_id": long_monitoring["record_id"],
+            "research_source_id": research_source_id,
+            "orphan_source_ids": orphan_source_ids,
+            "source_action_ids": {"agent-a": target_action["record_id"], "agent-b": target_action_b["record_id"]},
+            "source_position_ids": {"agent-a": target_position["record_id"], "agent-b": target_position_b["record_id"]},
+            "position_record_ids": {"position-a-1": next(item["record_id"] for item in fixture if item["content"].get("position_id") == "position-a-1"),
+                                     "position-a-2": target_position["record_id"]},
+            "financial_fixture": fixture,
+            "account_snapshot": account_history_snapshot(pg, owner_id)}
+
+
 def run_playwright(specs: list[str], env_extra: dict[str, str], log: Path) -> int:
     env = harness.base_env()
     env.update(env_extra)
@@ -235,6 +365,11 @@ def main() -> int:
 
         token_a, token_b, token_c = signer.token(OWNER_A), signer.token(OWNER_B), signer.token(OWNER_C)
         token_bad = TestSigner().token(OWNER_A)
+        p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
+        rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
+        ok &= rec.step("P19 authored account and context fixtures seeded for the verified owner",
+                       len(p19_fixtures["record_ids"]) == len(json.loads((harness.API_DIR / "tests" / "fixtures" / "account_views" / "account-records-v1.json").read_text())) + 108,
+                       {"records": len(p19_fixtures["record_ids"])})
 
         status_none, _ = http("GET", f"{api_url}/v1/me")
         status_bad, _ = http("GET", f"{api_url}/v1/me", token_bad)
@@ -242,13 +377,25 @@ def main() -> int:
 
         if not args.skip_ui:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
+                      "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
+                      "P19_AGENT_B_RECORD_ID": p19_fixtures["agent_record_ids"]["agent-b"],
+                      "P19_LONG_MONITORING_RECORD_ID": p19_fixtures["long_monitoring_record_id"],
+                      "P19_FIRST_POSITION_ID": p19_fixtures["position_record_ids"]["position-a-1"],
+                      "P19_SECOND_POSITION_ID": p19_fixtures["position_record_ids"]["position-a-2"],
+                      "P19_SOURCE_ACTION_ID": p19_fixtures["source_action_ids"]["agent-a"],
+                      "P19_SOURCE_ACTION_B_ID": p19_fixtures["source_action_ids"]["agent-b"],
+                      "P19_SOURCE_POSITION_ID": p19_fixtures["source_position_ids"]["agent-a"],
+                      "P19_SOURCE_POSITION_B_ID": p19_fixtures["source_position_ids"]["agent-b"],
+                      "P19_ORPHAN_SOURCE_IDS": json.dumps(p19_fixtures["orphan_source_ids"]),
+                      "P19_RESEARCH_SOURCE_ID": p19_fixtures["research_source_id"],
+                      "P19_ACCOUNT_RECORD_COUNT": str(len(p19_fixtures["record_ids"])),
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}
             code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs", "provenance.spec.mjs"], ui_env, evidence / "ui-e2e.log")
             ok &= rec.step("browser drive (desktop and 390px)", code == 0, {"exit": code})
 
             results_path = evidence / "ui" / "ui-results.json"
             results = json.loads(results_path.read_text()) if results_path.exists() else {}
-            inspection = sql_inspection(pg, results)
+            inspection = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
             rec.write("sql-inspection.json", inspection)
             ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
 
@@ -264,7 +411,7 @@ def main() -> int:
             ok &= rec.step("API restarted on the same database", True)
             code = run_playwright(["reopen.spec.mjs"], ui_env, evidence / "ui-reopen.log")
             ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
-            after_restart = sql_inspection(pg, results)
+            after_restart = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
             ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
 
         if args.hold_seconds:
@@ -306,7 +453,14 @@ def main() -> int:
     return 0 if ok else 1
 
 
-def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
+def account_history_snapshot(pg: harness.Postgres, owner_id: str) -> list[dict]:
+    return json.loads(pg.psql(
+        "select coalesce(json_agg(to_jsonb(r) order by r.seq), '[]'::json) from records r "
+        f"where r.owner_id='{owner_id}' and r.record_type='AccountViewRecord'"
+    ))
+
+
+def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_account_snapshot: list[dict]) -> dict:
     checks: dict[str, object] = {}
     def rows(sql: str):
         return json.loads(pg.psql(f"select coalesce(json_agg(t), '[]'::json) from ({sql}) t"))
@@ -314,6 +468,58 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
     checks["records_by_type"] = {r["record_type"]: r["c"] for r in rows(
         "select record_type, count(*) c from records group by record_type order by 1")}
     checks["revisions"] = rows("select count(*) c from strategy_revisions")[0]["c"]
+    current_p19_accounts = account_history_snapshot(pg, p19_owner_id)
+    def context_history(agent_id: str) -> dict:
+        versions = rows(
+            "select record_id::text, content from records where owner_id='" + p19_owner_id + "' "
+            "and record_type='AgentContextRecord' and content->>'agent_id'='" + agent_id + "' order by seq"
+        )
+        return {
+            "versions": [row["content"]["memory_version"] for row in versions],
+            "states": [row["content"]["state"] for row in versions],
+            "suggestion_adopted": any(any(entry["context_id"] == "lesson-1" and entry["status"] == "ADOPTED"
+                for entry in row["content"]["entries"]) for row in versions),
+            "final_cleared": bool(versions) and versions[-1]["content"]["state"] == "CLEARED"
+                and not versions[-1]["content"]["entries"],
+        }
+    checks["p19_account_history"] = {
+        "exact_immutable_snapshot": current_p19_accounts == p19_account_snapshot,
+        "row_count": len(current_p19_accounts),
+        "rows": current_p19_accounts,
+    }
+    account_content = [row["content"] for row in current_p19_accounts]
+    positions = {row.get("position_id"): row for row in account_content if row.get("record_kind") == "POSITION"}
+    flows = [row for row in account_content if row.get("record_kind") == "CAPITAL_FLOW"]
+    wallet_actions = [row for row in account_content if row.get("record_kind") == "ACTION" and not row.get("position_id")]
+    permission_rows = [row for row in account_content if row.get("record_kind") == "PERMISSION_SNAPSHOT"]
+    checks["p19_account_content"] = {
+        "all_authored_rows_match_verified_owner": all(row.get("owner_id") == p19_owner_id for row in account_content)
+            and all(row.get("owner_id") == p19_owner_id for row in current_p19_accounts),
+        "signed_result_literals_and_precision": positions.get("position-a-1", {}).get("realized_result", {}).get("amount")
+            == {"asset_id": "monad:143/asset:USDC", "raw": "-2", "decimals": 0}
+            and positions.get("position-a-1", {}).get("basis", {}).get("amount")
+            == {"asset_id": "monad:143/asset:USDC", "raw": "10", "decimals": 0}
+            and "proceeds 8 minus removed basis 10" in positions.get("position-a-1", {}).get("reason", "")
+            and positions.get("position-a-2", {}).get("realized_result", {}).get("amount")
+            == {"asset_id": "monad:143/asset:USDC", "raw": "2000000000000000001", "decimals": 18}
+            and positions.get("position-a-2", {}).get("estimated_unrealized_result", {}).get("amount")
+            == {"asset_id": "monad:143/asset:USDC", "raw": "0", "decimals": 8}
+            and positions.get("position-b-1", {}).get("realized_result", {}).get("state") == "UNKNOWN",
+        "deposit_and_withdrawal_flows": {row.get("flow_kind") for row in flows} >= {"DEPOSIT", "WITHDRAWAL"},
+        "wallet_action_states_and_exact_flow_ids": {row.get("status") for row in wallet_actions}
+            >= {"QUEUED", "SUBMISSION_UNKNOWN", "CONFIRMED", "REVERTED"}
+            and all(row.get("flow_id") in {flow.get("flow_id") for flow in flows} for row in wallet_actions),
+        "permission_history_and_bindings": {row.get("status") for row in permission_rows}
+            >= {"CURRENT", "EARLIER", "CHANGE_APPLIED", "FAILED", "CANCELLED"}
+            and all(row.get("approval_id") and row.get("terms_hash") and row.get("policy_binding")
+                    and row.get("signer_binding") and row.get("strategy_revision") and row.get("mandate_id")
+                    for row in permission_rows),
+        "permission_terms_hashes_match_exact_sql_terms": all(
+            row.get("terms_hash") == "sha256:" + hashlib.sha256(
+                json.dumps(row.get("terms"), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            for row in permission_rows),
+    }
+    checks["p19_context_history"] = {agent_id: context_history(agent_id) for agent_id in ("agent-a", "agent-b")}
     verdicts = []
     for key, saved in results.items():
         if not key.startswith(("thesis-", "volume-rule-", "grouped-rule-", "grouped-right-", "tiny-threshold-")):
@@ -572,7 +778,12 @@ def sql_inspection(pg: harness.Postgres, results: dict) -> dict:
         and v.get("p08_mapping_identity_is_unique")
         and v.get("synthetic_comparison_and_unavailable_buckets_match")
         and v.get("exact_run_and_report_counts") for v in effect_runs)
-    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass and spot_replays_pass}
+    p19_ok = checks["p19_account_history"]["exact_immutable_snapshot"] and checks["p19_account_history"]["row_count"] == len(p19_account_snapshot) \
+        and all(checks["p19_account_content"].values()) \
+        and all(checks["p19_context_history"][agent_id]["versions"] == [1, 2, 3, 4, 5]
+                and checks["p19_context_history"][agent_id]["suggestion_adopted"]
+                and checks["p19_context_history"][agent_id]["final_cleared"] for agent_id in ("agent-a", "agent-b"))
+    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass and spot_replays_pass and p19_ok}
 
 
 def sql_literal(text: str) -> str:
