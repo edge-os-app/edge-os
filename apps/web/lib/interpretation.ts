@@ -1,4 +1,5 @@
-import type { Attempt, AttemptStatus, AttemptUsage, Bundle, Finding, ReplyState } from "./types";
+import { OUTCOME_COPY } from "./describe";
+import type { Attempt, AttemptStatus, AttemptUsage, Bundle, Finding, ReplyState, RequestSummary } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
 export type FailureKind = "MALFORMED_OUTPUT" | "UNAVAILABLE" | "OUTCOME_UNKNOWN";
@@ -88,17 +89,55 @@ export interface FirstReading {
   /** Which explicit action fits: start or retry the interpreter, or only look again at the saved record. */
   action: "START" | "RETRY" | "CHECK_AGAIN";
   failure?: FailureKind;
+  /** A short label for a list card. */
+  tag: string;
+}
+
+/** The stored facts that decide a first reading's state. The page and the saved-requests list both build them. */
+export interface ReadingFacts {
+  /** An interpretation or a saved revision exists. */
+  has_interpretation: boolean;
+  /** The request has a saved outcome. */
+  outcome_present: boolean;
+  last_attempt: { attempt_id: string; status: AttemptStatus; parse_result: string | null } | null;
+  /** An outcome was written for the latest attempt itself (its operation ID is the attempt ID). */
+  last_covered: boolean;
+  retry_allowed: boolean;
+}
+
+export function factsOf(bundle: Pick<Bundle, "attempts" | "interpretations" | "revisions" | "head" | "outcomes">): ReadingFacts {
+  const last = bundle.attempts[bundle.attempts.length - 1];
+  return {
+    has_interpretation: bundle.interpretations.length > 0 || bundle.revisions.length > 0,
+    outcome_present: bundle.head.outcome !== null,
+    last_attempt: last ? { attempt_id: last.attempt_id, status: last.status, parse_result: last.parse_result } : null,
+    last_covered: Boolean(last) && bundle.outcomes.some((o) => o.record.operation_id === last.attempt_id),
+    retry_allowed: bundle.head.retry.allowed,
+  };
 }
 
 export function firstReading(bundle: Pick<Bundle, "attempts" | "interpretations" | "revisions" | "head" | "outcomes">): FirstReading | null {
-  const { attempts, head } = bundle;
-  if (bundle.interpretations.length > 0 || bundle.revisions.length > 0) return null;
-  const last = attempts[attempts.length - 1];
-  // The state belongs to the LATEST attempt. An outcome saved for an earlier attempt must not describe a later one.
-  if (last && bundle.outcomes.some((o) => o.record.operation_id === last.attempt_id)) return null;
-  if (!last && head.outcome !== null) return null; // fixture interpreter: no attempts, its own outcome
+  return readingOf(factsOf(bundle));
+}
+
+/** Decide from the LATEST attempt. An outcome saved for an earlier attempt must not describe a later one. */
+export function readingOf(facts: ReadingFacts): FirstReading | null {
+  const found = describeReading(facts);
+  return found ? { ...found, tag: READING_TAG[found.failure ?? found.kind] ?? found.title } : null;
+}
+
+const READING_TAG: Record<string, string> = {
+  UNREAD: "Saved, not read yet", RUNNING_OR_STOPPED: "Attempt not finished", READ_NOT_SAVED: "Read, not saved yet",
+  UNAVAILABLE: "Interpreter did not answer", MALFORMED_OUTPUT: "Answer not usable", OUTCOME_UNKNOWN: "Outcome unknown",
+};
+
+function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null {
+  const last = facts.last_attempt;
+  if (facts.has_interpretation) return null;
+  if (last && facts.last_covered) return null;
+  if (!last && facts.outcome_present) return null; // fixture interpreter: no attempts, its own outcome
   if (!last) {
-    return { kind: "UNREAD", title: "Saved, not read yet", action: head.retry.allowed ? "START" : "CHECK_AGAIN",
+    return { kind: "UNREAD", title: "Saved, not read yet", action: facts.retry_allowed ? "START" : "CHECK_AGAIN",
       lead: "Your request is saved, but the interpreter has not read it yet. Nothing was lost, and nothing was judged." };
   }
   if (last.status === "STARTED") {
@@ -111,12 +150,12 @@ export function firstReading(bundle: Pick<Bundle, "attempts" | "interpretations"
   }
   if (last.status === "PROVIDER_FAILED") {
     return { kind: "FAILED", failure: "UNAVAILABLE", title: FAILURE_COPY.UNAVAILABLE.title, lead: FAILURE_COPY.UNAVAILABLE.lead,
-      action: head.retry.allowed ? "RETRY" : "CHECK_AGAIN" };
+      action: facts.retry_allowed ? "RETRY" : "CHECK_AGAIN" };
   }
   if (last.parse_result?.startsWith("REJECTED:")) {
     return { kind: "FAILED", failure: "MALFORMED_OUTPUT", title: FAILURE_COPY.MALFORMED_OUTPUT.title,
       lead: `${FAILURE_COPY.MALFORMED_OUTPUT.lead} Reason: ${last.parse_result.slice("REJECTED:".length).replaceAll("_", " ")}.`,
-      action: head.retry.allowed ? "RETRY" : "CHECK_AGAIN" };
+      action: facts.retry_allowed ? "RETRY" : "CHECK_AGAIN" };
   }
   if (last.status === "TIMED_OUT" || last.status === "UNKNOWN" || last.status === "INTERRUPTED") {
     return { kind: "UNCERTAIN", failure: "OUTCOME_UNKNOWN", title: FAILURE_COPY.OUTCOME_UNKNOWN.title, lead: FAILURE_COPY.OUTCOME_UNKNOWN.lead, action: "CHECK_AGAIN" };
@@ -143,4 +182,18 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
     default:
       return { title: "Your last reply was not read", body: `A system failure stopped the interpreter. ${kept}` };
   }
+}
+
+const FAILURE_TAG: Record<string, string> = {
+  malformed_model_output: READING_TAG.MALFORMED_OUTPUT, interpreter_unavailable: READING_TAG.UNAVAILABLE,
+  interpreter_outcome_unknown: READING_TAG.OUTCOME_UNKNOWN,
+};
+
+/** The tag on a saved-requests card. It follows the latest attempt's stored facts, never an older attempt's outcome. */
+export function listTag(row: RequestSummary): { title: string; tone: "accent" | "accent-2" | "neutral" | "outline" } {
+  if (row.published) return OUTCOME_COPY.PUBLISHED;
+  const reading = row.reading ? readingOf(row.reading) : null;
+  if (reading) return { title: reading.tag, tone: "neutral" };
+  if (row.outcome === "INVALID_INPUT" && row.outcome_code && row.outcome_code in FAILURE_TAG) return { title: FAILURE_TAG[row.outcome_code], tone: "outline" };
+  return OUTCOME_COPY[row.outcome ?? "INVALID_INPUT"];
 }

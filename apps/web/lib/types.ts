@@ -182,6 +182,10 @@ export interface RequestSummary {
   input_class: InputClass;
   outcome: OutcomeName | null;
   published: boolean;
+  /** Present when the interpreter is Hermes: the stored facts about the latest attempt (see `readingOf`). */
+  reading?: import("./interpretation").ReadingFacts;
+  /** The first finding code of the latest saved outcome, when there is one. */
+  outcome_code?: string | null;
 }
 
 export interface InvestigationHorizon { value: number; unit: "SECONDS" | "MINUTES" | "HOURS" | "DAYS" }

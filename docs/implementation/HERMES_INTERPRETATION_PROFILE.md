@@ -158,6 +158,10 @@ The outcome codes reuse the P02 outcome envelope. P05 adds no record type and no
 
 **A first request whose latest attempt has no saved outcome.** The outcome is a separate commit after the attempt settles, so a crash or a storage error can leave the latest attempt without one. After a retry the page matches an outcome to an attempt by the outcome's operation ID, which is the attempt ID. An older attempt's outcome never describes a newer attempt. A plain page load does not repair it (it writes nothing). The page words the state from the stored attempt and never from the missing outcome. It never says "Could not be interpreted" for these:
 
+**The saved-requests list uses the same rule.** With the Hermes interpreter each list row carries the stored facts about the request's latest attempt (`reading`: whether an interpretation exists, whether an outcome exists, the latest attempt's status and parse result, whether an outcome was written for that attempt, whether a retry is allowed) and the first finding code of the latest outcome (`outcome_code`). One function (`readingOf`) turns those facts into the page state and the card tag. A card never shows "Could not be interpreted" for a Hermes state. It shows "Saved, not read yet", "Attempt not finished", "Read, not saved yet", "Interpreter did not answer", "Answer not usable" or "Outcome unknown". With the fixture interpreter a row has no `reading`, and "Could not be interpreted" keeps its old meaning there: unscripted text.
+
+**`head.outcome` is the latest saved outcome, not necessarily the latest attempt's.** After a retry it can belong to an earlier attempt. A client must match an outcome to an attempt by the outcome's `operation_id`, which is the attempt ID, as the page does.
+
 | Stored facts | Heading | Action offered |
 |---|---|---|
 | No attempt | Saved, not read yet | "Read my request now" starts one attempt |

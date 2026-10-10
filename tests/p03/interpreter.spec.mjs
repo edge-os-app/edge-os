@@ -359,3 +359,33 @@ test("after a retry, the page describes the latest attempt and not an older fail
   await inspect(page, project, "latest-attempt-unknown");
   await page.unrouteAll({ behavior: "wait" });
 });
+
+test("the saved-requests list tags each request from its latest attempt and never says 'Could not be interpreted' for a system state", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  script({ case: "provider-503" });
+  const id = await submit(page, THESIS);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
+  const card = page.locator(`#req-${id}`);
+  await expect(card).toContainText("Interpreter did not answer");
+  await expect(card).not.toContainText("Could not be interpreted");
+
+  // Attempt 1 failed and has its outcome. Attempt 2 was accepted and its save did not finish: only the list response is changed.
+  await page.route(/\/v1\/research\/requests$/, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const row = body.requests.find((r) => r.intake_record_id === id);
+    row.reading.last_covered = false;
+    row.reading.retry_allowed = false;
+    row.reading.last_attempt = { attempt_id: "00000000-0000-4000-8000-0000000000a2", status: "COMPLETED", parse_result: "ACCEPTED" };
+    await route.fulfill({ response, json: body });
+  });
+  await page.reload();
+  await expect(card).toContainText("Read, not saved yet");
+  await expect(card).not.toContainText(/Could not be interpreted|did not answer/);
+  await shot(page, project, "list-read-not-saved");
+  await inspect(page, project, "list-read-not-saved");
+  await page.unrouteAll({ behavior: "wait" });
+});

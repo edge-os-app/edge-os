@@ -199,7 +199,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/research/requests")
     def list_requests(principal: Principal = Depends(require_principal),
                       session: Session = Depends(get_session)) -> dict[str, Any]:
-        requests, has_more = run(session, lambda: service.list_requests(session, principal))
+        list_saved = hermes.list_requests if hermes else service.list_requests
+        requests, has_more = run(session, lambda: list_saved(session, principal))
         return {"requests": requests, "has_more": has_more}
 
     @private.get("/research/requests/{intake_id}")

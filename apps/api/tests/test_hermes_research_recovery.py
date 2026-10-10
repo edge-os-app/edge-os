@@ -429,3 +429,61 @@ def test_a_request_saved_before_its_first_attempt_can_be_interpreted_by_an_expli
 
     assert retried.status_code == 201
     assert retried.json()["head"]["outcome"] == "NEEDS_CLARIFICATION" and len(runner.turns) == 1
+
+
+# --- The saved-requests list carries the latest attempt's stored facts ----------------------------------------------------
+
+def list_row(client: TestClient, headers: dict[str, str], intake: str) -> dict[str, Any]:
+    rows_ = client.get("/v1/research/requests", headers=headers).json()["requests"]
+    return next(r for r in rows_ if r["intake_record_id"] == intake)
+
+
+def test_the_list_reports_the_latest_attempts_facts_for_each_state(make_client, owner_a, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CaseRunner(turn_result(case("provider-503")["provider"]), turn_result(case("concrete-thesis")["provider"]))
+    client = make_client(runner)
+
+    # Failed, with its own outcome.
+    failed = create(client, owner_a, "concrete-thesis").json()
+    intake = failed["intake"]["record_id"]
+    row = list_row(client, owner_a, intake)
+    assert row["outcome"] == "INVALID_INPUT" and row["outcome_code"] == "interpreter_unavailable"
+    assert row["reading"] == {"has_interpretation": False, "outcome_present": True, "last_covered": True, "retry_allowed": True,
+                              "last_attempt": {"attempt_id": failed["attempts"][0]["attempt_id"], "status": "PROVIDER_FAILED",
+                                               "parse_result": "NOT_PARSED"}}
+
+    # Retried: attempt 2 is accepted but its publication crashes. Attempt 1's outcome must not cover attempt 2.
+    with monkeypatch.context() as crashing:
+        crashing.setattr(interpretation_workflow.HermesResearch, "_publish_interpretation",
+                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("died after the answer was saved")))
+        assert retry(client, owner_a, failed, failed["attempts"][0]["attempt_id"]).status_code == 500
+    row = list_row(client, owner_a, intake)
+    assert row["outcome"] == "INVALID_INPUT"  # attempt 1's outcome is still the latest saved outcome
+    assert row["reading"]["last_covered"] is False
+    assert row["reading"]["last_attempt"]["status"] == "COMPLETED" and row["reading"]["last_attempt"]["parse_result"] == "ACCEPTED"
+    assert row["reading"]["last_attempt"]["attempt_id"] != failed["attempts"][0]["attempt_id"]
+
+
+def test_the_list_reports_a_request_that_was_never_read(make_client, owner_a, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = make_client(CaseRunner())
+    with monkeypatch.context() as crashing:
+        crashing.setattr(interpretation_workflow.HermesResearch, "_interpret",
+                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("died before the first attempt")))
+        assert create(client, owner_a, "concrete-thesis").status_code == 500
+    row = list_row(client, owner_a, first_request_id(client, owner_a))
+    assert row["outcome"] is None and row["outcome_code"] is None
+    assert row["reading"] == {"has_interpretation": False, "outcome_present": False, "last_covered": False,
+                              "retry_allowed": True, "last_attempt": None}
+
+
+def test_the_list_of_a_read_request_shows_it_has_an_interpretation(make_client, owner_a) -> None:
+    client = make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"])))
+    bundle = create(client, owner_a, "concrete-thesis").json()
+    row = list_row(client, owner_a, bundle["intake"]["record_id"])
+    assert row["outcome"] == "NEEDS_CLARIFICATION" and row["reading"]["has_interpretation"] is True
+    assert row["reading"]["last_covered"] is True and row["reading"]["retry_allowed"] is False
+
+
+def test_another_owner_never_sees_the_attempt_facts_of_a_request(make_client, owner_a, owner_b) -> None:
+    client = make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"])))
+    create(client, owner_a, "concrete-thesis")
+    assert client.get("/v1/research/requests", headers=owner_b).json()["requests"] == []

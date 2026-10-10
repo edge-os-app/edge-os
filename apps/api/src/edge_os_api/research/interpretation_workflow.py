@@ -22,7 +22,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -514,6 +514,44 @@ class HermesResearch:
                 "response_sha256": late.response_sha256, "authoritative": False,
                 "usage": {"source": late.usage.source, "input_tokens": late.usage.input_tokens,
                           "output_tokens": late.usage.output_tokens, "total_tokens": late.usage.total_tokens}}
+
+    # --- the saved-requests list ------------------------------------------------------------------------------------
+
+    def list_requests(self, session: Session, principal: Principal, limit: int = 50) -> tuple[list[dict[str, Any]], bool]:
+        """The saved-requests list with the stored facts about each request's latest attempt.
+
+        The list tag is chosen from these facts by the same function as the request page, so a request that was never
+        read, is unfinished, was read but not saved, or failed never shows the outcome of an older attempt.
+        """
+        rows, has_more = service.list_requests(session, principal, limit)
+        if not rows:
+            return rows, has_more
+        ids = [uuid.UUID(r["intake_record_id"]) for r in rows]
+        interpreted = set(session.execute(select(Record.intake_record_id).where(
+            Record.owner_id == principal.user_id, Record.record_type == "PromptInterpretation",
+            Record.intake_record_id.in_(ids))).scalars())
+        outcomes: dict[uuid.UUID, list[tuple[uuid.UUID, str | None]]] = {}
+        for outcome in session.execute(select(Record).where(
+                Record.owner_id == principal.user_id, Record.record_type == "Outcome",
+                Record.intake_record_id.in_(ids)).order_by(Record.seq)).scalars():
+            findings = outcome.content.get("findings") or []
+            outcomes.setdefault(outcome.intake_record_id, []).append(  # type: ignore[arg-type]
+                (outcome.operation_id, findings[0]["code"] if findings else None))
+        owner = str(principal.user_id)
+        for row, intake_id in zip(rows, ids):
+            history = self.ledger.history(owner, str(intake_id))
+            last = history[-1] if history else None
+            mine = outcomes.get(intake_id, [])
+            row["reading"] = {
+                "has_interpretation": intake_id in interpreted,
+                "outcome_present": row["outcome"] is not None,
+                "last_attempt": None if last is None else {
+                    "attempt_id": last.start.attempt_id, "status": last.status,
+                    "parse_result": last.settlement.parse_result if last.settlement else None},
+                "last_covered": last is not None and any(op == uuid.UUID(last.start.attempt_id) for op, _ in mine),
+                "retry_allowed": retry_state(history, intake_id in interpreted, None).allowed}
+            row["outcome_code"] = mine[-1][1] if mine else None
+        return rows, has_more
 
     # --- recovery -----------------------------------------------------------------------------------------------
 

@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
-import { CLASS_LABEL, JOB_LABEL, OUTCOME_COPY, SUPPORTED_RESTRICTIONS, formatTime } from "../lib/describe";
+import { CLASS_LABEL, JOB_LABEL, SUPPORTED_RESTRICTIONS, formatTime } from "../lib/describe";
 import { draftKey, parseDraft } from "../lib/draft";
+import { listTag } from "../lib/interpretation";
 import type { InputClass, Job, RequestSummary, Sample } from "../lib/types";
 import { MoeExample } from "./MoeExample";
 
@@ -243,13 +244,13 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         {hasMore ? <p className="muted" role="status">Showing your 50 most recent requests. Older ones are saved but not listed here yet.</p> : null}
         <div className="cards">
           {(saved ?? []).map((r) => {
-            const copy = r.published ? OUTCOME_COPY.PUBLISHED : OUTCOME_COPY[r.outcome ?? "INVALID_INPUT"];
+            const copy = listTag(r);
             return (
               <button type="button" className="card-open" id={`req-${r.intake_record_id}`} key={r.intake_record_id}
                 onClick={() => go(`#/research/${r.intake_record_id}`, `req-${r.intake_record_id}`)}>
                 <span className="title">{r.original_request.length > 140 ? `${r.original_request.slice(0, 140)}…` : r.original_request}</span>
                 <span className="tags">
-                  <span className={`tag tag-${copy.tone}`}>{copy.title}</span>
+                  <span className={`tag tag-${copy.tone}`} style={{ whiteSpace: "normal" }}>{copy.title}</span>
                   <span className="tag tag-neutral">{CLASS_LABEL[r.input_class]}</span>
                   <span className="tag tag-neutral">{JOB_LABEL[r.requested_job]}</span>
                 </span>
