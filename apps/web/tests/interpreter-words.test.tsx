@@ -255,3 +255,95 @@ describe("system failures on the request page", () => {
     expect(mocks.retry).toHaveBeenCalledWith("intake-1", null);
   });
 });
+
+describe("a first request with no saved outcome and no revision", () => {
+  const noOutcome = (attempts: Attempt[], retry: object) => {
+    const bundle = baseBundle("INVALID_INPUT", { code: "x", detail: "y" }, retry, attempts);
+    bundle.outcomes = [] as never;
+    bundle.head.outcome = null as never;
+    return bundle;
+  };
+  const show = async (bundle: unknown) => {
+    mocks.get.mockResolvedValue(bundle);
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    return screen.findByTestId("outcome");
+  };
+  const wrongClaims = () => {
+    expect(screen.queryByText("Could not be interpreted")).toBeNull();
+    expect(screen.queryByText(/No strategy was created/)).toBeNull();
+  };
+
+  it("says an attempt that has not finished may be running or stopped, and claims nothing about current activity", async () => {
+    const section = await show(noOutcome([attempt({ status: "STARTED", completion: "UNKNOWN", finished_at: null, latency_ms: null, parse_result: null, revision_id: null,
+      usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null } })], { allowed: false, retry_of: null, reason: "attempt_in_flight" }));
+    expect(section).toHaveAttribute("data-reading", "RUNNING_OR_STOPPED");
+    expect(screen.getByRole("heading", { name: "An interpreter attempt has not finished" })).toBeInTheDocument();
+    expect(screen.getByTestId("reading-state")).toHaveTextContent("may still be running, or it may have stopped");
+    expect(screen.getByTestId("reading-state")).not.toHaveTextContent(/is reading|is running now|working now/i);
+    expect(screen.getByTestId("retry-blocked")).toHaveTextContent("still running");
+    expect(screen.queryByRole("button", { name: /Try the interpreter again|Read my request now/ })).toBeNull();
+    wrongClaims();
+  });
+
+  it("says an accepted answer was read and is waiting to be saved, and does not call it a failure", async () => {
+    const section = await show(noOutcome([attempt({ revision_id: null })], { allowed: false, retry_of: null, reason: "nothing_to_retry" }));
+    expect(section).toHaveAttribute("data-reading", "READ_NOT_SAVED");
+    expect(screen.getByRole("heading", { name: "Your request was read, and the answer is not saved yet" })).toBeInTheDocument();
+    expect(screen.getByTestId("reading-state")).toHaveTextContent("answer was accepted");
+    expect(screen.queryByText(/system failure|did not answer|not usable/)).toBeNull();
+    wrongClaims();
+  });
+
+  it("offers the retry button for a settled provider failure whose outcome was not saved", async () => {
+    mocks.retry.mockResolvedValue(baseBundle("UNRESOLVED", { code: "m", detail: "n" }, { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({})]));
+    const user = userEvent.setup();
+    const section = await show(noOutcome([failedAttempt], { allowed: true, retry_of: "a1", reason: null }));
+    expect(section).toHaveAttribute("data-reading", "FAILED");
+    expect(screen.getByRole("heading", { name: "The interpreter did not answer" })).toBeInTheDocument();
+    expect(mocks.retry).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Try the interpreter again" }));
+    expect(mocks.retry).toHaveBeenCalledWith("intake-1", "a1");
+    wrongClaims();
+  });
+
+  it("names a rejected answer with its reason and offers the retry button", async () => {
+    await show(noOutcome([attempt({ parse_result: "REJECTED:multiple_objects", revision_id: null })], { allowed: true, retry_of: "a1", reason: null }));
+    expect(screen.getByRole("heading", { name: "The interpreter's answer was not usable" })).toBeInTheDocument();
+    expect(screen.getByTestId("reading-state")).toHaveTextContent("Reason: multiple objects");
+    expect(screen.getByRole("button", { name: "Try the interpreter again" })).toBeInTheDocument();
+  });
+
+  it.each(["TIMED_OUT", "UNKNOWN", "INTERRUPTED"] as const)("says the outcome is unknown for %s, gives the blocked-retry reason and offers no retry", async (status) => {
+    const section = await show(noOutcome([attempt({ status, completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null })],
+      { allowed: false, retry_of: null, reason: "outcome_uncertain" }));
+    expect(section).toHaveAttribute("data-reading", "UNCERTAIN");
+    expect(screen.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeInTheDocument();
+    expect(screen.getByTestId("retry-blocked")).toHaveTextContent("Nothing was replayed.");
+    expect(screen.queryByRole("button", { name: /Try the interpreter again|Read my request now/ })).toBeNull();
+    wrongClaims();
+  });
+
+  it("looks at the saved record again without starting an attempt, and shows what is saved by then", async () => {
+    const user = userEvent.setup();
+    const stuck = noOutcome([attempt({ revision_id: null })], { allowed: false, retry_of: null, reason: "nothing_to_retry" });
+    mocks.get.mockResolvedValueOnce(stuck).mockResolvedValueOnce(baseBundle("UNRESOLVED", { code: "m", detail: "n" },
+      { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({})]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Check the saved request again" }));
+    expect(await screen.findByRole("heading", { name: "Unresolved: nothing was tested" })).toBeInTheDocument();
+    expect(mocks.retry).not.toHaveBeenCalled();
+    expect(mocks.answer).not.toHaveBeenCalled();
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("draws the state in a neutral style, not as a stop", async () => {
+    const section = await show(noOutcome([], { allowed: true, retry_of: null, reason: null }));
+    expect(section.className).not.toMatch(/stop|err/);
+  });
+
+  it("leaves a request that has a saved outcome untouched", async () => {
+    const section = await show(baseBundle("INVALID_INPUT", { code: "interpreter_unavailable", detail: "x" }, { allowed: true, retry_of: "a1", reason: null }, [failedAttempt]));
+    expect(section).not.toHaveAttribute("data-reading");
+    expect(section).toHaveAttribute("data-outcome", "INVALID_INPUT");
+  });
+});

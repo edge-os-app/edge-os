@@ -1,4 +1,4 @@
-import type { Attempt, AttemptStatus, AttemptUsage, Finding } from "./types";
+import type { Attempt, AttemptStatus, AttemptUsage, Bundle, Finding } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
 export type FailureKind = "MALFORMED_OUTPUT" | "UNAVAILABLE" | "OUTCOME_UNKNOWN";
@@ -73,4 +73,50 @@ export function sourceQuote(sourceRef: string, original: string): string | null 
   if (!match) return null;
   const start = Number(match[1]), end = Number(match[2]);
   return end > start && end <= original.length ? original.slice(start, end) : null;
+}
+
+/**
+ * A first request that has no saved outcome and no revision. The outcome is written in a separate step after the attempt
+ * settles, so this state is real: a crash or a storage error can stop between the two. The page words it from the stored
+ * attempt, never from the absence of an outcome, and never calls it a verdict on the idea.
+ */
+export type FirstReadingKind = "UNREAD" | "RUNNING_OR_STOPPED" | "READ_NOT_SAVED" | "FAILED" | "UNCERTAIN";
+export interface FirstReading {
+  kind: FirstReadingKind;
+  title: string;
+  lead: string;
+  /** Which explicit action fits: start or retry the interpreter, or only look again at the saved record. */
+  action: "START" | "RETRY" | "CHECK_AGAIN";
+  failure?: FailureKind;
+}
+
+export function firstReading(bundle: Pick<Bundle, "attempts" | "interpretations" | "revisions" | "head">): FirstReading | null {
+  const { attempts, head } = bundle;
+  if (head.outcome !== null || head.interpretation_revision_id !== null || bundle.interpretations.length > 0 || bundle.revisions.length > 0) return null;
+  const last = attempts[attempts.length - 1];
+  if (!last) {
+    return { kind: "UNREAD", title: "Saved, not read yet", action: head.retry.allowed ? "START" : "CHECK_AGAIN",
+      lead: "Your request is saved, but the interpreter has not read it yet. Nothing was lost, and nothing was judged." };
+  }
+  if (last.status === "STARTED") {
+    return { kind: "RUNNING_OR_STOPPED", title: "An interpreter attempt has not finished", action: "CHECK_AGAIN",
+      lead: "An attempt was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. Nothing was judged, and nothing is repeated while it may still run." };
+  }
+  if (last.status === "COMPLETED" && last.parse_result === "ACCEPTED") {
+    return { kind: "READ_NOT_SAVED", title: "Your request was read, and the answer is not saved yet", action: "CHECK_AGAIN",
+      lead: "The interpreter answered and the answer was accepted. Saving it did not finish. It is saved the next time this request is answered or retried, or when the service restarts. Nothing was judged." };
+  }
+  if (last.status === "PROVIDER_FAILED") {
+    return { kind: "FAILED", failure: "UNAVAILABLE", title: FAILURE_COPY.UNAVAILABLE.title, lead: FAILURE_COPY.UNAVAILABLE.lead,
+      action: head.retry.allowed ? "RETRY" : "CHECK_AGAIN" };
+  }
+  if (last.parse_result?.startsWith("REJECTED:")) {
+    return { kind: "FAILED", failure: "MALFORMED_OUTPUT", title: FAILURE_COPY.MALFORMED_OUTPUT.title,
+      lead: `${FAILURE_COPY.MALFORMED_OUTPUT.lead} Reason: ${last.parse_result.slice("REJECTED:".length).replaceAll("_", " ")}.`,
+      action: head.retry.allowed ? "RETRY" : "CHECK_AGAIN" };
+  }
+  if (last.status === "TIMED_OUT" || last.status === "UNKNOWN" || last.status === "INTERRUPTED") {
+    return { kind: "UNCERTAIN", failure: "OUTCOME_UNKNOWN", title: FAILURE_COPY.OUTCOME_UNKNOWN.title, lead: FAILURE_COPY.OUTCOME_UNKNOWN.lead, action: "CHECK_AGAIN" };
+  }
+  return null;
 }

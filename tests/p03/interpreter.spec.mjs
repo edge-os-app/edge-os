@@ -246,3 +246,82 @@ test("an unsupported capability is not a failure, and another owner cannot open 
   await other.close();
   record(`p05-unsupported-${project}`, { id, queue_left: remaining() });
 });
+
+/** Show a saved request as the API would return it if its outcome step had not finished. Only the GET response is changed. */
+async function withoutOutcome(page, id, change) {
+  await page.route(new RegExp(`/v1/research/requests/${id}$`), async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const bundle = await response.json();
+    bundle.outcomes = [];
+    bundle.head.outcome = null;
+    change(bundle);
+    await route.fulfill({ response, json: bundle });
+  });
+}
+
+test("a request whose outcome was not saved is worded from its attempt, offers the right action and makes no false claim", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  script({ case: "provider-503" });
+  const id = await submit(page, THESIS);
+  const requests = [];
+  page.on("request", (request) => { if (request.method() === "POST") requests.push(request.url()); });
+
+  // A settled provider failure: the retry button must be there.
+  await withoutOutcome(page, id, () => {});
+  await page.goto(`/#/research/${id}`);
+  await page.reload();
+  await expect(outcome(page)).toHaveAttribute("data-reading", "FAILED");
+  await expect(page.getByRole("heading", { name: "The interpreter did not answer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toBeVisible();
+  await expect(page.getByText("Could not be interpreted")).toHaveCount(0);
+  await shot(page, project, "no-outcome-failed");
+  await inspect(page, project, "no-outcome-failed");
+
+  // An attempt with no result: it may be running or stopped, and nothing is offered but a look at the saved record.
+  await page.unrouteAll();
+  await withoutOutcome(page, id, (bundle) => {
+    Object.assign(bundle.attempts[0], { status: "STARTED", completion: "UNKNOWN", finished_at: null, latency_ms: null, parse_result: null,
+      usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null }, error_class: null, request_count: null });
+    bundle.head.retry = { allowed: false, retry_of: null, reason: "attempt_in_flight" };
+  });
+  await page.reload();
+  await expect(outcome(page)).toHaveAttribute("data-reading", "RUNNING_OR_STOPPED");
+  await expect(page.getByTestId("reading-state")).toContainText("may still be running, or it may have stopped");
+  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Check the saved request again" })).toBeVisible();
+  await shot(page, project, "no-outcome-running");
+  await inspect(page, project, "no-outcome-running");
+
+  // An accepted answer that was not saved.
+  await page.unrouteAll();
+  await withoutOutcome(page, id, (bundle) => {
+    Object.assign(bundle.attempts[0], { status: "COMPLETED", completion: "COMPLETE", parse_result: "ACCEPTED" });
+    bundle.head.retry = { allowed: false, retry_of: null, reason: "nothing_to_retry" };
+  });
+  await page.reload();
+  await expect(outcome(page)).toHaveAttribute("data-reading", "READ_NOT_SAVED");
+  await expect(page.getByText("Could not be interpreted")).toHaveCount(0);
+  await inspect(page, project, "no-outcome-read-not-saved");
+
+  // An uncertain settlement keeps its blocked-retry reason.
+  await page.unrouteAll();
+  await withoutOutcome(page, id, (bundle) => {
+    Object.assign(bundle.attempts[0], { status: "TIMED_OUT", completion: "UNKNOWN", parse_result: "NOT_PARSED" });
+    bundle.head.retry = { allowed: false, retry_of: null, reason: "outcome_uncertain" };
+  });
+  await page.reload();
+  await expect(outcome(page)).toHaveAttribute("data-reading", "UNCERTAIN");
+  await expect(page.getByTestId("retry-blocked")).toContainText("Nothing was replayed.");
+  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
+  await inspect(page, project, "no-outcome-uncertain");
+
+  // Looking again reads the saved record and starts nothing.
+  await page.getByRole("button", { name: "Check the saved request again" }).click();
+  await expect(outcome(page)).toHaveAttribute("data-reading", "UNCERTAIN");
+  expect(requests, "no write and no interpreter attempt came from looking").toEqual([]);
+  expect(remaining()).toBe(0);
+  await page.unrouteAll({ behavior: "wait" }); // let any stubbed response finish before the test ends
+  record(`p05-no-outcome-${project}`, { id });
+});

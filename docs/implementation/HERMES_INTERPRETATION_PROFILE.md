@@ -150,11 +150,24 @@ The outcome codes reuse the P02 outcome envelope. P05 adds no record type and no
 
 **Concurrency.** A second attempt for one request is refused while one is open. The unique place (owner, request, sequence) separates simultaneous callers. A process start or restart closes an attempt only when nobody holds its claim. A held claim means the attempt may still run, so it stays open and duplicate work is refused. A crashed worker loses its connection and so its claim.
 
-**Recovery.** Startup recovery, a retry and an answer all run the same step first: close attempts that are proved abandoned, then publish saved accepted results by parsing their stored text again. That step makes no model call. The publication and its link commit together, so repeating the step adds no second revision. A saved result is left unpublished when the saved meaning moved on.
+**Recovery.** Startup recovery, a retry and an answer all run the same three steps first: close attempts that are proved abandoned; publish saved accepted results by parsing their stored text again; save the failure outcome of a first reading that settled as a failure but crashed before its outcome was written (provider failure, rejected output, or an unknown outcome, including an attempt closed as interrupted). None of them makes a model call. Each is safe to repeat: the publication and its link commit together, and the outcome is written only when none exists for that attempt. A saved result is left unpublished when the saved meaning moved on. A failed outcome repair is logged by class name and never blocks an answer or a retry.
 
 **Capacity.** Each running attempt holds one dedicated database connection for its whole provider call. The pool allows 20 connections, so about ten simultaneous attempts leave little room for ordinary reads. When the pool is full the start record or the claim fails, no model is called, and the user gets a 503. This was not load tested.
 
-**Stuck results.** A saved accepted result that cannot be published (a persistent defect, or a parser change after it was saved) is retried on every recovery pass and logged by class name. Other requests are not blocked. That request shows no revision and no retry. The profile does not yet offer a way out.
+**Stuck results.** A saved accepted result that cannot be published (a persistent defect, or a parser change after it was saved) is retried on every recovery pass and logged by class name. Other requests are not blocked. The page shows it as "Your request was read, and the answer is not saved yet". It offers no retry. The profile does not yet offer a way out.
+
+**A first request with no saved outcome.** The outcome is a separate commit after the attempt settles, so a crash or a storage error can leave a request with attempts and no outcome. A plain page load does not repair it (it writes nothing). The page words the state from the stored attempt and never from the missing outcome. It never says "Could not be interpreted" for these:
+
+| Stored facts | Heading | Action offered |
+|---|---|---|
+| No attempt | Saved, not read yet | "Read my request now" starts one attempt |
+| Attempt with no settlement | An interpreter attempt has not finished. It may be running or stopped; the page cannot tell | "Check the saved request again" (reads only) |
+| Accepted answer, no revision | Your request was read, and the answer is not saved yet | "Check the saved request again" |
+| Provider failure | The interpreter did not answer | "Try the interpreter again" when the server allows it |
+| Rejected or cut-off answer | The interpreter's answer was not usable, with its reason | "Try the interpreter again" when the server allows it |
+| Timed out, unknown or interrupted | We do not know if the interpreter finished, with the blocked-retry reason | "Check the saved request again". No retry |
+
+The same page rules for a reply: `REJECTED`, `UNCERTAIN`, `FAILED` and `PENDING_SAVE` (an accepted reply that is not saved yet is shown as read, never as a failure). Browser checks at 1280px and 390px cover the four first-reading states that have an attempt.
 
 **Late results.** A result that arrives after its attempt was closed as unknown is saved as evidence beside it. It never replaces the settlement, becomes a revision, or starts a retry. Nothing in this build delivers one except the adapter itself, when a worker finishes after another process closed its attempt.
 

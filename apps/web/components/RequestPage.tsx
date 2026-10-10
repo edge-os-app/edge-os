@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, FIELD_LABEL, JOB_LABEL, ORIGIN_LABEL, OUTCOME_COPY, formatTime, shortId, summarizeValue } from "../lib/describe";
-import { FAILURE_COPY, RETRY_BLOCKED, sourceQuote, systemFailure } from "../lib/interpretation";
+import { FAILURE_COPY, RETRY_BLOCKED, firstReading, sourceQuote, systemFailure } from "../lib/interpretation";
 import type { Bundle, Finding, Strategy } from "../lib/types";
 import type { ConversationContext } from "./Conversation";
 import { InterpretationAttempts } from "./InterpretationAttempts";
@@ -88,6 +88,14 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   }, [bundle, id, reload]);
   const answer = useCallback((questionId: string, choiceId: string, origin?: HTMLElement) => respond(questionId, { choice_id: choiceId }, origin), [respond]);
   const reply = useCallback((questionId: string, text: string, origin?: HTMLElement) => respond(questionId, { answer_text: text }, origin), [respond]);
+
+  // Look at the saved record again. It reads only; it starts no interpreter attempt.
+  const checkAgain = async () => {
+    if (busy) return;
+    setBusy(true); setError(""); setNotice("");
+    focusSurface.current = null;
+    try { await reload(); } finally { setBusy(false); }
+  };
 
   // Explicit retry of the interpreter. It starts a separate attempt and never replays an unknown one.
   const retryInterpretation = async () => {
@@ -186,10 +194,10 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const draft = bundle.drafts.find((d) => d.record_id === head.draft_id);
   const interp = bundle.interpretations.find((i) => i.content.interpretation_revision_id === head.interpretation_revision_id);
   const findings: Finding[] = headOutcome?.findings ?? [];
-  const stopped = ["UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT"].includes(outcome);
-  // Saved, but no attempt was ever made (the service stopped first): not a failure and not a verdict. Retry starts it.
-  const unread = head.outcome === null && bundle.attempts.length === 0 && !revision && head.retry.allowed;
-  const failure = outcome === "INVALID_INPUT" && !unread ? systemFailure(findings) : null; // the interpreter failed; the idea was not judged
+  // No saved outcome and no revision: word the state from the stored attempt, never from the missing outcome.
+  const pending = firstReading(bundle);
+  const stopped = !pending && ["UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT"].includes(outcome);
+  const failure = outcome === "INVALID_INPUT" && !pending ? systemFailure(findings) : null; // the interpreter failed; the idea was not judged
   const usesWords = bundle.interpreter.kind !== "FIXTURE";
   const lastAttempt = bundle.attempts[bundle.attempts.length - 1];
 
@@ -222,19 +230,27 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {notice ? <p role="status" className="status ok">{notice}</p> : null}
       {error ? <p role="alert" className="status err" ref={errorBanner} tabIndex={-1}>{error}</p> : null}
 
-      <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={outcome}>
-        <p className="visually-hidden" role="status">{unread ? "Saved, not read yet" : failure ? FAILURE_COPY[failure].title : copy.title}</p>
-        <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${copy.tone}`} style={{ marginRight: 8 }}>{unread ? "Saved, not read yet" : failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
+      <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={pending ? "PENDING" : outcome} data-reading={pending?.kind}>
+        <p className="visually-hidden" role="status">{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</p>
+        <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${pending ? "neutral" : copy.tone}`} style={{ marginRight: 8 }}>{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
         {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the rules can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
         {outcome === "COMPILED" && <p>These rules came from your words and the settings you adopted. Check them, then save. Saving makes an immutable revision. It does not show the rules work.</p>}
         {outcome === "PUBLISHED" && <p>This revision is saved. Reopening it later shows the same record from storage.</p>}
-        {unread ? (
+        {pending ? (
           <>
-            <p>Your request is saved, but the interpreter has not read it yet. Nothing was lost, and nothing was judged.</p>
+            <p data-testid="reading-state">{pending.lead}</p>
             <div className="btn-row">
-              <button className="btn btn-primary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Starting…" : "Read my request now"}</button>
-              <span className="muted">This starts one interpreter attempt.</span>
+              {pending.action === "START" || pending.action === "RETRY" ? (
+                <button className="btn btn-primary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>
+                  {busy ? "Working…" : pending.action === "START" ? "Read my request now" : "Try the interpreter again"}</button>
+              ) : (
+                <button className="btn btn-secondary" type="button" onClick={checkAgain} aria-disabled={busy || undefined}>{busy ? "Checking…" : "Check the saved request again"}</button>
+              )}
+              <span className="muted">{pending.action === "START" ? "This starts one interpreter attempt."
+                : pending.action === "RETRY" ? "A retry is a separate attempt. The earlier attempt stays in the list below."
+                  : "This only reads the saved record. It starts no interpreter attempt."}</span>
             </div>
+            {pending.action === "CHECK_AGAIN" && head.retry.reason && RETRY_BLOCKED[head.retry.reason] ? <p className="muted" data-testid="retry-blocked">{RETRY_BLOCKED[head.retry.reason]}</p> : null}
           </>
         ) : null}
         {failure ? (
@@ -250,7 +266,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
             ) : <p className="muted" data-testid="retry-blocked">{RETRY_BLOCKED[head.retry.reason ?? ""] ?? "A retry is not available."}</p>}
           </>
         ) : null}
-        {stopped && !failure && !unread && (
+        {stopped && !failure && (
           <>
             {findings.map((f) => {
               const field = f.path.match(/^\/field_evidence\/([^/]+)/)?.[1];
@@ -327,7 +343,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
         strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}
 
       <InterpretationAttempts attempts={bundle.attempts} lateResults={bundle.late_results}
-        open={Boolean(failure) || Boolean(head.reply) || (lastAttempt !== undefined && lastAttempt.status !== "COMPLETED")} />
+        open={Boolean(failure) || Boolean(pending) || Boolean(head.reply) || (lastAttempt !== undefined && lastAttempt.status !== "COMPLETED")} />
 
       <details>
         <summary>Where each setting came from</summary>
