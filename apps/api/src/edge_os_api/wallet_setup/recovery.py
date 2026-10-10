@@ -23,10 +23,15 @@ def evidence_is_wellformed(evidence: WalletEvidence) -> bool:
     It rejects a malformed field before any JSON write or binding, so an invalid result cannot fail the
     retained-event write and leave the setup `PENDING` without a reason.
     """
-    return (isinstance(evidence.wallet_id, str) and bool(evidence.wallet_id)
+    return (_storable_text(evidence.wallet_id)
             and isinstance(evidence.owner_id, uuid.UUID)
-            and isinstance(evidence.chain_type, str) and bool(evidence.chain_type)
-            and isinstance(evidence.address, str) and bool(evidence.address))
+            and _storable_text(evidence.chain_type)
+            and _storable_text(evidence.address))
+
+
+def _storable_text(value: object) -> bool:
+    """A non-empty string PostgreSQL can store. A NUL (U+0000) is a valid `str` but breaks a JSONB write."""
+    return isinstance(value, str) and bool(value) and "\x00" not in value
 
 
 def evidence_matches_identity(row: WalletSetupRow, evidence: WalletEvidence) -> bool:

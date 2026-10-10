@@ -115,6 +115,18 @@ def test_malformed_evidence_field_becomes_unknown_and_never_recreates(wallet_cli
     assert pg.psql("select wallet_id is null from wallet_setups where agent_id = 'agent-malformed-field'") == "t"
 
 
+def test_unstorable_evidence_field_becomes_unknown(wallet_client, owner_a, provider, pg):
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    owner_id = uuid.UUID(helpers.owner_user_id(wallet_client, owner_a))
+    provider.create_result = WalletEvidence(wallet_id="wallet-nul", owner_id=owner_id, chain_type="ethereum",
+                                            address="0x\x00bad")
+    assert _prepare(wallet_client, owner_a, "agent-nul", strategy_id, revision_id).status_code == 200
+    body = _dispatch(wallet_client, owner_a, "agent-nul").json()
+    assert body["state"] == "UNKNOWN" and body["reason"] == "MALFORMED_RESULT"
+    assert pg.psql("select count(*) from wallet_setup_events where event_type = 'RESULT_RETURNED'") == "0"
+    assert pg.psql("select wallet_id is null from wallet_setups where agent_id = 'agent-nul'") == "t"
+
+
 def test_malformed_lookup_evidence_field_becomes_unknown(wallet_client, owner_a, provider, pg):
     strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
     owner_id = uuid.UUID(helpers.owner_user_id(wallet_client, owner_a))
