@@ -100,7 +100,7 @@ def test_a_concrete_thesis_is_read_from_the_users_words_and_compiles_only_after_
     assert attempt["parse_result"] == "ACCEPTED" and attempt["request_count"] == 1
     assert attempt["revision_id"] == bundle["head"]["interpretation_revision_id"]
     assert attempt["identity"]["runtime_label"] == "LOCAL_FAKE_PROVIDER"
-    assert attempt["identity"]["prompt_version"] == "p05-interpretation/3"
+    assert attempt["identity"]["prompt_version"] == "p05-interpretation/4"
     assert len(attempt["identity"]["task_sha256"]) == 64
     no_model_text(bundle, '"source_passage"', "Buy when the 15-minute price return is above 1%\", \"value\"")
     assert runner.turns[0].user_message.startswith("{")
@@ -954,3 +954,26 @@ def test_large_offered_options_beside_a_costly_request_are_refused_or_the_whole_
         bundle = chosen.json()
     adopted = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
     assert adopted.status_code == 201, adopted.text
+
+
+def test_the_reply_dry_run_uses_the_longest_question_identifier_a_real_reply_can_carry(monkeypatch) -> None:
+    """The real question id is copied into two saved records; a placeholder shorter than the longest id hides their size."""
+    from edge_os_api.research import interpretation_publication as publication
+    from edge_os_api.research.interpretation_response import MAX_IDENTIFIER_CHARS
+    seen: list[str] = []
+    real = publication.reply_records
+
+    def spy(base, intake_content, request_id, evidence, question, answer_ref, question_id, *rest):
+        seen.append(question_id)
+        return real(base, intake_content, request_id, evidence, question, answer_ref, question_id, *rest)
+    monkeypatch.setattr(publication, "reply_records", spy)
+    intake = intake_body("rough-hunch")
+    evidence = [dict(i) for i in case("rough-hunch")["provider"]["model_response"]["field_evidence"]]
+    from edge_os_api.research.interpretation_response import ParsedInterpretation, parse_follow_up_response, ClarificationAnswer
+    answer_ = ClarificationAnswer("reply:00000000-0000-4000-8000-000000000001", "up more than 2%")
+    parsed = parse_follow_up_response(json.dumps(hunch_follow_up("rough-hunch", [{
+        "field_name": "entry", "state": "KNOWN", "origin": "USER_STATED", "source_passage": "up more than 2%",
+        "value": TWO_PERCENT}])), intake, evidence, answer_)
+    assert isinstance(parsed, ParsedInterpretation), parsed
+    publication.RecordPublicationCheck().reply(intake, evidence, "Which entry?", answer_, parsed)
+    assert seen and len(seen[0]) == MAX_IDENTIFIER_CHARS

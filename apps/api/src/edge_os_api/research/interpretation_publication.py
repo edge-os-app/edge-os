@@ -18,7 +18,7 @@ from typing import Any
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service
 from edge_os_api.research.interpretation_response import (
-    ClarificationAnswer, OfferedQuestion, ParsedInterpretation, Rejection,
+    MAX_IDENTIFIER_CHARS, ClarificationAnswer, OfferedQuestion, ParsedInterpretation, Rejection,
 )
 from edge_os_api.research.outcome_router import Routed, route
 
@@ -122,7 +122,7 @@ class RecordPublicationCheck:
                     "syntax_status": "VALID", "evidence_readiness": parsed.evidence_readiness}
             interp, clarification, routed = reply_records(
                 base, intake, DRY_RUN_REQUEST, list(parsed.field_evidence), question, answer.answer_ref,
-                "dry-run-question", parsed.meaning_status, parsed.evidence_readiness, parsed.missing_capability,
+                "q" * MAX_IDENTIFIER_CHARS, parsed.meaning_status, parsed.evidence_readiness, parsed.missing_capability,
                 parsed.questions, DRY_RUN_REVISION)
             record_contract.validate_record("PromptInterpretation", interp)
             record_contract.validate_record("Clarification", clarification)

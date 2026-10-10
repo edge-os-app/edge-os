@@ -35,7 +35,7 @@ log = logging.getLogger("edge_os")
 
 PINNED_HERMES_COMMIT = "54bc5e509c985f37265c3d416bd2c64b10fc77ba"
 PINNED_HERMES_LOCK_SHA256 = "de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01"
-PROMPT_VERSION = "p05-interpretation/3"
+PROMPT_VERSION = "p05-interpretation/4"
 RUNTIME_LABELS = ("LOCAL_FAKE_PROVIDER", "LIVE")
 
 RESPONSE_SHAPE = """\
@@ -73,8 +73,10 @@ Rules:
 6. When the user states two values for one field, use CONFLICTING and quote each statement. Do not pick one.
 7. A question must ask about a field you report as MISSING or CONFLICTING. Its text ends with "?". Each option label
    states every number that its value carries.
-   Keep a question text under 500 characters and an option label under 300. Give every question_id and option id fewer
-   than 200 characters. Never begin a question_id with "ask-". The application uses that start for its own questions.
+   Keep a question text under 500 characters and an option label under 300. Neither may hold control characters.
+   Write every question_id and option id with only letters, digits, "-", "_", "." or ":", starting with a letter or
+   digit, at most 64 characters. Never begin a question_id with "ask-". The application uses that start for its own
+   questions.
 8. Use the shapes in field_shapes and only the operators in operators. Those shapes show form, not advice.
 9. When requested_job is not CREATE_STRATEGY, model_fields is empty: return an empty field_evidence and no questions,
    and set evidence_readiness to "UNRESOLVED" when the user asks you to look for ideas without a thesis.

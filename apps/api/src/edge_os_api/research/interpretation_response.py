@@ -11,6 +11,7 @@ import functools
 import hashlib
 import json
 import logging
+import re
 import math
 import re
 import unicodedata
@@ -37,7 +38,10 @@ CONFLICT_FIELDS = frozenset({"value", "source_passage"})
 ADOPT_QUESTION_ID = "adopt-suggested-settings"
 RESERVED_QUESTION_IDS = frozenset({ADOPT_QUESTION_ID})
 RESERVED_QUESTION_PREFIXES = ("ask-",)  # the application names its own free-text questions "ask-<field>"
-MAX_IDENTIFIER_CHARS = 200  # the answer route accepts no longer identifier
+MAX_IDENTIFIER_CHARS = 64
+# Plain characters only: each costs one byte in a saved record, where a control character costs six. The records that a
+# later step writes copy an identifier several times, so the room check can count it at 64 bytes.
+IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 MAX_QUESTION_CHARS = 500
 MAX_LABEL_CHARS = 300
 DECLARED_MARKET_SOURCE = "intake:declared_market"
@@ -322,8 +326,8 @@ def _parse_questions(raw: list[Any], evidence: list[dict[str, Any]],
             if key not in question:
                 return _reject("missing_field", f"{at}/{key}", "A question lacks a required field.")
         question_id, name, text = question["question_id"], question["field_name"], question["text"]
-        if not isinstance(question_id, str) or not question_id or len(question_id) > MAX_IDENTIFIER_CHARS:
-            return _reject("invalid_value", f"{at}/question_id", "A question needs an identifier of 1 to 200 characters.")
+        if not isinstance(question_id, str) or not IDENTIFIER_PATTERN.fullmatch(question_id):
+            return _reject("invalid_value", f"{at}/question_id", "A question needs an identifier of 1 to 64 plain characters.")
         if not isinstance(name, str):
             return _reject("invalid_value", f"{at}/field_name", "The field name must be text.")
         if question_id in RESERVED_QUESTION_IDS or question_id.startswith(RESERVED_QUESTION_PREFIXES):
@@ -337,7 +341,7 @@ def _parse_questions(raw: list[Any], evidence: list[dict[str, Any]],
         if state_of[name] == "KNOWN":
             return _reject("question_for_settled_field", f"{at}/field_name",
                            "A question cannot ask about a field that is already known.")
-        if not isinstance(text, str) or not text.strip().endswith("?") or len(text) > MAX_QUESTION_CHARS:
+        if not isinstance(text, str) or not text.strip().endswith("?") or len(text) > MAX_QUESTION_CHARS or _has_control(text):
             return _reject("question_text_invalid", f"{at}/text",
                            "A question must be text of at most 500 characters that ends with a question mark.")
         options = _parse_options(question["options"], at)
@@ -345,6 +349,10 @@ def _parse_questions(raw: list[Any], evidence: list[dict[str, Any]],
             return options
         questions.append(OfferedQuestion(question_id, name, text, options))
     return tuple(questions)
+
+
+def _has_control(text: str) -> bool:
+    return any(ord(char) < 0x20 or ord(char) == 0x7F for char in text)
 
 
 def _parse_options(raw: Any, at: str) -> tuple[OfferedOption, ...] | Rejection:
@@ -362,9 +370,9 @@ def _parse_options(raw: Any, at: str) -> tuple[OfferedOption, ...] | Rejection:
         if option.get("value") is None:
             return _reject("missing_field", f"{where}/value", "An option needs a value.")
         option_id, label = option.get("id"), option.get("label")
-        if not isinstance(option_id, str) or not option_id or len(option_id) > MAX_IDENTIFIER_CHARS:
-            return _reject("invalid_value", f"{where}/id", "An option needs an identifier of 1 to 200 characters.")
-        if not isinstance(label, str) or not label or len(label) > MAX_LABEL_CHARS:
+        if not isinstance(option_id, str) or not IDENTIFIER_PATTERN.fullmatch(option_id):
+            return _reject("invalid_value", f"{where}/id", "An option needs an identifier of 1 to 64 plain characters.")
+        if not isinstance(label, str) or not label or len(label) > MAX_LABEL_CHARS or _has_control(label):
             return _reject("invalid_value", f"{where}/label", "An option needs a label of 1 to 300 characters.")
         if _ungrounded(option["value"], label):
             return _reject("option_label_omits_value", f"{where}/label",

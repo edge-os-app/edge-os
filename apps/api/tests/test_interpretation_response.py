@@ -941,16 +941,22 @@ def test_rejects_a_question_id_that_the_application_names_its_own_questions_with
 
 
 @pytest.mark.parametrize("where, change", [
-    ("question_id", lambda q: q.update(question_id="q" * 201)),
-    ("option id", lambda q: q["options"][0].update(id="o" * 201)),
+    ("question_id too long", lambda q: q.update(question_id="q" * 65)),
+    ("option id too long", lambda q: q["options"][0].update(id="o" * 65)),
+    ("question_id with a control character", lambda q: q.update(question_id="q\u0001x")),
+    ("option id with a space", lambda q: q["options"][0].update(id="o x")),
+    ("question_id starting with a dash", lambda q: q.update(question_id="-q")),
+    ("question text with a control character", lambda q: q.update(text="Which entry\u0001?")),
+    ("option label with a control character", lambda q: q["options"][0].update(label=q["options"][0]["label"] + "\u0007")),
 ])
-def test_rejects_an_identifier_longer_than_the_answer_route_accepts(where: str, change: Any) -> None:
+def test_rejects_an_identifier_or_text_that_is_not_plain(where: str, change: Any) -> None:
+    """Plain characters cost one byte in a saved record; a control character costs six, so later size checks need them out."""
     response = hunch_response()
     change(response["questions"][0])
     assert isinstance(parse(response, HUNCH_INTAKE), Rejection), where
     response = hunch_response()
-    response["questions"][0]["question_id"] = "q" * 200
-    response["questions"][0]["options"][0]["id"] = "o" * 200
+    response["questions"][0]["question_id"] = "q" * 64
+    response["questions"][0]["options"][0]["id"] = "o" * 64
     assert isinstance(parse(response, HUNCH_INTAKE), ParsedInterpretation)
 
 
