@@ -642,7 +642,7 @@ def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_a
                 and any(row["replay_id"] == saved["replayId"] and row["content_sha256"] == saved["replayHash"]
                         for row in original_rows),
             "same_content_fresh_key_allowed": identity["sameContentNewKeyStatus"] == 201 and len(original_rows) == 2
-                and all(row["content"]["inputs"] == saved["expectedInputs"] for row in original_rows),
+                and all(row["content"]["inputs"] == identity["expectedInputs"] for row in original_rows),
             "independent_id_changed_settings_saved": identity["independentStatus"] == 201
                 and len(independent_rows) == 1
                 and independent_rows[0]["replay_id"] == identity["independentReplayId"]
