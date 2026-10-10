@@ -318,10 +318,44 @@ test("a request whose outcome was not saved is worded from its attempt, offers t
   await inspect(page, project, "no-outcome-uncertain");
 
   // Looking again reads the saved record and starts nothing.
+  const reads = [];
+  page.on("request", (request) => { if (request.method() === "GET" && request.url().endsWith(`/v1/research/requests/${id}`)) reads.push(request.url()); });
   await page.getByRole("button", { name: "Check the saved request again" }).click();
   await expect(outcome(page)).toHaveAttribute("data-reading", "UNCERTAIN");
+  await expect(page.locator("#state-title")).toBeFocused();
+  expect(reads.length, "looking again reads the saved record").toBeGreaterThanOrEqual(1);
   expect(requests, "no write and no interpreter attempt came from looking").toEqual([]);
   expect(remaining()).toBe(0);
   await page.unrouteAll({ behavior: "wait" }); // let any stubbed response finish before the test ends
   record(`p05-no-outcome-${project}`, { id });
+});
+
+test("after a retry, the page describes the latest attempt and not an older failure that has its own outcome", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  script({ case: "provider-503" });
+  const id = await submit(page, THESIS);
+  await expect(page.getByRole("heading", { name: "The interpreter did not answer" })).toBeVisible();
+
+  // Attempt 1 failed and has its outcome. Attempt 2 timed out and its outcome was not saved: only the GET response is changed.
+  await page.route(new RegExp(`/v1/research/requests/${id}$`), async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const bundle = await response.json();
+    const first = bundle.attempts[0];
+    bundle.attempts.push({ ...first, attempt_id: "00000000-0000-4000-8000-0000000000a2", sequence: 2, retry_of: first.attempt_id,
+      status: "TIMED_OUT", completion: "UNKNOWN", parse_result: "NOT_PARSED", error_class: null, request_count: null, latency_ms: null,
+      usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null } });
+    bundle.head.retry = { allowed: false, retry_of: null, reason: "outcome_uncertain" };
+    await route.fulfill({ response, json: bundle });
+  });
+  await page.reload();
+  await expect(outcome(page)).toHaveAttribute("data-reading", "UNCERTAIN");
+  await expect(page.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeVisible();
+  await expect(page.getByText("The interpreter did not answer")).toHaveCount(0);
+  await expect(page.getByText(/did not return a result/)).toHaveCount(0);
+  await expect(page.getByTestId("retry-blocked")).toContainText("Nothing was replayed.");
+  await shot(page, project, "latest-attempt-unknown");
+  await inspect(page, project, "latest-attempt-unknown");
+  await page.unrouteAll({ behavior: "wait" });
 });

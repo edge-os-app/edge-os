@@ -122,7 +122,7 @@ const baseBundle = (outcome: string, finding: { code: string; detail: string }, 
   interpreter: { kind: "HERMES_LOCAL_FAKE_PROVIDER", id: "p05-interpretation/1", notice: "Actual pinned Hermes ran against a local fake provider." },
   intake: { record_id: "intake-1", created_at: "2026-10-10T08:00:00Z", content: { original_request: "Buy when up", restrictions: [], input_class: "CONCRETE_THESIS", requested_job: "CREATE_STRATEGY" } },
   interpretations: [], clarifications: [], publications: [], drafts: [], revisions: [], attempts, late_results: [],
-  outcomes: [{ interpretation_revision_id: null, record: { record_id: "o1", content: { outcome, stage: "INTERPRETATION", code: "validation_error", retry: "SAFE_SAME_KEY", findings: [{ path: "/", ...finding }] } } }],
+  outcomes: [{ interpretation_revision_id: null, record: { record_id: "o1", operation_id: attempts[attempts.length - 1]?.attempt_id ?? "none", content: { outcome, stage: "INTERPRETATION", code: "validation_error", retry: "SAFE_SAME_KEY", findings: [{ path: "/", ...finding }] } } }],
   head: { interpretation_revision_id: null, outcome, questions: [], draft_id: null, strategy_id: null, retry, reply },
 });
 
@@ -335,6 +335,23 @@ describe("a first request with no saved outcome and no revision", () => {
     expect(mocks.retry).not.toHaveBeenCalled();
     expect(mocks.answer).not.toHaveBeenCalled();
     expect(mocks.get).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("heading", { name: "Unresolved: nothing was tested" })).toHaveFocus(); // focus follows the new state
+  });
+
+  it("moves focus to the state heading after 'Read my request now' and says it is starting, not retrying", async () => {
+    const user = userEvent.setup();
+    mocks.get.mockResolvedValue(noOutcome([], { allowed: true, retry_of: null, reason: null }));
+    mocks.retry.mockResolvedValue(baseBundle("UNRESOLVED", { code: "m", detail: "n" }, { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({})]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Read my request now" }));
+    expect(await screen.findByRole("heading", { name: "Unresolved: nothing was tested" })).toHaveFocus();
+  });
+
+  it("does not offer the investigation plan beside a request the interpreter has not read or failed to read", async () => {
+    const bundle = noOutcome([failedAttempt], { allowed: true, retry_of: "a1", reason: null });
+    bundle.intake.content.requested_job = "INVESTIGATE_EFFECT" as never;
+    await show(bundle);
+    expect(screen.queryByTestId("investigation-review")).toBeNull();
   });
 
   it("draws the state in the neutral grey style, not as an error and not as a prompt for an answer", async () => {
@@ -347,5 +364,76 @@ describe("a first request with no saved outcome and no revision", () => {
     const section = await show(baseBundle("INVALID_INPUT", { code: "interpreter_unavailable", detail: "x" }, { allowed: true, retry_of: "a1", reason: null }, [failedAttempt]));
     expect(section).not.toHaveAttribute("data-reading");
     expect(section).toHaveAttribute("data-outcome", "INVALID_INPUT");
+  });
+
+  it("words the request from the LATEST attempt when an earlier attempt has its own outcome: failed, then unknown", async () => {
+    const first = attempt({ attempt_id: "a1", status: "PROVIDER_FAILED", completion: "NONE", parse_result: "NOT_PARSED", revision_id: null,
+      usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null } });
+    const second = attempt({ attempt_id: "a2", sequence: 2, retry_of: "a1", status: "TIMED_OUT", completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null });
+    const bundle = baseBundle("INVALID_INPUT", { code: "interpreter_unavailable", detail: "The model provider did not return a result." },
+      { allowed: false, retry_of: null, reason: "outcome_uncertain" }, [first, second]);
+    bundle.outcomes[0].record.operation_id = "a1"; // only attempt 1 has an outcome
+    const section = await show(bundle);
+    expect(section).toHaveAttribute("data-reading", "UNCERTAIN");
+    expect(screen.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeInTheDocument();
+    expect(screen.queryByText("The interpreter did not answer")).toBeNull();
+    expect(screen.queryByText(/did not return a result|You can try again/)).toBeNull();
+    expect(screen.getByTestId("retry-blocked")).toHaveTextContent("Nothing was replayed.");
+  });
+
+  it("says the latest attempt was read and is not saved when an earlier attempt failed: failed, then accepted but unsaved", async () => {
+    const first = attempt({ attempt_id: "a1", status: "PROVIDER_FAILED", completion: "NONE", parse_result: "NOT_PARSED", revision_id: null });
+    const second = attempt({ attempt_id: "a2", sequence: 2, retry_of: "a1", revision_id: null });
+    const bundle = baseBundle("INVALID_INPUT", { code: "interpreter_unavailable", detail: "The model provider did not return a result." },
+      { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [first, second]);
+    bundle.outcomes[0].record.operation_id = "a1";
+    const section = await show(bundle);
+    expect(section).toHaveAttribute("data-reading", "READ_NOT_SAVED");
+    expect(screen.queryByText(/system failure|did not return a result|A retry is not available/)).toBeNull();
+  });
+
+  it("does not claim an earlier failure describes a retry that has started: failed, then started", async () => {
+    const first = attempt({ attempt_id: "a1", status: "PROVIDER_FAILED", completion: "NONE", parse_result: "NOT_PARSED", revision_id: null });
+    const second = attempt({ attempt_id: "a2", sequence: 2, retry_of: "a1", status: "STARTED", completion: "UNKNOWN", finished_at: null, parse_result: null, revision_id: null });
+    const bundle = baseBundle("INVALID_INPUT", { code: "interpreter_unavailable", detail: "x" }, { allowed: false, retry_of: null, reason: "attempt_in_flight" }, [first, second]);
+    bundle.outcomes[0].record.operation_id = "a1";
+    const section = await show(bundle);
+    expect(section).toHaveAttribute("data-reading", "RUNNING_OR_STOPPED");
+    expect(screen.queryByText("The interpreter did not answer")).toBeNull();
+  });
+
+  it("keeps the outcome of the latest attempt when that attempt has one: failed, then failed again", async () => {
+    const first = attempt({ attempt_id: "a1", status: "PROVIDER_FAILED", completion: "NONE", parse_result: "NOT_PARSED", revision_id: null });
+    const second = attempt({ attempt_id: "a2", sequence: 2, retry_of: "a1", parse_result: "REJECTED:multiple_objects", revision_id: null });
+    const bundle = baseBundle("INVALID_INPUT", { code: "malformed_model_output", detail: "The model's answer could not be used (reason: multiple_objects)." },
+      { allowed: true, retry_of: "a2", reason: null }, [first, second]);
+    bundle.outcomes = [
+      { interpretation_revision_id: null, record: { record_id: "o1", operation_id: "a1", content: { outcome: "INVALID_INPUT", stage: "INTERPRETATION", code: "validation_error", retry: "SAFE_SAME_KEY", findings: [{ path: "/", code: "interpreter_unavailable", detail: "provider" }] } } },
+      bundle.outcomes[0]] as never;
+    bundle.outcomes[1].record.operation_id = "a2";
+    const section = await show(bundle);
+    expect(section).not.toHaveAttribute("data-reading");
+    expect(screen.getByRole("heading", { name: "The interpreter's answer was not usable" })).toBeInTheDocument();
+    expect(screen.getByTestId("failure-detail")).toHaveTextContent("multiple_objects");
+  });
+
+  it("does not label an attempt with no saved result as running", () => {
+    render(<InterpretationAttempts attempts={[attempt({ status: "STARTED", completion: "UNKNOWN", finished_at: null, parse_result: null, revision_id: null })]} lateResults={[]} open />);
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.getByText("Started, no result saved")).toBeInTheDocument();
+  });
+
+  it("says a reply attempt with no saved result may be running or stopped, and makes no claim of activity", async () => {
+    const bundle = baseBundle("NEEDS_CLARIFICATION", { code: "missing_field", detail: "What should the entry rule be?" },
+      { allowed: false, retry_of: null, reason: "attempt_in_flight" }, [attempt({}), attempt({ attempt_id: "a2", sequence: 2, purpose: "FOLLOW_UP", status: "STARTED", completion: "UNKNOWN", finished_at: null, parse_result: null, revision_id: null })],
+      { state: "UNFINISHED", reason_code: null, attempt_id: "a2" });
+    bundle.head.interpretation_revision_id = "rev-1" as never;
+    bundle.head.questions = [choice] as never;
+    mocks.get.mockResolvedValue(bundle);
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Your last reply has no saved result" })).toBeInTheDocument();
+    expect(screen.getByText(/may still be running, or it may have stopped/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try this reply again" })).toBeNull();
+    expect(screen.queryByText(/system failure|was not read/)).toBeNull();
   });
 });

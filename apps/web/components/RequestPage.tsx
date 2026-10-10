@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, FIELD_LABEL, JOB_LABEL, ORIGIN_LABEL, OUTCOME_COPY, formatTime, shortId, summarizeValue } from "../lib/describe";
-import { FAILURE_COPY, RETRY_BLOCKED, firstReading, sourceQuote, systemFailure } from "../lib/interpretation";
+import { FAILURE_COPY, RETRY_BLOCKED, firstReading, replyCopy, sourceQuote, systemFailure } from "../lib/interpretation";
 import type { Bundle, Finding, Strategy } from "../lib/types";
 import type { ConversationContext } from "./Conversation";
 import { InterpretationAttempts } from "./InterpretationAttempts";
@@ -101,7 +101,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const retryInterpretation = async () => {
     if (busy || !bundle || !bundle.head.retry.allowed) return;
     setBusy(true); setError(""); setNotice(""); setAnswerMessage(undefined);
-    setWork("Trying the interpreter again. This can take a few seconds.");
+    setWork(bundle.attempts.length === 0 ? "Starting the interpreter. This can take a few seconds." : "Trying the interpreter again. This can take a few seconds.");
     focusSurface.current = null; // the retry button may disappear; focus lands on the new state
     try {
       setBundle(await api.retryInterpretation(id, bundle.head.retry.retry_of));
@@ -189,7 +189,11 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const head = bundle.head;
   const outcome = revision ? "PUBLISHED" : head.outcome ?? "INVALID_INPUT";
   const copy = OUTCOME_COPY[outcome];
-  const headOutcome = bundle.outcomes.find((o) => o.interpretation_revision_id === head.interpretation_revision_id)?.record.content
+  // With no revision, every failure outcome has a null revision, so match the outcome to the latest attempt (its operation ID).
+  const latestAttempt = bundle.attempts[bundle.attempts.length - 1];
+  const headOutcome = (head.interpretation_revision_id === null && latestAttempt
+    ? bundle.outcomes.find((o) => o.record.operation_id === latestAttempt.attempt_id)
+    : bundle.outcomes.find((o) => o.interpretation_revision_id === head.interpretation_revision_id))?.record.content
     ?? bundle.outcomes[bundle.outcomes.length - 1]?.record.content;
   const draft = bundle.drafts.find((d) => d.record_id === head.draft_id);
   const interp = bundle.interpretations.find((i) => i.content.interpretation_revision_id === head.interpretation_revision_id);
@@ -277,7 +281,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
         )}
       </section>
 
-      {intake.requested_job === "INVESTIGATE_EFFECT" ? <InvestigationReview intakeId={id}
+      {intake.requested_job === "INVESTIGATE_EFFECT" && !pending && !failure ? <InvestigationReview intakeId={id}
         interpretationRevisionId={head.interpretation_revision_id} /> : null}
 
       {/* The region is always on the page, so assistive technology announces the text when it changes. */}
@@ -285,14 +289,8 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
 
       {head.reply ? (
         <section className="status stop" aria-labelledby="reply-title" data-testid="reply-state" data-reply={head.reply.state}>
-          <h2 id="reply-title" style={{ fontSize: 18 }}>{head.reply.state === "REJECTED" ? "Your last reply could not be used" : head.reply.state === "UNCERTAIN" ? "We do not know if your last reply was read" : head.reply.state === "PENDING_SAVE" ? "Your last reply was read but is not saved yet" : "Your last reply was not read"}</h2>
-          <p>{head.reply.state === "REJECTED" && head.reply.reason_code === "reply_changed_nothing"
-            ? "Your reply matched what is already saved, so nothing changed. Say what you want to change, or choose an option."
-            : head.reply.state === "REJECTED"
-            ? `The interpreter's reading broke a rule (${head.reply.reason_code?.replaceAll("_", " ")}), so none of it was used. Your saved meaning did not change.`
-            : head.reply.state === "PENDING_SAVE" ? "The interpreter read it and the answer was accepted. Saving it did not finish. It is saved the next time this request is opened for an answer or a retry, or when the service restarts. Your saved meaning has not changed yet."
-              : head.reply.state === "UNCERTAIN" ? "The interpreter may or may not have read it. Nothing was retried and your saved meaning did not change."
-              : "A system failure stopped the interpreter. Your saved meaning did not change."}</p>
+          <h2 id="reply-title" style={{ fontSize: 18 }}>{replyCopy(head.reply).title}</h2>
+          <p>{replyCopy(head.reply).body}</p>
           {head.retry.allowed ? (
             <div className="btn-row">
               <button className="btn btn-secondary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try this reply again"}</button>

@@ -27,7 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from edge_os_api.core.authentication import Principal
-from edge_os_api.core.errors import AppError, finding, invalid, not_found, service_unavailable
+from edge_os_api.core.errors import AppError, finding, invalid, service_unavailable
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.records.models import Record
 from edge_os_api.research import service
@@ -38,7 +38,7 @@ from edge_os_api.research.hermes_interpreter import (
 )
 from edge_os_api.research.interpretation_attempts import AttemptLedger, AttemptView
 from edge_os_api.research.interpretation_response import (
-    ADOPT_QUESTION_ID, ClarificationAnswer, OfferedOption, OfferedQuestion, ParsedInterpretation, Rejection,
+    ClarificationAnswer, OfferedOption, OfferedQuestion, ParsedInterpretation,
 )
 from edge_os_api.research.outcome_router import Routed, route
 
@@ -51,7 +51,6 @@ LABEL = {"kind": "HERMES_LOCAL_FAKE_PROVIDER", "id": "p05-interpretation/1",
                    "and no research ran."}
 TEXT_QUESTION_PREFIX = "ask-"
 UNCERTAIN = frozenset({"TIMED_OUT", "UNKNOWN", "INTERRUPTED"})
-KNOWN_FAILURE = frozenset({"PROVIDER_FAILED", "TRUNCATED"})
 
 MALFORMED = "malformed_model_output"
 UNAVAILABLE = "interpreter_unavailable"
@@ -492,6 +491,9 @@ class HermesResearch:
         state = retry_state(history, head is not None, head_id)
         reply = None
         if history and history[-1].start.identity.purpose == "FOLLOW_UP" and history[-1].revision_id is None \
+                and history[-1].settlement is None and history[-1].start.identity.previous_revision_id == head_id:
+            reply = {"state": "UNFINISHED", "reason_code": None, "attempt_id": history[-1].start.attempt_id}
+        elif history and history[-1].start.identity.purpose == "FOLLOW_UP" and history[-1].revision_id is None \
                 and history[-1].settlement is not None and history[-1].start.identity.previous_revision_id == head_id:
             last = history[-1]
             parse = last.settlement.parse_result  # type: ignore[union-attr]

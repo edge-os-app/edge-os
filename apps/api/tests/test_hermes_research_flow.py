@@ -8,7 +8,6 @@ actual pinned Hermes runs the same cases in `tests/hermes_interpretation`. No mo
 from __future__ import annotations
 
 import json
-import threading
 import uuid
 from typing import Any
 
@@ -441,3 +440,19 @@ def test_the_default_fixture_interpreter_has_no_attempts_free_text_or_retry(clie
     free = answer(client, owner_a, bundle, "adopt-suggested-settings", answer_text="adopt")
     assert free.status_code == 422 and free.json()["findings"][0]["code"] == "free_text_not_supported"
     assert retry(client, owner_a, bundle, None).status_code == 409
+
+
+def test_a_reply_with_no_saved_result_is_reported_as_unfinished_not_as_a_failure(make_client, owner_a) -> None:
+    first = make_client(CaseRunner(turn_result(case("rough-hunch")["provider"])))
+    bundle = create(first, owner_a, "rough-hunch").json()
+    owner = first.get("/v1/me", headers=owner_a).json()["user_id"]
+    from test_interpretation_attempt_store import identity as attempt_identity
+    first.app.state.hermes.ledger.begin(owner, bundle["intake"]["record_id"], attempt_identity(
+        '{"task":"follow_up","answer":"x"}', purpose="FOLLOW_UP", answer_ref="reply:1", answer_text="x",
+        previous_revision_id=bundle["head"]["interpretation_revision_id"]))
+
+    after = first.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).json()
+
+    assert after["head"]["reply"]["state"] == "UNFINISHED"
+    assert after["attempts"][-1]["status"] == "STARTED"
+    assert after["head"]["retry"]["reason"] == "attempt_in_flight"

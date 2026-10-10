@@ -156,18 +156,20 @@ The outcome codes reuse the P02 outcome envelope. P05 adds no record type and no
 
 **Stuck results.** A saved accepted result that cannot be published (a persistent defect, or a parser change after it was saved) is retried on every recovery pass and logged by class name. Other requests are not blocked. The page shows it as "Your request was read, and the answer is not saved yet". It offers no retry. The profile does not yet offer a way out.
 
-**A first request with no saved outcome.** The outcome is a separate commit after the attempt settles, so a crash or a storage error can leave a request with attempts and no outcome. A plain page load does not repair it (it writes nothing). The page words the state from the stored attempt and never from the missing outcome. It never says "Could not be interpreted" for these:
+**A first request whose latest attempt has no saved outcome.** The outcome is a separate commit after the attempt settles, so a crash or a storage error can leave the latest attempt without one. After a retry the page matches an outcome to an attempt by the outcome's operation ID, which is the attempt ID. An older attempt's outcome never describes a newer attempt. A plain page load does not repair it (it writes nothing). The page words the state from the stored attempt and never from the missing outcome. It never says "Could not be interpreted" for these:
 
 | Stored facts | Heading | Action offered |
 |---|---|---|
 | No attempt | Saved, not read yet | "Read my request now" starts one attempt |
-| Attempt with no settlement | An interpreter attempt has not finished. It may be running or stopped; the page cannot tell | "Check the saved request again" (reads only) |
+| Attempt with no settlement (the attempt list says "Started, no result saved", never "Running") | An interpreter attempt has not finished. It may be running or stopped; the page cannot tell | "Check the saved request again" (reads only) |
 | Accepted answer, no revision | Your request was read, and the answer is not saved yet | "Check the saved request again" |
 | Provider failure | The interpreter did not answer | "Try the interpreter again" when the server allows it |
 | Rejected or cut-off answer | The interpreter's answer was not usable, with its reason | "Try the interpreter again" when the server allows it |
 | Timed out, unknown or interrupted | We do not know if the interpreter finished, with the blocked-retry reason | "Check the saved request again". No retry |
 
-The same page rules for a reply: `REJECTED`, `UNCERTAIN`, `FAILED` and `PENDING_SAVE` (an accepted reply that is not saved yet is shown as read, never as a failure). Browser checks at 1280px and 390px cover the four first-reading states that have an attempt.
+The same page rules for a reply: `REJECTED`, `UNCERTAIN`, `FAILED` and `PENDING_SAVE` (an accepted reply that is not saved yet is shown as read, never as a failure). Browser checks at 1280px and 390px cover the four first-reading states that have an attempt, and a failed-then-unknown retry. They produce each state by rewriting the one GET response of a real saved request, then read the page text that the real component draws. They prove the page logic. They do not prove what the API returns in those states; the PostgreSQL recovery tests do that.
+
+**What the database does not enforce.** The application guards these, as it does for other rules in this repository: the late-result `status` has no value list; a link's revision is not tied by a database rule to the same request or to a `PromptInterpretation`; `runtime_label` allows `LIVE` (the settings refuse the interpreter in production, and no code builds a live release); `records` has no unique key on owner and operation ID. A second outcome for one attempt is prevented by the request row lock plus a check that no outcome exists for that attempt.
 
 **Late results.** A result that arrives after its attempt was closed as unknown is saved as evidence beside it. It never replaces the settlement, becomes a revision, or starts a retry. Nothing in this build delivers one except the adapter itself, when a worker finishes after another process closed its attempt.
 

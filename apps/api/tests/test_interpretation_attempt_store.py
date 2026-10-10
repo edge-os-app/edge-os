@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import threading
 import uuid
-from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import text

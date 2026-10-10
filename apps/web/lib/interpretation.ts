@@ -1,4 +1,4 @@
-import type { Attempt, AttemptStatus, AttemptUsage, Bundle, Finding } from "./types";
+import type { Attempt, AttemptStatus, AttemptUsage, Bundle, Finding, ReplyState } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
 export type FailureKind = "MALFORMED_OUTPUT" | "UNAVAILABLE" | "OUTCOME_UNKNOWN";
@@ -36,7 +36,7 @@ export const RETRY_BLOCKED: Record<string, string> = {
 };
 
 export const ATTEMPT_STATUS_LABEL: Record<AttemptStatus, string> = {
-  STARTED: "Running",
+  STARTED: "Started, no result saved",
   COMPLETED: "Finished",
   TRUNCATED: "Cut short",
   PROVIDER_FAILED: "Provider failed",
@@ -90,10 +90,13 @@ export interface FirstReading {
   failure?: FailureKind;
 }
 
-export function firstReading(bundle: Pick<Bundle, "attempts" | "interpretations" | "revisions" | "head">): FirstReading | null {
+export function firstReading(bundle: Pick<Bundle, "attempts" | "interpretations" | "revisions" | "head" | "outcomes">): FirstReading | null {
   const { attempts, head } = bundle;
-  if (head.outcome !== null || head.interpretation_revision_id !== null || bundle.interpretations.length > 0 || bundle.revisions.length > 0) return null;
+  if (bundle.interpretations.length > 0 || bundle.revisions.length > 0) return null;
   const last = attempts[attempts.length - 1];
+  // The state belongs to the LATEST attempt. An outcome saved for an earlier attempt must not describe a later one.
+  if (last && bundle.outcomes.some((o) => o.record.operation_id === last.attempt_id)) return null;
+  if (!last && head.outcome !== null) return null; // fixture interpreter: no attempts, its own outcome
   if (!last) {
     return { kind: "UNREAD", title: "Saved, not read yet", action: head.retry.allowed ? "START" : "CHECK_AGAIN",
       lead: "Your request is saved, but the interpreter has not read it yet. Nothing was lost, and nothing was judged." };
@@ -104,7 +107,7 @@ export function firstReading(bundle: Pick<Bundle, "attempts" | "interpretations"
   }
   if (last.status === "COMPLETED" && last.parse_result === "ACCEPTED") {
     return { kind: "READ_NOT_SAVED", title: "Your request was read, and the answer is not saved yet", action: "CHECK_AGAIN",
-      lead: "The interpreter answered and the answer was accepted. Saving it did not finish. It is saved the next time this request is answered or retried, or when the service restarts. Nothing was judged." };
+      lead: "The interpreter answered and the answer was accepted. Saving it did not finish. It is saved when the service restarts. Nothing was judged." };
   }
   if (last.status === "PROVIDER_FAILED") {
     return { kind: "FAILED", failure: "UNAVAILABLE", title: FAILURE_COPY.UNAVAILABLE.title, lead: FAILURE_COPY.UNAVAILABLE.lead,
@@ -119,4 +122,25 @@ export function firstReading(bundle: Pick<Bundle, "attempts" | "interpretations"
     return { kind: "UNCERTAIN", failure: "OUTCOME_UNKNOWN", title: FAILURE_COPY.OUTCOME_UNKNOWN.title, lead: FAILURE_COPY.OUTCOME_UNKNOWN.lead, action: "CHECK_AGAIN" };
   }
   return null;
+}
+
+/** Heading and words for the last reply when it has no saved revision. Each follows from the stored attempt only. */
+export function replyCopy(reply: ReplyState): { title: string; body: string } {
+  const kept = "Your saved meaning did not change.";
+  switch (reply.state) {
+    case "REJECTED":
+      return reply.reason_code === "reply_changed_nothing"
+        ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or choose an option." }
+        : { title: "Your last reply could not be used", body: `The interpreter's reading broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
+    case "UNCERTAIN":
+      return { title: "We do not know if your last reply was read", body: `The interpreter may or may not have read it. Nothing was retried and ${kept.toLowerCase()}` };
+    case "PENDING_SAVE":
+      return { title: "Your last reply was read but is not saved yet",
+        body: `The interpreter read it and the answer was accepted. Saving it did not finish. It is saved when the service restarts, or the next time this request is answered or retried. ${kept}` };
+    case "UNFINISHED":
+      return { title: "Your last reply has no saved result",
+        body: `An attempt to read your reply was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. ${kept} Nothing is repeated while it may still run.` };
+    default:
+      return { title: "Your last reply was not read", body: `A system failure stopped the interpreter. ${kept}` };
+  }
 }
