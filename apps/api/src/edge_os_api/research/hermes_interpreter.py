@@ -327,6 +327,8 @@ class HermesInterpreter:
         settlement = view.settlement
         if settlement is None or settlement.response_text is None:
             return Rejection("no_saved_response", "", "This attempt saved no response.")
+        if len(settlement.response_text.encode("utf-8")) > MAX_RESPONSE_BYTES:
+            return Rejection("response_too_large", "", "The model's answer was too long to use safely, so none of it was used.")
         if view.start.identity.purpose == "INTERPRET":
             return self._publishable_first(intake, parse_interpretation_response(settlement.response_text, intake))
         if previous_evidence is None or answer is None:

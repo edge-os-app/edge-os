@@ -26,6 +26,8 @@ __all__ = ["OfferedBook", "RecordPublicationCheck", "UNPUBLISHABLE", "first_read
            "reply_records"]
 
 UNPUBLISHABLE = "unpublishable_response"
+DRAFT_OVERHEAD_BYTES = 4096  # the strategy draft's own fields and the strategy's fixed parts, with room to spare
+MAX_RECORD_BYTES = record_contract.CONTRACT["limits"]["input_bytes"]
 MAX_OFFERED_BYTES = 32 * 1024  # the questions that an accepted answer offers are saved with its link
 DRY_RUN_REQUEST = uuid.UUID("00000000-0000-4000-8000-0000000000a1")
 DRY_RUN_REVISION = uuid.UUID("00000000-0000-4000-8000-0000000000a2")
@@ -106,7 +108,7 @@ class RecordPublicationCheck:
             interp, routed = first_reading_records(intake, DRY_RUN_REQUEST, parsed, DRY_RUN_REVISION)
             record_contract.validate_record("PromptInterpretation", interp)
             record_contract.validate_record("Outcome", service.outcome_content(DRY_RUN_OPERATION, DRY_RUN_REQUEST, routed))
-            return self._offered(parsed)
+            return self._offered(parsed) or self._room(intake, parsed)
         except Exception:  # noqa: BLE001 - whatever stops these records stops publication, so the answer is rejected
             return _rejection()
 
@@ -125,9 +127,20 @@ class RecordPublicationCheck:
             record_contract.validate_record("PromptInterpretation", interp)
             record_contract.validate_record("Clarification", clarification)
             record_contract.validate_record("Outcome", service.outcome_content(DRY_RUN_OPERATION, DRY_RUN_REQUEST, routed))
-            return self._offered(parsed)
+            return self._offered(parsed) or self._room(intake, parsed)
         except Exception:  # noqa: BLE001
             return _rejection()
+
+    @staticmethod
+    def _room(intake: Mapping[str, Any], parsed: ParsedInterpretation) -> Rejection | None:
+        """Leave room for the strategy draft that adoption writes later.
+
+        The draft holds the whole request next to a strategy built from the answer's values. The request counts at its
+        canonical size: a control character costs six bytes there, so the character count says too little.
+        """
+        request = len(record_contract.canonical_bytes(intake["original_request"]))
+        answer = len(record_contract.canonical_bytes([dict(item) for item in parsed.field_evidence]))
+        return _rejection() if request + answer + DRAFT_OVERHEAD_BYTES > MAX_RECORD_BYTES else None
 
     @staticmethod
     def _offered(parsed: ParsedInterpretation) -> Rejection | None:

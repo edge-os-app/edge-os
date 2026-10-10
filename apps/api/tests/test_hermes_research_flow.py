@@ -868,3 +868,53 @@ def test_a_record_the_store_refuses_as_too_large_is_a_plain_refusal_and_leaves_t
     monkeypatch.undo()
     after = client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).json()
     assert len(after["interpretations"]) == 1
+
+
+def and_tree(rule: Any, copies: int) -> Any:
+    if copies <= 1:
+        return rule
+    half = copies // 2
+    return {"op": "and", "args": [and_tree(rule, half), and_tree(rule, copies - half)]}
+
+
+@pytest.mark.parametrize("pad,length,copies,expected", [
+    ("\u0001", 10_000, 12, "REJECTED:unpublishable_response"),  # a 60 KB request leaves no room for the draft that adoption writes
+    ("\u0001", 6_000, 12, "ACCEPTED"),
+    ("a", 10_000, 12, "ACCEPTED"),
+    ("\U0001F600", 10_000, 12, "ACCEPTED")])
+def test_the_room_for_an_answer_depends_on_what_the_request_costs_in_the_record_and_an_accepted_answer_adopts(
+        make_client, owner_a, pad: str, length: int, copies: int, expected: str) -> None:
+    """A control character costs six bytes in the canonical record, so the character count says too little."""
+    from edge_os_api.research.interpretation_attempts import Usage
+    good = json.loads(thesis_with_sizing({"note": ""}))
+    entry = next(i for i in good["field_evidence"] if i["field_name"] == "entry")
+    entry["value"] = and_tree(entry["value"], copies)
+    client = make_client(CaseRunner(reply(case("concrete-thesis")["provider"]["model_response"],
+                                          usage=Usage(1500, 400, 1900, "PROVIDER_REPORTED"), text=json.dumps(good)),
+                                    turn_result(case("concrete-thesis")["provider"])))
+    body = intake_body("concrete-thesis")
+    body["original_request"] += " " + pad * (length - len(body["original_request"]) - 1)
+
+    created = client.post("/v1/research/requests", json=body, headers=owner_a)
+
+    assert created.status_code == 201, created.text
+    bundle = created.json()
+    assert bundle["attempts"][0]["parse_result"] == expected
+    if expected == "ACCEPTED":
+        adopted = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
+        assert adopted.status_code == 201, adopted.text  # the compiler may still judge the odd rule; the save must not fail
+
+
+def test_a_contract_refusal_that_is_not_about_size_is_not_called_a_size_problem(make_client, owner_a, monkeypatch) -> None:
+    from edge_os_api.records import contract_adapter as record_contract
+    from edge_os_api.research import service
+    client = make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"])))
+    bundle = create(client, owner_a, "concrete-thesis").json()
+
+    def refuse(*args: Any, **kwargs: Any):
+        raise record_contract.Invalid("strings must be Unicode NFC")
+    monkeypatch.setattr(service, "put_record", refuse)
+
+    response = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
+
+    assert "record_too_large" not in response.text

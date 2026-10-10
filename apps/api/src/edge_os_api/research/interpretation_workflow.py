@@ -299,10 +299,12 @@ class HermesResearch:
                 self._link(session, str(principal.user_id), attempt_id, str(revision_id), new_questions)
             service.verify_lineage(session, principal, intake.record_id)
             session.commit()
-        except record_contract.Invalid:
-            session.rollback()  # a record above the limits: say so plainly, and keep the saved reading as it was
-            raise invalid("/", "This answer produces a record that is too large to save. Answer in your own words instead.",
-                          "record_too_large") from None
+        except record_contract.Invalid as error:
+            session.rollback()  # keep the saved reading as it was
+            log.error("record refused by the contract: %s", error)
+            if "byte" not in str(error):
+                raise  # not a size problem: let it show as the failure it is
+            raise invalid("/", "This answer produces a record that is too large to save.", "record_too_large") from None
         except IntegrityError as error:
             session.rollback()
             if service.constraint_name(error) == "uq_records_interpretation_successor":
