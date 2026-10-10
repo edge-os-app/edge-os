@@ -398,6 +398,8 @@ def main() -> int:
             inspection = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
             rec.write("sql-inspection.json", inspection)
             ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
+            storage_before_restart = p13_storage_snapshot(pg)
+            rec.write("p13-storage-before-restart.json", storage_before_restart)
 
             # cross-owner denial against the real saved rows
             denial = ownership_drive(pg, api_url, token_a, token_b)
@@ -413,6 +415,12 @@ def main() -> int:
             ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
             after_restart = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
             ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
+            storage_after_restart = p13_storage_snapshot(pg)
+            rec.write("p13-storage-after-restart.json", storage_after_restart)
+            ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",
+                           storage_after_restart == storage_before_restart,
+                           {"spot_replay_runs": len(storage_before_restart["spot_replay_runs"]),
+                            "spot_replay_configurations": len(storage_before_restart["spot_replay_configurations"])})
 
         if args.hold_seconds:
             hold = {"web": web_url, "api": api_url, "token_owner_a": token_a,
@@ -835,6 +843,17 @@ def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_a
                 and checks["p19_context_history"][agent_id]["final_cleared"] for agent_id in ("agent-a", "agent-b"))
     return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass
             and spot_replays_pass and configuration_identities_pass and p19_ok}
+
+
+def p13_storage_snapshot(pg: harness.Postgres) -> dict[str, list[dict]]:
+    def rows(sql: str):
+        return json.loads(pg.psql(f"select coalesce(json_agg(t), '[]'::json) from ({sql}) t"))
+
+    replay_rows = rows("select to_jsonb(r) row from spot_replay_runs r order by r.created_at, r.replay_id")
+    configuration_rows = rows(
+        "select to_jsonb(c) row from spot_replay_configurations c order by c.owner_id, c.run_configuration_id")
+    return {"spot_replay_runs": [item["row"] for item in replay_rows],
+            "spot_replay_configurations": [item["row"] for item in configuration_rows]}
 
 
 def sql_literal(text: str) -> str:

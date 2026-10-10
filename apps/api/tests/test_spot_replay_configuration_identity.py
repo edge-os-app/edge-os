@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
 import subprocess
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -371,5 +374,119 @@ def test_migration_refuses_malformed_legacy_inputs_without_rewriting_saved_rows(
             assert not registry_exists
         finally:
             engine.dispose()
+    finally:
+        pg.psql(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+
+
+@pytest.mark.parametrize("malformation", [
+    "content-replay-id",
+    "content-strategy-revision-id",
+    "input-strategy-id",
+    "descriptor-version",
+    "descriptor-fields",
+])
+def test_migration_refuses_hash_consistent_legacy_identity_and_descriptor_malformations(
+        client, owner_a, pg, malformation):
+    strategy, revision = _saved_revision(client, owner_a)
+    body = _body(strategy, revision, key=f"legacy-r7-{malformation}-{uuid.uuid4()}")
+    saved = client.post("/v1/spot-replays", headers=owner_a, json=body)
+    assert saved.status_code == 201, saved.text
+    replay_id = saved.json()["replay_id"]
+    owner_id = saved.json()["content"]["owner_id"]
+    database_name, environment = _migration_target(pg, f"r7_{malformation.replace('-', '_')}")
+    try:
+        assert _upgrade_to(environment, "0004").returncode == 0
+        _copy_legacy_replay_rows(pg.url, environment["EDGE_OS_DATABASE_URL"], owner_id,
+                                 revision["revision_id"], [replay_id])
+        engine = create_engine(environment["EDGE_OS_DATABASE_URL"])
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(
+                    "ALTER TABLE spot_replay_runs DISABLE TRIGGER spot_replay_runs_immutable"))
+                run = dict(connection.execute(text(
+                    "SELECT * FROM spot_replay_runs WHERE replay_id = :replay_id"),
+                    {"replay_id": uuid.UUID(replay_id)}).mappings().one())
+                malformed = copy.deepcopy(run["content"])
+                if malformation == "content-replay-id":
+                    malformed["replay_id"] = str(uuid.uuid4())
+                elif malformation == "content-strategy-revision-id":
+                    different_revision = str(uuid.uuid4())
+                    malformed["strategy_revision_id"] = different_revision
+                    malformed["inputs"]["strategy_revision_id"] = different_revision
+                    malformed["inputs"]["essential_evidence"]["strategy_revision"] = different_revision
+                elif malformation == "input-strategy-id":
+                    malformed["inputs"]["strategy_id"] = f"different-{uuid.uuid4()}"
+                elif malformation == "descriptor-version":
+                    malformed["inputs"]["essential_evidence"]["schema_version"] = (
+                        "p12.essential-evidence/999")
+                else:
+                    malformed["inputs"]["essential_evidence"]["fields"] = "not-an-entry-exit-object"
+                connection.execute(text(
+                    "UPDATE spot_replay_runs SET content = :content, content_sha256 = :content_sha256 "
+                    "WHERE replay_id = :replay_id"), {
+                        "content": json.dumps(malformed),
+                        "content_sha256": p02.sha256_hex(malformed),
+                        "replay_id": uuid.UUID(replay_id),
+                    })
+                connection.execute(text(
+                    "ALTER TABLE spot_replay_runs ENABLE TRIGGER spot_replay_runs_immutable"))
+                rows_before = [dict(row) for row in connection.execute(text(
+                    "SELECT * FROM spot_replay_runs ORDER BY created_at, replay_id")).mappings()]
+            assert p02.sha256_hex(rows_before[0]["content"]) == rows_before[0]["content_sha256"]
+        finally:
+            engine.dispose()
+
+        rejected = _upgrade_to(environment, "head")
+        engine = create_engine(environment["EDGE_OS_DATABASE_URL"])
+        try:
+            with engine.connect() as connection:
+                rows_after = [dict(row) for row in connection.execute(text(
+                    "SELECT * FROM spot_replay_runs ORDER BY created_at, replay_id")).mappings()]
+                version_after = connection.execute(text(
+                    "SELECT version_num FROM alembic_version")).scalar_one()
+                registry_exists = connection.execute(text(
+                    "SELECT to_regclass('public.spot_replay_configurations') IS NOT NULL")).scalar_one()
+                registry_rows = []
+                if registry_exists:
+                    registry_rows = [dict(row) for row in connection.execute(text(
+                        "SELECT * FROM spot_replay_configurations ORDER BY owner_id, run_configuration_id"
+                    )).mappings()]
+        finally:
+            engine.dispose()
+
+        def json_safe(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {str(key): json_safe(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [json_safe(item) for item in value]
+            if isinstance(value, (datetime, uuid.UUID)):
+                return value.isoformat() if isinstance(value, datetime) else str(value)
+            return value
+
+        record = {
+            "malformation": malformation,
+            "database": database_name,
+            "upgrade_returncode": rejected.returncode,
+            "upgrade_stdout": rejected.stdout,
+            "upgrade_stderr": rejected.stderr,
+            "source_rows_before": json_safe(rows_before),
+            "source_rows_after": json_safe(rows_after),
+            "revision_after": version_after,
+            "registry_exists_after": registry_exists,
+            "registry_rows_after": json_safe(registry_rows),
+        }
+        evidence_dir = os.environ.get("P13_R7_EVIDENCE_DIR")
+        if evidence_dir:
+            output = Path(evidence_dir)
+            output.mkdir(parents=True, exist_ok=True)
+            (output / f"red-{malformation}.json").write_text(
+                json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+        assert rejected.returncode != 0, f"migration admitted {malformation}"
+        assert "cannot bind P13 configuration IDs" in rejected.stderr
+        assert rows_after == rows_before
+        assert version_after == "0004"
+        assert not registry_exists
+        assert not registry_rows
     finally:
         pg.psql(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
