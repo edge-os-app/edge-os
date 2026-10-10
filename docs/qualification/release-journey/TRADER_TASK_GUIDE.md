@@ -20,13 +20,15 @@ Rules:
 | Item | Requirement |
 |---|---|
 | Candidate revision | Exact committed candidate from the running worktree, recorded in the observation form |
-| Fixture sign-in | The accepted verifier creates the isolated authentication and saved records: `scripts/p03/verify_run.py` seeds owned owners, saved requests, investigation, effect and replay records and the P19 account fixtures, and publishes per-run P03_TOKEN_* and P19 record IDs into `ui-results.json` and `p19-fixtures.json`. `tests/p03/fixture-auth.mjs` only injects those per-run tokens into the page; it supplies no manual credential. The conductor runs the verifier first and reads the needed record IDs from its evidence under `.scratch/p03/evidence/<run_id>/`. |
+| Fixture sign-in | `scripts/p03/verify_run.py` passes the per-run P03_TOKEN_* values to the browser only through the in-memory child environment (`ui_env`), and deliberately strips token keys from HOLD output and `hold.json`. It does not publish token values in any evidence file, and `tests/p03/fixture-auth.mjs` only injects those in-memory tokens into the page. Evidence is not a manual sign-in credential. No token is exported or collected. |
+| Evidence paths | The verifier sets `P03_EVIDENCE_DIR` to `evidence / "ui"`, so the browser writes `ui/ui-results.json`; the seeded `p19-fixtures.json` is at the run root. Record IDs for saved surfaces come from those exact relative paths. |
+| Participant session availability BLOCKED | The default verifier stops its processes and removes the run-owned database container, volume and web build at the end of the run. A finished default run is not an available participant session. No supported authorized manual-session setup is supplied for this package. This prerequisite is BLOCKED until the controller or builder supplies one. A live or manual runtime is not invented here. |
 | Surfaces | Research home, a saved no-thesis investigation, a saved compiled rule with an exact threshold (for T2), a saved P08 declaration, a saved P09 report, a saved P13 replay, Agents/Positions/Funds account views |
 | Device | Desktop 1280px and a 390px viewport as available; a physical phone when available |
 | Environment | Local repository run by the controller or builder; no live provider, wallet or network |
 | Timing | Target five observations where participants are available; preserve actual numbers |
 
-Each participant session must name the exact revision it ran and the evidence run ID whose records it used. A notebook or the observation form in section 6 records the session.
+Each participant session must name the exact revision it ran and the evidence run ID whose record IDs it used. A notebook or the observation form in section 6 records the session.
 
 ## 3. Participant-facing tasks
 
@@ -46,19 +48,19 @@ Question: "This rule will be saved exactly as written. What does the rule say, a
 
 ### Task T3: Tell evidence from permission
 
-Conductor setup: open the seeded account records. `scripts/p03/verify_run.py` inserts authored P19 records under the fixture owner and publishes the owner's record list in `ui-results.json` (key `p19-context-*`) and `p19-fixtures.json` (record IDs). Open Agents, then Positions, then Funds from the side navigation. Do not open Reviewer or scenario controls; this run has none.
+Conductor setup: open the seeded account records. `scripts/p03/verify_run.py` inserts authored P19 records under the fixture owner. The P19 record IDs are at the run root in `p19-fixtures.json`; the browser run-key observations are in `ui/ui-results.json` (key `p19-context-*`). Open Agents, then Positions, then Funds from the side navigation. Do not open Reviewer or scenario controls; this run has none.
 
 Question: "Without doing anything, what does this page let you see, and what does it not let you or the agent do yet? You can say you cannot tell."
 
 ### Task T4: Understand saved records after reopen
 
-Conductor setup: reuse the saved P09 report ID and P13 replay ID from the same evidence run (`ui-results.json` keys `investigation-*` for the report and `spot-replay-*` for the replay, both saved by the verifier; `tests/p03/reopen.spec.mjs` reassigns IDs only to existing runs). Open the report, then the replay, and reopen one of them.
+Conductor setup: reuse the saved P09 report ID and P13 replay ID from the same evidence run (`ui/ui-results.json` keys `investigation-*` for the declaration/report and `spot-replay-*` for the replay, both saved by the verifier; `tests/p03/reopen.spec.mjs` reopens the saved run IDs, it does not create new ones). Open the report, then the replay, and reopen one of them. Because the default verifier tears the run down afterward, this task requires a live run held open by an authorized participant-session setup; that prerequisite remains BLOCKED in this package.
 
 Question: "This record was saved earlier. What happens when you reopen it, and what does the page say did not run again? You can say you cannot tell."
 
 ### Task T5: Distinguish pending from confirmed
 
-Conductor setup: the P19 seed contains ACTION records in `PROPOSED`, `QUEUED`, `SUBMITTED`, `CONFIRMED`, `REVERTED` and `SUBMISSION_UNKNOWN` states (fixture file `apps/api/tests/fixtures/account_views/account-records-v1.json`; `scripts/p03/verify_run.py` seeds them). Open Positions, filter to an agent, and show one pending or unknown action beside a confirmed one. Record which record IDs were shown.
+Conductor setup: the P19 seed contains ACTION records in `QUEUED`, `SUBMITTED`, `CONFIRMED`, `REVERTED` and `SUBMISSION_UNKNOWN` states (fixture file `apps/api/tests/fixtures/account_views/account-records-v1.json`; `scripts/p03/verify_run.py` seeds them). Open Positions, filter to an agent, and show one pending or unknown action beside a confirmed one. Record which record IDs were shown.
 
 Question: "Show me which item is finished and which one is still waiting, and what that means for the tokens held. You can say you cannot tell."
 
@@ -104,7 +106,7 @@ One form per participant per revision. All fields are required; leave unknown fi
 Participant id:
 Role (trader / builder / teammate):
 Candidate revision (exact SHA):
-Evidence run id (from .scratch/p03/evidence/<run_id>):
+Evidence run id (from .scratch/p03/evidence/<run_id>; record IDs from ui/ui-results.json and the run-root p19-fixtures.json):
 Record IDs shown per task (T1 no-thesis URL, T2 revision id, T4 report/replay id, T5 action ids):
 Date and time:
 Device and viewport (desktop 1280 / 390px / physical phone):
