@@ -7,12 +7,13 @@ import { RequestPage } from "../components/RequestPage";
 import { describeLatency, describeParse, describeUsage, sourceQuote, systemFailure } from "../lib/interpretation";
 import type { Attempt, Question } from "../lib/types";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), retry: vi.fn(), answer: vi.fn(), revision: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), retry: vi.fn(), answer: vi.fn(), revision: vi.fn(), investigations: vi.fn(), investigationProposal: vi.fn() }));
 vi.mock("../lib/api", () => ({
   ApiError: class extends Error { constructor(public status = 503, public code = "x", public detail = "Unavailable") { super(detail); } },
   api: {
     get: (...a: unknown[]) => mocks.get(...a), retryInterpretation: (...a: unknown[]) => mocks.retry(...a),
     answer: (...a: unknown[]) => mocks.answer(...a), revision: (...a: unknown[]) => mocks.revision(...a),
+    investigations: (...a: unknown[]) => mocks.investigations(...a), investigationProposal: (...a: unknown[]) => mocks.investigationProposal(...a),
   },
 }));
 
@@ -129,7 +130,10 @@ const baseBundle = (outcome: string, finding: { code: string; detail: string }, 
 const failedAttempt = attempt({ status: "PROVIDER_FAILED", completion: "NONE", parse_result: "NOT_PARSED", revision_id: null,
   usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null } });
 
-beforeEach(() => { mocks.get.mockReset(); mocks.retry.mockReset(); mocks.answer.mockReset(); mocks.revision.mockReset(); });
+beforeEach(() => {
+  mocks.get.mockReset(); mocks.retry.mockReset(); mocks.answer.mockReset(); mocks.revision.mockReset();
+  mocks.investigations.mockReset().mockReturnValue(new Promise(() => {})); mocks.investigationProposal.mockReset().mockReturnValue(new Promise(() => {}));
+});
 
 describe("system failures on the request page", () => {
   it("says a provider failure is a system failure, never a verdict on the idea, and retries only on request", async () => {
@@ -341,9 +345,13 @@ describe("a first request with no saved outcome and no revision", () => {
   it("moves focus to the state heading after 'Read my request now' and says it is starting, not retrying", async () => {
     const user = userEvent.setup();
     mocks.get.mockResolvedValue(noOutcome([], { allowed: true, retry_of: null, reason: null }));
-    mocks.retry.mockResolvedValue(baseBundle("UNRESOLVED", { code: "m", detail: "n" }, { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({})]));
+    let finish: (value: unknown) => void = () => {};
+    mocks.retry.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "Read my request now" }));
+    expect(await screen.findByTestId("working")).toHaveTextContent("Starting the interpreter");
+    expect(screen.getByTestId("working")).not.toHaveTextContent("Trying the interpreter again");
+    finish(baseBundle("UNRESOLVED", { code: "m", detail: "n" }, { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({})]));
     expect(await screen.findByRole("heading", { name: "Unresolved: nothing was tested" })).toHaveFocus();
   });
 
@@ -351,7 +359,18 @@ describe("a first request with no saved outcome and no revision", () => {
     const bundle = noOutcome([failedAttempt], { allowed: true, retry_of: "a1", reason: null });
     bundle.intake.content.requested_job = "INVESTIGATE_EFFECT" as never;
     await show(bundle);
-    expect(screen.queryByTestId("investigation-review")).toBeNull();
+    expect(screen.queryByText("Investigation plan")).toBeNull();
+    expect(mocks.investigations).not.toHaveBeenCalled();
+  });
+
+  it("does offer the investigation plan once the request has an interpretation (positive control)", async () => {
+    const bundle = baseBundle("UNRESOLVED", { code: "m", detail: "n" }, { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({})]);
+    bundle.intake.content.requested_job = "INVESTIGATE_EFFECT" as never;
+    bundle.head.interpretation_revision_id = "rev-1" as never;
+    (bundle as { interpretations: unknown[] }).interpretations = [{ record_id: "r1", content: { interpretation_revision_id: "rev-1", field_evidence: [] } }];
+    await show(bundle);
+    expect(await screen.findByText("Investigation plan")).toBeInTheDocument();
+    expect(mocks.investigations).toHaveBeenCalled();
   });
 
   it("draws the state in the neutral grey style, not as an error and not as a prompt for an answer", async () => {

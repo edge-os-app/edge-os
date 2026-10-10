@@ -21,7 +21,7 @@ export const FAILURE_COPY: Record<FailureKind, { title: string; lead: string }> 
   },
   OUTCOME_UNKNOWN: {
     title: "We do not know if the interpreter finished",
-    lead: "The interpreter may or may not have produced an answer. Nothing was retried and nothing was assumed.",
+    lead: "The interpreter may or may not have produced an answer. This attempt was not repeated, and nothing was assumed.",
   },
 };
 
@@ -172,10 +172,10 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
         ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or choose an option." }
         : { title: "Your last reply could not be used", body: `The interpreter's reading broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
     case "UNCERTAIN":
-      return { title: "We do not know if your last reply was read", body: `The interpreter may or may not have read it. Nothing was retried and ${kept.toLowerCase()}` };
+      return { title: "We do not know if your last reply was read", body: `The interpreter may or may not have read it. This attempt was not repeated, and ${kept.toLowerCase()}` };
     case "PENDING_SAVE":
       return { title: "Your last reply was read but is not saved yet",
-        body: `The interpreter read it and the answer was accepted. Saving it did not finish. It is saved when the service restarts, or the next time this request is answered or retried. ${kept}` };
+        body: `The interpreter read it and the answer was accepted. Saving it did not finish. It is saved when the service restarts, or when you answer a question. ${kept}` };
     case "UNFINISHED":
       return { title: "Your last reply has no saved result",
         body: `An attempt to read your reply was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. ${kept} Nothing is repeated while it may still run.` };

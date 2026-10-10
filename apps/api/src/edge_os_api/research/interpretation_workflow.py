@@ -59,8 +59,8 @@ REJECTION_DETAIL = "The model's answer could not be used (reason: {reason}). Not
 UNAVAILABLE_TEXT = {
     "provider_failed": "The model provider did not return a result. This is a system failure, not a verdict on the idea. "
                        "The request is saved. You can try again.",
-    "timed_out": "It is not known whether the model provider finished. The request is saved. Nothing was retried.",
-    "outcome_unknown": "It is not known whether the model provider finished. The request is saved. Nothing was retried.",
+    "timed_out": "It is not known whether the model provider finished. The request is saved. This attempt was not repeated.",
+    "outcome_unknown": "It is not known whether the model provider finished. The request is saved. This attempt was not repeated.",
     "result_arrived_late": "The result arrived after the attempt was closed. It is kept for review and was not used.",
 }
 
