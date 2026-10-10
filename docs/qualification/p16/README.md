@@ -90,3 +90,11 @@ Historical result (2026-10-07): **ATTACHMENT OBSTRUCTED; P16 remained unqualifie
 The restored owner session passed mounted owner verification. Both linked SDK wallets matched their exact server IDs and normalized addresses. A and B each passed a fresh pre-attach check and one owner-approved signer attachment; the server post-attach checks returned `MATCH/EXACT_SIGNER_POLICY` for both. Historical failed attempts and the original A mismatch remain preserved.
 
 DevTools recorded 122 requests for the page. The two signer flows generated two `POST /api/v1/analytics_events` requests, above the one-request page-load allowance. The helper was stopped. No sign-only request, A signer removal, owner-positive signature or broadcast occurred. Signer isolation and removal remain unqualified; cross-user application authorization remains `NOT RUN`.
+
+## Creation and recovery preparation (2026-10-10)
+
+Prepares the remaining owner-linked creation, lost-response/restart and actual-backend cross-user checks in the [creation and recovery plan](CREATION_RECOVERY_PLAN.md).
+
+Status: **preparation only.** The plan reuses the accepted one-owner signing and A-removal evidence above; it repeats no consumed provider call. It records the existing proof versus the remaining WAL-Q19/Q20/Q24 gaps, the selected owner-linked creation route and pinned inputs, a saved-identity reconciliation sequence, the actual backend boundary and its required future seam, owner recovery, a future run checklist and a NOT_AUTHORIZED live-release section.
+
+This addendum adds no provider result and no live authority. P16 remains OPEN and unqualified. All historical sections above are unchanged.
