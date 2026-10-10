@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+import uuid
 from typing import Any
 
 from alembic import op
@@ -61,6 +62,18 @@ def _canonical_bytes(value: Any) -> bytes:
 
 def _configuration_sha256(inputs: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_bytes({"schema_version": _SCHEMA_VERSION, "inputs": inputs})).hexdigest()
+
+
+def _matches_api_uuid(value: Any, expected: Any) -> bool:
+    """Match a UUID field using the valid spelling accepted by SpotReplayBody."""
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = uuid.UUID(value)
+        expected_uuid = expected if isinstance(expected, uuid.UUID) else uuid.UUID(str(expected))
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return str(parsed) == value.lower() and parsed == expected_uuid
 
 
 def _valid_essential_fields(value: Any) -> bool:
@@ -123,10 +136,10 @@ def upgrade() -> None:
         if (not isinstance(run_configuration_id, str) or not 1 <= len(run_configuration_id) <= 200
                 or not isinstance(inputs, dict) or set(inputs) != _INPUT_FIELDS
                 or content.get("replay_id") != row_replay_id
-                or content.get("strategy_revision_id") != row_revision_id
+                or not _matches_api_uuid(content.get("strategy_revision_id"), row["strategy_revision_id"])
                 or inputs.get("run_configuration_id") != run_configuration_id
                 or inputs.get("strategy_id") != row_strategy_id
-                or inputs.get("strategy_revision_id") != row_revision_id
+                or not _matches_api_uuid(inputs.get("strategy_revision_id"), row["strategy_revision_id"])
                 or inputs.get("dataset_fixture_id") != content.get("dataset_fixture_id")
                 or content.get("owner_id") != str(row["owner_id"])
                 or not isinstance(inputs.get("strategy"), dict)
@@ -137,7 +150,7 @@ def upgrade() -> None:
                 or set(descriptor) != {"schema_version", "strategy_revision", "run_configuration_id",
                                        "dataset_revision", "market_binding_id", "fields"}
                 or descriptor.get("schema_version") != _ESSENTIAL_SCHEMA_VERSION
-                or descriptor.get("strategy_revision") != inputs.get("strategy_revision_id")
+                or not _matches_api_uuid(descriptor.get("strategy_revision"), row["strategy_revision_id"])
                 or descriptor.get("run_configuration_id") != run_configuration_id
                 or descriptor.get("dataset_revision") != inputs.get("dataset_revision_id")
                 or descriptor.get("market_binding_id") != inputs.get("market_binding_id")

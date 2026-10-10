@@ -490,3 +490,83 @@ def test_migration_refuses_hash_consistent_legacy_identity_and_descriptor_malfor
         assert not registry_rows
     finally:
         pg.psql(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+
+
+def test_migration_preserves_api_authored_uppercase_strategy_revision_uuid(client, owner_a, pg):
+    strategy, revision = _saved_revision(client, owner_a)
+    body = _body(strategy, revision, key=f"legacy-uppercase-revision-{uuid.uuid4()}")
+    body["strategy_revision_id"] = body["strategy_revision_id"].upper()
+    saved_response = client.post("/v1/spot-replays", headers=owner_a, json=body)
+    assert saved_response.status_code == 201, saved_response.text
+    saved = saved_response.json()
+    exact_read = client.get(f"/v1/spot-replays/{saved['replay_id']}", headers=owner_a)
+    assert exact_read.status_code == 200 and exact_read.json() == saved
+
+    database_name, environment = _migration_target(pg, "uppercase_revision")
+    try:
+        assert _upgrade_to(environment, "0004").returncode == 0
+        _copy_legacy_replay_rows(pg.url, environment["EDGE_OS_DATABASE_URL"],
+                                 saved["content"]["owner_id"], revision["revision_id"],
+                                 [saved["replay_id"]])
+        engine = create_engine(environment["EDGE_OS_DATABASE_URL"])
+        try:
+            with engine.connect() as connection:
+                rows_before = [dict(row) for row in connection.execute(text(
+                    "SELECT * FROM spot_replay_runs ORDER BY created_at, replay_id")).mappings()]
+            upgrade = _upgrade_to(environment, "head")
+            with engine.connect() as connection:
+                rows_after = [dict(row) for row in connection.execute(text(
+                    "SELECT * FROM spot_replay_runs ORDER BY created_at, replay_id")).mappings()]
+                version_after = connection.execute(text(
+                    "SELECT version_num FROM alembic_version")).scalar_one()
+                registry_exists = connection.execute(text(
+                    "SELECT to_regclass('public.spot_replay_configurations') IS NOT NULL")).scalar_one()
+                registry_rows = []
+                if registry_exists:
+                    registry_rows = [dict(row) for row in connection.execute(text(
+                        "SELECT * FROM spot_replay_configurations ORDER BY owner_id, run_configuration_id"
+                    )).mappings()]
+        finally:
+            engine.dispose()
+
+        def json_safe(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {str(key): json_safe(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [json_safe(item) for item in value]
+            if isinstance(value, (datetime, uuid.UUID)):
+                return value.isoformat() if isinstance(value, datetime) else str(value)
+            return value
+
+        proof = {
+            "post_status": saved_response.status_code,
+            "get_status": exact_read.status_code,
+            "exact_get_match": exact_read.json() == saved,
+            "api_authored_revision_text": saved["content"]["strategy_revision_id"],
+            "parent_revision_text": str(revision["revision_id"]),
+            "source_rows_before": json_safe(rows_before),
+            "source_rows_after": json_safe(rows_after),
+            "upgrade_exit": upgrade.returncode,
+            "upgrade_stdout": upgrade.stdout,
+            "upgrade_stderr": upgrade.stderr,
+            "version_after": version_after,
+            "registry_exists_after": registry_exists,
+            "registry_rows_after": json_safe(registry_rows),
+        }
+        evidence_dir = os.environ.get("P13_R8_EVIDENCE_DIR")
+        if evidence_dir:
+            output = Path(evidence_dir)
+            output.mkdir(parents=True, exist_ok=True)
+            evidence_kind = os.environ.get("P13_R8_EVIDENCE_KIND", "red")
+            (output / f"{evidence_kind}-uppercase-revision.json").write_text(
+                json.dumps(proof, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+        assert upgrade.returncode == 0, "migration refused valid API-authored uppercase revision UUID history"
+        assert rows_after == rows_before
+        assert version_after == "0005"
+        assert registry_exists and len(registry_rows) == 1
+        expected_hash = p02.sha256_hex({
+            "schema_version": "p13.spot-replay-run/1", "inputs": saved["content"]["inputs"]})
+        assert registry_rows[0]["configuration_sha256"] == expected_hash
+    finally:
+        pg.psql(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
