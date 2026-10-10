@@ -12,7 +12,7 @@ For each task:
 
 All required implementation inputs must be available in this checkout or the assigned issue. Material marked `BUILDER-ONLY REFERENCE` is not included in a teammate's clone. Follow the reference rules in `docs/agents/domain.md`; request the required verified extract instead of guessing or searching the builder's filesystem.
 
-The builder owns product decisions and all prototyping. Teammates implement accepted tickets.
+The builder owns product decisions and all prototyping. Agents and contributors implement explicitly assigned accepted tickets. Read [current team ownership](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) before assigning or changing an owner.
 
 The Hackathon Winning Compass controls the project through `docs/EDGE_OS_COMPASS_WORKFLOW.md`. The retired Idea Funnel does not control current work.
 
@@ -22,11 +22,11 @@ A draft specification, proposed experiment, or successful component test is not 
 
 Keep changes within the assigned task. Preserve unrelated changes.
 
-Work on a task branch and submit a pull request. The builder accepts and merges changes. Do not push directly to `main`.
+Work in an assigned isolated worktree on a task branch. Return required checks and original independent reviews to the controller for technical acceptance and local integration under recorded authority. Publication and merging to `main` require recorded builder authorization. The builder may authorize the controller to execute a specific merge. Do not push directly to `main`.
 
 The builder authorized a one-time documentation-only initial commit and push to `main` on 2026-10-02 to establish the empty repository's baseline. This does not authorize later direct pushes, application implementation or prototype execution.
 
-The builder selected a manual merge gate on 2026-10-02. GitHub-enforced approvals, sole-code-owner review and branch protection are not required by this policy. Teammates must still leave merges to the builder. This does not waive task verification, independent code reviews or financial authorization.
+The builder selected a manual merge gate on 2026-10-02. GitHub-enforced approvals, sole-code-owner review and branch protection are not required by this policy. Contributors leave integration to the controller and `main` authorization to the builder. This does not waive task verification, independent code reviews or financial authorization.
 
 Paid services, wallet changes, delegation and financial transactions require explicit task-level authorization. Keep credentials outside source control and model inputs.
 

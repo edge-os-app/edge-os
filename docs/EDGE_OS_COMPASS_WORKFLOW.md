@@ -26,7 +26,7 @@ Current wallet decision, 2026-10-05: the builder accepted [separate user-owned a
 
 This document controls the remaining Edge OS hackathon workflow.
 
-Use the Hackathon Winning Compass as the method. Use this document to apply that method to Edge OS, the Monad Metropolis deadline, and the three-person team.
+Use the Hackathon Winning Compass as the method. Use this document to apply that method to Edge OS, the Monad Metropolis deadline, and the assigned contributors.
 
 The earlier Monad Idea Funnel no longer controls phase order or gates. Use HACKATHON_COMPASS_SESSION_PROMPT.md, BUILDER-ONLY REFERENCE `playbooks/HACKATHON_COMPASS_SESSION_PROMPT.md` for fresh sessions; the builder approved that flexible, hackathon-independent replacement on 2026-09-30. This document supplies the Edge OS context. Earlier artifacts remain historical evidence. A failed Funnel gate remains visible, but it does not block the Compass workflow.
 
@@ -736,69 +736,43 @@ If the primary meme spot path is unstable on 2026-10-08, defer live LP execution
 
 ## 9. Team ownership
 
-### Builder: backend, product decisions, and prototypes
+Ownership amendment, builder-requested 2026-10-10. The former fixed backend/frontend/tokenization teammate split is superseded. Ownership follows explicit ticket assignments and shared-file leases. The [approved release cut](planning/EDGE_OS_RELEASE_CUT_2026-10-10.md) controls hackathon scope.
 
-The builder owns the whole backend for now and all prototyping, including the research, execution and UI interaction probes. Teammates implement accepted tickets against the builder's published contracts and findings.
+### Builder: product, prototypes and consequential permissions
 
-Own:
+The builder owns product decisions and prototypes, including research, execution and UI interaction probes. The builder approves release claims, new product behavior, provider access, spending, wallet operations and financial actions. Participant recruitment, recordings and submission follow the owners recorded in the release cut.
 
-- `EdgeSpec`, `ResearchEvidencePackage`, `StrategySpec`, `ResearchBudget`, and `ResearchLedger` semantics;
-- hypothesis generation and classification;
-- feature definitions, aggregation windows, sentiment-model policy, and point-in-time semantics;
-- compiler, parser, type checker, canonicalization, and decompiler;
-- edge validation and false-edge rejection;
-- backtest and LP simulation semantics;
-- robustness and temporal tests;
-- quant, Jev, and Hermes boundaries;
-- deterministic risk rules;
-- mandate semantics, strategy-version binding, and typed agent handoffs;
-- reference implementation fixtures;
-- application API, persistence and background research job state;
-- bounded provider collection, provenance, quality, request/cost accounting and data reconciliation;
-- Privy wallet ownership, restricted signer consent, current policy checks, and owner removal;
-- backend secret isolation and separate policy administration;
-- persistent strategy workers, exclusive claims, reserved capital, and durable intent records;
-- recovery of pending transactions, orders, and fills before another submission;
-- Monad data and transaction plumbing;
-- Kuru and Envio ingestion, QuickNode integration, public-RPC fallback, and provider-health checks;
-- official X API collection and forward snapshot storage when access is available;
-- Kuru spot adapter and a verified LP adapter when selected;
-- receipt storage and explorer links;
-- backend deployment, monitoring, recovery and reproduction instructions.
+Backend and frontend implementation may be delegated through accepted tickets. This does not delegate product or financial authority. Preserve accepted record semantics, risk rules, owner isolation and recovery requirements regardless of the implementation owner.
 
-### Teammate: frontend and judge experience
+### Codex controller: coordination and local integration
 
-Own:
+The controller prepares task worktrees and frozen packets, assigns owners, selects relevant skills and manages shared-file leases. It coordinates the two independent internal reviews and separate gate. It verifies the exact candidate and evidence, accepts the proved technical scope and integrates serially into `integration/edge-os-mvp` under the recorded controller authority.
 
-- input and clarification workflow;
-- inspectable EdgeSpec and StrategySpec views;
-- research progress and evidence views;
-- source, timestamp, degraded-mode, and missing-data views;
-- observation-versus-interpretation, contradictory-evidence and historical-versus-forward coverage views;
-- rejection, unresolved, mandate-approval, and receipt states;
-- wallet consent, pause, revoke, recovery, pending-order, and fill views;
-- mobile and desktop usability;
-- visual consistency;
-- demo-safe fixture playback;
-- project graphic support.
+The selected execution workflow controls agent context and transport. A new document does not switch active assignments. The controller may implement a specifically authorized change itself, but independent reviewers and the separate gate still assess that change.
 
-### Teammate: tokenization extension
+Publication and `main` merges require recorded builder authorization. The controller can execute a specifically authorized merge. Technical acceptance, an assigned owner or a gate PASS does not grant deployment, provider or financial permission.
 
-Implement accepted extension tickets after the builder accepts their behavior and interfaces. This role does not own core backend work or prototyping.
+### Implementation agents and contributors: assigned tickets
 
-Own:
+Each agent or human contributor implements only its accepted assigned scope in an isolated worktree and branch. The packet identifies the exact base, owned paths, shared-file lease, skills, tests and return route. Backend and matching UI work may belong to the same ticket owner. There is no standing frontend or tokenization teammate assignment.
 
-- approved token/publication contracts and integration interfaces;
-- extension-specific tests, denied-action cases and inspectable accounting;
-- extension deployment and reproduction instructions under separately approved permissions.
+The existing Claude owner retains P05, including its issued backend/UI shared-wiring lease. Preserve its session, branch, staged history and continuation. Do not create a second P05 writer. Current assignments and completion evidence are recorded in the team handoff and controller ledger.
 
-Before a dependent ticket is ready, accept the holder's utility/rights, immutable strategy-revision binding, eligibility evidence, fee route, liquidity source, pause/version-change behavior, governance limits and absent claims. Ownership does not authorize the teammate to choose these terms or expand trading authority.
+A prospective quant/backend teammate may receive a separate optional extension such as P14 or P42 after explicit assignment. That recommendation assigns neither ticket and creates no submission dependency. Required inputs must be published contracts, permitted extracts, labelled fixtures and public references. Private courses are not mandatory contributor inputs.
 
-Implementation may proceed against clearly labeled fixtures once its behavior and interfaces are accepted. Activation requires the core proof, the extension's own checks and separate builder approval. Optional economics and activation remain unapproved and must not block the core probes.
+Core wallet, signing, money and recovery work stays in the builder-directed execution queue unless explicitly reassigned. The same acceptance, review and permission rules apply to human and agent implementations.
+
+### Optional tokenization extension
+
+No tokenization contributor is assigned by this ownership update. The extension remains outside the hackathon cut and needs accepted behavior and interfaces before implementation.
+
+Before a dependent extension ticket is ready, accept the holder's utility/rights, immutable strategy-revision binding, eligibility evidence, fee route, liquidity source, pause/version-change behavior, governance limits and absent claims. Ownership does not authorize these decisions or expand trading authority.
+
+Implementation may use labelled fixtures after its behavior and interfaces are accepted. Activation needs the core proof, extension checks and separate builder approval. Optional economics and activation remain unapproved and must not block the core release.
 
 ### Integration contract
 
-The builder must publish versioned JSON schemas and representative fixtures before the teammates depend on live quant output.
+The controller must ensure required versioned schemas and representative fixtures are published under builder authorization before a contributor depends on live quant output.
 
 Minimum fixtures:
 
@@ -821,7 +795,7 @@ Minimum fixtures:
 - signer removal with a still-open order;
 - LP StrategySpec and simulated result.
 
-The frontend should work against these fixtures while the real engine is being built. Tokenization work uses its separately accepted publication contract and revision/eligibility fixtures. A fixture grants no live authority and establishes no profitability.
+Assigned frontend work can use these fixtures while the real engine is being built. Optional tokenization work uses its separately accepted publication contract and revision/eligibility fixtures. A fixture grants no live authority and establishes no profitability.
 
 ## 10. Quant course knowledge base
 

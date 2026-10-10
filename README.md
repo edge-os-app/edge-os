@@ -217,12 +217,14 @@ The specification, contracts, scoped probe plan and project workflow in this rep
 
 Track assigned work in [GitHub Issues](https://github.com/edge-os-app/edge-os/issues). Read [AGENTS.md](AGENTS.md) before an agent task. Tracker, label and domain conventions are under [docs/agents/](docs/agents/).
 
-The builder owns product decisions, all prototyping and the whole backend. One teammate implements the frontend; the other implements the gated tokenization extension after its behavior and interfaces are accepted. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records the boundaries. Assigning an owner does not approve an extension's economics or activation.
+The builder owns product decisions, prototypes and financial permissions. The Codex controller coordinates implementation agents and explicitly assigned contributors, reviews their evidence and integrates accepted work locally. The former fixed frontend/backend/tokenization split is retired. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records current responsibilities and assignment boundaries.
 
-Teammates implement accepted tickets on task branches and submit pull requests for builder acceptance. Only the builder merges to `main` by team agreement. The builder selected this manual gate instead of requiring GitHub-enforced approvals or branch protection. Required checks and implementation review still apply.
+Contributors implement assigned accepted tickets in isolated worktrees on task branches. The controller checks both original internal reviews and the separate gate before technical acceptance and serial local integration. Publication and merging to `main` require recorded builder authorization. The builder may authorize the controller to execute a specific merge. This manual gate does not require GitHub-enforced approvals or branch protection. Required checks and independent review still apply.
 
 Contributor coding skills require installation in each contributor's agent environment. They are separate from the planned user-facing agent add-ons catalog. These documentation files do not install either kind of skill or create remote labels.
 
 For supporting evidence and required task inputs, follow the [contributor reference rules](docs/agents/domain.md#shared-documents-and-private-evidence).
 
 Use the locked toolchains and repository verification commands above. New feature work requires its assigned scope, tests and independent reviews; publication does not grant provider access or financial authority.
+
+A PASS covers the exact candidate and declared scope. Fixture tests, a component milestone or a release portion do not complete remaining live qualification or the original wider issue. See [current status](#current-status) for accepted features and their limits.

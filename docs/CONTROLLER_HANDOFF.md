@@ -20,9 +20,11 @@ The code through accepted integration `8ad71c4` contains the saved Research/comp
 
 P04's local pinned-Hermes recipe passed with a fake provider; live model/hosting remains unresolved. P07's offline checker is integrated, but real-history evidence remains open. P16's bounded one-owner signing/removal output passed its reviews and gate and is integrated. Its creation/lost-response/restart and actual-backend cross-user qualification remain open. Resume those checks before real wallet setup/recovery; reuse passed signing/removal evidence rather than repeat provider actions without a specific reason. P36 remains unresolved LP preparation.
 
-P05's adapter remains staged outside this tree, without a shared-wiring lease. Its next assigned continuation must reconcile the accepted refactor, place interpretation modules under research and update imports before wiring/persistence/review. Do not create another writer or reset its retained candidate. No real data/model/trading, deployment, wallet/spending or worktree-deletion authority follows from publication.
+P05 remains in its existing Claude worktree, with the issued backend/UI shared-wiring continuation and lease. Its local adapter milestone does not complete application wiring, persistence, restart checks or final reviews. Preserve its retained history and sole implementation owner. No real data/model/trading, deployment, wallet/spending or worktree-deletion authority follows from publication.
 
-Earlier implementation-not-started, binding-in-progress and P16-review-pending statements below are historical snapshots. Accepted bounded results do not close remaining qualification or prototype gates. The README's dated status records the current published implementation; preserve original failure/qualification records rather than rewriting their history.
+Earlier implementation-not-started, no-P05-lease, binding-in-progress and P16-review-pending statements below are historical snapshots. Accepted bounded results do not close remaining qualification or prototype gates. The README's dated status records the current published implementation; preserve original failure/qualification records rather than rewriting their history.
+
+A PASS applies to the exact candidate and declared scope. P04 and P36 closed with explicitly accepted unresolved qualifications, not live-model or working-LP proof. P07, P16 and P43 retain unfinished original criteria. A release portion may pass while its wider issue stays open under the approved cut. Test success alone does not complete P05's remaining wiring and review stages. Completed accepted features remain completed.
 
 Controller binding work, 2026-10-07: CTRL-BIND-L3-01 is in progress on `chore/controller-guard-session-binding`, based on `6e7efc941a015e72278b3037bfcc314fc5cd6602`. The scoped change adds approved local task assignments and native SessionStart receipts for Codex and Claude. It does not bind existing sessions automatically. Wait for both internal PASS reviews and the independent gate before treating the candidate as accepted. New sessions still require normal hook trust and a matching receipt.
 
@@ -81,9 +83,9 @@ Wallet amendment accepted, 2026-10-05: [one separately funded user-owned wallet 
 
 ## Ownership and document authority
 
-The builder owns product decisions, the whole backend and every prototype, including both probes and any UI interaction prototype. One teammate implements the frontend. The other implements the gated tokenization extension using accepted behavior, interfaces and fixtures. Detailed ownership is in [the workflow](EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership).
+Use [current team ownership](EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) before assigning work. The builder owns product, prototypes and consequential permissions. The Codex controller coordinates assigned implementation, reviews, technical acceptance and serial local integration. Contributors own only their explicitly assigned tickets. The former fixed frontend/backend/tokenization split is retired.
 
-Tokenization ownership does not approve token rights, fees, governance, funding or activation. Those decisions and the extension's verification gate remain separate. Teammates implement accepted tickets; they do not own prototyping.
+P05 retains its existing Claude owner and backend/UI shared-wiring lease. A prospective quant teammate is not assigned automatically. Tokenization economics, implementation and activation remain separate, unapproved extension decisions.
 
 The specification, research contracts, probe plan, project workflow and `docs/agents/` configuration in this repository are the shared sources of truth. Workspace copies are redirects. Approved product behavior belongs in the specification; this handoff summarizes status without introducing new requirements.
 
@@ -93,9 +95,9 @@ Private source material is marked `BUILDER-ONLY REFERENCE`. Follow the [referenc
 
 Use [Matt's project workflow](../playbooks/MATT_POCOCK_PROJECT_WORKFLOW.md) and the [GitHub tracker configuration](agents/issue-tracker.md).
 
-Implementation starts after the relevant behavior and production scope are accepted. Draft tickets are not ready implementation work. Work on task branches, submit PRs, return the required checks and independent review evidence, and leave acceptance and merging to the builder.
+Implementation starts after the relevant behavior and production scope are accepted and an owner is assigned. Draft tickets are not ready implementation work. Work on isolated task branches and return required checks and original independent review evidence. The controller handles technical acceptance and local integration under recorded authority.
 
-The builder selected a manual merge gate rather than required GitHub approvals or branch protection. This does not waive verification, independent reviews or financial authorization.
+The builder selected a manual merge gate rather than required GitHub approvals or branch protection. Publication and merging to `main` require recorded builder authorization, which may name the controller as executor. This does not waive verification, independent reviews or financial authorization.
 
 ## Contest constraints
 

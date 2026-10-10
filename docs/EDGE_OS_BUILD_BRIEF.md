@@ -189,13 +189,13 @@ The courses supply calculation and testing references. They do not supply Monad 
 
 These are proposed slices, not issued tickets or file-by-file plans.
 
-1. **Intake, clarification, saved rules and retrievable result records.** Builder owns the API, storage, interpreter/compiler boundary and deterministic routing. Frontend teammate owns the matching request/review/report path. Use sanitized real MOE evidence for a labeled saved-result example; do not call loading that report a fresh investigation. Include runtime verification with this slice.
+1. **Intake, clarification, saved rules and retrievable result records.** Assign the API, storage, interpreter/compiler boundary, deterministic routing and matching request/review/report path through explicit ticket ownership. Use sanitized real MOE evidence for a labeled saved-result example; do not call loading that report a fresh investigation. Include runtime verification with this slice.
 2. **Run one supported investigation through that path.** Add qualified history, deterministic feature/outcome evaluation, attempt ledger and evidence-backed report generation. Verify it returns an honest unresolved result when requirements cannot be met. A recorded replay and a newly executed provider/model run must be distinct.
 3. **Implement the narrow simulator and connect Test on past prices.** Keep its accounting separate from effect research and real wallets. Publish supported rules, assumptions and reproducible result fixtures before UI integration.
 4. **Build qualified account operation.** Builder can investigate Probe B in a fresh session while accepted research/UI work proceeds. Implement wallet setup, funding, permissions, persistent execution, positions and withdrawals only against the relevant qualified contracts. The frontend can use labeled fixtures earlier, without presenting them as live capability.
 5. **Complete accepted add-ons, the LP proof and release integration.** Required tools precede catalog exposure. LP retains its separate data/simulation checks. Consider optional token/publication work only under its own accepted scope and remaining capacity.
 
-Frontend and backend can work in parallel against stable shared records and fixtures. The builder owns backend, research, integration, probes and acceptance; teammates own accepted frontend and token-extension tickets. Reconfirm availability before assigning dates. This plan makes no four-day completion promise.
+Frontend and backend can work in parallel against stable shared records and fixtures with disjoint ownership and explicit shared-file leases. Use [current team ownership](EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) for assignments. The former fixed teammate split is retired. Reconfirm availability before assigning dates. This plan makes no four-day completion promise.
 
 ### Contract package before dependent tickets
 
