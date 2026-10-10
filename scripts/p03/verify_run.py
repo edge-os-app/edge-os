@@ -610,6 +610,56 @@ def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_a
         and item.get("expected_result_status") and item.get("expected_unavailable_reason")
         and item.get("synthetic_evidence_class") and item.get("expected_accounting")
         and item.get("no_trade_permission_notice") for item in spot_replays)
+    configuration_identities = []
+    for key, saved in results.items():
+        identity = saved.get("configurationIdentity")
+        if not key.startswith("spot-replay-") or not identity:
+            continue
+        owner_rows = rows(
+            "select owner_id::text, run_configuration_id from spot_replay_runs "
+            f"where replay_id='{saved['replayId']}'")
+        owner_id = owner_rows[0]["owner_id"] if owner_rows else ""
+        identity_rows = rows(
+            "select c.run_configuration_id, c.configuration_sha256, r.replay_id::text replay_id, "
+            "r.content_sha256, r.content from spot_replay_configurations c "
+            "left join spot_replay_runs r on r.owner_id=c.owner_id "
+            "and r.content->>'run_configuration_id'=c.run_configuration_id "
+            f"where c.owner_id='{owner_id}' and c.run_configuration_id in "
+            f"('{identity['runConfigurationId']}', '{identity['independentConfigurationId']}')") if owner_id else []
+        original_rows = [row for row in identity_rows if row["run_configuration_id"] == identity["runConfigurationId"]]
+        independent_rows = [row for row in identity_rows
+                            if row["run_configuration_id"] == identity["independentConfigurationId"]]
+
+        def configuration_hash(row):
+            encoded = json.dumps({"schema_version": "p13.spot-replay-run/1", "inputs": row["content"]["inputs"]},
+                                 ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+        item = {
+            "key": key,
+            "conflicting_fresh_key_rejected": identity["conflictingStatus"] == 409,
+            "exact_retry_unchanged": identity["exactRetryStatus"] == 200 and identity["exactRetryUnchanged"]
+                and any(row["replay_id"] == saved["replayId"] and row["content_sha256"] == saved["replayHash"]
+                        for row in original_rows),
+            "same_content_fresh_key_allowed": identity["sameContentNewKeyStatus"] == 201 and len(original_rows) == 2
+                and all(row["content"]["inputs"] == saved["expectedInputs"] for row in original_rows),
+            "independent_id_changed_settings_saved": identity["independentStatus"] == 201
+                and len(independent_rows) == 1
+                and independent_rows[0]["replay_id"] == identity["independentReplayId"]
+                and independent_rows[0]["content_sha256"] == identity["independentReplayHash"]
+                and independent_rows[0]["content"]["inputs"]["initial_cash_quote"] == "999",
+            "owner_scoped_registry_hashes_match_inputs": len(original_rows) == 2 and len(independent_rows) == 1
+                and all(row["configuration_sha256"] == configuration_hash(row)
+                        for row in original_rows + independent_rows)
+                and len({row["configuration_sha256"] for row in original_rows}) == 1
+                and original_rows[0]["configuration_sha256"] != independent_rows[0]["configuration_sha256"],
+        }
+        item["all_checks_pass"] = all(value for name, value in item.items()
+                                      if name not in {"key", "all_checks_pass"})
+        configuration_identities.append(item)
+    checks["spot_replay_configuration_identities"] = configuration_identities
+    configuration_identities_pass = bool(configuration_identities) and all(
+        item["all_checks_pass"] for item in configuration_identities)
     investigations = []
     for key, saved in results.items():
         if not key.startswith("investigation-"):
@@ -783,7 +833,8 @@ def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_a
         and all(checks["p19_context_history"][agent_id]["versions"] == [1, 2, 3, 4, 5]
                 and checks["p19_context_history"][agent_id]["suggestion_adopted"]
                 and checks["p19_context_history"][agent_id]["final_cleared"] for agent_id in ("agent-a", "agent-b"))
-    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass and spot_replays_pass and p19_ok}
+    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass
+            and spot_replays_pass and configuration_identities_pass and p19_ok}
 
 
 def sql_literal(text: str) -> str:

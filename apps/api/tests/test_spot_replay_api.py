@@ -122,6 +122,7 @@ def test_failed_replay_insert_rolls_back_without_a_partial_saved_result(client, 
     strategy, revision = _saved_revision(client, owner_a)
     body = _body(strategy, revision, key="atomic-failure")
     before = pg.psql("select count(*) from spot_replay_runs")
+    configuration_before = pg.psql("select count(*) from spot_replay_configurations")
     pg.psql("CREATE FUNCTION p13_test_reject_spot_replay() RETURNS trigger LANGUAGE plpgsql AS $$ "
             "BEGIN RAISE EXCEPTION 'p13_test_reject_spot_replay'; END $$")
     pg.psql("CREATE TRIGGER p13_test_reject_spot_replay BEFORE INSERT ON spot_replay_runs "
@@ -130,6 +131,7 @@ def test_failed_replay_insert_rolls_back_without_a_partial_saved_result(client, 
         response = client.post("/v1/spot-replays", json=body, headers=owner_a)
         assert response.status_code == 500
         assert pg.psql("select count(*) from spot_replay_runs") == before
+        assert pg.psql("select count(*) from spot_replay_configurations") == configuration_before
     finally:
         pg.psql("DROP TRIGGER p13_test_reject_spot_replay ON spot_replay_runs")
         pg.psql("DROP FUNCTION p13_test_reject_spot_replay()")
@@ -148,6 +150,16 @@ def test_saved_replay_rows_reject_update_and_delete(client, owner_a, pg):
         pg.psql(f"delete from spot_replay_runs where replay_id = '{replay_id}'")
     assert "edge-os: spot_replay_runs rows are immutable" in delete_error.value.stderr
     assert pg.psql(f"select count(*) from spot_replay_runs where replay_id = '{replay_id}'") == "1"
+    configuration_id = created.json()["content"]["run_configuration_id"]
+    with pytest.raises(subprocess.CalledProcessError) as configuration_update_error:
+        pg.psql("update spot_replay_configurations set configuration_sha256 = repeat('0', 64) "
+                f"where run_configuration_id = '{configuration_id}'")
+    assert "edge-os: spot_replay_configurations rows are immutable" in configuration_update_error.value.stderr
+    with pytest.raises(subprocess.CalledProcessError) as configuration_delete_error:
+        pg.psql(f"delete from spot_replay_configurations where run_configuration_id = '{configuration_id}'")
+    assert "edge-os: spot_replay_configurations rows are immutable" in configuration_delete_error.value.stderr
+    assert pg.psql(
+        f"select count(*) from spot_replay_configurations where run_configuration_id = '{configuration_id}'") == "1"
 
 
 def test_spot_replay_requires_an_authenticated_owner(client):

@@ -13,12 +13,13 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from . import p02, p06, spot_replay
 from .auth import Principal
 from .errors import AppError, finding, not_found
-from .models import SpotReplayRun
+from .models import SpotReplayConfiguration, SpotReplayRun
 from .schemas import SpotReplayBody
 from .service import get_revision, parse_uuid
 
@@ -151,6 +152,27 @@ def _unavailable(error: spot_replay.ReplayError) -> dict[str, Any]:
             "repeatability_id": None, "open_position": None}
 
 
+def _bind_configuration(session: Session, owner_id: uuid.UUID, run_configuration_id: str,
+                        inputs: dict[str, Any]) -> None:
+    configuration_sha256 = p02.sha256_hex({"schema_version": SCHEMA_VERSION, "inputs": inputs})
+    statement = pg_insert(SpotReplayConfiguration).values(
+        owner_id=owner_id,
+        run_configuration_id=run_configuration_id,
+        configuration_sha256=configuration_sha256,
+    ).on_conflict_do_nothing(index_elements=["owner_id", "run_configuration_id"])
+    session.execute(statement)
+    established = session.execute(select(SpotReplayConfiguration).where(
+        SpotReplayConfiguration.owner_id == owner_id,
+        SpotReplayConfiguration.run_configuration_id == run_configuration_id,
+    )).scalar_one()
+    if established.configuration_sha256 != configuration_sha256:
+        session.rollback()
+        raise AppError(409, "SPOT_REPLAY", "CONFLICTED", "run_configuration_id_reused",
+                       [finding("run_configuration_id_reused", "/run_configuration_id",
+                                "This run-configuration ID is already bound to different inputs for this owner. "
+                                "Choose a new run-configuration ID for changed settings.")])
+
+
 def create_spot_replay(session: Session, principal: Principal, body: SpotReplayBody) -> tuple[int, dict[str, Any]]:
     """Create one immutable replay, or return the identical result for its idempotency key."""
     request = body.model_dump(mode="json")
@@ -195,6 +217,7 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
     descriptor = _descriptor(body, strategy, fixture["dataset_revision_id"], market_binding_id)
     snapshot = _input_snapshot(body, strategy, fixture, descriptor, market_binding_id)
     snapshot["fixture_sha256"], snapshot["profile_sha256"] = fixture_hash, profile_hash
+    _bind_configuration(session, principal.user_id, body.run_configuration_id, snapshot)
     try:
         result = spot_replay.run_spot_replay(strategy, _replay_input(body, fixture, descriptor, market_binding_id))
         result_snapshot = {"status": "COMPLETE", "evidence_class": result.evidence_class,

@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import (BigInteger, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Identity, Index,
-                        Text, UniqueConstraint, text)
+                        PrimaryKeyConstraint, Text, UniqueConstraint, text)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -260,4 +260,23 @@ class SpotReplayRun(Base):
         CheckConstraint("fingerprint ~ '^[0-9a-f]{64}$' AND content_sha256 ~ '^[0-9a-f]{64}$'",
                         name="ck_spot_replay_hashes"),
         Index("ix_spot_replay_owner_created", "owner_id", "created_at"),
+    )
+
+
+class SpotReplayConfiguration(Base):
+    """Immutable owner-scoped meaning assigned to one P13 run-configuration ID."""
+
+    __tablename__ = "spot_replay_configurations"
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    run_configuration_id: Mapped[str] = mapped_column(Text, nullable=False)
+    configuration_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=NOW)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("owner_id", "run_configuration_id", name="pk_spot_replay_configurations"),
+        ForeignKeyConstraint(["owner_id"], ["users.id"], name="fk_spot_replay_configuration_owner"),
+        CheckConstraint("length(run_configuration_id) BETWEEN 1 AND 200",
+                        name="ck_spot_replay_configuration_id_length"),
+        CheckConstraint("configuration_sha256 ~ '^[0-9a-f]{64}$'",
+                        name="ck_spot_replay_configuration_hash"),
     )
