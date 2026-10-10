@@ -1,5 +1,7 @@
 # Edge OS Compass workflow
 
+Release-scope amendment, 2026-10-10: use the [approved hackathon release cut](planning/EDGE_OS_RELEASE_CUT_2026-10-10.md) for submission scope and staged prerequisites. The dated statuses below are historical where contradicted by the latest team handoff. Wider Compass/product requirements remain visible. No missing runtime, participant or financial gate passes through the cut.
+
 Private source pointers are marked `BUILDER-ONLY REFERENCE`. They are not included in a teammate's clone. Follow the [reference rules](agents/domain.md#shared-documents-and-private-evidence). Source labels preserve provenance, not new verification.
 
 Last updated: 2026-10-06, Africa/Kinshasa

@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-10, Africa/Kinshasa.
 
+## Approved hackathon release cut, 2026-10-10
+
+The builder approved the [release-cut record](planning/EDGE_OS_RELEASE_CUT_2026-10-10.md) and precise amendments to P05/P16/P17/P18/P20/P21/P22/P23/P24/P25/P26/P30/P40/P41. It narrows demonstrated capabilities, preserves accepted features and included safety requirements, and keeps wider unfinished issues open. Probe B now qualifies the actual application instead of requiring a second throwaway program. P26/P30 preparation precedes P20; their final qualification consumes its results. No cycle or live authority is implied.
+
+P05 has an issued same-owner continuation and reserved shared-wiring lease; the older no-lease statements below are superseded. Do not duplicate its writer or modify its frozen packet. Parallel preparation for P20/P40/P41 and P22 local domain work can proceed only after assignment and disjoint-ownership checks. Shared wiring/migrations remain serialized. Resume P16's unfinished owner-linked creation/lost-response/restart and backend cross-user checks before real P17 setup; reuse accepted signing/removal evidence where its configuration applies.
+
+Owners, 11/12 October decision checkpoints and blocked network/route/hosting/financial fields are recorded in the cut. The former frontend/backend teammate split is retired for this release. Builder remains product/participant/financial owner, controller owns coordination, and the existing Claude owner retains P05. No new quant teammate assignment follows. The cut does not accept unfinished work, authorize live actions or dispatch another ticket.
+
 This file records team-facing state. The builder's detailed controller history, retired Funnel ledger, courses and research archives are private and are not required inputs for a teammate's clone.
 
 ## Current state

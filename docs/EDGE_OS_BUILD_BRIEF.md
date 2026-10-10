@@ -1,5 +1,7 @@
 # Edge OS first-release build brief
 
+Release-scope amendment, 2026-10-10: the builder approved the [hackathon release cut](planning/EDGE_OS_RELEASE_CUT_2026-10-10.md). It controls this submission's deliverables, staged prerequisites and deferrals where this older brief requires the full graph. Preserve the wider product and all included safety checks. Scope approval is not dispatch, live qualification or financial authority.
+
 Status: PRODUCT SCOPE APPROVED; LOCAL HANDOFF FREEZE AND TICKET DRAFT. Updated 2026-10-06. Named technical choices and qualification remain open.
 
 The builder approved specification scope and requested `to-spec` on 2026-10-05. The [canonical specification](superpowers/specs/2026-09-29-edge-os-hackathon-design.md) now includes user stories, test coverage and dependency boundaries. On 2026-10-06 the builder requested freezing the local handoff and drafting its ticket graph. Review the proposed breakdown and testing boundary before publication or implementation dispatch. The research contracts and linked ADRs retain their meanings. Open technical choices block only dependent work.
