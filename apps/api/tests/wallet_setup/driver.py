@@ -42,12 +42,13 @@ def main() -> None:
     parser.add_argument("scenario")
     parser.add_argument("--start-file", default=None)
     parser.add_argument("--seed-wallet", action="append", default=[])
+    parser.add_argument("--seed-address", default=None)
     args = parser.parse_args()
     if args.start_file:
         _wait_for(args.start_file)
 
     owner = uuid.UUID(args.owner_id)
-    wallets = {wallet_id: crash_evidence(owner, wallet_id) for wallet_id in args.seed_wallet}
+    wallets = {wallet_id: crash_evidence(owner, wallet_id, args.seed_address) for wallet_id in args.seed_wallet}
     hooks: dict = {}
     if args.scenario == "crash_at_dispatch":
         hooks["on_create"] = lambda _request: os._exit(7)
@@ -60,7 +61,7 @@ def main() -> None:
     principal = Principal(user_id=owner, privy_did="did:privy:driver")
     result: dict = {"scenario": args.scenario}
     with session_factory() as session:
-        if args.scenario == "prepare":
+        if args.scenario in {"prepare", "prepare_race"}:
             record = service.prepare_setup(session, principal, agent_id=args.agent_id, network_id=NETWORK_ID,
                                            strategy_id=args.strategy_id, strategy_revision_id=args.revision_id,
                                            request_key=f"driver-{args.scenario}")
@@ -74,7 +75,8 @@ def main() -> None:
             record = service.get_setup(session, principal, agent_id=args.agent_id)
         else:
             sys.exit(f"unknown scenario: {args.scenario}")
-        result.update({"state": record.state.value, "wallet_id": record.wallet_id, "reason": record.reason})
+        result.update({"setup_id": str(record.setup_id), "state": record.state.value, "wallet_id": record.wallet_id,
+                       "reason": record.reason})
     result["invoked"] = bool(provider.created)
     result["lookup_count"] = len(provider.lookups)
     engine.dispose()

@@ -81,10 +81,14 @@ provider idempotency. The package therefore:
 
 - binds a wallet only from an exact returned server wallet ID plus an independent provider lookup
   that matches the same wallet ID, the bound owner, an Ethereum chain type and a non-empty address.
-- keeps `UNKNOWN` when the response is lost, the lookup is unavailable, the match is wrong, or the
-  wallet is already bound to another agent of the same owner.
+- keeps `UNKNOWN` when the response is lost, the result is malformed, the lookup is unavailable or
+  malformed, the match is wrong, or the wallet is already bound to another agent of the same owner.
 - never selects a first or latest wallet and never creates a second wallet to resolve uncertainty.
-- reconciles a retained exact late result after a restart without invoking creation again.
+- reconciles a retained exact late result after a restart only when the current lookup is identical
+  to the retained result in wallet ID, owner, chain type and address. A changed address stays
+  `UNKNOWN` with `RECONCILE_WRONG_IDENTITY`, so recovery never weakens the initial check.
+- validates provider results before reading their fields, so a malformed fixture result records
+  `UNKNOWN` with a sanitized reason (`MALFORMED_RESULT` or `RECONCILE_NO_MATCH`) instead of failing.
 
 The requested network stays an application binding. Provider evidence carries a chain type and
 address only, because an Ethereum provider wallet is not inherently bound to one chain ID. No

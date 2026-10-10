@@ -17,6 +17,7 @@ class AuthoredFakeWalletProvider:
 
     def __init__(self, *, wallets: dict[str, WalletEvidence] | None = None, lose_response: bool = False,
                  unavailable: bool = False, create_result: WalletEvidence | None = None,
+                 create_returns_malformed: bool = False, lookup_returns_malformed: bool = False,
                  on_create: Callable[[CreationRequest], None] | None = None,
                  on_lookup: Callable[[str], None] | None = None) -> None:
         self.wallets: dict[str, WalletEvidence] = dict(wallets or {})
@@ -25,6 +26,8 @@ class AuthoredFakeWalletProvider:
         self.lose_response = lose_response
         self.unavailable = unavailable
         self.create_result = create_result
+        self.create_returns_malformed = create_returns_malformed
+        self.lookup_returns_malformed = lookup_returns_malformed
         self.on_create = on_create
         self.on_lookup = on_lookup
         self._counter = len(self.wallets)
@@ -37,6 +40,8 @@ class AuthoredFakeWalletProvider:
         self.created.append(request)
         if self.lose_response:
             return None
+        if self.create_returns_malformed:
+            return {"wallet_id": "malformed-wallet", "owner_id": str(request.owner_id)}  # type: ignore[return-value]
         if self.create_result is not None:
             self.wallets[self.create_result.wallet_id] = self.create_result
             return self.create_result
@@ -53,9 +58,12 @@ class AuthoredFakeWalletProvider:
         if self.unavailable:
             raise WalletProviderUnavailable()
         self.lookups.append(wallet_id)
+        if self.lookup_returns_malformed:
+            return {"wallet_id": wallet_id}  # type: ignore[return-value]
         return self.wallets.get(wallet_id)
 
 
-def crash_evidence(owner_id: Any, wallet_id: str = "wallet-retained") -> WalletEvidence:
+def crash_evidence(owner_id: Any, wallet_id: str = "wallet-retained", address: str | None = None) -> WalletEvidence:
     """A deterministic retained wallet used to seed a restarted process."""
-    return WalletEvidence(wallet_id=wallet_id, owner_id=owner_id, chain_type="ethereum", address=f"0x{1:040x}")
+    return WalletEvidence(wallet_id=wallet_id, owner_id=owner_id, chain_type="ethereum",
+                          address=address or f"0x{1:040x}")

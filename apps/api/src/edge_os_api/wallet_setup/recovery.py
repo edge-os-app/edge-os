@@ -8,6 +8,7 @@ never repeated to resolve uncertainty.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from edge_os_api.wallet_setup.persistence import (WalletSetupRow, bind_wallet, conflicting_binding, latest_event,
@@ -35,11 +36,30 @@ def verify_wallet_evidence(row: WalletSetupRow, returned: WalletEvidence, looked
 def lookup_wallet_evidence(provider: WalletCreationPort, wallet_id: str) -> WalletEvidence | None:
     """One exact provider lookup. Any failure or malformed answer stays `UNKNOWN` (returns `None`)."""
     try:
-        return provider.lookup_wallet(wallet_id)
+        result = provider.lookup_wallet(wallet_id)
     except WalletProviderUnavailable:
         return None
     except Exception:  # noqa: BLE001 - an authored fake may fail in unknown ways; uncertainty is safe
         return None
+    return result if isinstance(result, WalletEvidence) else None
+
+
+def _retained_evidence(content: dict[str, Any]) -> WalletEvidence | None:
+    """Rebuild the retained `RESULT_RETURNED` evidence. A malformed retained record has no exact match."""
+    wallet_id, owner_id = content.get("wallet_id"), content.get("owner_id")
+    chain_type, address = content.get("chain_type"), content.get("address")
+    if not (isinstance(wallet_id, str) and wallet_id and isinstance(address, str) and address):
+        return None
+    try:
+        owner = uuid.UUID(str(owner_id))
+    except (ValueError, TypeError):
+        return None
+    return WalletEvidence(wallet_id=wallet_id, owner_id=owner, chain_type=str(chain_type), address=address)
+
+
+def _same_wallet(left: WalletEvidence, right: WalletEvidence) -> bool:
+    return (left.wallet_id == right.wallet_id and left.owner_id == right.owner_id
+            and left.chain_type == right.chain_type and left.address == right.address)
 
 
 def reconcile(session: Any, principal: Any, row: WalletSetupRow, provider: WalletCreationPort) -> SetupRecord:
@@ -51,13 +71,14 @@ def reconcile(session: Any, principal: Any, row: WalletSetupRow, provider: Walle
         session.rollback()
         return to_record(row)
     retained = latest_event(session, row, SetupEventType.RESULT_RETURNED)
-    wallet_id = retained.get("wallet_id") if isinstance(retained, dict) else None
-    if not isinstance(wallet_id, str) or not wallet_id:
+    retained_evidence = _retained_evidence(retained) if isinstance(retained, dict) else None
+    if retained_evidence is None:
         return mark_unknown(session, row, SetupReason.RECONCILE_NO_EXACT_ID.value)
+    wallet_id = retained_evidence.wallet_id
     evidence = lookup_wallet_evidence(provider, wallet_id)
     if evidence is None:
         return mark_unknown(session, row, SetupReason.RECONCILE_NO_MATCH.value)
-    if not evidence_matches_identity(row, evidence) or evidence.wallet_id != wallet_id:
+    if not (evidence_matches_identity(row, evidence) and _same_wallet(retained_evidence, evidence)):
         return mark_unknown(session, row, SetupReason.RECONCILE_WRONG_IDENTITY.value)
     if conflicting_binding(session, row.owner_id, row.agent_id, wallet_id) is not None:
         record_denial(session, row.owner_id, row.agent_id, "SAME_OWNER_CROSS_AGENT", {"wallet_id": wallet_id})

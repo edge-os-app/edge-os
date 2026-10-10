@@ -58,6 +58,9 @@ Route-driven (`HARNESS_EXECUTED`, real signed test tokens):
 - a lost response stays `UNKNOWN` and never retries creation;
 - wrong-owner provider evidence stays `UNKNOWN`;
 - a conflicting wallet never overwrites a confirmed binding;
+- a mutation request that asserts an owner, wallet, setup, network or revision is rejected `422`
+  before any call and changes no protected state;
+- a malformed creation or lookup result becomes durable `UNKNOWN` with a reason, never a `500`;
 - research saves and reads a revision with no wallet.
 
 Process-driven (`PROCESS_EXECUTED`, independent OS processes against the same database):
@@ -65,6 +68,8 @@ Process-driven (`PROCESS_EXECUTED`, independent OS processes against the same da
 - a fresh process reloads the same binding unchanged;
 - a crash during dispatch leaves one durable dispatch intent and no second creation;
 - a crash after the result but before the binding reconciles one exact retained late result;
+- a resumed unchanged wallet ID with a changed address stays `UNKNOWN` and does not bind;
+- a concurrent valid prepare returns the same setup and never fails on the unique constraint;
 - two independent processes create exactly one wallet.
 
 ## Current results

@@ -94,12 +94,12 @@ def prepare_setup(session: Any, principal: Principal, *, agent_id: str, network_
                          content_sha256=identity["content_sha256"], manifest_sha256=identity["manifest_sha256"],
                          state=SetupState.REQUESTED.value, cancellation_intent=CancellationIntent.NONE.value,
                          creation_dispatched=False, request_key=request_key, created_at=utcnow(), updated_at=utcnow())
-    session.add(row)
-    session.flush()
-    insert_event(session, row, SetupEventType.PREPARED,
-                 {"network_id": row.network_id, "strategy_id": row.strategy_id,
-                  "strategy_revision_id": str(row.strategy_revision_id)})
     try:
+        session.add(row)
+        session.flush()  # a competing valid prepare hits the unique constraint here, not at commit
+        insert_event(session, row, SetupEventType.PREPARED,
+                     {"network_id": row.network_id, "strategy_id": row.strategy_id,
+                      "strategy_revision_id": str(row.strategy_revision_id)})
         session.commit()
     except IntegrityError:
         session.rollback()
@@ -108,6 +108,9 @@ def prepare_setup(session: Any, principal: Principal, *, agent_id: str, network_
             record = to_record(existing)
             session.rollback()
             return record
+        record_denial(session, principal.user_id, agent_id, "CHANGED_SETUP_IDENTITY",
+                      {"requested_revision_id": str(identity["strategy_revision_id"])})
+        session.commit()
         raise _conflict("changed_setup_identity",
                         "Another request already saved a setup for this agent with a different identity.") from None
     return to_record(row)
@@ -139,7 +142,11 @@ def _create_after_intent(session: Any, principal: Principal, row: WalletSetupRow
         return mark_unknown(session, row, SetupReason.PROVIDER_UNAVAILABLE.value)
     except Exception:  # noqa: BLE001 - an authored fake may fail in unknown ways; uncertainty is safe
         return mark_unknown(session, row, SetupReason.PROVIDER_ERROR.value)
-    if returned is None or not returned.wallet_id:
+    if returned is None:
+        return mark_unknown(session, row, SetupReason.RESPONSE_LOST.value)
+    if not isinstance(returned, WalletEvidence):
+        return mark_unknown(session, row, SetupReason.MALFORMED_RESULT.value)
+    if not returned.wallet_id:
         return mark_unknown(session, row, SetupReason.RESPONSE_LOST.value)
     insert_event(session, row, SetupEventType.RESULT_RETURNED,
                  {"wallet_id": returned.wallet_id, **_evidence_dict(returned)})

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request
 from pydantic import StringConstraints
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,10 @@ class PrepareBody(StrictModel):
     strategy_id: Identifier
     strategy_revision_id: Identifier
     request_key: Identifier
+
+
+class NoIdentityBody(StrictModel):
+    """A mutation handler accepts no body. Any identity assertion is rejected at the request seam."""
 
 
 def serialize(record: SetupRecord) -> dict[str, Any]:
@@ -59,19 +63,22 @@ def build_wallet_setup_router() -> APIRouter:
         return serialize(record)
 
     @router.post("/agents/{agent_id}/dispatch")
-    def dispatch(agent_id: str, principal: Principal = Depends(require_principal),
+    def dispatch(agent_id: str, data: NoIdentityBody | None = Body(default=None),
+                 principal: Principal = Depends(require_principal),
                  session: Session = Depends(get_session),
                  provider: WalletCreationPort = Depends(get_provider)) -> dict[str, Any]:
         return serialize(service.dispatch_setup(session, principal, agent_id=agent_id, provider=provider))
 
     @router.post("/agents/{agent_id}/resume")
-    def resume(agent_id: str, principal: Principal = Depends(require_principal),
+    def resume(agent_id: str, data: NoIdentityBody | None = Body(default=None),
+               principal: Principal = Depends(require_principal),
                session: Session = Depends(get_session),
                provider: WalletCreationPort = Depends(get_provider)) -> dict[str, Any]:
         return serialize(service.resume_setup(session, principal, agent_id=agent_id, provider=provider))
 
     @router.post("/agents/{agent_id}/cancel")
-    def cancel(agent_id: str, principal: Principal = Depends(require_principal),
+    def cancel(agent_id: str, data: NoIdentityBody | None = Body(default=None),
+               principal: Principal = Depends(require_principal),
                session: Session = Depends(get_session)) -> dict[str, Any]:
         return serialize(service.cancel_setup(session, principal, agent_id=agent_id))
 
