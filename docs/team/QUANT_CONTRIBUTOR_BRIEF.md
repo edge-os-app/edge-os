@@ -77,3 +77,9 @@ No real-provider collection, paid compute, model research call, wallet operation
 ## Your first reply
 
 Tell me whether Python simulation/accounting or statistical-method testing is your stronger area. Then send the P14 profile outline and one independently calculated trace, or explain why P42 preparation is the better starting point. List any exact missing input. I will confirm the first task packet before implementation.
+
+## Workflow and prompt templates
+
+Use the [portable contributor workflow](../agents/contributor-workflow.md) for clone setup, skill requirements and the contribution sequence. It links the canonical [worker packet](../agents/controller-workflow.md#worker-activation-packet), [internal-review packet](../agents/templates/internal-review.md) and [gate packet](../agents/controller-workflow.md#gate-activation-packet). Native agents and Smux lanes are optional ways to run that process; you do not need the builder's machine, pane names or subscriptions.
+
+Your first return is a profile proposal with a worked numerical trace, not an implementation candidate. Before code changes, obtain the accepted profile and a filled assignment naming the exact base, branch/worktree, owned files, required checks, review route and return destination. Install the selected skills in your own agent environment and report missing skills before relying on them. Publication of this brief creates no assignment or provider/financial permission.

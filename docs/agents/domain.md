@@ -23,6 +23,8 @@ The repository handoff records team-facing state. The builder keeps detailed con
 
 `BUILDER-ONLY REFERENCE` identifies source material kept in the builder's private workspace and excluded from a teammate's clone. Its path is relative to that private workspace, not this repository. Preserve the source name and any section or line locator for provenance. A reference label is not new evidence or an instruction to read outside the checkout.
 
+On the builder's host, [read-only prior-project discovery](controller-workflow.md#read-only-prior-project-discovery) separately permits task-relevant searches in the explicitly authorized local reference roots. Use the [implementation reference map](../research/EDGE_OS_IMPLEMENTATION_REFERENCE_MAP.md) for published context. This optional permission does not replace the portable required-input rule below.
+
 For an implementation task that depends on private evidence, the builder must supply the necessary verified extract, semantics, fixtures, source/version identifiers and limitations in the issue or a repository artifact. If they are missing, report the exact missing input and pause the affected work. Do not invent behavior or silently weaken an acceptance check.
 
 The copied hackathon brief is a published research snapshot. Official current rules control contest facts. Any refreshed builder research must be explicitly incorporated into the repository snapshot; do not maintain two independently researched briefs.
