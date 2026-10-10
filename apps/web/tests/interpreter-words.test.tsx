@@ -280,7 +280,8 @@ describe("a first request with no saved outcome and no revision", () => {
     expect(screen.getByRole("heading", { name: "An interpreter attempt has not finished" })).toBeInTheDocument();
     expect(screen.getByTestId("reading-state")).toHaveTextContent("may still be running, or it may have stopped");
     expect(screen.getByTestId("reading-state")).not.toHaveTextContent(/is reading|is running now|working now/i);
-    expect(screen.getByTestId("retry-blocked")).toHaveTextContent("still running");
+    expect(screen.getByTestId("retry-blocked")).toHaveTextContent("may still be running");
+    expect(screen.getByTestId("retry-blocked")).not.toHaveTextContent(/is still running|Wait for it/);
     expect(screen.queryByRole("button", { name: /Try the interpreter again|Read my request now/ })).toBeNull();
     wrongClaims();
   });
@@ -336,9 +337,10 @@ describe("a first request with no saved outcome and no revision", () => {
     expect(mocks.get).toHaveBeenCalledTimes(2);
   });
 
-  it("draws the state in a neutral style, not as a stop", async () => {
+  it("draws the state in the neutral grey style, not as an error and not as a prompt for an answer", async () => {
     const section = await show(noOutcome([], { allowed: true, retry_of: null, reason: null }));
-    expect(section.className).not.toMatch(/stop|err/);
+    expect(section.className).toMatch(/\bstop\b/);
+    expect(section.className).not.toMatch(/err|ok/);
   });
 
   it("leaves a request that has a saved outcome untouched", async () => {

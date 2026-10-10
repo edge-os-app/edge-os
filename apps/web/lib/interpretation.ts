@@ -30,7 +30,7 @@ export function systemFailure(findings: Finding[]): FailureKind | null {
 }
 
 export const RETRY_BLOCKED: Record<string, string> = {
-  attempt_in_flight: "An attempt is still running. Wait for it to finish.",
+  attempt_in_flight: "An earlier attempt has no saved result and may still be running, so a retry is not offered.",
   outcome_uncertain: "An earlier attempt may still finish, so a retry is not offered. Nothing was replayed.",
   stale_reply: "Your saved meaning changed after that reply, so the reply cannot be tried again.",
 };

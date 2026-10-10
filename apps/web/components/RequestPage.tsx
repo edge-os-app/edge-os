@@ -230,7 +230,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {notice ? <p role="status" className="status ok">{notice}</p> : null}
       {error ? <p role="alert" className="status err" ref={errorBanner} tabIndex={-1}>{error}</p> : null}
 
-      <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={pending ? "PENDING" : outcome} data-reading={pending?.kind}>
+      <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped || pending ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={pending ? "PENDING" : outcome} data-reading={pending?.kind}>
         <p className="visually-hidden" role="status">{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</p>
         <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${pending ? "neutral" : copy.tone}`} style={{ marginRight: 8 }}>{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
         {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the rules can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
