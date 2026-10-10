@@ -6,19 +6,22 @@ import uuid
 
 from sqlalchemy import text
 
+from edge_os_api.admission.service import AdmissionService
 from edge_os_api.admission.types import AssetAmount
 from edge_os_api.execution.models import ClaimRow, SubmissionAttemptRow
+from edge_os_api.execution.service import ExecutionService
 from edge_os_api.execution.transport import TransportOutcome
 
-from admission._builders import AGENT_A, BASE, NETWORK, WALLET_A
+from admission._builders import AGENT_A, BASE, NETWORK, WALLET_A, approval_a, context_a, intent_entry
 from execution._builders import frozen_entry_exit
-from execution._support import enqueue_entry, transport
+from execution._support import entry_inputs, enqueue_entry, transport
+from execution.conftest import NOW
 
 
 def _tick(execution_service, owner, revision, approval, context, fixture):
     return execution_service.tick(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, transport=fixture)
+        context=context, revision=revision, inputs=entry_inputs(), transport=fixture)
 
 
 def _active_claims(engine, owner) -> int:
@@ -148,30 +151,77 @@ def test_rejected_settlement_breach_is_retained_not_reported(
     assert blocked.status == "BLOCKED_UNKNOWN"
 
 
-def test_cancel_after_claim_is_unresolved_not_confirmed(
+def test_claim_wins_cancellation_is_refused_and_capital_is_not_reused(
         execution_service, admission_service, execution_engine, fresh_owner) -> None:
     revision = frozen_entry_exit()
     _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
     action_id = result.intent.action_id
+    observed = {}
 
     class CancellingTransport:
-        """A concurrent P22 cancellation lands after the execution claim commit."""
+        """A concurrent P22 cancellation lands after the durable P23 ownership transition."""
 
         transport_id = "test-cancel-before-effect/1"
 
         def submit(self, prepared):
-            assert admission_service.cancel(fresh_owner, prepared.action_id).decision_status == "CANCELLED"
-            return TransportOutcome(outcome="CONFIRMED", detail="effect after external cancellation")
+            refused = admission_service.cancel(fresh_owner, prepared.action_id)
+            observed["cancel_status"] = refused.decision_status
+            observed["cancel_reason"] = refused.reason
+            competing = admission_service.admit_and_reserve(
+                fresh_owner, intent_entry(position_id="compete-1"), approval_a(), context_a())
+            observed["competing"] = competing.status
+            observed["competing_reason"] = competing.reason
+            return TransportOutcome(outcome="CONFIRMED", detail="effect after refused cancellation")
 
     tick = _tick(execution_service, fresh_owner, revision, approval, context, CancellingTransport())
 
-    assert tick.status == "RECONCILE_MISMATCH"
+    # The ownership transition won: cancellation is refused and no capital is reused.
+    assert tick.status == "SUBMITTED_CONFIRMED"
+    assert observed["cancel_status"] == "SUBMISSION_UNKNOWN"
+    assert observed["cancel_reason"] == "NOT_CANCELLABLE_AFTER_SUBMISSION"
+    assert observed["competing"] == "DENIED"
+    assert observed["competing_reason"] == "UNRESOLVED_PRIOR_ACTION"
     saved = admission_service.retrieve_decisions(fresh_owner, action_id=action_id)[0]
-    assert saved.status == "CANCELLED"
-    assert _active_claims(execution_engine, fresh_owner) == 1
-    status = execution_service.status(
-        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)
-    assert (status.blocking_reason or "").startswith("RECONCILE_MISMATCH")
+    assert saved.status == "CONFIRMED"
+    assert _active_claims(execution_engine, fresh_owner) == 0
 
-    blocked = _tick(execution_service, fresh_owner, revision, approval, context, transport("ACCEPT"))
-    assert blocked.status == "BLOCKED_UNKNOWN"
+
+def test_cancellation_before_the_ownership_transition_makes_no_call(
+        execution_factory, admission_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    service = ExecutionService(execution_factory, admission_service, clock=lambda: NOW)
+    _decision, approval, context, result = enqueue_entry(service, fresh_owner, revision)
+    action_id = result.intent.action_id
+
+    class CancellingAdmission(AdmissionService):
+        """A cancellation wins the ownership transition race by committing first."""
+
+        def __init__(self) -> None:
+            super().__init__(execution_factory)
+            self._done = False
+
+        def reconcile(self, owner, called_action_id, receipt):
+            if receipt.outcome == "SUBMISSION_UNKNOWN" and not self._done:
+                self._done = True
+                self.cancel(owner, called_action_id)
+            return super().reconcile(owner, called_action_id, receipt)
+
+    class CountingTransport:
+        transport_id = "test-count/1"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def submit(self, prepared):
+            self.calls += 1
+            return TransportOutcome(outcome="CONFIRMED", detail="must not be called")
+
+    fixture = CountingTransport()
+    racing = ExecutionService(execution_factory, CancellingAdmission(), clock=lambda: NOW)
+    tick = racing.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
+        context=context, revision=revision, inputs=entry_inputs(), transport=fixture)
+
+    assert tick.status == "SUBMISSION_NOT_OWNED"
+    assert fixture.calls == 0
+    assert admission_service.retrieve_decisions(fresh_owner, action_id=action_id)[0].status == "CANCELLED"

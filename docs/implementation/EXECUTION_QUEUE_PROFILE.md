@@ -111,11 +111,16 @@ Immediately before the fixture call, the service rechecks, for the exact payload
 - the current revision content hash and revision identity;
 - the policy binding, the approval state and expiry, and the submission time
   against the decision time;
-- submission-time freshness: the intent is valid only until the next scheduled
+- submission-time freshness: the intent is valid only before the next scheduled
   decision (a local five-minute bound), and the submission-time context snapshot
   must be current (a local five-minute bound). A context that only predates the
   old decision, or the stored `FRESH` flag, cannot prove current freshness; a
   stale context or an expired intent is denied with no transport call;
+- qualified submission-time observations for the exact revision and market: the
+  service re-evaluates the rules with the current inputs and requires the same
+  eligible operation. A newer `NO_SIGNAL`, a changed or missing quote, or an
+  unqualified observation denies with `INPUTS_CHANGED` and no transport call,
+  covering changes before the next-decision boundary as well as at it;
 - the pure P22 admission proposal (approval, scoped stops, quote freshness,
   asset/decimal identity and position existence);
 - the saved P22 admission state, which must still be `ADMITTED`; a cancelled,
@@ -131,6 +136,39 @@ time. A failed revalidation saves the denial and blocking reason and preserves
 the exact prior intent payload. No queued eligibility is reused. A denied
 revalidation leaves the admitted reservations in place; it does not silently
 free or alter them.
+
+## Submission ownership and cancellation coordination
+
+After revalidation, before any fixture call, the service makes one durable
+submission-ownership transition on the exact action: it reconciles the action to
+the accepted P22 `SUBMISSION_UNKNOWN` state. That state is not cancellable, blocks
+a competing admission, and retains the action's reservations.
+
+- If the transition succeeds, the action is submission-owned. A concurrent P22
+  `cancel` is refused (`NOT_CANCELLABLE_AFTER_SUBMISSION`) and a competing
+  admission is denied (`UNRESOLVED_PRIOR_ACTION`). The original capital is not
+  reusable while the effect may be in flight.
+- If a cancellation already won before the transition, the transition returns a
+  non-`SUBMISSION_UNKNOWN` status and the service makes no fixture call. The
+  queue records `SUBMISSION_NOT_OWNED` and the attempt is recorded definitely
+  unsent.
+- A proved definitely-unsent result releases the ownership and its reservations
+  through `AdmissionService.reconcile` with `PREBROADCAST_DENIED`; a confirmed or
+  reverted result settles from the owned state. A submission-possible result
+  retains the ownership.
+- `RECONCILE_MISMATCH` remains a defensive backstop for any residual interleaving.
+
+The P23 claim is committed before this transition, so a crash between them leaves
+the durable claim blocking a repeat. A crash after the transition leaves the
+action submission-owned (capacity retained, cancellation and competing admission
+blocked) with the claim held. No transaction is held across the fixture call and
+no replacement or retry path is added.
+
+This coordination uses one minimal addition in the leased P22 path:
+`SUBMISSION_UNKNOWN` is added to the pre-broadcast clearable set so a proved
+definite-unsent can release a submission-owned action. No new state, table, model
+or migration is added, and existing accounting, owner isolation and default
+behavior are unchanged.
 
 ## Labelled local fixture submission
 
@@ -156,13 +194,10 @@ transport outcome:
   state `BREACHED` with its reason. The claim is held and a next economic action
   is blocked until explicit recovery. A transport confirmation is never reported
   as a successful action.
-- When P22 returns any other status that does not match the transport outcome
-  (for example an external cancellation in the claim window), the queue records
-  `RECONCILE_MISMATCH` with the status and reason. The claim is held and the
-  action is unresolved until explicit recovery. This stage does not edit the P22
-  or shared path to prevent the interleaving; a fully race-free coordination of
-  an external cancellation with the execution claim needs a P22/shared change
-  outside this task's ownership and is reported as an upstream obstruction.
+- When P22 returns any other status that does not match the transport outcome,
+  the queue records `RECONCILE_MISMATCH` with the status and reason, and the claim
+  is held. This is a defensive backstop; the submission-ownership transition above
+  prevents the ordinary cancellation interleaving.
 
 ## Crash and restart boundaries
 
@@ -172,6 +207,11 @@ transport outcome:
 - The claim and an `IN_FLIGHT` submission attempt are persisted in one
   transaction before the fixture call. A crash before the call leaves them
   durable.
+- The submission-ownership transition is durable. A crash before the transition
+  leaves the claim blocking a repeat; a crash after the transition leaves the
+  action submission-owned with its capacity retained and cancellation and
+  competing admission blocked. A fresh process reconciles the unresolved original
+  action before any new one.
 - A fresh process that finds an active claim returns `BLOCKED_UNKNOWN` and
   creates no second attempt. No timeout, lease expiry or unacknowledged worker
   death creates a duplicate or replacement action.
@@ -208,12 +248,11 @@ local assumptions, never qualified live thresholds.
   `execution_local` schema of the run-labelled test database. The P22
   `admission_local` schema stays separate.
 - P05 keeps its shared-wiring lease. Shared files stay read-only.
-- Upstream obstruction: P22 `cancel` and `_admit_locked` do not inspect this
-  package's execution claim, so an external cancellation can interleave between
-  the claim commit and the fixture effect. This stage detects the interleaving at
-  reconciliation and retains it as `RECONCILE_MISMATCH` (unresolved), but a fully
-  race-free prevention needs a change to the P22/shared cancellation path, which
-  is outside this task's ownership.
+- The cancellation/submission guard uses one bounded addition in the leased P22
+  path: `SUBMISSION_UNKNOWN` is added to the pre-broadcast clearable set in
+  `edge_os_api/admission/service.py`, with focused regressions under
+  `apps/api/tests/admission/`. This is the only P22 source change; no other
+  admission path, type, model, contract, migration or shared file changed.
 
 ## Evidence classification
 

@@ -297,14 +297,28 @@ class ExecutionService:
         approval: ApprovalSnapshot,
         context: AdmissionContext,
         revision: FrozenRevision,
+        inputs: EvaluationInputs,
         transport: SubmissionTransport,
         now: dt.datetime | None = None,
     ) -> TickResult:
         now = now or self._clock()
         prepared, intention, queue_id, attempt_id = self._begin_submission(
-            verified_owner_id, agent_id, wallet_id, network_id, approval, context, revision, transport, now)
+            verified_owner_id, agent_id, wallet_id, network_id, approval, context, revision, inputs,
+            transport, now)
         if isinstance(prepared, TickResult):
             return prepared
+
+        # P22 submission-ownership guard. Make the exact action non-cancellable and
+        # capacity-retaining before any fixture call. If a cancellation wins this
+        # transition, make no call and release the claim.
+        ownership = self._admission.reconcile(
+            verified_owner_id, intention.action_id,
+            ActionReceipt(action_id=intention.action_id, binding=intention.binding,
+                          outcome="SUBMISSION_UNKNOWN"))
+        if ownership.decision_status != "SUBMISSION_UNKNOWN":
+            return self._abort_submission(
+                verified_owner_id, agent_id, wallet_id, network_id, queue_id, attempt_id,
+                ownership.decision_status, now)
 
         try:
             outcome = transport.submit(prepared)
@@ -317,10 +331,42 @@ class ExecutionService:
             verified_owner_id, agent_id, wallet_id, network_id, queue_id, attempt_id,
             intention, approval, outcome, now)
 
+    def _abort_submission(
+        self, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
+        queue_id: uuid.UUID, attempt_id: uuid.UUID, status: str, now: dt.datetime,
+    ) -> TickResult:
+        """A cancellation won the ownership transition: make no fixture call."""
+        with self._factory() as session:
+            try:
+                _wallet_lock(session, owner, agent_id, wallet_id, network_id)
+                entry = self._queue_by_id(session, owner, queue_id)
+                assert entry is not None
+                attempt = session.execute(select(SubmissionAttemptRow).where(
+                    SubmissionAttemptRow.owner_id == owner,
+                    SubmissionAttemptRow.attempt_id == attempt_id,
+                ).with_for_update().execution_options(populate_existing=True)).scalar_one()
+                attempt.state = "TERMINAL"
+                attempt.outcome = "DEFINITELY_UNSENT"
+                attempt.detail = f"SUBMISSION_NOT_OWNED:{status}"
+                attempt.completed_at = now
+                entry.state = "SUBMISSION_NOT_OWNED"
+                entry.blocking_reason = f"SUBMISSION_NOT_OWNED:{status}"
+                entry.updated_at = now
+                claim = self._active_claim(session, owner, agent_id, wallet_id, network_id)
+                if claim is not None:
+                    claim.state = "RELEASED"
+                    claim.released_at = now
+                session.commit()
+                return TickResult(status=entry.state, reason=entry.blocking_reason,
+                                  selected_action_id=entry.action_id, queue_entry=_queue_view(entry, now))
+            except SQLAlchemyError:
+                session.rollback()
+                raise
+
     def _begin_submission(
         self, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
         approval: ApprovalSnapshot, context: AdmissionContext, revision: FrozenRevision,
-        transport: SubmissionTransport, now: dt.datetime,
+        inputs: EvaluationInputs, transport: SubmissionTransport, now: dt.datetime,
     ) -> tuple[TickResult | PreparedSubmission, ActionIntent | None, uuid.UUID | None, uuid.UUID | None]:
         with self._factory() as session:
             try:
@@ -344,7 +390,7 @@ class ExecutionService:
                 action_intent = ActionIntent.model_validate(intent_row.payload)
 
                 revalidation = self._revalidate(
-                    session, owner, entry, intent_row, action_intent, approval, context, revision, now)
+                    session, owner, entry, intent_row, action_intent, approval, context, revision, inputs, now)
                 entry.revalidation = revalidation.model_dump(mode="json")
                 entry.updated_at = now
                 if revalidation.status == "DENIED":
@@ -446,7 +492,7 @@ class ExecutionService:
     def _revalidate(
         self, session: Session, owner: uuid.UUID, entry: QueueRow, intent_row: IntentRow,
         action_intent: ActionIntent, approval: ApprovalSnapshot, context: AdmissionContext,
-        revision: FrozenRevision, now: dt.datetime,
+        revision: FrozenRevision, inputs: EvaluationInputs, now: dt.datetime,
     ) -> RevalidationOutcome:
         decision = session.execute(select(DecisionRow).where(
             DecisionRow.owner_id == owner, DecisionRow.decision_id == entry.decision_id,
@@ -468,15 +514,27 @@ class ExecutionService:
             return denied("POLICY_BINDING_CHANGED", "POLICY_BINDING_CHANGED")
         if not approval.is_active_at(now):
             return denied("APPROVAL_INACTIVE_OR_EXPIRED", "APPROVAL_INACTIVE_OR_EXPIRED")
-        # Submission-time freshness. The intent is bounded to the next scheduled
-        # decision, and the current context/quote snapshot must be current. A
-        # timestamp that only predates the old decision, or the stored FRESH flag,
-        # cannot prove current freshness.
-        if now - decision.decision_at > _INTENT_VALIDITY:
+        # Submission-time freshness. The intent is bounded to before the next
+        # scheduled decision, and the current context/quote snapshot must be
+        # current. A timestamp that only predates the old decision, or the stored
+        # FRESH flag, cannot prove current freshness.
+        if now - decision.decision_at >= _INTENT_VALIDITY:
             return denied("INTENT_EXPIRED", "INTENT_EXPIRED")
         checked = parse_utc(context.checked_at)
         if checked > now or now - checked > _CONTEXT_FRESHNESS:
             return denied("STALE_CONTEXT", "STALE_CONTEXT")
+
+        # Qualified submission-time observations for the exact revision and market.
+        # Re-evaluate the rules with the current inputs and require the same eligible
+        # operation; a newer NO_SIGNAL, a changed or missing quote, or an unqualified
+        # observation denies with zero transport calls. This checks changes before
+        # the next-decision boundary as well as at it.
+        if inputs.observed_at() > now or now - inputs.observed_at() > _CONTEXT_FRESHNESS:
+            return denied("STALE_INPUTS", "STALE_INPUTS")
+        current = evaluate(revision, inputs)
+        if current.status != "SIGNAL" or current.operation != entry.operation:
+            identity = f"INPUTS_CHANGED:{current.status}:{current.operation or ''}"
+            return denied("INPUTS_CHANGED", identity)
 
         # The saved admission must still be live. A cancelled, denied, reconciled
         # or breached action can never be submitted from the queue.

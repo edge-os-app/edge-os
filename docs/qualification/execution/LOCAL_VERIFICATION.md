@@ -58,17 +58,23 @@ git diff --check 8d38d691e7be3d0bfd12f3e16cfdc13564c4c652..HEAD
   action once.
 - Revalidation: an expired or revoked approval, a changed policy binding, a
   changed revision, a scoped stop, an expired intent, a stale submission
-  context, empty holdings, a lowered successor limit and a cancelled saved action
-  each deny submission with no transport call, record the reason and preserve the
-  prior intent payload.
+  context, changed or missing submission-time observations, empty holdings, a
+  lowered successor limit and a cancelled saved action each deny submission with
+  no transport call, record the reason and preserve the prior intent payload.
+  A newer `NO_SIGNAL` input and the next-decision boundary both deny.
+- Submission ownership: after revalidation, the action is made non-cancellable
+  and non-competing before the fixture call. A cancellation that wins the
+  transition makes no call (`SUBMISSION_NOT_OWNED`); a claim that wins refuses
+  the cancellation (`NOT_CANCELLABLE_AFTER_SUBMISSION`), denies a competing
+  admission (`UNRESOLVED_PRIOR_ACTION`) and retains the reservations; a proved
+  definitely-unsent releases them.
 - Fixture submission: a confirmed swap reconciles into P22 and releases the
   claim; a definitely-unsent denial consumes no attempt and releases the claim;
   an unknown outcome retains the claim and blocks status; a lost acknowledgement
   is recorded as submission-possible; a persisted in-flight attempt after a
   simulated crash blocks a duplicate; a settlement breach is retained as
-  `BREACHED` and blocks a next action; an external cancellation that lands after
-  the claim commit is retained as `RECONCILE_MISMATCH` (never reported as a
-  confirmation) and blocks the next action.
+  `BREACHED` and blocks a next action; a reconciliation mismatch is retained as
+  `RECONCILE_MISMATCH` (never reported as a confirmation).
 - Status: last attempt/completion/input time, next scheduled local work, the
   queue with waiting time, delayed-exit marker and blocking reason.
 - Durability and isolation: records survive a fresh engine; the `execution_local`
@@ -93,18 +99,18 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 504 passed (472 existing + 32 execution), ~75 s, 2 known warnings.
-- Execution suite: 32 passed.
-- Focused suite (execution + admission + compiler tests): 178 passed.
+- Full suite: 511 passed (472 existing + 39 execution/admission additions), ~76 s,
+  2 known warnings.
+- Execution suite: 36 passed. Admission suite: 98 passed.
+- Focused suite (execution + admission + compiler tests): 185 passed.
 - P15, P02 and P06 contract scripts: PASS.
-- `compileall` on owned source/tests: PASS.
+- `compileall` on owned source/tests and the leased admission source: PASS.
 - `git diff --check` against the base: clean.
-- Gate-owned reproduction of the repaired candidate (separate PostgreSQL 18.6,
-  local fixture transport): the verdict-1/3 findings still deny/block, the
-  verdict-2/3 findings now deny/block (an aged intent and a stale context deny
-  with zero transport calls; an external cancellation after the claim commit is
-  retained as `RECONCILE_MISMATCH` with the claim held), and all positive
-  controls still pass.
+- The submission-ownership regressions cover cancellation-before-transition (no
+  call) and claim-before-cancellation (refused, capacity retained, no competing
+  reuse), changed/missing submission-time inputs, the next-decision boundary, and
+  the confirmed/settled and proved-definitely-unsent paths, all on a labelled
+  PostgreSQL 18 instance with the local fixture transport.
 
 ## Not covered
 

@@ -38,7 +38,7 @@ NOW = text("now()")
 DECISION_STATES = ("SIGNAL", "NO_SIGNAL", "INELIGIBLE")
 QUEUE_STATES = (
     "QUEUED", "CLAIMED", "REVALIDATION_DENIED", "ADMISSION_DENIED", "BREACHED", "RECONCILE_MISMATCH",
-    "SUBMITTED_CONFIRMED", "SUBMITTED_REVERTED", "SUBMITTED_UNKNOWN", "DENIED_UNSENT",
+    "SUBMISSION_NOT_OWNED", "SUBMITTED_CONFIRMED", "SUBMITTED_REVERTED", "SUBMITTED_UNKNOWN", "DENIED_UNSENT",
 )
 ATTEMPT_STATES = ("IN_FLIGHT", "TERMINAL")
 
@@ -136,7 +136,7 @@ class QueueRow(ExecutionBase):
         UniqueConstraint("owner_id", "action_id", name="uq_execution_queue_owner_action"),
         CheckConstraint(
             "state IN ('QUEUED','CLAIMED','REVALIDATION_DENIED','ADMISSION_DENIED','BREACHED','RECONCILE_MISMATCH',"
-            "'SUBMITTED_CONFIRMED','SUBMITTED_REVERTED','SUBMITTED_UNKNOWN','DENIED_UNSENT')",
+            "'SUBMISSION_NOT_OWNED','SUBMITTED_CONFIRMED','SUBMITTED_REVERTED','SUBMITTED_UNKNOWN','DENIED_UNSENT')",
             name="ck_execution_queue_state",
         ),
         Index("ix_execution_queue_owner_wallet_state", "owner_id", "wallet_id", "network_id", "state"),

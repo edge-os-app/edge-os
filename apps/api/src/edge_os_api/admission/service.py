@@ -56,7 +56,10 @@ from edge_os_api.admission.types import (
 
 _CAPITAL_SCOPES = ("CAPITAL", "GAS")
 _CANCELLABLE = {"PROPOSED", "ADMITTED"}
-_PREBROADCAST_CLEARABLE = {"PROPOSED", "ADMITTED"}
+# A proved pre-broadcast denial releases a working or submission-owned action.
+# SUBMISSION_UNKNOWN is included so a P23 submission-owned action can be released
+# when the transport proves no send was possible; a breach is still not clearable.
+_PREBROADCAST_CLEARABLE = {"PROPOSED", "ADMITTED", "SUBMISSION_UNKNOWN"}
 _TERMINAL = {"CONFIRMED", "REVERTED", "DENIED", "CANCELLED"}
 
 

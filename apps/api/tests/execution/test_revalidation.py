@@ -11,10 +11,11 @@ from execution._builders import (
     DECISION_TIME,
     frozen_entry_exit,
     gt_constant,
+    make_inputs,
     scoped_approval,
     scoped_context,
 )
-from execution._support import enqueue_entry, transport
+from execution._support import enqueue_entry, entry_inputs, transport
 
 
 def _payload_hash(engine, owner, action_id: str) -> str:
@@ -27,7 +28,8 @@ def _payload_hash(engine, owner, action_id: str) -> str:
 def _run(execution_service, owner, revision, approval, context, action_id):
     return execution_service.tick(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, transport=transport("ACCEPT", action_id=action_id))
+        context=context, revision=revision, inputs=entry_inputs(),
+        transport=transport("ACCEPT", action_id=action_id))
 
 
 def test_expired_or_revoked_approval_denies_and_preserves_payload(execution_service, execution_engine, fresh_owner) -> None:
@@ -130,7 +132,7 @@ def test_expired_intent_denies_before_submission(execution_service, execution_en
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
         approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
-        transport=transport("ACCEPT"), now=late)
+        inputs=entry_inputs(), transport=transport("ACCEPT"), now=late)
     assert tick.status == "REVALIDATION_DENIED"
     assert tick.reason == "INTENT_EXPIRED"
     assert _attempt_count(execution_engine, fresh_owner) == 0
@@ -144,7 +146,50 @@ def test_stale_submission_context_denies_before_submission(execution_service, ex
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
         approval=scoped_approval(revision_id=revision.revision_id), context=stale, revision=revision,
-        transport=transport("ACCEPT"))
+        inputs=entry_inputs(), transport=transport("ACCEPT"))
     assert tick.status == "REVALIDATION_DENIED"
     assert tick.reason == "STALE_CONTEXT"
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_changed_current_inputs_deny_before_submission(execution_service, execution_engine, fresh_owner) -> None:
+    """A newer no-signal input at a fresh context time must not submit the old signal."""
+    revision = frozen_entry_exit()
+    _decision, _approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    changed = make_inputs(["90"], ["5"], position_open=False)  # entry now FALSE -> NO_SIGNAL
+
+    tick = execution_service.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
+        approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
+        inputs=changed, transport=transport("ACCEPT"))
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "INPUTS_CHANGED"
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_missing_current_input_denies_before_submission(execution_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, _approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    missing = make_inputs([None], ["5"], position_open=False)  # required price missing -> INELIGIBLE
+
+    tick = execution_service.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
+        approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
+        inputs=missing, transport=transport("ACCEPT"))
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "INPUTS_CHANGED"
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_next_bucket_boundary_denies_the_old_intent(execution_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, _approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    next_bucket = DECISION_TIME + dt.timedelta(minutes=5)
+
+    tick = execution_service.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
+        approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
+        inputs=entry_inputs(), transport=transport("ACCEPT"), now=next_bucket)
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "INTENT_EXPIRED"
     assert _attempt_count(execution_engine, fresh_owner) == 0

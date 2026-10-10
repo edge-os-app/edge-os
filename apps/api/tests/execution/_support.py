@@ -20,6 +20,16 @@ def transport(mode: str, *, action_id: str | None = None, **plan) -> LocalFixtur
     return LocalFixtureTransport({action_id: plan_obj} if action_id else {}, plan_obj)
 
 
+def entry_inputs(prices=("110",)):
+    """Current submission-time observations that keep the entry rule TRUE."""
+    return make_inputs(list(prices), ["5"], position_open=False)
+
+
+def exit_inputs(prices=("90",)):
+    """Current submission-time observations that keep the exit rule TRUE."""
+    return make_inputs(list(prices), ["5"], position_open=True)
+
+
 def decide_entry(service, owner, revision, *, prices=("110",), position_open=False):
     return service.evaluate_and_decide(
         owner, revision, make_inputs(list(prices), ["5"], position_open=position_open),
@@ -45,7 +55,7 @@ def open_position(service, owner, revision, *, quantity: str = "10", quote_input
     assert result.admission_status == "ADMITTED", result.admission_reason
     tick = service.tick(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision,
+        context=context, revision=revision, inputs=entry_inputs(),
         transport=transport("ACCEPT", action_id=result.intent.action_id))
     assert tick.status == "SUBMITTED_CONFIRMED", tick
     return approval, context
