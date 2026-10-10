@@ -16,6 +16,21 @@ sys.path.insert(0, str(REPO / "apps" / "api" / "tests"))  # the append-only Memo
 from docker_turn_runner import PinnedHermesImage  # noqa: E402
 
 
+def _api_fixtures() -> None:
+    """Reuse the API test session (PostgreSQL container, signing key, tokens) for the HTTP-level pinned-Hermes tests."""
+    import importlib.util
+    sys.path.insert(0, str(REPO / "scripts" / "p03"))
+    spec = importlib.util.spec_from_file_location("edge_os_api_test_session", REPO / "apps" / "api" / "tests" / "conftest.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for name in ("signer", "pg", "env", "migrated", "owner_a", "owner_b"):
+        globals()[name] = getattr(module, name)
+
+
+_api_fixtures()
+
+
 @pytest.fixture(scope="session")
 def run_id() -> str:
     return f"p05-{uuid.uuid4().hex[:12]}"

@@ -1,0 +1,106 @@
+{
+ "id": "hunch-reply-states-two-values",
+ "group": "FOLLOW_UP",
+ "base_case": "rough-hunch",
+ "intake": {
+  "original_request": "Recent rises seem to keep running. Is that worth testing?",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "LOOSE_INTUITION"
+ },
+ "purpose": "A free-text reply gives two different thresholds for one rule. The result is a conflict that quotes both.",
+ "answers_question": "choose-entry",
+ "reply": "Price up more than 1% over the last 15 minutes. Actually, price up more than 2% over the last 15 minutes",
+ "expect": {
+  "result": "Interpreted",
+  "conflict_values": [
+   {
+    "op": "gt",
+    "args": [
+     {
+      "op": "price_return",
+      "lookback_buckets": 3
+     },
+     {
+      "op": "constant",
+      "value": "0.01",
+      "unit": "DIMENSIONLESS"
+     }
+    ]
+   },
+   {
+    "op": "gt",
+    "args": [
+     {
+      "op": "price_return",
+      "lookback_buckets": 3
+     },
+     {
+      "op": "constant",
+      "value": "0.02",
+      "unit": "DIMENSIONLESS"
+     }
+    ]
+   }
+  ]
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1980,
+   "completion_tokens": 208,
+   "total_tokens": 2188
+  },
+  "model_response": {
+   "meaning_status": "SUPPORTED",
+   "missing_capability": null,
+   "evidence_readiness": "READY",
+   "field_evidence": [
+    {
+     "field_name": "entry",
+     "state": "CONFLICTING",
+     "conflicts": [
+      {
+       "value": {
+        "op": "gt",
+        "args": [
+         {
+          "op": "price_return",
+          "lookback_buckets": 3
+         },
+         {
+          "op": "constant",
+          "value": "0.01",
+          "unit": "DIMENSIONLESS"
+         }
+        ]
+       },
+       "source_passage": "Price up more than 1% over the last 15 minutes"
+      },
+      {
+       "value": {
+        "op": "gt",
+        "args": [
+         {
+          "op": "price_return",
+          "lookback_buckets": 3
+         },
+         {
+          "op": "constant",
+          "value": "0.02",
+          "unit": "DIMENSIONLESS"
+         }
+        ]
+       },
+       "source_passage": "price up more than 2% over the last 15 minutes"
+      }
+     ]
+    }
+   ],
+   "questions": []
+  }
+ }
+}

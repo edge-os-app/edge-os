@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from authored_cases import provider_script
 from docker_turn_runner import DockerHermesTurnRunner
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research.hermes_interpreter import (
@@ -22,7 +23,7 @@ from edge_os_api.research.hermes_interpreter import (
 )
 from edge_os_api.research.interpretation_attempts import AttemptLedger
 from edge_os_api.research.interpretation_response import ParsedInterpretation
-from edge_os_api.research.fixture_interpreter import FixtureInterpreter
+from edge_os_api.research.interpretation_workflow import OfferedBook
 from edge_os_api.research.outcome_router import route
 
 REPO = Path(__file__).resolve().parents[2]
@@ -31,14 +32,6 @@ CASES = {p.stem: json.loads(p.read_text()) for p in sorted(
 OWNER, INTAKE = "owner-a-7f3c", "intake-5e21"
 CONFIG = HermesInterpreterConfig(model="fixture-model/1", route="local-fake-provider", max_output_tokens=4096)
 PINNED_COMMIT = "54bc5e509c985f37265c3d416bd2c64b10fc77ba"
-
-
-def provider_script(case_provider: dict[str, Any]) -> dict[str, Any]:
-    if case_provider["kind"] != "content":
-        return dict(case_provider)
-    text = json.dumps(case_provider["model_response"]) if "model_response" in case_provider else case_provider["model_text"]
-    return {"kind": "content", "content": text, "finish_reason": case_provider["finish_reason"],
-            "usage": case_provider["usage"]}
 
 
 class Session:
@@ -69,7 +62,7 @@ def routed(intake: dict[str, Any], parsed: ParsedInterpretation, evidence: list[
               "meaning_status": parsed.meaning_status, "syntax_status": "VALID",
               "evidence_readiness": parsed.evidence_readiness}
     record_contract.validate_record("PromptInterpretation", interp)
-    return route(intake, interp, FixtureInterpreter(), parsed.missing_capability, "strategy-test")
+    return route(intake, interp, OfferedBook(parsed.questions), parsed.missing_capability, "strategy-test")
 
 
 def adopt_all(parsed: ParsedInterpretation) -> list[dict[str, Any]]:
