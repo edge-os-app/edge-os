@@ -211,6 +211,33 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
     { headers: { Authorization: `Bearer ${tokens.a}` } });
   expect(savedReplayResponse.status()).toBe(200);
   const savedReplay = await savedReplayResponse.json();
+  const sameConfigurationId = replayPosts[0].run_configuration_id;
+  const conflictingConfigurationBody = { ...replayPosts[0], idempotency_key: `mapped-conflict-${crypto.randomUUID()}`,
+    initial_cash_quote: "999" };
+  const conflictingConfigurationResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: conflictingConfigurationBody });
+  expect(conflictingConfigurationResponse.status()).toBe(409);
+  const exactConfigurationRetry = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: replayPosts[0] });
+  expect(exactConfigurationRetry.status()).toBe(200);
+  const exactRetryRecord = await exactConfigurationRetry.json();
+  expect(exactRetryRecord).toEqual(savedReplay);
+  const sameConfigurationNewKey = { ...replayPosts[0], idempotency_key: `mapped-repeat-${crypto.randomUUID()}` };
+  const sameConfigurationNewKeyResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: sameConfigurationNewKey });
+  expect(sameConfigurationNewKeyResponse.status()).toBe(201);
+  const repeatedConfigurationRecord = await sameConfigurationNewKeyResponse.json();
+  expect(repeatedConfigurationRecord.content.inputs).toEqual(savedReplay.content.inputs);
+  expect(repeatedConfigurationRecord.content.result).toEqual(savedReplay.content.result);
+  const independentConfigurationId = crypto.randomUUID();
+  const independentConfigurationBody = { ...conflictingConfigurationBody,
+    idempotency_key: `mapped-independent-${crypto.randomUUID()}`,
+    run_configuration_id: independentConfigurationId };
+  const independentConfigurationResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: independentConfigurationBody });
+  expect(independentConfigurationResponse.status()).toBe(201);
+  const independentConfigurationRecord = await independentConfigurationResponse.json();
+  expect(independentConfigurationRecord.content.inputs.initial_cash_quote).toBe("999");
   const summaryText = await replay.locator(".spot-replay-summary").innerText();
   for (const [metric, value] of Object.entries(savedReplay.content.result.metrics)) {
     if (value !== null && savedReplay.content.result.metric_statuses[metric] === "AVAILABLE") {
@@ -222,6 +249,14 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
     if (sample.account_value_quote !== null) await expect(samplesList).toContainText(sample.account_value_quote);
   }
   record(`spot-replay-${project}`, { url: requestUrl, revisionId, replayId, replayHash,
+    configurationIdentity: { runConfigurationId: sameConfigurationId,
+      conflictingStatus: conflictingConfigurationResponse.status(), exactRetryStatus: exactConfigurationRetry.status(),
+      exactRetryUnchanged: exactRetryRecord.content_sha256 === savedReplay.content_sha256,
+      sameContentNewKeyStatus: sameConfigurationNewKeyResponse.status(),
+      independentConfigurationId, independentStatus: independentConfigurationResponse.status(),
+      independentReplayId: independentConfigurationRecord.replay_id,
+      independentReplayHash: independentConfigurationRecord.content_sha256,
+      expectedInputs: savedReplay.content.inputs },
     expectedEntryDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -3 }],
     expectedExitDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -1 }],
     expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",

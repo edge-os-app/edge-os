@@ -398,6 +398,8 @@ def main() -> int:
             inspection = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
             rec.write("sql-inspection.json", inspection)
             ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
+            storage_before_restart = p13_storage_snapshot(pg)
+            rec.write("p13-storage-before-restart.json", storage_before_restart)
 
             # cross-owner denial against the real saved rows
             denial = ownership_drive(pg, api_url, token_a, token_b)
@@ -413,6 +415,12 @@ def main() -> int:
             ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
             after_restart = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
             ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
+            storage_after_restart = p13_storage_snapshot(pg)
+            rec.write("p13-storage-after-restart.json", storage_after_restart)
+            ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",
+                           storage_after_restart == storage_before_restart,
+                           {"spot_replay_runs": len(storage_before_restart["spot_replay_runs"]),
+                            "spot_replay_configurations": len(storage_before_restart["spot_replay_configurations"])})
 
         if args.hold_seconds:
             hold = {"web": web_url, "api": api_url, "token_owner_a": token_a,
@@ -610,6 +618,56 @@ def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_a
         and item.get("expected_result_status") and item.get("expected_unavailable_reason")
         and item.get("synthetic_evidence_class") and item.get("expected_accounting")
         and item.get("no_trade_permission_notice") for item in spot_replays)
+    configuration_identities = []
+    for key, saved in results.items():
+        identity = saved.get("configurationIdentity")
+        if not key.startswith("spot-replay-") or not identity:
+            continue
+        owner_rows = rows(
+            "select owner_id::text, content->>'run_configuration_id' run_configuration_id from spot_replay_runs "
+            f"where replay_id='{saved['replayId']}'")
+        owner_id = owner_rows[0]["owner_id"] if owner_rows else ""
+        identity_rows = rows(
+            "select c.run_configuration_id, c.configuration_sha256, r.replay_id::text replay_id, "
+            "r.content_sha256, r.content from spot_replay_configurations c "
+            "left join spot_replay_runs r on r.owner_id=c.owner_id "
+            "and r.content->>'run_configuration_id'=c.run_configuration_id "
+            f"where c.owner_id='{owner_id}' and c.run_configuration_id in "
+            f"('{identity['runConfigurationId']}', '{identity['independentConfigurationId']}')") if owner_id else []
+        original_rows = [row for row in identity_rows if row["run_configuration_id"] == identity["runConfigurationId"]]
+        independent_rows = [row for row in identity_rows
+                            if row["run_configuration_id"] == identity["independentConfigurationId"]]
+
+        def configuration_hash(row):
+            encoded = json.dumps({"schema_version": "p13.spot-replay-run/1", "inputs": row["content"]["inputs"]},
+                                 ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+        item = {
+            "key": key,
+            "conflicting_fresh_key_rejected": identity["conflictingStatus"] == 409,
+            "exact_retry_unchanged": identity["exactRetryStatus"] == 200 and identity["exactRetryUnchanged"]
+                and any(row["replay_id"] == saved["replayId"] and row["content_sha256"] == saved["replayHash"]
+                        for row in original_rows),
+            "same_content_fresh_key_allowed": identity["sameContentNewKeyStatus"] == 201 and len(original_rows) == 2
+                and all(row["content"]["inputs"] == identity["expectedInputs"] for row in original_rows),
+            "independent_id_changed_settings_saved": identity["independentStatus"] == 201
+                and len(independent_rows) == 1
+                and independent_rows[0]["replay_id"] == identity["independentReplayId"]
+                and independent_rows[0]["content_sha256"] == identity["independentReplayHash"]
+                and independent_rows[0]["content"]["inputs"]["initial_cash_quote"] == "999",
+            "owner_scoped_registry_hashes_match_inputs": len(original_rows) == 2 and len(independent_rows) == 1
+                and all(row["configuration_sha256"] == configuration_hash(row)
+                        for row in original_rows + independent_rows)
+                and len({row["configuration_sha256"] for row in original_rows}) == 1
+                and original_rows[0]["configuration_sha256"] != independent_rows[0]["configuration_sha256"],
+        }
+        item["all_checks_pass"] = all(value for name, value in item.items()
+                                      if name not in {"key", "all_checks_pass"})
+        configuration_identities.append(item)
+    checks["spot_replay_configuration_identities"] = configuration_identities
+    configuration_identities_pass = bool(configuration_identities) and all(
+        item["all_checks_pass"] for item in configuration_identities)
     investigations = []
     for key, saved in results.items():
         if not key.startswith("investigation-"):
@@ -783,7 +841,19 @@ def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_a
         and all(checks["p19_context_history"][agent_id]["versions"] == [1, 2, 3, 4, 5]
                 and checks["p19_context_history"][agent_id]["suggestion_adopted"]
                 and checks["p19_context_history"][agent_id]["final_cleared"] for agent_id in ("agent-a", "agent-b"))
-    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass and spot_replays_pass and p19_ok}
+    return {"checks": checks, "all_checks_pass": passed and investigations_pass and effect_runs_pass
+            and spot_replays_pass and configuration_identities_pass and p19_ok}
+
+
+def p13_storage_snapshot(pg: harness.Postgres) -> dict[str, list[dict]]:
+    def rows(sql: str):
+        return json.loads(pg.psql(f"select coalesce(json_agg(t), '[]'::json) from ({sql}) t"))
+
+    replay_rows = rows("select to_jsonb(r) row from spot_replay_runs r order by r.created_at, r.replay_id")
+    configuration_rows = rows(
+        "select to_jsonb(c) row from spot_replay_configurations c order by c.owner_id, c.run_configuration_id")
+    return {"spot_replay_runs": [item["row"] for item in replay_rows],
+            "spot_replay_configurations": [item["row"] for item in configuration_rows]}
 
 
 def sql_literal(text: str) -> str:
