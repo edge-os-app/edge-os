@@ -74,6 +74,16 @@ _TERMINAL_QUEUE = {
     "ADMISSION_DENIED", "DENIED_UNSENT",
 }
 _DELAYED_EXIT_STATES = {"CLAIMED", "SUBMITTED_UNKNOWN"}
+# Local submission-freshness bounds (local assumptions, not live thresholds). An
+# intent is valid only until the next scheduled decision, and the submission-time
+# context snapshot must be current. The accepted schedule uses five-minute buckets.
+_INTENT_VALIDITY = dt.timedelta(minutes=5)
+_CONTEXT_FRESHNESS = dt.timedelta(minutes=5)
+# The settled P22 admission status a transport outcome must reconcile to.
+_EXPECTED_STATUS = {
+    "DEFINITELY_UNSENT": "DENIED", "SUBMISSION_POSSIBLE": "SUBMISSION_UNKNOWN",
+    "CONFIRMED": "CONFIRMED", "REVERTED": "REVERTED",
+}
 _QUEUE_BY_OUTCOME = {
     "DEFINITELY_UNSENT": "DENIED_UNSENT",
     "SUBMISSION_POSSIBLE": "SUBMITTED_UNKNOWN",
@@ -288,8 +298,9 @@ class ExecutionService:
         context: AdmissionContext,
         revision: FrozenRevision,
         transport: SubmissionTransport,
+        now: dt.datetime | None = None,
     ) -> TickResult:
-        now = self._clock()
+        now = now or self._clock()
         prepared, intention, queue_id, attempt_id = self._begin_submission(
             verified_owner_id, agent_id, wallet_id, network_id, approval, context, revision, transport, now)
         if isinstance(prepared, TickResult):
@@ -386,26 +397,38 @@ class ExecutionService:
                 ).with_for_update().execution_options(populate_existing=True)).scalar_one()
                 receipt = self._receipt(action_intent, approval, outcome)
                 reconciliation = self._admission.reconcile(owner, entry.action_id, receipt)
-                breached = reconciliation.decision_status == "BREACHED"
+                status = reconciliation.decision_status
+                expected = _EXPECTED_STATUS[outcome.outcome]
 
                 attempt.state = "TERMINAL"
                 attempt.outcome = outcome.outcome
                 attempt.detail = outcome.detail
                 attempt.completed_at = now
-                if breached:
+                if status == "BREACHED":
                     # A rejected settlement is never a confirmation. Retain the
                     # claim and surface the breach so no next action can submit
                     # until an explicit recovery.
                     entry.state = "BREACHED"
                     entry.blocking_reason = f"BREACHED:{reconciliation.reason or 'UNKNOWN'}"
+                    retain_claim = True
+                elif status != expected:
+                    # A submission-capable attempt cannot be reconciled to a
+                    # different settled state (for example an external P22
+                    # cancellation in the claim window). Keep the claim and record
+                    # unresolved blocking evidence instead of reporting a success.
+                    entry.state = "RECONCILE_MISMATCH"
+                    entry.blocking_reason = (
+                        f"RECONCILE_MISMATCH:{status}:{reconciliation.reason or 'UNRESOLVED'}")
+                    retain_claim = True
                 else:
                     entry.state = _QUEUE_BY_OUTCOME[outcome.outcome]
                     entry.blocking_reason = (
                         "SUBMISSION_UNKNOWN" if outcome.outcome == "SUBMISSION_POSSIBLE" else None)
+                    retain_claim = outcome.outcome == "SUBMISSION_POSSIBLE"
                 entry.updated_at = now
 
                 claim = self._active_claim(session, owner, agent_id, wallet_id, network_id)
-                if claim is not None and not breached and outcome.outcome != "SUBMISSION_POSSIBLE":
+                if claim is not None and not retain_claim:
                     claim.state = "RELEASED"
                     claim.released_at = now
                 session.commit()
@@ -435,7 +458,7 @@ class ExecutionService:
             return RevalidationOutcome(
                 status="DENIED", reason=reason, revision_hash=revision_hash, approval_hash=approval_hash,
                 policy_binding=approval.policy_binding, market_binding_id=decision.market_binding_id,
-                validation_identity=validation_identity)
+                validation_identity=validation_identity, submission_at=_iso(now))
 
         if revision_hash != decision.content_hash:
             return denied("REVISION_CHANGED", "REVISION_CHANGED")
@@ -445,7 +468,14 @@ class ExecutionService:
             return denied("POLICY_BINDING_CHANGED", "POLICY_BINDING_CHANGED")
         if not approval.is_active_at(now):
             return denied("APPROVAL_INACTIVE_OR_EXPIRED", "APPROVAL_INACTIVE_OR_EXPIRED")
-        if context.checked_at and parse_utc(context.checked_at) < decision.decision_at:
+        # Submission-time freshness. The intent is bounded to the next scheduled
+        # decision, and the current context/quote snapshot must be current. A
+        # timestamp that only predates the old decision, or the stored FRESH flag,
+        # cannot prove current freshness.
+        if now - decision.decision_at > _INTENT_VALIDITY:
+            return denied("INTENT_EXPIRED", "INTENT_EXPIRED")
+        checked = parse_utc(context.checked_at)
+        if checked > now or now - checked > _CONTEXT_FRESHNESS:
             return denied("STALE_CONTEXT", "STALE_CONTEXT")
 
         # The saved admission must still be live. A cancelled, denied, reconciled
@@ -469,7 +499,7 @@ class ExecutionService:
         return RevalidationOutcome(
             status="PASSED", reason=None, revision_hash=revision_hash, approval_hash=approval_hash,
             policy_binding=approval.policy_binding, market_binding_id=decision.market_binding_id,
-            validation_identity=identity)
+            validation_identity=identity, submission_at=_iso(now))
 
     def _durable_coverage(
         self, owner: uuid.UUID, action_intent: ActionIntent, approval: ApprovalSnapshot,

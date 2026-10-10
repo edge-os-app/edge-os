@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from edge_os_api.admission.types import AssetAmount
 from edge_os_api.execution.models import ClaimRow, SubmissionAttemptRow
+from edge_os_api.execution.transport import TransportOutcome
 
 from admission._builders import AGENT_A, BASE, NETWORK, WALLET_A
 from execution._builders import frozen_entry_exit
@@ -143,5 +144,34 @@ def test_rejected_settlement_breach_is_retained_not_reported(
     assert (status.blocking_reason or "").startswith("BREACHED")
 
     # A breached wallet cannot submit a next economic action.
+    blocked = _tick(execution_service, fresh_owner, revision, approval, context, transport("ACCEPT"))
+    assert blocked.status == "BLOCKED_UNKNOWN"
+
+
+def test_cancel_after_claim_is_unresolved_not_confirmed(
+        execution_service, admission_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    action_id = result.intent.action_id
+
+    class CancellingTransport:
+        """A concurrent P22 cancellation lands after the execution claim commit."""
+
+        transport_id = "test-cancel-before-effect/1"
+
+        def submit(self, prepared):
+            assert admission_service.cancel(fresh_owner, prepared.action_id).decision_status == "CANCELLED"
+            return TransportOutcome(outcome="CONFIRMED", detail="effect after external cancellation")
+
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, CancellingTransport())
+
+    assert tick.status == "RECONCILE_MISMATCH"
+    saved = admission_service.retrieve_decisions(fresh_owner, action_id=action_id)[0]
+    assert saved.status == "CANCELLED"
+    assert _active_claims(execution_engine, fresh_owner) == 1
+    status = execution_service.status(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)
+    assert (status.blocking_reason or "").startswith("RECONCILE_MISMATCH")
+
     blocked = _tick(execution_service, fresh_owner, revision, approval, context, transport("ACCEPT"))
     assert blocked.status == "BLOCKED_UNKNOWN"

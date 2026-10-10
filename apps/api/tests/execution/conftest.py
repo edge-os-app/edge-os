@@ -9,6 +9,7 @@ schema is untouched.
 
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 
 import pytest
@@ -20,6 +21,9 @@ from edge_os_api.admission.models import AdmissionBase
 from edge_os_api.admission.service import AdmissionService
 from edge_os_api.execution.models import ExecutionBase
 from edge_os_api.execution.service import ExecutionService
+
+# Controlled submission clock: one minute after the authored decision time.
+NOW = dt.datetime(2026, 1, 1, 0, 16, tzinfo=dt.timezone.utc)
 
 
 def build_engine(pg: object) -> Engine:
@@ -57,7 +61,7 @@ def admission_service(execution_factory: sessionmaker) -> AdmissionService:
 
 @pytest.fixture(scope="session")
 def execution_service(execution_factory: sessionmaker, admission_service: AdmissionService) -> ExecutionService:
-    return ExecutionService(execution_factory, admission_service)
+    return ExecutionService(execution_factory, admission_service, clock=lambda: NOW)
 
 
 @pytest.fixture

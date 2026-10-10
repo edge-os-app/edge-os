@@ -264,6 +264,7 @@ class RevalidationOutcome(StrictModel):
     policy_binding: str
     market_binding_id: str
     validation_identity: str
+    submission_at: str
 
 
 class SubmissionEvidence(StrictModel):

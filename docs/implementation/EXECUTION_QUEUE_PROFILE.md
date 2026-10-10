@@ -109,8 +109,13 @@ and is not submitted.
 Immediately before the fixture call, the service rechecks, for the exact payload:
 
 - the current revision content hash and revision identity;
-- the policy binding, the approval state and expiry, and the context time
+- the policy binding, the approval state and expiry, and the submission time
   against the decision time;
+- submission-time freshness: the intent is valid only until the next scheduled
+  decision (a local five-minute bound), and the submission-time context snapshot
+  must be current (a local five-minute bound). A context that only predates the
+  old decision, or the stored `FRESH` flag, cannot prove current freshness; a
+  stale context or an expired intent is denied with no transport call;
 - the pure P22 admission proposal (approval, scoped stops, quote freshness,
   asset/decimal identity and position existence);
 - the saved P22 admission state, which must still be `ADMITTED`; a cancelled,
@@ -120,11 +125,12 @@ Immediately before the fixture call, the service rechecks, for the exact payload
 - the current holdings against the live reservations for the assets the action
   spends from the wallet.
 
-It records the current revision hash, approval hash, policy binding,
-market-binding hash and the validation identity on the queue entry. A failed
-revalidation saves the denial and blocking reason and preserves the exact prior
-intent payload. No queued eligibility is reused. A denied revalidation leaves the
-admitted reservations in place; it does not silently free or alter them.
+The recorded revalidation identity includes the current revision hash, approval
+hash, policy binding, market-binding hash, validation identity and submission
+time. A failed revalidation saves the denial and blocking reason and preserves
+the exact prior intent payload. No queued eligibility is reused. A denied
+revalidation leaves the admitted reservations in place; it does not silently
+free or alter them.
 
 ## Labelled local fixture submission
 
@@ -143,10 +149,20 @@ The service maps the fixture result to the accepted P22 receipt outcomes
 (`PREBROADCAST_DENIED`, `SUBMISSION_UNKNOWN`, `CONFIRMED`, `REVERTED`) and
 reconciles through `AdmissionService.reconcile`. A confirmed acquisition or exit
 uses the fixture's actuals, or the planned amounts when the fixture reports none.
-The service reads the reconciliation result. If P22 rejects the settlement and
-records `BREACHED`, the queue records `BREACHED` with its reason, retains the
-claim and blocks a next economic action until explicit recovery; a transport
-confirmation is never reported as a successful action.
+The service reads the reconciliation result and requires it to match the
+transport outcome:
+
+- A rejected settlement that P22 records as `BREACHED` is retained as queue
+  state `BREACHED` with its reason. The claim is held and a next economic action
+  is blocked until explicit recovery. A transport confirmation is never reported
+  as a successful action.
+- When P22 returns any other status that does not match the transport outcome
+  (for example an external cancellation in the claim window), the queue records
+  `RECONCILE_MISMATCH` with the status and reason. The claim is held and the
+  action is unresolved until explicit recovery. This stage does not edit the P22
+  or shared path to prevent the interleaving; a fully race-free coordination of
+  an external cancellation with the execution claim needs a P22/shared change
+  outside this task's ownership and is reported as an upstream obstruction.
 
 ## Crash and restart boundaries
 
@@ -192,6 +208,12 @@ local assumptions, never qualified live thresholds.
   `execution_local` schema of the run-labelled test database. The P22
   `admission_local` schema stays separate.
 - P05 keeps its shared-wiring lease. Shared files stay read-only.
+- Upstream obstruction: P22 `cancel` and `_admit_locked` do not inspect this
+  package's execution claim, so an external cancellation can interleave between
+  the claim commit and the fixture effect. This stage detects the interleaving at
+  reconciliation and retains it as `RECONCILE_MISMATCH` (unresolved), but a fully
+  race-free prevention needs a change to the P22/shared cancellation path, which
+  is outside this task's ownership.
 
 ## Evidence classification
 

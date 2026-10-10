@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 from sqlalchemy import text
 
 from admission._builders import AGENT_A, NETWORK, WALLET_A
-from execution._builders import frozen_entry_exit, gt_constant, scoped_approval, scoped_context
+from execution._builders import (
+    DECISION_TIME,
+    frozen_entry_exit,
+    gt_constant,
+    scoped_approval,
+    scoped_context,
+)
 from execution._support import enqueue_entry, transport
 
 
@@ -111,4 +119,32 @@ def test_cancelled_action_denies_before_submission(execution_service, admission_
     tick = _run(execution_service, fresh_owner, revision, approval, context, result.intent.action_id)
     assert tick.status == "REVALIDATION_DENIED"
     assert (tick.reason or "").startswith("ACTION_NOT_ADMITTED")
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_expired_intent_denies_before_submission(execution_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, _approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    late = DECISION_TIME + dt.timedelta(minutes=14)
+
+    tick = execution_service.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
+        approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
+        transport=transport("ACCEPT"), now=late)
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "INTENT_EXPIRED"
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_stale_submission_context_denies_before_submission(execution_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, _approval, _context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    stale = scoped_context(checked_at="2026-01-01T00:05:00Z")
+
+    tick = execution_service.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
+        approval=scoped_approval(revision_id=revision.revision_id), context=stale, revision=revision,
+        transport=transport("ACCEPT"))
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "STALE_CONTEXT"
     assert _attempt_count(execution_engine, fresh_owner) == 0
