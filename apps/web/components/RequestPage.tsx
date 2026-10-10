@@ -187,7 +187,9 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const interp = bundle.interpretations.find((i) => i.content.interpretation_revision_id === head.interpretation_revision_id);
   const findings: Finding[] = headOutcome?.findings ?? [];
   const stopped = ["UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT"].includes(outcome);
-  const failure = outcome === "INVALID_INPUT" ? systemFailure(findings) : null; // the interpreter failed; the idea was not judged
+  // Saved, but no attempt was ever made (the service stopped first): not a failure and not a verdict. Retry starts it.
+  const unread = head.outcome === null && bundle.attempts.length === 0 && !revision && head.retry.allowed;
+  const failure = outcome === "INVALID_INPUT" && !unread ? systemFailure(findings) : null; // the interpreter failed; the idea was not judged
   const usesWords = bundle.interpreter.kind !== "FIXTURE";
   const lastAttempt = bundle.attempts[bundle.attempts.length - 1];
 
@@ -221,11 +223,20 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {error ? <p role="alert" className="status err" ref={errorBanner} tabIndex={-1}>{error}</p> : null}
 
       <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={outcome}>
-        <p className="visually-hidden" role="status">{failure ? FAILURE_COPY[failure].title : copy.title}</p>
-        <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${copy.tone}`} style={{ marginRight: 8 }}>{failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
+        <p className="visually-hidden" role="status">{unread ? "Saved, not read yet" : failure ? FAILURE_COPY[failure].title : copy.title}</p>
+        <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${copy.tone}`} style={{ marginRight: 8 }}>{unread ? "Saved, not read yet" : failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
         {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the rules can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
         {outcome === "COMPILED" && <p>These rules came from your words and the settings you adopted. Check them, then save. Saving makes an immutable revision. It does not show the rules work.</p>}
         {outcome === "PUBLISHED" && <p>This revision is saved. Reopening it later shows the same record from storage.</p>}
+        {unread ? (
+          <>
+            <p>Your request is saved, but the interpreter has not read it yet. Nothing was lost, and nothing was judged.</p>
+            <div className="btn-row">
+              <button className="btn btn-primary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Starting…" : "Read my request now"}</button>
+              <span className="muted">This starts one interpreter attempt.</span>
+            </div>
+          </>
+        ) : null}
         {failure ? (
           <>
             <p>{FAILURE_COPY[failure].lead}</p>
@@ -239,7 +250,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
             ) : <p className="muted" data-testid="retry-blocked">{RETRY_BLOCKED[head.retry.reason ?? ""] ?? "A retry is not available."}</p>}
           </>
         ) : null}
-        {stopped && !failure && (
+        {stopped && !failure && !unread && (
           <>
             {findings.map((f) => {
               const field = f.path.match(/^\/field_evidence\/([^/]+)/)?.[1];

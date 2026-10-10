@@ -395,8 +395,7 @@ def test_an_attempt_closed_as_interrupted_whose_outcome_was_not_saved_gets_its_o
         crashing.setattr(interpretation_workflow.HermesResearch, "_record_failure",
                          lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("died after closing")))
         with client.app.state.session_factory() as session:
-            with pytest.raises(RuntimeError):
-                hermes.reconcile(session, owner, intake_id)
+            hermes.reconcile(session, owner, intake_id)  # closes the attempt; saving the outcome fails and is only logged
     assert bundle_of(client, owner_a, str(intake_id))["attempts"][0]["status"] == "INTERRUPTED"
     assert bundle_of(client, owner_a, str(intake_id))["outcomes"] == []
 
@@ -404,3 +403,29 @@ def test_an_attempt_closed_as_interrupted_whose_outcome_was_not_saved_gets_its_o
 
     after = bundle_of(restarted, owner_a, str(intake_id))
     assert after["outcomes"][-1]["record"]["content"]["findings"][0]["code"] == "interpreter_outcome_unknown"
+
+
+# --- A request that was saved but never reached an attempt ---------------------------------------------------------------
+
+def test_a_request_saved_before_its_first_attempt_can_be_interpreted_by_an_explicit_retry(
+        make_client, owner_a, monkeypatch: pytest.MonkeyPatch) -> None:
+    first = make_client(CaseRunner())
+    with monkeypatch.context() as crashing:
+        crashing.setattr(interpretation_workflow.HermesResearch, "_interpret",
+                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("died before the first attempt")))
+        assert create(first, owner_a, "concrete-thesis").status_code == 500
+    intake = first_request_id(first, owner_a)
+
+    runner = CaseRunner(turn_result(case("concrete-thesis")["provider"]))
+    second = make_client(runner)
+
+    saved = bundle_of(second, owner_a, intake)
+    assert (saved["attempts"], saved["outcomes"], saved["interpretations"]) == ([], [], [])
+    assert saved["head"]["outcome"] is None
+    assert saved["head"]["retry"] == {"allowed": True, "retry_of": None, "reason": None}
+    assert runner.turns == []  # nothing is interpreted until the user asks
+
+    retried = retry(second, owner_a, saved, None)
+
+    assert retried.status_code == 201
+    assert retried.json()["head"]["outcome"] == "NEEDS_CLARIFICATION" and len(runner.turns) == 1

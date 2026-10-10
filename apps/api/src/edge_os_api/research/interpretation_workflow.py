@@ -525,7 +525,11 @@ class HermesResearch:
             except Exception as error:  # noqa: BLE001 - one bad saved result must not block the request or other requests
                 session.rollback()
                 log.error("recovery of an accepted attempt failed: %s", type(error).__name__)
-        self._repair_failure_outcome(session, principal, intake_id)
+        try:
+            self._repair_failure_outcome(session, principal, intake_id)
+        except Exception as error:  # noqa: BLE001 - a persistent error here must not block an answer or a retry
+            session.rollback()
+            log.error("saving a missing failure outcome failed: %s", type(error).__name__)
 
     def _repair_failure_outcome(self, session: Session, principal: Principal, intake_id: uuid.UUID) -> None:
         """Save the system outcome of a first interpretation that settled as a failure but never got its outcome.

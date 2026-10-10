@@ -236,4 +236,22 @@ describe("system failures on the request page", () => {
     await screen.findByRole("heading", { name: "The interpreter did not answer" });
     expect(screen.getByTestId("working")).not.toHaveAttribute("aria-busy");
   });
+
+  it("offers a way forward for a request that was saved but never reached an attempt, and calls it neither a failure nor a verdict", async () => {
+    const saved = baseBundle("INVALID_INPUT", { code: "x", detail: "y" }, { allowed: true, retry_of: null, reason: null }, []);
+    saved.outcomes = [] as never;
+    saved.head.outcome = null as never;
+    mocks.get.mockResolvedValue(saved);
+    mocks.retry.mockResolvedValue(baseBundle("UNRESOLVED", { code: "missing_dependency", detail: "No research run exists." },
+      { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({})]));
+    const user = userEvent.setup();
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "Saved, not read yet" })).toBeInTheDocument();
+    expect(screen.queryByText("Could not be interpreted")).toBeNull();
+    expect(screen.queryByText(/could not be interpreted|not a verdict on your idea/i)).toBeNull();
+    expect(mocks.retry).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Read my request now" }));
+    expect(mocks.retry).toHaveBeenCalledWith("intake-1", null);
+  });
 });
