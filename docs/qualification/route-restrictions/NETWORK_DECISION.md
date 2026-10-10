@@ -38,6 +38,8 @@ These are different questions. A permitted network is not a supported provider n
 
 ## What is required to resolve testnet
 
+Lead: the Kuru SDK quickstart labels router `0x1f5A250c4A506DA4cE584173c6ed1890B1bf7187` and margin account `0xdDDaBd30785bA8b45e434a1f134BDf304d6125d9` as testnet. These addresses conflict with the deployment table. Do not treat them as a testnet Flow proof. See [SOURCE_EVIDENCE.md](SOURCE_EVIDENCE.md) section 2.
+
 1. A source-backed testnet Flow entrypoint/router address, or an official statement that Flow is mainnet-only.
 2. A quote/build response for a testnet request that freezes the actual schema (`transaction.calldata` per K2, `buildResponse` per K3, or another shape).
 3. Deployed bytecode identity for the entrypoint and router against the pinned source.

@@ -61,7 +61,7 @@ P1 entry needs 300 USDC. P2 entry needs 200 USDC. Each entry reserves 2 attempts
 |---|---|---|
 | Buy input remaining | `1000000000 - 300000000 - 200000000` | `500000000` |
 | Buy input after addition | `500000000 - 100000000` | `400000000` |
-| Gas reserved (raw) | `4000000000000000 + 4000000000` | `8000000000000000` |
+| Gas reserved (raw) | `4000000000000000 + 4000000000000000` | `8000000000000000` |
 | Gas remaining (raw) | `300000000000000000 - 8000000000000000` | `292000000000000000` |
 | Minimum output below quote | `950000 <= 1000000` | true |
 | Native notional is not the token notional | `msg.value` covers `amountUserSells` only for native input | true |

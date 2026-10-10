@@ -30,6 +30,8 @@ Names describe responsibility. The ticket number is not a module name.
 
 `RestrictionProfile` holds one `ControlDeclaration` per mandatory control: `state` (`ENFORCED`/`UNSUPPORTED`/`UNKNOWN`/`UNSET`), `layer` (`HOST`/`CONTRACT`/`INDEPENDENT_POLICY`) and `evidence` (`DOCUMENTED`/`SOURCE_INSPECTED`/`LOCAL_TESTED`/`PROVIDER_ACTUAL`/`NOT_RUN`).
 
+`ControlledAction` carries the action plus its authored approval bounds, including `approved_entrypoints`, `approved_networks`, `approved_assets`, `approved_methods` and `approved_recipients`. The action's `entrypoint_address` and `method` must each appear in their approved set.
+
 `CaseVerdict` reports `accepted`, `result_class` (`AUTHORED_FAKE_ONLY` or `BLOCKED`) and the ordered, de-duplicated `reasons`.
 
 ## Mandatory controls
@@ -40,12 +42,15 @@ Twelve mandatory controls gate a real action: `chain`, `wallet_signer_binding`, 
 
 - A missing mandatory control returns `MISSING_MANDATORY_CONTROL:<name>`.
 - A control that is `UNSUPPORTED`, `UNKNOWN` or `UNSET` returns `UNSUPPORTED_CONTROL:<name>`.
+- A control marked `ENFORCED` with `NOT_RUN` evidence returns `EVIDENCE_MISSING:<name>`.
+- The entrypoint must be in `approved_entrypoints`, and the method in `approved_methods`.
 - Amounts are canonical unsigned base-10 strings. Boolean, float, negative and leading-zero raw values are rejected.
-- An unknown required quantity (gas, gas used, minimum output) is not zero and blocks the action.
-- The minimum received must exist and must not exceed the quote.
+- An unknown required quantity (gas, gas used, action capacity, quote age, maximum age) is not zero and blocks the action. An unknown quote returns `QUOTE_UNKNOWN`.
+- The minimum received must exist, and must not exceed the quote.
 - `feeBps + referrerFeeBps <= 10000`.
 - The opaque route `program` must be present and hex.
 - A local case that claims a non-local result class returns `EVIDENCE_UNMATCHED`.
+- A malformed declaration (non-integer or negative fee/capacity/age, non-string identifier or allow-list item, non-integer asset decimal) raises a field-specific `ValueError`. The loader never coerces these values.
 
 ## Enforcement boundary
 

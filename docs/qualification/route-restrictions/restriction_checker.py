@@ -11,6 +11,9 @@ Public interface:
     load_profile(mapping) -> RestrictionProfile
     load_action(mapping) -> ControlledAction
 
+A malformed declaration raises ``ValueError`` with a field-specific message.
+Missing or unknown required quantities are not zero and block the action.
+
 See README.md for the meaning and the evidence classes.
 """
 
@@ -49,9 +52,11 @@ MANDATORY_CONTROLS: Tuple[str, ...] = (
 
 R_MISSING_CONTROL = "MISSING_MANDATORY_CONTROL"
 R_UNSUPPORTED_CONTROL = "UNSUPPORTED_CONTROL"
+R_EVIDENCE_MISSING = "EVIDENCE_MISSING"
 R_NETWORK_NOT_ALLOWED = "NETWORK_NOT_ALLOWED"
 R_WALLET_BINDING_MISSING = "WALLET_BINDING_MISSING"
 R_WALLET_BINDING_MISMATCH = "WALLET_BINDING_MISMATCH"
+R_ENTRYPOINT_NOT_ALLOWED = "ENTRYPOINT_NOT_ALLOWED"
 R_METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
 R_ASSET_NOT_ALLOWED = "ASSET_NOT_ALLOWED"
 R_RECIPIENT_NOT_ALLOWED = "RECIPIENT_NOT_ALLOWED"
@@ -60,10 +65,12 @@ R_BOOLEAN_NOT_INTEGER = "BOOLEAN_NOT_INTEGER"
 R_DECIMALS_MISMATCH = "DECIMALS_MISMATCH"
 R_MIN_OUTPUT_MISSING = "MIN_OUTPUT_MISSING"
 R_MIN_OUTPUT_INVALID = "MIN_OUTPUT_INVALID"
+R_QUOTE_UNKNOWN = "QUOTE_UNKNOWN"
 R_FEE_BOUND_EXCEEDED = "FEE_BOUND_EXCEEDED"
 R_PROGRAM_MISSING = "PROGRAM_MISSING"
 R_CAPACITY_UNKNOWN = "CAPACITY_UNKNOWN"
 R_CAPACITY_EXHAUSTED = "CAPACITY_EXHAUSTED"
+R_FRESHNESS_UNKNOWN = "FRESHNESS_UNKNOWN"
 R_STALE_INPUT = "STALE_INPUT"
 R_EVIDENCE_UNMATCHED = "EVIDENCE_UNMATCHED"
 
@@ -144,11 +151,12 @@ class ControlledAction:
     program_hex: Optional[str]
     gas_capacity_raw: Optional[str]
     gas_used_raw: Optional[str]
-    action_capacity: int
-    actions_used: int
-    quote_age_seconds: int
-    max_quote_age_seconds: int
+    action_capacity: Optional[int]
+    actions_used: Optional[int]
+    quote_age_seconds: Optional[int]
+    max_quote_age_seconds: Optional[int]
     approved_networks: frozenset[str]
+    approved_entrypoints: frozenset[str]
     approved_assets: Mapping[str, int]
     approved_methods: frozenset[str]
     approved_recipients: frozenset[str]
@@ -180,11 +188,32 @@ def _validate_raw(raw: Any) -> Optional[str]:
     return None
 
 
+def _require_str(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    return value
+
+
+def _strict_nonneg_int(value: Any, field: str) -> int:
+    if _reject_bool(value) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer")
+    if value < 0:
+        raise ValueError(f"{field} must not be negative")
+    return value
+
+
+def _strict_optional_nonneg_int(value: Any, field: str) -> Optional[int]:
+    if value is None:
+        return None
+    return _strict_nonneg_int(value, field)
+
+
 def profile_readiness_reasons(profile: RestrictionProfile) -> Tuple[str, ...]:
     """Return reasons the declared profile cannot back a real action.
 
-    Empty tuple means every mandatory control is declared with ENFORCED state
-    and a concrete enforcement layer. It does not mean the action is safe.
+    Empty tuple means every mandatory control is declared ENFORCED with a
+    concrete enforcement layer and some evidence above ``NOT_RUN``. It does not
+    mean the action is safe.
     """
     reasons: list[str] = []
     if not profile.version:
@@ -196,13 +225,16 @@ def profile_readiness_reasons(profile: RestrictionProfile) -> Tuple[str, ...]:
             continue
         if declaration.state is not SupportState.ENFORCED:
             reasons.append(f"{R_UNSUPPORTED_CONTROL}:{control}")
+            continue
+        if declaration.evidence is EvidenceClass.NOT_RUN:
+            reasons.append(f"{R_EVIDENCE_MISSING}:{control}")
     return tuple(reasons)
 
 
 def _evaluate_action(action: ControlledAction) -> list[str]:
     reasons: list[str] = []
 
-    if _reject_bool(action.network) or action.network not in SUPPORTED_NETWORKS:
+    if action.network not in SUPPORTED_NETWORKS:
         reasons.append(R_NETWORK_NOT_ALLOWED)
     if action.network not in action.approved_networks:
         reasons.append(R_NETWORK_NOT_ALLOWED)
@@ -212,6 +244,9 @@ def _evaluate_action(action: ControlledAction) -> list[str]:
     elif action.policy_binding_wallet_id != action.wallet_id:
         reasons.append(R_WALLET_BINDING_MISMATCH)
 
+    if action.entrypoint_address not in action.approved_entrypoints:
+        reasons.append(R_ENTRYPOINT_NOT_ALLOWED)
+
     if action.method not in action.approved_methods:
         reasons.append(R_METHOD_NOT_ALLOWED)
 
@@ -219,36 +254,53 @@ def _evaluate_action(action: ControlledAction) -> list[str]:
         reasons.append(R_ASSET_NOT_ALLOWED)
     elif action.approved_assets[action.input_asset_id] != action.input_decimals:
         reasons.append(R_DECIMALS_MISMATCH)
-    if action.output_decimals != action.approved_assets.get(action.output_asset_id):
+    if action.output_asset_id not in action.approved_assets:
+        reasons.append(R_ASSET_NOT_ALLOWED)
+    elif action.approved_assets[action.output_asset_id] != action.output_decimals:
         reasons.append(R_DECIMALS_MISMATCH)
 
     raw_reason = _validate_raw(action.input_raw)
     if raw_reason is not None:
         reasons.append(raw_reason)
-    if action.input_decimals < 0:
-        reasons.append(R_DECIMALS_MISMATCH)
 
     if action.recipient not in action.approved_recipients:
         reasons.append(R_RECIPIENT_NOT_ALLOWED)
 
-    if action.min_output_raw is None:
-        reasons.append(R_MIN_OUTPUT_MISSING)
-    else:
-        min_reason = _validate_raw(action.min_output_raw)
-        if min_reason is not None:
-            reasons.append(min_reason)
-        elif action.quote_output_raw is not None:
-            if int(action.min_output_raw) > int(action.quote_output_raw):
-                reasons.append(R_MIN_OUTPUT_INVALID)
+    reasons.extend(_min_output_reasons(action))
 
-    if _reject_bool(action.fee_bps) or _reject_bool(action.referrer_fee_bps):
-        reasons.append(R_BOOLEAN_NOT_INTEGER)
-    elif action.fee_bps + action.referrer_fee_bps > 10000:
+    if action.fee_bps + action.referrer_fee_bps > 10000:
         reasons.append(R_FEE_BOUND_EXCEEDED)
 
     if not action.program_hex or not _HEX_BYTES.match(action.program_hex):
         reasons.append(R_PROGRAM_MISSING)
 
+    reasons.extend(_capacity_reasons(action))
+    reasons.extend(_freshness_reasons(action))
+
+    if action.claimed_result_class != RESULT_AUTHORED_FAKE_ONLY:
+        reasons.append(R_EVIDENCE_UNMATCHED)
+
+    return reasons
+
+
+def _min_output_reasons(action: ControlledAction) -> list[str]:
+    if action.min_output_raw is None:
+        return [R_MIN_OUTPUT_MISSING]
+    min_reason = _validate_raw(action.min_output_raw)
+    if min_reason is not None:
+        return [min_reason]
+    if action.quote_output_raw is None:
+        return [R_QUOTE_UNKNOWN]
+    quote_reason = _validate_raw(action.quote_output_raw)
+    if quote_reason is not None:
+        return [quote_reason]
+    if int(action.min_output_raw) > int(action.quote_output_raw):
+        return [R_MIN_OUTPUT_INVALID]
+    return []
+
+
+def _capacity_reasons(action: ControlledAction) -> list[str]:
+    reasons: list[str] = []
     if action.gas_capacity_raw is None or action.gas_used_raw is None:
         reasons.append(R_CAPACITY_UNKNOWN)
     else:
@@ -261,20 +313,19 @@ def _evaluate_action(action: ControlledAction) -> list[str]:
         elif int(action.gas_used_raw) > int(action.gas_capacity_raw):
             reasons.append(R_CAPACITY_EXHAUSTED)
 
-    if _reject_bool(action.action_capacity) or _reject_bool(action.actions_used):
-        reasons.append(R_BOOLEAN_NOT_INTEGER)
+    if action.action_capacity is None or action.actions_used is None:
+        reasons.append(R_CAPACITY_UNKNOWN)
     elif action.actions_used >= action.action_capacity:
         reasons.append(R_CAPACITY_EXHAUSTED)
-
-    if _reject_bool(action.quote_age_seconds):
-        reasons.append(R_BOOLEAN_NOT_INTEGER)
-    elif action.quote_age_seconds > action.max_quote_age_seconds:
-        reasons.append(R_STALE_INPUT)
-
-    if action.claimed_result_class != RESULT_AUTHORED_FAKE_ONLY:
-        reasons.append(R_EVIDENCE_UNMATCHED)
-
     return reasons
+
+
+def _freshness_reasons(action: ControlledAction) -> list[str]:
+    if action.quote_age_seconds is None or action.max_quote_age_seconds is None:
+        return [R_FRESHNESS_UNKNOWN]
+    if action.quote_age_seconds > action.max_quote_age_seconds:
+        return [R_STALE_INPUT]
+    return []
 
 
 def evaluate_declared_case(
@@ -322,48 +373,59 @@ def load_profile(mapping: Mapping[str, Any]) -> RestrictionProfile:
     return RestrictionProfile(version=str(mapping.get("version", "")), declarations=declarations)
 
 
-def _frozenset_of_strings(value: Any, field: str) -> frozenset[str]:
+def _string_set(value: Any, field: str) -> frozenset[str]:
     if not isinstance(value, (list, tuple)):
         raise ValueError(f"{field} must be a list")
-    return frozenset(str(item) for item in value)
+    return frozenset(_require_str(item, f"{field}[]") for item in value)
+
+
+def _asset_decimals(value: Any, field: str) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be an object")
+    return {_require_str(k, f"{field}.key"): _strict_nonneg_int(v, f"{field}.{k}") for k, v in value.items()}
 
 
 def load_action(mapping: Mapping[str, Any]) -> ControlledAction:
-    """Build a ControlledAction from a JSON-like mapping."""
-    approved_assets_raw = mapping.get("approved_assets", {})
-    if not isinstance(approved_assets_raw, Mapping):
-        raise ValueError("approved_assets must be an object")
-    approved_assets = {str(k): int(v) for k, v in approved_assets_raw.items()}
+    """Build a ControlledAction from a JSON-like mapping.
+
+    Raises ``ValueError`` for a malformed declaration. It never coerces a
+    non-string identifier or a non-integer quantity.
+    """
     return ControlledAction(
-        action_id=str(mapping.get("action_id", "")),
-        network=mapping.get("network"),
-        entrypoint_address=str(mapping.get("entrypoint_address", "")),
-        method=str(mapping.get("method", "")),
-        wallet_id=str(mapping.get("wallet_id", "")),
-        signer_id=str(mapping.get("signer_id", "")),
-        policy_binding_wallet_id=str(mapping.get("policy_binding_wallet_id", "")),
-        input_asset_id=str(mapping.get("input_asset_id", "")),
+        action_id=_require_str(mapping.get("action_id", ""), "action_id"),
+        network=_require_str(mapping.get("network"), "network"),
+        entrypoint_address=_require_str(mapping.get("entrypoint_address", ""), "entrypoint_address"),
+        method=_require_str(mapping.get("method", ""), "method"),
+        wallet_id=_require_str(mapping.get("wallet_id", ""), "wallet_id"),
+        signer_id=_require_str(mapping.get("signer_id", ""), "signer_id"),
+        policy_binding_wallet_id=_require_str(
+            mapping.get("policy_binding_wallet_id", ""), "policy_binding_wallet_id"
+        ),
+        input_asset_id=_require_str(mapping.get("input_asset_id", ""), "input_asset_id"),
         input_raw=mapping.get("input_raw"),
-        input_decimals=int(mapping.get("input_decimals", 0)),
-        output_asset_id=str(mapping.get("output_asset_id", "")),
-        output_decimals=int(mapping.get("output_decimals", 0)),
-        recipient=str(mapping.get("recipient", "")),
+        input_decimals=_strict_nonneg_int(mapping.get("input_decimals", 0), "input_decimals"),
+        output_asset_id=_require_str(mapping.get("output_asset_id", ""), "output_asset_id"),
+        output_decimals=_strict_nonneg_int(mapping.get("output_decimals", 0), "output_decimals"),
+        recipient=_require_str(mapping.get("recipient", ""), "recipient"),
         min_output_raw=mapping.get("min_output_raw"),
         quote_output_raw=mapping.get("quote_output_raw"),
-        fee_bps=mapping.get("fee_bps", 0),
-        referrer_fee_bps=mapping.get("referrer_fee_bps", 0),
+        fee_bps=_strict_nonneg_int(mapping.get("fee_bps", 0), "fee_bps"),
+        referrer_fee_bps=_strict_nonneg_int(mapping.get("referrer_fee_bps", 0), "referrer_fee_bps"),
         program_hex=mapping.get("program_hex"),
         gas_capacity_raw=mapping.get("gas_capacity_raw"),
         gas_used_raw=mapping.get("gas_used_raw"),
-        action_capacity=mapping.get("action_capacity", 0),
-        actions_used=mapping.get("actions_used", 0),
-        quote_age_seconds=mapping.get("quote_age_seconds", 0),
-        max_quote_age_seconds=mapping.get("max_quote_age_seconds", 0),
-        approved_networks=_frozenset_of_strings(mapping.get("approved_networks", []), "approved_networks"),
-        approved_assets=approved_assets,
-        approved_methods=_frozenset_of_strings(mapping.get("approved_methods", []), "approved_methods"),
-        approved_recipients=_frozenset_of_strings(mapping.get("approved_recipients", []), "approved_recipients"),
-        claimed_result_class=str(mapping.get("claimed_result_class", RESULT_BLOCKED)),
+        action_capacity=_strict_optional_nonneg_int(mapping.get("action_capacity"), "action_capacity"),
+        actions_used=_strict_optional_nonneg_int(mapping.get("actions_used"), "actions_used"),
+        quote_age_seconds=_strict_optional_nonneg_int(mapping.get("quote_age_seconds"), "quote_age_seconds"),
+        max_quote_age_seconds=_strict_optional_nonneg_int(
+            mapping.get("max_quote_age_seconds"), "max_quote_age_seconds"
+        ),
+        approved_networks=_string_set(mapping.get("approved_networks", []), "approved_networks"),
+        approved_entrypoints=_string_set(mapping.get("approved_entrypoints", []), "approved_entrypoints"),
+        approved_assets=_asset_decimals(mapping.get("approved_assets", {}), "approved_assets"),
+        approved_methods=_string_set(mapping.get("approved_methods", []), "approved_methods"),
+        approved_recipients=_string_set(mapping.get("approved_recipients", []), "approved_recipients"),
+        claimed_result_class=_require_str(mapping.get("claimed_result_class", RESULT_BLOCKED), "claimed_result_class"),
     )
 
 
@@ -374,6 +436,8 @@ def _load_fixtures(path: Path) -> Mapping[str, Any]:
 
 def _run_fixtures(path: Path) -> int:
     data = _load_fixtures(path)
+    if data.get("schema") != "p21-route-restrictions/1":
+        raise ValueError(f"unsupported fixtures schema: {data.get('schema')!r}")
     failures = 0
     total = 0
     for scenario in data["scenarios"]:

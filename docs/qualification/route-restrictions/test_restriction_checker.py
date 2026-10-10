@@ -50,6 +50,7 @@ _VALID_ACTION = {
     "quote_age_seconds": 5,
     "max_quote_age_seconds": 30,
     "approved_networks": ["143"],
+    "approved_entrypoints": ["0xb3e6778480b2E488385E8205eA05E20060B813cb"],
     "approved_assets": {"MON-native-143": 18, "USDC-143": 6},
     "approved_methods": ["executeSwap"],
     "approved_recipients": ["wallet-A"],
@@ -107,6 +108,13 @@ class ProfileReadinessTest(unittest.TestCase):
         reasons = checker.profile_readiness_reasons(profile)
         self.assertIn(f"{checker.R_UNSUPPORTED_CONTROL}:opaque_program", reasons)
 
+    def test_enforced_with_not_run_evidence_is_reported(self) -> None:
+        declarations = {c: dict(_READY_CONTROL) for c in checker.MANDATORY_CONTROLS}
+        declarations["fees"] = {"state": "ENFORCED", "layer": "CONTRACT", "evidence": "NOT_RUN"}
+        profile = checker.load_profile({"version": "t", "declarations": declarations})
+        reasons = checker.profile_readiness_reasons(profile)
+        self.assertIn(f"{checker.R_EVIDENCE_MISSING}:fees", reasons)
+
 
 class OneFieldAdversarialTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -159,9 +167,6 @@ class OneFieldAdversarialTest(unittest.TestCase):
     def test_fee_bound_exceeded(self) -> None:
         _expect_blocked(self, self._blocked(fee_bps=6000, referrer_fee_bps=5000), checker.R_FEE_BOUND_EXCEEDED)
 
-    def test_fee_boolean(self) -> None:
-        _expect_blocked(self, self._blocked(fee_bps=True), checker.R_BOOLEAN_NOT_INTEGER)
-
     def test_program_missing(self) -> None:
         _expect_blocked(self, self._blocked(program_hex=None), checker.R_PROGRAM_MISSING)
 
@@ -182,6 +187,92 @@ class OneFieldAdversarialTest(unittest.TestCase):
 
     def test_evidence_unmatched(self) -> None:
         _expect_blocked(self, self._blocked(claimed_result_class="REAL_READY"), checker.R_EVIDENCE_UNMATCHED)
+
+    def test_entrypoint_not_allowed(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(entrypoint_address="0x000000000000000000000000000000000000dEaD"),
+            checker.R_ENTRYPOINT_NOT_ALLOWED,
+        )
+
+    def test_entrypoint_empty(self) -> None:
+        _expect_blocked(self, self._blocked(entrypoint_address=""), checker.R_ENTRYPOINT_NOT_ALLOWED)
+
+    def test_output_asset_not_allowed(self) -> None:
+        _expect_blocked(self, self._blocked(output_asset_id="DAI-143"), checker.R_ASSET_NOT_ALLOWED)
+
+    def test_quote_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(quote_output_raw=None), checker.R_QUOTE_UNKNOWN)
+
+    def test_quote_malformed(self) -> None:
+        _expect_blocked(self, self._blocked(quote_output_raw="1e3"), checker.R_RAW_AMOUNT_INVALID)
+
+    def test_freshness_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(quote_age_seconds=None), checker.R_FRESHNESS_UNKNOWN)
+
+    def test_max_freshness_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(max_quote_age_seconds=None), checker.R_FRESHNESS_UNKNOWN)
+
+    def test_action_capacity_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(action_capacity=None), checker.R_CAPACITY_UNKNOWN)
+
+    def test_actions_used_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(actions_used=None), checker.R_CAPACITY_UNKNOWN)
+
+
+class MalformedDeclarationTest(unittest.TestCase):
+    """A malformed declaration raises a field-specific ValueError. No coercion."""
+
+    def _load(self, **overrides: object) -> None:
+        checker.load_action(_action(**overrides))
+
+    def test_fee_float_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(fee_bps=12.5)
+
+    def test_fee_negative_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(fee_bps=-100)
+
+    def test_fee_string_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(fee_bps="30")
+
+    def test_fee_boolean_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(fee_bps=True)
+
+    def test_capacity_float_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(action_capacity=0.5)
+
+    def test_actions_used_negative_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(actions_used=-5)
+
+    def test_decimals_string_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(input_decimals="18")
+
+    def test_decimals_none_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(input_decimals=None)
+
+    def test_network_non_string_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            checker.load_action({**_VALID_ACTION, "network": ["143"]})
+
+    def test_identifier_boolean_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(method=True)
+
+    def test_approved_item_non_string_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(approved_methods=[True])
+
+    def test_approved_asset_decimal_float_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(approved_assets={"MON-native-143": 18, "USDC-143": 6.5})
 
 
 class OfflinePropertyTest(unittest.TestCase):

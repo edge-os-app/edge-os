@@ -49,9 +49,14 @@ The testnet table lists **no Flow entrypoint or router**. The table's omission d
 
 The two public schemas disagree. Both are retained with their dates. Do not assume either. The `buildResponse`/`path` inner schema remains `UNKNOWN`.
 
+### SDK address conflict (retained)
+
+The Kuru SDK quickstart labels router `0x1f5A250c4A506DA4cE584173c6ed1890B1bf7187` and margin account `0xdDDaBd30785bA8b45e434a1f134BDf304d6125d9` as testnet. These addresses differ from the deployment table (section 2). Both are retained. They are conflicting examples that require fresh qualification, not proof of a testnet Flow path.
+
 ### Faucet and eligibility
 
-- K5 links `https://faucet.monad.xyz`. The retained private check `docs/research/P21_TESTNET_FAUCET_CHECK_2026-10-10.md` (SHA256 `5b3b5d54010ea59900bc0f45e97aeb7c80e21f961ec16ff6a4e71e8458c6ade7`) records a human web form and a supported agent claim API `UNKNOWN`. This package claims no faucet action and no eligibility.
+- K5 links `https://faucet.monad.xyz`.
+- `BUILDER-ONLY REFERENCE`: `/Users/degencodebeast/Projects/personal/monad-hack/docs/research/P21_TESTNET_FAUCET_CHECK_2026-10-10.md` (private workspace; SHA256 `5b3b5d54010ea59900bc0f45e97aeb7c80e21f961ec16ff6a4e71e8458c6ade7`) records a human web form and a supported agent claim API `UNKNOWN`. This package claims no faucet action and no eligibility.
 
 ## 3. Kuru Flow contract source (pinned)
 
