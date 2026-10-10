@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, FIELD_LABEL, JOB_LABEL, ORIGIN_LABEL, OUTCOME_COPY, formatTime, shortId, summarizeValue } from "../lib/describe";
+import { FAILURE_COPY, RETRY_BLOCKED, sourceQuote, systemFailure } from "../lib/interpretation";
 import type { Bundle, Finding, Strategy } from "../lib/types";
 import type { ConversationContext } from "./Conversation";
+import { InterpretationAttempts } from "./InterpretationAttempts";
 import { AnswerMessage, QuestionForm } from "./QuestionForm";
 import { RulesReview } from "./RulesReview";
 import { InvestigationReview } from "./InvestigationReview";
@@ -38,6 +40,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [work, setWork] = useState(""); // what the interpreter is doing now, announced to assistive technology
   const [answerMessage, setAnswerMessage] = useState<{ kind: "error" | "notice"; text: string; surface: string } | undefined>(undefined);
   const [verified, setVerified] = useState<null | boolean>(null);
   const [opened, setOpened] = useState<"loading" | "loaded">("loading");
@@ -59,14 +62,15 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
     catch { if (!quiet) setError("The saved request could not be reloaded. Reload the page to see its current state."); return false; }
   }, [id]);
 
-  const answer = useCallback(async (questionId: string, choiceId: string, origin?: HTMLElement) => {
+  const respond = useCallback(async (questionId: string, body: { choice_id: string } | { answer_text: string }, origin?: HTMLElement) => {
     if (!bundle?.head.interpretation_revision_id) return;
     // Remember which surface took the answer. After the state change, focus stays there.
     const surface = origin?.closest<HTMLElement>("[data-focus-surface]") ?? null;
     const surfaceName = surface?.dataset.focusSurface ?? "main";
     setBusy(true); setAnswerMessage(undefined);
+    setWork("answer_text" in body ? "The interpreter is reading your words. This can take a few seconds." : "Saving your answer.");
     try {
-      setBundle(await api.answer(id, { previous_revision_id: bundle.head.interpretation_revision_id, question_id: questionId, choice_id: choiceId }));
+      setBundle(await api.answer(id, { previous_revision_id: bundle.head.interpretation_revision_id, question_id: questionId, ...body }));
       focusSurface.current = surface; // the answered form is gone; the layout effect lands focus on the new state
     } catch (e) {
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
@@ -76,9 +80,30 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
           focusSurface.current = undefined;
           setAnswerMessage({ kind: "error", surface: surfaceName, text: "This request changed elsewhere and the saved copy could not be reloaded. Reload the page before you answer again." });
         }
+      } else if (e instanceof ApiError && e.status === 0) {
+        await reload(true); // the service may have saved the answer or an attempt: show what is saved
+        setAnswerMessage({ kind: "error", surface: surfaceName, text: "We could not confirm what happened. The saved request was reloaded. Check its attempts before you answer again." });
       } else setAnswerMessage({ kind: "error", surface: surfaceName, text: e instanceof ApiError ? e.detail : "Your answer was not saved." });
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setWork(""); }
   }, [bundle, id, reload]);
+  const answer = useCallback((questionId: string, choiceId: string, origin?: HTMLElement) => respond(questionId, { choice_id: choiceId }, origin), [respond]);
+  const reply = useCallback((questionId: string, text: string, origin?: HTMLElement) => respond(questionId, { answer_text: text }, origin), [respond]);
+
+  // Explicit retry of the interpreter. It starts a separate attempt and never replays an unknown one.
+  const retryInterpretation = async () => {
+    if (busy || !bundle || !bundle.head.retry.allowed) return;
+    setBusy(true); setError(""); setNotice(""); setAnswerMessage(undefined);
+    setWork("Trying the interpreter again. This can take a few seconds.");
+    focusSurface.current = null; // the retry button may disappear; focus lands on the new state
+    try {
+      setBundle(await api.retryInterpretation(id, bundle.head.retry.retry_of));
+    } catch (e) {
+      focusSurface.current = undefined;
+      await reload(true);
+      setError(e instanceof ApiError && e.status !== 0 ? `${e.detail} The saved request was reloaded.`
+        : "We could not confirm what happened. The saved request was reloaded. Check its attempts before you try again.");
+    } finally { setBusy(false); setWork(""); }
+  };
 
   // A failure must be visible where the user acted, not above the fold. Focus stays on the pressed button.
   useEffect(() => { if (error) errorBanner.current?.scrollIntoView({ block: "center", behavior: "auto" }); }, [error]);
@@ -93,9 +118,9 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   }, [bundle]);
 
   useEffect(() => {
-    setContext(bundle ? { bundle, busy, answer, message: answerMessage } : null);
+    setContext(bundle ? { bundle, busy, answer, reply, message: answerMessage } : null);
     return () => setContext(null);
-  }, [bundle, busy, answer, answerMessage, setContext]);
+  }, [bundle, busy, answer, reply, answerMessage, setContext]);
 
   const revision = bundle?.revisions[0];
   useEffect(() => {
@@ -162,6 +187,9 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const interp = bundle.interpretations.find((i) => i.content.interpretation_revision_id === head.interpretation_revision_id);
   const findings: Finding[] = headOutcome?.findings ?? [];
   const stopped = ["UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT"].includes(outcome);
+  const failure = outcome === "INVALID_INPUT" ? systemFailure(findings) : null; // the interpreter failed; the idea was not judged
+  const usesWords = bundle.interpreter.kind !== "FIXTURE";
+  const lastAttempt = bundle.attempts[bundle.attempts.length - 1];
 
   return (
     <div className="stack">
@@ -193,12 +221,25 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {error ? <p role="alert" className="status err" ref={errorBanner} tabIndex={-1}>{error}</p> : null}
 
       <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={outcome}>
-        <p className="visually-hidden" role="status">{copy.title}</p>
-        <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${copy.tone}`} style={{ marginRight: 8 }}>{copy.title}</span></h2>
+        <p className="visually-hidden" role="status">{failure ? FAILURE_COPY[failure].title : copy.title}</p>
+        <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${copy.tone}`} style={{ marginRight: 8 }}>{failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
         {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the rules can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
         {outcome === "COMPILED" && <p>These rules came from your words and the settings you adopted. Check them, then save. Saving makes an immutable revision. It does not show the rules work.</p>}
         {outcome === "PUBLISHED" && <p>This revision is saved. Reopening it later shows the same record from storage.</p>}
-        {stopped && (
+        {failure ? (
+          <>
+            <p>{FAILURE_COPY[failure].lead}</p>
+            <p data-testid="failure-detail">{findings[0]?.detail}</p>
+            <p>Your words and restrictions are saved. No strategy was created.</p>
+            {head.retry.allowed ? (
+              <div className="btn-row">
+                <button className="btn btn-primary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try the interpreter again"}</button>
+                <span className="muted">A retry is a separate attempt. The earlier attempt stays in the list below.</span>
+              </div>
+            ) : <p className="muted" data-testid="retry-blocked">{RETRY_BLOCKED[head.retry.reason ?? ""] ?? "A retry is not available."}</p>}
+          </>
+        ) : null}
+        {stopped && !failure && (
           <>
             {findings.map((f) => {
               const field = f.path.match(/^\/field_evidence\/([^/]+)/)?.[1];
@@ -212,10 +253,28 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {intake.requested_job === "INVESTIGATE_EFFECT" ? <InvestigationReview intakeId={id}
         interpretationRevisionId={head.interpretation_revision_id} /> : null}
 
+      {work ? <p role="status" aria-busy="true" className="status stop" data-testid="working">{work}</p> : null}
+
+      {head.reply ? (
+        <section className="status stop" aria-labelledby="reply-title" data-testid="reply-state" data-reply={head.reply.state}>
+          <h2 id="reply-title" style={{ fontSize: 18 }}>{head.reply.state === "REJECTED" ? "Your last reply could not be used" : head.reply.state === "UNCERTAIN" ? "We do not know if your last reply was read" : "Your last reply was not read"}</h2>
+          <p>{head.reply.state === "REJECTED"
+            ? `The interpreter's reading broke a rule (${head.reply.reason_code?.replaceAll("_", " ")}), so none of it was used. Your saved meaning did not change.`
+            : head.reply.state === "UNCERTAIN" ? "The interpreter may or may not have read it. Nothing was retried and your saved meaning did not change."
+              : "A system failure stopped the interpreter. Your saved meaning did not change."}</p>
+          {head.retry.allowed ? (
+            <div className="btn-row">
+              <button className="btn btn-secondary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try this reply again"}</button>
+              <span className="muted">You can also choose an option or write something different.</span>
+            </div>
+          ) : <p className="muted">{RETRY_BLOCKED[head.retry.reason ?? ""] ?? ""}</p>}
+        </section>
+      ) : null}
+
       {outcome === "NEEDS_CLARIFICATION" && (
         <section className="panel" aria-labelledby="q-title">
           <h2 id="q-title">What we need from you</h2>
-          <QuestionForm questions={head.questions} busy={busy} idPrefix="main" onAnswer={answer} message={answerMessage} onCancel={() => go("#/research", `req-${id}`)} />
+          <QuestionForm questions={head.questions} busy={busy} idPrefix="main" onAnswer={answer} onReply={usesWords ? reply : undefined} message={answerMessage} onCancel={() => go("#/research", `req-${id}`)} />
         </section>
       )}
 
@@ -252,6 +311,9 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
         strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}
 
+      <InterpretationAttempts attempts={bundle.attempts} lateResults={bundle.late_results}
+        open={Boolean(failure) || Boolean(head.reply) || (lastAttempt !== undefined && lastAttempt.status !== "COMPLETED")} />
+
       <details>
         <summary>Where each setting came from</summary>
         {interp ? (
@@ -261,9 +323,11 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
               {interp.content.field_evidence.map((f) => (
                 <tr key={f.field_name}>
                   <th scope="row">{FIELD_LABEL[f.field_name] ?? f.field_name}</th>
-                  <td>{f.state === "KNOWN" ? summarizeValue(f.field_name, f.value) : "Missing. We will ask."}</td>
-                  <td>{ORIGIN_LABEL[f.origin]}</td>
-                  <td>{f.state !== "KNOWN" ? "Needs your answer" : f.adoption === "PENDING" ? "Awaiting your adoption" : f.adoption === "ADOPTED" ? "Adopted" : "Stated"}</td>
+                  <td>{f.state === "KNOWN" ? summarizeValue(f.field_name, f.value)
+                    : f.state === "CONFLICTING" ? <>Two statements that disagree:<ol>{(f.conflicts ?? []).map((c, i) => <li key={i}>{summarizeValue(f.field_name, c.value)}</li>)}</ol></>
+                      : "Missing. We will ask."}</td>
+                  <td>{ORIGIN_LABEL[f.origin]}{sourceQuote(f.source_ref, intake.original_request) ? <><br /><span className="muted">{`\u201c${sourceQuote(f.source_ref, intake.original_request)}\u201d`}</span></> : null}</td>
+                  <td>{f.state === "CONFLICTING" ? "Conflict: needs your answer" : f.state !== "KNOWN" ? "Needs your answer" : f.adoption === "PENDING" ? "Awaiting your adoption" : f.adoption === "ADOPTED" ? "Adopted" : "Stated"}</td>
                 </tr>
               ))}
             </tbody>
@@ -278,6 +342,10 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
           <dt>Current revision</dt><dd className="mono">{head.interpretation_revision_id ?? "none"}</dd>
           <dt>Revisions in history</dt><dd>{bundle.interpretations.length}</dd>
           <dt>Interpreter</dt><dd>{bundle.interpreter.kind} · {bundle.interpreter.id}</dd>
+          {lastAttempt ? <>
+            <dt>Model and route</dt><dd>{lastAttempt.identity.model} · {lastAttempt.identity.route} · {lastAttempt.identity.runtime_label}</dd>
+            <dt>Latest request hash</dt><dd className="mono">{lastAttempt.identity.task_sha256.slice(0, 16)}</dd>
+          </> : null}
           <dt>Opened</dt><dd>{opened === "loaded" ? "Read from the database just now" : ""}</dd>
         </dl>
       </details>

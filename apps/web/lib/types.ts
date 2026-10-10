@@ -22,6 +22,8 @@ export interface FieldEvidence {
   evidence_status: string;
   value?: unknown;
   adoption?: "ADOPTED" | "PENDING";
+  /** Present when state is CONFLICTING: each statement with the words it came from. */
+  conflicts?: { value: unknown; source_ref: string }[];
 }
 
 export interface Intake {
@@ -70,12 +72,54 @@ export interface Outcome {
 export interface QuestionOption { id: string; label: string }
 export interface Question {
   question_id: string;
-  kind: "CHOICE" | "ADOPT";
+  /** CHOICE: listed options, or the user's own words. TEXT: the user's own words only. ADOPT: one bundled review. */
+  kind: "CHOICE" | "ADOPT" | "TEXT";
   text: string;
   field_name?: string;
   options: QuestionOption[];
-  items?: { field_name: string; label: string; summary: string; origin: string; question: string }[];
+  items?: { field_name: string; label: string; summary: string; origin: string; question: string; value?: unknown }[];
 }
+
+export type AttemptStatus = "STARTED" | "COMPLETED" | "TRUNCATED" | "PROVIDER_FAILED" | "TIMED_OUT" | "INTERRUPTED" | "UNKNOWN";
+export interface AttemptUsage { source: "PROVIDER_REPORTED" | "UNKNOWN"; input_tokens: number | null; output_tokens: number | null; total_tokens: number | null }
+
+/** One recorded interpreter attempt. It holds structured values and hashes, never the generated text. */
+export interface Attempt {
+  attempt_id: string;
+  sequence: number;
+  retry_of: string | null;
+  purpose: "INTERPRET" | "FOLLOW_UP";
+  status: AttemptStatus;
+  completion: "COMPLETE" | "TRUNCATED" | "NONE" | "UNKNOWN";
+  started_at: string;
+  finished_at: string | null;
+  latency_ms: number | null;
+  usage: AttemptUsage;
+  request_count: number | null;
+  response_sha256: string | null;
+  parse_result: string | null;
+  error_class: string | null;
+  revision_id: string | null;
+  identity: {
+    prompt_version: string; system_prompt_sha256: string; task_sha256: string; response_shape_sha256: string;
+    manifest_sha256: string; config_sha256: string; runtime_label: string; model: string | null; route: string | null;
+    hermes_commit: string | null; answer_ref: string | null; previous_revision_id: string | null;
+  };
+}
+
+/** A result that arrived after its attempt was closed as unknown. Evidence only: it never becomes a revision. */
+export interface LateResult {
+  observation_id: string;
+  attempt_id: string;
+  observed_at: string;
+  status: string;
+  response_sha256: string | null;
+  authoritative: false;
+  usage: AttemptUsage;
+}
+
+export interface RetryState { allowed: boolean; retry_of: string | null; reason: string | null }
+export interface ReplyState { state: "REJECTED" | "FAILED" | "UNCERTAIN"; reason_code: string | null; attempt_id: string }
 
 export interface RevisionSummary {
   revision_id: string;
@@ -94,6 +138,8 @@ export interface Bundle {
   interpretations: Envelope<Interpretation>[];
   clarifications: Envelope<Clarification>[];
   outcomes: { interpretation_revision_id: string | null; record: Envelope<Outcome> }[];
+  attempts: Attempt[];
+  late_results: LateResult[];
   drafts: Envelope<{ draft_id: string; strategy_id: string; source_syntax: Strategy; interpretation_revision_id: string }>[];
   publications: Envelope<Record<string, unknown>>[];
   revisions: RevisionSummary[];
@@ -103,6 +149,8 @@ export interface Bundle {
     questions: Question[];
     draft_id: string | null;
     strategy_id: string | null;
+    retry: RetryState;
+    reply: ReplyState | null;
   };
 }
 

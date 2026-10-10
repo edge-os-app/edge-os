@@ -55,4 +55,21 @@ describe("api client", () => {
     setTokenSource(async () => "t"); vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
     await expect(api.list()).rejects.toMatchObject({ status: 0, code: "network_error" });
   });
+
+  it("sends the user's own words, or a retry that names its earlier attempt, to the saved request", async () => {
+    setTokenSource(async () => "t");
+    const fetchMock = vi.fn().mockResolvedValue(reply(201, {}));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.answer("req-1", { previous_revision_id: "rev-1", question_id: "choose-entry", answer_text: "up more than 2%" });
+    await api.retryInterpretation("req-1", "attempt-1");
+    await api.retryInterpretation("req-1", null);
+    const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
+    expect(calls.map(([url]) => url)).toEqual([
+      "http://api.test/v1/research/requests/req-1/clarifications",
+      "http://api.test/v1/research/requests/req-1/interpretation-retries",
+      "http://api.test/v1/research/requests/req-1/interpretation-retries"]);
+    expect(JSON.parse(String(calls[0][1].body))).toEqual({ previous_revision_id: "rev-1", question_id: "choose-entry", answer_text: "up more than 2%" });
+    expect(JSON.parse(String(calls[1][1].body))).toEqual({ retry_of: "attempt-1" });
+    expect(JSON.parse(String(calls[2][1].body))).toEqual({ retry_of: null });
+  });
 });

@@ -27,6 +27,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   const [useMarket, setUseMarket] = useState(false);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [fixtureNotice, setFixtureNotice] = useState("");
+  const [fixtureKind, setFixtureKind] = useState("FIXTURE");
   const [samplesError, setSamplesError] = useState(false);
   type FormState = { text: string; kind: InputClass; restrictions: string[]; useMarket: boolean };
   const [undoExample, setUndoExample] = useState<FormState | null>(null);
@@ -87,7 +88,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
 
   useEffect(() => {
     let cancelled = false;
-    api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); } })
+    api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); setFixtureKind(r.interpreter.kind); } })
       .catch(() => { if (!cancelled) setSamplesError(true); });
     void loadList(true);
     return () => { cancelled = true; };
@@ -212,8 +213,8 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         </fieldset>
 
         <div className="stack" style={{ gap: 8 }}>
-          <p className="muted" id={`${formId}-examples`}>Fixture examples. {fixtureNotice || "The fixture interpreter answers only these."} Picking one fills the form; you can edit it.</p>
-          {samplesError ? <p role="status" className="muted">The fixture examples could not be loaded. You can still write your own request.</p> : null}
+          <p className="muted" id={`${formId}-examples`}>{fixtureKind === "FIXTURE" ? "Fixture examples." : "Examples."} {fixtureNotice || "The fixture interpreter answers only these."} Picking one fills the form; you can edit it.</p>
+          {samplesError ? <p role="status" className="muted">The examples could not be loaded. You can still write your own request.</p> : null}
           {undoExample ? <button type="button" className="btn btn-secondary" onClick={restoreTyped}>Restore what I typed{editedSinceExample ? " (replaces your edits)" : ""}</button> : null}
           {samples.map((s) => (
             <button key={s.scenario_id} type="button" className="example" aria-describedby={`${formId}-examples`} onClick={() => fill(s)}>

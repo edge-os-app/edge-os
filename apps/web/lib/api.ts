@@ -21,25 +21,27 @@ export function apiBase(): string {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
+/** A call that waits for the interpreter can take longer than a read. */
+export const INTERPRETER_TIMEOUT_MS = 120_000;
 
-async function send(path: string, init: RequestInit, token: string | null): Promise<Response> {
+async function send(path: string, init: RequestInit, token: string | null, timeoutMs: number): Promise<Response> {
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body) headers.set("Content-Type", "application/json");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(`${apiBase()}${path}`, { ...init, headers, cache: "no-store", signal: controller.signal });
   } finally { clearTimeout(timer); }
 }
 
-export async function request<T>(path: string, init: RequestInit = {}): Promise<{ status: number; body: T }> {
+export async function request<T>(path: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<{ status: number; body: T }> {
   let response: Response;
   try {
-    response = await send(path, init, await tokenSource());
+    response = await send(path, init, await tokenSource(), timeoutMs);
     if (response.status === 401) {
       const first = await response.clone().json().catch(() => ({}));
-      if (first.code === "auth_expired") response = await send(path, init, await tokenSource());
+      if (first.code === "auth_expired") response = await send(path, init, await tokenSource(), timeoutMs);
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
@@ -75,9 +77,13 @@ export const api = {
   createSpotReplay: (body: SpotReplayBody) =>
     request<SpotReplayRecord>("/v1/spot-replays", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   spotReplay: (id: string) => request<SpotReplayRecord>(`/v1/spot-replays/${id}`).then((r) => r.body),
-  submit: (body: unknown) => request<Bundle>("/v1/research/requests", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
-  answer: (id: string, body: { previous_revision_id: string; question_id: string; choice_id: string }) =>
-    request<Bundle>(`/v1/research/requests/${id}/clarifications`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  submit: (body: unknown) => request<Bundle>("/v1/research/requests", { method: "POST", body: JSON.stringify(body) }, INTERPRETER_TIMEOUT_MS).then((r) => r.body),
+  /** One listed choice, or the user's own words. The interpreter reads words, so that call can take longer. */
+  answer: (id: string, body: { previous_revision_id: string; question_id: string } & ({ choice_id: string } | { answer_text: string })) =>
+    request<Bundle>(`/v1/research/requests/${id}/clarifications`, { method: "POST", body: JSON.stringify(body) }, INTERPRETER_TIMEOUT_MS).then((r) => r.body),
+  /** Explicit retry. It names the earlier attempt it follows and starts a separate attempt. */
+  retryInterpretation: (id: string, retryOf: string | null) =>
+    request<Bundle>(`/v1/research/requests/${id}/interpretation-retries`, { method: "POST", body: JSON.stringify({ retry_of: retryOf }) }, INTERPRETER_TIMEOUT_MS).then((r) => r.body),
   publish: (strategyId: string, body: unknown) =>
     request<PublicationResult>(`/v1/strategies/${strategyId}/revisions`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   revision: (strategyId: string, revisionId: string) =>
