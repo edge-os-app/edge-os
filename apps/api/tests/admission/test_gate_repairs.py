@@ -195,7 +195,42 @@ def test_acquisition_cannot_exceed_remaining_sell_ceiling(admission_service, fre
     assert denied.status == "DENIED" and denied.reason == "SELL_CAPACITY_UNAVAILABLE"
 
 
-# ---------------------------------------------------------------- B8
+def test_favorable_overfill_beyond_sell_ceiling_fails_closed(admission_service, fresh_owner) -> None:
+    approval = approval_a(base_approved_raw="10")
+    entry = intent_entry(quantity_raw="1", quote_input_raw="20", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    outcome = admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "20", "11", "1"))
+    assert outcome.reason == "SELL_COVERAGE_EXCEEDED"
+    base = _one(admission_service.balances(fresh_owner), BASE)
+    assert base.consumed_raw == "0" and base.reserved_raw == "1"
+
+
+def test_reconciled_input_beyond_allocation_fails_closed(admission_service, fresh_owner) -> None:
+    approval = approval_a(allocation_quote_raw="100", quote_approved_raw="1000")
+    entry = intent_entry(quantity_raw="1", quote_input_raw="50", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    outcome = admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "150", "1", "1"))
+    assert outcome.reason == "ALLOCATION_EXCEEDED"
+    assert _one(admission_service.balances(fresh_owner), QUOTE).consumed_raw == "0"
+
+
+def test_reconcile_and_admission_serialize_on_wallet_lock(admission_service, fresh_owner) -> None:
+    approval = approval_a()
+    first = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, first, approval, context_a())
+    second = intent_entry(quantity_raw="5", quote_input_raw="60", position_id="position-a-2")
+
+    def reconcile_first(index):
+        return admission_service.reconcile(fresh_owner, first.action_id, confirm_entry(first, "110", "10", "1"))
+
+    def admit_second(index):
+        return admission_service.admit_and_reserve(fresh_owner, second, approval, context_a())
+
+    outcomes = _run_concurrently(2, lambda i: reconcile_first(i) if i == 0 else admit_second(i))
+    assert any(getattr(o, "decision_status", None) == "CONFIRMED" for o in outcomes)
+    # Invariant holds after concurrent reconcile and admission: consumed + reserved <= approved.
+    for summary in admission_service.balances(fresh_owner):
+        assert int(summary.consumed_raw) + int(summary.reserved_raw) <= int(summary.approved_raw)
 
 def test_scoped_stop_denies_acquisitions(admission_service, fresh_owner) -> None:
     denied = admission_service.admit_and_reserve(

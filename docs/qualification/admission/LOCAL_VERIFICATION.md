@@ -83,8 +83,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 447 passed (377 existing + 70 admission), ~148 s.
-- Admission suite: 70 passed.
+- Full suite: 450 passed (377 existing + 73 admission), ~105 s.
+- Admission suite: 73 passed.
 - P15 and P02 contract checks: PASS.
 - `git diff --check`: clean.
 
@@ -96,9 +96,11 @@ action identity is denied without mutation; a cross-wallet or stale position
 snapshot is denied; changed-approval-content reuse is denied while an adopted
 successor cap applies; reconciled actual gas respects other outstanding
 reservations; large-integer accounting stays exact and decimal drift is denied;
-an acquisition cannot exceed the remaining sell ceiling; scoped stops and
-unqualified required controls fail closed; and confirmed acquisitions/exits
-require reconciled actuals and update weighted cost basis and realized result.
+an acquisition cannot exceed the remaining sell ceiling; a favorable reconciled
+over-fill or over-allocation fails closed and rolls back; scoped stops and
+unqualified required controls fail closed; reconcile and admission serialize on
+the wallet lock; and confirmed acquisitions/exits require reconciled actuals and
+update weighted cost basis and realized result.
 
 ## Not covered
 

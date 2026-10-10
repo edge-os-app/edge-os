@@ -97,14 +97,20 @@ def _acquire_wallet_lock(session: Session, owner: uuid.UUID, agent_id: str, wall
     session.execute(text("SELECT pg_advisory_xact_lock(:key_a, :key_b)"), {"key_a": key_a, "key_b": key_b})
 
 
-def _binding_snapshot(intent: ActionIntent) -> dict[str, Any]:
+def _binding_snapshot(intent: ActionIntent, approval: ApprovalSnapshot) -> dict[str, Any]:
+    quote_decimals = approval.quote_allowance.decimals
+    if intent.input.quote_input is not None:
+        quote_decimals = intent.input.quote_input.decimals
     return {
         "agent_id": intent.binding.agent_id, "wallet_id": intent.binding.wallet_id,
         "network_id": intent.binding.network_id, "strategy_revision": intent.binding.strategy_revision,
         "mandate_id": intent.binding.mandate_id, "policy_binding": intent.policy_binding,
+        "approval_id": approval.approval_id,
         "position_id": intent.position_id, "operation": intent.operation,
         "base_asset_id": intent.quantity.asset_id, "base_decimals": intent.quantity.decimals,
-        "quote_asset_id": intent.input.quote_asset_id,
+        "quote_asset_id": intent.input.quote_asset_id, "quote_decimals": quote_decimals,
+        "allocation_asset_id": approval.allocation_quote.asset_id,
+        "allocation_approved_raw": approval.allocation_quote.approved_raw,
     }
 
 
@@ -135,13 +141,13 @@ def _find_decision(session: Session, owner: uuid.UUID, action_id: str, *, for_up
 
 
 def _save_decision(session: Session, owner: uuid.UUID, intent: ActionIntent,
-                   status: str, reason: str | None) -> DecisionRow:
+                   status: str, reason: str | None, approval: ApprovalSnapshot) -> DecisionRow:
     row = DecisionRow(
         decision_id=uuid.uuid4(), owner_id=owner, agent_id=intent.binding.agent_id,
         wallet_id=intent.binding.wallet_id, network_id=intent.binding.network_id,
         action_id=intent.action_id, review_hash=intent.review_hash,
         operation=intent.operation, status=status, reason=reason,
-        binding=_binding_snapshot(intent),
+        binding=_binding_snapshot(intent, approval),
     )
     session.add(row)
     session.flush()
@@ -210,12 +216,8 @@ def _attributed_inventory(session: Session, owner: uuid.UUID, agent_id: str, wal
 
 
 def _attributed_cost(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str,
-                     network_id: str, quote_asset: str) -> int:
-    """Deployed capital = position cost basis for positions whose asset is quoted by quote_asset.
-
-    Positions store base-asset inventory and quote-asset cost; the wallet's deployed
-    capital is the sum of every position's cost basis, valued in the approval quote.
-    """
+                     network_id: str) -> int:
+    """Deployed capital = the sum of every position's cost basis in the approval quote."""
     total = session.execute(select(func.coalesce(func.sum(PositionRow.cost_basis), 0)).where(
         PositionRow.owner_id == owner,
         PositionRow.agent_id == agent_id,
@@ -325,10 +327,10 @@ class AdmissionService:
                                      intent.binding.wallet_id, intent.binding.network_id)
                 denial = self._admit_locked(session, verified_owner_id, intent, approval, context)
                 if denial is not None:
-                    row = _save_decision(session, verified_owner_id, intent, "DENIED", denial)
+                    row = _save_decision(session, verified_owner_id, intent, "DENIED", denial, approval)
                     session.commit()
                     return _decision_view(session, row)
-                persisted = _save_decision(session, verified_owner_id, intent, "ADMITTED", None)
+                persisted = _save_decision(session, verified_owner_id, intent, "ADMITTED", None, approval)
                 session.commit()
                 return _decision_view(session, persisted)
             except SQLAlchemyError:
@@ -441,7 +443,7 @@ class AdmissionService:
             quote_asset = intent.input.quote_asset_id
             if allocation.asset_id != quote_asset:
                 return "ALLOCATION_ASSET_MISMATCH"
-            deployed = (_attributed_cost(session, owner, b.agent_id, b.wallet_id, b.network_id, quote_asset)
+            deployed = (_attributed_cost(session, owner, b.agent_id, b.wallet_id, b.network_id)
                         + _capital_reserved(session, owner, b.agent_id, b.wallet_id, b.network_id, quote_asset))
             if deployed + intent.input.quote_input.as_int() > allocation.as_int():
                 return "ALLOCATION_EXCEEDED"
@@ -831,6 +833,24 @@ def _settle(
                 if receipt.actual_input is None or receipt.actual_input.asset_id != quote_asset:
                     raise AccountingBreach("MISSING_RECONCILED_INPUT")
                 invested = receipt.actual_input.as_int()
+                # The reconciled actual is authoritative. It must stay within the
+                # adopted sell coverage and allocation, or the settlement fails closed.
+                base_allowance = _lock_allowance_for(session, row, base_asset, base_decimals)
+                if base_allowance is None:
+                    raise AccountingBreach("ALLOWANCE_MISSING")
+                coverage_others = (
+                    _attributed_inventory(session, row.owner_id, row.agent_id, row.wallet_id,
+                                          row.network_id, base_asset)
+                    + _pending_acquisition(session, row.owner_id, row.agent_id, row.wallet_id,
+                                           row.network_id, base_asset, exclude=reservation.reservation_id))
+                if _int(base_allowance.consumed) + coverage_others + acquired > _int(base_allowance.approved):
+                    raise AccountingBreach("SELL_COVERAGE_EXCEEDED")
+                allocation_raw = _int(row.binding.get("allocation_approved_raw") or 0)
+                deployed = (_attributed_cost(session, row.owner_id, row.agent_id, row.wallet_id, row.network_id)
+                            + _capital_reserved(session, row.owner_id, row.agent_id, row.wallet_id,
+                                                row.network_id, quote_asset))
+                if deployed + invested > allocation_raw:
+                    raise AccountingBreach("ALLOCATION_EXCEEDED")
                 position.inventory = Decimal(_int(position.inventory) + acquired)
                 position.cost_basis = Decimal(_int(position.cost_basis) + invested)
             else:  # EXIT

@@ -132,10 +132,12 @@ mandate, agent, wallet and network. A mismatch fails closed with
 
 Confirmed acquisitions and exits require reconciled actual input and output.
 Missing or mismatched actuals fail closed rather than substituting the planned
-values. An acquisition attributes the reconciled output and adds the reconciled
-input to the position cost basis. An exit removes the weighted-average basis for
-the exited quantity and records realized consideration. Unknown gas, input or
-output stays unknown.
+values. At settlement the reconciled actual is authoritative and must stay
+within the adopted sell coverage and allocation; a favorable over-fill or an
+over-allocation fails closed and rolls back. An acquisition attributes the
+reconciled output and adds the reconciled input to the position cost basis. An
+exit removes the weighted-average basis for the exited quantity and records
+realized consideration. Unknown gas, input or output stays unknown.
 
 Consumption is capped. A reconciled actual that would push `consumed` past
 `approved`, or invalidate another live reservation, fails closed with
