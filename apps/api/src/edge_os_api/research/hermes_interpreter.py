@@ -207,6 +207,10 @@ def _storable(text: str) -> tuple[str, bool]:
     return text.encode("utf-8", "backslashreplace").decode("utf-8").replace("\x00", "\\x00"), False
 
 
+# A saved answer feeds later records: the draft that adoption writes holds the user's request (up to 10,000 characters,
+# three bytes each in the worst case) next to values taken from the answer. The P02 limit is 65,536 bytes per record,
+# so the answer is bounded well below it. Ordinary answers are a few kilobytes; the output cap is 4,096 tokens.
+MAX_RESPONSE_BYTES = 20_000
 MAX_REQUEST_COUNT = 2 ** 31 - 1  # the column is a 32-bit integer
 MAX_TOKENS = 2 ** 62  # the columns are 64-bit integers
 
@@ -405,6 +409,8 @@ class HermesInterpreter:
             text, storable = _storable(text)
             if not storable:
                 outcome = Rejection("unstorable_text", "", "The answer holds characters that cannot be saved, so none of it was used.")
+            elif len(text.encode("utf-8")) > MAX_RESPONSE_BYTES:
+                outcome = Rejection("response_too_large", "", "The model's answer was too long to use safely, so none of it was used.")
             elif status == "TRUNCATED":
                 outcome = Rejection("truncated", "", "The model's answer was cut short, so none of it was used.")
             elif not _within_approved_settings(result):

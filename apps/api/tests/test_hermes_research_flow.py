@@ -694,7 +694,7 @@ def test_an_accepted_looking_answer_too_large_to_save_settles_as_rejected_and_st
     assert created.status_code == 201, created.text
     bundle = created.json()
     [attempt] = bundle["attempts"]
-    assert attempt["parse_result"] == "REJECTED:unpublishable_response"
+    assert attempt["parse_result"] == "REJECTED:response_too_large"
     assert attempt["usage"]["input_tokens"] == 1500 and bundle["head"]["retry"]["allowed"] is True
     assert client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).status_code == 200
     assert retry(client, owner_a, bundle, attempt["attempt_id"]).status_code == 201
@@ -727,7 +727,7 @@ def test_a_too_large_reply_result_settles_as_rejected_and_keeps_the_saved_meanin
 
     assert response.status_code == 200, response.text
     after = response.json()
-    assert after["attempts"][-1]["parse_result"] == "REJECTED:unpublishable_response"
+    assert after["attempts"][-1]["parse_result"] == "REJECTED:response_too_large"
     assert after["head"]["reply"]["state"] == "REJECTED" and len(after["interpretations"]) == 1
 
 
@@ -810,3 +810,61 @@ def test_every_hostile_planting_ends_published_or_rejected_and_never_stuck(make_
                 stuck.append((label, "rejected but not retryable"))
     assert stuck == [], stuck[:5]
     assert accepted > 0 and rejected > 0
+
+
+# --- Round 11: the next user step must also fit the record limit -----------------------------------------------------------
+
+@pytest.mark.parametrize("size", [21_000, 45_000, 60_500])
+def test_a_response_above_the_size_bound_is_rejected_before_any_follow_on_record_can_overflow(
+        make_client, owner_a, size: int) -> None:
+    from edge_os_api.research.interpretation_attempts import Usage
+    hostile = reply(case("concrete-thesis")["provider"]["model_response"], usage=Usage(1500, 400, 1900, "PROVIDER_REPORTED"),
+                    text=thesis_with_sizing({"note": "a" * size}))
+    client = make_client(CaseRunner(hostile, turn_result(case("concrete-thesis")["provider"])))
+
+    bundle = create(client, owner_a, "concrete-thesis").json()
+
+    [attempt] = bundle["attempts"]
+    assert attempt["parse_result"] == "REJECTED:response_too_large"
+    assert bundle["head"]["retry"]["allowed"] is True
+
+
+def test_the_largest_accepted_response_with_the_longest_request_still_adopts_without_a_server_error(
+        make_client, owner_a) -> None:
+    from edge_os_api.research.hermes_interpreter import MAX_RESPONSE_BYTES
+    from edge_os_api.research.interpretation_attempts import Usage
+    base = thesis_with_sizing({"note": ""})
+    room = MAX_RESPONSE_BYTES - len(base.encode("utf-8")) - 64
+    big = reply(case("concrete-thesis")["provider"]["model_response"], usage=Usage(1500, 400, 1900, "PROVIDER_REPORTED"),
+                text=thesis_with_sizing({"note": "a" * room}))
+    client = make_client(CaseRunner(big))
+    body = intake_body("concrete-thesis")
+    body["original_request"] += " " + "価" * (10_000 - len(body["original_request"]) - 1)  # the longest legal request
+
+    created = client.post("/v1/research/requests", json=body, headers=owner_a)
+
+    assert created.status_code == 201, created.text
+    bundle = created.json()
+    assert bundle["attempts"][0]["parse_result"] == "ACCEPTED"
+    adopted = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
+    assert adopted.status_code < 500, adopted.text
+
+
+def test_a_record_the_store_refuses_as_too_large_is_a_plain_refusal_and_leaves_the_saved_reading_unchanged(
+        make_client, owner_a, monkeypatch) -> None:
+    from edge_os_api.records import contract_adapter as record_contract
+    from edge_os_api.research import service
+    client = make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"])))
+    bundle = create(client, owner_a, "concrete-thesis").json()
+
+    def refuse(*args: Any, **kwargs: Any):
+        raise record_contract.Invalid("record exceeds the byte limit")
+    monkeypatch.setattr(service, "put_record", refuse)
+
+    response = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
+
+    assert response.status_code == 422, response.text
+    assert "record_too_large" in response.text
+    monkeypatch.undo()
+    after = client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).json()
+    assert len(after["interpretations"]) == 1
