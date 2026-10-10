@@ -9,7 +9,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from edge_os_api.models import Record
+from edge_os_api.records.models import Record
 
 FIXTURE = Path(__file__).parent / "fixtures" / "account_views" / "account-records-v1.json"
 
@@ -34,7 +34,7 @@ def _seed(client, headers):
 
 
 def test_account_views_keep_same_asset_positions_and_sales_attributed(client, owner_a):
-    from edge_os_api.account_views import router
+    from edge_os_api.accounts.views import router
 
     client.app.include_router(router)
     fixture = _seed(client, owner_a)
@@ -80,7 +80,7 @@ def test_account_views_keep_same_asset_positions_and_sales_attributed(client, ow
 
 
 def test_foreign_and_missing_account_record_ids_have_same_not_found(client, owner_a, owner_b):
-    from edge_os_api.account_views import router
+    from edge_os_api.accounts.views import router
 
     client.app.include_router(router)
     fixture = _seed(client, owner_a)
@@ -93,7 +93,7 @@ def test_foreign_and_missing_account_record_ids_have_same_not_found(client, owne
 
 
 def test_context_source_resolves_a_public_research_request_without_cross_owner_lookup(client, owner_a, owner_b):
-    from edge_os_api.models import Record
+    from edge_os_api.records.models import Record
 
     from flows import HUNCH, submit
 
@@ -137,7 +137,7 @@ def test_context_source_resolves_a_public_research_request_without_cross_owner_l
 
 
 def test_signed_position_results_preserve_negative_zero_unknown_and_raw_precision(client, owner_a):
-    from edge_os_api.account_views import SCHEMA_VERSION
+    from edge_os_api.accounts.views import SCHEMA_VERSION
 
     owner_id = client.get("/v1/me", headers=owner_a).json()["user_id"]
     source = next(row["content"] for row in json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -194,7 +194,7 @@ def test_owner_can_read_current_earlier_changed_and_never_active_permission_snap
 
 
 def test_truthful_permission_lifecycle_states_are_readable_without_invented_history(client, owner_a):
-    from edge_os_api.account_views import SCHEMA_VERSION
+    from edge_os_api.accounts.views import SCHEMA_VERSION
 
     fixture = _seed(client, owner_a)
     source = next(row["content"] for row in fixture
@@ -267,7 +267,7 @@ def test_truthful_permission_lifecycle_states_are_readable_without_invented_hist
 
 
 def test_filtering_never_reads_another_owners_records(client, owner_a, owner_b):
-    from edge_os_api.account_views import router
+    from edge_os_api.accounts.views import router
 
     client.app.include_router(router)
     _seed(client, owner_a)

@@ -10,7 +10,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-API_ROOT = Path(__file__).resolve().parents[2]
+API_ROOT = Path(__file__).resolve().parents[3]
 
 
 def make_engine(url: str) -> Engine:

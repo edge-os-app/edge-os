@@ -16,17 +16,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from . import p02, p06, spot_replay
-from .auth import Principal
-from .errors import AppError, finding, not_found
-from .models import SpotReplayConfiguration, SpotReplayRun
-from .schemas import SpotReplayBody
-from .service import get_revision, parse_uuid
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.strategies import compiler as strategy_compiler
+from edge_os_api.replay import simulator as spot_replay
+from edge_os_api.core.authentication import Principal
+from edge_os_api.core.errors import AppError, finding, not_found
+from edge_os_api.records.models import SpotReplayConfiguration, SpotReplayRun
+from edge_os_api.core.request_schemas import SpotReplayBody
+from edge_os_api.research.service import get_revision, parse_uuid
 
 SCHEMA_VERSION = "p13.spot-replay-run/1"
 FIXTURE_ID = "p13.wc01/1"
-FIXTURE_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "spot_replay" / "runtime_wc01.json"
-PROFILE_PATH = Path(__file__).resolve().parents[4] / "docs" / "implementation" / "SPOT_REPLAY_RUNTIME_PROFILE.md"
+FIXTURE_PATH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "spot_replay" / "runtime_wc01.json"
+PROFILE_PATH = Path(__file__).resolve().parents[5] / "docs" / "implementation" / "SPOT_REPLAY_RUNTIME_PROFILE.md"
 _PATH = "/v1/spot-replays"
 
 
@@ -38,7 +40,7 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, dt.datetime):
-        return p02.utc_string(value)
+        return record_contract.utc_string(value)
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, dict):
@@ -50,7 +52,7 @@ def _json_value(value: Any) -> Any:
 
 def _response(row: SpotReplayRun) -> dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "record_type": "SpotReplayRun",
-            "replay_id": str(row.replay_id), "created_at": p02.utc_string(row.created_at),
+            "replay_id": str(row.replay_id), "created_at": record_contract.utc_string(row.created_at),
             "content_sha256": row.content_sha256, "content": row.content}
 
 
@@ -81,7 +83,7 @@ def _input_snapshot(body: SpotReplayBody, strategy: dict[str, Any], fixture: dic
         "profile_version": spot_replay.PROFILE_VERSION,
         "strategy_revision_id": body.strategy_revision_id,
         "strategy_id": body.strategy_id,
-        "strategy_sha256": p02.sha256_hex(strategy),
+        "strategy_sha256": record_contract.sha256_hex(strategy),
         "strategy": strategy,
         "run_configuration_id": body.run_configuration_id,
         "dataset_fixture_id": body.dataset_fixture_id,
@@ -92,8 +94,8 @@ def _input_snapshot(body: SpotReplayBody, strategy: dict[str, Any], fixture: dic
         "fixture_sha256": _sha256(FIXTURE_PATH),
         "profile_sha256": _sha256(PROFILE_PATH),
         "market_binding_id": market_binding_id,
-        "window_start": p02.utc_string(body.window_start),
-        "window_end": p02.utc_string(body.window_end),
+        "window_start": record_contract.utc_string(body.window_start),
+        "window_end": record_contract.utc_string(body.window_end),
         "initial_cash_quote": body.initial_cash_quote,
         "initial_base_amount": body.initial_base_amount,
         "initial_basis_quote": body.initial_basis_quote,
@@ -109,7 +111,7 @@ def _replay_input(body: SpotReplayBody, fixture: dict[str, Any], descriptor: dic
         spot_replay.ReplayBucket(
             bucket_end=dt.datetime.fromisoformat(bucket["bucket_end"].replace("Z", "+00:00")),
             status=bucket["status"],
-            price=p06.Observation(
+            price=strategy_compiler.Observation(
                 value=bucket["price"],
                 bucket_end=dt.datetime.fromisoformat(bucket["bucket_end"].replace("Z", "+00:00")),
                 market_binding_id=market_binding_id,
@@ -118,7 +120,7 @@ def _replay_input(body: SpotReplayBody, fixture: dict[str, Any], descriptor: dic
                               if bucket["available_at"] else None),
                 reasons=tuple(bucket.get("price_reasons", ())),
             ),
-            quote_volume=p06.Observation(
+            quote_volume=strategy_compiler.Observation(
                 value=bucket["quote_volume"],
                 bucket_end=dt.datetime.fromisoformat(bucket["bucket_end"].replace("Z", "+00:00")),
                 market_binding_id=market_binding_id,
@@ -154,7 +156,7 @@ def _unavailable(error: spot_replay.ReplayError) -> dict[str, Any]:
 
 def _bind_configuration(session: Session, owner_id: uuid.UUID, run_configuration_id: str,
                         inputs: dict[str, Any]) -> None:
-    configuration_sha256 = p02.sha256_hex({"schema_version": SCHEMA_VERSION, "inputs": inputs})
+    configuration_sha256 = record_contract.sha256_hex({"schema_version": SCHEMA_VERSION, "inputs": inputs})
     statement = pg_insert(SpotReplayConfiguration).values(
         owner_id=owner_id,
         run_configuration_id=run_configuration_id,
@@ -177,7 +179,7 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
     """Create one immutable replay, or return the identical result for its idempotency key."""
     request = body.model_dump(mode="json")
     fingerprint_body = {key: value for key, value in request.items() if key != "idempotency_key"}
-    fingerprint = p02.sha256_hex({"owner_id": str(principal.user_id), "method": "POST", "path": _PATH,
+    fingerprint = record_contract.sha256_hex({"owner_id": str(principal.user_id), "method": "POST", "path": _PATH,
                                   "request": fingerprint_body})
     existing = session.execute(select(SpotReplayRun).where(
         SpotReplayRun.owner_id == principal.user_id,
@@ -213,7 +215,7 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
     except (OSError, ValueError, json.JSONDecodeError):
         raise AppError(503, "SPOT_REPLAY", "UNAVAILABLE", "fixture_profile_unavailable", []) from None
 
-    market_binding_id = p06.market_binding_id(strategy["market"])
+    market_binding_id = strategy_compiler.market_binding_id(strategy["market"])
     descriptor = _descriptor(body, strategy, fixture["dataset_revision_id"], market_binding_id)
     snapshot = _input_snapshot(body, strategy, fixture, descriptor, market_binding_id)
     snapshot["fixture_sha256"], snapshot["profile_sha256"] = fixture_hash, profile_hash
@@ -240,7 +242,7 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
                "inputs": snapshot, "result": result_snapshot,
                "notice": "Synthetic replay only. Assumed fills; no gas, spread, additional impact, or capacity model. "
                          "No trading permission is granted."}
-    content_sha256 = p02.sha256_hex(content)
+    content_sha256 = record_contract.sha256_hex(content)
     row = SpotReplayRun(
         replay_id=replay_id, owner_id=principal.user_id, strategy_id=body.strategy_id,
         strategy_revision_id=revision_id, method="POST", path=_PATH,
@@ -269,7 +271,7 @@ def get_spot_replay(session: Session, principal: Principal, replay_id: str) -> d
     if set(row.content) != required or row.content.get("schema_version") != SCHEMA_VERSION \
             or row.content.get("owner_id") != str(principal.user_id) \
             or row.content.get("replay_id") != str(row.replay_id) \
-            or p02.sha256_hex(row.content) != row.content_sha256:
+            or record_contract.sha256_hex(row.content) != row.content_sha256:
         raise AppError(500, "SPOT_REPLAY", "UNAVAILABLE", "stored_replay_invalid",
                        [finding("stored_replay_invalid", "/", "The saved replay failed its integrity check.")])
     return _response(row)

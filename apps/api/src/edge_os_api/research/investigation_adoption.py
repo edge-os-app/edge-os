@@ -11,12 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import p02
-from .auth import Principal
-from .errors import AppError, finding, invalid, not_found
-from .models import InvestigationAccessEvent, InvestigationDeclaration
-from .schemas import InvestigationBody, InvestigationConfiguration
-from .service import get_owned, head_interpretation, intake_rows, lock_intake, parse_uuid
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.core.authentication import Principal
+from edge_os_api.core.errors import AppError, finding, invalid, not_found
+from edge_os_api.records.models import InvestigationAccessEvent, InvestigationDeclaration
+from edge_os_api.core.request_schemas import InvestigationBody, InvestigationConfiguration
+from edge_os_api.research.service import get_owned, head_interpretation, intake_rows, lock_intake, parse_uuid
 
 SCHEMA_VERSION = "p08.investigation-declaration/2"
 PROPOSAL_VERSION = "p08-bounded-review/2"
@@ -122,7 +122,7 @@ def get_proposal(session: Session, principal: Principal, intake_id: str) -> dict
 def _declaration_envelope(row: InvestigationDeclaration) -> dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "record_type": "InvestigationDeclaration",
             "record_id": str(row.declaration_id), "owner_id": str(row.owner_id),
-            "operation_id": str(row.operation_id), "created_at": p02.utc_string(row.created_at),
+            "operation_id": str(row.operation_id), "created_at": record_contract.utc_string(row.created_at),
             "content": row.content}
 
 
@@ -131,7 +131,7 @@ def _access_event(session: Session, row: InvestigationDeclaration) -> dict[str, 
         InvestigationAccessEvent.owner_id == row.owner_id,
         InvestigationAccessEvent.declaration_id == row.declaration_id)).scalar_one()
     return {"event_id": str(event.event_id), "declaration_id": str(event.declaration_id),
-            "created_at": p02.utc_string(event.created_at), **event.content}
+            "created_at": record_contract.utc_string(event.created_at), **event.content}
 
 
 def _response(session: Session, row: InvestigationDeclaration, *, replay: bool = False) -> dict[str, Any]:
@@ -140,8 +140,8 @@ def _response(session: Session, row: InvestigationDeclaration, *, replay: bool =
 
 
 def _request_fingerprint(principal: Principal, intake_id: uuid.UUID, body: InvestigationBody) -> str:
-    canonical_body = p02.canonical_bytes(body.model_dump(mode="json")).decode("utf-8")
-    return p02.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake_id),
+    canonical_body = record_contract.canonical_bytes(body.model_dump(mode="json")).decode("utf-8")
+    return record_contract.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake_id),
                           "body": canonical_body})
 
 

@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from edge_os_api import p02
-from edge_os_api.effect_comparison import compare_effects, evaluate_p06_bindings, reference_trade
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.research.effect_comparison import compare_effects, evaluate_p06_bindings, reference_trade
 
 FIXTURES = Path(__file__).parent / "fixtures" / "effect_comparison"
 
@@ -127,7 +127,7 @@ def test_explicit_p06_bindings_run_on_five_minute_features_under_independent_clo
     plan = [{"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
              "horizon": {"value": 15, "unit": "MINUTES"}}]
     price = {"op": "gt", "args": [{"op": "price"}, {"op": "constant", "value": "99", "unit": "PRICE"}]}
-    quote_unit = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    quote_unit = f"QUOTE:{record_contract.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
     volume = {"op": "gt", "args": [{"op": "quote_volume"}, {
         "op": "constant", "value": "4", "unit": quote_unit}]}
     features = [{"bucket_end": "2026-01-01T00:00:00Z",
@@ -286,7 +286,7 @@ def test_missing_current_five_minute_bucket_is_not_carried_from_previous_bucket(
                 "end": "2026-01-01T00:06:00Z", "interval_seconds": 60}
     plan = [{"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
              "horizon": {"value": 1, "unit": "MINUTES"}}]
-    quote_unit = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    quote_unit = f"QUOTE:{record_contract.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
     binding = {"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
                "price_expression": {"op": "gt", "args": [{"op": "price"},
                    {"op": "constant", "value": "99", "unit": "PRICE"}]},
@@ -310,7 +310,7 @@ def test_missing_historical_dependency_under_true_or_is_not_a_qualified_signal()
                 "end": "2026-01-01T00:06:00Z", "interval_seconds": 60}
     plan = [{"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
              "horizon": {"value": 1, "unit": "MINUTES"}}]
-    quote_unit = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    quote_unit = f"QUOTE:{record_contract.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
     price_expr = {"op": "or", "args": [
         {"op": "gt", "args": [{"op": "price"}, {"op": "constant", "value": "99", "unit": "PRICE"}]},
         {"op": "gt", "args": [{"op": "lag", "value": {"op": "price"}, "buckets": 1},
@@ -338,7 +338,7 @@ def test_price_return_middle_gap_is_diagnostic_not_a_required_dependency() -> No
                 "end": "2026-01-01T00:11:00Z", "interval_seconds": 60}
     plan = [{"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
              "horizon": {"value": 1, "unit": "MINUTES"}}]
-    quote_unit = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    quote_unit = f"QUOTE:{record_contract.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
     comparison = {"op": "gt", "args": [
         {"op": "price_return", "lookback_buckets": 2},
         {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"},
@@ -379,7 +379,7 @@ def test_nested_price_return_uses_only_nested_endpoints_but_mean_keeps_each_buck
                 "end": "2026-01-01T00:16:00Z", "interval_seconds": 60}
     plan = [{"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
              "horizon": {"value": 1, "unit": "MINUTES"}}]
-    quote_unit = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    quote_unit = f"QUOTE:{record_contract.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
     def binding(price_expression):
         return {"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
                 "price_expression": price_expression,
@@ -422,7 +422,7 @@ def test_future_historical_dependency_under_true_or_is_not_available_at_decision
                 "end": "2026-01-01T00:06:00Z", "interval_seconds": 60}
     plan = [{"evaluation_id": "eval-a", "trial_id": "trial-a", "variant_id": "rule-a",
              "horizon": {"value": 1, "unit": "MINUTES"}}]
-    quote_unit = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    quote_unit = f"QUOTE:{record_contract.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
     price_expr = {"op": "or", "args": [
         {"op": "gt", "args": [{"op": "price"}, {"op": "constant", "value": "99", "unit": "PRICE"}]},
         {"op": "gt", "args": [{"op": "lag", "value": {"op": "price"}, "buckets": 1},

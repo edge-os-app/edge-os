@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[5]
 CONTRACT_DIR = REPO_ROOT / "docs" / "contracts" / "p02"
 CHECKER_PATH = CONTRACT_DIR / "check_contract.py"
 FROZEN_SHA256 = {

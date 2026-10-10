@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-from edge_os_api.models import Base
+from edge_os_api.records.models import Base
 
 config = context.config
 if config.config_file_name is not None:

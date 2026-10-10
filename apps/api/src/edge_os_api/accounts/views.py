@@ -15,10 +15,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from edge_os_api.auth import Principal, require_principal
-from edge_os_api.errors import not_found, service_unavailable
-from edge_os_api.models import Record
-from edge_os_api.p02 import utc_string
+from edge_os_api.core.authentication import Principal, require_principal
+from edge_os_api.core.errors import not_found, service_unavailable
+from edge_os_api.records.models import Record
+from edge_os_api.records.contract_adapter import utc_string
 
 router = APIRouter(prefix="/v1/account-views", tags=["account views"])
 RECORD_TYPE = "AccountViewRecord"

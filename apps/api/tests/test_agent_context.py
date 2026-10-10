@@ -13,8 +13,8 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 
-from edge_os_api.errors import AppError
-from edge_os_api.models import Record
+from edge_os_api.core.errors import AppError
+from edge_os_api.records.models import Record
 from conftest import run_threads
 
 FIXTURE = Path(__file__).parent / "fixtures" / "account_views" / "agent-context-v1.json"
@@ -23,7 +23,7 @@ ACCOUNT_FIXTURE = Path(__file__).parent / "fixtures" / "account_views" / "accoun
 
 def _mount_context(client):
     if not getattr(client.app.state, "p19_context_mounted", False):
-        from edge_os_api.agent_context import router
+        from edge_os_api.agent_context.controls import router
 
         client.app.include_router(router)
         client.app.state.p19_context_mounted = True
@@ -99,8 +99,8 @@ def _context_versions(client, owner_id, agent_id="agent-a"):
 def test_suggestion_stays_out_of_task_context_until_owner_adopts_it(client, owner_a):
     _mount_context(client)
     expected, _ = _seed_context(client, owner_a)
-    from edge_os_api.agent_context import retrieve_agent_context
-    from edge_os_api.auth import Principal
+    from edge_os_api.agent_context.controls import retrieve_agent_context
+    from edge_os_api.core.authentication import Principal
 
     owner_id = uuid.UUID(_owner(client, owner_a))
     with client.app.state.session_factory() as session:
@@ -123,8 +123,8 @@ def test_owner_can_manage_but_agent_scope_cannot_read_another_same_owner_agent(c
     _mount_context(client)
     _seed_context(client, owner_a)
     _seed_context(client, owner_a, agent_id="agent-b")
-    from edge_os_api.agent_context import retrieve_agent_context
-    from edge_os_api.auth import Principal
+    from edge_os_api.agent_context.controls import retrieve_agent_context
+    from edge_os_api.core.authentication import Principal
 
     principal = Principal(uuid.UUID(_owner(client, owner_a)), "test")
     managed_b = client.get("/v1/agents/agent-b/context", headers=owner_a)
@@ -212,7 +212,7 @@ def test_update_from_stale_context_snapshot_cannot_overwrite_newer_version(
     preserved_entry,
     preserved_value,
 ):
-    import edge_os_api.agent_context as context_api
+    import edge_os_api.agent_context.controls as context_api
 
     _mount_context(client)
     owner_id = _owner(client, owner_a)
@@ -265,7 +265,7 @@ def test_update_from_stale_context_snapshot_cannot_overwrite_newer_version(
 
 
 def test_commit_failure_rolls_back_and_lost_commit_reply_reconciles_before_retry(client, owner_a):
-    import edge_os_api.agent_context as context_api
+    import edge_os_api.agent_context.controls as context_api
 
     _mount_context(client)
     owner_id = _owner(client, owner_a)
@@ -333,8 +333,8 @@ def test_retrieval_maps_source_lookup_failure_to_reconciliation_error(client, ow
         ))
         session.commit()
     _seed_context(client, owner_a, source_refs=[str(source_id)])
-    from edge_os_api.agent_context import retrieve_agent_context
-    from edge_os_api.auth import Principal
+    from edge_os_api.agent_context.controls import retrieve_agent_context
+    from edge_os_api.core.authentication import Principal
 
     with client.app.state.session_factory() as session:
         execute = session.execute
@@ -376,8 +376,8 @@ def test_correction_disable_clear_are_versioned_and_leave_account_records_unchan
     disabled = client.post("/v1/agents/agent-a/context/disable", headers=owner_a,
                            json={"expected_version": 2})
     assert disabled.status_code == 200 and disabled.json()["state"] == "DISABLED"
-    from edge_os_api.agent_context import retrieve_agent_context
-    from edge_os_api.auth import Principal
+    from edge_os_api.agent_context.controls import retrieve_agent_context
+    from edge_os_api.core.authentication import Principal
 
     with client.app.state.session_factory() as session:
         version, entries = retrieve_agent_context(session, Principal(uuid.UUID(owner_id), "test"),
@@ -434,8 +434,8 @@ def test_cross_agent_task_scope_and_foreign_source_links_are_denied(client, owne
     assert foreign_context.status_code == 200
     assert foreign_context.json()["memory_version"] == 0
 
-    from edge_os_api.agent_context import retrieve_agent_context
-    from edge_os_api.auth import Principal
+    from edge_os_api.agent_context.controls import retrieve_agent_context
+    from edge_os_api.core.authentication import Principal
 
     with client.app.state.session_factory() as session, pytest.raises(AppError) as error:
         retrieve_agent_context(session, Principal(uuid.UUID(owner_a_id), "test"), "agent-a", "agent-b")

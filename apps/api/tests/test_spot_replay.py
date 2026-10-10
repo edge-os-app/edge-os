@@ -10,8 +10,9 @@ from typing import Any
 
 import pytest
 
-from edge_os_api import p02, p06
-from edge_os_api.spot_replay import ReplayBucket, ReplayDataset, ReplayError, ReplayInput, run_spot_replay
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.strategies import compiler as strategy_compiler
+from edge_os_api.replay.simulator import ReplayBucket, ReplayDataset, ReplayError, ReplayInput, run_spot_replay
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "spot_replay" / "wc01.json"
 REFERENCE_CASES_PATH = Path(__file__).parent / "fixtures" / "spot_replay" / "p12_reference_cases.json"
@@ -23,7 +24,7 @@ def _moment(value: str) -> datetime:
 
 def _wc01_input() -> tuple[dict[str, Any], ReplayInput, dict[str, Any]]:
     fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-    strategy = copy.deepcopy(p02.FIXTURE_STRATEGY)
+    strategy = copy.deepcopy(record_contract.FIXTURE_STRATEGY)
     strategy["entry"] = {
         "op": "gt",
         "args": [{"op": "price"}, {"op": "constant", "value": "7", "unit": "PRICE"}],
@@ -38,19 +39,19 @@ def _wc01_input() -> tuple[dict[str, Any], ReplayInput, dict[str, Any]]:
     strategy["cost_assumptions"] = {"fee_rate": "0.001", "slippage_rate": "0", "source_ref": "synthetic-wc01"}
     strategy["risk_limits"]["max_quote_notional"] = "400"
     strategy["warmup_buckets"] = 0
-    strategy = p06.build_strategy(
+    strategy = strategy_compiler.build_strategy(
         "synthetic-strategy-wc01-v1",
-        {name: strategy[name] for name in p02.CREATE_STRATEGY_FIELDS if name != "restrictions"},
+        {name: strategy[name] for name in record_contract.CREATE_STRATEGY_FIELDS if name != "restrictions"},
     )
-    p06.validate_strategy(strategy)
+    strategy_compiler.validate_strategy(strategy)
 
-    market_id = p06.market_binding_id(strategy["market"])
+    market_id = strategy_compiler.market_binding_id(strategy["market"])
     fixture["essential_evidence"]["market_binding_id"] = market_id
     buckets = tuple(
         ReplayBucket(
             bucket_end=_moment(bucket["bucket_end"]),
             status=bucket["status"],
-            price=p06.Observation(
+            price=strategy_compiler.Observation(
                 value=bucket["price"],
                 bucket_end=_moment(bucket["bucket_end"]),
                 market_binding_id=market_id,
@@ -58,7 +59,7 @@ def _wc01_input() -> tuple[dict[str, Any], ReplayInput, dict[str, Any]]:
                 available_at=_moment(bucket["available_at"]) if bucket["available_at"] else None,
                 reasons=tuple(bucket.get("reasons", ())),
             ),
-            quote_volume=p06.Observation(
+            quote_volume=strategy_compiler.Observation(
                 value=bucket["quote_volume"],
                 bucket_end=_moment(bucket["bucket_end"]),
                 market_binding_id=market_id,
@@ -97,15 +98,15 @@ def _reference_case(name: str) -> dict[str, Any]:
 
 def _rebuild_strategy(strategy: dict[str, Any], **changes: Any) -> dict[str, Any]:
     strategy_id = changes.pop("strategy_id", strategy["strategy_id"])
-    values = {name: copy.deepcopy(strategy[name]) for name in p02.CREATE_STRATEGY_FIELDS
+    values = {name: copy.deepcopy(strategy[name]) for name in record_contract.CREATE_STRATEGY_FIELDS
               if name != "restrictions"}
     for name, value in changes.items():
         if name != "invalidation" and isinstance(values.get(name), dict) and isinstance(value, dict):
             values[name].update(value)
         else:
             values[name] = value
-    rebuilt = p06.build_strategy(strategy_id, values)
-    p06.validate_strategy(rebuilt)
+    rebuilt = strategy_compiler.build_strategy(strategy_id, values)
+    strategy_compiler.validate_strategy(rebuilt)
     return rebuilt
 
 
@@ -120,7 +121,7 @@ def _scheduled_run(
     availability: tuple[datetime | None, ...] | None = None,
     statuses: tuple[str, ...] | None = None,
 ) -> ReplayInput:
-    market_id = p06.market_binding_id(strategy["market"])
+    market_id = strategy_compiler.market_binding_id(strategy["market"])
     buckets: list[ReplayBucket] = []
     for index, value in enumerate(prices):
         moment = schedule_start + timedelta(minutes=5 * index)
@@ -129,12 +130,12 @@ def _scheduled_run(
         source_reasons = (("EMPTY_BUCKET_NO_CLOSE",) if status == "COMPLETE_EMPTY" else
                           ("COVERAGE_NOT_PROVEN",) if status == "INCOMPLETE" else
                           ("UNQUALIFIED_RECORDS",) if status == "UNQUALIFIED" else ())
-        price = p06.Observation(
+        price = strategy_compiler.Observation(
             value, moment, market_id, status == "COMPLETE_OCCUPIED" or status == "COMPLETE_EMPTY",
             available_at, source_reasons,
         )
         volume_value = "0" if status == "COMPLETE_EMPTY" else "10"
-        volume = p06.Observation(
+        volume = strategy_compiler.Observation(
             volume_value, moment, market_id, status in {"COMPLETE_OCCUPIED", "COMPLETE_EMPTY"},
             available_at, source_reasons,
         )
@@ -279,7 +280,7 @@ def test_spot_replay_preserves_true_or_unknown_and_blocks_only_essential_missing
     result = run_spot_replay(strategy, replay_input)
 
     decision = next(event for event in result.events if event["kind"] == "DECISION")
-    assert decision["entry"]["value"] == p06.Truth.TRUE
+    assert decision["entry"]["value"] == strategy_compiler.Truth.TRUE
     assert decision["entry"]["reasons"] == ("MISSING_QUOTE_VOLUME", "MISSING_QUOTE_VOLUME:0")
     assert decision["entry"]["eligible"] is False
     assert decision["entry"]["eligibility_status"] == "ESSENTIAL_EVIDENCE_UNAVAILABLE"
@@ -437,7 +438,7 @@ def test_price_return_keeps_timing_of_its_two_endpoints_not_an_unused_gap() -> N
     result = run_spot_replay(strategy, replay_input)
 
     decision = next(event for event in result.events if event["kind"] == "DECISION")
-    assert decision["entry"]["value"] == p06.Truth.TRUE
+    assert decision["entry"]["value"] == strategy_compiler.Truth.TRUE
     assert decision["entry"]["reasons"] == ("EMPTY_BUCKET_NO_CLOSE", "MISSING_PRICE:1")
     assert decision["entry"]["eligible"] is True
     assert not any(event["kind"] == "ORDER" and event["at"] == start + timedelta(minutes=10)
@@ -467,7 +468,7 @@ def test_spot_replay_preserves_p06_market_mismatch_and_fails_essential_binding()
     result = run_spot_replay(strategy, replay_input)
 
     decision = next(event for event in result.events if event.get("kind") == "DECISION")
-    assert decision["entry"]["value"] == p06.Truth.UNKNOWN
+    assert decision["entry"]["value"] == strategy_compiler.Truth.UNKNOWN
     assert decision["entry"]["reasons"] == ("MARKET_BINDING_MISMATCH:0",)
     assert decision["entry"]["eligible"] is False
     assert decision["entry"]["eligibility_reasons"] == ("MARKET_BINDING_MISMATCH:0",)
@@ -482,7 +483,7 @@ def test_spot_replay_preserves_p06_schedule_mismatch_and_fails_essential_binding
     result = run_spot_replay(strategy, replay_input)
 
     decision = next(event for event in result.events if event.get("kind") == "DECISION")
-    assert decision["entry"]["value"] == p06.Truth.UNKNOWN
+    assert decision["entry"]["value"] == strategy_compiler.Truth.UNKNOWN
     assert decision["entry"]["reasons"] == ("SCHEDULE_MISMATCH:0",)
     assert decision["entry"]["eligible"] is False
     assert decision["entry"]["eligibility_reasons"] == ("SCHEDULE_MISMATCH:0",)
@@ -659,8 +660,8 @@ def test_spot_replay_requires_the_saved_strategy_warmup_before_window_start() ->
         {"op": "constant", "value": "7", "unit": "PRICE"},
     ]}
     strategy["warmup_buckets"] = 1
-    strategy = p06.build_strategy(strategy["strategy_id"], {
-        name: strategy[name] for name in p02.CREATE_STRATEGY_FIELDS if name != "restrictions"
+    strategy = strategy_compiler.build_strategy(strategy["strategy_id"], {
+        name: strategy[name] for name in record_contract.CREATE_STRATEGY_FIELDS if name != "restrictions"
     })
 
     try:
@@ -691,7 +692,7 @@ def test_spot_replay_rejects_missing_trailing_scheduled_coverage() -> None:
 
 
 def test_wc05_reports_absolute_quote_drawdown_from_independent_samples() -> None:
-    from edge_os_api.spot_replay import calculate_quote_metrics
+    from edge_os_api.replay.simulator import calculate_quote_metrics
 
     values = tuple({"account_value_quote": value, "mark_reasons": ()} for value in (
         Decimal("1000"), Decimal("999.6"), Decimal("1049.6"), Decimal("1020")
@@ -718,10 +719,10 @@ def test_wc13_replays_a_preexisting_single_position_with_current_bucket_settleme
     strategy["sizing"]["amount"] = "50"
     strategy["risk_limits"]["max_quote_notional"] = "50"
     strategy["cost_assumptions"] = {"fee_rate": "0.001", "slippage_rate": "0", "source_ref": "synthetic-wc13"}
-    strategy = p06.build_strategy(strategy["strategy_id"], {
-        name: strategy[name] for name in p02.CREATE_STRATEGY_FIELDS if name != "restrictions"
+    strategy = strategy_compiler.build_strategy(strategy["strategy_id"], {
+        name: strategy[name] for name in record_contract.CREATE_STRATEGY_FIELDS if name != "restrictions"
     })
-    market_id = p06.market_binding_id(strategy["market"])
+    market_id = strategy_compiler.market_binding_id(strategy["market"])
     values = ("8", "11", "4")
     buckets = []
     for index, value in enumerate(values):
@@ -730,7 +731,7 @@ def test_wc13_replays_a_preexisting_single_position_with_current_bucket_settleme
         buckets.append(replace(
             prior,
             bucket_end=moment,
-            price=p06.Observation(value, moment, market_id, True, moment),
+            price=strategy_compiler.Observation(value, moment, market_id, True, moment),
             quote_volume=replace(prior.quote_volume, bucket_end=moment, market_binding_id=market_id, available_at=moment),
         ))
     descriptor = copy.deepcopy(replay_input.essential_evidence)
@@ -830,9 +831,9 @@ def test_wc11_preserves_valid_boolean_invalidation_then_rejects_p12_subset() -> 
         window_end=start + timedelta(minutes=5),
     )
     bucket = replay_input.dataset.buckets[0]
-    context = p06.EvaluationContext((bucket.price,), (bucket.quote_volume,), (start,),
+    context = strategy_compiler.EvaluationContext((bucket.price,), (bucket.quote_volume,), (start,),
                                    replay_input.dataset.market_binding_id, start, 0)
-    invalidation = p06.evaluate_expression(strategy["invalidation"], strategy["market"], context)
+    invalidation = strategy_compiler.evaluate_expression(strategy["invalidation"], strategy["market"], context)
 
     assert invalidation.value == case["invalidation_value"]
     try:
@@ -872,7 +873,7 @@ def test_wc12_matches_ordered_decimal50_fees_slippage_and_rounding_residual() ->
     assert str(sell["fill_price"]) == case["sell_fill"]
     assert str(sell["gross_quote"]) == case["gross_quote"]
     assert str(sell["fee_quote"]) == case["sell_fee_quote"]
-    with localcontext(p06.NUMERIC):
+    with localcontext(strategy_compiler.NUMERIC):
         net = sell["gross_quote"] - sell["fee_quote"]
         residual = trade["gain_loss_quote"] - result.metrics["gain_loss_quote"]
     assert str(net) == case["net_quote"]
@@ -915,15 +916,15 @@ def test_wc14_resolves_moving_offsets_and_keeps_p06_result_separate_from_eligibi
     decisions = [event for event in result.events if event["kind"] == "DECISION"]
 
     assert len(decisions) == 2
-    assert decisions[0]["entry"]["value"] == p06.Truth.TRUE
+    assert decisions[0]["entry"]["value"] == strategy_compiler.Truth.TRUE
     assert list(decisions[0]["entry"]["reasons"]) == case["position_2_reasons"]
     assert decisions[0]["entry"]["eligible"] is True
-    assert decisions[1]["entry"]["value"] == p06.Truth.UNKNOWN
+    assert decisions[1]["entry"]["value"] == strategy_compiler.Truth.UNKNOWN
     assert list(decisions[1]["entry"]["reasons"]) == case["position_3_reasons"]
     assert decisions[1]["entry"]["eligible"] is False
     assert decisions[1]["entry"]["eligibility_status"] == case["position_3_eligibility"]
     assert decisions[1]["exit"]["eligible"] is True
-    assert decisions[1]["exit"]["value"] == p06.Truth.FALSE
+    assert decisions[1]["exit"]["value"] == strategy_compiler.Truth.FALSE
 
 
 def test_wc02_reconciles_shared_reservation_literals_without_runtime_portfolio_support() -> None:
@@ -1043,17 +1044,17 @@ def test_wc07_preserves_late_future_empty_and_incomplete_input_reasons() -> None
         strategy, replay_input, ("110",), schedule_start=start, window_start=start,
         window_end=start + timedelta(minutes=5), availability=(start + timedelta(minutes=2),),
     )
-    late_context = p06.EvaluationContext(
+    late_context = strategy_compiler.EvaluationContext(
         (late_run.dataset.buckets[0].price,), (late_run.dataset.buckets[0].quote_volume,),
         (start,), late_run.dataset.market_binding_id, start, 0,
     )
-    late = p06.evaluate_expression({"op": "price"}, strategy["market"], late_context)
+    late = strategy_compiler.evaluate_expression({"op": "price"}, strategy["market"], late_context)
     assert late.state == case["late_value"]
     assert list(late.reasons) == case["late_reasons"]
 
     misaligned = replace(late_run.dataset.buckets[0].price, bucket_end=start + timedelta(minutes=5))
     future_context = replace(late_context, prices=(misaligned,))
-    future = p06.evaluate_expression({"op": "price"}, strategy["market"], future_context)
+    future = strategy_compiler.evaluate_expression({"op": "price"}, strategy["market"], future_context)
     assert future.state == case["future_schedule_value"]
     assert list(future.reasons) == case["future_schedule_reasons"]
 
@@ -1062,10 +1063,10 @@ def test_wc07_preserves_late_future_empty_and_incomplete_input_reasons() -> None
         window_end=start + timedelta(minutes=5),
     )
     empty_bucket = empty_run.dataset.buckets[0]
-    empty_context = p06.EvaluationContext((empty_bucket.price,), (empty_bucket.quote_volume,),
+    empty_context = strategy_compiler.EvaluationContext((empty_bucket.price,), (empty_bucket.quote_volume,),
                                          (start,), empty_run.dataset.market_binding_id, start, 0)
-    empty_price = p06.evaluate_expression({"op": "price"}, strategy["market"], empty_context)
-    empty_volume = p06.evaluate_expression({"op": "quote_volume"}, strategy["market"], empty_context)
+    empty_price = strategy_compiler.evaluate_expression({"op": "price"}, strategy["market"], empty_context)
+    empty_volume = strategy_compiler.evaluate_expression({"op": "quote_volume"}, strategy["market"], empty_context)
     assert empty_price.state == case["empty_price_value"]
     assert list(empty_price.reasons) == case["empty_price_reasons"]
     assert str(empty_volume.value) == case["empty_quote_volume_value"]

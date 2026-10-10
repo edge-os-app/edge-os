@@ -9,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, DecimalException, localcontext
 from typing import Any, Sequence
 
-from edge_os_api import p02, p06
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.strategies import compiler as strategy_compiler
 
 PROFILE_VERSION = "p12.spot-replay/1"
 ESSENTIAL_VERSION = "p12.essential-evidence/1"
@@ -32,8 +33,8 @@ class ReplayBucket:
 
     bucket_end: datetime
     status: str
-    price: p06.Observation | None
-    quote_volume: p06.Observation | None
+    price: strategy_compiler.Observation | None
+    quote_volume: strategy_compiler.Observation | None
 
 
 @dataclass(frozen=True)
@@ -104,8 +105,8 @@ def _decimal(value: object, path: str, *, positive: bool = False) -> Decimal:
     if not isinstance(value, str):
         raise _invalid("INVALID_REPLAY_NUMBER", path, "Use a canonical decimal string.")
     try:
-        result = p02._checker.canonical_decimal(value)
-    except (p02.Invalid, TypeError) as error:
+        result = record_contract._checker.canonical_decimal(value)
+    except (record_contract.Invalid, TypeError) as error:
         raise _invalid("INVALID_REPLAY_NUMBER", path, str(error)) from None
     if not result.is_finite() or positive and result <= 0:
         raise _invalid("INVALID_REPLAY_NUMBER", path, "The decimal value is outside the supported range.")
@@ -173,8 +174,8 @@ def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int,
     costs = strategy.get("cost_assumptions")
     if not isinstance(costs, dict) or not isinstance(costs.get("source_ref"), str) or not costs["source_ref"]:
         raise _invalid("UNSUPPORTED_COST_ASSUMPTIONS", "/strategy/cost_assumptions/source_ref", "Retain a saved cost source.")
-    p06.validate_strategy(strategy)
-    if p02._checker.canonical_decimal(strategy["cost_assumptions"]["slippage_rate"]) == 1:
+    strategy_compiler.validate_strategy(strategy)
+    if record_contract._checker.canonical_decimal(strategy["cost_assumptions"]["slippage_rate"]) == 1:
         raise _invalid("UNSUPPORTED_COST_ASSUMPTIONS", "/strategy/cost_assumptions/slippage_rate",
                        "The saved slippage makes a sell fill non-positive.")
     if not run.strategy_revision_id or not run.run_configuration_id or not run.dataset.revision_id:
@@ -185,7 +186,7 @@ def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int,
         raise _invalid("UNSUPPORTED_INVALIDATION", "/strategy/invalidation", "Boolean invalidation is outside P12/1.")
     if run.dataset.qualification != "QUALIFIED" or run.dataset.coverage_complete is not True:
         raise _invalid("DATASET_COVERAGE_UNPROVEN", "/dataset", "P12/1 requires a qualified dataset and proven interval coverage.")
-    if not run.dataset.market_binding_id or run.dataset.market_binding_id != p06.market_binding_id(strategy["market"]):
+    if not run.dataset.market_binding_id or run.dataset.market_binding_id != strategy_compiler.market_binding_id(strategy["market"]):
         raise _invalid("MARKET_BINDING_MISMATCH", "/dataset/market_binding_id", "The dataset must match the saved market binding.")
     _utc(run.window_start, "/window_start")
     _utc(run.window_end, "/window_end")
@@ -246,7 +247,7 @@ def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int,
     return run.dataset.market_binding_id, start_index, decision_indices[-1], _validate_descriptor(strategy, run, run.dataset.market_binding_id)
 
 
-def _observation_for(bucket: ReplayBucket, series: str) -> p06.Observation | None:
+def _observation_for(bucket: ReplayBucket, series: str) -> strategy_compiler.Observation | None:
     return bucket.price if series == "price" else bucket.quote_volume
 
 
@@ -370,7 +371,7 @@ def _account_mark(bucket: ReplayBucket, moment: datetime, market_id: str, positi
 def _fingerprint(strategy: dict[str, Any], run: ReplayInput) -> str:
     input_record = {
         "profile_version": PROFILE_VERSION,
-        "strategy_sha256": p02.sha256_hex(strategy),
+        "strategy_sha256": record_contract.sha256_hex(strategy),
         "strategy_revision_id": run.strategy_revision_id,
         "run_configuration_id": run.run_configuration_id,
         "dataset_revision_id": run.dataset.revision_id,
@@ -378,15 +379,15 @@ def _fingerprint(strategy: dict[str, Any], run: ReplayInput) -> str:
         "coverage_complete": run.dataset.coverage_complete,
         "evidence_class": run.dataset.evidence_class,
         "market_binding_id": run.dataset.market_binding_id,
-        "window_start": p02.utc_string(run.window_start),
-        "window_end": p02.utc_string(run.window_end),
+        "window_start": record_contract.utc_string(run.window_start),
+        "window_end": record_contract.utc_string(run.window_end),
         "initial_cash_quote": run.initial_cash_quote,
         "initial_base_amount": run.initial_base_amount,
         "initial_basis_quote": run.initial_basis_quote,
         "essential_evidence": run.essential_evidence,
         "buckets": [
             {
-                "bucket_end": p02.utc_string(bucket.bucket_end),
+                "bucket_end": record_contract.utc_string(bucket.bucket_end),
                 "status": bucket.status,
                 "price": _observation_payload(bucket.price),
                 "quote_volume": _observation_payload(bucket.quote_volume),
@@ -394,18 +395,18 @@ def _fingerprint(strategy: dict[str, Any], run: ReplayInput) -> str:
             for bucket in run.dataset.buckets
         ],
     }
-    return hashlib.sha256(p02.canonical_bytes(input_record)).hexdigest()
+    return hashlib.sha256(record_contract.canonical_bytes(input_record)).hexdigest()
 
 
-def _observation_payload(observation: p06.Observation | None) -> dict[str, Any] | None:
+def _observation_payload(observation: strategy_compiler.Observation | None) -> dict[str, Any] | None:
     if observation is None:
         return None
     return {
         "value": str(observation.value) if observation.value is not None else None,
-        "bucket_end": p02.utc_string(observation.bucket_end),
+        "bucket_end": record_contract.utc_string(observation.bucket_end),
         "market_binding_id": observation.market_binding_id,
         "qualified": observation.qualified,
-        "available_at": p02.utc_string(observation.available_at) if observation.available_at else None,
+        "available_at": record_contract.utc_string(observation.available_at) if observation.available_at else None,
         "reasons": list(observation.reasons),
     }
 
@@ -421,7 +422,7 @@ def calculate_quote_metrics(
     high_water: Decimal | None = None
     largest_drawdown = Decimal(0)
     if complete_samples:
-        with localcontext(p06.NUMERIC):
+        with localcontext(strategy_compiler.NUMERIC):
             for value in values:
                 assert isinstance(value, Decimal)
                 high_water = value if high_water is None else max(high_water, value)
@@ -433,7 +434,7 @@ def calculate_quote_metrics(
     ))
     gain_reasons = () if gain_available else unavailable_reasons
     drawdown_reasons = () if complete_samples else unavailable_reasons
-    with localcontext(p06.NUMERIC):
+    with localcontext(strategy_compiler.NUMERIC):
         gain_loss = final_value - initial_capital_quote if gain_available else None
     values_by_metric: dict[str, Decimal | int | None] = {
         "gain_loss_quote": gain_loss,
@@ -496,7 +497,7 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                 reservation_quote = Decimal(0)
                 reservation_base = Decimal(0)
             elif pending.side == "BUY":
-                with localcontext(p06.NUMERIC):
+                with localcontext(strategy_compiler.NUMERIC):
                     fill_price = mark * (Decimal(1) + slippage_rate)
                     if fill_price <= 0:
                         raise _invalid("NON_POSITIVE_FILL", "/strategy/cost_assumptions/slippage_rate", "The saved cost produces a non-positive buy fill.")
@@ -510,7 +511,7 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                                "base_amount": acquired, "quote_notional": quote_size, "fee_quote": fee,
                                "cash_quote": cash, "base_balance": base})
             else:
-                with localcontext(p06.NUMERIC):
+                with localcontext(strategy_compiler.NUMERIC):
                     fill_price = mark * (Decimal(1) - slippage_rate)
                     if fill_price <= 0:
                         raise _invalid("NON_POSITIVE_FILL", "/strategy/cost_assumptions/slippage_rate", "The saved cost produces a non-positive sell fill.")
@@ -536,7 +537,7 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
             pending = None
 
         mark, mark_reasons = _account_mark(bucket, moment, market_id, index)
-        with localcontext(p06.NUMERIC):
+        with localcontext(strategy_compiler.NUMERIC):
             account_value: Decimal | None = cash + base * mark if mark is not None else None
         samples.append({"at": moment, "cash_quote": cash, "base_amount": base,
                         "reserved_quote": reservation_quote, "reserved_base": reservation_base,
@@ -545,9 +546,9 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                         "mark_reasons": mark_reasons if mark is None else ()})
         if index == first_index and account_value is not None:
             initial_capital = account_value
-        context = p06.EvaluationContext(prices, volumes, schedule, market_id, moment, index)
-        entry = p06.evaluate_expression(strategy["entry"], strategy["market"], context)
-        exit_result = p06.evaluate_expression(strategy["exit"], strategy["market"], context)
+        context = strategy_compiler.EvaluationContext(prices, volumes, schedule, market_id, moment, index)
+        entry = strategy_compiler.evaluate_expression(strategy["entry"], strategy["market"], context)
+        exit_result = strategy_compiler.evaluate_expression(strategy["exit"], strategy["market"], context)
         entry_reasons = _essential_reasons(essential["entry"], index, moment, run)
         exit_reasons = _essential_reasons(essential["exit"], index, moment, run)
         entry_timing = _mandatory_timing_reasons(strategy["entry"], index, moment, run)
@@ -571,7 +572,7 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
         if pending is not None:
             continue
         if base > 0:
-            if exit_eligible and exit_result.value == p06.Truth.TRUE:
+            if exit_eligible and exit_result.value == strategy_compiler.Truth.TRUE:
                 if index + 1 > last_index:
                     events.append({"kind": "ORDER", "at": moment, "status": "NO_NEXT_BUCKET", "side": "SELL"})
                     continue
@@ -581,11 +582,11 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                 events.append({"kind": "ORDER", "at": moment, "status": "RESERVED", "side": "SELL",
                                "reserved_base": base, "fill_at": schedule[index + 1]})
             continue
-        if entry_eligible and entry.value == p06.Truth.TRUE:
+        if entry_eligible and entry.value == strategy_compiler.Truth.TRUE:
             if index + 1 > last_index:
                 events.append({"kind": "ORDER", "at": moment, "status": "NO_NEXT_BUCKET", "side": "BUY"})
                 continue
-            with localcontext(p06.NUMERIC):
+            with localcontext(strategy_compiler.NUMERIC):
                 required_cash = quote_size + quote_size * fee_rate
             if required_cash > cash:
                 events.append({"kind": "ORDER", "at": moment, "status": "INSUFFICIENT_CASH",

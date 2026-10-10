@@ -18,8 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DataError, SQLAlchemyError
 
-from .errors import auth_error, service_unavailable
-from .models import User
+from edge_os_api.core.errors import auth_error, service_unavailable
+from edge_os_api.records.models import User
 
 log = logging.getLogger("edge_os.auth")
 
