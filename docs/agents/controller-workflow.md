@@ -78,7 +78,7 @@ After submission, await an incoming Smux message. Do not poll panes, branches or
 Task authority: <explicit allowed operations/budgets>. No main merge or unrelated external action.
 ```
 
-The controller schedules and integrates. The worker implements and commits. Reviewers remain read-only. The builder retains acceptance and main-branch merge control. A controller cannot supply the independent approval for its own change.
+Follow [current team ownership](../EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership). The controller schedules work and checks the exact candidate, original review pair, separate gate and required evidence. It handles technical acceptance and serial local integration of already authorized tickets. The worker implements and commits. Reviewers remain read-only. The builder retains product decisions, publication and main-merge authorization. The controller may execute a specifically authorized main merge. A controller cannot supply the independent approval for its own change.
 
 1. The worker produces a clean candidate commit and records checks and limits.
 2. Pause the worker while reviewers inspect its worktree. Alternatively use a separate read-only checkout of the exact commit.
@@ -87,7 +87,7 @@ The controller schedules and integrates. The worker implements and commits. Revi
 5. Keep their initial findings hidden from each other. Use General Review Protocol for evidenced defects and task-relevant domain checks.
 6. Return verified blockers to the worker in one batch. A fix requires a replacement commit and both reviewers' assessment of the changed behavior and affected invariants.
 7. Record each verdict with the exact candidate SHA. An earlier PASS never approves later edits.
-8. Send the internally reviewed candidate to the separate Codex gate. Record its independent verdict against that same candidate. The builder accepts and merges under the manual policy.
+8. Send the internally reviewed candidate to the separate Codex gate. Record its independent verdict against that same candidate. The controller checks the required evidence before technical acceptance and serial local integration under recorded authority. Publication and merging to main require builder authorization under the manual policy.
 
 Internal repair and review rounds have no numeric cap. Repeat in-scope repairs and two independent original reviews until both PASS on the same exact candidate. Preserve each round's reports and candidate identity. Ordinary findings stay in this worker loop.
 
