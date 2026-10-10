@@ -140,7 +140,12 @@ class RecordPublicationCheck:
         """
         request = len(record_contract.canonical_bytes(intake["original_request"]))
         answer = len(record_contract.canonical_bytes([dict(item) for item in parsed.field_evidence]))
-        return _rejection() if request + answer + DRAFT_OVERHEAD_BYTES > MAX_RECORD_BYTES else None
+        # a chosen option moves its value into the evidence, and so into the strategy: count every offered value
+        options = len(record_contract.canonical_bytes(questions_to_json(parsed.questions)))
+        if request + answer + options + DRAFT_OVERHEAD_BYTES > MAX_RECORD_BYTES:
+            return Rejection(UNPUBLISHABLE, "", "The request is long, so the answer could not be saved with room to use it. "
+                                                "A shorter request leaves more room.")
+        return None
 
     @staticmethod
     def _offered(parsed: ParsedInterpretation) -> Rejection | None:

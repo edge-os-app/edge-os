@@ -886,7 +886,7 @@ def test_the_room_for_an_answer_depends_on_what_the_request_costs_in_the_record_
         make_client, owner_a, pad: str, length: int, copies: int, expected: str) -> None:
     """A control character costs six bytes in the canonical record, so the character count says too little."""
     from edge_os_api.research.interpretation_attempts import Usage
-    good = json.loads(thesis_with_sizing({"note": ""}))
+    good = json.loads(json.dumps(case("concrete-thesis")["provider"]["model_response"]))
     entry = next(i for i in good["field_evidence"] if i["field_name"] == "entry")
     entry["value"] = and_tree(entry["value"], copies)
     client = make_client(CaseRunner(reply(case("concrete-thesis")["provider"]["model_response"],
@@ -902,7 +902,7 @@ def test_the_room_for_an_answer_depends_on_what_the_request_costs_in_the_record_
     assert bundle["attempts"][0]["parse_result"] == expected
     if expected == "ACCEPTED":
         adopted = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
-        assert adopted.status_code == 201, adopted.text  # the compiler may still judge the odd rule; the save must not fail
+        assert adopted.status_code == 201 and adopted.json()["head"]["outcome"] == "COMPILED", adopted.text
 
 
 def test_a_contract_refusal_that_is_not_about_size_is_not_called_a_size_problem(make_client, owner_a, monkeypatch) -> None:
@@ -918,3 +918,39 @@ def test_a_contract_refusal_that_is_not_about_size_is_not_called_a_size_problem(
     response = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
 
     assert "record_too_large" not in response.text
+
+
+def swollen_option_response(copies: int) -> str:
+    """A rough-hunch answer whose offered option values are large: a chosen option moves its value into the strategy."""
+    good = json.loads(json.dumps(case("rough-hunch")["provider"]["model_response"]))
+    for question in good["questions"]:
+        for option in question["options"]:
+            if isinstance(option["value"], dict) and "op" in option["value"]:
+                option["value"] = and_tree(option["value"], copies)
+    return json.dumps(good)
+
+
+@pytest.mark.parametrize("copies", [16, 32])
+def test_large_offered_options_beside_a_costly_request_are_refused_or_the_whole_chain_adopts(
+        make_client, owner_a, copies: int) -> None:
+    from edge_os_api.research.interpretation_attempts import Usage
+    client = make_client(CaseRunner(reply(case("rough-hunch")["provider"]["model_response"],
+                                          usage=Usage(1500, 400, 1900, "PROVIDER_REPORTED"),
+                                          text=swollen_option_response(copies))))
+    body = intake_body("rough-hunch")
+    body["original_request"] += " " + "\u0001" * (9_500 - len(body["original_request"]) - 1)
+
+    created = client.post("/v1/research/requests", json=body, headers=owner_a)
+
+    assert created.status_code == 201, created.text
+    bundle = created.json()
+    if bundle["attempts"][0]["parse_result"] != "ACCEPTED":
+        assert bundle["attempts"][0]["parse_result"] == "REJECTED:unpublishable_response"
+        return
+    for question_id in ("choose-entry", "choose-exit"):
+        question = next(q for q in bundle["head"]["questions"] if q["question_id"] == question_id)
+        chosen = answer(client, owner_a, bundle, question_id, choice_id=question["options"][0]["id"])
+        assert chosen.status_code == 201, chosen.text
+        bundle = chosen.json()
+    adopted = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
+    assert adopted.status_code == 201, adopted.text
