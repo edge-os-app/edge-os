@@ -16,6 +16,8 @@ Start with [contributor-workflow.md](contributor-workflow.md). A contributor use
 
 Record one return transport in the assignment. For a contributor without panes, use the assigned PR and original report attachments/files, with a controller-arranged separate gate. Substitute these destinations for pane fields and mark pane activation/Smux checks inapplicable. A native batch uses native returns; a Smux lane uses checked delivery. Do not silently switch an active assignment. These substitutions change transport, not accepted scope, review independence, exact-commit approval or authority.
 
+The [dated P14 numerical assignment](../team/QUANT_CONTRIBUTOR_BRIEF.md#start-with-p14) permits the contributor to branch from latest main and record the actual base SHA himself. It permits proposed profile choices, independent calculations, code and tests in one bounded PR. No preliminary proposal return, controller-created checkout or separate profile approval is required for that PR development. Adopted defaults and saved-run compatibility remain intact. Shared wiring needs a later lease. Runtime adoption, full-ticket acceptance and main merge remain separate. Other tickets and active lanes retain their recorded procedure.
+
 ## Before dispatch
 
 Use the [team handoff](../CONTROLLER_HANDOFF.md), accepted specification revision, linked ADRs and assigned GitHub issue. The private workspace maintains the live lane ledger. Required inputs must also exist in the teammate's checkout or issue.

@@ -1,14 +1,14 @@
 # Contributor workflow
 
-Updated 2026-10-10. This guide makes the existing process usable from your own clone. [Controller workflow](controller-workflow.md) controls review, repairs, evidence and integration; [current ownership](../EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) controls responsibilities. This guide assigns no ticket.
+Updated 2026-10-10. This guide makes the existing process usable from your own clone. [Controller workflow](controller-workflow.md) controls review, repairs, evidence and integration; [current ownership](../EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) controls responsibilities. The [brief's dated P14 assignment](../team/QUANT_CONTRIBUTOR_BRIEF.md#start-with-p14) authorizes independent numerical PR development. Other tickets need their own assignment.
 
 ## Start from your clone
 
 1. Read [AGENTS.md](../../AGENTS.md), the [README](../../README.md), [team handoff](../CONTROLLER_HANDOFF.md) and your assigned issue. Quant contributors also read the [brief](../team/QUANT_CONTRIBUTOR_BRIEF.md).
 2. Use the README's locked toolchains and setup/verification commands. Read the relevant contracts, accepted profiles, numerical examples and tests before proposing behavior. Private courses, controller reports and the builder's machine are not required inputs.
-3. For the proposed P14 work, return a profile outline and one independently calculated accounting trace first. Do not change application code until the profile is accepted and the controller supplies an implementation packet.
-4. Before implementation, obtain the exact accepted base SHA, task branch, clone/worktree path, owned files, forbidden/shared files, acceptance checks, review route and return destination. Verify the actual path, branch and HEAD before editing. One writer owns each checkout.
-5. Select one [execution profile](execution-workflows.md), or record contributor PR/report transport under [portable contributor use](controller-workflow.md#portable-contributor-use). Model names, subscriptions and tmux are not prerequisites for the initial proposal. An implementation assignment still needs an available, explicitly selected review route.
+3. For the authorized P14 numerical PR, develop the proposed profile, independent accounting traces, code and tests together. Follow the brief's exact owned scope and retained limits. No separate preimplementation proposal or profile approval is required. Proposed extension choices remain unadopted runtime behavior.
+4. Create your own task branch from latest main in your clone or isolated checkout. Record the actual base SHA, branch and checkout in the PR/report. Check the path, branch, HEAD and clean state before editing. Keep one writer per checkout. For other assignments, obtain the controller's exact base and ownership packet first.
+5. Record contributor PR/report transport under [portable contributor use](controller-workflow.md#portable-contributor-use), or select an authorized [execution profile](execution-workflows.md). Record owned/shared files, checks and the return destination before edits. Record an available independent review route before review begins. An early draft PR is optional. Model names, subscriptions and tmux are not prerequisites for independent PR development.
 
 The builder handles the hackathon release candidate. Your assigned wider-product work must remain outside its active leases and must not become a release dependency without an accepted scope change.
 
@@ -30,7 +30,7 @@ Missing skills must be reported before work relies on them. The controller suppl
 
 ## Ticket sequence
 
-1. Implement only the accepted assignment, with focused tests after meaningful changes. Use responsibility-based filenames and functions. An outside-scope upstream defect is reproduced and proposed to the controller before editing; [the defect procedure](controller-workflow.md#upstream-defects-found-downstream) also applies to already integrated code.
+1. Implement only the authorized assignment, with focused tests after meaningful changes. P14 may develop proposed numerical extension semantics in its bounded PR while preserving adopted defaults and saved runs. Pause only the affected part for missing requirements or accepted-contract conflicts. Continue unrelated safe work. Use responsibility-based filenames and functions. An outside-scope upstream defect is reproduced and proposed to the controller before editing; [the defect procedure](controller-workflow.md#upstream-defects-found-downstream) also applies to already integrated code.
 2. Commit a clean candidate and run the complete task-required submission checks on that exact candidate. Preserve commands, results, configuration/input identities and limitations. Keep secrets and private logs out of source control.
 3. Obtain the two original independent internal assessments on that candidate. A checks specification/correctness; B checks standards/maintainability and adversarial failure paths. Neither sees the other's initial findings. Repair verified blockers and repeat both reviews until both PASS before the first gate verdict. Internal rounds have no numeric cap.
 4. Send the exact candidate, original reports and evidence to the assigned independent gate. It retains the ticket's history and has at most three verdicts. Later repairs follow [gate-stage repair review](controller-workflow.md#gate-stage-repair-review); baseline PASS reports never approve later commits.
@@ -40,7 +40,7 @@ For PR/report transport, use the assigned PR or issue for the return and provide
 
 ## Reusable prompts
 
-Fill these templates from the accepted assignment; they are field checklists, not permission to start:
+Fill these templates from the authorized assignment. For the independent P14 numerical PR, record your own actual base and checkout. Templates are field checklists, not extra preliminary approval gates:
 
 - [Worker activation packet](controller-workflow.md#worker-activation-packet).
 - [Internal reviewer A/B packet](templates/internal-review.md).

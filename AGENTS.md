@@ -16,6 +16,8 @@ If a linked worktree lacks a referenced document or needs newer context, first u
 
 The builder owns product decisions, prototypes and the hackathon release candidate. The quant contributor may implement separately assigned, accepted quantitative/backend work outside that release. The former frontend/tokenization teammate split is superseded; see [current ownership](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership). Start with [the contributor workflow](docs/agents/contributor-workflow.md).
 
+The [dated P14 numerical assignment](docs/team/QUANT_CONTRIBUTOR_BRIEF.md#start-with-p14) permits independent PR development of proposed extension semantics and tests. Follow its bounded ownership and record your own base from latest main. This exception removes preliminary proposal/profile waits, while preserving adoption, shared leases, reviews and merge control. Other tickets still require their own assignment.
+
 Follow [evidence-first task context](docs/agents/controller-workflow.md#evidence-first-task-context) before material decisions or missing-context escalation. Read the packet's named prior research. Preserve source limits and distinguish accepted requirements from drafts, inferences and routine implementation choices.
 
 The Hackathon Winning Compass controls the project through `docs/EDGE_OS_COMPASS_WORKFLOW.md`. The retired Idea Funnel does not control current work.
