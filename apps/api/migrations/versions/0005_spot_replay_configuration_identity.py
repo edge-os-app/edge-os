@@ -169,6 +169,9 @@ def upgrade() -> None:
                 or not isinstance(inputs.get("strategy"), dict)
                 or inputs["strategy"].get("strategy_id") != row_strategy_id):
             raise RuntimeError("cannot bind P13 configuration IDs: a saved replay identity is malformed")
+        if (inputs.get("dataset_fixture_id") != "p13.wc01/1"
+                or content.get("dataset_fixture_id") != "p13.wc01/1"):
+            raise RuntimeError("cannot bind P13 configuration IDs: a saved replay uses an unsupported dataset fixture")
         if (row["saved_revision_id"] is None
                 or row["saved_revision_id"] != row["strategy_revision_id"]
                 or row["saved_revision_owner_id"] != row["owner_id"]

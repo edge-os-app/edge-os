@@ -594,13 +594,22 @@ def _assert_legacy_revision_boundary_refused(client, owner_a, pg, malformation: 
             content = copy.deepcopy(replay["content"])
             if malformation == "unsupported-profile":
                 content["inputs"]["profile_version"] = "p12.spot-replay/999"
+            elif malformation == "unsupported-fixture":
+                content["inputs"]["dataset_fixture_id"] = "unsupported-fixture/999"
+                content["dataset_fixture_id"] = "unsupported-fixture/999"
+            elif malformation == "unsupported-input-fixture-copy":
+                content["inputs"]["dataset_fixture_id"] = "unsupported-fixture/999"
+            elif malformation == "unsupported-content-fixture-copy":
+                content["dataset_fixture_id"] = "unsupported-fixture/999"
             elif malformation == "revision-strategy-mismatch":
                 content["inputs"]["strategy"]["cost_assumptions"]["fee_rate"] = "0"
                 content["inputs"]["strategy_sha256"] = p02.sha256_hex(content["inputs"]["strategy"])
             elif malformation not in {
                     "revision-content-hash", "revision-manifest-hash", "revision-duplicate-key"}:
                 raise AssertionError(f"unknown R9 migration fixture: {malformation}")
-            if malformation in {"unsupported-profile", "revision-strategy-mismatch"}:
+            if malformation in {
+                    "unsupported-profile", "unsupported-fixture", "unsupported-input-fixture-copy",
+                    "unsupported-content-fixture-copy", "revision-strategy-mismatch"}:
                 connection.execute(text(
                     "UPDATE spot_replay_runs SET content = CAST(:content AS jsonb), content_sha256 = :hash "
                     "WHERE replay_id = :replay_id"), {
@@ -674,6 +683,9 @@ def _assert_legacy_revision_boundary_refused(client, owner_a, pg, malformation: 
         assert upgraded.returncode != 0, f"migration admitted {malformation} legacy history"
         obstruction = {
             "unsupported-profile": "unsupported P12 profile version",
+            "unsupported-fixture": "unsupported dataset fixture",
+            "unsupported-input-fixture-copy": "a saved replay identity is malformed",
+            "unsupported-content-fixture-copy": "a saved replay identity is malformed",
             "revision-strategy-mismatch": "differs from its immutable revision",
             "revision-content-hash": "failed integrity validation",
             "revision-manifest-hash": "failed integrity validation",
@@ -692,6 +704,15 @@ def _assert_legacy_revision_boundary_refused(client, owner_a, pg, malformation: 
 
 def test_migration_refuses_unsupported_legacy_profile_version(client, owner_a, pg):
     _assert_legacy_revision_boundary_refused(client, owner_a, pg, "unsupported-profile")
+
+
+def test_migration_refuses_self_consistent_unsupported_legacy_fixture(client, owner_a, pg):
+    _assert_legacy_revision_boundary_refused(client, owner_a, pg, "unsupported-fixture")
+
+
+@pytest.mark.parametrize("malformation", ["unsupported-input-fixture-copy", "unsupported-content-fixture-copy"])
+def test_migration_refuses_mismatched_saved_fixture_copies(client, owner_a, pg, malformation):
+    _assert_legacy_revision_boundary_refused(client, owner_a, pg, malformation)
 
 
 def test_migration_refuses_hash_consistent_strategy_different_from_saved_revision(client, owner_a, pg):
