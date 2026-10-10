@@ -22,6 +22,10 @@ Historical setup record, 2026-10-02 scoped-probe amendment: proposed separate re
 
 Build-handoff consolidation, 2026-10-05: the [first-release brief](../../EDGE_OS_BUILD_BRIEF.md) explains build order and component responsibilities. This specification owns accepted behavior. Later accepted decisions supersede the original idea/synthesis's compulsory validation-to-live sequence and former shared-wallet direction. The wider research, backtesting, execution and LP commitments remain visible. The current synthesis adds no profitable result, provider guarantee or new financial approval.
 
+## Accepted hackathon release subset, 2026-10-10
+
+The builder approved the [release-cut record](../../planning/EDGE_OS_RELEASE_CUT_2026-10-10.md). That record controls this submission's deliverables, staged dependencies and deferrals. The wider specification remains the product direction. All safety requirements applicable to an included operation remain binding. A controlled qualification fixture does not enable general entries, continuing operation, exits or withdrawal. Missing qualification remains unresolved.
+
 ## Problem Statement
 
 A Monad trader can recognize a possible pattern without knowing how to investigate it. Moving between charts, social feeds, notebooks and trading tools loses the original question, contrary evidence and trading restrictions. A generated rule can look precise while changing the user's meaning. A historical gain can hide missing costs, repeated trials or information unavailable at the decision time.

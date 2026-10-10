@@ -4,6 +4,8 @@ An edge-generation and alpha research system for onchain traders and liquidity p
 
 Current build, 10 October 2026: saved Research, descriptive comparisons, spot replay and account views work with labelled fixtures. Live trading is not available. See [current status](#current-status) for implemented scope and qualification limits.
 
+The approved [hackathon release cut](docs/planning/EDGE_OS_RELEASE_CUT_2026-10-10.md) targets a connected Research-to-controlled-Kuru-action demonstration. Its live portion is not yet qualified. LP expansion and general ongoing trading remain outside this submission subset.
+
 Edge OS generates market hypotheses, investigates their mechanisms, and turns supported, sufficiently clear trading instructions into inspectable strategy rules. It preserves the evidence, shows uncertainty and separates research findings from permission to trade.
 
 A trading idea can sound convincing while leaving the important questions unanswered. What causes the opportunity? When should a position open or close? What would disprove the thesis? Does the result survive realistic costs, or only look attractive in a backtest?
