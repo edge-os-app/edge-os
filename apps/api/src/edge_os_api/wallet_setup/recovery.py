@@ -17,12 +17,23 @@ from edge_os_api.wallet_setup.provider import WalletCreationPort, WalletEvidence
 from edge_os_api.wallet_setup.types import (EVM_CHAIN_TYPE, SetupEventType, SetupReason, SetupRecord, SetupState)
 
 
+def evidence_is_wellformed(evidence: WalletEvidence) -> bool:
+    """Runtime field validation for provider data. A dataclass annotation does not validate a value.
+
+    It rejects a malformed field before any JSON write or binding, so an invalid result cannot fail the
+    retained-event write and leave the setup `PENDING` without a reason.
+    """
+    return (isinstance(evidence.wallet_id, str) and bool(evidence.wallet_id)
+            and isinstance(evidence.owner_id, uuid.UUID)
+            and isinstance(evidence.chain_type, str) and bool(evidence.chain_type)
+            and isinstance(evidence.address, str) and bool(evidence.address))
+
+
 def evidence_matches_identity(row: WalletSetupRow, evidence: WalletEvidence) -> bool:
     """An exact, owner-bound, Ethereum, addressed wallet record. Network stays an application binding."""
-    return (isinstance(evidence.wallet_id, str) and bool(evidence.wallet_id)
+    return (evidence_is_wellformed(evidence)
             and evidence.owner_id == row.owner_id
-            and evidence.chain_type == EVM_CHAIN_TYPE
-            and isinstance(evidence.address, str) and bool(evidence.address))
+            and evidence.chain_type == EVM_CHAIN_TYPE)
 
 
 def verify_wallet_evidence(row: WalletSetupRow, returned: WalletEvidence, looked_up: WalletEvidence) -> bool:
@@ -41,7 +52,7 @@ def lookup_wallet_evidence(provider: WalletCreationPort, wallet_id: str) -> Wall
         return None
     except Exception:  # noqa: BLE001 - an authored fake may fail in unknown ways; uncertainty is safe
         return None
-    return result if isinstance(result, WalletEvidence) else None
+    return result if isinstance(result, WalletEvidence) and evidence_is_wellformed(result) else None
 
 
 def _retained_evidence(content: dict[str, Any]) -> WalletEvidence | None:

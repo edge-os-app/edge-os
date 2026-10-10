@@ -87,8 +87,11 @@ provider idempotency. The package therefore:
 - reconciles a retained exact late result after a restart only when the current lookup is identical
   to the retained result in wallet ID, owner, chain type and address. A changed address stays
   `UNKNOWN` with `RECONCILE_WRONG_IDENTITY`, so recovery never weakens the initial check.
-- validates provider results before reading their fields, so a malformed fixture result records
-  `UNKNOWN` with a sanitized reason (`MALFORMED_RESULT` or `RECONCILE_NO_MATCH`) instead of failing.
+- validates the runtime fields of a provider result before writing any event or binding, so a
+  malformed result — a wrong type, or a malformed field inside a valid-looking `WalletEvidence` —
+  records `UNKNOWN` with a sanitized reason (`MALFORMED_RESULT` or `RECONCILE_NO_MATCH`) instead of
+  failing with a `500` or leaving the setup `PENDING` without a reason. A dataclass annotation does
+  not validate a value.
 
 The requested network stays an application binding. Provider evidence carries a chain type and
 address only, because an Ethereum provider wallet is not inherently bound to one chain ID. No

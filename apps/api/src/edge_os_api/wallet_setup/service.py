@@ -21,7 +21,8 @@ from edge_os_api.records.models import StrategyRevision
 from edge_os_api.wallet_setup.persistence import (WalletSetupRow, bind_wallet, conflicting_binding, insert_event,
                                                   load_setup, mark_unknown, record_denial, to_record, utcnow)
 from edge_os_api.wallet_setup.provider import CreationRequest, WalletCreationPort, WalletEvidence, WalletProviderUnavailable
-from edge_os_api.wallet_setup.recovery import lookup_wallet_evidence, reconcile, verify_wallet_evidence
+from edge_os_api.wallet_setup.recovery import (evidence_is_wellformed, lookup_wallet_evidence, reconcile,
+                                               verify_wallet_evidence)
 from edge_os_api.wallet_setup.types import (ACCEPTED_NETWORK_IDS, CancellationIntent, SetupEventType, SetupReason,
                                             SetupRecord, SetupState)
 
@@ -144,10 +145,8 @@ def _create_after_intent(session: Any, principal: Principal, row: WalletSetupRow
         return mark_unknown(session, row, SetupReason.PROVIDER_ERROR.value)
     if returned is None:
         return mark_unknown(session, row, SetupReason.RESPONSE_LOST.value)
-    if not isinstance(returned, WalletEvidence):
+    if not isinstance(returned, WalletEvidence) or not evidence_is_wellformed(returned):
         return mark_unknown(session, row, SetupReason.MALFORMED_RESULT.value)
-    if not returned.wallet_id:
-        return mark_unknown(session, row, SetupReason.RESPONSE_LOST.value)
     insert_event(session, row, SetupEventType.RESULT_RETURNED,
                  {"wallet_id": returned.wallet_id, **_evidence_dict(returned)})
     session.commit()

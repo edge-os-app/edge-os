@@ -1,9 +1,11 @@
-"""Gate repair regressions G1-G4.
+"""Gate repair regressions G1-G4 and G6.
 
 G1: resume must validate the retained result against the current lookup with the same identity rules.
 G2: a concurrent valid prepare must return the same setup, not an uncaught uniqueness failure.
 G3: malformed creation or lookup results must become durable UNKNOWN, never a 500.
 G4: the mutation seams must reject spoofed or changed identity assertions before any mutation or call.
+G6: a malformed field inside a WalletEvidence result must be rejected before the event write and
+never leave the setup PENDING without a reason or trigger a second creation.
 """
 
 from __future__ import annotations
@@ -93,6 +95,36 @@ def test_malformed_creation_becomes_unknown(wallet_client, owner_a, provider, pg
     assert len(provider.created) == 1
     assert pg.psql("select count(*) from wallet_setup_events where event_type = 'DISPATCH_INTENT'") == "1"
     assert pg.psql("select wallet_id is null from wallet_setups where agent_id = 'agent-malformed-create'") == "t"
+
+
+def test_malformed_evidence_field_becomes_unknown_and_never_recreates(wallet_client, owner_a, provider, pg):
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    owner_id = uuid.UUID(helpers.owner_user_id(wallet_client, owner_a))
+    provider.create_result = WalletEvidence(wallet_id="gate-malformed-fields", owner_id=owner_id,
+                                            chain_type="ethereum", address=object())
+    assert _prepare(wallet_client, owner_a, "agent-malformed-field", strategy_id, revision_id).status_code == 200
+    body = _dispatch(wallet_client, owner_a, "agent-malformed-field").json()
+    assert body["state"] == "UNKNOWN" and body["reason"] == "MALFORMED_RESULT"
+    assert len(provider.created) == 1
+    assert pg.psql("select count(*) from wallet_setup_events where event_type = 'DISPATCH_INTENT'") == "1"
+    assert pg.psql("select count(*) from wallet_setup_events where event_type = 'RESULT_RETURNED'") == "0"
+    for _ in range(2):
+        resumed = wallet_client.post("/v1/wallet-setup/agents/agent-malformed-field/resume", headers=owner_a).json()
+        assert resumed["state"] == "UNKNOWN"
+    assert len(provider.created) == 1
+    assert pg.psql("select wallet_id is null from wallet_setups where agent_id = 'agent-malformed-field'") == "t"
+
+
+def test_malformed_lookup_evidence_field_becomes_unknown(wallet_client, owner_a, provider, pg):
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    owner_id = uuid.UUID(helpers.owner_user_id(wallet_client, owner_a))
+    retained = WalletEvidence("wallet-field", owner_id, "ethereum", "0x" + "a" * 40)
+    _retain_unknown_result(wallet_client, owner_a, provider, "agent-mlf", strategy_id, revision_id, retained)
+    provider.wallets["wallet-field"] = WalletEvidence("wallet-field", owner_id, "ethereum", address=object())
+    provider.create_result = None
+    resumed = wallet_client.post("/v1/wallet-setup/agents/agent-mlf/resume", headers=owner_a).json()
+    assert resumed["state"] == "UNKNOWN" and resumed["reason"] == "RECONCILE_NO_MATCH"
+    assert pg.psql("select wallet_id is null from wallet_setups where agent_id = 'agent-mlf'") == "t"
 
 
 def test_malformed_lookup_becomes_unknown(wallet_client, owner_a, provider, pg):
