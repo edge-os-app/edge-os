@@ -22,8 +22,8 @@ from edge_os_api.research.hermes_interpreter import (
 )
 from edge_os_api.research.interpretation_attempts import AttemptLedger
 from edge_os_api.research.interpretation_response import ParsedInterpretation
-from edge_os_api.interpreter import FixtureInterpreter
-from edge_os_api.router import route
+from edge_os_api.research.fixture_interpreter import FixtureInterpreter
+from edge_os_api.research.outcome_router import route
 
 REPO = Path(__file__).resolve().parents[2]
 CASES = {p.stem: json.loads(p.read_text()) for p in sorted(
@@ -69,7 +69,7 @@ def routed(intake: dict[str, Any], parsed: ParsedInterpretation, evidence: list[
               "meaning_status": parsed.meaning_status, "syntax_status": "VALID",
               "evidence_readiness": parsed.evidence_readiness}
     record_contract.validate_record("PromptInterpretation", interp)
-    return route(intake, interp, FixtureInterpreter(), None, "strategy-test")
+    return route(intake, interp, FixtureInterpreter(), parsed.missing_capability, "strategy-test")
 
 
 def adopt_all(parsed: ParsedInterpretation) -> list[dict[str, Any]]:

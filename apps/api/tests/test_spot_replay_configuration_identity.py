@@ -563,7 +563,7 @@ def test_migration_preserves_api_authored_uppercase_strategy_revision_uuid(clien
 
         assert upgrade.returncode == 0, "migration refused valid API-authored uppercase revision UUID history"
         assert rows_after == rows_before
-        assert version_after == "0005"
+        assert version_after == "0006"
         assert registry_exists and len(registry_rows) == 1
         expected_hash = record_contract.sha256_hex({
             "schema_version": "p13.spot-replay-run/1", "inputs": saved["content"]["inputs"]})
@@ -788,7 +788,7 @@ def test_migration_preserves_supported_profile_and_revision_spellings_for_comple
         }
         assert rows_after == rows_before
         assert revisions_after == revisions_before
-        assert version_after == "0005"
+        assert version_after == "0006"
         assert len(rows_after) == len(cases) == len(registry) == 9
         assert {row["run_configuration_id"]: row["configuration_sha256"] for row in registry} == expected_bindings
 

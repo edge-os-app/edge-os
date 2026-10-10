@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     privy_verification_key_previous: str | None = None
     cors_allowed_origins: str
     build_sha: str | None = None
+    # `fixture` answers scripted requests only. `hermes_local` runs the pinned Hermes against a local fake provider and
+    # needs a runner handed to the application factory. No setting reaches a real provider (decision D7).
+    interpreter: Literal["fixture", "hermes_local"] = "fixture"
 
     @field_validator("privy_app_id")
     @classmethod
@@ -106,6 +109,8 @@ class Settings(BaseSettings):
                 problems.append("database_url: test host must be loopback")
             if not (url.database or "").startswith("edge_os_test_"):
                 problems.append("database_url: test database name must start with edge_os_test_")
+        if self.env == "production" and self.interpreter != "fixture":
+            problems.append("interpreter: only the fixture interpreter is available in production")
         if self.env == "production" and self.privy_app_id == TEST_APP_ID:
             problems.append("privy_app_id: the test app id is refused in production")
         if problems:

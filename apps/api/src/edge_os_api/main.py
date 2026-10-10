@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, TypeVar
 
@@ -21,13 +22,16 @@ from edge_os_api.research import comparison_runs as effect_run
 from edge_os_api.research import investigation_adoption as investigation_adoption
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service as service
+from edge_os_api.research.attempt_store import AdvisoryLockGuard
+from edge_os_api.research.hermes_interpreter import HermesTurnRunner
+from edge_os_api.research.interpretation_workflow import HermesResearch
 from edge_os_api.replay import saved_runs as spot_replay_api
 from edge_os_api.core.authentication import Principal, Verifier, require_principal
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
 from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
 from edge_os_api.research.fixture_interpreter import samples
-from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, InvestigationBody, PublicationBody, SpotReplayBody
-from edge_os_api.core.settings import Settings, load_settings
+from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, InvestigationBody, PublicationBody, RetryBody, SpotReplayBody
+from edge_os_api.core.settings import ConfigError, Settings, load_settings
 
 log = logging.getLogger("edge_os")
 MAX_BODY_BYTES = 256 * 1024
@@ -88,8 +92,14 @@ def parse_body(model: type[ModelT], data: Any) -> ModelT:
         raise AppError(422, "VALIDATION", "INVALID_INPUT", "validation_error", findings) from None
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner | None = None) -> FastAPI:
+    """Compose the application. `hermes_runner` is the process boundary of the local Hermes interpreter.
+
+    Only the `hermes_local` setting uses it, and that setting needs it. Nothing here reaches a real provider.
+    """
     settings = settings or load_settings()
+    if settings.interpreter == "hermes_local" and hermes_runner is None:
+        raise ConfigError("invalid configuration: interpreter: hermes_local needs a Hermes runner")
     engine = make_engine(settings.database_url)
     try:
         require_head(engine)
@@ -99,9 +109,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     verifier = Verifier(settings.privy_app_id, settings.verification_keys)
     session_factory = make_session_factory(engine)
     started_at = service.utcnow().isoformat()
+    hermes = (HermesResearch(hermes_runner, session_factory, AdvisoryLockGuard(engine), time.monotonic)
+              if settings.interpreter == "hermes_local" and hermes_runner is not None else None)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if hermes is not None:
+            try:  # closes only attempts that nobody runs, publishes saved accepted results, and makes no model call
+                hermes.recover_all()
+            except Exception as error:  # noqa: BLE001 - a failed recovery must not stop the service from starting
+                log.error("interpretation recovery failed: %s", type(error).__name__)
         yield
         engine.dispose()
 
@@ -109,7 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Edge OS API", lifespan=lifespan, docs_url="/docs" if docs else None,
                   redoc_url="/redoc" if docs else None, openapi_url="/openapi.json" if docs else None)
     app.state.settings, app.state.verifier = settings, verifier
-    app.state.engine, app.state.session_factory = engine, session_factory
+    app.state.engine, app.state.session_factory, app.state.hermes = engine, session_factory, hermes
     install_handlers(app)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
                        allow_headers=["Authorization", "Content-Type"], allow_credentials=False)
@@ -155,7 +172,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @private.get("/interpreter")
     def interpreter_info() -> dict[str, Any]:
-        return {"interpreter": service.INTERPRETER.label(), "samples": samples()}
+        return {"interpreter": hermes.label() if hermes else service.INTERPRETER.label(), "samples": samples()}
 
     @private.post("/spot-replays")
     def create_spot_replay(data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
@@ -176,7 +193,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                        session: Session = Depends(get_session)) -> Any:
         body = parse_body(IntakeBody, data).model_dump()
         # Intake has no idempotency key: after an outage the client must check the saved list before repeating.
-        return run(session, lambda: service.create_request(session, principal, body), retry="RECONCILE")
+        create = hermes.create_request if hermes else service.create_request
+        return run(session, lambda: create(session, principal, body), retry="RECONCILE")
 
     @private.get("/research/requests")
     def list_requests(principal: Principal = Depends(require_principal),
@@ -190,7 +208,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         parsed = service.parse_uuid(intake_id)
         if parsed is None:
             raise not_found()
-        return run(session, lambda: service.load_bundle(session, principal, parsed))
+        return run(session, lambda: service.load_bundle(session, principal, parsed, hermes))
 
     @private.get("/research/requests/{intake_id}/investigation-proposal")
     def investigation_proposal(intake_id: str, principal: Principal = Depends(require_principal),
@@ -246,11 +264,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                        session: Session = Depends(get_session)) -> Any:
         return run(session, lambda: effect_run.get_effect_run(session, principal, intake_id, run_id))
 
-    @private.post("/research/requests/{intake_id}/clarifications", status_code=201)
+    @private.post("/research/requests/{intake_id}/clarifications")
     def answer(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
-               session: Session = Depends(get_session)) -> Any:
+               session: Session = Depends(get_session)) -> JSONResponse:
         body = parse_body(ClarificationBody, data).model_dump()
-        return run(session, lambda: service.answer_question(session, principal, intake_id, body))
+        if hermes is not None:
+            status, bundle = run(session, lambda: hermes.answer_question(session, principal, intake_id, body))
+            return JSONResponse(bundle, status_code=status)
+        if body["answer_text"] is not None:
+            raise invalid("/answer_text", "The fixture interpreter reads listed choices only.", "free_text_not_supported")
+        return JSONResponse(run(session, lambda: service.answer_question(session, principal, intake_id, body)),
+                            status_code=201)
+
+    @private.post("/research/requests/{intake_id}/interpretation-retries")
+    def retry_interpretation(intake_id: str, data: Any = Depends(read_json),
+                             principal: Principal = Depends(require_principal),
+                             session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(RetryBody, data).model_dump()
+        if hermes is None:
+            raise AppError(409, "VALIDATION", "CONFLICTED", "parent_revision_conflict", [finding(
+                "retry_unavailable", "/", "The fixture interpreter makes no attempts, so there is nothing to retry.")])
+        status, bundle = run(session, lambda: hermes.retry(session, principal, intake_id, body), retry="RECONCILE")
+        return JSONResponse(bundle, status_code=status)
 
     @private.post("/strategies/{strategy_id}/revisions")
     def publish(strategy_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
