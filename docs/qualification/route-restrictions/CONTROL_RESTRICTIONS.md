@@ -19,17 +19,17 @@ A fake policy simulator cannot prove an independent provider restriction. An app
 | # | Control | Required restriction | Enforcing layer | Evidence class | Current state |
 |---|---|---|---|---|---|
 | 1 | `chain` | Exactly Monad mainnet `143` or testnet `10143`; one network per approval. | `HOST` + `INDEPENDENT_POLICY` (`chain_id`) | `DOCUMENTED` / `SOURCE_INSPECTED` | Declarable; no live call run. |
-| 2 | `wallet_signer_binding` | Bind the action to the exact agent wallet and its restricted signer policy. | `HOST` + `INDEPENDENT_POLICY` | `SOURCE_INSPECTED` (P16 testnet sign-only) | `LOCAL_TESTED` only; cross-user isolation `NOT_RUN`. |
+| 2 | `wallet_signer_binding` | Bind the action to the exact agent wallet and a signer in the adopted signer set; the policy binding must name that wallet. | `HOST` + `INDEPENDENT_POLICY` | `SOURCE_INSPECTED` (P16 testnet sign-only) | `LOCAL_TESTED` only; cross-user isolation `NOT_RUN`. |
 | 3 | `entrypoint_method` | Allow only the exact Flow entrypoint **and** method (`executeSwap` or `executeSwapWithReceiver`). The action must name an approved entrypoint. | `INDEPENDENT_POLICY` (`to`, decoded `function_name`) | `DOCUMENTED` (P1) | Declarable; deployed ABI equivalence `UNKNOWN`. |
 | 4 | `input_output_assets` | Limit the input and output tokens to the adopted assets. | `INDEPENDENT_POLICY` (decoded calldata) + `CONTRACT` (intent tokens) | `DOCUMENTED` / `SOURCE_INSPECTED` | Declarable; testnet Flow assets unverified. |
-| 5 | `raw_input` | Exact non-negative base-10 base-unit input; no float, Boolean, negative or leading zero. | `CONTRACT` (`amountUserSells`) + `HOST` | `SOURCE_INSPECTED` | Enforced offline. |
+| 5 | `raw_input` | Exact non-negative base-10 base-unit input; no float, Boolean, negative, leading zero or trailing character. The value must equal the approved input. | `CONTRACT` (`amountUserSells`) + `HOST` | `SOURCE_INSPECTED` | Enforced offline. |
 | 6 | `recipient` | Only the agent wallet (`msg.sender`) or an allowed explicit receiver. | `CONTRACT` | `SOURCE_INSPECTED` | Enforced offline. |
 | 7 | `minimum_output` | A real minimum received, in raw units, at or below the quote; never derived from the estimate. An unknown quote blocks the action. | `CONTRACT` (post-fee check) + `HOST` | `SOURCE_INSPECTED` | Enforced offline. |
-| 8 | `fees` | `feeBps + referrerFeeBps <= 10000`; fee recipients within the adopted set. | `CONTRACT` | `SOURCE_INSPECTED` | Fee recipient/payout live behavior `NOT_RUN`. |
-| 9 | `approvals` | The owner allowance to the entrypoint is bounded and revoked; no lasting allowance remains. | `CONTRACT` (entrypoint resets its own router approval) + `HOST` | `SOURCE_INSPECTED` | Owner-to-entrypoint allowance lifetime/revocation `UNQUALIFIED`. |
+| 8 | `fees` | `feeBps + referrerFeeBps <= 10000`; the fee value and recipient must equal the adopted values. | `CONTRACT` | `SOURCE_INSPECTED` | Fee recipient/payout live behavior `NOT_RUN`. |
+| 9 | `approvals` | The owner allowance to the entrypoint is declared and equals the adopted allowance; it is bounded and revoked. | `CONTRACT` (entrypoint resets its own router approval) + `HOST` | `SOURCE_INSPECTED` | Owner-to-entrypoint allowance lifetime/revocation `UNQUALIFIED`. |
 | 10 | `gas_action_capacity` | A known native gas budget, a known action/attempt budget and no over-cap actual. | `HOST` (reservations) + `CONTRACT` (gas limit) | `SOURCE_INSPECTED` | Exact budget `UNSET`; unknown is not zero. |
-| 11 | `expiry_freshness` | Bounded quote age, input age and local intent expiry. | `HOST` | `DOCUMENTED` | The Flow intent has no on-chain deadline; local expiry cannot revoke a broadcast. |
-| 12 | `opaque_program` | Constrain the opaque route `program` bytes to the approved route. | `INDEPENDENT_POLICY` (unproven) + `CONTRACT` (forwards opaquely) | `NOT_RUN` | **`UNKNOWN`.** No source shows a policy bound on opaque `bytes`. The entrypoint forwards `program` unchanged. |
+| 11 | `expiry_freshness` | Bounded quote age, bounded input age, and a local intent and mandate expiry that are not past. | `HOST` | `DOCUMENTED` | The Flow intent has no on-chain deadline; local expiry cannot revoke a broadcast. |
+| 12 | `opaque_program` | Constrain the opaque route `program` bytes to the adopted route; require at least one byte. | `INDEPENDENT_POLICY` (unproven) + `CONTRACT` (forwards opaquely) | `NOT_RUN` | **`UNKNOWN`.** No source shows a policy bound on opaque `bytes`. The entrypoint forwards `program` unchanged. |
 
 ## Consequences for the real action
 
@@ -46,17 +46,26 @@ A fake policy simulator cannot prove an independent provider restriction. An app
 | `EVIDENCE_MISSING:<name>` | The profile marks a control `ENFORCED` but its evidence is `NOT_RUN`. |
 | `NETWORK_NOT_ALLOWED` | Network outside the supported set or the approval. |
 | `WALLET_BINDING_MISSING` / `WALLET_BINDING_MISMATCH` | Missing signer or a policy binding to another wallet. |
+| `SIGNER_NOT_ALLOWED` | Signer outside the adopted signer set. |
 | `ENTRYPOINT_NOT_ALLOWED` | Entrypoint outside the approval. |
 | `METHOD_NOT_ALLOWED` | Method outside the approval. |
 | `ASSET_NOT_ALLOWED` / `DECIMALS_MISMATCH` | Input or output asset, or decimals, outside the approval. |
-| `RAW_AMOUNT_INVALID` / `BOOLEAN_NOT_INTEGER` | Non-canonical, missing or Boolean raw amount or quote. |
+| `RAW_AMOUNT_INVALID` / `BOOLEAN_NOT_INTEGER` | Non-canonical (including a trailing character), missing or Boolean raw amount or quote. |
+| `INPUT_NOT_APPROVED` | Input amount absent or not equal to the approved input. |
 | `RECIPIENT_NOT_ALLOWED` | Recipient outside the approval. |
 | `MIN_OUTPUT_MISSING` / `MIN_OUTPUT_INVALID` | No minimum, or a minimum above the quote. |
 | `QUOTE_UNKNOWN` | The quote output is unknown, so the minimum-output bound cannot be checked. |
+| `FEE_UNKNOWN` | The fee value or the adopted fee is absent. |
+| `FEE_NOT_APPROVED` / `FEE_RECIPIENT_NOT_ALLOWED` | Fee outside the adopted value, or a fee recipient outside the adopted set. |
 | `FEE_BOUND_EXCEEDED` | `feeBps + referrerFeeBps > 10000`. |
-| `PROGRAM_MISSING` | Empty or non-hex route program. |
+| `PROGRAM_MISSING` | Empty, non-hex or zero-byte route program. |
+| `PROGRAM_NOT_APPROVED` | Route bytes outside the adopted route. |
+| `ALLOWANCE_UNKNOWN` / `ALLOWANCE_NOT_APPROVED` | Allowance absent, or not equal to the adopted allowance. |
 | `CAPACITY_UNKNOWN` / `CAPACITY_EXHAUSTED` | Unknown gas/action capacity, or gas/action over the approved bound. |
 | `FRESHNESS_UNKNOWN` / `STALE_INPUT` | Unknown quote age or maximum, or an age above the approved maximum. |
+| `INPUT_FRESHNESS_UNKNOWN` / `STALE_INPUT_AGE` | Unknown input age or maximum, or an input age above the approved maximum. |
+| `EXPIRY_UNKNOWN` | The evaluation time, intent expiry or mandate expiry is unknown. |
+| `INTENT_EXPIRED` / `MANDATE_EXPIRED` | The evaluation time is at or past the intent or mandate expiry. |
 | `EVIDENCE_UNMATCHED` | A local case claims a non-local result class. |
 
 The loader rejects a malformed declaration with a field-specific `ValueError`: a non-integer or negative fee, capacity or age; a non-string identifier or allow-list item; and a non-integer asset decimal. It never coerces these values.

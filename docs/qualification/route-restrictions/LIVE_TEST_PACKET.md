@@ -105,4 +105,4 @@ Next blockers, each with its owner:
 5. **Exact financial values.** Assets, raw amounts, minimum received, fees, gas budget, request/action ceilings, freshness and expiry (builder).
 6. **Opaque `program` enforcement.** A demonstrated bound on the opaque route bytes, or a recorded material architecture decision (builder).
 
-Bounded release request: approve **one** exact live packet with the four setup rows and the one controlled swap, on one network, with the ceilings above. Once approved, ordinary in-scope tests need no repeated permission. Authority, capacity or anti-abuse failures escalate with evidence. No automatic fallback to another route, funded mainnet or weaker policy.
+Bounded release request: approve **one** exact live packet with the six setup rows and the one controlled swap, on one network, with the ceilings above. Once approved, ordinary in-scope tests need no repeated permission. Authority, capacity or anti-abuse failures escalate with evidence. No automatic fallback to another route, funded mainnet or weaker policy.

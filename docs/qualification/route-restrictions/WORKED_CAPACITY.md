@@ -37,12 +37,9 @@ P1 entry needs 300 USDC. P2 entry needs 200 USDC. Each entry reserves 2 attempts
 ## Example B - addition and partial exit
 
 - P1 addition of 100 USDC: reserved buy input `500 + 100 = 600` USDC; remaining `400` USDC. The addition reserves its own 2 attempts. Reserved attempts reach 6; remaining attempts 0.
+- Gas check for two entries: entry gas 0.004 MON each, retained exit gas 0.004 MON each. Reserved gas = `4000000000000000 + 4000000000000000 = 8000000000000000` raw (0.008 MON). Remaining gas = `0.300 - 0.008 = 0.292` MON.
 - P2 acquires 1,000 MON actual; the quote estimate was 900 MON. A full intended exit must cover the **attributable inventory** (1,000 MON actual), not the quote estimate and not the whole wallet balance.
-- P2 partial exit of 500 MON:
-  - sell consumed becomes 500 MON. Remaining sell capacity = `3000 - 500 - outstanding reservations`.
-  - removed basis = exited quantity × weighted-average basis immediately before the exit (P15).
-  - realized result before fees = reconciled exit proceeds − removed basis, in the same quote asset.
-  - the retained inventory must still keep a supported exit path.
+- Fully worked partial exit (accepted P15 cost literal shape): first acquisition 10 units at 1000 quote; addition 10 units at 1200 quote. Total 20 units, 2200 quote. Weighted-average basis = `2200 / 20 = 110`. Partial exit of 5 units: removed basis = `5 * 110 = 550`. Reconciled proceeds = 650. Realized result before fees = `650 - 550 = 100`. The remaining 15 units keep the retained exit path. These literals are computed by `capacity_examples.py` and checked by `test_capacity_examples.py` with independent expected values. They reuse the accepted P15 cost and allowance fixtures; they are not production defaults.
 
 ## Example C - actual acquisition above the quote estimate
 
@@ -57,12 +54,18 @@ P1 entry needs 300 USDC. P2 entry needs 200 USDC. Each entry reserves 2 attempts
 
 ## Independent arithmetic checks
 
+These literals are computed by `capacity_examples.py` and asserted by `test_capacity_examples.py` with independent expected values.
+
 | Check | Expression | Expected |
 |---|---|---|
 | Buy input remaining | `1000000000 - 300000000 - 200000000` | `500000000` |
 | Buy input after addition | `500000000 - 100000000` | `400000000` |
 | Gas reserved (raw) | `4000000000000000 + 4000000000000000` | `8000000000000000` |
 | Gas remaining (raw) | `300000000000000000 - 8000000000000000` | `292000000000000000` |
+| Weighted-average basis | `2200 / 20` | `110` |
+| Removed basis | `110 * 5` | `550` |
+| Realized result before fees | `650 - 550` | `100` |
+| Sell remaining (base units) | `3000 - 500 - 200` | `2300` |
 | Minimum output below quote | `950000 <= 1000000` | true |
 | Native notional is not the token notional | `msg.value` covers `amountUserSells` only for native input | true |
 | Different asset IDs are never summed | `USDC 500` and `MON 500` separate | true |

@@ -42,18 +42,32 @@ _VALID_ACTION = {
     "quote_output_raw": "1000000",
     "fee_bps": 0,
     "referrer_fee_bps": 0,
+    "fee_recipient": "wallet-A",
     "program_hex": "0xdeadbeef",
+    "allowance_raw": "1000000000000000000",
     "gas_capacity_raw": "50000000000000000",
     "gas_used_raw": "21000000000000000",
     "action_capacity": 1,
     "actions_used": 0,
     "quote_age_seconds": 5,
     "max_quote_age_seconds": 30,
+    "input_age_seconds": 4,
+    "max_input_age_seconds": 30,
+    "intent_expires_at_seconds": 2000000000,
+    "mandate_expires_at_seconds": 2000000000,
+    "now_seconds": 1791668000,
     "approved_networks": ["143"],
     "approved_entrypoints": ["0xb3e6778480b2E488385E8205eA05E20060B813cb"],
+    "approved_signers": ["signer-A"],
     "approved_assets": {"MON-native-143": 18, "USDC-143": 6},
     "approved_methods": ["executeSwap"],
     "approved_recipients": ["wallet-A"],
+    "approved_input_raw": "1000000000000000000",
+    "approved_program_hex": ["0xdeadbeef"],
+    "approved_fee_bps": 0,
+    "approved_referrer_fee_bps": 0,
+    "approved_fee_recipients": ["wallet-A"],
+    "approved_allowance_raw": "1000000000000000000",
     "claimed_result_class": "AUTHORED_FAKE_ONLY",
 }
 
@@ -219,6 +233,61 @@ class OneFieldAdversarialTest(unittest.TestCase):
     def test_actions_used_unknown(self) -> None:
         _expect_blocked(self, self._blocked(actions_used=None), checker.R_CAPACITY_UNKNOWN)
 
+    def test_signer_not_allowed(self) -> None:
+        _expect_blocked(self, self._blocked(signer_id="signer-B"), checker.R_SIGNER_NOT_ALLOWED)
+
+    def test_input_not_approved(self) -> None:
+        _expect_blocked(self, self._blocked(input_raw="3000000000000000000"), checker.R_INPUT_NOT_APPROVED)
+
+    def test_raw_trailing_newline(self) -> None:
+        _expect_blocked(self, self._blocked(input_raw="1000000000000000000\n"), checker.R_RAW_AMOUNT_INVALID)
+
+    def test_program_empty_bytes(self) -> None:
+        _expect_blocked(self, self._blocked(program_hex="0x"), checker.R_PROGRAM_MISSING)
+
+    def test_program_trailing_newline(self) -> None:
+        _expect_blocked(self, self._blocked(program_hex="0xdeadbeef\n"), checker.R_PROGRAM_MISSING)
+
+    def test_program_not_approved(self) -> None:
+        _expect_blocked(self, self._blocked(program_hex="0xccdd"), checker.R_PROGRAM_NOT_APPROVED)
+
+    def test_fee_not_approved(self) -> None:
+        _expect_blocked(self, self._blocked(fee_bps=1), checker.R_FEE_NOT_APPROVED)
+
+    def test_fee_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(fee_bps=None), checker.R_FEE_UNKNOWN)
+
+    def test_referrer_fee_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(referrer_fee_bps=None), checker.R_FEE_UNKNOWN)
+
+    def test_fee_recipient_not_allowed(self) -> None:
+        _expect_blocked(self, self._blocked(fee_recipient="wallet-B"), checker.R_FEE_RECIPIENT_NOT_ALLOWED)
+
+    def test_allowance_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(allowance_raw=None), checker.R_ALLOWANCE_UNKNOWN)
+
+    def test_allowance_not_approved(self) -> None:
+        _expect_blocked(self, self._blocked(allowance_raw="999"), checker.R_ALLOWANCE_NOT_APPROVED)
+
+    def test_input_freshness_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(input_age_seconds=None), checker.R_INPUT_FRESHNESS_UNKNOWN)
+
+    def test_stale_input_age(self) -> None:
+        _expect_blocked(self, self._blocked(input_age_seconds=31), checker.R_STALE_INPUT_AGE)
+
+    def test_expiry_unknown(self) -> None:
+        _expect_blocked(self, self._blocked(now_seconds=None), checker.R_EXPIRY_UNKNOWN)
+
+    def test_intent_expired(self) -> None:
+        _expect_blocked(self, self._blocked(now_seconds=2000000000), checker.R_INTENT_EXPIRED)
+
+    def test_mandate_expired(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(mandate_expires_at_seconds=1791668000, now_seconds=1791668001),
+            checker.R_MANDATE_EXPIRED,
+        )
+
 
 class MalformedDeclarationTest(unittest.TestCase):
     """A malformed declaration raises a field-specific ValueError. No coercion."""
@@ -273,6 +342,50 @@ class MalformedDeclarationTest(unittest.TestCase):
     def test_approved_asset_decimal_float_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self._load(approved_assets={"MON-native-143": 18, "USDC-143": 6.5})
+
+    def test_profile_version_missing_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            checker.load_profile({"declarations": {}})
+
+    def test_profile_version_non_string_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            checker.load_profile({"version": True, "declarations": {}})
+
+    def test_action_id_missing_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            checker.load_action({**_VALID_ACTION, "action_id": ""})
+
+
+class FixtureExpectationTest(unittest.TestCase):
+    """The real command rejects a non-boolean fixture expectation."""
+
+    def test_non_boolean_expectation_runs_clean_error(self) -> None:
+        import json
+        import tempfile
+
+        fixtures = {
+            "schema": "p21-route-restrictions/1",
+            "scenarios": [
+                {
+                    "name": "tampered",
+                    "profile": {"version": "v", "declarations": {c: dict(_READY_CONTROL) for c in checker.MANDATORY_CONTROLS}},
+                    "base_action": dict(_VALID_ACTION),
+                    "cases": [{"name": "boom", "override": {}, "expect": {"accepted": "false"}}],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tampered.json"
+            path.write_text(json.dumps(fixtures), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-B", str(_CHECKER_PATH), str(path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("PASS", result.stdout)
+        self.assertIn("error:", result.stdout)
 
 
 class OfflinePropertyTest(unittest.TestCase):

@@ -16,7 +16,9 @@ The package is not independent wallet enforcement. It does not read, sign for, r
 |---|---|
 | `restriction_checker.py` | Standard-library-only checker. Strict typed records, profile readiness, one-action evaluation. |
 | `fixtures.json` | Authored fixtures: an all-enforced positive control, one-field adversarial cases, a truthful route profile and a missing-control profile. |
-| `test_restriction_checker.py` | Offline unit tests, including the no-network/no-signing property. |
+| `test_restriction_checker.py` | Offline unit tests, including the no-network/no-signing property and malformed-declaration controls. |
+| `capacity_examples.py`, `test_capacity_examples.py` | Independent capacity arithmetic and its tests. |
+| `VERIFICATION_MAP_PROPOSAL.md` | Local verification and future live-verification proposal. |
 | `README.md`, `SOURCE_EVIDENCE.md`, `NETWORK_DECISION.md`, `CONTROL_RESTRICTIONS.md`, `WORKED_CAPACITY.md`, `LIVE_TEST_PACKET.md` | Preparation documents. |
 
 Names describe responsibility. The ticket number is not a module name.
@@ -30,7 +32,7 @@ Names describe responsibility. The ticket number is not a module name.
 
 `RestrictionProfile` holds one `ControlDeclaration` per mandatory control: `state` (`ENFORCED`/`UNSUPPORTED`/`UNKNOWN`/`UNSET`), `layer` (`HOST`/`CONTRACT`/`INDEPENDENT_POLICY`) and `evidence` (`DOCUMENTED`/`SOURCE_INSPECTED`/`LOCAL_TESTED`/`PROVIDER_ACTUAL`/`NOT_RUN`).
 
-`ControlledAction` carries the action plus its authored approval bounds, including `approved_entrypoints`, `approved_networks`, `approved_assets`, `approved_methods` and `approved_recipients`. The action's `entrypoint_address` and `method` must each appear in their approved set.
+`ControlledAction` carries the action plus its authored approval bounds. The adopted bindings are `approved_networks`, `approved_entrypoints`, `approved_signers`, `approved_assets`, `approved_methods`, `approved_recipients`, `approved_input_raw`, `approved_program_hex`, `approved_fee_bps`, `approved_referrer_fee_bps`, `approved_fee_recipients` and `approved_allowance_raw`. Each action value must match its adopted binding. Fee values, allowance, input age, intent expiry and mandate expiry are explicit or unknown.
 
 `CaseVerdict` reports `accepted`, `result_class` (`AUTHORED_FAKE_ONLY` or `BLOCKED`) and the ordered, de-duplicated `reasons`.
 
@@ -43,14 +45,14 @@ Twelve mandatory controls gate a real action: `chain`, `wallet_signer_binding`, 
 - A missing mandatory control returns `MISSING_MANDATORY_CONTROL:<name>`.
 - A control that is `UNSUPPORTED`, `UNKNOWN` or `UNSET` returns `UNSUPPORTED_CONTROL:<name>`.
 - A control marked `ENFORCED` with `NOT_RUN` evidence returns `EVIDENCE_MISSING:<name>`.
-- The entrypoint must be in `approved_entrypoints`, and the method in `approved_methods`.
-- Amounts are canonical unsigned base-10 strings. Boolean, float, negative and leading-zero raw values are rejected.
-- An unknown required quantity (gas, gas used, action capacity, quote age, maximum age) is not zero and blocks the action. An unknown quote returns `QUOTE_UNKNOWN`.
+- The action must match its adopted bindings: network, entrypoint, signer, method, assets and decimals, recipient, exact input, route program, fee value and recipient, and owner allowance.
+- Amounts are canonical unsigned base-10 strings that match the whole value. Boolean, float, negative, leading-zero and trailing-character raw values are rejected.
+- The route program must be present, hex and at least one byte.
+- An unknown required value (gas, gas used, action capacity, quote age, input age, fee, allowance, evaluation time, intent expiry, mandate expiry) is not zero and blocks the action. An unknown quote returns `QUOTE_UNKNOWN`.
 - The minimum received must exist, and must not exceed the quote.
 - `feeBps + referrerFeeBps <= 10000`.
-- The opaque route `program` must be present and hex.
 - A local case that claims a non-local result class returns `EVIDENCE_UNMATCHED`.
-- A malformed declaration (non-integer or negative fee/capacity/age, non-string identifier or allow-list item, non-integer asset decimal) raises a field-specific `ValueError`. The loader never coerces these values.
+- A malformed declaration (non-integer or negative fee/capacity/age, non-string identifier or allow-list item, non-integer asset decimal, empty profile version or action identity) raises a field-specific `ValueError`. The loader never coerces these values. The default command reports it as `error: ...` and exits non-zero.
 
 ## Enforcement boundary
 

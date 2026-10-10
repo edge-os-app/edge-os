@@ -5,14 +5,16 @@ controlled action and the readiness of a restriction profile. It has no
 network, signing, wallet, provider or broadcast code path. A local success is
 always ``AUTHORED_FAKE_ONLY``; it is never a live or provider approval.
 
+Every mandatory control has an adopted-value comparison. Missing or unknown
+required values block the action. The loader raises ``ValueError`` for a
+malformed declaration and never coerces a non-string identifier, a non-integer
+quantity or a non-boolean expectation.
+
 Public interface:
     evaluate_declared_case(profile, action) -> CaseVerdict
     profile_readiness_reasons(profile) -> tuple[str, ...]
     load_profile(mapping) -> RestrictionProfile
     load_action(mapping) -> ControlledAction
-
-A malformed declaration raises ``ValueError`` with a field-specific message.
-Missing or unknown required quantities are not zero and block the action.
 
 See README.md for the meaning and the evidence classes.
 """
@@ -34,6 +36,7 @@ SUPPORTED_NETWORKS = frozenset({NETWORK_MAINNET, NETWORK_TESTNET})
 RESULT_BLOCKED = "BLOCKED"
 RESULT_AUTHORED_FAKE_ONLY = "AUTHORED_FAKE_ONLY"
 PROVIDER_EXECUTED = "NOT_RUN"
+FIXTURES_SCHEMA = "p21-route-restrictions/1"
 
 MANDATORY_CONTROLS: Tuple[str, ...] = (
     "chain",
@@ -56,26 +59,39 @@ R_EVIDENCE_MISSING = "EVIDENCE_MISSING"
 R_NETWORK_NOT_ALLOWED = "NETWORK_NOT_ALLOWED"
 R_WALLET_BINDING_MISSING = "WALLET_BINDING_MISSING"
 R_WALLET_BINDING_MISMATCH = "WALLET_BINDING_MISMATCH"
+R_SIGNER_NOT_ALLOWED = "SIGNER_NOT_ALLOWED"
 R_ENTRYPOINT_NOT_ALLOWED = "ENTRYPOINT_NOT_ALLOWED"
 R_METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
 R_ASSET_NOT_ALLOWED = "ASSET_NOT_ALLOWED"
 R_RECIPIENT_NOT_ALLOWED = "RECIPIENT_NOT_ALLOWED"
 R_RAW_AMOUNT_INVALID = "RAW_AMOUNT_INVALID"
 R_BOOLEAN_NOT_INTEGER = "BOOLEAN_NOT_INTEGER"
+R_INPUT_NOT_APPROVED = "INPUT_NOT_APPROVED"
 R_DECIMALS_MISMATCH = "DECIMALS_MISMATCH"
 R_MIN_OUTPUT_MISSING = "MIN_OUTPUT_MISSING"
 R_MIN_OUTPUT_INVALID = "MIN_OUTPUT_INVALID"
 R_QUOTE_UNKNOWN = "QUOTE_UNKNOWN"
+R_FEE_UNKNOWN = "FEE_UNKNOWN"
+R_FEE_NOT_APPROVED = "FEE_NOT_APPROVED"
+R_FEE_RECIPIENT_NOT_ALLOWED = "FEE_RECIPIENT_NOT_ALLOWED"
 R_FEE_BOUND_EXCEEDED = "FEE_BOUND_EXCEEDED"
 R_PROGRAM_MISSING = "PROGRAM_MISSING"
+R_PROGRAM_NOT_APPROVED = "PROGRAM_NOT_APPROVED"
+R_ALLOWANCE_UNKNOWN = "ALLOWANCE_UNKNOWN"
+R_ALLOWANCE_NOT_APPROVED = "ALLOWANCE_NOT_APPROVED"
 R_CAPACITY_UNKNOWN = "CAPACITY_UNKNOWN"
 R_CAPACITY_EXHAUSTED = "CAPACITY_EXHAUSTED"
 R_FRESHNESS_UNKNOWN = "FRESHNESS_UNKNOWN"
 R_STALE_INPUT = "STALE_INPUT"
+R_INPUT_FRESHNESS_UNKNOWN = "INPUT_FRESHNESS_UNKNOWN"
+R_STALE_INPUT_AGE = "STALE_INPUT_AGE"
+R_EXPIRY_UNKNOWN = "EXPIRY_UNKNOWN"
+R_INTENT_EXPIRED = "INTENT_EXPIRED"
+R_MANDATE_EXPIRED = "MANDATE_EXPIRED"
 R_EVIDENCE_UNMATCHED = "EVIDENCE_UNMATCHED"
 
-_CANONICAL_RAW = re.compile(r"^(0|[1-9][0-9]*)$")
-_HEX_BYTES = re.compile(r"^(0x)?([0-9a-fA-F]{2})*$")
+_CANONICAL_RAW = re.compile(r"(?:0|[1-9][0-9]*)")
+_HEX_BYTES = re.compile(r"(?:0x)?(?:[0-9a-fA-F]{2})+")
 
 
 class EvidenceClass(str, Enum):
@@ -127,8 +143,8 @@ class RestrictionProfile:
 class ControlledAction:
     """One declared controlled action plus its authored approval bounds.
 
-    Any field left as ``None`` is UNKNOWN. An unknown required quantity is
-    never treated as zero.
+    Any field left as ``None`` is UNKNOWN. An unknown required value is never
+    treated as zero or as an approved value.
     """
 
     action_id: str
@@ -146,20 +162,34 @@ class ControlledAction:
     recipient: str
     min_output_raw: Optional[str]
     quote_output_raw: Optional[str]
-    fee_bps: int
-    referrer_fee_bps: int
+    fee_bps: Optional[int]
+    referrer_fee_bps: Optional[int]
+    fee_recipient: str
     program_hex: Optional[str]
+    allowance_raw: Optional[str]
     gas_capacity_raw: Optional[str]
     gas_used_raw: Optional[str]
     action_capacity: Optional[int]
     actions_used: Optional[int]
     quote_age_seconds: Optional[int]
     max_quote_age_seconds: Optional[int]
+    input_age_seconds: Optional[int]
+    max_input_age_seconds: Optional[int]
+    intent_expires_at_seconds: Optional[int]
+    mandate_expires_at_seconds: Optional[int]
+    now_seconds: Optional[int]
     approved_networks: frozenset[str]
     approved_entrypoints: frozenset[str]
+    approved_signers: frozenset[str]
     approved_assets: Mapping[str, int]
     approved_methods: frozenset[str]
     approved_recipients: frozenset[str]
+    approved_input_raw: Optional[str]
+    approved_program_hex: frozenset[str]
+    approved_fee_bps: Optional[int]
+    approved_referrer_fee_bps: Optional[int]
+    approved_fee_recipients: frozenset[str]
+    approved_allowance_raw: Optional[str]
     claimed_result_class: str
 
 
@@ -178,20 +208,31 @@ def _reject_bool(value: Any) -> bool:
 
 
 def _validate_raw(raw: Any) -> Optional[str]:
-    """Return a rejection code when raw is not a canonical amount, else None."""
+    """Return a rejection code when raw is not a complete canonical amount."""
     if _reject_bool(raw):
         return R_BOOLEAN_NOT_INTEGER
     if not isinstance(raw, str):
         return R_RAW_AMOUNT_INVALID
-    if not _CANONICAL_RAW.match(raw):
+    if _CANONICAL_RAW.fullmatch(raw) is None:
         return R_RAW_AMOUNT_INVALID
     return None
+
+
+def _is_hex_program(value: Any) -> bool:
+    return isinstance(value, str) and _HEX_BYTES.fullmatch(value) is not None
 
 
 def _require_str(value: Any, field: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string")
     return value
+
+
+def _require_nonempty_str(value: Any, field: str) -> str:
+    text = _require_str(value, field)
+    if not text:
+        raise ValueError(f"{field} must not be empty")
+    return text
 
 
 def _strict_nonneg_int(value: Any, field: str) -> int:
@@ -216,8 +257,6 @@ def profile_readiness_reasons(profile: RestrictionProfile) -> Tuple[str, ...]:
     mean the action is safe.
     """
     reasons: list[str] = []
-    if not profile.version:
-        reasons.append(f"{R_MISSING_CONTROL}:version")
     for control in MANDATORY_CONTROLS:
         declaration = profile.declarations.get(control)
         if declaration is None:
@@ -231,71 +270,49 @@ def profile_readiness_reasons(profile: RestrictionProfile) -> Tuple[str, ...]:
     return tuple(reasons)
 
 
-def _evaluate_action(action: ControlledAction) -> list[str]:
+def _approved_raw_reasons(actual: Optional[str], approved: Optional[str]) -> list[str]:
+    if approved is None:
+        return [R_INPUT_NOT_APPROVED]
+    approved_reason = _validate_raw(approved)
+    if approved_reason is not None:
+        return [approved_reason]
+    if actual is None:
+        return [R_INPUT_NOT_APPROVED]
+    if actual != approved:
+        return [R_INPUT_NOT_APPROVED]
+    return []
+
+
+def _fee_reasons(action: ControlledAction) -> list[str]:
     reasons: list[str] = []
-
-    if action.network not in SUPPORTED_NETWORKS:
-        reasons.append(R_NETWORK_NOT_ALLOWED)
-    if action.network not in action.approved_networks:
-        reasons.append(R_NETWORK_NOT_ALLOWED)
-
-    if not action.wallet_id or not action.signer_id:
-        reasons.append(R_WALLET_BINDING_MISSING)
-    elif action.policy_binding_wallet_id != action.wallet_id:
-        reasons.append(R_WALLET_BINDING_MISMATCH)
-
-    if action.entrypoint_address not in action.approved_entrypoints:
-        reasons.append(R_ENTRYPOINT_NOT_ALLOWED)
-
-    if action.method not in action.approved_methods:
-        reasons.append(R_METHOD_NOT_ALLOWED)
-
-    if action.input_asset_id not in action.approved_assets:
-        reasons.append(R_ASSET_NOT_ALLOWED)
-    elif action.approved_assets[action.input_asset_id] != action.input_decimals:
-        reasons.append(R_DECIMALS_MISMATCH)
-    if action.output_asset_id not in action.approved_assets:
-        reasons.append(R_ASSET_NOT_ALLOWED)
-    elif action.approved_assets[action.output_asset_id] != action.output_decimals:
-        reasons.append(R_DECIMALS_MISMATCH)
-
-    raw_reason = _validate_raw(action.input_raw)
-    if raw_reason is not None:
-        reasons.append(raw_reason)
-
-    if action.recipient not in action.approved_recipients:
-        reasons.append(R_RECIPIENT_NOT_ALLOWED)
-
-    reasons.extend(_min_output_reasons(action))
-
-    if action.fee_bps + action.referrer_fee_bps > 10000:
-        reasons.append(R_FEE_BOUND_EXCEEDED)
-
-    if not action.program_hex or not _HEX_BYTES.match(action.program_hex):
-        reasons.append(R_PROGRAM_MISSING)
-
-    reasons.extend(_capacity_reasons(action))
-    reasons.extend(_freshness_reasons(action))
-
-    if action.claimed_result_class != RESULT_AUTHORED_FAKE_ONLY:
-        reasons.append(R_EVIDENCE_UNMATCHED)
-
+    if (
+        action.fee_bps is None
+        or action.referrer_fee_bps is None
+        or action.approved_fee_bps is None
+        or action.approved_referrer_fee_bps is None
+    ):
+        reasons.append(R_FEE_UNKNOWN)
+    else:
+        if action.fee_bps + action.referrer_fee_bps > 10000:
+            reasons.append(R_FEE_BOUND_EXCEEDED)
+        if action.fee_bps != action.approved_fee_bps or action.referrer_fee_bps != action.approved_referrer_fee_bps:
+            reasons.append(R_FEE_NOT_APPROVED)
+    if action.fee_recipient not in action.approved_fee_recipients:
+        reasons.append(R_FEE_RECIPIENT_NOT_ALLOWED)
     return reasons
 
 
-def _min_output_reasons(action: ControlledAction) -> list[str]:
-    if action.min_output_raw is None:
-        return [R_MIN_OUTPUT_MISSING]
-    min_reason = _validate_raw(action.min_output_raw)
-    if min_reason is not None:
-        return [min_reason]
-    if action.quote_output_raw is None:
-        return [R_QUOTE_UNKNOWN]
-    quote_reason = _validate_raw(action.quote_output_raw)
-    if quote_reason is not None:
-        return [quote_reason]
-    if int(action.min_output_raw) > int(action.quote_output_raw):
-        return [R_MIN_OUTPUT_INVALID]
+def _allowance_reasons(action: ControlledAction) -> list[str]:
+    if action.allowance_raw is None or action.approved_allowance_raw is None:
+        return [R_ALLOWANCE_UNKNOWN]
+    actual_reason = _validate_raw(action.allowance_raw)
+    if actual_reason is not None:
+        return [actual_reason]
+    approved_reason = _validate_raw(action.approved_allowance_raw)
+    if approved_reason is not None:
+        return [approved_reason]
+    if action.allowance_raw != action.approved_allowance_raw:
+        return [R_ALLOWANCE_NOT_APPROVED]
     return []
 
 
@@ -321,16 +338,105 @@ def _capacity_reasons(action: ControlledAction) -> list[str]:
 
 
 def _freshness_reasons(action: ControlledAction) -> list[str]:
+    reasons: list[str] = []
     if action.quote_age_seconds is None or action.max_quote_age_seconds is None:
-        return [R_FRESHNESS_UNKNOWN]
-    if action.quote_age_seconds > action.max_quote_age_seconds:
-        return [R_STALE_INPUT]
+        reasons.append(R_FRESHNESS_UNKNOWN)
+    elif action.quote_age_seconds > action.max_quote_age_seconds:
+        reasons.append(R_STALE_INPUT)
+    if action.input_age_seconds is None or action.max_input_age_seconds is None:
+        reasons.append(R_INPUT_FRESHNESS_UNKNOWN)
+    elif action.input_age_seconds > action.max_input_age_seconds:
+        reasons.append(R_STALE_INPUT_AGE)
+    return reasons
+
+
+def _expiry_reasons(action: ControlledAction) -> list[str]:
+    if (
+        action.now_seconds is None
+        or action.intent_expires_at_seconds is None
+        or action.mandate_expires_at_seconds is None
+    ):
+        return [R_EXPIRY_UNKNOWN]
+    reasons: list[str] = []
+    if action.now_seconds >= action.intent_expires_at_seconds:
+        reasons.append(R_INTENT_EXPIRED)
+    if action.now_seconds >= action.mandate_expires_at_seconds:
+        reasons.append(R_MANDATE_EXPIRED)
+    return reasons
+
+
+def _evaluate_action(action: ControlledAction) -> list[str]:
+    reasons: list[str] = []
+
+    if action.network not in SUPPORTED_NETWORKS or action.network not in action.approved_networks:
+        reasons.append(R_NETWORK_NOT_ALLOWED)
+
+    if not action.wallet_id or not action.signer_id:
+        reasons.append(R_WALLET_BINDING_MISSING)
+    elif action.policy_binding_wallet_id != action.wallet_id:
+        reasons.append(R_WALLET_BINDING_MISMATCH)
+    if action.signer_id not in action.approved_signers:
+        reasons.append(R_SIGNER_NOT_ALLOWED)
+
+    if action.entrypoint_address not in action.approved_entrypoints:
+        reasons.append(R_ENTRYPOINT_NOT_ALLOWED)
+
+    if action.method not in action.approved_methods:
+        reasons.append(R_METHOD_NOT_ALLOWED)
+
+    if action.input_asset_id not in action.approved_assets:
+        reasons.append(R_ASSET_NOT_ALLOWED)
+    elif action.approved_assets[action.input_asset_id] != action.input_decimals:
+        reasons.append(R_DECIMALS_MISMATCH)
+    if action.output_asset_id not in action.approved_assets:
+        reasons.append(R_ASSET_NOT_ALLOWED)
+    elif action.approved_assets[action.output_asset_id] != action.output_decimals:
+        reasons.append(R_DECIMALS_MISMATCH)
+
+    raw_reason = _validate_raw(action.input_raw)
+    if raw_reason is not None:
+        reasons.append(raw_reason)
+    reasons.extend(_approved_raw_reasons(action.input_raw, action.approved_input_raw))
+
+    if action.recipient not in action.approved_recipients:
+        reasons.append(R_RECIPIENT_NOT_ALLOWED)
+
+    reasons.extend(_min_output_reasons(action))
+    reasons.extend(_fee_reasons(action))
+
+    if not _is_hex_program(action.program_hex):
+        reasons.append(R_PROGRAM_MISSING)
+    elif action.program_hex not in action.approved_program_hex:
+        reasons.append(R_PROGRAM_NOT_APPROVED)
+
+    reasons.extend(_allowance_reasons(action))
+    reasons.extend(_capacity_reasons(action))
+    reasons.extend(_freshness_reasons(action))
+    reasons.extend(_expiry_reasons(action))
+
+    if action.claimed_result_class != RESULT_AUTHORED_FAKE_ONLY:
+        reasons.append(R_EVIDENCE_UNMATCHED)
+
+    return reasons
+
+
+def _min_output_reasons(action: ControlledAction) -> list[str]:
+    if action.min_output_raw is None:
+        return [R_MIN_OUTPUT_MISSING]
+    min_reason = _validate_raw(action.min_output_raw)
+    if min_reason is not None:
+        return [min_reason]
+    if action.quote_output_raw is None:
+        return [R_QUOTE_UNKNOWN]
+    quote_reason = _validate_raw(action.quote_output_raw)
+    if quote_reason is not None:
+        return [quote_reason]
+    if int(action.min_output_raw) > int(action.quote_output_raw):
+        return [R_MIN_OUTPUT_INVALID]
     return []
 
 
-def evaluate_declared_case(
-    profile: RestrictionProfile, action: ControlledAction
-) -> CaseVerdict:
+def evaluate_declared_case(profile: RestrictionProfile, action: ControlledAction) -> CaseVerdict:
     """Evaluate one declared action offline against a declared profile.
 
     Returns an accepted ``AUTHORED_FAKE_ONLY`` verdict only when the profile is
@@ -370,7 +476,10 @@ def load_profile(mapping: Mapping[str, Any]) -> RestrictionProfile:
             evidence=_enum(EvidenceClass, raw.get("evidence")),
             note=str(raw.get("note", "")),
         )
-    return RestrictionProfile(version=str(mapping.get("version", "")), declarations=declarations)
+    return RestrictionProfile(
+        version=_require_nonempty_str(mapping.get("version"), "version"),
+        declarations=declarations,
+    )
 
 
 def _string_set(value: Any, field: str) -> frozenset[str]:
@@ -389,10 +498,10 @@ def load_action(mapping: Mapping[str, Any]) -> ControlledAction:
     """Build a ControlledAction from a JSON-like mapping.
 
     Raises ``ValueError`` for a malformed declaration. It never coerces a
-    non-string identifier or a non-integer quantity.
+    non-string identifier, a non-integer quantity or a non-boolean value.
     """
     return ControlledAction(
-        action_id=_require_str(mapping.get("action_id", ""), "action_id"),
+        action_id=_require_nonempty_str(mapping.get("action_id"), "action_id"),
         network=_require_str(mapping.get("network"), "network"),
         entrypoint_address=_require_str(mapping.get("entrypoint_address", ""), "entrypoint_address"),
         method=_require_str(mapping.get("method", ""), "method"),
@@ -409,9 +518,11 @@ def load_action(mapping: Mapping[str, Any]) -> ControlledAction:
         recipient=_require_str(mapping.get("recipient", ""), "recipient"),
         min_output_raw=mapping.get("min_output_raw"),
         quote_output_raw=mapping.get("quote_output_raw"),
-        fee_bps=_strict_nonneg_int(mapping.get("fee_bps", 0), "fee_bps"),
-        referrer_fee_bps=_strict_nonneg_int(mapping.get("referrer_fee_bps", 0), "referrer_fee_bps"),
+        fee_bps=_strict_optional_nonneg_int(mapping.get("fee_bps"), "fee_bps"),
+        referrer_fee_bps=_strict_optional_nonneg_int(mapping.get("referrer_fee_bps"), "referrer_fee_bps"),
+        fee_recipient=_require_str(mapping.get("fee_recipient", ""), "fee_recipient"),
         program_hex=mapping.get("program_hex"),
+        allowance_raw=mapping.get("allowance_raw"),
         gas_capacity_raw=mapping.get("gas_capacity_raw"),
         gas_used_raw=mapping.get("gas_used_raw"),
         action_capacity=_strict_optional_nonneg_int(mapping.get("action_capacity"), "action_capacity"),
@@ -420,11 +531,31 @@ def load_action(mapping: Mapping[str, Any]) -> ControlledAction:
         max_quote_age_seconds=_strict_optional_nonneg_int(
             mapping.get("max_quote_age_seconds"), "max_quote_age_seconds"
         ),
+        input_age_seconds=_strict_optional_nonneg_int(mapping.get("input_age_seconds"), "input_age_seconds"),
+        max_input_age_seconds=_strict_optional_nonneg_int(
+            mapping.get("max_input_age_seconds"), "max_input_age_seconds"
+        ),
+        intent_expires_at_seconds=_strict_optional_nonneg_int(
+            mapping.get("intent_expires_at_seconds"), "intent_expires_at_seconds"
+        ),
+        mandate_expires_at_seconds=_strict_optional_nonneg_int(
+            mapping.get("mandate_expires_at_seconds"), "mandate_expires_at_seconds"
+        ),
+        now_seconds=_strict_optional_nonneg_int(mapping.get("now_seconds"), "now_seconds"),
         approved_networks=_string_set(mapping.get("approved_networks", []), "approved_networks"),
         approved_entrypoints=_string_set(mapping.get("approved_entrypoints", []), "approved_entrypoints"),
+        approved_signers=_string_set(mapping.get("approved_signers", []), "approved_signers"),
         approved_assets=_asset_decimals(mapping.get("approved_assets", {}), "approved_assets"),
         approved_methods=_string_set(mapping.get("approved_methods", []), "approved_methods"),
         approved_recipients=_string_set(mapping.get("approved_recipients", []), "approved_recipients"),
+        approved_input_raw=mapping.get("approved_input_raw"),
+        approved_program_hex=_string_set(mapping.get("approved_program_hex", []), "approved_program_hex"),
+        approved_fee_bps=_strict_optional_nonneg_int(mapping.get("approved_fee_bps"), "approved_fee_bps"),
+        approved_referrer_fee_bps=_strict_optional_nonneg_int(
+            mapping.get("approved_referrer_fee_bps"), "approved_referrer_fee_bps"
+        ),
+        approved_fee_recipients=_string_set(mapping.get("approved_fee_recipients", []), "approved_fee_recipients"),
+        approved_allowance_raw=mapping.get("approved_allowance_raw"),
         claimed_result_class=_require_str(mapping.get("claimed_result_class", RESULT_BLOCKED), "claimed_result_class"),
     )
 
@@ -434,9 +565,15 @@ def _load_fixtures(path: Path) -> Mapping[str, Any]:
         return json.load(handle)
 
 
+def _expected_accepted(value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError("fixture expect.accepted must be a boolean")
+    return value
+
+
 def _run_fixtures(path: Path) -> int:
     data = _load_fixtures(path)
-    if data.get("schema") != "p21-route-restrictions/1":
+    if data.get("schema") != FIXTURES_SCHEMA:
         raise ValueError(f"unsupported fixtures schema: {data.get('schema')!r}")
     failures = 0
     total = 0
@@ -449,7 +586,7 @@ def _run_fixtures(path: Path) -> int:
             merged["action_id"] = case["name"]
             verdict = evaluate_declared_case(profile, load_action(merged))
             expect = case["expect"]
-            expected_accepted = bool(expect["accepted"])
+            expected_accepted = _expected_accepted(expect["accepted"])
             ok = verdict.accepted == expected_accepted
             if ok and not expected_accepted:
                 wanted = expect.get("reason")
@@ -467,7 +604,11 @@ def _run_fixtures(path: Path) -> int:
 def main(argv: Iterable[str]) -> int:
     args = list(argv)
     path = Path(args[1]) if len(args) > 1 else Path(__file__).with_name("fixtures.json")
-    return _run_fixtures(path)
+    try:
+        return _run_fixtures(path)
+    except ValueError as error:
+        print(f"error: {error}")
+        return 2
 
 
 if __name__ == "__main__":

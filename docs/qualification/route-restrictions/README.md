@@ -22,6 +22,8 @@ A passing offline case is always `AUTHORED_FAKE_ONLY`. It is never `REAL_READY` 
 - [LIVE_TEST_PACKET.md](LIVE_TEST_PACKET.md) - the one bounded future release proposal and its acceptance sequence.
 - [restriction_checker.py](restriction_checker.py) and [fixtures.json](fixtures.json) - the offline checker and its authored fixtures.
 - [test_restriction_checker.py](test_restriction_checker.py) - the offline unit tests.
+- [capacity_examples.py](capacity_examples.py) and [test_capacity_examples.py](test_capacity_examples.py) - the independent capacity arithmetic and its tests.
+- [VERIFICATION_MAP_PROPOSAL.md](VERIFICATION_MAP_PROPOSAL.md) - the local verification and future live-verification proposal.
 
 The implementation-facing summary is `docs/implementation/ROUTE_RESTRICTIONS_PROFILE.md`.
 
@@ -32,6 +34,7 @@ From the repository root:
 ```sh
 python3 -B -m unittest discover -s docs/qualification/route-restrictions -p 'test_*.py' -v
 python3 -B docs/qualification/route-restrictions/restriction_checker.py
+python3 -B docs/qualification/route-restrictions/capacity_examples.py
 ```
 
 The checker uses Python's standard library only. It loads one authored fixture file. It has no network, wallet, signing, provider or broadcast code path. The test suite proves that property by inspecting the checker's imports and by running the default command.
