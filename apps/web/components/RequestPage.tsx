@@ -253,7 +253,8 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {intake.requested_job === "INVESTIGATE_EFFECT" ? <InvestigationReview intakeId={id}
         interpretationRevisionId={head.interpretation_revision_id} /> : null}
 
-      {work ? <p role="status" aria-busy="true" className="status stop" data-testid="working">{work}</p> : null}
+      {/* The region is always on the page, so assistive technology announces the text when it changes. */}
+      <p role="status" aria-live="polite" aria-busy={work ? true : undefined} className={work ? "status stop" : "visually-hidden"} data-testid="working">{work}</p>
 
       {head.reply ? (
         <section className="status stop" aria-labelledby="reply-title" data-testid="reply-state" data-reply={head.reply.state}>
@@ -328,7 +329,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
                   <td>{f.state === "KNOWN" ? summarizeValue(f.field_name, f.value)
                     : f.state === "CONFLICTING" ? <>Two statements that disagree:<ol>{(f.conflicts ?? []).map((c, i) => <li key={i}>{summarizeValue(f.field_name, c.value)}</li>)}</ol></>
                       : "Missing. We will ask."}</td>
-                  <td>{ORIGIN_LABEL[f.origin]}{sourceQuote(f.source_ref, intake.original_request) ? <><br /><span className="muted">{`\u201c${sourceQuote(f.source_ref, intake.original_request)}\u201d`}</span></> : null}</td>
+                  <td>{f.state === "MISSING" ? "Not stated yet" : ORIGIN_LABEL[f.origin]}{sourceQuote(f.source_ref, intake.original_request) ? <><br /><span className="muted">{`\u201c${sourceQuote(f.source_ref, intake.original_request)}\u201d`}</span></> : null}</td>
                   <td>{f.state === "CONFLICTING" ? "Conflict: needs your answer" : f.state !== "KNOWN" ? "Needs your answer" : f.adoption === "PENDING" ? "Awaiting your adoption" : f.adoption === "ADOPTED" ? "Adopted" : "Stated"}</td>
                 </tr>
               ))}

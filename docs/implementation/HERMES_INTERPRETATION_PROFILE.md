@@ -22,7 +22,7 @@ Web screens: `RequestPage`, `QuestionForm`, `Conversation` and `InterpretationAt
 ## One interpretation, step by step
 
 1. The route saves the request as written and commits. Nothing has called a model yet.
-2. The workflow takes a claim for the new attempt: a PostgreSQL session lock on a dedicated idle connection. The claim comes before the attempt record, so nobody sees a recorded attempt that has no claim.
+2. The adapter takes a claim for the new attempt: a PostgreSQL session lock on a dedicated idle connection. The claim comes before the attempt record, so nobody sees a recorded attempt that has no claim.
 3. The adapter builds the task from the user's words, the restrictions, the job, the input class and the shapes of the fields the model may report. No owner ID, request ID or attempt ID is in it.
 4. The ledger records the attempt **before** the call and commits. If that record cannot be written, no call is made. No database transaction is open during the call.
 5. The injected runner runs one turn and returns text, usage, request count and what the runtime reported about itself.
@@ -117,7 +117,7 @@ Two append-only rows per attempt: a start (before the call) and a settlement (af
 
 Rules the ledger enforces: sequence numbers rise by one; a retry names an earlier attempt of the same owner and request; only one attempt may be open per request; an attempt settles once; hashes must match the saved text; usage is either reported with input and output counts or unknown; a truncated response is never accepted; an attempt links to one revision, and only if it completed and was accepted.
 
-**Unknown stays unknown.** Usage that the provider did not report is stored as empty, never as zero. A restart closes every unsettled attempt as `INTERRUPTED` with unknown usage. Nothing is replayed. An accepted result that no revision uses yet can be recovered by parsing the saved text again. That makes no model call.
+**Unknown stays unknown.** Usage that the provider did not report is stored as empty, never as zero. A restart closes an unsettled attempt as `INTERRUPTED` with unknown usage only when nobody holds its claim. A held claim means the attempt may still run, so it stays open. Nothing is replayed. An accepted result that no revision uses yet can be recovered by parsing the saved text again. That makes no model call.
 
 A late result for an `UNKNOWN` or `INTERRUPTED` attempt is **not** settled by this code. That needs a separate reconciliation record and a decision.
 
@@ -152,6 +152,10 @@ The outcome codes reuse the P02 outcome envelope. P05 adds no record type and no
 
 **Recovery.** Startup recovery, a retry and an answer all run the same step first: close attempts that are proved abandoned, then publish saved accepted results by parsing their stored text again. That step makes no model call. The publication and its link commit together, so repeating the step adds no second revision. A saved result is left unpublished when the saved meaning moved on.
 
+**Capacity.** Each running attempt holds one dedicated database connection for its whole provider call. The pool allows 20 connections, so about ten simultaneous attempts leave little room for ordinary reads. When the pool is full the start record or the claim fails, no model is called, and the user gets a 503. This was not load tested.
+
+**Stuck results.** A saved accepted result that cannot be published (a persistent defect, or a parser change after it was saved) is retried on every recovery pass and logged by class name. Other requests are not blocked. That request shows no revision and no retry. The profile does not yet offer a way out.
+
 **Late results.** A result that arrives after its attempt was closed as unknown is saved as evidence beside it. It never replaces the settlement, becomes a revision, or starts a retry. Nothing in this build delivers one except the adapter itself, when a worker finishes after another process closed its attempt.
 
 **Decisions kept.** The market binding stays the labelled synthetic fixture binding, pending adoption (D1). Unavailability is a saved system outcome with an explicit retry (D2). The exact task and reply text are kept (D3). Attempt storage is application storage (D4). The public bundle never carries generated text (D5). Uncertain records stay unchanged (D6). The fixture interpreter is the default, and no setting reaches a real provider (D7).
@@ -164,7 +168,7 @@ All of it uses the pinned commit `54bc5e509c985f37265c3d416bd2c64b10fc77ba` (`uv
 - Six more HTTP-level flows ran through actual Hermes over authenticated routes and PostgreSQL (`test_pinned_hermes_http.py`).
 - Parser, ledger and adapter have unit tests. The attempt tables, the routes, crash recovery, a second process, a dead worker, late results and simultaneous requests have PostgreSQL tests.
 - The mapped browser path drives failure, retry, free-text replies, conflict, rejection, unsupported meaning and foreign-owner denial at 1280px and 390px, then restarts and reopens.
-- Two mutation sweeps change rules in a throwaway copy. The first covers the parser, ledger and adapter. The second covers the wiring.
+- Two mutation sweeps change rules in a throwaway copy. The first covers the parser, ledger and adapter. The second changes 16 rules in the ledger, claim, workflow and fixture-question code. It does not cover claim release on an error path, the failure-outcome repeat guard, ownership checks or the migration constraints.
 - No real provider socket, key or account was used.
 
 ## What is not proven

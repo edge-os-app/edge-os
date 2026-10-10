@@ -235,10 +235,13 @@ class AttemptLedger:
         closed: list[str] = []
         for view in self.history(owner_id, intake_record_id):
             if view.settlement is None and is_abandoned(view.start):
-                self._store.add_settlement(AttemptSettlement(
-                    attempt_id=view.start.attempt_id, owner_id=owner_id, status="INTERRUPTED", finished_at=self._now(),
-                    latency_ms=None, usage=Usage(), request_count=None, response_sha256=None, response_text=None,
-                    parse_result="NOT_PARSED", error_class=None))
+                try:
+                    self._store.add_settlement(AttemptSettlement(
+                        attempt_id=view.start.attempt_id, owner_id=owner_id, status="INTERRUPTED",
+                        finished_at=self._now(), latency_ms=None, usage=Usage(), request_count=None,
+                        response_sha256=None, response_text=None, parse_result="NOT_PARSED", error_class=None))
+                except AlreadySettled:
+                    continue  # the attempt settled while we looked: its real result stands
                 closed.append(view.start.attempt_id)
         return [view for view in self.history(owner_id, intake_record_id) if view.start.attempt_id in closed]
 

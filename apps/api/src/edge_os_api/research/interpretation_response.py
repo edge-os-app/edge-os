@@ -34,6 +34,7 @@ DECLARED_MARKET_SOURCE = "intake:declared_market"
 SYNTHETIC_MARKET_SOURCE = "application:synthetic-fixture-market"
 INTERVAL_SOURCE = "application:five-minute-buckets"
 APPLICATION_OWNED_FIELDS = frozenset({"restrictions", "market", "decision_interval_seconds"})
+CAPABILITY_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
 MEANING_STATUSES = ("SUPPORTED", "UNSUPPORTED")
 EVIDENCE_READINESS = ("READY", "UNRESOLVED")
 
@@ -166,6 +167,8 @@ def _check_top_level(response: Mapping[str, Any]) -> Rejection | None:
         if not isinstance(capability, str) or not capability:
             return Rejection("missing_capability_required", "/missing_capability",
                              "Unsupported meaning must name the missing capability.")
+        if not CAPABILITY_NAME.fullmatch(capability):
+            return Rejection("invalid_value", "/missing_capability", "The capability must be a short snake_case name.")
     elif capability is not None:
         return Rejection("missing_capability_not_allowed", "/missing_capability",
                          "Supported meaning names no missing capability.")

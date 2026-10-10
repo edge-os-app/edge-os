@@ -193,4 +193,26 @@ describe("system failures on the request page", () => {
     render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
     expect(await screen.findByText(/matched what is already saved, so nothing changed/)).toBeInTheDocument();
   });
+
+  it("does not say 'You said' for a field the user has not stated", async () => {
+    const bundle = baseBundle("NEEDS_CLARIFICATION", { code: "missing_field", detail: "What should the exit be?" },
+      { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({})]);
+    bundle.head.interpretation_revision_id = "rev-1" as never;
+    (bundle as { interpretations: unknown[] }).interpretations = [{ content: { interpretation_revision_id: "rev-1", field_evidence: [
+      { field_name: "exit", state: "MISSING", origin: "USER_STATED", source_ref: "intake:original_request", interpretation_revision: "rev-1", evidence_status: "UNKNOWN" }] } }];
+    mocks.get.mockResolvedValue(bundle);
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    const row = (await screen.findAllByRole("row")).find((r) => r.textContent?.includes("Exit rule"));
+    expect(row).toHaveTextContent("Not stated yet");
+    expect(row).not.toHaveTextContent("You said");
+  });
+
+  it("keeps one status region on the page so a change is announced", async () => {
+    mocks.get.mockResolvedValue(baseBundle("INVALID_INPUT", { code: "interpreter_unavailable", detail: "x" },
+      { allowed: true, retry_of: "a1", reason: null }, [failedAttempt]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    await screen.findByRole("heading", { name: "The interpreter did not answer" });
+    expect(screen.getByTestId("working")).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("working")).toBeEmptyDOMElement();
+  });
 });

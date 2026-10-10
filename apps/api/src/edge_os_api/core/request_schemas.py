@@ -60,6 +60,8 @@ class ClarificationBody(StrictModel):
     def _one_kind_of_answer(self) -> "ClarificationBody":
         if (self.choice_id is None) == (self.answer_text is None):
             raise PydanticCustomError("one_answer_required", "Give either choice_id or answer_text, not both.")
+        if self.answer_text is not None and not self.answer_text.strip():
+            raise PydanticCustomError("answer_text_blank", "Write something in your own words, or choose an option.")
         return self
 
 

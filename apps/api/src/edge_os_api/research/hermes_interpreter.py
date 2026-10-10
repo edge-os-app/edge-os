@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
@@ -28,6 +29,8 @@ from .interpretation_response import (
 __all__ = ["HermesInterpreter", "HermesInterpreterConfig", "HermesTurn", "HermesTurnResult", "HermesTurnRunner",
            "Interpreted", "LiveRelease", "LiveReleaseRequired", "OutputRejected", "Unavailable",
            "apply_choice_answer", "open_questions"]
+
+log = logging.getLogger("edge_os")
 
 PINNED_HERMES_COMMIT = "54bc5e509c985f37265c3d416bd2c64b10fc77ba"
 PINNED_HERMES_LOCK_SHA256 = "de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01"
@@ -274,7 +277,8 @@ class HermesInterpreter:
             if self._guard is not None:  # the claim comes first, so a recorded attempt is never seen without its claim
                 try:
                     held.enter_context(self._guard.claim(attempt_id))
-                except Exception:  # noqa: BLE001 - without a claim the attempt cannot be shown to be running
+                except Exception as error:  # noqa: BLE001 - without a claim the attempt cannot be shown to be running
+                    log.error("attempt claim failed: %s", type(error).__name__)
                     return Unavailable(None, "attempt_not_recorded", UNAVAILABLE_DETAIL["attempt_not_recorded"])
             return self._run_claimed(attempt_id, owner_id, intake_record_id, identity, retry_of, parse)
 
@@ -287,7 +291,8 @@ class HermesInterpreter:
             return Unavailable(None, "attempt_in_flight", UNAVAILABLE_DETAIL["attempt_in_flight"])
         except RetryTargetInvalid:
             return Unavailable(None, "retry_target_invalid", UNAVAILABLE_DETAIL["retry_target_invalid"])
-        except Exception:  # noqa: BLE001 - storage can fail in many ways; with no record there must be no provider call
+        except Exception as error:  # noqa: BLE001 - storage can fail in many ways; with no record there must be no provider call
+            log.error("attempt not recorded: %s", type(error).__name__)
             return Unavailable(None, "attempt_not_recorded", UNAVAILABLE_DETAIL["attempt_not_recorded"])
         turn = HermesTurn(attempt_id=start.attempt_id, system_prompt=SYSTEM_PROMPT, user_message=identity.task_text,
                           model=self._config.model, route=self._config.route,
@@ -334,7 +339,8 @@ class HermesInterpreter:
             self._ledger.settle(settlement)
         except AlreadySettled:  # the attempt was closed as unknown while it ran: keep this result as evidence only
             return self._keep_late(settlement)
-        except Exception:  # noqa: BLE001 - an unrecorded result is not released; abandonment is proved later
+        except Exception as error:  # noqa: BLE001 - an unrecorded result is not released; abandonment is proved later
+            log.error("result not recorded for attempt %s: %s", attempt_id, type(error).__name__)
             return Unavailable(attempt_id, "result_not_recorded", UNAVAILABLE_DETAIL["result_not_recorded"])
         if isinstance(outcome, ParsedInterpretation):
             return Interpreted(attempt_id, outcome)
@@ -351,7 +357,8 @@ class HermesInterpreter:
                 owner_id=settlement.owner_id, observed_at=settlement.finished_at, status=settlement.status,
                 response_sha256=settlement.response_sha256, response_text=settlement.response_text,
                 usage=settlement.usage, request_count=settlement.request_count, error_class=settlement.error_class))
-        except Exception:  # noqa: BLE001 - nothing more can be kept; the result stays unused either way
+        except Exception as error:  # noqa: BLE001 - nothing more can be kept; the result stays unused either way
+            log.error("late result not kept for attempt %s: %s", settlement.attempt_id, type(error).__name__)
             return Unavailable(settlement.attempt_id, "result_not_recorded", UNAVAILABLE_DETAIL["result_not_recorded"])
         return Unavailable(settlement.attempt_id, "result_arrived_late", UNAVAILABLE_DETAIL["result_arrived_late"])
 

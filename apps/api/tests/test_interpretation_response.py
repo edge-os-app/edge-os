@@ -704,3 +704,10 @@ def test_the_application_proposes_no_defaults_for_an_unsupported_meaning() -> No
 def test_rejects_model_evidence_for_a_field_the_application_owns(field_name: str) -> None:
     item = {"field_name": field_name, "state": "KNOWN", "origin": "AGENT_PROPOSED", "adoption": "PENDING", "value": 300}
     assert_rejected(parse(with_item(item)), "reserved_field", "/field_evidence/2/field_name")
+
+
+@pytest.mark.parametrize("capability", ["x" * 65, "Has Spaces", "line\nbreak", "9starts_with_digit", "UPPER", "a-b"])
+def test_rejects_a_missing_capability_that_is_not_a_short_snake_case_name(capability: str) -> None:
+    response = {**thesis_response(), "meaning_status": "UNSUPPORTED", "missing_capability": capability,
+                "field_evidence": [], "questions": []}
+    assert_rejected(parse(response), "invalid_value", "/missing_capability")

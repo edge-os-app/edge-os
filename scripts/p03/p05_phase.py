@@ -152,11 +152,12 @@ def turn_count(workdir: Path) -> int:
 
 def run_p05_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port: int, api_url: str, evidence: Path,
                   run_id: str, ui_env: dict[str, str], token_a: str, token_b: str, run_playwright: Any,
-                  current_api: harness.Process) -> tuple[bool, harness.Process]:
-    """Returns (every step passed, a running fixture-interpreter API).
+                  current_api: harness.Process, processes: list[Any]) -> bool:
+    """Returns whether every step passed.
 
     It stops `current_api`, runs the Hermes API for the P05 steps, and ends by starting the standard API again so the
-    rest of the run (and a hold for SQL inspection) finds the service it expects.
+    rest of the run (and a hold for SQL inspection) finds the service it expects. Every process that it starts goes into
+    `processes` at once, so the caller's own cleanup stops it even when a step here raises.
     """
     ok = True
     workdir = evidence / "p05"
@@ -176,6 +177,7 @@ def run_p05_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port:
         script_file.write_text("[]")
         current_api.stop()
         process = start_hermes_api(env, api_port, tag, run_id, workdir, script_file, evidence / "logs", "api-hermes-local")
+        processes.append(process)
         harness.wait_http(f"{api_url}/readyz")
         status, label = http("GET", f"{api_url}/v1/interpreter", token_a)
         ok &= rec.step("P05: API runs with the local Hermes interpreter, labelled as a fake provider",
@@ -202,6 +204,7 @@ def run_p05_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port:
         turns_before = turn_count(workdir)
         process.stop()
         process = start_hermes_api(env, api_port, tag, run_id, workdir, script_file, evidence / "logs", "api-hermes-local-restarted")
+        processes.append(process)
         harness.wait_http(f"{api_url}/readyz")
         code = run_playwright(["interpreter-after-restart.spec.mjs"], p05_env, evidence / "ui-p05-reopen.log")
         ok &= rec.step("P05: saved attempts and states reopen unchanged after restart (new browser context, no write)",
@@ -221,5 +224,6 @@ def run_p05_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port:
                            removal["image_removed"] and not removal["labeled_containers_left"], removal)
         current_api.stop()  # already stopped when the phase got that far; stopping again is harmless
         standard = harness.start_api(env, api_port, evidence / "logs", name="api-after-p05")
+        processes.append(standard)  # registered before any wait, so a failed wait cannot lose the handle
         harness.wait_http(f"{api_url}/readyz")
-    return bool(ok), standard
+    return bool(ok)

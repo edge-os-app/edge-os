@@ -286,6 +286,8 @@ def main() -> int:
     parser.add_argument("--hold-seconds", type=int, default=0,
                         help="keep the instance up this long after the drive so an inspector can run SQL, then clean up")
     args = parser.parse_args()
+    if args.only_p05 and args.skip_p05:
+        parser.error("--only-p05 and --skip-p05 together would run nothing")
     try:
         run_id = harness.check_run_id(args.run_id)
     except ValueError as error:
@@ -429,10 +431,8 @@ def main() -> int:
                                 "spot_replay_configurations": len(storage_before_restart["spot_replay_configurations"])})
 
         if not args.skip_ui and not args.skip_p05:
-            p05_ok, api = run_p05_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,
-                                        run_playwright, api)
-            processes.append(api)
-            ok &= p05_ok
+            ok &= run_p05_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,
+                                run_playwright, api, processes)
 
         if args.hold_seconds:
             hold = {"web": web_url, "api": api_url, "token_owner_a": token_a,

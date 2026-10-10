@@ -400,6 +400,21 @@ def test_a_retry_that_names_no_failed_attempt_or_a_stale_one_is_refused(make_cli
     assert len(runner.turns) == 2
 
 
+def test_blank_words_are_refused_before_any_model_call(make_client, owner_a) -> None:
+    runner = CaseRunner(turn_result(case("rough-hunch")["provider"]))
+    client = make_client(runner)
+    bundle = create(client, owner_a, "rough-hunch").json()
+
+    refused = answer(client, owner_a, bundle, "choose-entry", answer_text="   \n\t ")
+
+    assert refused.status_code == 422
+    assert len(runner.turns) == 1 and len(bundle_after(client, owner_a, bundle)["attempts"]) == 1
+
+
+def bundle_after(client, headers, bundle):
+    return client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=headers).json()
+
+
 # --- Ownership -----------------------------------------------------------------------------------------------------------
 
 def test_another_owner_cannot_read_answer_or_retry_a_request_and_sees_no_attempts(make_client, owner_a, owner_b) -> None:

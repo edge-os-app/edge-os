@@ -261,6 +261,29 @@ def test_an_attempt_that_is_proved_abandoned_closes_as_interrupted_with_unknown_
     ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")  # a deliberate retry is now allowed
 
 
+def test_an_attempt_that_settles_while_it_is_being_closed_is_left_alone(ledger: AttemptLedger) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    store = ledger._store
+
+    def settled_meanwhile(_start: AttemptStart) -> bool:
+        ledger.settle(settlement("attempt-1"))  # the live worker finishes after the history was read
+        return True
+
+    original = store.add_settlement
+
+    def refuse_second(settlement_: AttemptSettlement) -> None:
+        if any(known.attempt_id == settlement_.attempt_id for known in store._settlements):
+            raise AlreadySettled("settled first")
+        original(settlement_)
+
+    store.add_settlement = refuse_second  # type: ignore[method-assign]
+
+    closed = ledger.interrupt_abandoned(OWNER, INTAKE, settled_meanwhile)
+
+    assert closed == []
+    assert ledger.history(OWNER, INTAKE)[0].status == "COMPLETED"  # the real result stands
+
+
 def test_an_attempt_that_may_still_be_running_is_never_closed(ledger: AttemptLedger) -> None:
     ledger.begin(OWNER, INTAKE, IDENTITY)
 

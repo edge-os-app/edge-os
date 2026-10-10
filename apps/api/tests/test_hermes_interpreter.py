@@ -569,3 +569,18 @@ def test_a_result_that_arrives_after_its_attempt_was_closed_is_kept_as_a_late_re
     assert len(late) == 1
     assert (late[0].attempt_id, late[0].response_text, late[0].usage) == (result.attempt_id, thesis_text(), REPORTED)
     assert ledger.unpublished_results(OWNER, INTAKE) == []
+
+
+def test_an_unrecorded_result_is_logged_by_class_name_only(caplog) -> None:
+    import logging
+    interpreter, _, ledger, store = build(returned(thesis_text()))
+
+    def fail_to_store(_settlement) -> None:
+        raise RuntimeError("secret provider text sk-LEAK-0003")
+    store.add_settlement = fail_to_store  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR, logger="edge_os"):
+        result = interpreter.interpret(OWNER, INTAKE, THESIS_INTAKE)
+
+    assert isinstance(result, Unavailable) and result.reason_code == "result_not_recorded"
+    assert "RuntimeError" in caplog.text and "sk-LEAK" not in caplog.text and "secret" not in caplog.text
