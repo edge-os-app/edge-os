@@ -75,9 +75,9 @@ def test_repeated_recovery_adds_no_second_revision(make_client, owner_a, monkeyp
     intake = first_request_id(first, owner_a)
 
     third = make_client(CaseRunner())
-    visited = [third.app.state.hermes.recover_all() for _ in range(3)]
+    for _ in range(3):  # startup recovery already published it; further passes must change nothing
+        third.app.state.hermes.recover_all()
 
-    assert visited[0] <= 1
     assert counts(third, intake)["PromptInterpretation"] == 1 and counts(third, intake)["Outcome"] == 1
     assert len(bundle_of(third, owner_a, intake)["attempts"]) == 1
 
@@ -251,3 +251,101 @@ def test_two_simultaneous_choices_for_one_revision_save_one_revision(make_client
 
     assert sorted(r.status_code for r in results) == [201, 409]
     assert len(bundle_of(client, owner_a, bundle["intake"]["record_id"])["interpretations"]) == 2
+
+
+# --- Guards that hold when two callers race ---------------------------------------------------------------------------
+
+def test_a_probe_that_cannot_reach_the_database_does_not_prove_abandonment() -> None:
+    from sqlalchemy import create_engine
+    from edge_os_api.research.attempt_store import AdvisoryLockGuard
+    unreachable = create_engine("postgresql+psycopg://nobody:none@127.0.0.1:1/none", connect_args={"connect_timeout": 1})
+    assert AdvisoryLockGuard(unreachable).is_abandoned(str(uuid.uuid4())) is False
+
+
+def test_publishing_the_same_accepted_attempt_twice_saves_one_revision(make_client, owner_a) -> None:
+    client = make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"])))
+    bundle = create(client, owner_a, "concrete-thesis").json()
+    hermes, principal = client.app.state.hermes, _principal(client, owner_a)
+    intake = uuid.UUID(bundle["intake"]["record_id"])
+    view = hermes.ledger.history(str(principal.user_id), str(intake))[0]
+    parsed = hermes.interpreter.reparse(view, bundle["intake"]["content"])
+
+    with client.app.state.session_factory() as session:
+        hermes._publish_interpretation(session, principal, intake, view.start.attempt_id, parsed)
+
+    assert counts(client, str(intake))["PromptInterpretation"] == 1 and counts(client, str(intake))["Outcome"] == 1
+
+
+def test_a_choice_is_refused_while_a_reply_is_being_read(make_client, owner_a) -> None:
+    first = make_client(CaseRunner(turn_result(case("rough-hunch")["provider"])))
+    bundle = create(first, owner_a, "rough-hunch").json()
+    holder = HoldingRunner(reply_for(case("rough-hunch")["provider"]["model_response"]))
+    second = make_client(holder)
+    worker = threading.Thread(target=lambda: answer(second, owner_a, bundle, "choose-entry", answer_text="up a lot"))
+    worker.start()
+    try:
+        assert holder.entered.wait(30)
+        refused = answer(first, owner_a, bundle, "choose-entry", choice_id="g3-1pct")
+        assert refused.status_code == 409 and refused.json()["findings"][0]["code"] == "attempt_in_flight"
+        assert len(bundle_of(first, owner_a, bundle["intake"]["record_id"])["interpretations"]) == 1
+    finally:
+        holder.release.set()
+        worker.join(30)
+
+
+def reply_for(model_response: dict[str, Any]):
+    """A follow-up that fills the entry rule from the words 'up more than 2% over the last 15 minutes'."""
+    from hermes_cases import reply
+    from test_hermes_research_flow import TWO_PERCENT
+    return reply({**model_response, "questions": [], "field_evidence": [{
+        "field_name": "entry", "state": "KNOWN", "origin": "USER_STATED", "source_passage": WORDS, "value": TWO_PERCENT}]})
+
+
+WORDS = "up more than 2% over the last 15 minutes"
+
+
+def _accepted_follow_up(client: TestClient, owner_headers: dict[str, str], bundle: dict[str, Any], previous: str):
+    """Record an accepted follow-up attempt that answers `previous`, without publishing it."""
+    hermes, principal = client.app.state.hermes, _principal(client, owner_headers)
+    hermes.interpreter._runner.script.append(reply_for(case("rough-hunch")["provider"]["model_response"]))  # type: ignore[attr-defined]
+    from edge_os_api.research.interpretation_response import ClarificationAnswer
+    intake = bundle["intake"]["content"]
+    evidence = bundle["interpretations"][0]["content"]["field_evidence"]
+    answer_ref = f"reply:{uuid.uuid4()}"
+    result = hermes.interpreter.follow_up(str(principal.user_id), bundle["intake"]["record_id"], intake, evidence,
+                                          "What counts as a rise?", ClarificationAnswer(answer_ref, WORDS),
+                                          previous_revision_id=previous)
+    return hermes, principal, result, ClarificationAnswer(answer_ref, WORDS)
+
+
+def test_a_reply_is_not_published_when_the_saved_meaning_moved_on(make_client, owner_a) -> None:
+    runner = CaseRunner(turn_result(case("rough-hunch")["provider"]))
+    client = make_client(runner)
+    bundle = create(client, owner_a, "rough-hunch").json()
+    first_revision = bundle["head"]["interpretation_revision_id"]
+    moved = answer(client, owner_a, bundle, "choose-entry", choice_id="g3-1pct").json()
+    hermes, principal, result, words = _accepted_follow_up(client, owner_a, bundle, first_revision)
+
+    with client.app.state.session_factory() as session:
+        from edge_os_api.core.errors import AppError
+        with pytest.raises(AppError) as caught:
+            hermes._publish_reply(session, principal, uuid.UUID(bundle["intake"]["record_id"]), result.attempt_id,
+                                  result.parsed, words, "choose-entry", "What counts as a rise?")
+
+    assert caught.value.status == 409
+    assert len(bundle_of(client, owner_a, bundle["intake"]["record_id"])["interpretations"]) == len(moved["interpretations"])
+
+
+def test_publishing_a_reply_twice_saves_one_revision_and_the_second_call_changes_nothing(make_client, owner_a) -> None:
+    client = make_client(CaseRunner(turn_result(case("rough-hunch")["provider"])))
+    bundle = create(client, owner_a, "rough-hunch").json()
+    hermes, principal, result, words = _accepted_follow_up(client, owner_a, bundle, bundle["head"]["interpretation_revision_id"])
+    intake = uuid.UUID(bundle["intake"]["record_id"])
+    args = (principal, intake, result.attempt_id, result.parsed, words, "choose-entry", "What counts as a rise?")
+
+    with client.app.state.session_factory() as session:
+        assert hermes._publish_reply(session, *args) is True
+    with client.app.state.session_factory() as session:
+        assert hermes._publish_reply(session, *args) is False
+
+    assert counts(client, str(intake))["PromptInterpretation"] == 2

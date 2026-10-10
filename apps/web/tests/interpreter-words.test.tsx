@@ -182,4 +182,15 @@ describe("system failures on the request page", () => {
     expect(screen.getByRole("textbox", { name: /^Or say it in your own words/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try this reply again" })).toBeInTheDocument();
   });
+
+  it("tells the user a reply that matched the saved meaning changed nothing", async () => {
+    const bundle = baseBundle("NEEDS_CLARIFICATION", { code: "missing_field", detail: "What should the entry rule be?" },
+      { allowed: true, retry_of: "a2", reason: null }, [attempt({}), attempt({ attempt_id: "a2", sequence: 2, purpose: "FOLLOW_UP", revision_id: null, parse_result: "REJECTED:reply_changed_nothing" })],
+      { state: "REJECTED", reason_code: "reply_changed_nothing", attempt_id: "a2" });
+    bundle.head.interpretation_revision_id = "rev-1" as never;
+    bundle.head.questions = [choice] as never;
+    mocks.get.mockResolvedValue(bundle);
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByText(/matched what is already saved, so nothing changed/)).toBeInTheDocument();
+  });
 });

@@ -258,7 +258,9 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {head.reply ? (
         <section className="status stop" aria-labelledby="reply-title" data-testid="reply-state" data-reply={head.reply.state}>
           <h2 id="reply-title" style={{ fontSize: 18 }}>{head.reply.state === "REJECTED" ? "Your last reply could not be used" : head.reply.state === "UNCERTAIN" ? "We do not know if your last reply was read" : "Your last reply was not read"}</h2>
-          <p>{head.reply.state === "REJECTED"
+          <p>{head.reply.state === "REJECTED" && head.reply.reason_code === "reply_changed_nothing"
+            ? "Your reply matched what is already saved, so nothing changed. Say what you want to change, or choose an option."
+            : head.reply.state === "REJECTED"
             ? `The interpreter's reading broke a rule (${head.reply.reason_code?.replaceAll("_", " ")}), so none of it was used. Your saved meaning did not change.`
             : head.reply.state === "UNCERTAIN" ? "The interpreter may or may not have read it. Nothing was retried and your saved meaning did not change."
               : "A system failure stopped the interpreter. Your saved meaning did not change."}</p>

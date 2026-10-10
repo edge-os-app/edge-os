@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import json
+import logging
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -40,6 +41,8 @@ from edge_os_api.research.interpretation_response import (
     ADOPT_QUESTION_ID, ClarificationAnswer, OfferedOption, OfferedQuestion, ParsedInterpretation, Rejection,
 )
 from edge_os_api.research.outcome_router import Routed, route
+
+log = logging.getLogger("edge_os")
 
 LOCAL_FAKE_CONFIG = HermesInterpreterConfig(model="local-fake/p05-interpretation", route="local-fake-provider",
                                             max_output_tokens=4096, runtime_label="LOCAL_FAKE_PROVIDER")
@@ -510,7 +513,11 @@ class HermesResearch:
                 self._record_failure(session, principal, intake_id, closed.start.attempt_id, OUTCOME_UNKNOWN,
                                      UNAVAILABLE_TEXT["outcome_unknown"], "RECONCILE")
         for view in self.ledger.unpublished_results(owner, iid):
-            self._recover(session, principal, intake_id, view)
+            try:
+                self._recover(session, principal, intake_id, view)
+            except Exception as error:  # noqa: BLE001 - one bad saved result must not block the request or other requests
+                session.rollback()
+                log.error("recovery of an accepted attempt failed: %s", type(error).__name__)
 
     def _recover(self, session: Session, principal: Principal, intake_id: uuid.UUID, view: AttemptView) -> None:
         rows = service.intake_rows(session, principal, intake_id)
@@ -544,6 +551,9 @@ class HermesResearch:
                 "where s.attempt_id is null or (s.status = 'COMPLETED' and s.parse_result = 'ACCEPTED' "
                 "and l.attempt_id is null)")).all()
         for owner_id, intake_id in pairs:
-            with self._session_factory() as session:
-                self.reconcile(session, Principal(owner_id, "recovery"), intake_id)
+            try:
+                with self._session_factory() as session:
+                    self.reconcile(session, Principal(owner_id, "recovery"), intake_id)
+            except Exception as error:  # noqa: BLE001 - recovery of one request must not stop the others
+                log.error("recovery of one request failed: %s", type(error).__name__)
         return len(pairs)

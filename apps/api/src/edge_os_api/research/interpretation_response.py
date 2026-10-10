@@ -436,6 +436,12 @@ def _parsed(response: Mapping[str, Any], evidence: list[dict[str, Any]], questio
         response_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest())
 
 
+def _meaning(evidence: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Evidence by field, without the revision it was saved in."""
+    return {item["field_name"]: {key: value for key, value in item.items() if key != "interpretation_revision"}
+            for item in evidence}
+
+
 def _is_protected(previous: Mapping[str, Any]) -> bool:
     """Meaning the user stated, chose or adopted, or that the application configured. The model may not replace it."""
     return previous["state"] == "KNOWN" and (previous["origin"] != "AGENT_PROPOSED"
@@ -492,6 +498,9 @@ def parse_follow_up_response(text: str, intake: Mapping[str, Any], previous_evid
     for item in merged.values():
         item["interpretation_revision"] = ""
     evidence = list(merged.values())
+    if _meaning(evidence) == _meaning(previous_evidence):
+        # P02 needs a clarification to name at least one changed field, so a reply that changes nothing cannot be saved.
+        return _reject("reply_changed_nothing", "/field_evidence", "The reply changed no field.")
     reported = frozenset(name for name in merged if name in _model_owned_fields(intake["requested_job"]))
     questions = _parse_questions(response["questions"], evidence, reported)
     if isinstance(questions, Rejection):

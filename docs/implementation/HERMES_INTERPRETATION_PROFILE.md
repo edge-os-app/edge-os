@@ -1,6 +1,6 @@
 # Hermes interpretation profile (P05)
 
-Status: local implementation candidate for P05 (issue 15). It is not wired into the saved Research path yet. It does not approve a real model call, a provider key, hosting, spending, a wallet or a transaction.
+Status: local implementation candidate for P05 (issue 15). The saved Research path uses it when the setting `EDGE_OS_INTERPRETER=hermes_local` is on. The default is still the fixture interpreter. It does not approve a real model call, a provider key, hosting, spending, a wallet or a transaction.
 
 Every result below comes from a **local fake provider**. The fake returns authored text. It shows that the adapter, the attempt history and the strict parser work around the real pinned Hermes runtime. It does not show how any real model reads a request.
 
@@ -11,20 +11,23 @@ Every result below comes from a **local fake provider**. The fake returns author
 | Adapter | `apps/api/src/edge_os_api/research/hermes_interpreter.py` | Builds one request, records the attempt, calls an injected runner, parses the answer whole |
 | Strict parser | `apps/api/src/edge_os_api/research/interpretation_response.py` | Accepts one generated answer whole or rejects it whole |
 | Attempt ledger | `apps/api/src/edge_os_api/research/interpretation_attempts.py` | Append-only attempt history and its rules |
-| Container job and runner | `scripts/hermes_interpretation/` | Runs one actual Hermes turn in a no-network container against the fake provider |
-| Tests | `apps/api/tests/test_hermes_interpreter.py`, `test_interpretation_response.py`, `test_interpretation_attempts.py`, `tests/hermes_interpretation/` | Unit and real-Hermes tests |
+| Attempt storage | `apps/api/src/edge_os_api/research/attempt_store.py`, migration `0006_interpretation_attempts.py` | Append-only PostgreSQL tables and the claim that proves who runs an attempt |
+| Saved Research workflow | `apps/api/src/edge_os_api/research/interpretation_workflow.py` | Saves the request, runs the attempt, publishes the result, retries and recovers |
+| Container job, runner and local API | `scripts/hermes_interpretation/` | Runs one actual Hermes turn in a no-network container against the fake provider; `serve_local.py` runs the API this way for verification |
+| Tests | `apps/api/tests/test_hermes_interpreter.py`, `test_interpretation_response.py`, `test_interpretation_attempts.py`, `test_interpretation_attempt_store.py`, `test_hermes_research_flow.py`, `test_hermes_research_recovery.py`, `tests/hermes_interpretation/`, `tests/p03/interpreter*.spec.mjs` | Unit, PostgreSQL, HTTP, actual-Hermes and browser tests |
 | Authored cases | `apps/api/tests/fixtures/hermes_interpretation/cases/` | 15 cases with literal expectations |
 
-Not done yet, because these are shared paths: service and router calls, settings, schemas, the attempt table and its migration, the web screens, and the verification map. See the shared-wiring request.
+Web screens: `RequestPage`, `QuestionForm`, `Conversation` and `InterpretationAttempts` show the attempts, failures, words box and retry button. The verification map and recipe include a P05 phase.
 
 ## One interpretation, step by step
 
-1. The caller passes the saved intake. The adapter builds the task from the user's words, the restrictions, the job, the input class and the shapes of the fields the model may report. No owner ID, request ID or attempt ID is in it.
-2. The ledger records the attempt **before** the call. If that record cannot be written, no call is made.
-3. The injected runner runs one turn and returns text, usage, request count and what the runtime reported about itself.
-4. The adapter checks the runtime settings, then the parser checks the text.
-5. The ledger records the result once. If that record cannot be written, the result is not used.
-6. The caller gets one of three results: `Interpreted`, `OutputRejected` or `Unavailable`.
+1. The route saves the request as written and commits. Nothing has called a model yet.
+2. The workflow takes a claim for the new attempt: a PostgreSQL session lock on a dedicated idle connection. The claim comes before the attempt record, so nobody sees a recorded attempt that has no claim.
+3. The adapter builds the task from the user's words, the restrictions, the job, the input class and the shapes of the fields the model may report. No owner ID, request ID or attempt ID is in it.
+4. The ledger records the attempt **before** the call and commits. If that record cannot be written, no call is made. No database transaction is open during the call.
+5. The injected runner runs one turn and returns text, usage, request count and what the runtime reported about itself.
+6. The adapter checks the runtime settings, then the parser checks the text. The ledger records the result once. If that record cannot be written, the result is not used.
+7. The workflow publishes an accepted result in one transaction: the revision, its outcome, a draft when the rules compile, and the link from the attempt to the revision.
 
 The adapter makes **one attempt per call**. It never retries, repairs or replays. A retry is a new call that names the attempt it follows.
 
@@ -129,29 +132,56 @@ Findings from the actual runs:
 - **Hermes tries to continue a cut-off answer.** It sent a second, larger request. The local guard refused it and recorded it. A live route needs an equivalent hard limit on physical requests.
 - **A failed call is not counted by Hermes.** A 503 leaves Hermes' API-call counter at zero.
 
+## Saved Research path
+
+| Situation | What is saved | What the user sees |
+|---|---|---|
+| Answer accepted | A revision, its outcome, a draft when it compiles, and the attempt link | Questions, or rules to review |
+| Unsupported capability named by the model | An `UNSUPPORTED` outcome with the capability | Not supported yet. Not a failure |
+| Malformed or truncated output, or a policy violation | A first interpretation gets an `INVALID_INPUT` outcome with finding `malformed_model_output`. A reply saves no outcome. The attempt keeps its reason code | The interpreter's answer was not usable. Retry offered |
+| Provider failure | Finding `interpreter_unavailable`, usage unknown | The interpreter did not answer. Retry offered |
+| Timeout, crash or unknown outcome | Finding `interpreter_outcome_unknown`, status `TIMED_OUT`, `UNKNOWN` or `INTERRUPTED` | We do not know if it finished. No retry is offered |
+
+The outcome codes reuse the P02 outcome envelope. P05 adds no record type and no schema version. A failed reply keeps the saved meaning and its questions, so the page shows the failure from the attempt list and does not hide the questions behind a new outcome.
+
+**Routes.** `POST /v1/research/requests/{id}/clarifications` takes either a listed `choice_id` (no model call) or the user's `answer_text` (one follow-up attempt). `POST /v1/research/requests/{id}/interpretation-retries` takes `retry_of`, the earlier attempt it follows. A retry is allowed after a provider failure, a cut-off answer or a rejected answer. It is refused while an attempt runs, after an unknown outcome, after a reply went stale, and when nothing is waiting. Another owner gets 404 for every route.
+
+**Tables.** `interpretation_attempts` (exact task text, reply text and hashes, configuration, runtime label, the revision a reply answers), `interpretation_settlements` (status, latency, usage or NULL, request count, response hash and text, parse result, runtime report), `interpretation_attempt_links` (one accepted attempt to one revision, with the questions the answer offered) and `interpretation_late_results`. All four reject UPDATE and DELETE. Foreign keys include the owner. Database checks recompute every hash from the saved text. The public view holds structured values, hashes and sanitized codes. It never holds the generated text.
+
+**Concurrency.** A second attempt for one request is refused while one is open. The unique place (owner, request, sequence) separates simultaneous callers. A process start or restart closes an attempt only when nobody holds its claim. A held claim means the attempt may still run, so it stays open and duplicate work is refused. A crashed worker loses its connection and so its claim.
+
+**Recovery.** Startup recovery, a retry and an answer all run the same step first: close attempts that are proved abandoned, then publish saved accepted results by parsing their stored text again. That step makes no model call. The publication and its link commit together, so repeating the step adds no second revision. A saved result is left unpublished when the saved meaning moved on.
+
+**Late results.** A result that arrives after its attempt was closed as unknown is saved as evidence beside it. It never replaces the settlement, becomes a revision, or starts a retry. Nothing in this build delivers one except the adapter itself, when a worker finishes after another process closed its attempt.
+
+**Decisions kept.** The market binding stays the labelled synthetic fixture binding, pending adoption (D1). Unavailability is a saved system outcome with an explicit retry (D2). The exact task and reply text are kept (D3). Attempt storage is application storage (D4). The public bundle never carries generated text (D5). Uncertain records stay unchanged (D6). The fixture interpreter is the default, and no setting reaches a real provider (D7).
+
 ## Local evidence
 
 All of it uses the pinned commit `54bc5e509c985f37265c3d416bd2c64b10fc77ba` (`uv.lock` SHA-256 `de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01`) in `python:3.14-slim-trixie` with no network, a read-only root, one read-only input file and one output directory.
 
 - 15 authored cases and 11 multi-step flows ran through actual Hermes: concrete thesis, paraphrase, rough hunch, bounded no-thesis, unsupported extension, follow-up, changed meaning, conflicting reply, restatement, malformed, truncated, ungrounded number, rewritten quote, self-adoption, 503, hang, missing usage, retry, restart, foreign owner, wire isolation, recovery.
-- Parser, ledger and adapter have unit tests.
-- A mutation sweep changes 32 rules in a throwaway copy; every change is caught.
+- Six more HTTP-level flows ran through actual Hermes over authenticated routes and PostgreSQL (`test_pinned_hermes_http.py`).
+- Parser, ledger and adapter have unit tests. The attempt tables, the routes, crash recovery, a second process, a dead worker, late results and simultaneous requests have PostgreSQL tests.
+- The mapped browser path drives failure, retry, free-text replies, conflict, rejection, unsupported meaning and foreign-owner denial at 1280px and 390px, then restarts and reopens.
+- Two mutation sweeps change rules in a throwaway copy. The first covers the parser, ledger and adapter. The second covers the wiring.
 - No real provider socket, key or account was used.
 
 ## What is not proven
 
 - How any real model reads these requests. Quality, cost per request and latency of a real provider are unmeasured.
 - Production tenancy, hosting, a provider spending cap, provider-side cancellation, billing.
-- The authenticated HTTP path, the PostgreSQL attempt table, restart and reopen of saved attempts, and the screens. Those need the shared wiring.
-- That a user understands a question or a proposal.
+- That a user understands a question or a proposal. No person used the screens.
+- Safari, Firefox, a phone and a screen reader. Only Chromium at 1280px and 390px, axe and a keyboard path ran.
+- An unknown outcome has no way forward in this build: no retry is offered. A reconciliation record and a decision are needed first.
 
 ## Run it
 
-From the repository root. The pinned Hermes checkout must exist at `/Users/degencodebeast/Projects/personal/monad-hack/.tools/hermes-agent`.
+From the repository root. The pinned Hermes checkout must exist at `/Users/degencodebeast/Projects/personal/monad-hack/.tools/hermes-agent`. The full mapped path, with its P05 phase, is in `.agents/skills/verify-edge-os/SKILL.md`.
 
 ```sh
 cd apps/api && uv sync --frozen
-uv run --frozen pytest tests/test_interpretation_response.py tests/test_interpretation_attempts.py tests/test_hermes_interpreter.py
+uv run --frozen pytest tests/test_interpretation_response.py tests/test_interpretation_attempts.py tests/test_hermes_interpreter.py tests/test_interpretation_attempt_store.py tests/test_hermes_research_flow.py tests/test_hermes_research_recovery.py
 P05_EVIDENCE_DIR=<private folder> uv run --frozen pytest ../../tests/hermes_interpretation   # needs Docker and network for the image build
 ```
 

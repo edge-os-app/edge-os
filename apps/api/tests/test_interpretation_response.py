@@ -534,24 +534,29 @@ def test_a_reply_fills_a_missing_field_with_words_taken_from_the_reply() -> None
 
 
 def test_fields_the_reply_does_not_change_are_carried_forward_word_for_word() -> None:
-    reply = "Make the entry a 2% rise: price up more than 2%"
-    result = follow_up([], [STATED_ENTRY, STATED_EXIT, RESTRICTIONS_ITEM], reply)
+    reply = "Use a fixed 100 quote units per entry"
+    result = follow_up([{"field_name": "sizing", "state": "KNOWN", "origin": "USER_STATED",
+                         "source_passage": "100 quote units", "value": SIZING_PROPOSAL}],
+                       [STATED_ENTRY, STATED_EXIT, RESTRICTIONS_ITEM], reply)
 
     assert isinstance(result, ParsedInterpretation)
     assert [(i["field_name"], i["source_ref"], i.get("value")) for i in result.field_evidence] == [
         ("entry", "intake:original_request#c0-47", ENTRY_VALUE), ("exit", "intake:original_request#c53-97", EXIT_VALUE),
-        ("restrictions", "intake:restrictions", ["no leverage"])]
+        ("restrictions", "intake:restrictions", ["no leverage"]), ("sizing", "answer:choose-entry#c12-27", SIZING_PROPOSAL)]
     assert all(item["interpretation_revision"] == "" for item in result.field_evidence)
 
 
-def test_a_paraphrased_restatement_of_the_same_meaning_changes_nothing() -> None:
+def test_a_paraphrased_restatement_of_the_same_meaning_is_rejected_because_it_changes_nothing() -> None:
     reply = "I meant above one percent over fifteen minutes"
     result = follow_up([{"field_name": "entry", "state": "KNOWN", "origin": "USER_STATED",
                          "source_passage": "above one percent", "value": ENTRY_VALUE}],
                        [STATED_ENTRY, RESTRICTIONS_ITEM], reply)
 
-    assert isinstance(result, ParsedInterpretation)
-    assert by_name(result)["entry"]["source_ref"] == "intake:original_request#c0-47"  # the first statement stays
+    assert_rejected(result, "reply_changed_nothing", "/field_evidence")  # a saved clarification must change a field
+
+
+def test_a_reply_that_reports_nothing_is_rejected_because_it_changes_nothing() -> None:
+    assert_rejected(follow_up([], [STATED_ENTRY, RESTRICTIONS_ITEM], "ok"), "reply_changed_nothing", "/field_evidence")
 
 
 def test_rejects_a_silent_overwrite_of_a_value_the_user_stated() -> None:

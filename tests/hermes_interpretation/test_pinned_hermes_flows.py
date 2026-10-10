@@ -129,7 +129,7 @@ def test_a_contradicting_reply_becomes_a_conflict_that_the_router_sends_back_to_
     assert [(f["code"], f["path"]) for f in outcome.findings] == [("conflicting_field", "/field_evidence/entry")]
 
 
-def test_a_paraphrased_restatement_changes_nothing(pinned_hermes_image: str, run_id: str, evidence_root: Path) -> None:
+def test_a_paraphrased_restatement_is_rejected_because_it_changes_nothing(pinned_hermes_image: str, run_id: str, evidence_root: Path) -> None:
     restate = [{"field_name": "entry", "state": "KNOWN", "origin": "USER_STATED",
                 "source_passage": "above one percent", "value": ENTRY}]
     session = Session(pinned_hermes_image, run_id, evidence_root, "flow-restatement",
@@ -139,8 +139,8 @@ def test_a_paraphrased_restatement_changes_nothing(pinned_hermes_image: str, run
     second = session.interpreter.follow_up(OWNER, INTAKE, CASES["concrete-thesis"]["intake"], first.parsed.field_evidence,
                                            "Confirm?", ClarificationAnswer("answer:q", "I meant above one percent"))
 
-    assert isinstance(second, Interpreted)
-    assert second.parsed.field_evidence == first.parsed.field_evidence
+    assert isinstance(second, OutputRejected) and second.rejection.reason_code == "reply_changed_nothing"
+    assert session.ledger.history(OWNER, INTAKE)[1].settlement.parse_result == "REJECTED:reply_changed_nothing"  # type: ignore[union-attr]
 
 
 def test_a_retry_after_a_provider_failure_is_a_separate_attempt_and_the_failure_stays(
