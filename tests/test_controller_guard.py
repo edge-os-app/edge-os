@@ -1223,6 +1223,45 @@ class StopGuardTests(unittest.TestCase):
                 self.assertIn("malformed", outputs[0].get("reason", ""))
                 self.assertEqual(outputs[1], {})
 
+    def test_command_hook_accepts_high_gate_count_and_rejects_malformed_for_both_hosts(self):
+        script = str(Path(__file__).resolve().parents[1] / "scripts/controller_guard.py")
+        for host in ("codex", "claude"):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                session_id = f"{host}-highcount"
+                binding = {
+                    "host": host, "session_id": session_id, "agent_id": f"{host}:{session_id}",
+                    "pane_id": "%1", "cwd": str(root), "status": "ACTIVE", "role": "gate",
+                    "required_reports": [], "approved_work": [{"id": "T-1", "status": "in_progress"}],
+                    "gate_verdicts": 6,
+                }
+                state = root / "bindings.json"
+                state.write_text(json.dumps({"version": 1, "bindings": [binding]}))
+                payload = {"session_id": session_id, "cwd": str(root), "stop_hook_active": False}
+                command = [sys.executable, script, "--state-root", str(root), "hook", host]
+
+                active = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True, check=False)
+                self.assertEqual(active.returncode, 0, active.stderr)
+                self.assertEqual(json.loads(active.stdout)["decision"], "block")
+                self.assertIn("approved-work", json.loads(active.stdout)["reason"])
+
+                binding["status"] = "AWAITING_EVENT"
+                state.write_text(json.dumps({"version": 1, "bindings": [binding]}))
+                waiting = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True, check=False)
+                self.assertEqual(waiting.returncode, 0, waiting.stderr)
+                self.assertEqual(json.loads(waiting.stdout), {})
+
+                for count in (-1, 4):
+                    with self.subTest(host=host, count=count):
+                        update = {"host": host, "session_id": session_id, "agent_id": f"{host}:{session_id}",
+                                  "gate_verdicts": count}
+                        rejected = subprocess.run(
+                            [sys.executable, script, "--state-root", str(root), "update", host],
+                            input=json.dumps(update), text=True, capture_output=True, check=False,
+                        )
+                        self.assertEqual(rejected.returncode, 2)
+                        self.assertEqual(json.loads(state.read_text())["bindings"][0]["gate_verdicts"], 6)
+
     def test_stop_hook_active_always_allows_without_second_block(self):
         self.binding["required_reports"] = ["reports/final.md"]
         self.write_state([self.binding])
@@ -1631,19 +1670,68 @@ class SessionStartTests(unittest.TestCase):
         self.assertEqual(binding["pane_id"], "%5")
         self.assertEqual(binding["cwd"], str(self.root.resolve()))
 
-    def test_first_gate_counter_update_is_bounded_and_preserves_receipt(self):
+    def test_gate_counter_update_accepts_cumulative_counts_four_and_six(self):
         self.assign({**self.assignment, "role": "gate"})
         self.start()
+        _, original_receipt = self.receipt()
+        identity = {"host": "codex", "session_id": "s1", "agent_id": "codex:s1"}
+
+        for count in (4, 6):
+            with self.subTest(count=count):
+                code, _ = self.run_cli("update", payload={**identity, "gate_verdicts": count})
+                self.assertEqual(code, 0)
+                self.assertEqual(self.state()["bindings"][0]["gate_verdicts"], count)
+                self.assertEqual(self.receipt()[1], original_receipt)
+
+    def test_gate_counter_update_rejects_malformed_and_decreasing_counts(self):
+        self.assign({**self.assignment, "role": "gate"})
+        self.start()
+        state = self.state()
+        state["bindings"][0]["gate_verdicts"] = 4
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
         original = self.state()["bindings"][0]
         _, original_receipt = self.receipt()
         identity = {"host": "codex", "session_id": "s1", "agent_id": "codex:s1"}
 
-        for count in (4, -1):
+        for count in (-1, True, 1.5, 3):
             with self.subTest(count=count):
                 code, _ = self.run_cli("update", payload={**identity, "gate_verdicts": count})
                 self.assertEqual(code, 2)
                 self.assertEqual(self.state()["bindings"][0], original)
                 self.assertEqual(self.receipt()[1], original_receipt)
+
+    def test_gate_counter_six_passes_stop_load_validation_and_keeps_obligations(self):
+        self.assign({**self.assignment, "role": "gate"})
+        self.start()
+        state = self.state()
+        state["bindings"][0].update({"status": "ACTIVE", "gate_verdicts": 6, "required_reports": []})
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+        store = GuardStore(self.state_root / "delivery.sqlite3")
+        result = stop_decision("codex", {"session_id": "s1", "cwd": str(self.root), "stop_hook_active": False},
+                               self.state_root / "bindings.json", store)
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("approved-work", result["reason"])
+
+    def test_gate_counter_six_survives_resume_and_approved_fork(self):
+        self.assign({**self.assignment, "role": "gate"})
+        self.start()
+        state = self.state()
+        state["bindings"][0]["gate_verdicts"] = 6
+        (self.state_root / "bindings.json").write_text(json.dumps(state))
+        code, restart = self.start({**self.event, "source": "resume"})
+        self.assertEqual(code, 0)
+        self.assertIn("hookSpecificOutput", restart)
+        after_resume = self.state()
+        self.assertEqual(after_resume["bindings"][0]["gate_verdicts"], 6)
+        assignment = {
+            **self.assignment, "role": "gate", "assignment_id": "fork-gate-6",
+            "pane_id": "%6", "fork_parent_session_id": "s1",
+        }
+        self.assertEqual(self.assign(assignment, now=1002)[0], 0)
+        event = {**self.event, "session_id": "fork-gate-6-session", "source": "fork"}
+        self.assertTrue(self.start(event, pane="%6", now=1003)[1])
+        child = next(binding for binding in self.state()["bindings"] if binding["session_id"] == "fork-gate-6-session")
+        self.assertEqual(child["gate_verdicts"], 6)
 
     def test_update_rejects_malformed_first_or_appended_review_history(self):
         self.assign()
