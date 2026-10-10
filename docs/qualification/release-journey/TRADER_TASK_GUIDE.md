@@ -20,13 +20,13 @@ Rules:
 | Item | Requirement |
 |---|---|
 | Candidate revision | Exact committed candidate from the running worktree, recorded in the observation form |
-| Fixture sign-in | Existing `tests/p03/fixture-auth.mjs` owner tokens, same as the mapped path |
-| Surfaces | Research home, a saved request with an exact rule, a saved P08 declaration, a saved P09 report, a saved P13 replay, Agents/Positions/Funds account views |
+| Fixture sign-in | The accepted verifier creates the isolated authentication and saved records: `scripts/p03/verify_run.py` seeds owned owners, saved requests, investigation, effect and replay records and the P19 account fixtures, and publishes per-run P03_TOKEN_* and P19 record IDs into `ui-results.json` and `p19-fixtures.json`. `tests/p03/fixture-auth.mjs` only injects those per-run tokens into the page; it supplies no manual credential. The conductor runs the verifier first and reads the needed record IDs from its evidence under `.scratch/p03/evidence/<run_id>/`. |
+| Surfaces | Research home, a saved no-thesis investigation, a saved compiled rule with an exact threshold (for T2), a saved P08 declaration, a saved P09 report, a saved P13 replay, Agents/Positions/Funds account views |
 | Device | Desktop 1280px and a 390px viewport as available; a physical phone when available |
 | Environment | Local repository run by the controller or builder; no live provider, wallet or network |
 | Timing | Target five observations where participants are available; preserve actual numbers |
 
-Each participant session must name the exact revision it ran. A notebook or the observation form in section 6 records the session.
+Each participant session must name the exact revision it ran and the evidence run ID whose records it used. A notebook or the observation form in section 6 records the session.
 
 ## 3. Participant-facing tasks
 
@@ -34,31 +34,31 @@ Present each task as written here. Do not add synonyms, definitions or hints bef
 
 ### Task T1: Understand a saved research result
 
-Open the Research home, then open one saved request whose outcome is UNRESOLVED.
+Conductor setup: open a saved no-thesis investigation whose outcome is UNRESOLVED. The scripted fixture `no-thesis` in `apps/api/src/edge_os_api/research/fixture_interpreter.py` (scenario `no-thesis`) creates this state; the e2e test `no thesis stays an investigation and shows no study progress` in `tests/p03/e2e.spec.mjs` drives it and asserts no Save-this-revision button. Use that record, not a compiled one.
 
 Question: "This page holds a saved research item. What does it tell you about the trading idea, and what would you want to do next? You can say you cannot tell."
 
 ### Task T2: Read the exact rule
 
-Open the same request and show its compiled rule review.
+Conductor setup: this is a separate record from T1. Rules review renders only for a COMPILED or PUBLISHED outcome with a saved draft. Select a saved compiled rule from the same run set, for example the `grouped-rule` or `tiny-threshold` fixture the e2e tests saved. `tests/p03/provenance.spec.mjs` reopens the negative and positive tiny-threshold records by their saved URL. The conductor records the exact saved revision ID used.
 
 Question: "This rule will be saved exactly as written. What does the rule say, and what numbers would it act on? You can say you cannot tell."
 
 ### Task T3: Tell evidence from permission
 
-From Research, open Agents and then Funds.
+Conductor setup: open the seeded account records. `scripts/p03/verify_run.py` inserts authored P19 records under the fixture owner and publishes the owner's record list in `ui-results.json` (key `p19-context-*`) and `p19-fixtures.json` (record IDs). Open Agents, then Positions, then Funds from the side navigation. Do not open Reviewer or scenario controls; this run has none.
 
 Question: "Without doing anything, what does this page let you see, and what does it not let you or the agent do yet? You can say you cannot tell."
 
 ### Task T4: Understand saved records after reopen
 
-Open a saved P09 report, then a saved P13 replay, and let the participant reopen one.
+Conductor setup: reuse the saved P09 report ID and P13 replay ID from the same evidence run (`ui-results.json` keys `investigation-*` for the report and `spot-replay-*` for the replay, both saved by the verifier; `tests/p03/reopen.spec.mjs` reassigns IDs only to existing runs). Open the report, then the replay, and reopen one of them.
 
 Question: "This record was saved earlier. What happens when you reopen it, and what does the page say did not run again? You can say you cannot tell."
 
 ### Task T5: Distinguish pending from confirmed
 
-From Positions and Funds, show one pending or unknown action beside a confirmed one.
+Conductor setup: the P19 seed contains ACTION records in `PROPOSED`, `QUEUED`, `SUBMITTED`, `CONFIRMED`, `REVERTED` and `SUBMISSION_UNKNOWN` states (fixture file `apps/api/tests/fixtures/account_views/account-records-v1.json`; `scripts/p03/verify_run.py` seeds them). Open Positions, filter to an agent, and show one pending or unknown action beside a confirmed one. Record which record IDs were shown.
 
 Question: "Show me which item is finished and which one is still waiting, and what that means for the tokens held. You can say you cannot tell."
 
@@ -68,11 +68,11 @@ This section is for the builder and controller only. It must not reach the parti
 
 ### T1 expected
 
-The saved request shows an outcome, a no-thesis or investigation state, and its saved identity. Unsupported or unscripted requests keep their restriction text and show "Not supported yet" or "Could not be interpreted" as a system message, not a verdict on the idea. The page grants no permission. Sources: RequestPage behavior and `tests/p03/e2e.spec.mjs` unsupported and unscripted tests.
+The saved no-thesis request shows an UNRESOLVED outcome, "No study ran", and no Save-this-revision action. It is an investigation, not a compiled rule. Unsupported or unscripted requests keep their restriction text and show "Not supported yet" or "Could not be interpreted" as a system message, not a verdict on the idea. The page grants no permission. Sources: RequestPage behavior and `tests/p03/e2e.spec.mjs` no-thesis, unsupported and unscripted tests.
 
 ### T2 expected
 
-The rule review renders the exact compiled rule with its thresholds and groupings, the immutable content hash, and provenance rows for the exact values. The saved revision reopens with the same text after restart. Sources: RulesReview, `tests/p03/provenance.spec.mjs`, `tests/p03/reopen.spec.mjs`, `docs/implementation/P06_COMPILER_PROFILE.md`.
+The rule review renders the exact compiled rule with its thresholds and groupings, the immutable content hash, and provenance rows for the exact values. Because this record is COMPILED or PUBLISHED, the saved revision reopens with the same text after restart. Sources: RulesReview, `tests/p03/provenance.spec.mjs`, `tests/p03/reopen.spec.mjs`, `docs/implementation/P06_COMPILER_PROFILE.md`.
 
 ### T3 expected
 
@@ -104,6 +104,8 @@ One form per participant per revision. All fields are required; leave unknown fi
 Participant id:
 Role (trader / builder / teammate):
 Candidate revision (exact SHA):
+Evidence run id (from .scratch/p03/evidence/<run_id>):
+Record IDs shown per task (T1 no-thesis URL, T2 revision id, T4 report/replay id, T5 action ids):
 Date and time:
 Device and viewport (desktop 1280 / 390px / physical phone):
 Session type (assisted / unassisted):

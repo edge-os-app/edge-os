@@ -49,6 +49,8 @@ Each case is a table row with the same fields:
 
 Story to case mapping: stories 79 and 80 apply to the implemented surfaces in J01 to J03. Story 86 (qualified deployment and recorded operation) applies to the future qualification in J10 and section 13; the current repository has no deployment or recorded-operation evidence. Story 87 (a fresh agent runs the accepted path and inspects saved records from portable fixtures) applies to the fresh-operator steps in sections 5, 7 and 12; the portable fixture inputs exist (`tests/p03/fixture-auth.mjs` and the account-view fixtures, [feature map](../../../.agents/skills/verify-edge-os/feature-map.md)), but a fresh-agent run on another machine is UNRUN for this package.
 
+Case execution type and per-run evidence: the fallback states in J04, J05, J06 and J08 are created by the named automated browser tests below, not by ordinary page controls. The conductor reproduces each one from the named injection procedure when verifying, or runs the named test and reads its recorded evidence. Participant tasks T1 to T5 in TRADER_TASK_GUIDE are manual observations by the builder using the evidence run's record IDs. Future controls in J10 and section 13 require a later authorized run and have no current evidence field. Per-run record IDs for the seeded saved surfaces live in `ui-results.json` and `p19-fixtures.json` under `.scratch/p03/evidence/<run_id>/`.
+
 ## 4. Result-first and current primary action
 
 Requirement: stories 79 and 80 and the accepted release subset require the current result and the next primary action to lead. Sources: [design surface and acceptance](../../superpowers/specs/2026-09-29-edge-os-hackathon-design.md) sections 14 and 17; prototype findings [frontend interaction result](../../prototypes/EDGE_OS_FRONTEND_INTERACTION_RESULT.md) that record hierarchical presentation as the accepted direction.
@@ -110,7 +112,7 @@ Existing green checks (mapped once):
 | Rejected or unavailable session | App/Shell | e2e `signed-out and rejected sessions...`; quality session-rejected |
 | Account load failure with retry | AccountViews | e2e P19 first failure then Try again; quality P19 |
 
-Exact steps: with fixture sign-in, submit nothing, load an empty owner; force the saved list to fail and retry; submit a request and let the fixture answer; force a stale answer; reload the page and check the draft survives.
+Exact steps: state-condition injection is automated, not ordinary page controls. With fixture sign-in, submit nothing and open an empty owner to see the empty list (`e2e.spec.mjs` `empty state for an owner with no requests`). To force the saved-list failure and its retry, reproduce the HTTP-503 route interception in `quality.spec.mjs` `a failed load of a saved request keeps the retry button, focus and a visible error` (the `page.route("**/v1/research/requests/*")` fulfillment). To force a stale answer and a reload failure, reproduce `answerOutOfBand` and the `page.route("**/v1/research/requests/*")` abort/fulfill in the `quality.spec.mjs` stale-answer tests. Submit the thesis fixture (`THESIS` constant) and let the fixture answer, then reload and check the draft survives (`quality.spec.mjs` `an unsent draft survives a reload...`).
 
 Expected observation: each failure shows its error beside the action, keeps focus, offers the correct recovery, and never pretends a pending action completed.
 
@@ -147,7 +149,7 @@ Existing green checks (mapped once):
 
 - e2e `another owner cannot open the record`: foreign read, answer and publish return `not found`; no row change.
 - `scripts/p03/verify_run.py` writes `ownership-drive.json` after driving the cross-owner cases per surface.
-- `apps/api/tests/test_live.py` covers the published cross-owner parent reference and the 409 conflict.
+- `apps/api/tests/test_publication.py::test_database_rejects_cross_owner_parent_reference` covers the database cross-owner parent reference; `test_live.py` covers owner denial after restart and publication-route 409 conflicts (`apps/api/tests/test_live.py`).
 - `apps/api/tests/test_ownership.py` covers owner-scoped read/list denial.
 - e2e P19 account views: foreign `GET /v1/account-views/{record_id}` returns 404 and owner B list is empty.
 
@@ -171,7 +173,10 @@ Existing green checks:
 
 Record identity: `apps/api/src/edge_os_api/` compiles and stores the exact rule with content and manifest SHA-256. `docs/implementation/P06_COMPILER_PROFILE.md` and `docs/contracts/p06/` define the versioned deterministic compiler. `apps/api/tests/test_strategy_compiler.py` and `test_strategy_compilation_api.py` cover the machine form.
 
-Exact steps: type a tiny exact threshold and a nested Boolean group, adopt, save, close, reopen in a fresh context and after an API restart; read the provenance rows for positive and negative signs.
+Exact steps: the fixture interpreter matches normalized request text, requested job and input class exactly. Use the existing accepted constants from the tests, not arbitrary prose:
+- tiny negative threshold: `TINY_RULE` and `TINY_THRESHOLD` in `tests/p03/e2e.spec.mjs` (`-0.` followed by 399 zeros and `1`); `Group specific rule or thesis` as input class; fixture scenario `tiny-threshold` in `apps/api/src/edge_os_api/research/fixture_interpreter.py`.
+- nested left group: `GROUPED_RULE`; right group: `GROUPED_RIGHT_RULE` (same file). Provenance for both signs reuses the negative `TINY_RULE` record and the positive `TINY_POSITIVE_RULE` with `TINY_POSITIVE_THRESHOLD` from `tests/p03/provenance.spec.mjs`.
+Type the exact text, select the `Specific rule or thesis` input class (CONCRETE_THESIS), add the accepted `no leverage` restriction, prepare, adopt the suggested settings, save, close, reopen in a fresh context and after an API restart; read the provenance rows for positive and negative signs.
 
 Expected observation: the exact decimal and tree shape renders identically each time with the same content hash.
 
