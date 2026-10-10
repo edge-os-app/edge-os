@@ -17,7 +17,8 @@ Source basis is in [SOURCE_EVIDENCE.md](SOURCE_EVIDENCE.md). This document selec
 | Maximum output / acquisition upper bound | Required when a fixed token-quantity sell ceiling is adopted | design EXIT-CAP-Q01 | `ABSENT` in the intent |
 | Native `msg.value` | Must cover `amountUserSells` when the input is native | source-inspected entrypoint | `UNSET` |
 | ERC-20 versus native notional | Native value is not the ERC-20 notional | design "Exact Monad operation" | `UNSET` |
-| Approvals | Entrypoint approves the router for `amountIn` then resets to `0` | source-inspected entrypoint | **requires live proof** |
+| Owner wallet → entrypoint allowance | The owner must allow the `KuruFlowEntrypoint` as spender of the input token; `_transferTokensFromUser` calls `safeTransferFrom(token, msg.sender, entrypoint, amountUserSells)` | source-inspected entrypoint | `UNSET`; spender/amount/lifetime/revocation all unqualified |
+| Entrypoint → router approval | The entrypoint approves the router for the input, then resets that approval to `0` | source-inspected entrypoint | source-inspected; **distinct** from the owner allowance above |
 | Recipient | `msg.sender` or an explicit `receiver` | source-inspected entrypoint | `UNSET` |
 | Route `program` bytes | Opaque bytes forwarded to the router | source-inspected entrypoint | `UNSET`; encoding undocumented |
 | Fee fields | `feeBps`, `referrerFeeBps`, `feeCollectorAddress`, `referrerAddress`, `isInTokenFee` | documented + source-inspected | `UNSET` |
@@ -31,6 +32,7 @@ Rules to preserve:
 - Native MON gas stays separate from WMON and other trading assets.
 - A **quote estimate** is not an **enforceable bound**. `output` from the quote API is an estimate. `minAmountUserBuys` is the enforced minimum.
 - A **local expiry** is not an **on-chain deadline**. The Flow intent has no time field. Local intent/mandate expiry cannot revoke a broadcast transaction.
+- The owner's allowance to the entrypoint and the entrypoint's allowance to the router are **different relationships**. The entrypoint resets only its own router approval to `0`; it does not reset the owner's allowance to the entrypoint. Both need their own limit and, where applicable, revocation.
 
 ## 2. Identity, authority and isolation
 
@@ -85,7 +87,55 @@ Rules to preserve:
 | Success criteria | Confirmed receipt, decoded effects, actual deltas | `UNSET` |
 | Failure criteria | Explicit fail-closed conditions | `UNSET` |
 
-## 6. Unsupported and unknown markers
+## 6. Setup actions and separate approval scope
+
+Preparation acceptance item 7 requires every funding, wrap, approval, signer and policy setup action, with its own bounds. Permission for the one controlled swap does not grant permission for any setup, exit, transfer, replacement or cleanup action. Each action needs its own scope.
+
+| Setup action | Fields to freeze | Separate approval scope | Current value |
+|---|---|---|---|
+| Owner funding of the agent wallet | network, asset, raw amount, decimals, fees, recipient, transaction reference | one funding approval; not part of the swap permission | `UNSET` |
+| Wrap or unwrap (for example native MON and WMON) | asset pair, raw amount, mechanism, fees | only if the selected route needs it; not assumed | `UNQUALIFIED` |
+| Wallet → entrypoint token allowance | spender (the entrypoint), asset, raw amount, lifetime or revocation | its own approval, distinct from the swap | `UNSET` |
+| Restricted signer attachment | wallet, signer identity, policy binding, consent | its own owner-approved action | `UNSET` |
+| Policy administration | policy identity, content, version, administrator | separate from the executor credential | `UNSET` |
+
+Rules:
+
+- Preserve the **one-controlled-swap** ceiling. List every auxiliary action separately and bound it. No setup, follow-up or cleanup inherits the swap permission.
+- State acquired and residual holdings and any separately permitted follow-up.
+- Unknown setup bounds stay `UNSET`; the affected setup action stays closed.
+
+## 7. Transport, transaction identity and durable claim
+
+| Field | Requirement | Current value |
+|---|---|---|
+| Quote/build service | Exact endpoint and method for the selected route | `UNSET` |
+| Quote authentication | JWT (`Bearer`) or `X-API-Key` | `UNSET`; documented options only |
+| Signing transport | Exact service, endpoint and method (for example Privy `eth_signTransaction`) | `UNSET` |
+| Broadcast transport | Exact service, endpoint and method, if separate from signing | `UNSET`; whether signing and broadcast are separate is `UNKNOWN` |
+| Transaction identity and nonce | Exact serialized transaction fields plus nonce source | `UNSET` |
+| Locally derived transaction hash | Keccak of the encoded signed transaction, before broadcast | method documented; value `UNSET` |
+| Provider request reference | Exact provider request identity | `UNSET` |
+| Idempotency reference | `privy-idempotency-key` value and its 24-hour scope | `UNSET` |
+| Fee and gas fields | Exact fee fields, fee recipients, gas limit, fee fields, price guards | `UNSET` |
+| Durable storage | Where original signed bytes, derived hash, intent and reservations persist | `UNSET` |
+| Exclusive claim | One exclusive wallet/network claim before the external effect | `UNSET` |
+
+The selected transport, endpoints, methods and durable references must be frozen **before** the applicable external effect. No paid or authenticated call inherits approval from planning.
+
+## 8. Negative-control isolation and containment
+
+| Item | Required behavior | Current value |
+|---|---|---|
+| Safe denial request | A dedicated, isolated request that the provider must deny | `UNSET` plan |
+| Removal request | The owner removal request, isolated from the denial | `UNSET` plan |
+| Isolation from local counters | Do not let an exhausted local counter mask the provider result | `UNSET` plan |
+| Unexpected authorization containment | If an ostensibly denied request is unexpectedly authorized, halt the affected capability, retain the breach and residual exposure, and stop new work | `UNSET` plan |
+| Stop behavior | Scoped stop that denies new work and retains pending work and monitoring | `UNSET` plan |
+
+If a negative control is unexpectedly authorized, do not treat it as a pass. Record the breach and containment. Preparation runs no provider test.
+
+## 9. Unsupported and unknown markers
 
 - Testnet `10143` Flow support: **UNKNOWN / not documented**.
 - Opaque `program` enforcement by the policy: **requires live proof**.

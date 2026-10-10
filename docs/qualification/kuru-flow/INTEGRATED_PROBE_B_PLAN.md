@@ -29,18 +29,20 @@ Available durable references, as documented or source-inspected:
 
 | Reference | Availability | Limit |
 |---|---|---|
-| Signed transaction bytes and hash | Privy `eth_signTransaction` returns `signed_transaction` RLP plus `encoding`. The transport is documented. | Treat the bytes as broadcast-capable. Same-action resend needs byte-identical reuse. The actual retrieval and preservation path is **requires live proof**. |
+| Signed transaction bytes | Privy `eth_signTransaction` returns `signed_transaction` RLP plus `encoding`. The transport is documented. | Treat the bytes as broadcast-capable. Same-action resend needs byte-identical reuse. The actual retrieval and preservation path is **requires live proof**. |
+| Locally derived transaction identifier | When the transport returns the serialized signed bytes, the Ethereum transaction hash is computed locally by Keccak of the encoded transaction. It exists **before** broadcast for both legacy and typed encoding, with no network or broadcast dependency. | It identifies the transaction. It is **not** proof of submission or confirmation. Require durable original bytes plus this derived identifier before broadcasting on a sign-then-send route. |
 | Provider request identity | Privy `privy-idempotency-key`; on 4xx/5xx Privy caches and replays the response for the same key. Policy violations allow same-key retries. | Replay for the same key is not the same as preserving the original signed bytes. Distinct references. |
-| On-chain transaction hash | Returned by broadcast. | Not present for a sign-only path until broadcast. |
+| Broadcast acknowledgement | Returned by broadcast. | Reconcile any broadcast-returned hash against the locally derived identifier. A mismatch is a new identity, not the original action. |
 | Edge OS intent/reservation records | Application records bound to owner, agent, wallet, network, strategy revision and mandate. | Application records are not provider or chain evidence. |
 
 Rules to preserve:
 
-- **Same-action retrieval or resend** reuses the original signed bytes and transaction hash and keeps one economic-action identity. Record each provider request separately.
+- **Same-action retrieval or resend** reuses the original signed bytes and its locally derived transaction hash and keeps one economic-action identity. Record each provider request separately.
 - **A new economic action** means changed bytes, a changed transaction, a fresh route or a new transaction. It needs its own authority.
 - No automatic replacement strategy. No fresh route on an unknown outcome.
-- If the transport cannot retrieve the original signed bytes and hash, resend stays **unqualified**.
+- If the transport cannot retrieve the original signed bytes, the derived identifier cannot be reproduced and resend stays **unqualified**.
 - `SUBMISSION_UNKNOWN` retains the original references and all reservations until reconciliation.
+- Preserve the original serialized signed bytes and the locally derived hash **before** broadcasting. The broadcast-returned acknowledgement is a separate reference; reconcile it against the derived identity. This resolves the acknowledgement-loss boundary: an unknown outcome has a durable identity even when no broadcast response was observed.
 
 ## 3. P16 reuse map
 

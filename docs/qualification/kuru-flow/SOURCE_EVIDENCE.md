@@ -52,7 +52,16 @@ Limit: the pinned source is the public Flow repository. It does not prove the de
 
 Documentation limit: P1 shows ABI-argument matching. It does **not** show equality or bound checks on opaque `bytes` arguments such as the Flow `program`. Whether the policy can enforce any bound on the opaque route stays `UNKNOWN`.
 
-## 5. Retained records referenced
+## 5. Ethereum transaction-hash reference (Geth, pinned)
+
+| ID | Source | SHA256 | Supports |
+|---|---|---|---|
+| G1 | https://github.com/ethereum/go-ethereum/blob/3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c/core/types/transaction.go | `625b718dbb437460cae5f15111f39e7c15323ded528bf2ea55fc808b22590722` | `Hash()` computes the transaction identifier from the encoded transaction (`:579`) |
+| G2 | https://github.com/ethereum/go-ethereum/blob/3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c/core/types/hashing.go | `076b9e2d0a0b02de3c0c2c9327b6d2d28be6f15d0d6a13772247f73b8a9e51c4` | Keccak hashing for legacy (`:57`) and typed (`:68`) encoding with no network or broadcast dependency |
+
+Both file SHA256 values were independently re-fetched and verified on 2026-10-10. The transaction identifier is therefore computable locally from the serialized signed bytes, before broadcast. This is a primary reference implementation, not an application change. It supplies an identifier, not proof of submission or confirmation.
+
+## 6. Retained records referenced
 
 | ID | Path | Status | Use and limit |
 |---|---|---|---|
@@ -73,7 +82,7 @@ Retained prior research:
 
 These retained notes need the fresh checks above; the fresh checks are recorded in sections 2 to 4.
 
-## 6. Claim-to-source map
+## 7. Claim-to-source map
 
 | Claim | Source |
 |---|---|
@@ -84,9 +93,11 @@ These retained notes need the fresh checks above; the fresh checks are recorded 
 | No maximum-output field | S2 |
 | Router called with `minAmountOut = 0`; post-fee check inside the entrypoint | S1 |
 | ERC-20 approval set then reset to `0` | S1 |
+| Owner must allow the entrypoint as spender of the input token (separate from the router approval) | S1 |
 | Native input requires `msg.value >= amountUserSells` | S1 |
 | Policy supports chain/`to`/`value`/decoded-calldata conditions | P1 |
 | Opaque `program` enforcement unproven | P1 (absence of bytes-equality example) |
 | `eth_signTransaction` returns broadcast-capable bytes; idempotency behavior | P2 |
+| Transaction hash computable locally from signed bytes before broadcast | G1, G2 |
 
 Each claim is bounded to what its source shows. A documented capability is not a live proof.
