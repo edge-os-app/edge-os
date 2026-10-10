@@ -15,7 +15,7 @@ A source-inspected or harness-executed result does not imply a provider or owner
 
 ## 1. Existing proof versus remaining gaps (WAL-Q19, WAL-Q20, WAL-Q24)
 
-The accepted contract requires one user-owned wallet per agent and binds every action and position to owner, agent, wallet, network and position. Setup must persist uncertainty before sending, retain one identity through `UNKNOWN`, and reconcile before retry. Signer removal must preserve owner access and pending or residual records and must deny later agent signing. See [P15 wallet contracts](../contracts/P15_WALLET_MANDATE_ACCOUNT_CONTRACTS.md#wallets-ownership-and-flows), [WAL-Q19, WAL-Q20 and WAL-Q24](../EDGE_OS_RESEARCH_CONTRACTS.md#live-wallet-accounting-acceptance-checks) and [ADR 0007](../adr/0007-separate-user-owned-agent-wallets.md). These are accepted requirements, not runtime evidence.
+The accepted contract requires one user-owned wallet per agent and binds every action and position to owner, agent, wallet, network and position. Setup must persist uncertainty before sending, retain one identity through `UNKNOWN`, and reconcile before retry. Signer removal must preserve owner access and pending or residual records and must deny later agent signing. See [P15 wallet contracts](../../contracts/P15_WALLET_MANDATE_ACCOUNT_CONTRACTS.md#wallets-ownership-and-flows), [WAL-Q19, WAL-Q20 and WAL-Q24](../../EDGE_OS_RESEARCH_CONTRACTS.md#live-wallet-accounting-acceptance-checks) and [ADR 0007](../../adr/0007-separate-user-owned-agent-wallets.md). These are accepted requirements, not runtime evidence.
 
 | Check | Accepted requirement | Existing evidence (bounded) | Remaining gap | What the future check can prove |
 |---|---|---|---|---|
@@ -27,7 +27,7 @@ The accepted contract requires one user-owned wallet per agent and binds every a
 
 ## 2. Owner-linked creation route and pinned inputs
 
-**Login creates no wallet.** The web config sets `createOnLogin: "off"` for both chains: `apps/web/lib/privy-config.ts` sets `embeddedWallets.ethereum.createOnLogin = "off"` and `embeddedWallets.solana.createOnLogin = "off"`, and `loginMethods = ["email"]`. The test `apps/web/tests/privy-config.test.ts` asserts both values and that no wallet login method is offered. A connected wallet is not an identity; only the verified `sub` identifies a user ([P01 ownership](../implementation/P01_APPLICATION_AUTH_STORAGE_PROFILE.md#ownership)).
+**Login creates no wallet.** The web config sets `createOnLogin: "off"` for both chains: `apps/web/lib/privy-config.ts` sets `embeddedWallets.ethereum.createOnLogin = "off"` and `embeddedWallets.solana.createOnLogin = "off"`, and `loginMethods = ["email"]`. The test `apps/web/tests/privy-config.test.ts` asserts both values and that no wallet login method is offered. A connected wallet is not an identity; only the verified `sub` identifies a user ([P01 ownership](../../implementation/P01_APPLICATION_AUTH_STORAGE_PROFILE.md#ownership)).
 
 **Current app state.** The application has no wallet-creation call. A search of `apps/web` finds `createOnLogin` only in the config and its test; there is no `createWallet` or `useWallets` call. Wallet creation is therefore **not yet implemented**, and this plan prepares it.
 
@@ -46,7 +46,7 @@ Two provider routes can create an owner-linked wallet. Keep them separate:
 - The P16 offline harness (`docs/qualification/p16/qualification.py`) has **no** Privy SDK and no live mode. It is an authored fake.
 - The historical private helper and its SDK version are private worker evidence, not a shared input. Rolling provider documentation is not the pinned SDK.
 
-**Separate creation from permission and activation.** Wallet creation grants no signer access and starts no trading ([P15](../contracts/P15_WALLET_MANDATE_ACCOUNT_CONTRACTS.md#wallets-ownership-and-flows)). A later signer attachment and any activation are separate steps with their own authority.
+**Separate creation from permission and activation.** Wallet creation grants no signer access and starts no trading ([P15](../../contracts/P15_WALLET_MANDATE_ACCOUNT_CONTRACTS.md#wallets-ownership-and-flows)). A later signer attachment and any activation are separate steps with their own authority.
 
 ## 3. Saved-identity and reconciliation sequence
 
@@ -138,10 +138,10 @@ A documentation PASS does not complete P16 and does not unlock P17, P20 or P21. 
 
 ## References
 
-- [P15 wallet contracts](../contracts/P15_WALLET_MANDATE_ACCOUNT_CONTRACTS.md)
-- [WAL-Q19, WAL-Q20, WAL-Q24](../EDGE_OS_RESEARCH_CONTRACTS.md#live-wallet-accounting-acceptance-checks)
-- [ADR 0007](../adr/0007-separate-user-owned-agent-wallets.md), [ADR 0008](../adr/0008-python-api-postgresql-nextjs-privy-auth.md)
-- [P01 application auth and storage profile](../implementation/P01_APPLICATION_AUTH_STORAGE_PROFILE.md)
+- [P15 wallet contracts](../../contracts/P15_WALLET_MANDATE_ACCOUNT_CONTRACTS.md)
+- [WAL-Q19, WAL-Q20, WAL-Q24](../../EDGE_OS_RESEARCH_CONTRACTS.md#live-wallet-accounting-acceptance-checks)
+- [ADR 0007](../../adr/0007-separate-user-owned-agent-wallets.md), [ADR 0008](../../adr/0008-python-api-postgresql-nextjs-privy-auth.md)
+- [P01 application auth and storage profile](../../implementation/P01_APPLICATION_AUTH_STORAGE_PROFILE.md)
 - [P16 README](README.md) and [provider signing result](PROVIDER_SIGNING_RESULT_2026-10-08.md)
-- [Release cut](../planning/EDGE_OS_RELEASE_CUT_2026-10-10.md), [implementation reference map](../research/EDGE_OS_IMPLEMENTATION_REFERENCE_MAP.md)
+- [Release cut](../../planning/EDGE_OS_RELEASE_CUT_2026-10-10.md), [implementation reference map](../../research/EDGE_OS_IMPLEMENTATION_REFERENCE_MAP.md)
 - Privy current docs (checked 2026-10-10): `POST /v1/wallets` (`https://docs.privy.io/api-reference/wallets/create`), external IDs (`https://docs.privy.io/wallets/wallets/external-ids`), idempotency keys (`https://docs.privy.io/api-reference/idempotency-keys`), create-a-wallet (`https://docs.privy.io/wallets/wallets/create/create-a-wallet`)
