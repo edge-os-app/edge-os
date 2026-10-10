@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 
-from edge_os_api import p02
+from edge_os_api.records import contract_adapter as record_contract
 from flows import HUNCH, answer, compiled_thesis, publication_body, publish, submit
 
 
@@ -13,7 +13,7 @@ def assert_not_found(response):
     assert response.status_code == 404
     body = response.json()
     assert body["code"] == "not_found" and body["outcome"] == "NOT_FOUND"
-    p02.validate_http_error(body)
+    record_contract.validate_http_error(body)
     return body
 
 

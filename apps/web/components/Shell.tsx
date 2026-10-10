@@ -7,15 +7,22 @@ import { Conversation, type ConversationContext } from "./Conversation";
 import { ResearchHome } from "./ResearchHome";
 import { RequestPage } from "./RequestPage";
 import { Later } from "./Later";
+import { AccountViews, type AccountViewName } from "./AccountViews";
 
-type Route = { name: "research" } | { name: "request"; id: string } | { name: "later"; area: "Agents" | "Positions" | "Funds" };
+type Route = { name: "research" } | { name: "request"; id: string; sourceRecordId?: string }
+  | { name: "later"; area: "Agents" | "Positions" | "Funds" }
+  | { name: "account"; area: AccountViewName; recordId?: string };
 
 function parse(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/");
-  if (parts[0] === "research" && parts[1]) return { name: "request", id: parts[1] };
-  if (parts[0] === "agents") return { name: "later", area: "Agents" };
-  if (parts[0] === "positions") return { name: "later", area: "Positions" };
-  if (parts[0] === "funds") return { name: "later", area: "Funds" };
+  const [path, query = ""] = hash.replace(/^#\/?/, "").split("?");
+  const parts = path.split("/");
+  if (parts[0] === "research" && parts[1]) return { name: "request", id: parts[1],
+    sourceRecordId: new URLSearchParams(query).get("source") ?? undefined };
+  const area = parts[0] === "agents" ? "Agents" : parts[0] === "positions" ? "Positions" : parts[0] === "funds" ? "Funds" : null;
+  if (area) {
+    const recordId = new URLSearchParams(query).get("record") ?? undefined;
+    return { name: "account", area, recordId };
+  }
   return { name: "research" };
 }
 
@@ -57,7 +64,7 @@ export function Shell() {
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
-  const current = route.name === "later" ? route.area : "Research";
+  const current = route.name === "later" || route.name === "account" ? route.area : "Research";
 
   return (
     <div className="app">
@@ -68,13 +75,13 @@ export function Shell() {
             onClick={() => go("#/research")}>Research</button>
           {(["Agents", "Positions", "Funds"] as const).map((area) => (
             <button key={area} type="button" aria-current={current === area ? "page" : undefined}
-              onClick={() => go(`#/${area.toLowerCase()}`)}>{area}</button>
+            onClick={() => go(`#/${area.toLowerCase()}`)}>{area}</button>
           ))}
         </nav>
         <div className="side-foot">
           <div className="notice">
-            <strong>Build scope.</strong> This build runs Research only. Saving a rule grants no trading permission and
-            moves no money.
+            <strong>Build scope.</strong> Account views show authored synthetic records only, not live wallet data. Saving a
+            Research rule grants no trading permission. This build does not connect a wallet or move funds.
           </div>
           <button className="btn btn-ghost" type="button" onClick={auth.logout}>Sign out</button>
         </div>
@@ -82,10 +89,12 @@ export function Shell() {
       <main id="main" className="main" tabIndex={-1}>
         {route.name === "research" && <ResearchHome userId={auth.userId} go={go} consumeReturn={consumeReturn} />}
         {route.name === "request" && (
-          <RequestPage key={route.id} id={route.id} go={go} setContext={setBundleContext}
+          <RequestPage key={`${route.id}:${route.sourceRecordId ?? ""}`} id={route.id} sourceRecordId={route.sourceRecordId} go={go} setContext={setBundleContext}
             openConversation={openSheet} />
         )}
         {route.name === "later" && <Later area={route.area} />}
+        {route.name === "account" && <AccountViews key={`${route.area}:${route.recordId ?? ""}`} initialView={route.area}
+          sourceRecordId={route.recordId} />}
       </main>
       <div className="convo convo-desktop" role="complementary" aria-label="Conversation" data-focus-surface="side">
         <Conversation context={context} idPrefix="side" />

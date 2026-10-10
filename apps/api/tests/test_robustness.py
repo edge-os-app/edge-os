@@ -6,8 +6,9 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from edge_os_api import p02, service
-from edge_os_api.auth import Principal
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.research import service as service
+from edge_os_api.core.authentication import Principal
 from edge_os_api.main import create_app
 from flows import HUNCH, THESIS, compiled_thesis, publication_body, submit
 
@@ -15,7 +16,7 @@ from flows import HUNCH, THESIS, compiled_thesis, publication_body, submit
 def assert_envelope(response, status):
     assert response.status_code == status, response.text[:200]
     body = response.json()
-    p02.validate_http_error(body)
+    record_contract.validate_http_error(body)
     return body
 
 
@@ -34,7 +35,7 @@ def test_nul_in_a_path_segment_never_reaches_a_500(client, owner_a):
     for path in ("/v1/strategies/%00/revisions/" + str(uuid.uuid4()), "/v1/operations/%00", "/v1/research/requests/%00"):
         response = client.get(path, headers=owner_a)
         assert response.status_code in {404, 422}, (path, response.status_code)
-        p02.validate_http_error(response.json())
+        record_contract.validate_http_error(response.json())
     response = client.post("/v1/strategies/%00/revisions", headers=owner_a, json={
         "operation_id": str(uuid.uuid4()), "idempotency_key": "x", "expected_parent_revision_id": None,
         "draft_id": str(uuid.uuid4()), "strategy": {}})

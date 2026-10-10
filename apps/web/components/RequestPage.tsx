@@ -8,9 +8,11 @@ import type { ConversationContext } from "./Conversation";
 import { AnswerMessage, QuestionForm } from "./QuestionForm";
 import { RulesReview } from "./RulesReview";
 import { InvestigationReview } from "./InvestigationReview";
+import { SpotReplayPanel } from "./SpotReplayPanel";
 
 interface Props {
   id: string;
+  sourceRecordId?: string;
   go(hash: string, from?: string): void;
   setContext(ctx: ConversationContext | null): void;
   openConversation(event: React.MouseEvent<HTMLButtonElement>): void;
@@ -27,7 +29,7 @@ function pendingKeys(draftId: string): { operation_id: string; idempotency_key: 
   return keys;
 }
 
-export function RequestPage({ id, go, setContext, openConversation }: Props) {
+export function RequestPage({ id, sourceRecordId, go, setContext, openConversation }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
   const stateHeading = useRef<HTMLHeadingElement>(null);
   const errorBanner = useRef<HTMLParagraphElement>(null);
@@ -143,6 +145,14 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
   }
 
   const intake = bundle.intake.content;
+  const sourceIsInBundle = sourceRecordId != null && [
+    bundle.intake.record_id,
+    ...bundle.interpretations.map((item) => item.record_id),
+    ...bundle.outcomes.map((item) => item.record.record_id),
+    ...bundle.clarifications.map((item) => item.record_id),
+    ...bundle.drafts.map((item) => item.record_id),
+    ...bundle.publications.map((item) => item.record_id),
+  ].includes(sourceRecordId);
   const head = bundle.head;
   const outcome = revision ? "PUBLISHED" : head.outcome ?? "INVALID_INPUT";
   const copy = OUTCOME_COPY[outcome];
@@ -158,6 +168,9 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
       <div>
         <h1 ref={heading} tabIndex={-1}>Your request</h1>
         <p className="muted" style={{ marginTop: 0 }}>Saved request {shortId(bundle.intake.record_id)}</p>
+        {sourceRecordId && (sourceIsInBundle
+          ? <p role="status">Opened source record <code>{sourceRecordId}</code>.</p>
+          : <p role="alert">The saved request opened, but source record <code>{sourceRecordId}</code> is not in this detail. Context is unchanged.</p>)}
         <div className="btn-row">
           <button className="btn btn-secondary" type="button" onClick={() => go("#/research", `req-${id}`)}>All requests</button>
           <button className="btn btn-secondary convo-button" type="button" onClick={openConversation}>Conversation</button>
@@ -235,6 +248,9 @@ export function RequestPage({ id, go, setContext, openConversation }: Props) {
           </dl>
         </section>
       )}
+
+      {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
+        strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}
 
       <details>
         <summary>Where each setting came from</summary>

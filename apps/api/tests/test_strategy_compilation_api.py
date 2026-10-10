@@ -4,7 +4,8 @@ import copy
 import json
 import uuid
 
-from edge_os_api import p02, p06
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.strategies import compiler as strategy_compiler
 from flows import answer, compiled_thesis, publication_body, submit
 
 VOLUME_RULE = ("Enter when current quote volume is above twice its prior 10-minute mean; exit when the 5-minute "
@@ -16,9 +17,9 @@ def legacy_p02_bundle(client, owner, pg):
     bundle = compiled_thesis(client, owner)
     source = copy.deepcopy(bundle["drafts"][0]["content"])
     strategy = source["source_syntax"]
-    strategy["schema_version"] = p02.CONTRACT["identity"]["strategy_schema"]
-    strategy["semantic_manifest"] = dict(p02.MANIFEST)
-    p02.validate_strategy(strategy)
+    strategy["schema_version"] = record_contract.CONTRACT["identity"]["strategy_schema"]
+    strategy["semantic_manifest"] = dict(record_contract.MANIFEST)
+    record_contract.validate_strategy(strategy)
     draft_id = str(uuid.uuid4())
     source["draft_id"] = draft_id
     owner_id = pg.psql("select owner_id from records where record_id = "
@@ -35,12 +36,12 @@ def legacy_p02_bundle(client, owner, pg):
 def seed_legacy_revision(pg, strategy, draft_id, owner_id, *, operation_id=None):
     revision_id, publication_id = str(uuid.uuid4()), str(uuid.uuid4())
     operation_id = operation_id or str(uuid.uuid4())
-    canonical = p02.canonical_bytes(strategy).decode().replace("'", "''")
+    canonical = record_contract.canonical_bytes(strategy).decode().replace("'", "''")
     pg.psql("insert into strategy_revisions (revision_id, owner_id, strategy_id, parent_revision_id, "
             "draft_record_id, publication_id, operation_id, content_sha256, manifest_sha256, strategy_canonical, "
             "created_at) values "
             f"('{revision_id}', '{owner_id}', '{strategy['strategy_id']}', null, '{draft_id}', "
-            f"'{publication_id}', '{operation_id}', '{p02.sha256_hex(strategy)}', '{p02.manifest_sha256()}', "
+            f"'{publication_id}', '{operation_id}', '{record_contract.sha256_hex(strategy)}', '{record_contract.manifest_sha256()}', "
             f"'{canonical}', now())")
     return revision_id, publication_id, operation_id
 
@@ -52,7 +53,7 @@ def test_user_can_review_save_and_reopen_a_price_volume_rule(client, owner_a, pg
     assert compiled["head"]["outcome"] == "COMPILED"
     draft = compiled["drafts"][0]
     strategy = draft["content"]["source_syntax"]
-    p06.validate_strategy(strategy)
+    strategy_compiler.validate_strategy(strategy)
     assert strategy["entry"]["args"][0] == {"op": "relative_volume", "lookback_buckets": 2}
     assert strategy["data_inputs"] == ["price", "quote_volume"]
     assert strategy["warmup_buckets"] == 2
@@ -69,9 +70,9 @@ def test_user_can_review_save_and_reopen_a_price_volume_rule(client, owner_a, pg
     assert reopened.json()["stored_hash_matches_content"] is True
     row = json.loads(pg.psql("select coalesce(json_agg(r), '[]'::json) from strategy_revisions r where revision_id = "
                              f"'{result['revision_id']}'"))[0]
-    assert row["strategy_canonical"].encode() == p02.canonical_bytes(strategy)
-    assert row["content_sha256"] == result["content_sha256"] == p02.sha256_hex(strategy)
-    assert row["manifest_sha256"] == result["manifest_sha256"] == p06.manifest_sha256()
+    assert row["strategy_canonical"].encode() == record_contract.canonical_bytes(strategy)
+    assert row["content_sha256"] == result["content_sha256"] == record_contract.sha256_hex(strategy)
+    assert row["manifest_sha256"] == result["manifest_sha256"] == strategy_compiler.manifest_sha256()
 
 
 def test_mapped_only_rule_fixtures_do_not_appear_as_home_examples(client, owner_a):
@@ -126,7 +127,7 @@ def test_grouped_rules_keep_distinct_meaning_when_saved_and_reopened(client, own
     assert rows[0]["content_sha256"] != rows[1]["content_sha256"]
     for row, publication in zip(rows, (first.json(), second.json()), strict=True):
         assert row["content_sha256"] == publication["content_sha256"]
-        assert row["manifest_sha256"] == p06.manifest_sha256()
+        assert row["manifest_sha256"] == strategy_compiler.manifest_sha256()
 
 
 def test_exact_tiny_return_threshold_survives_review_save_and_reopen(client, owner_a, pg):
@@ -147,8 +148,8 @@ def test_exact_tiny_return_threshold_survives_review_save_and_reopen(client, own
     assert reopened.json()["strategy"]["entry"]["args"][1]["value"] == threshold
     row = json.loads(pg.psql("select coalesce(json_agg(r), '[]'::json) from strategy_revisions r where revision_id = "
                              f"'{result.json()['revision_id']}'"))[0]
-    assert row["strategy_canonical"].encode() == p02.canonical_bytes(strategy)
-    assert row["content_sha256"] == result.json()["content_sha256"] == p02.sha256_hex(strategy)
+    assert row["strategy_canonical"].encode() == record_contract.canonical_bytes(strategy)
+    assert row["content_sha256"] == result.json()["content_sha256"] == record_contract.sha256_hex(strategy)
 
 
 def test_unsupported_indicator_names_the_entry_field(client, owner_a):
@@ -238,15 +239,15 @@ def test_successful_existing_p02_publication_replay_remains_idempotent(client, o
     idempotency_key = "legacy-replay-round-one"
     body = {"operation_id": operation_id, "idempotency_key": idempotency_key,
             "expected_parent_revision_id": None, "draft_id": draft_id, "strategy": strategy}
-    fingerprint = p02.sha256_hex({"owner_id": owner_id, "method": "POST", "path": path,
+    fingerprint = record_contract.sha256_hex({"owner_id": owner_id, "method": "POST", "path": path,
         "expected_parent_revision_id": None, "draft_id": draft_id,
-        "canonical_strategy_bytes": p02.canonical_bytes(strategy).decode()})
+        "canonical_strategy_bytes": record_contract.canonical_bytes(strategy).decode()})
     result = {"operation_id": operation_id, "stage": "PUBLICATION", "outcome": "PUBLISHED",
               "code": "published", "findings": [], "retry": "SAFE_SAME_KEY",
               "publication_id": publication_id, "revision_id": revision_id,
-              "content_sha256": p02.sha256_hex(strategy), "manifest_sha256": p02.manifest_sha256(),
+              "content_sha256": record_contract.sha256_hex(strategy), "manifest_sha256": record_contract.manifest_sha256(),
               "created_at": "2026-01-01T00:00:00.000000Z"}
-    p02.validate_record("PublicationResult", result)
+    record_contract.validate_record("PublicationResult", result)
     result_json = json.dumps(result, separators=(",", ":")).replace("'", "''")
     pg.psql("insert into idempotency_records (owner_id, method, path, idempotency_key, fingerprint, revision_id, "
             "response) values "
@@ -263,7 +264,7 @@ def test_successful_existing_p02_publication_replay_remains_idempotent(client, o
 
 
 def test_over_limit_derived_history_rejects_before_unresolved_evidence(client, owner_a, monkeypatch):
-    from edge_os_api import service
+    from edge_os_api.research import service as service
 
     original_interpret = service.INTERPRETER.interpret
 

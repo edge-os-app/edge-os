@@ -159,6 +159,260 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   const requestUrl = page.url();
   record(`thesis-${project}`, { url: requestUrl, revisionId, original: THESIS });
   await shot(page, project, "04-saved");
+  const replay = page.getByTestId("spot-replay");
+  await expect(replay).toContainText("p13.wc01/1 · synthetic only");
+  const replayPosts = [];
+  const replayStatuses = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/v1/spot-replays") replayPosts.push(request.postDataJSON());
+  });
+  page.on("response", (response) => {
+    if (response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays") replayStatuses.push(response.status());
+  });
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByLabel("entry dependency offset 2").fill("-3");
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByLabel("exit dependency offset 2").fill("-1");
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByLabel("I reviewed the exit dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("SYNTHETIC_FIXTURE");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("BUY_FILLED");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("SELL_FILLED");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("990.51132338308457711442786069651741293532338308458");
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("no gas, spread, additional impact, or capacity model");
+  const summary = replay.getByRole("heading", { name: "Simulated replay summary" });
+  await expect(summary).toBeVisible();
+  const balanceChart = replay.getByRole("img", { name: "Account balance in quote over the replay window" });
+  await expect(balanceChart).toBeVisible();
+  await expect(balanceChart.locator("polyline")).toHaveCount(1);
+  await expect(replay.getByRole("list", { name: "Saved account value samples" }).locator("li")).toHaveCount(6);
+  const leadingOrder = await replay.evaluate((root) => {
+    const summaryElement = root.querySelector("#spot-replay-summary-title");
+    const chartElement = root.querySelector("[data-testid='spot-replay-balance-chart']");
+    const savedInputsElement = root.querySelector("[data-testid='spot-replay-saved-inputs']");
+    return Boolean(summaryElement && chartElement && savedInputsElement
+      && summaryElement.compareDocumentPosition(savedInputsElement) & Node.DOCUMENT_POSITION_FOLLOWING
+      && chartElement.compareDocumentPosition(savedInputsElement) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  expect(leadingOrder, "summary and chart must lead exact settings/details").toBe(true);
+  const savedInputs = replay.getByTestId("spot-replay-saved-inputs");
+  await expect(savedInputs).toContainText("p12.spot-replay/1");
+  await expect(savedInputs).toContainText(revisionId);
+  await expect(savedInputs).toContainText("p13-config-");
+  await expect(savedInputs).toContainText("price@0, price@-3");
+  await expect(savedInputs).toContainText("price@0, price@-1");
+  const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
+  const replayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  const savedReplayResponse = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${replayId}`,
+    { headers: { Authorization: `Bearer ${tokens.a}` } });
+  expect(savedReplayResponse.status()).toBe(200);
+  const savedReplay = await savedReplayResponse.json();
+  const sameConfigurationId = replayPosts[0].run_configuration_id;
+  const conflictingConfigurationBody = { ...replayPosts[0], idempotency_key: `mapped-conflict-${crypto.randomUUID()}`,
+    initial_cash_quote: "999" };
+  const conflictingConfigurationResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: conflictingConfigurationBody });
+  expect(conflictingConfigurationResponse.status()).toBe(409);
+  const exactConfigurationRetry = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: replayPosts[0] });
+  expect(exactConfigurationRetry.status()).toBe(200);
+  const exactRetryRecord = await exactConfigurationRetry.json();
+  expect(exactRetryRecord).toEqual(savedReplay);
+  const sameConfigurationNewKey = { ...replayPosts[0], idempotency_key: `mapped-repeat-${crypto.randomUUID()}` };
+  const sameConfigurationNewKeyResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: sameConfigurationNewKey });
+  expect(sameConfigurationNewKeyResponse.status()).toBe(201);
+  const repeatedConfigurationRecord = await sameConfigurationNewKeyResponse.json();
+  expect(repeatedConfigurationRecord.content.inputs).toEqual(savedReplay.content.inputs);
+  expect(repeatedConfigurationRecord.content.result).toEqual(savedReplay.content.result);
+  const independentConfigurationId = crypto.randomUUID();
+  const independentConfigurationBody = { ...conflictingConfigurationBody,
+    idempotency_key: `mapped-independent-${crypto.randomUUID()}`,
+    run_configuration_id: independentConfigurationId };
+  const independentConfigurationResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+    headers: { Authorization: `Bearer ${tokens.a}` }, data: independentConfigurationBody });
+  expect(independentConfigurationResponse.status()).toBe(201);
+  const independentConfigurationRecord = await independentConfigurationResponse.json();
+  expect(independentConfigurationRecord.content.inputs.initial_cash_quote).toBe("999");
+  const summaryText = await replay.locator(".spot-replay-summary").innerText();
+  for (const [metric, value] of Object.entries(savedReplay.content.result.metrics)) {
+    if (value !== null && savedReplay.content.result.metric_statuses[metric] === "AVAILABLE") {
+      expect(summaryText).toContain(String(value));
+    }
+  }
+  const samplesList = replay.getByRole("list", { name: "Saved account value samples" });
+  for (const sample of savedReplay.content.result.samples) {
+    if (sample.account_value_quote !== null) await expect(samplesList).toContainText(sample.account_value_quote);
+  }
+  record(`spot-replay-${project}`, { url: requestUrl, revisionId, replayId, replayHash,
+    configurationIdentity: { runConfigurationId: sameConfigurationId,
+      conflictingStatus: conflictingConfigurationResponse.status(), exactRetryStatus: exactConfigurationRetry.status(),
+      exactRetryUnchanged: exactRetryRecord.content_sha256 === savedReplay.content_sha256,
+      sameContentNewKeyStatus: sameConfigurationNewKeyResponse.status(),
+      independentConfigurationId, independentStatus: independentConfigurationResponse.status(),
+      independentReplayId: independentConfigurationRecord.replay_id,
+      independentReplayHash: independentConfigurationRecord.content_sha256,
+      expectedInputs: savedReplay.content.inputs },
+    expectedEntryDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -3 }],
+    expectedExitDependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -1 }],
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542",
+    expectedSamples: savedReplay.content.result.samples,
+    expectedMetrics: savedReplay.content.result.metrics });
+  await shot(page, project, "05-spot-replay-saved");
+
+  // Renderer-only finite Decimal fixture from the accepted public evaluator output.
+  const knownOverflowValue = "1.0000000000000000000000000000000000000000000000000E+309";
+  const rendererProbe = structuredClone(savedReplay);
+  rendererProbe.content.result.samples = rendererProbe.content.result.samples.slice(0, 4).map((sample) => ({
+    ...sample, cash_quote: knownOverflowValue, account_value_quote: knownOverflowValue,
+  }));
+  const overflowUrl = `**/v1/spot-replays/${replayId}`;
+  await page.route(overflowUrl, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rendererProbe) }));
+  await replay.getByLabel("Saved replay ID").fill(replayId);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  const overflowList = replay.getByRole("list", { name: "Saved account value samples" });
+  await expect(overflowList.getByText(`${knownOverflowValue} quote`).first()).toBeVisible();
+  await expect(overflowList.getByText("Unavailable")).toHaveCount(0);
+  const overflowChart = replay.getByRole("img", { name: "Account balance in quote over the replay window" });
+  await expect(overflowChart.locator("desc")).toContainText("4 of 4 saved account-balance samples have known quote values; 0 can be plotted safely");
+  await expect(overflowChart.locator("circle, polyline")).toHaveCount(0);
+  expect(await overflowList.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    `${project}: exact known Decimal values must not cause horizontal overflow`).toBe(true);
+  record(`renderer-known-overflow-${project}`, { replayId, value: knownOverflowValue, samples: 4,
+    rendererOnly: true, source: "accepted WC01 public evaluator output", horizontalOverflow: false });
+  await shot(page, project, "05-spot-replay-known-overflow");
+  await page.unroute(overflowUrl);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  await expect(overflowList.getByText("990.51132338308457711442786069651741293532338308458 quote")).toBeVisible();
+
+  // Public API-created unavailable records exercise nullable saved binding shapes in the real UI.
+  const unavailableCases = [
+    { name: "unbound-entry", field: "entry", binding: { state: "UNBOUND" }, summary: "UNBOUND: dependency list is null", reason: "UNRESOLVED_ESSENTIAL_EVIDENCE" },
+    { name: "bound-exit-null", field: "exit", binding: { state: "BOUND", essential_dependencies: null }, summary: "BOUND: dependency list is null", reason: "INVALID_ESSENTIAL_BINDING" },
+  ];
+  for (const item of unavailableCases) {
+    const unavailableBody = structuredClone(replayPosts[0]);
+    unavailableBody.idempotency_key = `p13-r3-${project}-${item.name}`;
+    unavailableBody.run_configuration_id = `p13-r3-${project}-${item.name}`;
+    unavailableBody.essential_fields[item.field] = item.binding;
+    const unavailableResponse = await page.request.post(`${process.env.P03_API_URL}/v1/spot-replays`, {
+      headers: { Authorization: `Bearer ${tokens.a}` }, data: unavailableBody });
+    expect(unavailableResponse.status()).toBe(201);
+    const unavailableRecord = await unavailableResponse.json();
+    expect(unavailableRecord.content.result.status).toBe("UNAVAILABLE");
+    expect(unavailableRecord.content.result.reason.code).toBe(item.reason);
+    await replay.getByLabel("Saved replay ID").fill(unavailableRecord.replay_id);
+    await replay.getByRole("button", { name: "Load saved replay" }).click();
+    await expect(replay.getByTestId("spot-replay-id")).toHaveText(unavailableRecord.replay_id);
+    await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: unavailable");
+    await expect(replay.getByRole("alert")).toContainText(item.reason);
+    await expect(replay.getByTestId("spot-replay-saved-inputs")).toContainText(item.summary);
+    await expect(replay.getByTestId("spot-replay-result")).toContainText("No trading permission is granted.");
+    const unavailableMetrics = replay.getByRole("table", { name: "Quote-denominated replay metrics" });
+    for (const [metric, status] of Object.entries(unavailableRecord.content.result.metric_statuses)) {
+      await expect(unavailableMetrics).toContainText(metric.replaceAll("_", " "));
+      await expect(unavailableMetrics).toContainText(status);
+    }
+    await replay.getByText("Saved events, trades, and samples").click();
+    const visibleEvents = JSON.parse((await replay.locator(".spot-replay-json").textContent()) ?? "");
+    expect(visibleEvents.events).toEqual(unavailableRecord.content.result.events);
+    expect(visibleEvents.samples).toEqual(unavailableRecord.content.result.samples);
+    const unavailableAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    const seriousAxe = unavailableAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+    expect(seriousAxe, JSON.stringify(seriousAxe, null, 2)).toEqual([]);
+    record(`spot-replay-unavailable-${item.name}-${project}`, { url: requestUrl, revisionId,
+      replayId: unavailableRecord.replay_id, replayHash: unavailableRecord.content_sha256,
+      expectedEntryDependencies: unavailableRecord.content.inputs.essential_evidence.fields.entry.essential_dependencies ?? null,
+      expectedExitDependencies: unavailableRecord.content.inputs.essential_evidence.fields.exit.essential_dependencies ?? null,
+      expectedStatus: "UNAVAILABLE", expectedReason: item.reason, expectedSummary: item.summary,
+      seriousAxeViolations: seriousAxe });
+    await shot(page, project, `spot-replay-${item.name}`);
+  }
+
+  // A definitive 422 rejects only this body. Correcting it starts a new key/body.
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  const rejectedOffset = replay.getByLabel("entry dependency offset 3");
+  await rejectedOffset.fill("1");
+  await replay.getByLabel("I reviewed the entry dependency set").uncheck();
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.locator(".status.err")).toContainText("rejected before it was saved");
+  await expect(replay.getByRole("button", { name: "Save synthetic replay" })).toBeVisible();
+  await rejectedOffset.fill("-2");
+  const correctedResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  const correctedResponse = await correctedResponsePromise;
+  expect([200, 201]).toContain(correctedResponse.status());
+  const correctedRecord = await correctedResponse.json();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(correctedRecord.replay_id);
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  expect(replayPosts[1].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(1);
+  expect(replayPosts[2].essential_fields.entry.essential_dependencies[2].offset_buckets).toBe(-2);
+  expect(replayPosts[2].idempotency_key).not.toBe(replayPosts[1].idempotency_key);
+  expect(replayStatuses).toContain(422);
+  const correctedReplayId = correctedRecord.replay_id;
+  const correctedReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  record(`spot-replay-corrected-${project}`, { url: requestUrl, revisionId, replayId: correctedReplayId,
+    replayHash: correctedReplayHash,
+    expectedEntryDependencies: replayPosts[2].essential_fields.entry.essential_dependencies,
+    expectedExitDependencies: replayPosts[2].essential_fields.exit.essential_dependencies,
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
+
+  // Lose the response after the API commits. Retrying must reuse the exact request and recover one row.
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  const uncertainOffset = replay.getByLabel("entry dependency offset 4");
+  await uncertainOffset.fill("-1");
+  let dropCommittedResponse = true;
+  await page.route("**/v1/spot-replays", async (route) => {
+    if (route.request().method() === "POST" && dropCommittedResponse) {
+      dropCommittedResponse = false;
+      await route.fetch();
+      await route.abort();
+    } else await route.continue();
+  });
+  await replay.getByLabel("I reviewed the entry dependency set").uncheck();
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
+  const uncertainRequest = replayPosts[3];
+  const postCountAfterCommitLoss = replayPosts.length;
+  await replay.getByLabel("Saved replay ID").fill(correctedReplayId);
+  await replay.getByRole("button", { name: "Load saved replay" }).click();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(correctedReplayId);
+  await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
+  await expect(replay.getByText(/uncertain outcome/)).toBeVisible();
+  await expect(replay).toContainText("Loaded the exact saved result. The replay did not run again.");
+  expect(replayPosts).toHaveLength(postCountAfterCommitLoss);
+  await uncertainOffset.fill("-2");
+  const recoveredResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
+  await replay.getByRole("button", { name: "Retry same replay" }).click();
+  const recoveredResponse = await recoveredResponsePromise;
+  expect(recoveredResponse.status()).toBe(200);
+  const recoveredRecord = await recoveredResponse.json();
+  await expect(replay.getByTestId("spot-replay-id")).toHaveText(recoveredRecord.replay_id);
+  expect(recoveredRecord.replay_id).not.toBe(correctedReplayId);
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  expect(replayPosts).toHaveLength(5);
+  expect(replayPosts[4]).toEqual(uncertainRequest);
+  expect(replayPosts[4].idempotency_key).toBe(uncertainRequest.idempotency_key);
+  const recoveredId = recoveredRecord.replay_id;
+  const uncertainReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  record(`spot-replay-uncertain-${project}`, { url: requestUrl, revisionId, replayId: recoveredId,
+    replayHash: uncertainReplayHash,
+    expectedIdempotencyKey: uncertainRequest.idempotency_key,
+    expectedEntryDependencies: uncertainRequest.essential_fields.entry.essential_dependencies,
+    expectedExitDependencies: uncertainRequest.essential_fields.exit.essential_dependencies,
+    expectedEndingCashQuote: "990.51132338308457711442786069651741293532338308458",
+    expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
+
   // reopen in a brand new context: nothing in this browser can supply the record
   const fresh = await page.context().browser().newContext({ viewport: page.viewportSize() });
   const again = await fresh.newPage();
@@ -807,10 +1061,339 @@ test("conversation: same record, focus handling, Escape and Tab containment", as
   }
 });
 
-test("sections other than Research say what is unavailable", async ({ page }) => {
+test("P19 account views, exact owner scope, context controls and financial history", async ({ page }, info) => {
+  const project = info.project.name;
+  const agentId = project === "desktop" ? "agent-a" : "agent-b";
+  const agentRecordId = project === "desktop" ? process.env.P19_AGENT_RECORD_ID : process.env.P19_AGENT_B_RECORD_ID;
+  const orphanSourceIds = JSON.parse(process.env.P19_ORPHAN_SOURCE_IDS);
   await open(page, tokens.a);
-  await page.getByRole("button", { name: "Funds" }).click();
-  await expect(page.getByText("Not available in this build")).toBeVisible();
+  let failAccountLoad = true;
+  await page.route("**/v1/account-views**", async (route) => {
+    if (failAccountLoad && route.request().method() === "GET" && new URL(route.request().url()).pathname === "/v1/account-views") {
+      failAccountLoad = false;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ code: "service_unavailable", findings: [{ detail: "Retry the saved account read." }] }) });
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Agents" }).click();
+  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  await expect(alerts(page)).toContainText("Account records could not be loaded");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { name: "agent-a", level: 2 })).toBeVisible();
+
+  const accountHeaders = { Authorization: `Bearer ${tokens.a}` };
+  const accountPath = `${process.env.P03_API_URL}/v1/account-views`;
+  const beforeResponse = await page.request.get(`${accountPath}?limit=500`, { headers: accountHeaders });
+  expect(beforeResponse.status()).toBe(200);
+  const financialBefore = await beforeResponse.json();
+  expect(financialBefore.records).toHaveLength(Number(process.env.P19_ACCOUNT_RECORD_COUNT));
+  expect(financialBefore.records.map((row) => row.record_id)).toContain(agentRecordId);
+  const foreign = await page.request.get(`${accountPath}/${agentRecordId}`, {
+    headers: { Authorization: `Bearer ${tokens.b}` },
+  });
+  expect(foreign.status()).toBe(404);
+  const ownerB = await page.request.get(`${accountPath}?limit=500`, { headers: { Authorization: `Bearer ${tokens.b}` } });
+  expect((await ownerB.json()).records).toEqual([]);
+
+  const longMonitoringId = process.env.P19_LONG_MONITORING_RECORD_ID;
+  const longMonitoringResponse = await page.request.get(`${accountPath}/${longMonitoringId}`, { headers: accountHeaders });
+  expect(longMonitoringResponse.status()).toBe(200);
+  const longMonitoring = (await longMonitoringResponse.json()).content;
+  expect(longMonitoring.record_kind).toBe("MONITORING");
+  expect(longMonitoring.evidence_class).toBe("SYNTHETIC_AUTHORED");
+  expect(longMonitoring.owner_id).toBe(financialBefore.records[0].owner_id);
+  expect(longMonitoring.agent_id).toBe("agent-a");
+  expect(longMonitoring.wallet_id).toBe("wallet-a");
+  expect(longMonitoring.network_id).toBe("monad:143");
+  const longMonitoringRow = page.locator(`#record-${longMonitoringId}`);
+  await expect(longMonitoringRow).toHaveCount(1);
+  await expect(longMonitoringRow).toBeVisible();
+  await expect(longMonitoringRow).toContainText(longMonitoring.next_work);
+  await expect(longMonitoringRow).toContainText(longMonitoring.blocking_reason);
+  const longMonitoringLayout = await page.evaluate((id) => {
+    const row = document.getElementById(`record-${id}`);
+    const paragraphs = [...row.querySelectorAll("p")].filter((paragraph) =>
+      paragraph.textContent.includes("Synthetic next work:") || paragraph.textContent.includes("Gate pending receipt"));
+    return { viewport: innerWidth, document: document.documentElement.scrollWidth,
+      fields: paragraphs.map((paragraph) => ({ text: paragraph.textContent,
+        overflowWrap: getComputedStyle(paragraph).overflowWrap })) };
+  }, longMonitoringId);
+  expect(longMonitoringLayout.fields).toHaveLength(2);
+  expect(longMonitoringLayout.fields.every((field) => field.overflowWrap === "anywhere")).toBe(true);
+  expect(longMonitoringLayout.document).toBeLessThanOrEqual(longMonitoringLayout.viewport);
+  await shot(page, project, "p19-long-monitoring-wrapped");
+  record(`p19-long-monitoring-${project}`, { recordId: longMonitoringId, identity: {
+    ownerId: longMonitoring.owner_id, agentId: longMonitoring.agent_id,
+    walletId: longMonitoring.wallet_id, networkId: longMonitoring.network_id,
+  }, nextWork: longMonitoring.next_work, blockingReason: longMonitoring.blocking_reason, layout: longMonitoringLayout });
+
+  const agentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+  await agentCard.getByRole("button", { name: "Inspect agent context" }).click();
+  const context = page.getByRole("region", { name: `${agentId} context` });
+  await expect(context).toContainText("Agent context · version 1");
+  await expect(context).toContainText("SUGGESTED");
+  await expect(context.getByRole("button", { name: "Open source record" })).toHaveCount(6);
+  await shot(page, project, "p19-agent-context-before-adoption");
+  const sourceActionId = agentId === "agent-a" ? process.env.P19_SOURCE_ACTION_ID : process.env.P19_SOURCE_ACTION_B_ID;
+  const sourcePositionId = agentId === "agent-a" ? process.env.P19_SOURCE_POSITION_ID : process.env.P19_SOURCE_POSITION_B_ID;
+  await context.getByRole("button", { name: "Open source record" }).nth(0).click();
+  await expect(page).toHaveURL(new RegExp(`#\\/agents\\?record=${sourceActionId}`));
+  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  const exactSourceAction = page.locator(`#record-${sourceActionId}`);
+  await expect(exactSourceAction).toHaveCount(1);
+  await expect(exactSourceAction).toBeVisible();
+  await expect(exactSourceAction).toContainText(agentId === "agent-a" ? "action-a-failed-2 · REVERTED" : "action-b-failed-paged · REVERTED");
+  const exactSourcePosition = page.locator(`#record-${sourcePositionId}`);
+  await expect(exactSourcePosition).toHaveCount(1);
+  await expect(exactSourcePosition).toContainText(agentId === "agent-a" ? "position-a-2" : "position-b-paged");
+  await expect(exactSourcePosition).toContainText(agentId === "agent-a" ? "action-a-failed-2 · REVERTED" : "action-b-failed-paged · REVERTED");
+  await page.getByRole("button", { name: "Load more records" }).click();
+  await expect(exactSourceAction).toHaveCount(1);
+  await expect(exactSourcePosition).toHaveCount(1);
+  await expect(exactSourceAction).toBeVisible();
+  await page.goBack();
+  const contextCardForResearch = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+  await contextCardForResearch.getByRole("button", { name: "Inspect agent context" }).click();
+  const contextForResearch = page.getByRole("region", { name: `${agentId} context` });
+  await expect(contextForResearch).toContainText("Agent context · version 1");
+  await contextForResearch.getByRole("button", { name: "Open source record" }).nth(1).click();
+  await expect(page).toHaveURL(new RegExp(`#\\/research\\/.*source=${process.env.P19_RESEARCH_SOURCE_ID}`));
+  await expect(page.getByRole("heading", { name: "Your request", level: 1 })).toBeVisible();
+  await expect(page.getByText(`Opened source record ${process.env.P19_RESEARCH_SOURCE_ID}.`, { exact: true })).toBeVisible();
+  await expect(page.getByTestId("original-request")).toContainText("Synthetic source for the P19 owner-context navigation test.");
+  await page.goBack();
+  const linkedAgentCard = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+  await linkedAgentCard.getByRole("button", { name: "Inspect agent context" }).click();
+  let reopenedContext = page.getByRole("region", { name: `${agentId} context` });
+  await expect(reopenedContext).toContainText("Agent context · version 1");
+  {
+    const orphanCases = [
+      ["monitoring_first_page", "MONITORING"], ["permission_first_page", "PERMISSION_SNAPSHOT"],
+      ["monitoring_later_page", "MONITORING"], ["permission_later_page", "PERMISSION_SNAPSHOT"],
+    ];
+    const firstPage = await page.request.get(`${accountPath}?limit=100`, { headers: accountHeaders });
+    expect(firstPage.status()).toBe(200);
+    const firstPageIds = new Set((await firstPage.json()).records.map((row) => row.record_id));
+    const allAccountRows = financialBefore.records;
+    for (const [index, [name, kind]] of orphanCases.entries()) {
+      const sourceId = orphanSourceIds[name];
+      const source = allAccountRows.find((row) => row.record_id === sourceId);
+      expect(source, `seeded ${name} source must exist in the owner's saved set`).toBeTruthy();
+      expect(source.content.record_kind).toBe(kind);
+      expect(firstPageIds.has(sourceId)).toBe(index < 2);
+      const exactResponse = await page.request.get(`${accountPath}/${sourceId}`, { headers: accountHeaders });
+      const sourceResponse = await page.request.get(`${accountPath}/source/${sourceId}`, { headers: accountHeaders });
+      expect(exactResponse.status()).toBe(200);
+      expect(sourceResponse.status()).toBe(200);
+      expect((await exactResponse.json()).content).toEqual(source.content);
+      expect((await sourceResponse.json()).destination_record_id).toBe(sourceId);
+      const relatedAgentResponse = await page.request.get(
+        `${accountPath}?limit=100&record_kind=AGENT&agent_id=${encodeURIComponent(source.content.agent_id)}&wallet_id=${encodeURIComponent(source.content.wallet_id)}&network_id=${encodeURIComponent(source.content.network_id)}`,
+        { headers: accountHeaders },
+      );
+      expect(relatedAgentResponse.status()).toBe(200);
+      expect((await relatedAgentResponse.json()).records).toEqual([]);
+      expect(allAccountRows.some((row) => row.content.record_kind === "AGENT"
+        && row.content.agent_id !== source.content.agent_id)).toBe(true);
+
+      await reopenedContext.getByRole("button", { name: "Open source record" }).nth(index + 2).click();
+      await expect(page).toHaveURL(new RegExp(`#\\/agents\\?record=${sourceId}`));
+      const target = page.locator(`#record-${sourceId}`);
+      await expect(target).toHaveCount(1);
+      await expect(target).toBeVisible();
+      await expect(target).toContainText(source.content.agent_id);
+      await expect(target).toContainText(source.content.wallet_id);
+      await expect(target).toContainText(source.content.network_id);
+      await expect(target).toContainText(source.content.strategy_revision);
+      await expect(target).toContainText(source.content.mandate_id);
+      await expect(page.getByRole("heading", { name: "agent-a", level: 2 })).toBeVisible();
+      if (kind === "MONITORING") {
+        await expect(target).toContainText(source.content.next_work);
+        await expect(target).toContainText(source.content.blocking_reason);
+        await expect(target).toContainText(`${source.content.evaluation_attempts} attempts / ${source.content.evaluation_completions} completions`);
+      } else {
+        await expect(target).toContainText(source.content.terms_hash);
+        await expect(target).toContainText(source.content.signer_binding);
+        await expect(target).toContainText(source.content.policy_binding);
+        for (const value of [source.content.approval_id, source.content.terms.expiry,
+          ...source.content.terms.supported_assets, ...source.content.terms.supported_routes,
+          ...source.content.terms.actions, ...source.content.terms.stop_effects]) await expect(target).toContainText(value);
+      }
+      await shot(page, project, `p19-${name}-source`);
+      await page.getByRole("button", { name: "Load more records" }).click();
+      await expect(target).toHaveCount(1);
+      await expect(target).toBeVisible();
+      record(`p19-orphan-source-${project}-${name}`, { sourceId, kind, sourceIdentity: {
+        ownerId: source.owner_id, agentId: source.content.agent_id, walletId: source.content.wallet_id,
+        networkId: source.content.network_id, strategyRevision: source.content.strategy_revision,
+        mandateId: source.content.mandate_id,
+      }, firstPage: index < 2, targetCountBeforeAndAfterLoadMore: 1, ownerGet: exactResponse.status(), sourceGet: sourceResponse.status() });
+      await page.goBack();
+      const sourceAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+      await sourceAgent.getByRole("button", { name: "Inspect agent context" }).click();
+      reopenedContext = page.getByRole("region", { name: `${agentId} context` });
+      await expect(reopenedContext).toBeVisible();
+    }
+  }
+  const adoptionPath = `**/v1/agents/${agentId}/context/suggestions/adopt`;
+  let adoptionAttempts = 0;
+  await page.route(adoptionPath, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    adoptionAttempts += 1;
+    if (adoptionAttempts === 1) {
+      const requestBody = route.request().postDataJSON();
+      const staleResponse = await route.fetch({ postData: JSON.stringify({ ...requestBody, expected_version: 0 }) });
+      expect(staleResponse.status()).toBe(409);
+      return route.fulfill({ response: staleResponse });
+    }
+    const committed = await route.fetch();
+    expect(committed.status()).toBe(200);
+    await route.abort("failed");
+  });
+  await reopenedContext.getByRole("button", { name: "Adopt suggestion" }).click();
+  await expect(alerts(page)).toContainText("Context changed before this save");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
+  await expect(reopenedContext).toContainText("version 1 was checked");
+  expect(adoptionAttempts).toBe(1);
+  await reopenedContext.getByRole("button", { name: "Adopt suggestion" }).click();
+  await expect(alerts(page)).toContainText("outcome is not confirmed");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
+  await expect(reopenedContext).toContainText("Agent context · version 2");
+  await expect(reopenedContext).toContainText("contains the requested change");
+  await expect(reopenedContext.locator("li").nth(1)).toContainText("ADOPTED");
+  await reopenedContext.getByRole("button", { name: "Correct context" }).first().click();
+  const correction = reopenedContext.getByLabel("Corrected context");
+  await correction.fill("Use exact saved account evidence and keep all claims synthetic.");
+  let correctionAttempts = 0;
+  await page.route(`**/v1/agents/${agentId}/context/corrections`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    correctionAttempts += 1;
+    if (correctionAttempts === 1) return route.fulfill({ status: 422, contentType: "application/json",
+      body: JSON.stringify({ code: "invalid", findings: [{ path: "/replacement", detail: "Synthetic pre-commit rejection." }] }) });
+    const committed = await route.fetch();
+    expect(committed.status()).toBe(200);
+    await route.abort("failed");
+  });
+  await reopenedContext.getByRole("button", { name: "Save correction" }).click();
+  await expect(alerts(page)).toContainText("The save was rejected");
+  await expect(correction).toHaveValue("Use exact saved account evidence and keep all claims synthetic.");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
+  const contextPath = `${process.env.P03_API_URL}/v1/agents/${agentId}/context`;
+  const unchangedVersion = await (await page.request.get(contextPath, { headers: accountHeaders })).json();
+  expect(unchangedVersion.memory_version).toBe(2);
+  await reopenedContext.getByRole("button", { name: "Save correction" }).click();
+  await expect(alerts(page)).toContainText("outcome is not confirmed");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
+  await expect(reopenedContext).toContainText("Agent context · version 3");
+  expect(correctionAttempts).toBe(2);
+  let disableDropped = false;
+  await page.route(`**/v1/agents/${agentId}/context/disable`, async (route) => {
+    if (!disableDropped && route.request().method() === "POST") {
+      disableDropped = true;
+      const committed = await route.fetch();
+      expect(committed.status()).toBe(200);
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+  await reopenedContext.getByRole("button", { name: "Disable future context" }).click();
+  await expect(alerts(page)).toContainText("outcome is not confirmed");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
+  await expect(reopenedContext).toContainText("Agent context · version 4");
+  await reopenedContext.getByRole("button", { name: "Clear context" }).click();
+  let clearDropped = false;
+  await page.route(`**/v1/agents/${agentId}/context/clear`, async (route) => {
+    if (!clearDropped && route.request().method() === "POST") {
+      clearDropped = true;
+      const committed = await route.fetch();
+      expect(committed.status()).toBe(200);
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+  await reopenedContext.getByRole("button", { name: "Confirm clear" }).click();
+  await expect(alerts(page)).toContainText("outcome is not confirmed");
+  await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
+  await expect(reopenedContext).toContainText("Agent context · version 5");
+  await expect(reopenedContext).toContainText("CLEARED");
+  await expect(reopenedContext.getByRole("listitem")).toHaveCount(0);
+  const afterContext = await page.request.get(`${accountPath}?limit=500`, { headers: accountHeaders });
+  expect(await afterContext.json()).toEqual(financialBefore);
+  const accountUrl = new URL(page.url());
+  accountUrl.hash = "#/agents";
+  record(`p19-context-${project}`, { ownerId: financialBefore.records[0].owner_id, agentId, agentRecordId,
+    contextVersions: [1, 2, 3, 4, 5], statuses: ["SUGGESTED", "ADOPTED"], failedCorrectionPreservedVersion: 2,
+    sourceActionId, sourcePositionId,
+    orphanSourceIds,
+    researchSourceId: process.env.P19_RESEARCH_SOURCE_ID,
+    finalState: "CLEARED", financialRecordsUnchanged: true, foreignRecordStatus: foreign.status(), url: accountUrl.toString() });
+
+  await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Positions" }).click();
+  await page.getByRole("button", { name: "Load more records" }).click();
+  await page.getByLabel("Agent").selectOption("agent-a");
+  await page.getByLabel("Wallet").selectOption("wallet-a");
+  await expect(page.locator("summary")).toHaveCount(2);
+  await expect(page.getByText("position-a-1", { exact: false })).toBeVisible();
+  await page.locator("summary", { hasText: "position-a-1" }).click();
+  await expect(page.getByText("action-a-sale-1", { exact: false })).toBeVisible();
+  const closedPosition = page.locator("details").filter({ hasText: "position-a-1" });
+  await expect(closedPosition.getByText(/Realized quote result/).locator("..")).toContainText("−2 monad:143/asset:USDC");
+  await expect(closedPosition).toContainText("proceeds 8 minus removed basis 10 equals realized result -2 USDC");
+  const precisePosition = page.locator("details").filter({ hasText: "position-a-2" });
+  await precisePosition.locator("summary").click();
+  await expect(precisePosition).toContainText("2.000000000000000001 monad:143/asset:USDC");
+  await expect(precisePosition).toContainText("Estimated unrealized quote result. 0 monad:143/asset:USDC");
+  await expect(precisePosition).toContainText("action-a-position-confirmed-2 · CONFIRMED");
+  await expect(precisePosition).toContainText("action-a-position-unknown-2 · SUBMISSION_UNKNOWN");
+  await expect(precisePosition).toContainText("action-a-failed-2 · REVERTED");
+  await shot(page, project, "p19-positions-exact-filter");
+
+  await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Funds" }).click();
+  await expect(page.getByText("flow-a-deposit-1", { exact: false })).toBeVisible();
+  await expect(page.getByText("flow-a-withdrawal-1", { exact: false })).toBeVisible();
+  await expect(page.getByText("action-a-deposit-queued", { exact: false })).toBeVisible();
+  await expect(page.getByText("action-a-withdrawal-unknown", { exact: false })).toBeVisible();
+  await expect(page.getByText("action-a-withdrawal-confirmed", { exact: false })).toBeVisible();
+  await expect(page.getByText("action-a-withdrawal-failed", { exact: false })).toBeVisible();
+  await expect(page.locator("li").filter({ hasText: "flow-a-deposit-1" })).toContainText("Capital flow, not trading profit.");
+  await expect(page.locator("li").filter({ hasText: "flow-a-withdrawal-1" })).toContainText("Capital flow, not trading profit.");
+  await expect(page.getByText(/Account value, percent return, and drawdown are unavailable/)).toBeVisible();
+  await shot(page, project, "p19-funds-synthetic");
+  await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Agents" }).click();
+  const permissionAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
+  await expect(permissionAgent.getByText(/Permission approval history/)).toBeVisible();
+  if (agentId === "agent-a") {
+    const failedSnapshot = permissionAgent.locator("li").filter({ hasText: "approval-a-v5 · FAILED · NEVER_ACTIVE" });
+    await expect(failedSnapshot.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/)).toBeVisible();
+    await failedSnapshot.locator("summary").click();
+    await expect(failedSnapshot.locator("dd").nth(6)).toContainText("2026-10-09T11:02:00Z");
+    const pendingSnapshot = permissionAgent.locator("li").filter({ hasText: "approval-a-change-pending-v7 · CHANGE_PENDING · NEVER_ACTIVE" });
+    await pendingSnapshot.locator("summary").click();
+    await expect(pendingSnapshot).toContainText("Not yet checked");
+    await expect(pendingSnapshot).toContainText("2026-10-09T13:01:00Z");
+    await expect(pendingSnapshot).toContainText("Not applied (never active)");
+    await expect(pendingSnapshot).toContainText("approval-a-v4");
+    const cancelledChange = permissionAgent.locator("li").filter({ hasText: "approval-a-change-cancelled-v8 · CANCELLED · NEVER_ACTIVE" });
+    await cancelledChange.locator("summary").click();
+    await expect(cancelledChange).toContainText("Not checked before cancellation");
+    await expect(cancelledChange).toContainText("2026-10-09T14:02:00Z");
+  } else {
+    await expect(permissionAgent.getByText(/approval-b-v6 · CHANGE_APPLIED · ACTIVE AT APPLICATION/)).toBeVisible();
+  }
+  const initialAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "agent-c", level: 2 }) });
+  const failedInitial = initialAgent.locator("li").filter({ hasText: "approval-c-initial-failed-v1 · FAILED · NEVER_ACTIVE" });
+  await failedInitial.locator("summary").click();
+  await expect(failedInitial).toContainText("No earlier approval (initial attempt)");
+  await expect(failedInitial).toContainText("2026-10-09T15:02:00Z");
+  const cancelledInitial = initialAgent.locator("li").filter({ hasText: "approval-c-initial-cancelled-v1 · CANCELLED · NEVER_ACTIVE" });
+  await cancelledInitial.locator("summary").click();
+  await expect(cancelledInitial).toContainText("No owner approval recorded");
+  await expect(cancelledInitial).toContainText("Not checked before cancellation");
+  await expect(cancelledInitial).toContainText("2026-10-09T16:01:00Z");
+  await shot(page, project, "p19-permission-history");
   await page.getByRole("button", { name: "Research" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 });

@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from edge_os_api import p02
+from edge_os_api.records import contract_adapter as record_contract
 from flows import compiled_thesis, publication_body, publish
 
 
@@ -36,7 +36,7 @@ def test_changed_payload_with_same_key_conflicts(client, owner_a, pg):
     changed["strategy"]["entry"]["args"][1]["value"] = "0.02"  # valid, but not the adopted meaning
     conflict = client.post(f"/v1/strategies/{body['strategy']['strategy_id']}/revisions", json=changed, headers=owner_a)
     assert conflict.status_code == 409 and conflict.json()["code"] == "idempotency_key_reused"
-    p02.validate_http_error(conflict.json())
+    record_contract.validate_http_error(conflict.json())
     assert conflict.json()["retry"] == "NOT_RETRYABLE"
 
 

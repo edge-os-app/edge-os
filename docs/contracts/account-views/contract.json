@@ -1,0 +1,42 @@
+{
+  "contract_id": "edge-os.account-view-records",
+  "version": "2.0.0",
+  "record_type": "AccountViewRecord",
+  "schema_version": "account-view/2",
+  "supported_schema_versions": ["account-view/1", "account-view/2"],
+  "envelope": ["schema_version", "record_type", "record_id", "owner_id", "operation_id", "created_at", "content"],
+  "evidence_class": "SYNTHETIC_AUTHORED",
+  "record_kinds": ["AGENT", "POSITION", "ACTION", "CAPITAL_FLOW", "MONITORING", "EDGE_EVIDENCE", "PERMISSION_SNAPSHOT"],
+  "identity": ["owner_id", "agent_id", "wallet_id", "network_id", "asset_id", "position_id", "strategy_revision", "mandate_id", "action_id"],
+  "action_attribution": "position actions require exact agent/wallet/network/asset/position/strategy/mandate identity; wallet-level actions require explicit flow_id",
+  "capital_flow_invariant": "included_in_realized_result must be false",
+  "listing": {"default_limit": 100, "maximum_limit": 500, "pagination": "owner-scoped stable sequence offset"},
+  "amount": {
+    "fields": ["asset_id", "raw", "decimals"],
+    "raw_pattern": "^(0|[1-9][0-9]*)$",
+    "sum_only_matching_asset_id": true,
+    "native_gas_is_separate": true
+  },
+  "value_states": ["KNOWN", "UNKNOWN"],
+  "signed_result": {
+    "fields": ["asset_id", "raw", "decimals"],
+    "raw_pattern": "^(?:0|[1-9][0-9]*|-[1-9][0-9]*)$",
+    "fields_on_position": ["realized_result", "estimated_unrealized_result"],
+    "unit": "the saved quote asset; no conversion or percentage is inferred",
+    "unknown": "state UNKNOWN has no amount",
+    "unsigned_amounts_unchanged": true
+  },
+  "permission_snapshot": {
+    "fields": ["owner_id", "agent_id", "wallet_id", "network_id", "strategy_revision", "mandate_id", "approval_id", "predecessor_approval_id", "successor_approval_id", "terms", "terms_hash", "signer_binding", "policy_binding", "requested_at", "checked_at", "approved_at", "applied_at", "failed_at", "cancelled_at", "activation_state"],
+    "states": ["CURRENT", "EARLIER", "CHANGE_APPLIED", "CHANGE_PENDING", "FAILED", "CANCELLED", "REMOVED"],
+    "activation_states": ["ACTIVE", "ENDED", "NEVER_ACTIVE"],
+    "terms_hash": "sha256 over UTF-8 canonical JSON for the complete terms object with sorted keys and compact separators",
+    "append_only": true,
+    "permission_mutation": false
+  },
+  "wallet_level_action_identity": ["owner_id", "agent_id", "wallet_id", "network_id", "flow_id"],
+  "action_states": ["PROPOSED", "QUEUED", "SUBMITTED", "CONFIRMED", "REVERTED", "DENIED", "CANCELLED", "SUBMISSION_UNKNOWN"],
+  "monitoring": ["evaluation_attempts", "evaluation_completions", "input_updated_at", "updated_at", "next_work", "blocking_reason", "pending_reconciliation", "health"],
+  "edge_evidence": ["agent_id", "strategy_revision", "edge_revision", "edge_evidence_status", "updated_at"],
+  "unavailable_metrics": ["account_value", "percent_return", "drawdown"]
+}

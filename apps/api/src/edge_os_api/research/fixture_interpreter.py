@@ -13,11 +13,11 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from . import p02
+from edge_os_api.records import contract_adapter as record_contract
 
 FIXTURE_ID = "p03-fixture-interpreter/1"
 ADOPT_QUESTION_ID = "adopt-suggested-settings"
-MARKET = p02.FIXTURE_STRATEGY["market"]
+MARKET = record_contract.FIXTURE_STRATEGY["market"]
 DECLARED_MARKET = {"network": MARKET["network"], "base_asset": MARKET["research_binding"]["base_asset"],
                    "quote_asset": MARKET["research_binding"]["quote_asset"]}
 MARKET_LABEL = "Synthetic fixture market (not a real pool)"
@@ -107,7 +107,7 @@ UNSUPPORTED_ENTRY = {"op": "gt", "args": [
 
 
 def proposal_values() -> dict[str, Any]:
-    fixture = p02.FIXTURE_STRATEGY
+    fixture = record_contract.FIXTURE_STRATEGY
     values = {name: copy.deepcopy(fixture[name]) for name in
               ("market", "decision_interval_seconds", "sizing", "additions", "partial_exits", "cost_assumptions",
                "risk_limits", "action_scope")}
@@ -233,7 +233,7 @@ class FixtureInterpreter:
         declared = intake.get("declared_market")
         if job == "CREATE_STRATEGY":
             values = proposal_values()
-            for name in p02.CREATE_STRATEGY_FIELDS:
+            for name in record_contract.CREATE_STRATEGY_FIELDS:
                 if name == "restrictions":
                     continue
                 if name in scenario.stated:

@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from edge_os_api import p02
+from edge_os_api.records import contract_adapter as record_contract
 from conftest import run_threads
 from flows import NO_THESIS, answer, submit
 
@@ -281,7 +281,7 @@ def test_same_key_replays_saved_identity_and_hypotheses_keep_distinct_lineage(cl
     foreign_id = first.json()["declaration"]["record_id"]
     foreign_read = client.get(f"{path}/{foreign_id}", headers=owner_b)
     assert foreign_read.status_code == 404
-    p02.validate_http_error(foreign_read.json())
+    record_contract.validate_http_error(foreign_read.json())
 
     child = declaration_body(bundle)
     child["edge_spec"].update({"edge_id": first.json()["declaration"]["content"]["edge_spec"]["edge_id"],
@@ -378,7 +378,7 @@ def test_concurrent_same_key_save_commits_one_declaration_and_access_event(clien
 
 def test_clarification_committed_after_initial_head_observation_rejects_new_save(client, owner_a, pg, monkeypatch):
     import threading
-    from edge_os_api import investigation_adoption
+    from edge_os_api.research import investigation_adoption as investigation_adoption
 
     bundle = submit(client, owner_a, NO_THESIS, job="INVESTIGATE_EFFECT",
                     input_class="BOUNDED_NO_THESIS").json()

@@ -13,7 +13,7 @@ from fastapi.routing import APIRoute
 
 import harness
 from edge_os_api.main import create_app
-from edge_os_api.settings import ConfigError, load_settings
+from edge_os_api.core.settings import ConfigError, load_settings
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "edge_os_api"
 PUBLIC_PATHS = {"/healthz", "/readyz"}
@@ -133,16 +133,16 @@ def test_t9_cors_allow_list(client):
 
 
 def test_error_bodies_follow_the_contract_envelope(client, owner_a):
-    from edge_os_api import p02
+    from edge_os_api.records import contract_adapter as record_contract
     for response in (client.get("/nope"), client.get("/v1/me"), client.post("/v1/research/requests", json={}, headers=owner_a),
                      client.get("/v1/research/requests/not-a-uuid", headers=owner_a)):
-        p02.validate_http_error(response.json())
+        record_contract.validate_http_error(response.json())
 
 
 def test_p02_inputs_are_frozen_and_checker_still_passes():
-    from edge_os_api import p02
-    p02.verify_frozen_files()
-    run = subprocess.run([sys.executable, "-I", str(p02.CHECKER_PATH)], capture_output=True, text=True)
+    from edge_os_api.records import contract_adapter as record_contract
+    record_contract.verify_frozen_files()
+    run = subprocess.run([sys.executable, "-I", str(record_contract.CHECKER_PATH)], capture_output=True, text=True)
     assert run.returncode == 0 and "PASS: 39 fixtures" in run.stdout
 
 

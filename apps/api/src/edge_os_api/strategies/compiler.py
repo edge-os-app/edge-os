@@ -10,9 +10,9 @@ from decimal import Context, Decimal, DecimalException, ROUND_HALF_EVEN, localco
 from pathlib import Path
 from typing import Any, Sequence
 
-from . import p02
+from edge_os_api.records import contract_adapter as record_contract
 
-CONTRACT_PATH = Path(__file__).resolve().parents[4] / "docs" / "contracts" / "p06" / "contract.json"
+CONTRACT_PATH = Path(__file__).resolve().parents[5] / "docs" / "contracts" / "p06" / "contract.json"
 CONTRACT: dict[str, Any] = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
 LIMITS = CONTRACT["limits"]
 MANIFEST: dict[str, str] = CONTRACT["identity"]["manifest_components"]
@@ -73,13 +73,13 @@ class EvaluationResult:
 
 
 def manifest_sha256() -> str:
-    return hashlib.sha256(p02.canonical_bytes(MANIFEST)).hexdigest()
+    return hashlib.sha256(record_contract.canonical_bytes(MANIFEST)).hexdigest()
 
 
 def market_binding_id(market: dict[str, Any]) -> str:
     binding = {"network": market["network"], "quote_unit": market["quote_unit"],
                "research_binding": market["research_binding"]}
-    return hashlib.sha256(p02.canonical_bytes(binding)).hexdigest()
+    return hashlib.sha256(record_contract.canonical_bytes(binding)).hexdigest()
 
 
 def _merge_reasons(*groups: Sequence[str]) -> tuple[str, ...]:
@@ -124,8 +124,8 @@ def expression_info(node: object, market: dict[str, Any], path: str = "", depth:
         raise CompilerError("invalid_arity", path or "/", f"The {op} operation has the wrong fields or arguments.")
     if op == "constant":
         try:
-            p02._checker.canonical_decimal(node["value"])
-        except (p02.Invalid, TypeError) as error:
+            record_contract._checker.canonical_decimal(node["value"])
+        except (record_contract.Invalid, TypeError) as error:
             raise CompilerError("invalid_constant", f"{path}/value", str(error)) from None
         unit = node["unit"]
         if not isinstance(unit, str) or unit not in {"DIMENSIONLESS", "PRICE", quote_unit}:
@@ -183,22 +183,22 @@ def required_history(node: object, market: dict[str, Any]) -> int:
 
 
 def validate_compile_fields(strategy: dict[str, Any]) -> int:
-    fields = p02.CREATE_STRATEGY_FIELDS
+    fields = record_contract.CREATE_STRATEGY_FIELDS
     for name in fields:
         if name != "restrictions":
             try:
-                p02._checker.validate_typed_value(
-                    strategy[name], p02.CONTRACT["record_schemas"]["StrategySpec"]["required"][name],
+                record_contract._checker.validate_typed_value(
+                    strategy[name], record_contract.CONTRACT["record_schemas"]["StrategySpec"]["required"][name],
                     f"StrategySpec.{name}")
-            except (p02.Invalid, KeyError, TypeError) as error:
+            except (record_contract.Invalid, KeyError, TypeError) as error:
                 raise CompilerError("invalid_field", f"/{name}", str(error)) from None
     if strategy["decision_interval_seconds"] != 300:
         raise CompilerError("unsupported_resolution", "/decision_interval_seconds",
                             "Rules use scheduled five-minute UTC buckets.")
     market = strategy["market"]
     try:
-        p02._checker._validate_research_binding(market["research_binding"])
-    except (p02.Invalid, KeyError, TypeError) as error:
+        record_contract._checker._validate_research_binding(market["research_binding"])
+    except (record_contract.Invalid, KeyError, TypeError) as error:
         raise CompilerError("invalid_market_binding", "/market/research_binding", str(error)) from None
     quote_unit = f"QUOTE:{market['research_binding']['quote_asset']}"
     if market["network"] != "MONAD" or market["quote_unit"] != quote_unit:
@@ -216,7 +216,7 @@ def validate_compile_fields(strategy: dict[str, Any]) -> int:
     for field_name in ("entry", "exit", "invalidation"):
         node = strategy[field_name]
         if field_name == "invalidation" and isinstance(node, dict) and node.get("state") == "NOT_REQUESTED":
-            p02._checker.validate_shape("NotRequestedInvalidation", node)
+            record_contract._checker.validate_shape("NotRequestedInvalidation", node)
             continue
         info = expression_info(node, market, f"/{field_name}")
         if info.kind != "BOOLEAN":
@@ -230,17 +230,17 @@ def validate_compile_fields(strategy: dict[str, Any]) -> int:
 
     quote_unit = f"QUOTE:{market['research_binding']['quote_asset']}"
     sizing = strategy["sizing"]
-    amount = p02._checker.canonical_decimal(sizing["amount"])
+    amount = record_contract._checker.canonical_decimal(sizing["amount"])
     if amount <= 0 or sizing["unit"] != quote_unit:
         raise CompilerError("invalid_sizing", "/sizing", "Position size must be positive and use the declared quote asset.")
     if strategy["additions"] is not False or strategy["partial_exits"] is not False:
         raise CompilerError("unsupported_action", "/action_scope", "This compiler does not support additions or partial exits.")
     costs = strategy["cost_assumptions"]
-    if (not 0 <= p02._checker.canonical_decimal(costs["fee_rate"]) <= 1
-            or not 0 <= p02._checker.canonical_decimal(costs["slippage_rate"]) <= 1 or not costs["source_ref"]):
+    if (not 0 <= record_contract._checker.canonical_decimal(costs["fee_rate"]) <= 1
+            or not 0 <= record_contract._checker.canonical_decimal(costs["slippage_rate"]) <= 1 or not costs["source_ref"]):
         raise CompilerError("invalid_costs", "/cost_assumptions", "Fee and slippage assumptions need valid rates and a source.")
     risk = strategy["risk_limits"]
-    if (p02._checker.canonical_decimal(risk["max_quote_notional"]) < amount
+    if (record_contract._checker.canonical_decimal(risk["max_quote_notional"]) < amount
             or isinstance(risk["max_open_positions"], bool) or risk["max_open_positions"] != 1):
         raise CompilerError("invalid_risk_limits", "/risk_limits", "Risk limits must cover size and allow one position.")
     if strategy["action_scope"] != ["SPOT_BUY", "SPOT_SELL_ALL_ATTRIBUTABLE"]:
@@ -251,11 +251,11 @@ def validate_compile_fields(strategy: dict[str, Any]) -> int:
 def validate_strategy(strategy: object) -> None:
     if not isinstance(strategy, dict):
         raise CompilerError("invalid_strategy", "/", "A strategy must be an object.")
-    descriptors = p02.CONTRACT["record_schemas"]["StrategySpec"]["required"]
+    descriptors = record_contract.CONTRACT["record_schemas"]["StrategySpec"]["required"]
     if set(strategy) != set(descriptors):
         raise CompilerError("invalid_strategy_fields", "/", "The strategy has missing or additional fields.")
     for name, descriptor in descriptors.items():
-        p02._checker.validate_typed_value(strategy[name], descriptor, f"StrategySpec.{name}")
+        record_contract._checker.validate_typed_value(strategy[name], descriptor, f"StrategySpec.{name}")
     if strategy["schema_version"] != CONTRACT["identity"]["strategy_schema"] or strategy["domain"] != "SPOT":
         raise CompilerError("unsupported_strategy_version", "/schema_version", "Use the versioned P06 spot strategy format.")
     if strategy["execution_permission"] != {"state": "NOT_GRANTED", "mandate_ref": None}:
@@ -268,7 +268,7 @@ def validate_strategy(strategy: object) -> None:
                             f"History must match the nested rule dependencies: {required} buckets.")
     if required > LIMITS["lookback_buckets"]:
         raise CompilerError("history_limit", "/warmup_buckets", "Nested rules need more than 288 scheduled buckets.")
-    if len(p02.canonical_bytes(strategy)) > LIMITS["input_bytes"]:
+    if len(record_contract.canonical_bytes(strategy)) > LIMITS["input_bytes"]:
         raise CompilerError("input_size_limit", "/", "The strategy exceeds the 64 KiB input limit.")
 
 
@@ -277,7 +277,7 @@ def build_strategy(strategy_id: str, values: dict[str, Any]) -> dict[str, Any]:
 
     strategy = {"schema_version": CONTRACT["identity"]["strategy_schema"], "strategy_id": strategy_id,
                 "domain": "SPOT"}
-    for name in p02.CREATE_STRATEGY_FIELDS:
+    for name in record_contract.CREATE_STRATEGY_FIELDS:
         if name != "restrictions":
             strategy[name] = copy.deepcopy(values[name])
     strategy["execution_permission"] = {"state": "NOT_GRANTED", "mandate_ref": None}

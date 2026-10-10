@@ -21,6 +21,32 @@ async function open(page, token) {
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
 
+async function saveSpotReplay(page) {
+  const replay = page.getByTestId("spot-replay");
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByLabel("entry dependency offset 2").fill("-3");
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByLabel("exit dependency offset 2").fill("-1");
+  await replay.getByLabel("I reviewed the entry dependency set").check();
+  await replay.getByLabel("I reviewed the exit dependency set").check();
+  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
+  return replay;
+}
+
+async function publishSpotReplayStrategy(page) {
+  await page.getByRole("button", { name: "All requests" }).click();
+  await sample(page, "Specific thesis").click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toBeVisible();
+}
+
 /** Visible interactive controls whose hit area is smaller than the accepted 44px minimum. */
 async function smallControls(page) {
   return page.evaluate((min) => {
@@ -61,8 +87,11 @@ test("accepted 44px minimum holds on every control in the main states", async ({
     results.conversationSheet = await smallControls(page);
     await page.keyboard.press("Escape");
   }
+  await publishSpotReplayStrategy(page);
+  await saveSpotReplay(page);
+  results.spotReplay = await smallControls(page);
   fs.writeFileSync(path.join(outDir, `controls-${info.project.name}.json`), JSON.stringify(results, null, 2));
-  expect(results, JSON.stringify(results)).toEqual({ homeWithRestrictions: [], requestWithDetailsOpen: [], ...(info.project.name === "mobile-390" ? { conversationSheet: [] } : {}) });
+  expect(results, JSON.stringify(results)).toEqual({ homeWithRestrictions: [], requestWithDetailsOpen: [], spotReplay: [], ...(info.project.name === "mobile-390" ? { conversationSheet: [] } : {}) });
 });
 
 test("smoke: the main path raises no console error, page error or failed request", async ({ page }, info) => {
@@ -82,7 +111,7 @@ test("smoke: the main path raises no console error, page error or failed request
   await page.getByRole("button", { name: "All requests" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   for (const area of ["Agents", "Positions", "Funds", "Research"]) {
-    await page.getByRole("button", { name: area, exact: true }).click();
+    await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: area, exact: true }).click();
   }
   fs.writeFileSync(path.join(outDir, `smoke-${info.project.name}.json`), JSON.stringify({ problems }, null, 2));
   expect(problems).toEqual([]);
@@ -107,6 +136,7 @@ test("axe: no serious or critical WCAG 2.2 AA violation in the main states", asy
   await scan("review");
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
+  await saveSpotReplay(page);
   await scan("saved");
   await page.getByRole("button", { name: "All requests" }).click();
   await sample(page, /I have no view/).click();
@@ -238,6 +268,7 @@ test("text and placeholder contrast meet 4.5:1 (3:1 for large text) in the main 
   failures.compiled = await lowContrast(page);
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
+  await saveSpotReplay(page);
   failures.saved = await lowContrast(page);
   await page.getByRole("button", { name: "All requests" }).click();
   await sample(page, /I have no view/).click();
@@ -378,6 +409,7 @@ test("no word segment is split in the middle in the main states", async ({ page 
   found.review = await splitWords(page);
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
+  await saveSpotReplay(page);
   await page.locator("summary", { hasText: "Where each setting came from" }).click();
   found.saved = await splitWords(page);
   fs.writeFileSync(path.join(outDir, `split-words-${info.project.name}.json`), JSON.stringify(found, null, 2));
@@ -635,4 +667,114 @@ test("a restriction that was typed but not added is kept with the request", asyn
   await page.getByLabel("Another restriction in your words").fill("never trade at night");
   await page.getByRole("button", { name: "Prepare request" }).click();
   await expect(page.getByRole("list", { name: "Saved restrictions" })).toContainText("never trade at night");
+});
+
+test("P19 account surface keeps controls usable and meets accessibility checks", async ({ page }, info) => {
+  await open(page, tokens.a);
+  await page.getByRole("button", { name: "Agents" }).click();
+  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "agent-a", level: 2 })).toBeVisible();
+  const agentControls = await smallControls(page);
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+  const agentAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  const agentSerious = agentAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+  const agentContrast = await lowContrast(page);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-quality-agents.png`), fullPage: true });
+  const views = page.getByRole("group", { name: "Account views" });
+  await views.getByRole("button", { name: "Positions" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(views.getByRole("button", { name: "Positions" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Position filters")).toBeVisible();
+  const positionControls = await smallControls(page);
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+  const positionAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  const positionSerious = positionAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+  const positionContrast = await lowContrast(page);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-quality-positions.png`), fullPage: true });
+  await views.getByRole("button", { name: "Funds" }).click();
+  const fundControls = await smallControls(page);
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+  const fundAxe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  const fundSerious = fundAxe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
+  const fundContrast = await lowContrast(page);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-quality-funds.png`), fullPage: true });
+  const evidencePath = path.join(outDir, `p19-accessibility-${info.project.name}.json`);
+  const axeDetails = (items) => items.map((v) => ({ id: v.id, help: v.help,
+    nodes: v.nodes.map((node) => ({ target: node.target, html: node.html, failureSummary: node.failureSummary })) }));
+  const report = { agents: { small: agentControls, serious: axeDetails(agentSerious), contrast: agentContrast },
+    positions: { small: positionControls, serious: axeDetails(positionSerious), contrast: positionContrast },
+    funds: { small: fundControls, serious: axeDetails(fundSerious), contrast: fundContrast } };
+  fs.writeFileSync(evidencePath, JSON.stringify(report, null, 2));
+  expect(report.agents.small, JSON.stringify(report.agents.small)).toEqual([]);
+  expect(report.positions.small, JSON.stringify(report.positions.small)).toEqual([]);
+  expect(report.funds.small, JSON.stringify(report.funds.small)).toEqual([]);
+  expect([...agentSerious, ...positionSerious, ...fundSerious].map((v) => ({ id: v.id, help: v.help }))).toEqual([]);
+  expect([...agentContrast, ...positionContrast, ...fundContrast]).toEqual([]);
+});
+
+test("P19 expanded permission histories keep every saved value inside the viewport", async ({ page }, info) => {
+  const width = info.project.name === "desktop" ? 1280 : 390;
+  await page.setViewportSize({ width, height: 900 });
+  await open(page, tokens.a);
+  const accountHeaders = { Authorization: `Bearer ${tokens.a}` };
+  const response = await page.request.get(`${process.env.P03_API_URL}/v1/account-views?limit=500&record_kind=PERMISSION_SNAPSHOT`,
+    { headers: accountHeaders });
+  expect(response.status()).toBe(200);
+  const rows = (await response.json()).records;
+  const states = [
+    ["CURRENT", "approval-a-v4"], ["CHANGE_PENDING", "approval-a-change-pending-v7"],
+    ["FAILED", "approval-a-v5"], ["CANCELLED", "approval-a-change-cancelled-v8"],
+  ];
+  const measurements = [];
+  await page.getByRole("button", { name: "Agents" }).click();
+  const agent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "agent-a", level: 2 }) });
+  await expect(agent.getByText(/Permission approval history/)).toBeVisible();
+  for (const [state, approvalId] of states) {
+    const saved = rows.find((row) => row.content.approval_id === approvalId);
+    expect(saved, `${state} permission source is present in the saved account view`).toBeTruthy();
+    const stateLabel = saved.content.status === "CHANGE_APPLIED" ? "ACTIVE AT APPLICATION" : saved.content.activation_state;
+    const summary = agent.getByText(`${approvalId} · ${saved.content.status} · ${stateLabel}`, { exact: true });
+    await expect(summary).toHaveCount(1);
+    const details = summary.locator("xpath=..");
+    await expect(details).toHaveCount(1);
+    const item = details.locator("xpath=..");
+    await summary.focus();
+    await expect(summary).toBeFocused();
+    const summaryBox = await summary.boundingBox();
+    expect(summaryBox?.height ?? 0).toBeGreaterThanOrEqual(MIN);
+    await page.keyboard.press("Enter");
+    await expect(details).toHaveAttribute("open", "");
+    const viewport = await page.evaluate(() => ({ innerWidth: window.innerWidth, documentWidth: document.documentElement.scrollWidth }));
+    const cellWidths = await item.locator("dd").evaluateAll((values) => values.map((value) => ({ scrollWidth: value.scrollWidth, clientWidth: value.clientWidth })));
+    const measurement = {
+      approvalId, state, viewport, termsHash: saved.content.terms_hash,
+      identities: { ownerId: saved.owner_id, agentId: saved.content.agent_id, walletId: saved.content.wallet_id,
+        networkId: saved.content.network_id, strategyRevision: saved.content.strategy_revision, mandateId: saved.content.mandate_id },
+      cellWidths, fullTermsRetained: false,
+    };
+    measurements.push(measurement);
+    fs.writeFileSync(path.join(outDir, `p19-permission-expanded-${info.project.name}.json`), JSON.stringify(measurements, null, 2));
+    await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-expanded-${state.toLowerCase()}.png`), fullPage: true });
+    await expect(item.locator("dd").nth(0)).toContainText(saved.owner_id);
+    await expect(item.locator("dd").nth(0)).toContainText(saved.content.agent_id);
+    await expect(item.locator("dd").nth(0)).toContainText(saved.content.wallet_id);
+    await expect(item.locator("dd").nth(0)).toContainText(saved.content.network_id);
+    await expect(item.locator("dd").nth(1)).toContainText(saved.content.strategy_revision);
+    await expect(item.locator("dd").nth(1)).toContainText(saved.content.mandate_id);
+    await expect(item.locator("dd").nth(3)).toContainText(saved.content.signer_binding);
+    await expect(item.locator("dd").nth(3)).toContainText(saved.content.policy_binding);
+    await expect(item.locator("dd").nth(7)).toHaveText(saved.content.terms_hash);
+    const termsText = item.locator("dl");
+    for (const value of [saved.content.terms.expiry, ...saved.content.terms.supported_assets,
+      ...saved.content.terms.supported_routes, ...saved.content.terms.actions, ...saved.content.terms.stop_effects,
+      ...saved.content.terms.adopted_capital.map((amount) => `${amount.raw} ${amount.asset_id}`),
+      ...saved.content.terms.limits.flatMap((limit) => [limit.name, `${limit.amount.raw} ${limit.amount.asset_id}`])])
+      await expect(termsText).toContainText(value);
+    measurement.fullTermsRetained = true;
+    fs.writeFileSync(path.join(outDir, `p19-permission-expanded-${info.project.name}.json`), JSON.stringify(measurements, null, 2));
+    expect(viewport.innerWidth).toBe(width);
+    expect(viewport.documentWidth, `${state} expanded permission history must not widen the page`).toBeLessThanOrEqual(width);
+    expect(cellWidths.every((value) => value.scrollWidth <= value.clientWidth))
+      .toBe(true);
+  }
 });

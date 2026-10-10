@@ -1,0 +1,1 @@
+{"agent_id":"agent-a","memory_version":1,"state":"ACTIVE","entries":[{"context_id":"preference-1","kind":"PREFERENCE","status":"ADOPTED","text":"Use short evidence summaries.","source_refs":[]},{"context_id":"lesson-1","kind":"LESSON","status":"SUGGESTED","text":"A sample result is not a live receipt.","source_refs":[]}]}

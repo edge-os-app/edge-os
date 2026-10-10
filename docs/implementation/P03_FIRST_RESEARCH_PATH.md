@@ -42,7 +42,7 @@ PostgreSQL 18.6. Migration `0001` creates `users`, `records`, `strategy_revision
 
 ### Routing and compilation
 
-The router follows the P02 outcome rules and uses the frozen validators through `apps/api/src/edge_os_api/p02.py`. That adapter loads `docs/contracts/p02/check_contract.py` unchanged and refuses to start if any pinned P02 file hash changes.
+The router follows the P02 outcome rules and uses the frozen validators through `apps/api/src/edge_os_api/records/contract_adapter.py`. That adapter loads `docs/contracts/p02/check_contract.py` unchanged and refuses to start if any pinned P02 file hash changes.
 
 - Restrictions that the contract cannot represent return `UNSUPPORTED` before any question. Their text is kept. (P02's example router checks them later. Early is the better user result and changes no record shape.)
 - Missing, conflicting or unadopted meaning returns `NEEDS_CLARIFICATION` with one finding per field.
@@ -94,7 +94,7 @@ The harness removes only what its own `Postgres` object created. Ownership is an
 
 ## Open items for the builder
 
-- The API reads the frozen P02 contract from `docs/contracts/p02` in the repository tree at runtime (`apps/api/src/edge_os_api/p02.py`). A deployment that ships only `apps/api` would fail at import. This slice runs from the repository.
+- The API reads the frozen P02 contract from `docs/contracts/p02` in the repository tree at runtime (`apps/api/src/edge_os_api/records/contract_adapter.py`). A deployment that ships only `apps/api` would fail at import. This slice runs from the repository.
 
 - Q1–Q4 of the P01 profile still need a Privy development app. The official Privy token pages read on 2026-10-08 (Exa fetch) still describe ES256, the claim list, `sid` in both token types and identity tokens that carry linked accounts. They name no JWKS URL for access tokens.
 - Q5: the web config offers email login only, a conservative placeholder. A connected wallet is not an identity.

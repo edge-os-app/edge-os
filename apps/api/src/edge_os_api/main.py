@@ -15,14 +15,19 @@ from sqlalchemy.exc import DataError, OperationalError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 
-from . import effect_run, investigation_adoption, p02, service
-from .auth import Principal, Verifier, require_principal
-from .db import current_revision, make_engine, make_session_factory, require_head, script_head
-from .errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
-from .interpreter import samples
-from .schemas import (ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody,
-                      InvestigationBody, PublicationBody)
-from .settings import Settings, load_settings
+from edge_os_api.accounts import views as account_views
+from edge_os_api.agent_context import controls as agent_context
+from edge_os_api.research import comparison_runs as effect_run
+from edge_os_api.research import investigation_adoption as investigation_adoption
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.research import service as service
+from edge_os_api.replay import saved_runs as spot_replay_api
+from edge_os_api.core.authentication import Principal, Verifier, require_principal
+from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
+from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
+from edge_os_api.research.fixture_interpreter import samples
+from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, InvestigationBody, PublicationBody, SpotReplayBody
+from edge_os_api.core.settings import Settings, load_settings
 
 log = logging.getLogger("edge_os")
 MAX_BODY_BYTES = 256 * 1024
@@ -62,8 +67,8 @@ async def read_json(request: Request) -> Any:
             raise invalid("/", "The request body is too large.", "body_too_large")
         chunks.append(chunk)
     try:
-        data = p02.strict_loads(b"".join(chunks).decode("utf-8"))
-    except (p02.Invalid, ValueError, UnicodeDecodeError, RecursionError) as error:
+        data = record_contract.strict_loads(b"".join(chunks).decode("utf-8"))
+    except (record_contract.Invalid, ValueError, UnicodeDecodeError, RecursionError) as error:
         detail = "The body nests too deeply." if isinstance(error, RecursionError) else f"The body is not strict JSON: {error}"
         raise invalid("/", detail, "invalid_json") from None
     has_nul, depth = _scan(data)
@@ -151,6 +156,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @private.get("/interpreter")
     def interpreter_info() -> dict[str, Any]:
         return {"interpreter": service.INTERPRETER.label(), "samples": samples()}
+
+    @private.post("/spot-replays")
+    def create_spot_replay(data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
+                           session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(SpotReplayBody, data)
+        status, result = run(session, lambda: spot_replay_api.create_spot_replay(session, principal, body),
+                             retry="RECONCILE")
+        headers = {"Idempotent-Replay": "true"} if status == 200 else {}
+        return JSONResponse(result, status_code=status, headers=headers)
+
+    @private.get("/spot-replays/{replay_id}")
+    def get_spot_replay(replay_id: str, principal: Principal = Depends(require_principal),
+                        session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: spot_replay_api.get_spot_replay(session, principal, replay_id))
 
     @private.post("/research/requests", status_code=201)
     def create_request(data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
@@ -254,4 +273,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(public)
     app.include_router(private)
+    app.include_router(account_views.router)
+    app.include_router(agent_context.router)
     return app

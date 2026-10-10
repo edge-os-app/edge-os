@@ -1,5 +1,5 @@
 import type { Bundle, EffectRunBody, EffectRunResult, InvestigationProposal, InvestigationSaveResult,
-  PublicationResult, RequestSummary, Sample } from "./types";
+  PublicationResult, RequestSummary, Sample, SpotReplayBody, SpotReplayRecord } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: string, public findings: { path: string; detail: string }[] = []) {
@@ -72,6 +72,9 @@ export const api = {
   executeEffectRun: (id: string, runId: string, body: { operation_id: string; idempotency_key: string }) =>
     request<EffectRunResult>(`/v1/research/requests/${id}/effect-runs/${runId}/attempts`,
       { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  createSpotReplay: (body: SpotReplayBody) =>
+    request<SpotReplayRecord>("/v1/spot-replays", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  spotReplay: (id: string) => request<SpotReplayRecord>(`/v1/spot-replays/${id}`).then((r) => r.body),
   submit: (body: unknown) => request<Bundle>("/v1/research/requests", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   answer: (id: string, body: { previous_revision_id: string; question_id: string; choice_id: string }) =>
     request<Bundle>(`/v1/research/requests/${id}/clarifications`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
