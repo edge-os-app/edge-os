@@ -100,7 +100,7 @@ def test_a_concrete_thesis_is_read_from_the_users_words_and_compiles_only_after_
     assert attempt["parse_result"] == "ACCEPTED" and attempt["request_count"] == 1
     assert attempt["revision_id"] == bundle["head"]["interpretation_revision_id"]
     assert attempt["identity"]["runtime_label"] == "LOCAL_FAKE_PROVIDER"
-    assert attempt["identity"]["prompt_version"] == "p05-interpretation/1"
+    assert attempt["identity"]["prompt_version"] == "p05-interpretation/2"
     assert len(attempt["identity"]["task_sha256"]) == 64
     no_model_text(bundle, '"source_passage"', "Buy when the 15-minute price return is above 1%\", \"value\"")
     assert runner.turns[0].user_message.startswith("{")
@@ -445,7 +445,7 @@ def test_a_bounded_no_thesis_request_with_no_declared_market_offers_the_syntheti
 @pytest.mark.parametrize("job, outcome", [
     ("COMPARE", "NEEDS_CLARIFICATION"), ("SIMULATE", "UNSUPPORTED"), ("OBSERVE_FORWARD", "UNSUPPORTED"),
     ("REQUEST_LIVE", "UNSUPPORTED")])
-def test_no_job_without_a_declared_market_leaves_the_user_a_question_that_cannot_be_answered(
+def test_no_job_without_a_declared_market_leaves_no_question_that_cannot_be_answered(
         make_client, owner_a, job: str, outcome: str) -> None:
     body = {**{k: v for k, v in intake_body("bounded-no-thesis").items() if k != "declared_market"}, "requested_job": job}
     client = make_client(CaseRunner(turn_result(case("bounded-no-thesis")["provider"])))
@@ -506,3 +506,85 @@ def test_a_reply_with_no_saved_result_is_reported_as_unfinished_not_as_a_failure
     assert after["head"]["reply"]["state"] == "UNFINISHED"
     assert after["attempts"][-1]["status"] == "STARTED"
     assert after["head"]["retry"]["reason"] == "attempt_in_flight"
+
+
+# --- Hostile model output settles as a rejected attempt and stays retryable ------------------------------------------------
+
+def hostile_text(kind: str) -> str:
+    good = case("concrete-thesis")["provider"]["model_response"]
+    if kind == "list_field_name":
+        return json.dumps({**good, "field_evidence": [{"field_name": ["entry"], "state": "MISSING"}]})
+    if kind == "snan":
+        bad = json.loads(json.dumps(good))
+        bad["field_evidence"][0]["value"]["args"][1]["value"] = "sNaN"
+        return json.dumps(bad)
+    if kind == "nul":
+        return json.dumps(good) + "\x00"
+    if kind == "surrogate":
+        return json.dumps(good) + "\ud800"
+    raise AssertionError(kind)
+
+
+@pytest.mark.parametrize("kind, reason", [("list_field_name", "invalid_value"), ("snan", "ungrounded_number"),
+                                          ("nul", "unstorable_text"), ("surrogate", "unstorable_text")])
+def test_hostile_model_output_settles_as_a_rejected_attempt_with_its_usage_and_allows_a_retry(
+        make_client, owner_a, kind: str, reason: str) -> None:
+    from edge_os_api.research.interpretation_attempts import Usage
+    hostile = reply(json.loads(json.dumps(case("concrete-thesis")["provider"]["model_response"])),
+                    usage=Usage(1500, 400, 1900, "PROVIDER_REPORTED"), text=hostile_text(kind))
+    runner = CaseRunner(hostile, turn_result(case("concrete-thesis")["provider"]))
+    client = make_client(runner)
+
+    created = create(client, owner_a, "concrete-thesis")
+
+    assert created.status_code == 201, created.text
+    bundle = created.json()
+    [attempt] = bundle["attempts"]
+    assert (attempt["status"], attempt["completion"], attempt["parse_result"]) == ("COMPLETED", "COMPLETE", f"REJECTED:{reason}")
+    assert attempt["usage"] == {"source": "PROVIDER_REPORTED", "input_tokens": 1500, "output_tokens": 400, "total_tokens": 1900}
+    assert bundle["outcomes"][-1]["record"]["content"]["findings"][0]["code"] == "malformed_model_output"
+    assert bundle["head"]["retry"]["allowed"] is True
+    assert attempt["response_sha256"] is not None
+
+    retried = retry(client, owner_a, bundle, attempt["attempt_id"])
+
+    assert retried.status_code == 201, retried.text
+    assert retried.json()["head"]["outcome"] == "NEEDS_CLARIFICATION"
+    assert [a["status"] for a in retried.json()["attempts"]] == ["COMPLETED", "COMPLETED"]
+
+
+def test_a_hostile_reply_leaves_the_saved_meaning_and_settles_the_reply_attempt(make_client, owner_a) -> None:
+    from edge_os_api.research.interpretation_attempts import Usage
+    hostile = reply(case("rough-hunch")["provider"]["model_response"], usage=Usage(900, 120, 1020, "PROVIDER_REPORTED"),
+                    text=hostile_text("list_field_name"))
+    client = make_client(CaseRunner(turn_result(case("rough-hunch")["provider"]), hostile))
+    bundle = create(client, owner_a, "rough-hunch").json()
+
+    response = answer(client, owner_a, bundle, "choose-entry", answer_text="up more than 2% over the last 15 minutes")
+
+    assert response.status_code == 200, response.text
+    after = response.json()
+    assert after["attempts"][-1]["parse_result"] == "REJECTED:invalid_value"
+    assert after["head"]["reply"]["state"] == "REJECTED"
+    assert len(after["interpretations"]) == 1
+
+
+def test_a_negative_threshold_is_read_from_the_users_words_and_compiles_after_adoption(make_client, owner_a) -> None:
+    words = ("Buy the dip: enter when the 15-minute price return is below -2%, and exit when the 5-minute return turns "
+             "negative. Spot only.")
+    good = json.loads(json.dumps(case("concrete-thesis")["provider"]["model_response"]))
+    good["field_evidence"][0]["source_passage"] = "enter when the 15-minute price return is below -2%"
+    good["field_evidence"][0]["value"] = {"op": "lt", "args": [{"op": "price_return", "lookback_buckets": 3},
+                                                              {"op": "constant", "value": "-0.02", "unit": "DIMENSIONLESS"}]}
+    good["field_evidence"][1]["source_passage"] = "exit when the 5-minute return turns negative"
+    client = make_client(CaseRunner(reply(good)))
+    body = {**intake_body("concrete-thesis"), "original_request": words}
+
+    created = client.post("/v1/research/requests", json=body, headers=owner_a)
+
+    assert created.status_code == 201, created.text
+    bundle = created.json()
+    assert bundle["attempts"][0]["parse_result"] == "ACCEPTED"
+    assert evidence(bundle, "entry", 0)["value"]["args"][1]["value"] == "-0.02"
+    adopted = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
+    assert adopted.json()["head"]["outcome"] == "COMPILED"

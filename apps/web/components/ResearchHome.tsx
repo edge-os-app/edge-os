@@ -180,7 +180,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         {job === "INVESTIGATE_EFFECT" ? (
           <label className="choice">
             <input type="checkbox" checked={useMarket} onChange={(e) => setUseMarket(e.target.checked)} />
-            <span>Use the synthetic fixture market. <span className="muted">Leave this off and we will ask which market.</span></span>
+            <span>Use the synthetic fixture market. <span className="muted">{fixtureKind === "FIXTURE" ? "Leave this off and we will ask which market." : "Leave this off and the application suggests the synthetic fixture market for you to adopt."}</span></span>
           </label>
         ) : null}
 

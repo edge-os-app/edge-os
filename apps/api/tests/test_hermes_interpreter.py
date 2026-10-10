@@ -145,7 +145,7 @@ def test_the_attempt_keeps_exact_request_configuration_and_source_identities() -
     start = ledger.history(OWNER, INTAKE)[0].start
     turn = runner.turns[0]
     assert start.identity.purpose == "INTERPRET"
-    assert start.identity.prompt_version == PROMPT_VERSION == "p05-interpretation/1"
+    assert start.identity.prompt_version == PROMPT_VERSION == "p05-interpretation/2"
     assert start.identity.system_prompt_sha256 == hashlib.sha256(turn.system_prompt.encode()).hexdigest()
     assert start.identity.task_sha256 == hashlib.sha256(turn.user_message.encode()).hexdigest()
     assert start.identity.task_text == turn.user_message  # the exact request, not only its hash
@@ -584,3 +584,19 @@ def test_an_unrecorded_result_is_logged_by_class_name_only(caplog) -> None:
 
     assert isinstance(result, Unavailable) and result.reason_code == "result_not_recorded"
     assert "RuntimeError" in caplog.text and "sk-LEAK" not in caplog.text and "secret" not in caplog.text
+
+
+def test_an_attempt_settles_as_rejected_even_when_the_parser_raises(caplog) -> None:
+    import logging
+    interpreter, _, ledger, _ = build(returned(thesis_text()))
+
+    def raising(_text: str):
+        raise RuntimeError("parser bug: sk-LEAK-0009")
+    with caplog.at_level(logging.ERROR, logger="edge_os"):
+        result = interpreter._attempt(OWNER, INTAKE, "INTERPRET", "{}", None, None, None, None, raising)
+
+    assert isinstance(result, OutputRejected) and result.rejection.reason_code == "unparseable_response"
+    view = ledger.history(OWNER, INTAKE)[0]
+    assert (view.status, view.settlement.parse_result) == ("COMPLETED", "REJECTED:unparseable_response")  # type: ignore[union-attr]
+    assert view.settlement.usage == REPORTED  # type: ignore[union-attr]
+    assert "RuntimeError" in caplog.text and "sk-LEAK" not in caplog.text

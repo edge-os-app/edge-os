@@ -46,7 +46,7 @@ log = logging.getLogger("edge_os")
 
 LOCAL_FAKE_CONFIG = HermesInterpreterConfig(model="local-fake/p05-interpretation", route="local-fake-provider",
                                             max_output_tokens=4096, runtime_label="LOCAL_FAKE_PROVIDER")
-LABEL = {"kind": "HERMES_LOCAL_FAKE_PROVIDER", "id": "p05-interpretation/1",
+LABEL = {"kind": "HERMES_LOCAL_FAKE_PROVIDER", "id": "p05-interpretation/2",
          "notice": "Actual pinned Hermes ran in a sandbox against a local fake provider. No real model was called "
                    "and no research ran."}
 TEXT_QUESTION_PREFIX = "ask-"

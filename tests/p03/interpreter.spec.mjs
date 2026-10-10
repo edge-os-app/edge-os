@@ -403,5 +403,7 @@ test("a no-thesis question with no declared market offers the labelled synthetic
   await inspect(page, project, "no-thesis-undeclared-market");
   await asked(page).getByRole("button", { name: "Adopt these settings" }).click();
   await expect(outcome(page)).toHaveAttribute("data-outcome", "UNRESOLVED");
+  await shot(page, project, "no-thesis-adopted");
+  await inspect(page, project, "no-thesis-adopted");
   record(`p05-undeclared-market-${project}`, { id });
 });

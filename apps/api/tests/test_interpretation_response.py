@@ -713,3 +713,106 @@ def test_rejects_a_missing_capability_that_is_not_a_short_snake_case_name(capabi
     response = {**thesis_response(), "meaning_status": "UNSUPPORTED", "missing_capability": capability,
                 "field_evidence": [], "questions": []}
     assert_rejected(parse(response), "invalid_value", "/missing_capability")
+
+
+# --- Negative numbers and hostile values --------------------------------------------------------------------------------
+
+NEG_PASSAGE = "enter when the 15-minute price return is below -2%"
+NEG_INTAKE = {"original_request": NEG_PASSAGE + ", exit when the 5-minute return turns negative", "restrictions": [],
+              "requested_job": "CREATE_STRATEGY", "input_class": "CONCRETE_THESIS"}
+
+
+def negative_entry(value: str = "-0.02", passage: str = NEG_PASSAGE) -> dict[str, Any]:
+    entry = {"op": "lt", "args": [{"op": "price_return", "lookback_buckets": 3},
+                                  {"op": "constant", "value": value, "unit": "DIMENSIONLESS"}]}
+    return {**thesis_response(), "field_evidence": [{"field_name": "entry", "state": "KNOWN", "origin": "USER_STATED",
+                                                    "source_passage": passage, "value": entry}]}
+
+
+@pytest.mark.parametrize("passage, value", [
+    ("enter when the 15-minute price return is below -2%", "-0.02"),
+    ("enter when the 15-minute price return is below −2%", "-0.02"),
+    ("enter when the 15-minute price return is below minus 2%", "-0.02"),
+    ("enter when the 15-minute price return is below negative 2 percent", "-0.02"),
+    ("enter when the 15-minute price return is below -50 bps", "-0.005"),
+    ("enter when the 15-minute price return is below -0.5", "-0.5"),
+])
+def test_accepts_a_negative_value_when_the_words_show_its_sign(passage: str, value: str) -> None:
+    intake = {**NEG_INTAKE, "original_request": passage + ", exit when the 5-minute return turns negative"}
+    result = parse(negative_entry(value, passage), intake)
+    assert isinstance(result, ParsedInterpretation)
+    assert {i["field_name"]: i for i in result.field_evidence}["entry"]["value"]["args"][1]["value"] == value
+
+
+@pytest.mark.parametrize("passage, value", [
+    ("enter when the 15-minute price return is below 2%", "-0.02"),          # the words show no sign
+    ("enter when the 15-minute price return is below -2%", "0.02"),          # the words show a sign the value drops
+    ("enter when the 15-minute price return is below 15-2%", "-0.02"),       # a dash inside a word is not a sign
+    ("enter when the 15-minute price return is below -2%", "-0.2"),          # wrong scale
+])
+def test_rejects_a_sign_that_the_words_do_not_support(passage: str, value: str) -> None:
+    intake = {**NEG_INTAKE, "original_request": passage + ", exit when the 5-minute return turns negative"}
+    assert_rejected(parse(negative_entry(value, passage), intake), "ungrounded_number")
+
+
+def test_a_dash_between_a_number_and_a_unit_is_not_a_sign() -> None:
+    from edge_os_api.research.interpretation_response import _numbers_in
+    stated = _numbers_in("the 15-minute return and the 5-10 range")
+    assert 15 in stated and 5 in stated and 10 in stated
+    assert not any(n < 0 for n in stated)
+
+
+def test_accepts_an_option_label_that_shows_the_negative_sign() -> None:
+    response = hunch_response()
+    response["questions"][0]["options"] = [{"id": "down2", "label": "Price below -2% over the last 15 minutes",
+        "value": {"op": "lt", "args": [{"op": "price_return", "lookback_buckets": 3},
+                                       {"op": "constant", "value": "-0.02", "unit": "DIMENSIONLESS"}]}}]
+    assert isinstance(parse(response, HUNCH_INTAKE), ParsedInterpretation)
+    response["questions"][0]["options"][0]["label"] = "Price down more than 2% over the last 15 minutes"
+    assert_rejected(parse(response, HUNCH_INTAKE), "option_label_omits_value")
+
+
+@pytest.mark.parametrize("hostile", [
+    {"field_name": ["entry"], "state": "MISSING"},
+    {"field_name": {"a": 1}, "state": "MISSING"},
+    {"field_name": 5, "state": "MISSING"},
+    {"field_name": None, "state": "MISSING"},
+])
+def test_a_field_name_that_is_not_text_is_rejected_not_raised(hostile: dict[str, Any]) -> None:
+    response = {**thesis_response(), "field_evidence": [hostile]}
+    assert_rejected(parse(response), "invalid_value", "/field_evidence/0/field_name")
+
+
+@pytest.mark.parametrize("name", [["entry"], {"a": 1}, 7, None])
+def test_a_question_field_name_that_is_not_text_is_rejected_not_raised(name: Any) -> None:
+    response = hunch_response()
+    response["questions"][0]["field_name"] = name
+    assert_rejected(parse(response, HUNCH_INTAKE), "invalid_value", "/questions/0/field_name")
+
+
+@pytest.mark.parametrize("quantity", ["sNaN", "NaN", "Infinity", "-Infinity", "snan"])
+def test_a_non_finite_decimal_is_rejected_not_raised(quantity: str) -> None:
+    response = thesis_response()
+    response["field_evidence"][0]["value"]["args"][1]["value"] = quantity
+    assert isinstance(parse(response), Rejection)
+
+
+def test_a_value_nested_far_too_deep_is_rejected_not_raised() -> None:
+    deep: Any = "x"
+    for _ in range(1500):
+        deep = {"op": "not", "value": deep}
+    response = thesis_response()
+    response["field_evidence"][0]["value"] = deep
+    result = parse(response)
+    assert isinstance(result, Rejection)
+
+
+def test_no_json_value_makes_a_parser_raise() -> None:
+    hostile_values: list[Any] = [None, True, 0, "", [], {}, [[]], {"op": []}, {"op": {}}, {"args": 5}, "9" * 5000]
+    for field in ("source_passage", "value", "state", "origin", "adoption", "conflicts", "field_name"):
+        for value in hostile_values:
+            item = {"field_name": "entry", "state": "KNOWN", "origin": "USER_STATED", "source_passage": ENTRY_PASSAGE,
+                    "value": copy.deepcopy(ENTRY_VALUE)}
+            item[field] = copy.deepcopy(value)
+            result = parse({**thesis_response(), "field_evidence": [item]})
+            assert isinstance(result, (ParsedInterpretation, Rejection)), (field, value)

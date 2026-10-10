@@ -7,6 +7,7 @@ fills a missing value. Meaning that the user did not state stays a proposal that
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import json
 import re
@@ -86,7 +87,8 @@ NUMBER_WORDS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
                 "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30,
                 "forty": 40, "fifty": 50, "sixty": 60, "hundred": 100, "twice": 2, "double": 2, "triple": 3}
 NUMBER_PATTERN = re.compile(
-    r"(?P<digits>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)|\b(?P<word>" + "|".join(NUMBER_WORDS) + r")\b",
+    r"(?P<neg>(?<![\w.])[-\u2212]|\b(?:minus|negative)\s+)?"
+    r"(?:(?P<digits>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)|\b(?P<word>" + "|".join(NUMBER_WORDS) + r")\b)",
     re.IGNORECASE)
 SCALE_PATTERN = re.compile(r"\s*(?P<scale>%|percent\b|per cent\b|bps\b|basis points?\b)", re.IGNORECASE)
 
@@ -98,10 +100,10 @@ def _numbers_in(text: str) -> set[Decimal]:
         raw = match.group("digits")
         number = Decimal(raw.replace(",", "")) if raw is not None else Decimal(NUMBER_WORDS[match.group("word").lower()])
         scale = SCALE_PATTERN.match(text, match.end())
-        if scale is None:
-            found.add(number)
-        else:
-            found.add(number.scaleb(-4 if scale.group("scale").lower().startswith(("bps", "basis")) else -2))
+        if scale is not None:
+            number = number.scaleb(-4 if scale.group("scale").lower().startswith(("bps", "basis")) else -2)
+        # A sign counts only when the words show it ("-2%", "minus 2%"). Without it a negative value stays ungrounded.
+        found.add(-number if match.group("neg") else number)
     return found
 
 
@@ -112,9 +114,11 @@ def _decimals_in(value: Any) -> list[Decimal]:
         for key, child in value.items():
             if (key in AMOUNT_KEYS or (key == "value" and value.get("op") == "constant")) and isinstance(child, str):
                 try:
-                    quantities.append(Decimal(child))
+                    quantity = Decimal(child)
                 except InvalidOperation:
-                    pass  # not a decimal; the compile checks reject it when the field is complete
+                    continue  # not a decimal; the compile checks reject it when the field is complete
+                # NaN and infinity are never a stated number, and hashing a signaling NaN raises.
+                quantities.append(quantity if quantity.is_finite() else Decimal("Infinity"))
             else:
                 quantities.extend(_decimals_in(child))
     elif isinstance(value, list):
@@ -125,7 +129,7 @@ def _decimals_in(value: Any) -> list[Decimal]:
 
 def _ungrounded(value: Any, words: str) -> bool:
     stated = _numbers_in(words)
-    return any(quantity not in stated for quantity in _decimals_in(value))
+    return any(not quantity.is_finite() or quantity not in stated for quantity in _decimals_in(value))
 
 
 
@@ -277,6 +281,8 @@ def _parse_questions(raw: list[Any], evidence: list[dict[str, Any]],
         question_id, name, text = question["question_id"], question["field_name"], question["text"]
         if not isinstance(question_id, str) or not question_id:
             return _reject("invalid_value", f"{at}/question_id", "A question needs an identifier.")
+        if not isinstance(name, str):
+            return _reject("invalid_value", f"{at}/field_name", "The field name must be text.")
         if question_id in RESERVED_QUESTION_IDS:
             return _reject("reserved_question_id", f"{at}/question_id", "This identifier belongs to the application.")
         if question_id in seen_ids:
@@ -376,6 +382,8 @@ def _model_items(items: list[Any], intake: Mapping[str, Any], sources: Sequence[
             if key not in ITEM_FIELDS:
                 return _reject("unaccepted_field", f"{at}/{key}", "An evidence item has a field that is not accepted.")
         name = item.get("field_name")
+        if not isinstance(name, str):
+            return _reject("invalid_value", f"{at}/field_name", "The field name must be text.")
         if name in APPLICATION_OWNED_FIELDS:
             return _reject("reserved_field", f"{at}/field_name", "The application records this field.")
         if name not in allowed:
@@ -418,6 +426,18 @@ def _application_items(intake: Mapping[str, Any], meaning_status: str) -> list[d
     return items
 
 
+def _never_raises(parse: Any) -> Any:
+    """Model output is an untrusted claim. Whatever it holds, a parser answers with a rejection and never an exception."""
+    @functools.wraps(parse)
+    def guarded(*args: Any, **kwargs: Any) -> ParsedInterpretation | Rejection:
+        try:
+            return parse(*args, **kwargs)
+        except (RecursionError, ArithmeticError, TypeError, ValueError, KeyError, AttributeError, IndexError):
+            return Rejection("unparseable_response", "", "The answer could not be read, so none of it was used.")
+    return guarded
+
+
+@_never_raises
 def parse_interpretation_response(text: str, intake: Mapping[str, Any]) -> ParsedInterpretation | Rejection:
     response = _decode_single_object(text)
     if isinstance(response, Rejection):
@@ -482,6 +502,7 @@ def _reconcile(item: dict[str, Any], previous: Mapping[str, Any] | None, at: str
     return item
 
 
+@_never_raises
 def parse_follow_up_response(text: str, intake: Mapping[str, Any], previous_evidence: Sequence[Mapping[str, Any]],
                              answer: ClarificationAnswer) -> ParsedInterpretation | Rejection:
     """Parse the reply to a clarification. The response lists only the fields that change; the rest carry forward."""

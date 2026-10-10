@@ -34,7 +34,7 @@ log = logging.getLogger("edge_os")
 
 PINNED_HERMES_COMMIT = "54bc5e509c985f37265c3d416bd2c64b10fc77ba"
 PINNED_HERMES_LOCK_SHA256 = "de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01"
-PROMPT_VERSION = "p05-interpretation/1"
+PROMPT_VERSION = "p05-interpretation/2"
 RUNTIME_LABELS = ("LOCAL_FAKE_PROVIDER", "LIVE")
 
 RESPONSE_SHAPE = """\
@@ -62,6 +62,8 @@ The object has these keys, all required:
 Rules:
 1. Copy the user's words exactly in every source_passage, character for character. Do not paraphrase them.
 2. A number in a USER_STATED value must be stated in its source_passage. Write 1% as "0.01", 50 bps as "0.005".
+   A negative value needs its sign in the words ("-2%" or "minus 2%" gives "-0.02"). An option label that carries a
+   negative value shows the sign the same way, for example "Price below -2% over 15 minutes".
 3. Use AGENT_PROPOSED with adoption "PENDING" only for something the user did not say. The user decides later.
    Prefer MISSING plus a question for the entry rule and the exit rule. Never invent them.
 4. Never report restrictions, market or decision_interval_seconds. The application records them.
@@ -176,6 +178,21 @@ ERROR_CLASS = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _storable(text: str) -> tuple[str, bool]:
+    """The text as it can be saved, and whether it was saved as it came.
+
+    PostgreSQL text cannot hold NUL, and a lone surrogate cannot be encoded. Such text is kept in an escaped copy, so the
+    attempt still settles with its measured values and the user can retry.
+    """
+    try:
+        text.encode("utf-8")
+        if "\x00" not in text:
+            return text, True
+    except UnicodeEncodeError:
+        pass
+    return text.encode("utf-8", "backslashreplace").decode("utf-8").replace("\x00", "\\x00"), False
 
 
 def _error_class(name: str | None) -> str | None:
@@ -316,13 +333,20 @@ class HermesInterpreter:
         outcome: ParsedInterpretation | Rejection | None = None
         parse_result = "NOT_PARSED"
         if text is not None:
-            if status == "TRUNCATED":
+            text, storable = _storable(text)
+            if not storable:
+                outcome = Rejection("unstorable_text", "", "The answer holds characters that cannot be saved, so none of it was used.")
+            elif status == "TRUNCATED":
                 outcome = Rejection("truncated", "", "The model's answer was cut short, so none of it was used.")
             elif not _within_approved_settings(result):
                 outcome = Rejection("runtime_policy_violation", "",
                                     "The model ran outside its approved settings, so its answer was not used.")
             else:
-                outcome = parse(text)
+                try:
+                    outcome = parse(text)
+                except Exception as error:  # noqa: BLE001 - whatever the parser raises, the attempt must still settle
+                    log.error("parser raised for attempt %s: %s", attempt_id, type(error).__name__)
+                    outcome = Rejection("unparseable_response", "", "The answer could not be read, so none of it was used.")
             parse_result = "ACCEPTED" if isinstance(outcome, ParsedInterpretation) else f"REJECTED:{outcome.reason_code}"
         return self._settle(attempt_id, owner_id, status, text, result.usage, result.request_count,
                             dict(result.observed), _error_class(result.error_class), latency_ms, parse_result, outcome)
