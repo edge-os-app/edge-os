@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness  # noqa: E402
 from tokens import OWNER_A, OWNER_B, OWNER_C, TestSigner  # noqa: E402
+from p05_phase import run_p05_phase  # noqa: E402
 
 THESIS = ("Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
           "Spot only.")
@@ -278,6 +279,10 @@ def main() -> int:
     parser.add_argument("--run-id", default=harness.new_run_id())
     parser.add_argument("--evidence-root", default=str(harness.REPO / ".scratch" / "p03" / "evidence"))
     parser.add_argument("--skip-ui", action="store_true", help="skip the browser steps (not a full pass)")
+    parser.add_argument("--only-p05", action="store_true",
+                        help="run only the pinned-Hermes phase after the build (a development shortcut, not a full pass)")
+    parser.add_argument("--skip-p05", action="store_true",
+                        help="skip the pinned-Hermes phase (not a full pass; it needs Docker and the pinned Hermes checkout)")
     parser.add_argument("--hold-seconds", type=int, default=0,
                         help="keep the instance up this long after the drive so an inspector can run SQL, then clean up")
     args = parser.parse_args()
@@ -390,37 +395,44 @@ def main() -> int:
                       "P19_RESEARCH_SOURCE_ID": p19_fixtures["research_source_id"],
                       "P19_ACCOUNT_RECORD_COUNT": str(len(p19_fixtures["record_ids"])),
                       "P03_EVIDENCE_DIR": str(evidence / "ui")}
-            code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs", "provenance.spec.mjs"], ui_env, evidence / "ui-e2e.log")
-            ok &= rec.step("browser drive (desktop and 390px)", code == 0, {"exit": code})
+            if not args.only_p05:  # a development shortcut, not a full pass: the fixture-interpreter phase is skipped
+                code = run_playwright(["e2e.spec.mjs", "quality.spec.mjs", "provenance.spec.mjs"], ui_env, evidence / "ui-e2e.log")
+                ok &= rec.step("browser drive (desktop and 390px)", code == 0, {"exit": code})
 
-            results_path = evidence / "ui" / "ui-results.json"
-            results = json.loads(results_path.read_text()) if results_path.exists() else {}
-            inspection = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
-            rec.write("sql-inspection.json", inspection)
-            ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
-            storage_before_restart = p13_storage_snapshot(pg)
-            rec.write("p13-storage-before-restart.json", storage_before_restart)
+                results_path = evidence / "ui" / "ui-results.json"
+                results = json.loads(results_path.read_text()) if results_path.exists() else {}
+                inspection = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
+                rec.write("sql-inspection.json", inspection)
+                ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
+                storage_before_restart = p13_storage_snapshot(pg)
+                rec.write("p13-storage-before-restart.json", storage_before_restart)
 
-            # cross-owner denial against the real saved rows
-            denial = ownership_drive(pg, api_url, token_a, token_b)
-            rec.write("ownership-drive.json", denial)
-            ok &= rec.step("another owner is denied read and mutation of saved rows (a foreign parent reference is covered by the database test)", denial["all_denied"], denial)
+                # cross-owner denial against the real saved rows
+                denial = ownership_drive(pg, api_url, token_a, token_b)
+                rec.write("ownership-drive.json", denial)
+                ok &= rec.step("another owner is denied read and mutation of saved rows (a foreign parent reference is covered by the database test)", denial["all_denied"], denial)
 
-            api.stop()
-            api = harness.start_api(env, api_port, evidence / "logs", name="api-restarted")
+                api.stop()
+                api = harness.start_api(env, api_port, evidence / "logs", name="api-restarted")
+                processes.append(api)
+                harness.wait_http(f"{api_url}/readyz")
+                ok &= rec.step("API restarted on the same database", True)
+                code = run_playwright(["reopen.spec.mjs"], ui_env, evidence / "ui-reopen.log")
+                ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
+                after_restart = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
+                ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
+                storage_after_restart = p13_storage_snapshot(pg)
+                rec.write("p13-storage-after-restart.json", storage_after_restart)
+                ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",
+                               storage_after_restart == storage_before_restart,
+                               {"spot_replay_runs": len(storage_before_restart["spot_replay_runs"]),
+                                "spot_replay_configurations": len(storage_before_restart["spot_replay_configurations"])})
+
+        if not args.skip_ui and not args.skip_p05:
+            p05_ok, api = run_p05_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,
+                                        run_playwright, api)
             processes.append(api)
-            harness.wait_http(f"{api_url}/readyz")
-            ok &= rec.step("API restarted on the same database", True)
-            code = run_playwright(["reopen.spec.mjs"], ui_env, evidence / "ui-reopen.log")
-            ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
-            after_restart = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
-            ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
-            storage_after_restart = p13_storage_snapshot(pg)
-            rec.write("p13-storage-after-restart.json", storage_after_restart)
-            ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",
-                           storage_after_restart == storage_before_restart,
-                           {"spot_replay_runs": len(storage_before_restart["spot_replay_runs"]),
-                            "spot_replay_configurations": len(storage_before_restart["spot_replay_configurations"])})
+            ok &= p05_ok
 
         if args.hold_seconds:
             hold = {"web": web_url, "api": api_url, "token_owner_a": token_a,

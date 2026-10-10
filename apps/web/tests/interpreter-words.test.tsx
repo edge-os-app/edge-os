@@ -27,9 +27,9 @@ describe("answering in your own words", () => {
   it("offers words beside a listed choice and sends them exactly as typed", async () => {
     const onReply = vi.fn(); const user = userEvent.setup();
     render(<QuestionForm questions={[choice]} busy={false} idPrefix="t" onAnswer={vi.fn()} onReply={onReply} />);
-    const send = screen.getByRole("button", { name: "Send my words" });
+    const send = screen.getByRole("button", { name: /^Send my words/ });
     expect(send).toBeDisabled();
-    await user.type(screen.getByRole("textbox", { name: "Or say it in your own words" }), "Up more than 2%");
+    await user.type(screen.getByRole("textbox", { name: /^Or say it in your own words/ }), "Up more than 2%");
     await user.click(send);
     expect(onReply).toHaveBeenCalledWith("choose-entry", "Up more than 2%", expect.any(HTMLFormElement));
   });
@@ -41,6 +41,14 @@ describe("answering in your own words", () => {
     rerender(<QuestionForm questions={[choice, text]} busy={false} idPrefix="t" onAnswer={vi.fn()} />);
     expect(screen.queryByRole("textbox")).toBeNull(); // the fixture interpreter reads listed choices only
     expect(screen.getByRole("button", { name: "Save my answer" })).toBeInTheDocument();
+  });
+
+  it("gives each question's words box its own name, so two questions are never confused", () => {
+    const exit: Question = { ...choice, question_id: "choose-exit", field_name: "exit", text: "When should the position be closed?" };
+    render(<QuestionForm questions={[choice, exit]} busy={false} idPrefix="t" onAnswer={vi.fn()} onReply={vi.fn()} />);
+    expect(screen.getByRole("textbox", { name: "Or say it in your own words. What should count as a rise for the entry rule?" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Or say it in your own words. When should the position be closed?" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send my words. When should the position be closed?" })).toBeInTheDocument();
   });
 
   it("never offers words for the adoption review, and shows each suggestion in plain words", () => {
@@ -75,13 +83,14 @@ describe("interpreter attempts", () => {
       usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null }, error_class: "ProviderHTTPError", latency_ms: null });
     const retry = attempt({ attempt_id: "a2", sequence: 2, retry_of: "a1" });
     render(<InterpretationAttempts attempts={[failed, retry]} lateResults={[]} open />);
-    const rows = screen.getAllByRole("row").slice(1);
-    expect(within(rows[0]).getByText("Provider failed")).toBeInTheDocument();
-    expect(within(rows[0]).getAllByText("Unknown")).toHaveLength(2); // tokens and time
-    expect(within(rows[0]).getByText("ProviderHTTPError")).toBeInTheDocument();
-    expect(within(rows[1]).getByText("First reading, retry of #1")).toBeInTheDocument();
-    expect(within(rows[1]).getByText("1,423 in, 611 out")).toBeInTheDocument();
-    expect(within(rows[1]).getByText("2.5 s")).toBeInTheDocument();
+    const [first, second] = screen.getAllByRole("listitem");
+    expect(within(first).getByRole("heading", { name: "Attempt #1: First reading" })).toBeInTheDocument();
+    expect(within(first).getByText("Provider failed (ProviderHTTPError)")).toBeInTheDocument();
+    expect(within(first).getAllByText("Unknown")).toHaveLength(2); // tokens and time
+    expect(within(second).getByRole("heading", { name: "Attempt #2: First reading, retry of #1" })).toBeInTheDocument();
+    expect(within(second).getByText("1,423 in, 611 out")).toBeInTheDocument();
+    expect(within(second).getByText("2.5 s")).toBeInTheDocument();
+    expect(within(second).getByText("Accepted. Used for the current meaning")).toBeInTheDocument();
   });
 
   it("says a late result is evidence only", () => {
@@ -139,7 +148,7 @@ describe("system failures on the request page", () => {
     await user.click(screen.getByRole("button", { name: "Try the interpreter again" }));
     expect(mocks.retry).toHaveBeenCalledWith("intake-1", "a1");
     expect(await screen.findByRole("heading", { name: "Unresolved: nothing was tested" })).toBeInTheDocument();
-    expect(screen.getAllByRole("row").length).toBeGreaterThan(2); // both attempts stay listed
+    expect(screen.getAllByRole("listitem")).toHaveLength(2); // both attempts stay listed
   });
 
   it("offers no retry for an unknown outcome and explains why", async () => {
@@ -157,7 +166,7 @@ describe("system failures on the request page", () => {
     render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
     expect(await screen.findByRole("heading", { name: "The interpreter's answer was not usable" })).toBeInTheDocument();
     expect(screen.getByTestId("failure-detail")).toHaveTextContent("multiple_objects");
-    expect(screen.getByText("Rejected: multiple objects")).toBeInTheDocument();
+    expect(screen.getByText("Rejected: multiple objects")).toBeInTheDocument(); // in the attempt list
   });
 
   it("keeps the saved meaning and the questions when a reply was rejected", async () => {
@@ -170,7 +179,7 @@ describe("system failures on the request page", () => {
     render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
     expect(await screen.findByRole("heading", { name: "Your last reply could not be used" })).toBeInTheDocument();
     expect(screen.getByText(/Your saved meaning did not change/)).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Or say it in your own words" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /^Or say it in your own words/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try this reply again" })).toBeInTheDocument();
   });
 });

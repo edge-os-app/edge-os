@@ -111,11 +111,13 @@ function Words({ question, busy, base, onReply, heading = false }: { question: Q
     <form className="stack" data-question={`${question.question_id}-words`} aria-labelledby={`${base}-words-label`}
       onSubmit={(event) => { event.preventDefault(); if (words.trim() && !busy) onReply(question.question_id, words, event.currentTarget); }}>
       {heading ? <h3 id={`${base}-words-label`}>{label}</h3> : <label htmlFor={`${base}-words`} id={`${base}-words-label`}>{label}</label>}
-      <textarea id={`${base}-words`} className="input" value={words} maxLength={MAX_WORDS} aria-label={heading ? question.text : undefined}
+      <textarea id={`${base}-words`} className="input" value={words} maxLength={MAX_WORDS}
+        aria-label={heading ? question.text : `${label}. ${question.text}`}
         onChange={(event) => setWords(event.target.value)} aria-describedby={`${base}-words-hint`} />
       <p className="muted" id={`${base}-words-hint`}>The interpreter reads your words. It can misread them, and it cannot replace something you already said. You review the result. Up to {MAX_WORDS.toLocaleString("en-US")} characters.</p>
       <div className="btn-row">
-        <button type="submit" className="btn btn-secondary" disabled={!words.trim()} aria-disabled={busy || undefined}>{busy ? "Working…" : "Send my words"}</button>
+        <button type="submit" className="btn btn-secondary" disabled={!words.trim()} aria-disabled={busy || undefined}
+          aria-label={busy ? undefined : `Send my words. ${question.text}`}>{busy ? "Working…" : "Send my words"}</button>
       </div>
     </form>
   );

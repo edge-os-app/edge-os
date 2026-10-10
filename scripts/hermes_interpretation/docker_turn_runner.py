@@ -82,8 +82,9 @@ class PinnedHermesImage:
         """Remove this run's image and report what is left. Only this tag and this run's label are touched."""
         docker("rmi", "-f", self.tag, check=False)
         absent = docker("image", "inspect", self.tag, check=False).returncode != 0
-        leftovers = docker("ps", "-a", "--filter", f"label={LABEL}={self.run_id}", "--format", "{{.Names}}",
-                           check=False).stdout.split()
+        # Only this runner's turn containers: other things in the run (the database) carry the same label.
+        leftovers = docker("ps", "-a", "--filter", f"label={LABEL}={self.run_id}", "--filter", f"name=^p05-{self.run_id}-",
+                           "--format", "{{.Names}}", check=False).stdout.split()
         return {"image_tag": self.tag, "image_removed": absent, "labeled_containers_left": leftovers}
 
 
