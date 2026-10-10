@@ -4,7 +4,9 @@ Last updated: 2026-10-10, Africa/Kinshasa.
 
 ## Contributor workflow and ownership, 2026-10-10
 
-The [current ownership](EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) supersedes the former frontend/tokenization split. The builder handles the release candidate; the quant contributor's proposed work is outside it. The [brief](team/QUANT_CONTRIBUTOR_BRIEF.md) and [portable workflow](agents/contributor-workflow.md) provide shared inputs and prompt templates. This publication does not dispatch contributor implementation, change active assignments or grant provider/financial authority. Active lane state remains in its recorded controller packets; dated status below is not a new activation instruction.
+The [current ownership](EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) supersedes the former frontend/tokenization split. The builder handles the release candidate. The quant contributor is authorized for independent P14 numerical PR development outside it, under the [brief's bounded assignment](team/QUANT_CONTRIBUTOR_BRIEF.md#start-with-p14) and [portable workflow](agents/contributor-workflow.md). He may create his own branch from latest main and record the actual base SHA. Proposed extension choices, independent calculations, implementation and tests can share one PR.
+
+This dated assignment supersedes contrary preliminary-proposal waits. Runtime profile adoption, shared API/storage/UI leases and full P14 acceptance remain separate. No other contributor ticket, active lane change, provider operation or financial action is authorized. Active lane state remains in its recorded controller packets; older dated status below is historical.
 
 ## Approved hackathon release cut, 2026-10-10
 

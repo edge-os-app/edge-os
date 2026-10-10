@@ -1,6 +1,6 @@
 # Quant contributor brief
 
-Prepared 10 October 2026. These are proposed assignments. The first task still needs its approved profile, starting commit and file ownership before implementation.
+Updated 10 October 2026. Independent contributor PR development is authorized for the numerical portion of P14 described below. Other tasks remain proposed.
 
 ## What we are building
 
@@ -14,11 +14,11 @@ I am handling the hackathon release candidate. Your track is quantitative backen
 
 ## Start with P14
 
-[P14: additions, partial exits and competing-position replay](https://github.com/edge-os-app/edge-os/issues/30) is my recommended first task. P13 is accepted, so there is a working replay to extend. This improves the core product without making the release wait for your work.
+[P14: additions, partial exits and competing-position replay](https://github.com/edge-os-app/edge-os/issues/30) is your authorized first task, limited to numerical PR development outside the release. [P13's accepted result](https://github.com/edge-os-app/edge-os/issues/25#issuecomment-6095690713) supplies the working replay baseline.
 
-The current profile supports one position and full exits. It explicitly rejects additions, partial exits and multiple positions. Start by proposing the extension's meaning and calculating its expected results. Do not enable those actions by removing the rejection checks.
+The current profile supports one position and full exits. It explicitly rejects additions, partial exits and multiple positions. Develop the proposed extension profile, independent calculations, implementation and tests in one PR. Keep the accepted P12/P13 default and rejection behavior intact. Removing rejection checks does not establish extension semantics.
 
-Your first return should contain:
+Your PR should contain:
 
 - A short proposed profile for additions, partial exits, position identity, shared simulated capital and event ordering. Name the supported subset and any undecided behavior.
 - Independently calculated event traces for buy → add → partial exit → add again → full exit. Show cash, inventory, allocated basis, fees, realized result and remaining basis at each event.
@@ -28,7 +28,13 @@ Your first return should contain:
 
 Use small labelled synthetic examples first. Calculate expected values separately from the proposed implementation, so the tests do not repeat the same mistake as the code. Retain the source and units for each assumption.
 
-I will review the profile before implementation. The controller will then provide the exact base, branch and owned paths. The next stage can implement the numerical replay and tests in the existing replay domain. Shared API, database and UI wiring comes through a separate coordinated lease. P14 is not finished until its saved API/UI results and full acceptance checks pass.
+You can begin this bounded PR without a separate profile approval or preliminary proposal return. Create your own task branch from the latest main in your clone or isolated checkout. Record the actual base SHA, branch and checkout in the PR. Opening an early draft PR is optional.
+
+Owned scope is pure numerical replay/calculation helpers in `apps/api/src/edge_os_api/replay/`, focused replay tests including `apps/api/tests/test_spot_replay.py` and new descriptive replay-test files, and new P14 extension-profile/qualification documents. Preserve existing public routes, shared record registration, schemas, contracts, `conftest`, migrations, lockfiles, web code and the shared verifier until an explicit later lease. Put new contract/profile proposals in owned new documents. Preserve adopted P02/P12 meaning and saved-run compatibility.
+
+Calculation choices in the PR remain proposals until reviewed and adopted. This assignment permits developing and testing them in isolation. It does not adopt a runtime profile or enable the extension through the existing application. Shared API, database and UI wiring requires a separate coordinated lease. P05's shared lease remains reserved, and the release does not depend on this PR. Numerical-only acceptance leaves P14 open until saved API/UI results and all full-ticket checks pass.
+
+If an essential requirement is missing or conflicts with an accepted contract, pause the affected part and report the exact conflict. Continue unrelated safe work. This assignment grants no portfolio optimizer, new signals, live financial effects or work on P42, P10 or LP tickets.
 
 ## Other tasks you can own later
 
@@ -60,7 +66,7 @@ Read only the relevant sections of the [full specification](../superpowers/specs
 
 ## Working together
 
-Work in your own clone or isolated checkout on one task branch. Before source edits, the controller supplies the starting SHA, allowed paths, checks and return route. Do not work in the release integration checkout or push to main.
+Work in your own clone or isolated checkout on one task branch. For the authorized P14 numerical PR, use the scope above and [contributor setup](../agents/contributor-workflow.md#start-from-your-clone). For other assignments, obtain the controller's starting SHA, allowed paths, checks and return route before source edits. Do not work in the release integration checkout or push to main.
 
 Keep numerical code in the existing responsibility-based domains. Use names that describe the calculation, not ticket names such as p14.py. Preserve exact decimal, timing, missing-data and source-identity conventions unless an approved new profile changes them. Use the locked toolchain and repository commands.
 
@@ -70,16 +76,16 @@ If you find a blocker in accepted upstream code, reproduce it and report the aff
 
 Each implementation return needs the exact candidate commit, checks and results, original review reports, worked examples, source identities and remaining limits. The project keeps two independent internal reviews and a separate gate before checked local integration. The controller arranges the gate; you do not need the builder's tmux setup. Submit a pull request for shared contribution. Only the builder merges to main.
 
-If you use coding agents, read the task-relevant skills before implementation. Numerical research needs quantitative-research and testing guidance. Python implementation adds codebase-design, python-pro, python-code-style, python-anti-patterns and applicable error-handling/backend skills. Use Karpathy and Ponytail Lite for the smallest complete change. Generic skill thresholds, daily-market assumptions and sample counts do not override the accepted five-minute, units or qualification profile. Agents still need explicit ownership and independent reviews.
+Coding agents are optional. If you use them, select task-relevant skills from the available catalog and read their instructions before use. Numerical research needs quantitative-research and testing guidance. Python implementation adds codebase-design, python-pro, python-code-style, python-anti-patterns and applicable error-handling/backend skills. Use Karpathy and Ponytail Lite for the smallest complete change. Report actual skill use, instruction sources and any permitted adaptations. Generic skill thresholds, daily-market assumptions and sample counts do not override the accepted five-minute, units or qualification profile. Agents still need explicit ownership and independent reviews.
 
 No real-provider collection, paid compute, model research call, wallet operation or trading is approved by this brief. Keep fixtures labelled and credentials out of the repository. The full issue stays open until all its criteria pass, even when an isolated preparation stage is accepted.
 
 ## Your first reply
 
-Tell me whether Python simulation/accounting or statistical-method testing is your stronger area. Then send the P14 profile outline and one independently calculated trace, or explain why P42 preparation is the better starting point. List any exact missing input. I will confirm the first task packet before implementation.
+You can begin the authorized P14 numerical PR now. Include your profile outline, independently calculated traces, code and tests together. List exact missing inputs or unresolved choices in the PR. If P42 is a better fit, propose that alternative for its own assignment before starting it.
 
 ## Workflow and prompt templates
 
 Use the [portable contributor workflow](../agents/contributor-workflow.md) for clone setup, skill requirements and the contribution sequence. It links the canonical [worker packet](../agents/controller-workflow.md#worker-activation-packet), [internal-review packet](../agents/templates/internal-review.md) and [gate packet](../agents/controller-workflow.md#gate-activation-packet). Native agents and Smux lanes are optional ways to run that process; you do not need the builder's machine, pane names or subscriptions.
 
-Your first return is a profile proposal with a worked numerical trace, not an implementation candidate. Before code changes, obtain the accepted profile and a filled assignment naming the exact base, branch/worktree, owned files, required checks, review route and return destination. Install the selected skills in your own agent environment and report missing skills before relying on them. Publication of this brief creates no assignment or provider/financial permission.
+For P14, record this dated numerical assignment, your actual base SHA, branch/checkout, owned scope, required checks and PR/report return. Record an available review route before review begins. The two original independent candidate-bound reviews and separate gate remain required before integration or main merge. They do not prevent opening a PR. Install selected skills in your own agent environment and report missing skills before relying on them. This P14 assignment supersedes contrary preliminary-proposal waits. It grants no provider or financial permission.
