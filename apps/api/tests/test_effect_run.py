@@ -11,7 +11,8 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from edge_os_api import effect_run, p02
+from edge_os_api.research import comparison_runs as effect_run
+from edge_os_api.records import contract_adapter as record_contract
 from conftest import run_threads
 from flows import NO_THESIS, submit
 from test_investigation_adoption import declaration_body
@@ -34,7 +35,7 @@ def _p08_descriptive_body(bundle):
 
 
 def _run_body(p08_body):
-    quote = f"QUOTE:{p02.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
+    quote = f"QUOTE:{record_contract.FIXTURE_STRATEGY['market']['research_binding']['quote_asset']}"
     price = {"op": "gt", "args": [{"op": "price"}, {"op": "constant", "value": "99", "unit": "PRICE"}]}
     volume_true = {"op": "gt", "args": [{"op": "quote_volume"}, {"op": "constant", "value": "4", "unit": quote}]}
     volume_false = {"op": "gt", "args": [{"op": "quote_volume"}, {"op": "constant", "value": "6", "unit": quote}]}
@@ -275,7 +276,7 @@ def test_explicit_run_adoption_precedes_fixture_access_and_report_reopens_exactl
 
     attempt_path = f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts"
     attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"attempt-{uuid.uuid4()}"}
-    monkeypatch.setattr("edge_os_api.effect_run._sha256", lambda _path: "0" * 64)
+    monkeypatch.setattr("edge_os_api.research.comparison_runs._sha256", lambda _path: "0" * 64)
     failed_attempt = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"failed-{uuid.uuid4()}"}
     failed = client.post(attempt_path, headers=owner_a, json=failed_attempt)
     assert failed.status_code == 422
@@ -544,7 +545,7 @@ def test_concurrent_fresh_report_replay_exact_and_conflicting_requests_commit_on
 def test_json_only_legacy_replay_key_still_rejects_a_changed_operation(client, owner_a, pg):
     intake_id, _, _, _, run_id, attempt_path, saved = _saved_effect_run(client, owner_a)
     legacy_replay = {"operation_id": str(uuid.uuid4()), "idempotency_key": f"legacy-replay-{uuid.uuid4()}"}
-    content = p02.canonical_bytes({"kind": "ATTEMPT_REPLAY", **legacy_replay,
+    content = record_contract.canonical_bytes({"kind": "ATTEMPT_REPLAY", **legacy_replay,
                                    "report_id": saved["report"]["record_id"], "outcome_accessed": True}).decode()
     pg.psql(f"insert into effect_run_events(event_id, owner_id, run_id, content, created_at) "
             f"select '{uuid.uuid4()}', owner_id, run_id, '{content}'::jsonb, now() "
@@ -839,8 +840,8 @@ def test_baseexception_after_access_boundary_keeps_durable_access_marker(client,
 
     hashes = iter((adopted.json()["run"]["content"]["fixture_sha256"],
                    adopted.json()["run"]["content"]["profile_sha256"]))
-    monkeypatch.setattr("edge_os_api.effect_run._sha256", lambda _path: next(hashes))
-    monkeypatch.setattr("edge_os_api.effect_run.FIXTURE_PATH", InterruptFixture())
+    monkeypatch.setattr("edge_os_api.research.comparison_runs._sha256", lambda _path: next(hashes))
+    monkeypatch.setattr("edge_os_api.research.comparison_runs.FIXTURE_PATH", InterruptFixture())
     response = client.post(f"/v1/research/requests/{intake_id}/effect-runs/{run_id}/attempts",
                            headers=owner_a, json=attempt)
     assert response.status_code == 500

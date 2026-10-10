@@ -16,7 +16,7 @@ import harness
 from sqlalchemy import MetaData, Table, create_engine, select, text
 
 from conftest import run_threads
-from edge_os_api import p02
+from edge_os_api.records import contract_adapter as record_contract
 from test_spot_replay_api import _body, _saved_revision
 
 
@@ -207,7 +207,7 @@ def _copy_legacy_replay_rows(source_url: str, target_url: str, owner_id: str,
             malformed_content = copy.deepcopy(runs[0]["content"])
             del malformed_content["inputs"]["profile_version"]
             runs[0]["content"] = malformed_content
-            runs[0]["content_sha256"] = p02.sha256_hex(malformed_content)
+            runs[0]["content_sha256"] = record_contract.sha256_hex(malformed_content)
         with target_engine.begin() as target:
             target.execute(tables["users"].insert().values(user))
             for record in records:
@@ -276,9 +276,9 @@ def test_migration_backfills_same_meaning_and_refuses_conflicting_legacy_history
             assert after_rows == original_rows
             assert len(bindings) == 3
             expected_hashes = {
-                original["run_configuration_id"]: p02.sha256_hex({
+                original["run_configuration_id"]: record_contract.sha256_hex({
                     "schema_version": "p13.spot-replay-run/1", "inputs": first.json()["content"]["inputs"]}),
-                **{record["content"]["run_configuration_id"]: p02.sha256_hex({
+                **{record["content"]["run_configuration_id"]: record_contract.sha256_hex({
                     "schema_version": "p13.spot-replay-run/1", "inputs": record["content"]["inputs"]})
                    for record in unavailable_records},
             }
@@ -302,10 +302,10 @@ def test_migration_backfills_same_meaning_and_refuses_conflicting_legacy_history
             conflicting_content["idempotency"]["key"] = conflicting["idempotency_key"]
             conflicting_content["inputs"]["initial_cash_quote"] = "999"
             conflicting["content"] = conflicting_content
-            conflicting["content_sha256"] = p02.sha256_hex(conflicting_content)
-            conflicting["fingerprint"] = p02.sha256_hex({"legacy-conflict": conflicting["idempotency_key"]})
+            conflicting["content_sha256"] = record_contract.sha256_hex(conflicting_content)
+            conflicting["fingerprint"] = record_contract.sha256_hex({"legacy-conflict": conflicting["idempotency_key"]})
             conflicting_content["idempotency"]["fingerprint"] = conflicting["fingerprint"]
-            conflicting["content_sha256"] = p02.sha256_hex(conflicting_content)
+            conflicting["content_sha256"] = record_contract.sha256_hex(conflicting_content)
             with bad_engine.begin() as connection:
                 connection.execute(run_table.insert().values(conflicting))
                 before_rows = [dict(row) for row in connection.execute(text(
@@ -354,7 +354,7 @@ def test_migration_refuses_malformed_legacy_inputs_without_rewriting_saved_rows(
                     "SELECT replay_id, content_sha256, content FROM spot_replay_runs")).mappings()]
             assert len(rows_before) == 1
             assert "profile_version" not in rows_before[0]["content"]["inputs"]
-            assert p02.sha256_hex(rows_before[0]["content"]) == rows_before[0]["content_sha256"]
+            assert record_contract.sha256_hex(rows_before[0]["content"]) == rows_before[0]["content_sha256"]
         finally:
             engine.dispose()
 
@@ -425,14 +425,14 @@ def test_migration_refuses_hash_consistent_legacy_identity_and_descriptor_malfor
                     "UPDATE spot_replay_runs SET content = :content, content_sha256 = :content_sha256 "
                     "WHERE replay_id = :replay_id"), {
                         "content": json.dumps(malformed),
-                        "content_sha256": p02.sha256_hex(malformed),
+                        "content_sha256": record_contract.sha256_hex(malformed),
                         "replay_id": uuid.UUID(replay_id),
                     })
                 connection.execute(text(
                     "ALTER TABLE spot_replay_runs ENABLE TRIGGER spot_replay_runs_immutable"))
                 rows_before = [dict(row) for row in connection.execute(text(
                     "SELECT * FROM spot_replay_runs ORDER BY created_at, replay_id")).mappings()]
-            assert p02.sha256_hex(rows_before[0]["content"]) == rows_before[0]["content_sha256"]
+            assert record_contract.sha256_hex(rows_before[0]["content"]) == rows_before[0]["content_sha256"]
         finally:
             engine.dispose()
 
@@ -565,7 +565,7 @@ def test_migration_preserves_api_authored_uppercase_strategy_revision_uuid(clien
         assert rows_after == rows_before
         assert version_after == "0005"
         assert registry_exists and len(registry_rows) == 1
-        expected_hash = p02.sha256_hex({
+        expected_hash = record_contract.sha256_hex({
             "schema_version": "p13.spot-replay-run/1", "inputs": saved["content"]["inputs"]})
         assert registry_rows[0]["configuration_sha256"] == expected_hash
     finally:
@@ -603,7 +603,7 @@ def _assert_legacy_revision_boundary_refused(client, owner_a, pg, malformation: 
                 content["dataset_fixture_id"] = "unsupported-fixture/999"
             elif malformation == "revision-strategy-mismatch":
                 content["inputs"]["strategy"]["cost_assumptions"]["fee_rate"] = "0"
-                content["inputs"]["strategy_sha256"] = p02.sha256_hex(content["inputs"]["strategy"])
+                content["inputs"]["strategy_sha256"] = record_contract.sha256_hex(content["inputs"]["strategy"])
             elif malformation not in {
                     "revision-content-hash", "revision-manifest-hash", "revision-duplicate-key"}:
                 raise AssertionError(f"unknown R9 migration fixture: {malformation}")
@@ -614,7 +614,7 @@ def _assert_legacy_revision_boundary_refused(client, owner_a, pg, malformation: 
                     "UPDATE spot_replay_runs SET content = CAST(:content AS jsonb), content_sha256 = :hash "
                     "WHERE replay_id = :replay_id"), {
                         "content": json.dumps(content),
-                        "hash": p02.sha256_hex(content),
+                        "hash": record_contract.sha256_hex(content),
                         "replay_id": uuid.UUID(saved["replay_id"]),
                     })
             connection.execute(text("ALTER TABLE spot_replay_runs ENABLE TRIGGER spot_replay_runs_immutable"))
@@ -782,7 +782,7 @@ def test_migration_preserves_supported_profile_and_revision_spellings_for_comple
                 "SELECT * FROM spot_replay_configurations ORDER BY owner_id, run_configuration_id"
             )).mappings()]
         expected_bindings = {
-            case["saved"]["content"]["run_configuration_id"]: p02.sha256_hex({
+            case["saved"]["content"]["run_configuration_id"]: record_contract.sha256_hex({
                 "schema_version": "p13.spot-replay-run/1", "inputs": case["saved"]["content"]["inputs"]})
             for case in cases.values()
         }

@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from edge_os_api import p02
+from edge_os_api.records import contract_adapter as record_contract
 from flows import (HUNCH, LAUNCH_AGE, MARKET, NO_THESIS, RESTRICTIONS, THESIS, answer, compiled_thesis, publish,
                    submit)
 
@@ -45,7 +45,7 @@ def test_thesis_end_to_end_with_database_observation(client, owner_a, pg):
     response, body = publish(client, owner_a, done)
     assert response.status_code == 201, response.text
     result = response.json()
-    p02.validate_record("PublicationResult", result)
+    record_contract.validate_record("PublicationResult", result)
     assert result["outcome"] == "PUBLISHED"
 
     # direct database observations
@@ -56,8 +56,8 @@ def test_thesis_end_to_end_with_database_observation(client, owner_a, pg):
     revision = json.loads(rows(pg, f"select * from strategy_revisions where revision_id = '{result['revision_id']}'"))[0]
     assert revision["content_sha256"] == result["content_sha256"]
     assert revision["parent_revision_id"] is None
-    assert p02.sha256_hex(json.loads(revision["strategy_canonical"])) == revision["content_sha256"]
-    assert revision["strategy_canonical"].encode() == p02.canonical_bytes(body["strategy"])
+    assert record_contract.sha256_hex(json.loads(revision["strategy_canonical"])) == revision["content_sha256"]
+    assert revision["strategy_canonical"].encode() == record_contract.canonical_bytes(body["strategy"])
     types = json.loads(rows(pg, f"select record_type from records where record_id = '{intake_id}' or "
                                 f"intake_record_id = '{intake_id}' order by seq"))
     assert [t["record_type"] for t in types] == ["IntakeRequest", "PromptInterpretation", "Outcome",
@@ -104,7 +104,7 @@ def test_hunch_needs_one_choice_and_one_adoption_in_any_order(client, owner_a):
     assert [c["content"]["question_id"] for c in done["clarifications"]] == ["adopt-suggested-settings", "choose-entry"]
     entry = next(i for i in done["interpretations"][-1]["content"]["field_evidence"] if i["field_name"] == "entry")
     assert entry["origin"] == "USER_CONFIRMED"
-    p02.validate_record_bundle([done["intake"], *done["interpretations"], *done["clarifications"],
+    record_contract.validate_record_bundle([done["intake"], *done["interpretations"], *done["clarifications"],
                                 *[o["record"] for o in done["outcomes"]], *done["drafts"]])
 
 

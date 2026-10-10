@@ -13,10 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from edge_os_api.auth import Principal, require_principal
-from edge_os_api.errors import AppError, finding, invalid, not_found, service_unavailable
-from edge_os_api.models import Record, User
-from edge_os_api.p02 import utc_string
+from edge_os_api.core.authentication import Principal, require_principal
+from edge_os_api.core.errors import AppError, finding, invalid, not_found, service_unavailable
+from edge_os_api.records.models import Record, User
+from edge_os_api.records.contract_adapter import utc_string
 
 router = APIRouter(prefix="/v1/agents/{agent_id}/context", tags=["agent context"])
 RECORD_TYPE = "AgentContextRecord"

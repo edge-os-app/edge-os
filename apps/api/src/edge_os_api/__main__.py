@@ -4,9 +4,9 @@ import sys
 
 import uvicorn
 
-from .db import SchemaMismatch
-from .main import create_app
-from .settings import ConfigError
+from edge_os_api.core.database import SchemaMismatch
+from edge_os_api.main import create_app
+from edge_os_api.core.settings import ConfigError
 
 
 def main() -> None:

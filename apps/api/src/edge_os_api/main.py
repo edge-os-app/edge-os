@@ -15,14 +15,19 @@ from sqlalchemy.exc import DataError, OperationalError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 
-from . import account_views, agent_context, effect_run, investigation_adoption, p02, service, spot_replay_api
-from .auth import Principal, Verifier, require_principal
-from .db import current_revision, make_engine, make_session_factory, require_head, script_head
-from .errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
-from .interpreter import samples
-from .schemas import (ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody,
-                      InvestigationBody, PublicationBody, SpotReplayBody)
-from .settings import Settings, load_settings
+from edge_os_api.accounts import views as account_views
+from edge_os_api.agent_context import controls as agent_context
+from edge_os_api.research import comparison_runs as effect_run
+from edge_os_api.research import investigation_adoption as investigation_adoption
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.research import service as service
+from edge_os_api.replay import saved_runs as spot_replay_api
+from edge_os_api.core.authentication import Principal, Verifier, require_principal
+from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
+from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
+from edge_os_api.research.fixture_interpreter import samples
+from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, InvestigationBody, PublicationBody, SpotReplayBody
+from edge_os_api.core.settings import Settings, load_settings
 
 log = logging.getLogger("edge_os")
 MAX_BODY_BYTES = 256 * 1024
@@ -62,8 +67,8 @@ async def read_json(request: Request) -> Any:
             raise invalid("/", "The request body is too large.", "body_too_large")
         chunks.append(chunk)
     try:
-        data = p02.strict_loads(b"".join(chunks).decode("utf-8"))
-    except (p02.Invalid, ValueError, UnicodeDecodeError, RecursionError) as error:
+        data = record_contract.strict_loads(b"".join(chunks).decode("utf-8"))
+    except (record_contract.Invalid, ValueError, UnicodeDecodeError, RecursionError) as error:
         detail = "The body nests too deeply." if isinstance(error, RecursionError) else f"The body is not strict JSON: {error}"
         raise invalid("/", detail, "invalid_json") from None
     has_nul, depth = _scan(data)

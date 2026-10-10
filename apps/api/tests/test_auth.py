@@ -8,8 +8,8 @@ import time
 import jwt
 import pytest
 
-from edge_os_api import p02
-from edge_os_api.auth import Verifier
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.core.authentication import Verifier
 from tokens import DROP, OWNER_A, TestSigner
 
 URL = "/v1/me"
@@ -28,7 +28,7 @@ def assert_error(response, status: int, code: str) -> None:
     assert response.status_code == status, response.text
     body = response.json()
     assert body["code"] == code
-    p02.validate_http_error(body)  # envelope shape from the frozen contract
+    record_contract.validate_http_error(body)  # envelope shape from the frozen contract
 
 
 def test_a1_missing_header(client):
@@ -174,7 +174,7 @@ def test_a20_previous_key_rotation(signer, settings, pg, env):
     import harness
     from fastapi.testclient import TestClient
     from edge_os_api.main import create_app
-    from edge_os_api.settings import load_settings
+    from edge_os_api.core.settings import load_settings
     old = TestSigner()
     rotated_env = harness.api_env(database_url=pg.url, public_pem=signer.public_pem, previous_pem=old.public_pem,
                                   cors=["http://127.0.0.1:3999"])
@@ -186,7 +186,7 @@ def test_a20_previous_key_rotation(signer, settings, pg, env):
 
 
 def test_ec_key_type_enforced(signer, env):
-    from edge_os_api.settings import ConfigError, load_settings
+    from edge_os_api.core.settings import ConfigError, load_settings
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519, ec as ec_
     ed = ed25519.Ed25519PrivateKey.generate().public_key().public_bytes(
@@ -232,7 +232,7 @@ def test_fuzz_never_5xx(client, signer):
 
 
 def test_no_auth_disabling_setting(env):
-    from edge_os_api.settings import ConfigError, Settings, load_settings
+    from edge_os_api.core.settings import ConfigError, Settings, load_settings
     assert not any("secret" in f or "bypass" in f or "disable" in f for f in Settings.model_fields)
     for name in ("EDGE_OS_PRIVY_APP_SECRET", "EDGE_OS_AUTH_DISABLED", "EDGE_OS_DEV_AUTH_BYPASS"):
         with pytest.raises(ConfigError):
@@ -243,9 +243,9 @@ def test_rotation_counters_are_logged_for_operators(signer, pg, migrated, caplog
     """P01: `auth.signature_failure` shows a spike, `auth.previous_key_accepted` shows when the old key is safe to remove."""
     import harness
     from fastapi.testclient import TestClient
-    from edge_os_api import auth as auth_module
+    from edge_os_api.core import authentication as auth_module
     from edge_os_api.main import create_app
-    from edge_os_api.settings import load_settings
+    from edge_os_api.core.settings import load_settings
     old = TestSigner()
     env = harness.api_env(database_url=pg.url, public_pem=signer.public_pem, previous_pem=old.public_pem,
                           cors=["http://127.0.0.1:3999"])

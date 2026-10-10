@@ -9,13 +9,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import p02, p06
-from .errors import finding as _finding
-from .interpreter import FixtureInterpreter, Scenario, clarification_text
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.strategies import compiler as strategy_compiler
+from edge_os_api.core.errors import finding as _finding
+from edge_os_api.research.fixture_interpreter import FixtureInterpreter, Scenario, clarification_text
 
 UNSUPPORTED_JOBS = {"SIMULATE", "OBSERVE_FORWARD", "REQUEST_LIVE"}
 INVESTIGATION_FIELDS = ["market", "restrictions"]
-CODES = p02.CONTRACT["result_codes"]
+CODES = record_contract.CONTRACT["result_codes"]
 
 
 @dataclass
@@ -37,18 +38,18 @@ def _invalid(path: str, detail: str, code: str = "invalid_value") -> Routed:
 
 
 def required_fields(job: str) -> list[str]:
-    return list(p02.CREATE_STRATEGY_FIELDS) if job == "CREATE_STRATEGY" else list(INVESTIGATION_FIELDS)
+    return list(record_contract.CREATE_STRATEGY_FIELDS) if job == "CREATE_STRATEGY" else list(INVESTIGATION_FIELDS)
 
 
 def build_strategy(strategy_id: str, values: dict[str, Any]) -> dict[str, Any]:
-    return p06.build_strategy(strategy_id, values)
+    return strategy_compiler.build_strategy(strategy_id, values)
 
 
 def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureInterpreter,
           scenario: Scenario | None, strategy_id: str) -> Routed:
     try:
-        p02.validate_record("PromptInterpretation", interp)
-    except (p02.Invalid, KeyError, TypeError) as error:
+        record_contract.validate_record("PromptInterpretation", interp)
+    except (record_contract.Invalid, KeyError, TypeError) as error:
         return _invalid("/", f"The interpretation is not a valid record: {error}", "invalid_interpretation")
     if interp["syntax_status"] == "INVALID":
         return _invalid("/", "The interpreter returned a malformed representation. This is a system failure, "
@@ -56,7 +57,7 @@ def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureIn
     job = interp["requested_job"]
     restrictions = interp["preserved_restrictions"]
     for index, restriction in enumerate(restrictions):
-        if restriction not in p02.SUPPORTED_RESTRICTIONS:
+        if restriction not in record_contract.SUPPORTED_RESTRICTIONS:
             return Routed("UNSUPPORTED", "INTERPRETATION", [_finding(
                 "missing_capability", f"/preserved_restrictions/{index}",
                 f"The restriction {restriction!r} cannot be represented. It is kept exactly as written and "
@@ -96,14 +97,14 @@ def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureIn
     if job == "CREATE_STRATEGY":
         values = {name: item["value"] for name, item in by_name.items()}
         try:
-            p06.validate_compile_fields(values)
-        except p06.CompilerError as error:
+            strategy_compiler.validate_compile_fields(values)
+        except strategy_compiler.CompilerError as error:
             field = error.path.strip("/").split("/", 1)[0]
             path = f"/field_evidence/{field}" if field else "/field_evidence"
             if error.code == "unsupported_operator":
                 return Routed("UNSUPPORTED", "COMPILATION", [_finding("missing_capability", path, error.detail)])
             return Routed("INVALID_INPUT", "VALIDATION", [_finding(error.code, path, error.detail)])
-        except (p02.Invalid, KeyError, TypeError) as error:
+        except (record_contract.Invalid, KeyError, TypeError) as error:
             return _invalid("/field_evidence", f"A supplied field is not valid: {error}", "invalid_field")
     if job != "CREATE_STRATEGY" or interp["evidence_readiness"] == "UNRESOLVED":
         return Routed("UNRESOLVED", "INTERPRETATION", [_finding(
@@ -113,16 +114,16 @@ def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureIn
 
     strategy = build_strategy(strategy_id, values)
     try:
-        p06.validate_strategy(strategy)
-    except p06.CompilerError as error:
+        strategy_compiler.validate_strategy(strategy)
+    except strategy_compiler.CompilerError as error:
         field = error.path.strip("/").split("/", 1)[0]
         path = f"/field_evidence/{field}" if field else "/field_evidence"
         return Routed("INVALID_INPUT", "VALIDATION", [_finding(error.code, path, error.detail)])
-    except (p02.Invalid, KeyError, TypeError) as error:
+    except (record_contract.Invalid, KeyError, TypeError) as error:
         return _invalid("/field_evidence", f"The adopted meaning does not form a valid strategy: {error}",
                         "invalid_strategy")
     for restriction in restrictions:
-        rule = p02.SUPPORTED_RESTRICTIONS[restriction]
+        rule = record_contract.SUPPORTED_RESTRICTIONS[restriction]
         actual: Any = strategy
         for part in rule["field"].split("."):
             actual = actual[part]

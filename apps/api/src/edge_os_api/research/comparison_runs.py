@@ -14,19 +14,20 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import p02, p06
-from .auth import Principal
-from .effect_comparison import compare_effects, evaluate_p06_bindings, expression_inputs, parse_utc
-from .errors import AppError, finding, internal_error, not_found, service_unavailable
-from .models import EffectReport, EffectRunDeclaration, EffectRunEvent, InvestigationDeclaration
-from .schemas import EffectAttemptBody, EffectRunBody
-from .service import get_owned, parse_uuid
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.strategies import compiler as strategy_compiler
+from edge_os_api.core.authentication import Principal
+from edge_os_api.research.effect_comparison import compare_effects, evaluate_p06_bindings, expression_inputs, parse_utc
+from edge_os_api.core.errors import AppError, finding, internal_error, not_found, service_unavailable
+from edge_os_api.records.models import EffectReport, EffectRunDeclaration, EffectRunEvent, InvestigationDeclaration
+from edge_os_api.core.request_schemas import EffectAttemptBody, EffectRunBody
+from edge_os_api.research.service import get_owned, parse_uuid
 
 SCHEMA_VERSION = "p09.effect-run-declaration/1"
 REPORT_VERSION = "p09.effect-report/1"
 FIXTURE_ID = "synthetic-effect-comparison/1"
-FIXTURE_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "effect_comparison" / "synthetic_effect_comparison_v1.json"
-PROFILE_PATH = Path(__file__).resolve().parents[4] / "docs" / "implementation" / "EFFECT_COMPARISON_PROFILE.md"
+FIXTURE_PATH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "effect_comparison" / "synthetic_effect_comparison_v1.json"
+PROFILE_PATH = Path(__file__).resolve().parents[5] / "docs" / "implementation" / "EFFECT_COMPARISON_PROFILE.md"
 
 
 def _sha256(path: Path) -> str:
@@ -50,14 +51,14 @@ def _response(row: EffectRunDeclaration, events: list[EffectRunEvent], report: E
         "run": {"schema_version": SCHEMA_VERSION, "record_type": "EffectRunDeclaration",
                 "record_id": str(row.run_id), "owner_id": str(row.owner_id),
                 "p08_declaration_id": str(row.p08_declaration_id),
-                "created_at": p02.utc_string(row.created_at), "content": row.content},
+                "created_at": record_contract.utc_string(row.created_at), "content": row.content},
         "events": [{"event_id": str(item.event_id), "sequence": item.sequence,
-                    "created_at": p02.utc_string(item.created_at), "content": item.content} for item in events],
+                    "created_at": record_contract.utc_string(item.created_at), "content": item.content} for item in events],
         "report": None if report is None else {"schema_version": REPORT_VERSION,
                                                 "record_type": "EffectReport",
                                                 "record_id": str(report.report_id),
                                                 "owner_id": str(report.owner_id),
-                                                "created_at": p02.utc_string(report.created_at),
+                                                "created_at": record_contract.utc_string(report.created_at),
                                                 "content": report.content},
     }
 
@@ -190,11 +191,11 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
                                     "Each P06 rule binding must retain the exact adopted evaluation, trial, and variant identities.")])
         try:
             for name in ("price_expression", "volume_expression"):
-                if p06.expression_info(binding[name], p02.FIXTURE_STRATEGY["market"], f"/bindings/{binding['evaluation_id']}/{name}").kind != "BOOLEAN":
+                if strategy_compiler.expression_info(binding[name], record_contract.FIXTURE_STRATEGY["market"], f"/bindings/{binding['evaluation_id']}/{name}").kind != "BOOLEAN":
                     raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "p06_condition_not_boolean",
                                    [finding("p06_condition_not_boolean", f"/bindings/{binding['evaluation_id']}/{name}",
                                             "Each adopted P06 condition must be Boolean.")])
-        except p06.CompilerError as error:
+        except strategy_compiler.CompilerError as error:
             raise AppError(422, "EFFECT_COMPARISON", "INVALID_INPUT", "unsupported_p06_expression",
                            [finding(error.code, error.path, error.detail)]) from None
     if body.incremental_volume_declared:
@@ -220,7 +221,7 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
         EffectRunDeclaration.p08_declaration_id == declaration.declaration_id)).scalars())
     _assert_p08_mappings_compatible(session, principal, None, p08_declaration_id=declaration.declaration_id,
                                     intake_record_id=intake.record_id, plan=plan, configuration=body_json)
-    fingerprint = p02.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake.record_id),
+    fingerprint = record_contract.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake.record_id),
                                   "p08_declaration_id": str(declaration.declaration_id), "body": body_json})
     existing = session.execute(select(EffectRunDeclaration).where(
         EffectRunDeclaration.owner_id == principal.user_id,
@@ -255,7 +256,7 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
             content={"kind": "RUN_ADOPTION_REPLAY", "method": "POST", "path": adoption_path,
                      "operation_id": body.operation_id, "idempotency_key": body.idempotency_key,
                      "fingerprint": fingerprint, "p08_declaration_id": str(declaration.declaration_id),
-                     "configuration_sha256": p02.sha256_hex(body_json), "outcome_accessed": False},
+                     "configuration_sha256": record_contract.sha256_hex(body_json), "outcome_accessed": False},
             created_at=now))
         session.commit()
         return 200, _response(exact_mapping, _events(session, exact_mapping))
@@ -268,9 +269,9 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
         content={"schema_version": SCHEMA_VERSION, "fixture_id": body.fixture_id,
                  "fixture_sha256": fixture_hash, "profile_id": "p09.synthetic-descriptive/1",
                  "profile_sha256": profile_hash, "p08_declaration_id": str(declaration.declaration_id),
-                 "p08_request_record_id": str(intake.record_id), "p08_configuration_sha256": p02.sha256_hex(config),
+                 "p08_request_record_id": str(intake.record_id), "p08_configuration_sha256": record_contract.sha256_hex(config),
                  "p08_evaluation_plan": copy.deepcopy(plan), "configuration": body_json,
-                 "configuration_sha256": p02.sha256_hex(body_json),
+                 "configuration_sha256": record_contract.sha256_hex(body_json),
                  "notice": "Explicit synthetic P09 adoption; no outcomes are read until a separate evaluation attempt."},
         created_at=now)
     try:
@@ -279,7 +280,7 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
         event = EffectRunEvent(event_id=uuid.uuid4(), owner_id=principal.user_id, run_id=row.run_id,
                                content={"kind": "RUN_ADOPTED", "outcome_accessed": False,
                                         "p08_declaration_id": str(declaration.declaration_id),
-                                        "configuration_sha256": p02.sha256_hex(body_json)}, created_at=now)
+                                        "configuration_sha256": record_contract.sha256_hex(body_json)}, created_at=now)
         session.add(event)
         session.commit()
     except IntegrityError:

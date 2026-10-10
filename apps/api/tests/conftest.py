@@ -14,7 +14,7 @@ import harness
 from tokens import OWNER_A, OWNER_B, TestSigner
 
 from edge_os_api.main import create_app
-from edge_os_api.settings import load_settings
+from edge_os_api.core.settings import load_settings
 
 EVIDENCE = Path(os.environ.get("P03_EVIDENCE_DIR", harness.REPO / ".scratch" / "p03" / "evidence" / "pytest"))
 

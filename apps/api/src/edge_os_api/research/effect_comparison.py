@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Context, Decimal, DecimalException, ROUND_HALF_EVEN, localcontext
 from typing import Any
 
-from . import p02, p06
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.strategies import compiler as strategy_compiler
 
 NUMERIC = Context(prec=50, rounding=ROUND_HALF_EVEN)
 CHAIN_ORDER = ("block_number", "transaction_index", "log_index")
@@ -305,7 +306,7 @@ def copy_input_evidence(decision: dict[str, Any] | None) -> list[dict[str, Any]]
         if not isinstance(item, dict):
             continue
         copied = dict(item)
-        copied.setdefault("input_dependency_id", p02.sha256_hex({
+        copied.setdefault("input_dependency_id", record_contract.sha256_hex({
             "input": copied.get("input"), "bucket_end": copied.get("bucket_end"),
             "available_at": copied.get("available_at"), "value": copied.get("value"),
         }))
@@ -383,7 +384,7 @@ def _dependency_evidence(
             "market_binding_id": market_id if item is not None else None,
             "reasons": list(dict.fromkeys(reasons)),
         }
-        evidence["input_dependency_id"] = p02.sha256_hex({
+        evidence["input_dependency_id"] = record_contract.sha256_hex({
             "input": evidence["input"], "bucket_end": evidence["bucket_end"],
             "available_at": evidence["available_at"], "value": evidence["value"],
         })
@@ -422,7 +423,7 @@ def evaluate_p06_bindings(
     The caller must author each binding and its essential-input declaration. No P08 free-text
     hypothesis or falsification text is parsed here.
     """
-    market = market or p02.FIXTURE_STRATEGY["market"]
+    market = market or record_contract.FIXTURE_STRATEGY["market"]
     start, end = parse_utc(schedule["start"]), parse_utc(schedule["end"])
     interval = schedule["interval_seconds"]
     if not isinstance(interval, int) or isinstance(interval, bool) or interval <= 0 or end <= start:
@@ -446,8 +447,8 @@ def evaluate_p06_bindings(
         if bucket_end in parsed_features:
             raise ValueError("P06 feature buckets must be unique")
         parsed_features[bucket_end] = feature
-    market_id = p06.market_binding_id(market)
-    history = max((p06.expression_info(expression, market).history
+    market_id = strategy_compiler.market_binding_id(market)
+    history = max((strategy_compiler.expression_info(expression, market).history
                    for binding in bindings
                    for expression in (binding["price_expression"], binding["volume_expression"])), default=0)
     first_decision_bucket = min(times).replace(minute=(min(times).minute // 5) * 5, second=0, microsecond=0)
@@ -461,7 +462,7 @@ def evaluate_p06_bindings(
         buckets.append(cursor)
         cursor += timedelta(minutes=5)
     slot_by_bucket = {bucket: index for index, bucket in enumerate(buckets)}
-    observations: dict[str, list[p06.Observation | None]] = {"price": [], "quote_volume": []}
+    observations: dict[str, list[strategy_compiler.Observation | None]] = {"price": [], "quote_volume": []}
     for bucket in buckets:
         feature = parsed_features.get(bucket)
         for source in observations:
@@ -469,7 +470,7 @@ def evaluate_p06_bindings(
             if raw is None:
                 observations[source].append(None)
                 continue
-            observations[source].append(p06.Observation(
+            observations[source].append(strategy_compiler.Observation(
                 value=raw.get("value"), bucket_end=bucket, market_binding_id=market_id,
                 qualified=raw.get("qualified") is True,
                 available_at=parse_utc(raw["available_at"]) if raw.get("available_at") else None,
@@ -484,9 +485,9 @@ def evaluate_p06_bindings(
         essentials = binding.get("essential_inputs")
         if not isinstance(essentials, list) or not essentials or len(set(essentials)) != len(essentials) or not set(essentials) <= set(observations):
             raise ValueError("each P06 binding needs an explicit unique essential-input mapping")
-        expression_info: dict[str, p06.ExpressionInfo] = {}
+        expression_info: dict[str, strategy_compiler.ExpressionInfo] = {}
         for name in ("price_expression", "volume_expression"):
-            info = p06.expression_info(binding[name], market, f"/{name}")
+            info = strategy_compiler.expression_info(binding[name], market, f"/{name}")
             if info.kind != "BOOLEAN":
                 raise ValueError("each adopted P06 comparison condition must be Boolean")
             expression_info[name] = info
@@ -499,9 +500,9 @@ def evaluate_p06_bindings(
             position = slot_by_bucket[current]
             scheduled = tuple(buckets)
             prices, volumes = observations["price"], observations["quote_volume"]
-            context = p06.EvaluationContext(prices, volumes, scheduled, market_id, decision_time, position)
-            price_result = p06.evaluate_expression(binding["price_expression"], market, context)
-            volume_result = p06.evaluate_expression(binding["volume_expression"], market, context)
+            context = strategy_compiler.EvaluationContext(prices, volumes, scheduled, market_id, decision_time, position)
+            price_result = strategy_compiler.evaluate_expression(binding["price_expression"], market, context)
+            volume_result = strategy_compiler.evaluate_expression(binding["volume_expression"], market, context)
             reasons = list(dict.fromkeys((*price_result.reasons, *volume_result.reasons)))
             essential_qualified = True
             dependencies = [dependency for field_name in ("price_expression", "volume_expression")
@@ -531,7 +532,7 @@ def evaluate_p06_bindings(
                                 and feature.get("value") is not None and (available_at is None or available_at <= decision_time),
                     "market_binding_id": market_id if feature is not None else None,
                     "reasons": [] if feature is None else list(feature.get("reasons", [])),
-                    "input_dependency_id": p02.sha256_hex({
+                    "input_dependency_id": record_contract.sha256_hex({
                         "input": name, "bucket_end": bucket.isoformat().replace("+00:00", "Z"),
                         "available_at": None if available_at is None else available_at.isoformat().replace("+00:00", "Z"),
                         "value": None if feature is None else feature.get("value"),

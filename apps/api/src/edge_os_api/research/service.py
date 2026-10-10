@@ -16,15 +16,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
-from . import p02, p06
-from .auth import Principal
-from .errors import AppError, finding, invalid, not_found, service_unavailable
-from .interpreter import FixtureInterpreter, find_scenario, open_questions
-from .models import IdempotencyRecord, Record, StrategyRevision
-from .router import Routed, route
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.strategies import compiler as strategy_compiler
+from edge_os_api.core.authentication import Principal
+from edge_os_api.core.errors import AppError, finding, invalid, not_found, service_unavailable
+from edge_os_api.research.fixture_interpreter import FixtureInterpreter, find_scenario, open_questions
+from edge_os_api.records.models import IdempotencyRecord, Record, StrategyRevision
+from edge_os_api.research.outcome_router import Routed, route
 
 INTERPRETER = FixtureInterpreter()
-SCHEMA_VERSIONS: dict[str, str] = p02.CONTRACT["schema_versions"]
+SCHEMA_VERSIONS: dict[str, str] = record_contract.CONTRACT["schema_versions"]
 
 
 def utcnow() -> dt.datetime:
@@ -42,7 +43,7 @@ def parse_uuid(value: str) -> uuid.UUID | None:
 def envelope_of(row: Record) -> dict[str, Any]:
     return {"schema_version": row.schema_version, "record_type": row.record_type, "record_id": str(row.record_id),
             "owner_id": str(row.owner_id), "operation_id": str(row.operation_id),
-            "created_at": p02.utc_string(row.created_at), "content": row.content}
+            "created_at": record_contract.utc_string(row.created_at), "content": row.content}
 
 
 def put_record(session: Session, principal: Principal, record_type: str, content: dict[str, Any],
@@ -52,8 +53,8 @@ def put_record(session: Session, principal: Principal, record_type: str, content
     record_id = record_id or uuid.uuid4()
     envelope = {"schema_version": SCHEMA_VERSIONS[record_type], "record_type": record_type,
                 "record_id": str(record_id), "owner_id": str(principal.user_id), "operation_id": str(operation_id),
-                "created_at": p02.utc_string(created_at), "content": content}
-    p02.validate_envelope(envelope)
+                "created_at": record_contract.utc_string(created_at), "content": content}
+    record_contract.validate_envelope(envelope)
     row = Record(record_id=record_id, owner_id=principal.user_id, record_type=record_type,
                  schema_version=SCHEMA_VERSIONS[record_type], operation_id=operation_id, created_at=created_at,
                  content=content, intake_record_id=intake_id, predecessor_record_id=predecessor_id,
@@ -100,8 +101,8 @@ def intake_rows(session: Session, principal: Principal, intake_id: uuid.UUID) ->
 def verify_lineage(session: Session, principal: Principal, intake_id: uuid.UUID) -> None:
     """Re-validate the whole saved lineage with the frozen P02 bundle checker before committing."""
     try:
-        p02.validate_record_bundle([envelope_of(row) for row in intake_rows(session, principal, intake_id)])
-    except (p02.Invalid, KeyError, TypeError) as error:
+        record_contract.validate_record_bundle([envelope_of(row) for row in intake_rows(session, principal, intake_id)])
+    except (record_contract.Invalid, KeyError, TypeError) as error:
         raise AppError(500, "VALIDATION", "INVALID_INPUT", "validation_error",
                        [finding("lineage_invalid", "/", f"Saved lineage failed validation: {error}")]) from None
 
@@ -146,8 +147,8 @@ def create_request(session: Session, principal: Principal, body: dict[str, Any])
     if body.get("declared_market") is not None:
         content["declared_market"] = body["declared_market"]
     try:
-        p02.validate_record("IntakeRequest", content)
-    except p02.Invalid as error:
+        record_contract.validate_record("IntakeRequest", content)
+    except record_contract.Invalid as error:
         detail = ("Text must use composed Unicode characters (NFC). Re-type or paste it as plain text, for example "
                   "so that an accented letter is one character.") if "NFC" in str(error) else str(error)
         raise invalid("/", detail) from None
@@ -244,20 +245,20 @@ def revision_summary(row: StrategyRevision) -> dict[str, Any]:
             "parent_revision_id": str(row.parent_revision_id) if row.parent_revision_id else None,
             "publication_id": str(row.publication_id), "operation_id": str(row.operation_id),
             "content_sha256": row.content_sha256, "manifest_sha256": row.manifest_sha256,
-            "created_at": p02.utc_string(row.created_at)}
+            "created_at": record_contract.utc_string(row.created_at)}
 
 
 def validate_strategy_version(strategy: object) -> None:
     """Validate immutable revisions with the contract that owns their bytes."""
     if not isinstance(strategy, dict):
-        raise p06.CompilerError("invalid_strategy", "/", "A strategy must be an object.")
+        raise strategy_compiler.CompilerError("invalid_strategy", "/", "A strategy must be an object.")
     version = strategy.get("schema_version")
-    if version == p02.CONTRACT["identity"]["strategy_schema"]:
-        p02.validate_strategy(strategy)
-    elif version == p06.CONTRACT["identity"]["strategy_schema"]:
-        p06.validate_strategy(strategy)
+    if version == record_contract.CONTRACT["identity"]["strategy_schema"]:
+        record_contract.validate_strategy(strategy)
+    elif version == strategy_compiler.CONTRACT["identity"]["strategy_schema"]:
+        strategy_compiler.validate_strategy(strategy)
     else:
-        raise p06.CompilerError("unsupported_strategy_version", "/schema_version",
+        raise strategy_compiler.CompilerError("unsupported_strategy_version", "/schema_version",
                                 "The strategy revision uses an unsupported schema version.")
 
 
@@ -325,7 +326,7 @@ def list_requests(session: Session, principal: Principal, limit: int = 50) -> tu
     published = {r.intake_record_id for r in session.execute(select(Record).where(
         Record.owner_id == principal.user_id, Record.record_type == "PublicationResult",
         Record.intake_record_id.in_(ids))).scalars()}
-    return [{"intake_record_id": str(i.record_id), "created_at": p02.utc_string(i.created_at),
+    return [{"intake_record_id": str(i.record_id), "created_at": record_contract.utc_string(i.created_at),
              "original_request": i.content["original_request"], "requested_job": i.content["requested_job"],
              "input_class": i.content["input_class"],
              "outcome": latest[i.record_id].content["outcome"] if i.record_id in latest else None,
@@ -337,15 +338,15 @@ def publish(session: Session, principal: Principal, strategy_id: str, body: dict
     strategy = body["strategy"]
     try:
         validate_strategy_version(strategy)
-    except p06.CompilerError as error:
+    except strategy_compiler.CompilerError as error:
         path = "/strategy" + (error.path if error.path != "/" else "")
         raise invalid(path, error.detail, error.code) from None
-    except (p02.Invalid, KeyError, TypeError) as error:
+    except (record_contract.Invalid, KeyError, TypeError) as error:
         raise invalid("/strategy", f"The strategy is not valid: {error}") from None
     if strategy["strategy_id"] != strategy_id:
         raise invalid("/strategy/strategy_id", "The body strategy ID must equal the path strategy ID.")
-    canonical = p02.canonical_bytes(strategy).decode("utf-8")
-    fingerprint = p02.sha256_hex({
+    canonical = record_contract.canonical_bytes(strategy).decode("utf-8")
+    fingerprint = record_contract.sha256_hex({
         "owner_id": str(principal.user_id), "method": "POST", "path": path,
         "expected_parent_revision_id": body["expected_parent_revision_id"], "draft_id": body["draft_id"],
         "canonical_strategy_bytes": canonical})
@@ -388,12 +389,12 @@ def _publish_once(session: Session, principal: Principal, strategy_id: str, path
         raise _conflict("parent_revision_conflict", "The draft does not bind to this strategy and parent revision.")
     try:
         validate_strategy_version(content["source_syntax"])
-    except p06.CompilerError as error:
+    except strategy_compiler.CompilerError as error:
         path = "/strategy" + (error.path if error.path != "/" else "")
         raise invalid(path, error.detail, error.code) from None
-    except (p02.Invalid, KeyError, TypeError) as error:
+    except (record_contract.Invalid, KeyError, TypeError) as error:
         raise invalid("/strategy", f"The saved strategy is not valid: {error}") from None
-    if p02.canonical_bytes(content["source_syntax"]).decode("utf-8") != canonical:
+    if record_contract.canonical_bytes(content["source_syntax"]).decode("utf-8") != canonical:
         raise invalid("/strategy", "The strategy differs from the adopted meaning saved in the draft.",
                       "strategy_differs_from_draft")
     parent_id = parse_uuid(body["expected_parent_revision_id"]) if body["expected_parent_revision_id"] else None
@@ -408,9 +409,9 @@ def _publish_once(session: Session, principal: Principal, strategy_id: str, path
     moment = utcnow()
     result = {"operation_id": body["operation_id"], "stage": "PUBLICATION", "outcome": "PUBLISHED",
               "code": "published", "findings": [], "retry": "SAFE_SAME_KEY", "publication_id": str(publication_id),
-              "revision_id": str(revision_id), "content_sha256": p02.sha256_hex(strategy),
-              "manifest_sha256": p02.sha256_hex(strategy["semantic_manifest"]), "created_at": p02.utc_string(moment)}
-    p02.validate_record("PublicationResult", result)
+              "revision_id": str(revision_id), "content_sha256": record_contract.sha256_hex(strategy),
+              "manifest_sha256": record_contract.sha256_hex(strategy["semantic_manifest"]), "created_at": record_contract.utc_string(moment)}
+    record_contract.validate_record("PublicationResult", result)
     try:
         inserted = session.execute(pg_insert(IdempotencyRecord).values(
             owner_id=principal.user_id, method="POST", path=path, idempotency_key=body["idempotency_key"],
@@ -448,14 +449,14 @@ def get_revision(session: Session, principal: Principal, strategy_id: str, revis
             StrategyRevision.strategy_id == strategy_id)).scalar_one_or_none()
     if row is None:
         raise not_found("revision")
-    strategy = p02.strict_loads(row.strategy_canonical)
+    strategy = record_contract.strict_loads(row.strategy_canonical)
     try:
         validate_strategy_version(strategy)
-    except (p06.CompilerError, p02.Invalid, KeyError, TypeError):
+    except (strategy_compiler.CompilerError, record_contract.Invalid, KeyError, TypeError):
         raise AppError(500, "READ", "UNAVAILABLE", "service_unavailable",
                        [finding("stored_strategy_invalid", "/strategy", "The saved revision failed P06 validation.")]) from None
-    recomputed = p02.sha256_hex(strategy)
-    manifest_hash = p02.sha256_hex(strategy["semantic_manifest"])
+    recomputed = record_contract.sha256_hex(strategy)
+    manifest_hash = record_contract.sha256_hex(strategy["semantic_manifest"])
     return {**revision_summary(row), "strategy": strategy, "stored_hash_matches_content": recomputed == row.content_sha256,
             "stored_manifest_hash_matches_content": manifest_hash == row.manifest_sha256}
 
