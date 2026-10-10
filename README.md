@@ -2,6 +2,8 @@
 
 An edge-generation and alpha research system for onchain traders and liquidity providers.
 
+Current build, 10 October 2026: saved Research, descriptive comparisons, spot replay and account views work with labelled fixtures. Live trading is not available. See [current status](#current-status) for implemented scope and qualification limits.
+
 Edge OS generates market hypotheses, investigates their mechanisms, and turns supported, sufficiently clear trading instructions into inspectable strategy rules. It preserves the evidence, shows uncertainty and separates research findings from permission to trade.
 
 A trading idea can sound convincing while leaving the important questions unanswered. What causes the opportunity? When should a position open or close? What would disprove the thesis? Does the result survive realistic costs, or only look attractive in a backtest?
@@ -60,7 +62,7 @@ The compiler does not execute arbitrary model-generated Python or smart contract
 
 The planned deployment path lets a user approve a revocable mandate for an exact strategy revision, wallet, venue and set of limits. A persistent worker monitors that strategy while the user is offline. Routine permitted actions do not require another signature.
 
-Each trading agent has its own user-owned wallet, which the user funds separately. Creating or funding it does not start trading. Agent A cannot use Agent B's money or sell its tokens; each agent can hold multiple positions within its own limits. The account overview combines records, not spending authority. Deposits do not reset allowances, losses or stops, and removing agent access leaves the owner's wallet access intact. This architecture is documented, not implemented or verified. See [agent wallets and funding](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-agent-wallet-ownership-and-funding).
+The accepted design gives each trading agent its own user-owned wallet, funded separately. Creating or funding it must not start trading. Agent A must not use Agent B's money or sell its tokens; each agent can hold multiple positions within its own limits. The account overview combines records, not spending authority. Deposits must not reset allowances, losses or stops, and removing agent access must leave owner access intact. The record contracts and account views are implemented; application wallet creation, funding and live operation are not qualified end to end. A separate bounded Privy test supplied one-owner signing and removal evidence. See [agent wallets and funding](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-agent-wallet-ownership-and-funding) and [P16's retained limits](docs/qualification/p16/README.md).
 
 Models can propose intents. Deterministic checks enforce operational eligibility and approved permissions, preserve evidence status, and check freshness, exposure and risk limits. A restricted Privy signer provides an independent wallet-policy boundary. The execution service holds its authorization credential; models do not receive it. The initial venue adapter targets Kuru on Monad.
 
@@ -90,7 +92,7 @@ GeckoTerminal is an optional chart and market-data candidate. Start with a "View
 
 The completed research prototype tested bounded short-horizon momentum/reversal rules and a reconstructed MOE/WMON investigation. It preserved the tested meaning and contrary evidence, returned no supported candidate, and rejected deliberately invalid future inputs. Its evidence does not establish production support for arbitrary strategies.
 
-The [draft first-release build brief](docs/EDGE_OS_BUILD_BRIEF.md) proposes a complete request-to-saved-research path, followed by a narrow historical simulator and separately qualified account operation. It is awaiting builder review. Research/UI work need not wait for every execution question after its own scope and contracts are accepted.
+The [first-release build brief](docs/EDGE_OS_BUILD_BRIEF.md) describes the spot-first direction. Accepted tickets have implemented the request-to-saved-record path, a bounded synthetic spot replay and persisted account views. The wider brief is not evidence that real data, model inference or execution have passed qualification.
 
 The planned execution path uses Kuru Flow and a revocable, policy-scoped Privy wallet mandate. Models propose actions. Deterministic checks and wallet policies determine whether an action is permitted. Swap requests, denied actions, confirmed asset changes and transaction receipts remain inspectable.
 
@@ -120,23 +122,49 @@ Longer-term possibilities include strategy forks and exports, licensing, marketp
 
 ## Current status
 
-Edge OS is finalizing its production design. The builder accepted and closed Probe A on 2026-10-03 for its bounded research-process claim:
+The repository contains a runnable Next.js frontend, FastAPI backend and PostgreSQL persistence. The implemented local path can:
 
-- Part 1A recovery passed the deterministic compiler, timing, leakage and accounting checks: 81/81 checks passed.
-- Part 1B passed all five fresh live GPT-6.1 Sol cases under contract v6: a concrete thesis, loose intuition, bounded no-thesis request, unsupported request and clarification follow-up. The concrete thesis and clarified rules compiled, saved and reloaded without changing their tested meaning. Unclear requests produced questions; missing evidence remained unresolved; unsupported requests were not replaced with another strategy.
-- The final offline suites passed 35 interpretation checks and 19 boundary checks. Earlier model failures and contract defects remain in the report. Both the model choice and corrections to our instructions/checker contributed to the recovery.
-- Checkpoint 1 passes for this bounded interpretation, compiler and known-invalid-input experiment. This is not proof of reliable interpretation of every arbitrary strategy.
-- Checkpoint 2 completed an actual Hermes investigation of reconstructed MOE/WMON history. It retained all four proposed variants and contrary results, then returned `UNRESOLVED` with no supported candidate. Historical delivery and realistic execution remain unproved. The sample requirement could not be met in the approved window; the holdout remains unopened.
-- Probe A is accepted for that narrow process result. The full Compass prototype gate remains unpassed. Probe B, delegated Monad–Kuru execution, has not started.
-- The separate frontend walkthrough is built through v0.12.2 with scoped source/state checks and independent repair confirmations. The builder reports completing an assisted walkthrough and finding it fine. Unfamiliar-user comprehension, full accessibility, physical-phone use and real wallet enforcement remain unproved; explicit bounded closure remains pending. The optional past-price result is an authored example, not a working backtester.
+- Save a request, ask clarifying questions, review compiled price/volume rules and reopen immutable revisions after an API restart.
+- Review and explicitly adopt a fixture-labelled investigation declaration before outcome access. Preserve its exact settings, origins and prior versions.
+- Run an adopted descriptive comparison on authored synthetic inputs, retaining variants, exclusions, missing references, contrary results and saved reports. Statistical support remains `UNRESOLVED`.
+- Save and replay the adopted one-position spot subset with next-scheduled-bar fills, explicit costs, immutable configuration identities, cash/holdings and available or unavailable metrics. This is a real implemented simulator driven by synthetic fixtures, not qualified market history or a profitable strategy.
+- Display persisted Agents, Positions and Funds records with immutable permission histories and separate deposits/withdrawals. Version agent context through adoption, correction, disable and clear. These are authored account records, not live wallet balances or trading workers.
 
-See the [probe result report](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) and [frontend findings](docs/prototypes/EDGE_OS_FRONTEND_INTERACTION_RESULT.md) for evidence and limitations. The focused product session is closed. Next is review of the reconciled specification and [draft build brief](docs/EDGE_OS_BUILD_BRIEF.md), followed by approved contracts and implementation tickets. No further inference, implementation or publishing is authorized by this README.
+### Integrated work by ticket
 
-The bounded research process produced an unresolved finding, not a profitable strategy or autonomous-execution proof. A passing test or completed transaction does not prove a trading edge.
+The accepted implementation/decision outputs below are in this codebase. Acceptance refers to each bounded output, including a permitted `UNRESOLVED` qualification result; it does not assert that every GitHub issue is closed or that the product is deployed.
 
-## Run the first Research path
+| Ticket | Integrated output | Boundary |
+|---|---|---|
+| P01 | Application/authentication/storage profile | Production deployment and real-auth checks remain separate |
+| P02 | Strict first-slice record contracts and lineage checks | No model or trading authority |
+| P03 | Saved Research API, database and Next.js path | Fixture sign-in and interpretation verification |
+| P04 | Pinned Hermes local runtime qualification | Fake-provider tests passed; live model/hosting unresolved |
+| P06 | Deterministic compiler/evaluator and review/save/reopen path | Supported price/volume subset only |
+| P08 | Investigation review, adoption, immutable save and reopen | Fixture-labelled declarations; no real study by adoption alone |
+| P09 | Descriptive comparison and saved-report runtime | Authored synthetic inputs; no statistical or profitability claim |
+| P12 | Adopted spot-replay accounting/evidence contract | One position, fixed positive quote buys and full exits |
+| P13 | Persisted spot-replay API and UI | Implements P12's bounded synthetic subset; no live fills |
+| P15 | Wallet, mandate and account record contracts | Does not implement live funding or execution |
+| P19 | Persisted account views and versioned agent context | Not live wallet state or Hermes context retrieval |
+| P36 | LP model/data requirements and reference case | Overall `UNRESOLVED`; no adopted LP model or simulator |
+| NANSEN-D01 | Bounded descriptive-input assessment | Limited sampled access; not qualified wallet PnL or signals |
 
-The first application slice (P03) is a FastAPI service, PostgreSQL and a Next.js app. It submits a request, asks the necessary question, saves reviewed rules and reopens them after a restart. It uses fixture interpretation and fixture sign-in for verification. No real model, real Privy login, research run or wallet is involved. See [the implementation notes](docs/implementation/P03_FIRST_RESEARCH_PATH.md) and the [verification skill](.agents/skills/verify-edge-os/SKILL.md).
+Also integrated: P07's offline history/lineage checker, P16's bounded one-owner signing/removal evidence, the P43 R9 design export and controller delivery/Stop safeguards. Full P07 real-history and P16 owner-linked creation, lost-response, restart and actual-backend cross-user qualification remain incomplete. P43 is a design milestone, not complete design-parity or unfamiliar-user validation.
+
+P05's Hermes interpretation adapter is staged outside this published tree and is not wired into Research. Its persistence, shared wiring, reviews and live-model qualification remain open. Real data collection, Kuru swaps, funded agent operation, withdrawals, production deployment, live LP execution and optional token/add-on extensions are not available end to end.
+
+The earlier accepted [Probe A](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) preserved bounded interpretation and contrary evidence, and returned `UNRESOLVED` with no supported MOE/WMON candidate. Keep that evidence separate from the current fixture-backed application. Compilation, simulations, passing tests and sign-only provider results do not prove a trading edge.
+
+### Verification snapshot
+
+On 10 October 2026, code at `8ad71c4` passed all 377 API tests against isolated PostgreSQL. The same application tree passed 118 web tests, typechecking, P02/P06/P15 contract checks, 73 P07 checks, production build and the full 18-step desktop/390px browser/API/SQL/restart/cleanup path. The backend reorganization received two independent internal PASS assessments and a separate gate PASS before integration.
+
+One unchanged desktop saved-heading focus assertion failed in the first mapped run and passed on an unchanged repeat. Its cause remains unexplained. Safari/Firefox, real devices, full screen-reader use, unfamiliar-user comprehension and deployed load remain unqualified. Verification used fixture authentication and synthetic records, not real market execution.
+
+## Run and test locally
+
+The mapped verifier starts a fresh isolated PostgreSQL database, migrates it, builds and starts the API/web app, drives the saved Research/comparison/replay/account paths, inspects actual rows, restarts the API and cleans up only its own resources. It uses fixture interpretation and sign-in. See [startup and configuration](docs/implementation/P03_FIRST_RESEARCH_PATH.md) and the [verification recipe](.agents/skills/verify-edge-os/SKILL.md) for the full steps and evidence locations. Keep credentials out of source control; example configuration is in `apps/api/.env.example` and `apps/web/.env.example`.
 
 ```bash
 (cd apps/api && uv sync --frozen && uv run --frozen pytest)
@@ -147,14 +175,36 @@ The first application slice (P03) is a FastAPI service, PostgreSQL and a Next.js
 
 The commands need Docker, Python 3.14, `uv`, and Node 24.
 
+## Code layout
+
+```text
+apps/web/                  Next.js application
+apps/api/src/edge_os_api/
+  main.py                  application factory and route composition
+  core/                    authentication, database, settings, errors, request schemas
+  records/                 contract adapter and shared SQLAlchemy definitions
+  strategies/              deterministic compiler/evaluator
+  research/                request workflow, investigation adoption, comparisons
+  replay/                  simulator and saved runs
+  accounts/                persisted account views
+  agent_context/           versioned context controls
+docs/contracts/            frozen/versioned record and execution contracts
+docs/implementation/       accepted runtime and decision profiles
+docs/qualification/        bounded qualification evidence and reference cases
+scripts/p03/, tests/p03/    isolated application verification harness
+docs/design/p43/r9/        retained design export
+```
+
+See [backend responsibilities and import paths](docs/implementation/BACKEND_PACKAGE_LAYOUT.md). Application filenames describe their responsibility; ticket/schema identifiers remain in contracts and traceability records. The reorganization changed imports and resource paths without changing database schema or application behavior.
+
 ## Project documents
 
 The specification, contracts, scoped probe plan and project workflow in this repository are the shared sources of truth. This README explains the product; the specification controls detailed behavior. Their approval status remains explicit.
 
 - [Current state and next action](docs/CONTROLLER_HANDOFF.md).
 - [Edge OS Compass workflow](docs/EDGE_OS_COMPASS_WORKFLOW.md).
-- [Product design, draft for builder review](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md).
-- [Research contracts, draft for builder review](docs/EDGE_OS_RESEARCH_CONTRACTS.md).
+- [Product scope and qualification requirements](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md).
+- [Research contracts](docs/EDGE_OS_RESEARCH_CONTRACTS.md).
 - [Scoped probe plan and approval record](docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md).
 - [Probe findings and limitations](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md).
 - [Hackathon brief](docs/research/00_HACKATHON_BRIEF.md).
@@ -173,4 +223,4 @@ Contributor coding skills require installation in each contributor's agent envir
 
 For supporting evidence and required task inputs, follow the [contributor reference rules](docs/agents/domain.md#shared-documents-and-private-evidence).
 
-Verified installation, build and test commands will be added when the runnable application and its tooling exist.
+Use the locked toolchains and repository verification commands above. New feature work requires its assigned scope, tests and independent reviews; publication does not grant provider access or financial authority.

@@ -1,10 +1,20 @@
 # Edge OS team handoff
 
-Last updated: 2026-10-08, Africa/Kinshasa.
+Last updated: 2026-10-10, Africa/Kinshasa.
 
 This file records team-facing state. The builder's detailed controller history, retired Funnel ledger, courses and research archives are private and are not required inputs for a teammate's clone.
 
 ## Current state
+
+### Published build status, 2026-10-10
+
+The code through accepted integration `8ad71c4` contains the saved Research/compiled-rule path, fixture-labelled investigation adoption, authored-synthetic comparison reports, bounded persisted spot replay and owner-scoped account/context views. P09/P13/P19's original reviews, separate gates and combined final review passed. The responsibility-only backend refactor also passed its original pair/gate and actual 377-test integration suite. See the [README status and ticket boundaries](../README.md#current-status) and [backend layout](implementation/BACKEND_PACKAGE_LAYOUT.md).
+
+P04's local pinned-Hermes recipe passed with a fake provider; live model/hosting remains unresolved. P07's offline checker is integrated, but real-history evidence remains open. P16's bounded one-owner signing/removal output passed its reviews and gate and is integrated. Its creation/lost-response/restart and actual-backend cross-user qualification remain open. Resume those checks before real wallet setup/recovery; reuse passed signing/removal evidence rather than repeat provider actions without a specific reason. P36 remains unresolved LP preparation.
+
+P05's adapter remains staged outside this tree, without a shared-wiring lease. Its next assigned continuation must reconcile the accepted refactor, place interpretation modules under research and update imports before wiring/persistence/review. Do not create another writer or reset its retained candidate. No real data/model/trading, deployment, wallet/spending or worktree-deletion authority follows from publication.
+
+Earlier implementation-not-started, binding-in-progress and P16-review-pending statements below are historical snapshots. Accepted bounded results do not close remaining qualification or prototype gates. The README's dated status records the current published implementation; preserve original failure/qualification records rather than rewriting their history.
 
 Controller binding work, 2026-10-07: CTRL-BIND-L3-01 is in progress on `chore/controller-guard-session-binding`, based on `6e7efc941a015e72278b3037bfcc314fc5cd6602`. The scoped change adds approved local task assignments and native SessionStart receipts for Codex and Claude. It does not bind existing sessions automatically. Wait for both internal PASS reviews and the independent gate before treating the candidate as accepted. New sessions still require normal hook trust and a matching receipt.
 
