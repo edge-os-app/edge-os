@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -23,7 +24,7 @@ from .interpretation_attempts import (
 )
 from .interpretation_response import (
     ADOPT_QUESTION_ID, APPLICATION_OWNED_FIELDS, ClarificationAnswer, OfferedQuestion, ParsedInterpretation, Rejection,
-    parse_follow_up_response, parse_interpretation_response,
+    parse_follow_up_response, parse_interpretation_response, unstorable,
 )
 
 __all__ = ["HermesInterpreter", "HermesInterpreterConfig", "HermesTurn", "HermesTurnResult", "HermesTurnRunner",
@@ -34,7 +35,7 @@ log = logging.getLogger("edge_os")
 
 PINNED_HERMES_COMMIT = "54bc5e509c985f37265c3d416bd2c64b10fc77ba"
 PINNED_HERMES_LOCK_SHA256 = "de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01"
-PROMPT_VERSION = "p05-interpretation/2"
+PROMPT_VERSION = "p05-interpretation/3"
 RUNTIME_LABELS = ("LOCAL_FAKE_PROVIDER", "LIVE")
 
 RESPONSE_SHAPE = """\
@@ -72,6 +73,8 @@ Rules:
 6. When the user states two values for one field, use CONFLICTING and quote each statement. Do not pick one.
 7. A question must ask about a field you report as MISSING or CONFLICTING. Its text ends with "?". Each option label
    states every number that its value carries.
+   Keep a question text under 500 characters and an option label under 300. Give every question_id and option id fewer
+   than 200 characters. Never begin a question_id with "ask-". The application uses that start for its own questions.
 8. Use the shapes in field_shapes and only the operators in operators. Those shapes show form, not advice.
 9. When requested_job is not CREATE_STRATEGY, model_fields is empty: return an empty field_evidence and no questions,
    and set evidence_readiness to "UNRESOLVED" when the user asks you to look for ideas without a thesis.
@@ -135,6 +138,15 @@ class HermesTurnResult:
     error_class: str | None = None
 
 
+class PublicationCheck(Protocol):
+    """Decides, before an answer is accepted, whether publishing it could fail. It returns a rejection or None."""
+
+    def first(self, intake: Mapping[str, Any], parsed: ParsedInterpretation) -> Rejection | None: ...
+
+    def reply(self, intake: Mapping[str, Any], previous_evidence: Sequence[Mapping[str, Any]], question: str,
+              answer: ClarificationAnswer, parsed: ParsedInterpretation) -> Rejection | None: ...
+
+
 class HermesTurnRunner(Protocol):
     def run_turn(self, turn: HermesTurn) -> HermesTurnResult: ...
 
@@ -195,27 +207,42 @@ def _storable(text: str) -> tuple[str, bool]:
     return text.encode("utf-8", "backslashreplace").decode("utf-8").replace("\x00", "\\x00"), False
 
 
-MAX_COUNT = 2 ** 53
+MAX_REQUEST_COUNT = 2 ** 31 - 1  # the column is a 32-bit integer
+MAX_TOKENS = 2 ** 62  # the columns are 64-bit integers
 
 
-def _sane_count(value: int | None) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_COUNT else None
+def _sane_count(value: Any) -> int | None:
+    ok = isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_REQUEST_COUNT
+    return value if ok else None
 
 
-def _sane_usage(usage: Usage) -> Usage:
+def _sane_tokens(value: Any) -> bool:
+    return value is None or (isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_TOKENS)
+
+
+def _sane_usage(usage: Any) -> Usage:
     """Provider-reported counts that the ledger and the database cannot hold are treated as not reported."""
+    if not isinstance(usage, Usage) or usage.source != "PROVIDER_REPORTED":
+        return Usage()
+    if usage.input_tokens is None or usage.output_tokens is None:
+        return Usage()
     counts = (usage.input_tokens, usage.output_tokens, usage.total_tokens)
-    if usage.source != "PROVIDER_REPORTED":
-        return Usage()
-    if usage.input_tokens is None or usage.output_tokens is None or any(
-            count is not None and _sane_count(count) is None for count in counts):
-        return Usage()
-    return usage
+    return usage if all(_sane_tokens(count) for count in counts) else Usage()
+
+
+def _sane_observed(observed: Any) -> dict[str, Any]:
+    """What the runtime reported about itself, if a saved record can hold it."""
+    if not isinstance(observed, Mapping) or unstorable(dict(observed)) is not None:
+        log.error("the runtime report could not be saved and was dropped")
+        return {}
+    return dict(observed)
 
 
 def _error_class(name: str | None) -> str | None:
     """Keep a class name only. Provider text never reaches a stored or public field."""
-    return name if name is not None and ERROR_CLASS.fullmatch(name) else ("ProviderError" if name else None)
+    if isinstance(name, str) and ERROR_CLASS.fullmatch(name):
+        return name
+    return "ProviderError" if name else None
 
 
 def _model_fields(intake: Mapping[str, Any]) -> list[str]:
@@ -259,20 +286,22 @@ def _task_json(task: Mapping[str, Any]) -> str:
 
 class HermesInterpreter:
     def __init__(self, config: HermesInterpreterConfig, runner: HermesTurnRunner, ledger: AttemptLedger,
-                 monotonic: Callable[[], float], guard: ExecutionGuard | None = None) -> None:
+                 monotonic: Callable[[], float], guard: ExecutionGuard | None = None,
+                 publication: PublicationCheck | None = None) -> None:
         if config.runtime_label not in RUNTIME_LABELS:
             raise ValueError(f"unknown runtime label {config.runtime_label!r}")
         if config.runtime_label == "LIVE" and (config.live_release is None or config.live_release.model != config.model):
             raise LiveReleaseRequired("A live runtime needs a recorded release for this provider, model and budget.")
         self._config, self._runner, self._ledger, self._monotonic = config, runner, ledger, monotonic
         self._guard = guard
+        self._publication = publication
 
     def interpret(self, owner_id: str, intake_record_id: str, intake: Mapping[str, Any],
                   retry_of: str | None = None) -> InterpretResult:
         """One attempt to interpret the saved request. A retry is a new call that names the attempt it follows."""
         task = _task_json(_task_base("interpret", intake))
         return self._attempt(owner_id, intake_record_id, "INTERPRET", task, None, None, None, retry_of,
-                             lambda text: parse_interpretation_response(text, intake))
+                             lambda text: self._publishable_first(intake, parse_interpretation_response(text, intake)))
 
     def follow_up(self, owner_id: str, intake_record_id: str, intake: Mapping[str, Any],
                   previous_evidence: Sequence[Mapping[str, Any]], question: str, answer: ClarificationAnswer,
@@ -283,7 +312,9 @@ class HermesInterpreter:
                     question=question, answer=answer.text)
         return self._attempt(owner_id, intake_record_id, "FOLLOW_UP", _task_json(task), answer.answer_ref, answer.text,
                              previous_revision_id, retry_of,
-                             lambda text: parse_follow_up_response(text, intake, previous_evidence, answer))
+                             lambda text: self._publishable_reply(
+                                 intake, previous_evidence, question, answer,
+                                 parse_follow_up_response(text, intake, previous_evidence, answer)))
 
     def reparse(self, view: AttemptView, intake: Mapping[str, Any],
                 previous_evidence: Sequence[Mapping[str, Any]] | None = None,
@@ -293,10 +324,25 @@ class HermesInterpreter:
         if settlement is None or settlement.response_text is None:
             return Rejection("no_saved_response", "", "This attempt saved no response.")
         if view.start.identity.purpose == "INTERPRET":
-            return parse_interpretation_response(settlement.response_text, intake)
+            return self._publishable_first(intake, parse_interpretation_response(settlement.response_text, intake))
         if previous_evidence is None or answer is None:
             return Rejection("missing_context", "", "A follow-up needs its earlier evidence and the user's reply.")
-        return parse_follow_up_response(settlement.response_text, intake, previous_evidence, answer)
+        question = json.loads(view.start.identity.task_text).get("question", "")
+        return self._publishable_reply(intake, previous_evidence, question, answer, parse_follow_up_response(
+            settlement.response_text, intake, previous_evidence, answer))
+
+    def _publishable_first(self, intake: Mapping[str, Any],
+                           parsed: ParsedInterpretation | Rejection) -> ParsedInterpretation | Rejection:
+        if self._publication is None or isinstance(parsed, Rejection):
+            return parsed
+        return self._publication.first(intake, parsed) or parsed
+
+    def _publishable_reply(self, intake: Mapping[str, Any], previous_evidence: Sequence[Mapping[str, Any]], question: str,
+                           answer: ClarificationAnswer,
+                           parsed: ParsedInterpretation | Rejection) -> ParsedInterpretation | Rejection:
+        if self._publication is None or isinstance(parsed, Rejection):
+            return parsed
+        return self._publication.reply(intake, previous_evidence, question, answer, parsed) or parsed
 
     def _attempt(self, owner_id: str, intake_record_id: str, purpose: str, task: str, answer_ref: str | None,
                  answer_text: str | None, previous_revision_id: str | None, retry_of: str | None,
@@ -344,13 +390,15 @@ class HermesInterpreter:
 
     def _finish(self, attempt_id: str, owner_id: str, result: HermesTurnResult, latency_ms: int,
                 parse: Callable[[str], ParsedInterpretation | Rejection]) -> InterpretResult:
-        status = STATUS_BY_RUNNER_STATUS.get(result.status, "UNKNOWN")
-        if status == "COMPLETED" and result.text is None:
+        status = STATUS_BY_RUNNER_STATUS.get(result.status, "UNKNOWN") if isinstance(result.status, str) else "UNKNOWN"
+        raw_text = result.text if isinstance(result.text, str) else None
+        if status == "COMPLETED" and raw_text is None:
             status = "UNKNOWN"
-        text = result.text if status in {"COMPLETED", "TRUNCATED"} else None
+        text = raw_text if status in {"COMPLETED", "TRUNCATED"} else None
         if status == "TRUNCATED" and text is None:
             text = ""  # a cut-off answer with no visible text is still a saved, rejected truncation
         usage, request_count = _sane_usage(result.usage), _sane_count(result.request_count)
+        observed = _sane_observed(result.observed)
         outcome: ParsedInterpretation | Rejection | None = None
         parse_result = "NOT_PARSED"
         if text is not None:
@@ -369,8 +417,8 @@ class HermesInterpreter:
                     log.error("parser raised for attempt %s: %s", attempt_id, type(error).__name__)
                     outcome = Rejection("unparseable_response", "", "The answer could not be read, so none of it was used.")
             parse_result = "ACCEPTED" if isinstance(outcome, ParsedInterpretation) else f"REJECTED:{outcome.reason_code}"
-        return self._settle(attempt_id, owner_id, status, text, usage, request_count,
-                            dict(result.observed), _error_class(result.error_class), latency_ms, parse_result, outcome)
+        return self._settle(attempt_id, owner_id, status, text, usage, request_count, observed,
+                            _error_class(result.error_class), max(0, latency_ms), parse_result, outcome)
 
     def _settle(self, attempt_id: str, owner_id: str, status: str, text: str | None, usage: Usage,
                 request_count: int | None, observed: Mapping[str, Any], error_class: str | None, latency_ms: int,
@@ -384,9 +432,10 @@ class HermesInterpreter:
             self._ledger.settle(settlement)
         except AlreadySettled:  # the attempt was closed as unknown while it ran: keep this result as evidence only
             return self._keep_late(settlement)
-        except Exception as error:  # noqa: BLE001 - an unrecorded result is not released; abandonment is proved later
+        except Exception as error:  # noqa: BLE001 - try once more with the minimal safe values before giving up
             log.error("result not recorded for attempt %s: %s", attempt_id, type(error).__name__)
-            return Unavailable(attempt_id, "result_not_recorded", UNAVAILABLE_DETAIL["result_not_recorded"])
+            if not self._settle_minimal(settlement):
+                return Unavailable(attempt_id, "result_not_recorded", UNAVAILABLE_DETAIL["result_not_recorded"])
         if isinstance(outcome, ParsedInterpretation):
             return Interpreted(attempt_id, outcome)
         if isinstance(outcome, Rejection):
@@ -394,6 +443,22 @@ class HermesInterpreter:
         reason = UNAVAILABLE_BY_STATUS[status]
         return Unavailable(attempt_id, reason, UNAVAILABLE_DETAIL[reason])
 
+
+    def _settle_minimal(self, settlement: AttemptSettlement) -> bool:
+        """Settle again with only values that cannot be refused: usage unknown, no count, no runtime report.
+
+        A settled row then always exists, and the response text and its hash are kept. Returns whether it settled.
+        """
+        try:
+            self._ledger.settle(AttemptSettlement(
+                attempt_id=settlement.attempt_id, owner_id=settlement.owner_id, status=settlement.status,
+                finished_at=settlement.finished_at, latency_ms=settlement.latency_ms, usage=Usage(), request_count=None,
+                response_sha256=settlement.response_sha256, response_text=settlement.response_text,
+                parse_result=settlement.parse_result, error_class=None, runtime_observed={}))
+        except Exception as error:  # noqa: BLE001 - nothing more can be done; abandonment is proved later
+            log.error("minimal result not recorded for attempt %s: %s", settlement.attempt_id, type(error).__name__)
+            return False
+        return True
 
     def _keep_late(self, settlement: AttemptSettlement) -> Unavailable:
         try:

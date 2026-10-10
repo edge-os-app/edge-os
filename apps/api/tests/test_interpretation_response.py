@@ -894,9 +894,12 @@ def plant(base: Any, path: tuple[Any, ...], value: Any) -> Any:
 
 
 def assert_publishable(result: ParsedInterpretation, intake: dict[str, Any]) -> None:
-    """What the workflow stores for an accepted answer must pass the record contract and the storage rules."""
+    """What the workflow stores for an accepted answer must pass the record contract and its size limit.
+
+    This oracle is the contract alone. The HTTP sweep in test_hermes_research_flow.py is the independent proof: it
+    publishes for real.
+    """
     from edge_os_api.records import contract_adapter as record_contract
-    from edge_os_api.research.interpretation_response import _unstorable
     content = {"intake_record_id": "22222222-2222-4222-8222-222222222222",
                "interpretation_revision_id": "11111111-1111-4111-8111-111111111111",
                "input_class": intake["input_class"], "requested_job": intake["requested_job"],
@@ -906,9 +909,7 @@ def assert_publishable(result: ParsedInterpretation, intake: dict[str, Any]) -> 
                "meaning_status": result.meaning_status, "syntax_status": "VALID",
                "evidence_readiness": result.evidence_readiness}
     record_contract.validate_record("PromptInterpretation", content)
-    assert _unstorable(json.loads(json.dumps(content))) is None
-    assert _unstorable(json.loads(json.dumps([{"question_id": q.question_id, "field_name": q.field_name, "text": q.text,
-        "options": [{"id": o.id, "label": o.label, "value": o.value} for o in q.options]} for q in result.questions]))) is None
+    assert len(record_contract.canonical_bytes(content)) <= 65536
 
 
 @pytest.mark.parametrize("name, response, intake", [
@@ -930,3 +931,39 @@ def test_no_hostile_value_at_any_position_makes_the_parser_raise_or_accept_somet
             except Exception as error:  # noqa: BLE001 - report the exact planting that slipped through
                 raise AssertionError(f"accepted but not publishable: {name} at {path} with {hostile!r}: {error!r}") from error
     assert checked > 500 and accepted > 0, (name, checked, accepted)
+
+
+@pytest.mark.parametrize("question_id", ["ask-exit", "ask-entry", "ask-", "adopt-suggested-settings"])
+def test_rejects_a_question_id_that_the_application_names_its_own_questions_with(question_id: str) -> None:
+    response = hunch_response()
+    response["questions"][0]["question_id"] = question_id
+    assert_rejected(parse(response, HUNCH_INTAKE), "reserved_question_id", "/questions/0/question_id")
+
+
+@pytest.mark.parametrize("where, change", [
+    ("question_id", lambda q: q.update(question_id="q" * 201)),
+    ("option id", lambda q: q["options"][0].update(id="o" * 201)),
+])
+def test_rejects_an_identifier_longer_than_the_answer_route_accepts(where: str, change: Any) -> None:
+    response = hunch_response()
+    change(response["questions"][0])
+    assert isinstance(parse(response, HUNCH_INTAKE), Rejection), where
+    response = hunch_response()
+    response["questions"][0]["question_id"] = "q" * 200
+    response["questions"][0]["options"][0]["id"] = "o" * 200
+    assert isinstance(parse(response, HUNCH_INTAKE), ParsedInterpretation)
+
+
+def test_rejects_a_question_or_label_longer_than_a_page_can_show() -> None:
+    response = hunch_response()
+    response["questions"][0]["text"] = "w" * 600 + "?"
+    assert_rejected(parse(response, HUNCH_INTAKE), "question_text_invalid", "/questions/0/text")
+    response = hunch_response()
+    response["questions"][0]["options"][0]["label"] = "Price up more than 1% " + "x" * 400
+    assert isinstance(parse(response, HUNCH_INTAKE), Rejection)
+
+
+def test_a_non_finite_float_in_a_value_is_unstorable() -> None:
+    from edge_os_api.research.interpretation_response import unstorable
+    assert unstorable({"a": float("nan")}) is not None and unstorable({"a": float("inf")}) is not None
+    assert unstorable({"a": 1.5, "b": [True, None, "ok"]}) is None

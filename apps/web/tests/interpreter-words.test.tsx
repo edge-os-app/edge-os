@@ -72,7 +72,7 @@ const attempt = (over: Partial<Attempt>): Attempt => ({
   started_at: "2026-10-10T08:00:00Z", finished_at: "2026-10-10T08:00:02Z", latency_ms: 2500,
   usage: { source: "PROVIDER_REPORTED", input_tokens: 1423, output_tokens: 611, total_tokens: 2034 }, request_count: 1,
   response_sha256: "a".repeat(64), parse_result: "ACCEPTED", error_class: null, revision_id: "r1",
-  identity: { prompt_version: "p05-interpretation/2", system_prompt_sha256: "b".repeat(64), task_sha256: "c".repeat(64),
+  identity: { prompt_version: "p05-interpretation/3", system_prompt_sha256: "b".repeat(64), task_sha256: "c".repeat(64),
     response_shape_sha256: "d".repeat(64), manifest_sha256: "e".repeat(64), config_sha256: "f".repeat(64),
     runtime_label: "LOCAL_FAKE_PROVIDER", model: "local-fake/p05-interpretation", route: "local-fake-provider",
     hermes_commit: "54bc5e509c985f37265c3d416bd2c64b10fc77ba", answer_ref: null, previous_revision_id: null }, ...over,
@@ -121,7 +121,7 @@ describe("interpreter attempts", () => {
 });
 
 const baseBundle = (outcome: string, finding: { code: string; detail: string }, retry: object, attempts: Attempt[], reply: object | null = null) => ({
-  interpreter: { kind: "HERMES_LOCAL_FAKE_PROVIDER", id: "p05-interpretation/2", notice: "Actual pinned Hermes ran against a local fake provider." },
+  interpreter: { kind: "HERMES_LOCAL_FAKE_PROVIDER", id: "p05-interpretation/3", notice: "Actual pinned Hermes ran against a local fake provider." },
   intake: { record_id: "intake-1", created_at: "2026-10-10T08:00:00Z", content: { original_request: "Buy when up", restrictions: [], input_class: "CONCRETE_THESIS", requested_job: "CREATE_STRATEGY" } },
   interpretations: [], clarifications: [], publications: [], drafts: [], revisions: [], attempts, late_results: [],
   outcomes: [{ interpretation_revision_id: null, record: { record_id: "o1", operation_id: attempts[attempts.length - 1]?.attempt_id ?? "none", content: { outcome, stage: "INTERPRETATION", code: "validation_error", retry: "SAFE_SAME_KEY", findings: [{ path: "/", ...finding }] } } }],

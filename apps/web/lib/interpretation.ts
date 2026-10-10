@@ -147,7 +147,7 @@ function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null 
   }
   if (last.status === "COMPLETED" && last.parse_result === "ACCEPTED") {
     return { kind: "READ_NOT_SAVED", title: "Your request was read, and the answer is not saved yet", action: "CHECK_AGAIN",
-      lead: "The interpreter answered and the answer was accepted. Saving it did not finish. It is saved when the service restarts. Nothing was judged." };
+      lead: "The interpreter answered and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. Nothing was judged. Saving a new request is the way forward until then." };
   }
   if (last.status === "PROVIDER_FAILED") {
     return { kind: "FAILED", failure: "UNAVAILABLE", title: FAILURE_COPY.UNAVAILABLE.title, lead: FAILURE_COPY.UNAVAILABLE.lead,
@@ -176,7 +176,7 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
       return { title: "We do not know if your last reply was read", body: `The interpreter may or may not have read it. This attempt was not repeated, and ${kept.toLowerCase()}` };
     case "PENDING_SAVE":
       return { title: "Your last reply was read but is not saved yet",
-        body: `The interpreter read it and the answer was accepted. Saving it did not finish. It is saved when the service restarts, or when you answer a question. ${kept}` };
+        body: `The interpreter read it and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. ${kept}` };
     case "UNFINISHED":
       return { title: "Your last reply has no saved result",
         body: `An attempt to read your reply was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. ${kept} Nothing is repeated while it may still run.` };

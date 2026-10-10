@@ -6,6 +6,7 @@ against the PostgreSQL store later by swapping `MemoryAttemptStore`.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import hashlib
 import itertools
@@ -454,3 +455,18 @@ def test_linking_an_unsettled_unknown_or_foreign_attempt_is_refused(ledger: Atte
         ledger.link_revision(OWNER, "attempt-99", "revision-1")
     with pytest.raises(UnknownAttempt):
         ledger.link_revision(OTHER_OWNER, "attempt-1", "revision-1")
+
+
+@pytest.mark.parametrize("changes", [
+    {"usage": Usage(None, None, 5, "UNKNOWN")},
+    {"request_count": 2 ** 31},
+    {"request_count": -1},
+    {"status": "TRUNCATED", "parse_result": "REJECTED:"},
+])
+def test_the_ledger_refuses_the_settlements_that_the_database_would_refuse(ledger: AttemptLedger, changes: dict) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    status = changes.pop("status", "COMPLETED")
+    request_count = changes.pop("request_count", 1)
+    with pytest.raises(InvalidSettlement):
+        ledger.settle(dataclasses.replace(settlement("attempt-1", status, **changes), request_count=request_count))
+    assert ledger.history(OWNER, INTAKE)[0].status == "STARTED"

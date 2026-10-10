@@ -100,7 +100,7 @@ def test_a_concrete_thesis_is_read_from_the_users_words_and_compiles_only_after_
     assert attempt["parse_result"] == "ACCEPTED" and attempt["request_count"] == 1
     assert attempt["revision_id"] == bundle["head"]["interpretation_revision_id"]
     assert attempt["identity"]["runtime_label"] == "LOCAL_FAKE_PROVIDER"
-    assert attempt["identity"]["prompt_version"] == "p05-interpretation/2"
+    assert attempt["identity"]["prompt_version"] == "p05-interpretation/3"
     assert len(attempt["identity"]["task_sha256"]) == 64
     no_model_text(bundle, '"source_passage"', "Buy when the 15-minute price return is above 1%\", \"value\"")
     assert runner.turns[0].user_message.startswith("{")
@@ -677,3 +677,136 @@ def test_usage_the_database_cannot_hold_is_saved_as_unknown_and_the_answer_is_st
     [attempt] = created.json()["attempts"]
     assert attempt["parse_result"] == "ACCEPTED"
     assert attempt["usage"] == {"source": "UNKNOWN", "input_tokens": None, "output_tokens": None, "total_tokens": None}
+
+
+# --- Answers too large to save, the application's own question ids, and a settle step that always settles ------------------
+
+@pytest.mark.parametrize("size", [66_000, 80_000, 300_000])
+def test_an_accepted_looking_answer_too_large_to_save_settles_as_rejected_and_stays_openable_and_retryable(
+        make_client, owner_a, size: int) -> None:
+    from edge_os_api.research.interpretation_attempts import Usage
+    hostile = reply(case("concrete-thesis")["provider"]["model_response"], usage=Usage(1500, 400, 1900, "PROVIDER_REPORTED"),
+                    text=thesis_with_sizing({"note": "a" * size}))
+    client = make_client(CaseRunner(hostile, turn_result(case("concrete-thesis")["provider"])))
+
+    created = create(client, owner_a, "concrete-thesis")
+
+    assert created.status_code == 201, created.text
+    bundle = created.json()
+    [attempt] = bundle["attempts"]
+    assert attempt["parse_result"] == "REJECTED:unpublishable_response"
+    assert attempt["usage"]["input_tokens"] == 1500 and bundle["head"]["retry"]["allowed"] is True
+    assert client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).status_code == 200
+    assert retry(client, owner_a, bundle, attempt["attempt_id"]).status_code == 201
+
+
+def test_a_model_question_id_that_collides_with_the_applications_text_question_is_rejected(make_client, owner_a) -> None:
+    first = json.loads(json.dumps(case("rough-hunch")["provider"]["model_response"]))
+    first["questions"] = [dict(first["questions"][0], question_id="ask-exit")]
+    first["field_evidence"] = [i for i in first["field_evidence"] if i["field_name"] != "exit"] + [
+        {"field_name": "exit", "state": "MISSING"}]
+    client = make_client(CaseRunner(reply(first)))
+
+    bundle = create(client, owner_a, "rough-hunch").json()
+
+    assert bundle["attempts"][0]["parse_result"] == "REJECTED:reserved_question_id"
+    assert bundle["interpretations"] == [] and bundle["head"]["retry"]["allowed"] is True
+
+
+def test_a_too_large_reply_result_settles_as_rejected_and_keeps_the_saved_meaning(make_client, owner_a) -> None:
+    first = case("rough-hunch")["provider"]["model_response"]
+    hostile = {**first, "questions": [], "field_evidence": [{
+        "field_name": "entry", "state": "KNOWN", "origin": "USER_STATED", "source_passage": "up more than 1%",
+        "value": {"op": "gt", "args": [{"op": "price_return", "lookback_buckets": 3},
+                                       {"op": "constant", "value": "0.01", "unit": "DIMENSIONLESS"}],
+                  "note": "a" * 70_000}}]}
+    client = make_client(CaseRunner(turn_result(case("rough-hunch")["provider"]), reply(hostile)))
+    bundle = create(client, owner_a, "rough-hunch").json()
+
+    response = answer(client, owner_a, bundle, "choose-entry", answer_text="up more than 1%")
+
+    assert response.status_code == 200, response.text
+    after = response.json()
+    assert after["attempts"][-1]["parse_result"] == "REJECTED:unpublishable_response"
+    assert after["head"]["reply"]["state"] == "REJECTED" and len(after["interpretations"]) == 1
+
+
+@pytest.mark.parametrize("label, changes", [
+    ("request count beyond a 32-bit integer", {"request_count": 2 ** 31}),
+    ("runtime report with a NUL", {"observed": {"note": "a\x00b"}}),
+    ("runtime report with a lone surrogate", {"observed": {"note": "a\ud800b"}}),
+    ("runtime report with NaN", {"observed": {"value": float("nan")}}),
+    ("error class that is not text", {"error_class": 5}),
+])
+def test_a_defective_runner_result_still_settles_the_attempt_and_keeps_the_answer(make_client, owner_a, label: str,
+                                                                                  changes: dict) -> None:
+    from edge_os_api.research.hermes_interpreter import HermesTurnResult
+    base = turn_result(case("concrete-thesis")["provider"])
+    defective = HermesTurnResult(**{**base.__dict__, **changes})
+    if "observed" in changes:  # keep the policy fields so only the saved value is defective
+        defective = HermesTurnResult(**{**base.__dict__, "observed": {**base.observed, **changes["observed"]}})
+    client = make_client(CaseRunner(defective))
+
+    created = create(client, owner_a, "concrete-thesis")
+
+    assert created.status_code == 201, (label, created.text)
+    [attempt] = created.json()["attempts"]
+    assert attempt["status"] == "COMPLETED", label
+    if "request count" in label:  # more than one provider request breaks the runtime policy: rejected, but it settles
+        assert attempt["parse_result"] == "REJECTED:runtime_policy_violation" and attempt["request_count"] is None
+    else:
+        assert attempt["parse_result"] == "ACCEPTED" and attempt["revision_id"] is not None, label
+
+
+def test_a_status_that_is_not_text_and_a_usage_that_is_not_usage_settle_as_unknown(make_client, owner_a) -> None:
+    from edge_os_api.research.hermes_interpreter import HermesTurnResult
+    base = turn_result(case("concrete-thesis")["provider"])
+    for field, value in (("status", None), ("usage", None), ("text", 5), ("text", b"{}")):
+        client = make_client(CaseRunner(HermesTurnResult(**{**base.__dict__, field: value})))
+        created = create(client, owner_a, "concrete-thesis")
+        assert created.status_code == 201, (field, value, created.text)
+        [attempt] = created.json()["attempts"]
+        assert attempt["status"] in {"COMPLETED", "UNKNOWN"}, (field, value)
+
+
+def thesis_variants() -> list[tuple[str, str]]:
+    """About 120 plantings of a hostile value at a position of the authored thesis answer, chosen the same way each run."""
+    good = case("concrete-thesis")["provider"]["model_response"]
+    from test_interpretation_response import HOSTILE_VALUES, mutations, plant
+    chosen = []
+    positions = mutations(good)
+    for index, (path, hostile) in enumerate(positions):
+        if index % 9 == 0:
+            chosen.append((f"{'/'.join(map(str, path))} <- {hostile!r:.40}", json.dumps(plant(good, path, hostile))))
+    return chosen[:140]
+
+
+def test_every_hostile_planting_ends_published_or_rejected_and_never_stuck(make_client, owner_a) -> None:
+    """The independent oracle: an answer that settles ACCEPTED must be published for real, and a rejected one retryable."""
+    from edge_os_api.research.interpretation_attempts import Usage
+    stuck, accepted, rejected = [], 0, 0
+    variants = thesis_variants()
+    assert len(variants) > 100
+    base = case("concrete-thesis")["provider"]["model_response"]
+    client = make_client(CaseRunner(*[reply(base, usage=Usage(900, 120, 1020, "PROVIDER_REPORTED"), text=text)
+                                      for _, text in variants]))  # one application, so connections are not exhausted
+    for label, _ in variants:
+        created = create(client, owner_a, "concrete-thesis")
+        if created.status_code != 201:
+            stuck.append((label, created.status_code))
+            continue
+        bundle = created.json()
+        [attempt] = bundle["attempts"]
+        opened = client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a)
+        if opened.status_code != 200 or attempt["status"] != "COMPLETED":
+            stuck.append((label, opened.status_code, attempt["status"]))
+        elif attempt["parse_result"] == "ACCEPTED":
+            accepted += 1
+            if attempt["revision_id"] is None or bundle["head"]["outcome"] is None:
+                stuck.append((label, "accepted but not published"))
+        else:
+            rejected += 1
+            if not bundle["head"]["retry"]["allowed"]:
+                stuck.append((label, "rejected but not retryable"))
+    assert stuck == [], stuck[:5]
+    assert accepted > 0 and rejected > 0

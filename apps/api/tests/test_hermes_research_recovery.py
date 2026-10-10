@@ -487,3 +487,25 @@ def test_another_owner_never_sees_the_attempt_facts_of_a_request(make_client, ow
     client = make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"])))
     create(client, owner_a, "concrete-thesis")
     assert client.get("/v1/research/requests", headers=owner_b).json()["requests"] == []
+
+
+def test_a_saved_accepted_result_that_the_current_rules_reject_is_logged_by_reason_code_at_startup(
+        make_client, owner_a, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+    from edge_os_api.research import interpretation_publication
+    from edge_os_api.research.interpretation_response import Rejection
+    first = make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"])))
+    with monkeypatch.context() as crashing:
+        crashing.setattr(interpretation_workflow.HermesResearch, "_publish_interpretation",
+                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("died after the answer was saved")))
+        assert create(first, owner_a, "concrete-thesis").status_code == 500
+    intake = first_request_id(first, owner_a)
+    monkeypatch.setattr(interpretation_publication.RecordPublicationCheck, "first",
+                        lambda self, intake_, parsed: Rejection("unpublishable_response", "", "a stricter rule"))
+
+    with caplog.at_level(logging.ERROR, logger="edge_os"):
+        second = make_client(CaseRunner())
+
+    assert "saved accepted answer rejected by the current rules: unpublishable_response" in caplog.text
+    after = bundle_of(second, owner_a, intake)
+    assert after["attempts"][0]["parse_result"] == "ACCEPTED" and after["interpretations"] == []

@@ -145,7 +145,7 @@ def test_the_attempt_keeps_exact_request_configuration_and_source_identities() -
     start = ledger.history(OWNER, INTAKE)[0].start
     turn = runner.turns[0]
     assert start.identity.purpose == "INTERPRET"
-    assert start.identity.prompt_version == PROMPT_VERSION == "p05-interpretation/2"
+    assert start.identity.prompt_version == PROMPT_VERSION == "p05-interpretation/3"
     assert start.identity.system_prompt_sha256 == hashlib.sha256(turn.system_prompt.encode()).hexdigest()
     assert start.identity.task_sha256 == hashlib.sha256(turn.user_message.encode()).hexdigest()
     assert start.identity.task_text == turn.user_message  # the exact request, not only its hash

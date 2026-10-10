@@ -169,11 +169,15 @@ def _check_settlement(settlement: AttemptSettlement) -> None:
         raise InvalidSettlement("The usage is not valid.")
     if (usage.source == "PROVIDER_REPORTED") != (usage.input_tokens is not None and usage.output_tokens is not None):
         raise InvalidSettlement("Usage is either reported with input and output counts or unknown.")
+    if usage.source == "UNKNOWN" and any(count is not None for count in counts):
+        raise InvalidSettlement("Unknown usage carries no counts.")
+    if settlement.request_count is not None and not 0 <= settlement.request_count <= 2 ** 31 - 1:
+        raise InvalidSettlement("The request count cannot be stored.")
     parse_result = settlement.parse_result
     if text is None:
         valid_parse = parse_result == "NOT_PARSED"
     elif status == "TRUNCATED":
-        valid_parse = parse_result.startswith("REJECTED:")
+        valid_parse = parse_result.startswith("REJECTED:") and len(parse_result) > 9
     else:
         valid_parse = parse_result == "ACCEPTED" or (parse_result.startswith("REJECTED:") and len(parse_result) > 9)
     if not valid_parse:

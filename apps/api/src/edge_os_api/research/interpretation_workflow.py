@@ -40,13 +40,16 @@ from edge_os_api.research.interpretation_attempts import AttemptLedger, AttemptV
 from edge_os_api.research.interpretation_response import (
     ClarificationAnswer, OfferedOption, OfferedQuestion, ParsedInterpretation,
 )
-from edge_os_api.research.outcome_router import Routed, route
+from edge_os_api.research.interpretation_publication import (
+    OfferedBook, RecordPublicationCheck, first_reading_records, questions_to_json, reply_records,
+)
+from edge_os_api.research.outcome_router import Routed
 
 log = logging.getLogger("edge_os")
 
 LOCAL_FAKE_CONFIG = HermesInterpreterConfig(model="local-fake/p05-interpretation", route="local-fake-provider",
                                             max_output_tokens=4096, runtime_label="LOCAL_FAKE_PROVIDER")
-LABEL = {"kind": "HERMES_LOCAL_FAKE_PROVIDER", "id": "p05-interpretation/2",
+LABEL = {"kind": "HERMES_LOCAL_FAKE_PROVIDER", "id": "p05-interpretation/3",
          "notice": "Actual pinned Hermes ran in a sandbox against a local fake provider. No real model was called "
                    "and no research ran."}
 TEXT_QUESTION_PREFIX = "ask-"
@@ -63,24 +66,6 @@ UNAVAILABLE_TEXT = {
     "outcome_unknown": "It is not known whether the model provider finished. The request is saved. This attempt was not repeated.",
     "result_arrived_late": "The result arrived after the attempt was closed. It is kept for review and was not used.",
 }
-
-
-class OfferedBook:
-    """The questions that the model offered, in the shape the router words its clarifications from."""
-
-    kind = "HERMES"
-
-    def __init__(self, offered: Sequence[OfferedQuestion]) -> None:
-        self._offered = list(offered)
-
-    def question_for(self, intake: dict[str, Any]) -> list[OfferedQuestion]:
-        return list(self._offered)
-
-
-def questions_to_json(questions: Sequence[OfferedQuestion]) -> list[dict[str, Any]]:
-    return [{"question_id": q.question_id, "field_name": q.field_name, "text": q.text,
-             "options": [{"id": o.id, "label": o.label, "value": copy.deepcopy(o.value)} for o in q.options]}
-            for q in questions]
 
 
 def questions_from_json(items: Sequence[dict[str, Any]]) -> list[OfferedQuestion]:
@@ -160,7 +145,8 @@ class HermesResearch:
         self.guard = guard
         self.store = PostgresAttemptStore(session_factory)
         self.ledger = AttemptLedger(self.store, new_id=lambda: str(uuid.uuid4()), now=service.utcnow)
-        self.interpreter = HermesInterpreter(config, runner, self.ledger, monotonic, guard=guard)
+        self.interpreter = HermesInterpreter(config, runner, self.ledger, monotonic, guard=guard,
+                                             publication=RecordPublicationCheck())
 
     def label(self) -> dict[str, str]:
         return dict(LABEL)
@@ -240,17 +226,8 @@ class HermesResearch:
                 r.record_type == "PromptInterpretation" for r in service.intake_rows(session, principal, intake_id)):
             session.rollback()  # already published, for example by recovery that ran first
             return
-        content = intake.content
         revision_id, moment = uuid.uuid4(), service.utcnow()
-        interp = {
-            "intake_record_id": str(intake.record_id), "interpretation_revision_id": str(revision_id),
-            "input_class": content["input_class"], "requested_job": content["requested_job"],
-            "field_evidence": service.bind_revision(list(parsed.field_evidence), str(revision_id)),
-            "clarification_history": [], "preserved_restrictions": list(content["restrictions"]),
-            "meaning_status": parsed.meaning_status, "syntax_status": "VALID",
-            "evidence_readiness": parsed.evidence_readiness}
-        routed = route(content, interp, OfferedBook(parsed.questions), parsed.missing_capability,
-                       service.strategy_id_for(intake.record_id))
+        interp, routed = first_reading_records(intake.content, intake.record_id, parsed, revision_id)
         operation_id = uuid.UUID(attempt_id)
         row = service.put_record(session, principal, "PromptInterpretation", interp, operation_id, moment,
                                  record_id=revision_id, intake_id=intake.record_id)
@@ -308,22 +285,10 @@ class HermesResearch:
                        offered: Sequence[OfferedQuestion], operation_id: uuid.UUID, moment: dt.datetime,
                        attempt_id: str | None, new_questions: Sequence[OfferedQuestion]) -> None:
         revision_id = uuid.uuid4()
-        strip = lambda items: {i["field_name"]: {k: v for k, v in i.items() if k != "interpretation_revision"}  # noqa: E731
-                               for i in items}
-        old, new = strip(head.content["field_evidence"]), strip(evidence)
-        changed = sorted(name for name in set(old) | set(new) if old.get(name) != new.get(name))
-        clarification = {"previous_revision_id": head.content["interpretation_revision_id"], "question_id": question_id,
-                         "question": question_text, "answer_ref": answer_ref, "changed_fields": changed,
-                         "preserved_restrictions": list(head.content["preserved_restrictions"]),
-                         "resulting_revision_id": str(revision_id)}
-        interp = copy.deepcopy(head.content)
-        interp.update({"interpretation_revision_id": str(revision_id),
-                       "field_evidence": service.bind_revision(list(evidence), str(revision_id)),
-                       "clarification_history": [clarification], "meaning_status": meaning_status,
-                       "evidence_readiness": readiness})
         book_questions = list(new_questions) if attempt_id else list(offered)
-        routed = route(intake.content, interp, OfferedBook(book_questions), missing_capability,
-                       service.strategy_id_for(intake.record_id))
+        interp, clarification, routed = reply_records(
+            head.content, intake.content, intake.record_id, list(evidence), question_text, answer_ref, question_id,
+            meaning_status, readiness, missing_capability, book_questions, revision_id)
         try:
             row = service.put_record(session, principal, "PromptInterpretation", interp, operation_id, moment,
                                      record_id=revision_id, intake_id=intake.record_id, predecessor_id=head.record_id)
@@ -599,6 +564,8 @@ class HermesResearch:
             parsed = self.interpreter.reparse(view, intake)
             if isinstance(parsed, ParsedInterpretation):
                 self._publish_interpretation(session, principal, intake_id, view.start.attempt_id, parsed)
+            else:
+                log.error("saved accepted answer rejected by the current rules: %s", parsed.reason_code)
             return
         identity = view.start.identity
         if head is None or head.content["interpretation_revision_id"] != identity.previous_revision_id:
@@ -610,6 +577,8 @@ class HermesResearch:
             question_id = self._question_id_of(session, principal, intake_id, head, task["question"])
             self._publish_reply(session, principal, intake_id, view.start.attempt_id, parsed, answer, question_id,
                                 task["question"])
+        else:
+            log.error("saved accepted reply rejected by the current rules: %s", parsed.reason_code)
 
     def recover_all(self) -> int:
         """Startup recovery for every request with unfinished or unpublished attempts. Returns requests visited."""

@@ -10,6 +10,8 @@ import copy
 import functools
 import hashlib
 import json
+import logging
+import math
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -19,7 +21,9 @@ from typing import Any
 
 from edge_os_api.records import contract_adapter as record_contract
 
-__all__ = ["ADOPT_QUESTION_ID", "ClarificationAnswer", "OfferedOption", "OfferedQuestion", "ParsedInterpretation", "Rejection",
+log = logging.getLogger("edge_os")
+
+__all__ = ["unstorable", "ADOPT_QUESTION_ID", "ClarificationAnswer", "OfferedOption", "OfferedQuestion", "ParsedInterpretation", "Rejection",
            "parse_follow_up_response", "parse_interpretation_response"]
 
 REQUEST_SOURCE = "intake:original_request"
@@ -32,6 +36,10 @@ OPTION_FIELDS = frozenset({"id", "label", "value"})
 CONFLICT_FIELDS = frozenset({"value", "source_passage"})
 ADOPT_QUESTION_ID = "adopt-suggested-settings"
 RESERVED_QUESTION_IDS = frozenset({ADOPT_QUESTION_ID})
+RESERVED_QUESTION_PREFIXES = ("ask-",)  # the application names its own free-text questions "ask-<field>"
+MAX_IDENTIFIER_CHARS = 200  # the answer route accepts no longer identifier
+MAX_QUESTION_CHARS = 500
+MAX_LABEL_CHARS = 300
 DECLARED_MARKET_SOURCE = "intake:declared_market"
 SYNTHETIC_MARKET_SOURCE = "application:synthetic-fixture-market"
 INTERVAL_SOURCE = "application:five-minute-buckets"
@@ -151,11 +159,11 @@ def _decode_single_object(text: str) -> dict[str, Any] | Rejection:
         return Rejection("invalid_number", "", "The response uses a JSON number form that the contract forbids.")
     if not isinstance(value, dict):
         return Rejection("not_an_object", "", "The response is not one JSON object.")
-    unstorable = _unstorable(value)
-    return unstorable if unstorable is not None else value
+    refused = unstorable(value)
+    return refused if refused is not None else value
 
 
-def _unstorable(root: Any) -> Rejection | None:
+def unstorable(root: Any) -> Rejection | None:
     """Reject any decoded value that a saved record cannot hold, before anything is accepted.
 
     The check is iterative, so depth cannot exhaust the stack. It covers every key and every string, and it uses the
@@ -176,6 +184,8 @@ def _unstorable(root: Any) -> Rejection | None:
                 return Rejection("unstorable_text", "", "The response holds a character that cannot be saved.")
             if not unicodedata.is_normalized("NFC", node):
                 return Rejection("unstorable_text", "", "The response holds text that is not in composed Unicode form (NFC).")
+        elif isinstance(node, float) and not math.isfinite(node):
+            return Rejection("unstorable_text", "", "The response holds a number that cannot be saved.")
         elif isinstance(node, dict):
             for key, child in node.items():
                 stack.append((key, depth + 1))
@@ -312,11 +322,11 @@ def _parse_questions(raw: list[Any], evidence: list[dict[str, Any]],
             if key not in question:
                 return _reject("missing_field", f"{at}/{key}", "A question lacks a required field.")
         question_id, name, text = question["question_id"], question["field_name"], question["text"]
-        if not isinstance(question_id, str) or not question_id:
-            return _reject("invalid_value", f"{at}/question_id", "A question needs an identifier.")
+        if not isinstance(question_id, str) or not question_id or len(question_id) > MAX_IDENTIFIER_CHARS:
+            return _reject("invalid_value", f"{at}/question_id", "A question needs an identifier of 1 to 200 characters.")
         if not isinstance(name, str):
             return _reject("invalid_value", f"{at}/field_name", "The field name must be text.")
-        if question_id in RESERVED_QUESTION_IDS:
+        if question_id in RESERVED_QUESTION_IDS or question_id.startswith(RESERVED_QUESTION_PREFIXES):
             return _reject("reserved_question_id", f"{at}/question_id", "This identifier belongs to the application.")
         if question_id in seen_ids:
             return _reject("duplicate_question", f"{at}/question_id", "The response repeats a question identifier.")
@@ -327,8 +337,9 @@ def _parse_questions(raw: list[Any], evidence: list[dict[str, Any]],
         if state_of[name] == "KNOWN":
             return _reject("question_for_settled_field", f"{at}/field_name",
                            "A question cannot ask about a field that is already known.")
-        if not isinstance(text, str) or not text.strip().endswith("?"):
-            return _reject("question_text_invalid", f"{at}/text", "A question must be text that ends with a question mark.")
+        if not isinstance(text, str) or not text.strip().endswith("?") or len(text) > MAX_QUESTION_CHARS:
+            return _reject("question_text_invalid", f"{at}/text",
+                           "A question must be text of at most 500 characters that ends with a question mark.")
         options = _parse_options(question["options"], at)
         if isinstance(options, Rejection):
             return options
@@ -351,10 +362,10 @@ def _parse_options(raw: Any, at: str) -> tuple[OfferedOption, ...] | Rejection:
         if option.get("value") is None:
             return _reject("missing_field", f"{where}/value", "An option needs a value.")
         option_id, label = option.get("id"), option.get("label")
-        if not isinstance(option_id, str) or not option_id:
-            return _reject("invalid_value", f"{where}/id", "An option needs an identifier.")
-        if not isinstance(label, str) or not label:
-            return _reject("invalid_value", f"{where}/label", "An option needs a label.")
+        if not isinstance(option_id, str) or not option_id or len(option_id) > MAX_IDENTIFIER_CHARS:
+            return _reject("invalid_value", f"{where}/id", "An option needs an identifier of 1 to 200 characters.")
+        if not isinstance(label, str) or not label or len(label) > MAX_LABEL_CHARS:
+            return _reject("invalid_value", f"{where}/label", "An option needs a label of 1 to 300 characters.")
         if _ungrounded(option["value"], label):
             return _reject("option_label_omits_value", f"{where}/label",
                            "The label must state every number that the option value carries.")
@@ -465,7 +476,9 @@ def _never_raises(parse: Any) -> Any:
     def guarded(*args: Any, **kwargs: Any) -> ParsedInterpretation | Rejection:
         try:
             return parse(*args, **kwargs)
-        except (RecursionError, ArithmeticError, TypeError, ValueError, KeyError, AttributeError, IndexError):
+        except (RecursionError, ArithmeticError, TypeError, ValueError, KeyError, AttributeError, IndexError) as error:
+            # A programming error would look like a bad answer here, so the class is logged (never the message).
+            log.error("parser raised %s", type(error).__name__)
             return Rejection("unparseable_response", "", "The answer could not be read, so none of it was used.")
     return guarded
 
