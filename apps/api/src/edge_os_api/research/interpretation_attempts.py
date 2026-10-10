@@ -10,14 +10,16 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from edge_os_api.records import contract_adapter as record_contract
 
 __all__ = ["AlreadyLinked", "AlreadySettled", "AttemptError", "AttemptIdentity", "AttemptInFlight", "AttemptLedger",
-           "AttemptSettlement", "AttemptStart", "AttemptStore", "AttemptView", "InvalidIdentity", "InvalidSettlement", "NotPublishable",
-           "RetryTargetInvalid", "UnknownAttempt", "Usage"]
+           "AttemptSettlement", "AttemptStart", "AttemptStore", "AttemptView", "ExecutionGuard", "InvalidIdentity",
+           "InvalidSettlement", "LateResult", "NotPublishable", "NotUncertain", "RetryTargetInvalid", "UnknownAttempt",
+           "Usage"]
 
 
 class AttemptError(Exception):
@@ -56,9 +58,14 @@ class NotPublishable(AttemptError):
     """Only a completed attempt whose response was accepted can link to a revision."""
 
 
+class NotUncertain(AttemptError):
+    """A late result belongs only beside an attempt whose outcome stayed unknown."""
+
+
 COMPLETION_BY_STATUS = {"COMPLETED": "COMPLETE", "TRUNCATED": "TRUNCATED", "PROVIDER_FAILED": "NONE",
                         "TIMED_OUT": "UNKNOWN", "INTERRUPTED": "UNKNOWN", "UNKNOWN": "UNKNOWN"}
 STATUSES_WITH_RESPONSE = frozenset({"COMPLETED", "TRUNCATED"})
+UNCERTAIN_STATUSES = frozenset({"TIMED_OUT", "INTERRUPTED", "UNKNOWN"})
 USAGE_SOURCES = ("UNKNOWN", "PROVIDER_REPORTED")
 
 
@@ -82,6 +89,8 @@ class AttemptIdentity:
     config: Mapping[str, Any]
     runtime_label: str
     answer_ref: str | None = None
+    answer_text: str | None = None
+    previous_revision_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -132,11 +141,15 @@ class AttemptStore(Protocol):
 
     def add_start(self, start: AttemptStart) -> None: ...
     def add_settlement(self, settlement: AttemptSettlement) -> None: ...
-    def add_link(self, owner_id: str, attempt_id: str, revision_id: str) -> None: ...
+    def add_link(self, owner_id: str, attempt_id: str, revision_id: str,
+                 offered_questions: Sequence[Mapping[str, Any]]) -> None: ...
+    def add_observation(self, observation: LateResult) -> None: ...
     def find_start(self, owner_id: str, attempt_id: str) -> AttemptStart | None: ...
     def starts(self, owner_id: str, intake_record_id: str) -> Sequence[AttemptStart]: ...
     def settlements(self, owner_id: str, intake_record_id: str) -> Sequence[AttemptSettlement]: ...
     def links(self, owner_id: str, intake_record_id: str) -> Mapping[str, str]: ...
+    def observations(self, owner_id: str, intake_record_id: str) -> Sequence[LateResult]: ...
+    def offered_questions(self, owner_id: str, intake_record_id: str, revision_id: str) -> Sequence[Mapping[str, Any]]: ...
 
 
 def _check_settlement(settlement: AttemptSettlement) -> None:
@@ -176,17 +189,22 @@ class AttemptLedger:
     def now(self) -> dt.datetime:
         return self._now()
 
+    def new_attempt_id(self) -> str:
+        return self._new_id()
+
     def begin(self, owner_id: str, intake_record_id: str, identity: AttemptIdentity,
-              retry_of: str | None = None) -> AttemptStart:
+              retry_of: str | None = None, attempt_id: str | None = None) -> AttemptStart:
         if identity.task_sha256 != hashlib.sha256(identity.task_text.encode("utf-8")).hexdigest():
             raise InvalidIdentity("The request hash does not match the saved request text.")
+        if (identity.answer_ref is None) != (identity.answer_text is None):
+            raise InvalidIdentity("A reply and its reference are saved together.")
         starts = self._store.starts(owner_id, intake_record_id)
         settled = {settlement.attempt_id for settlement in self._store.settlements(owner_id, intake_record_id)}
         if any(start.attempt_id not in settled for start in starts):
             raise AttemptInFlight("Another attempt for this request has not settled.")
         if retry_of is not None and retry_of not in {start.attempt_id for start in starts}:
             raise RetryTargetInvalid("A retry must name an earlier attempt of this request.")
-        start = AttemptStart(attempt_id=self._new_id(), owner_id=owner_id, intake_record_id=intake_record_id,
+        start = AttemptStart(attempt_id=attempt_id or self._new_id(), owner_id=owner_id, intake_record_id=intake_record_id,
                              sequence=len(starts) + 1, retry_of=retry_of, identity=identity,
                              config_sha256=record_contract.sha256_hex(dict(identity.config)), started_at=self._now())
         self._store.add_start(start)
@@ -208,11 +226,15 @@ class AttemptLedger:
         return [AttemptView(start, settlements.get(start.attempt_id), links.get(start.attempt_id))
                 for start in sorted(self._store.starts(owner_id, intake_record_id), key=lambda s: s.sequence)]
 
-    def interrupt_unsettled(self, owner_id: str, intake_record_id: str) -> list[AttemptView]:
-        """Close each attempt that never settled. Its usage and completion stay unknown; nothing is replayed."""
+    def interrupt_abandoned(self, owner_id: str, intake_record_id: str,
+                            is_abandoned: Callable[[AttemptStart], bool]) -> list[AttemptView]:
+        """Close each unsettled attempt that is proved abandoned. Its usage and completion stay unknown.
+
+        An attempt whose abandonment is not proved is left open, so a duplicate attempt is refused. Nothing is replayed.
+        """
         closed: list[str] = []
         for view in self.history(owner_id, intake_record_id):
-            if view.settlement is None:
+            if view.settlement is None and is_abandoned(view.start):
                 self._store.add_settlement(AttemptSettlement(
                     attempt_id=view.start.attempt_id, owner_id=owner_id, status="INTERRUPTED", finished_at=self._now(),
                     latency_ms=None, usage=Usage(), request_count=None, response_sha256=None, response_text=None,
@@ -220,7 +242,28 @@ class AttemptLedger:
                 closed.append(view.start.attempt_id)
         return [view for view in self.history(owner_id, intake_record_id) if view.start.attempt_id in closed]
 
-    def link_revision(self, owner_id: str, attempt_id: str, revision_id: str) -> None:
+    def observe_late_result(self, result: LateResult) -> None:
+        """Keep a result that arrived after its attempt settled as unknown. The settlement is never replaced."""
+        start = self._store.find_start(result.owner_id, result.attempt_id)
+        if start is None:
+            raise UnknownAttempt("No such attempt.")
+        settlement = next((s for s in self._store.settlements(start.owner_id, start.intake_record_id)
+                           if s.attempt_id == start.attempt_id), None)
+        if settlement is None or settlement.status not in UNCERTAIN_STATUSES:
+            raise NotUncertain("A late result belongs only beside an attempt that settled as unknown.")
+        text = result.response_text
+        if result.response_sha256 != (hashlib.sha256(text.encode("utf-8")).hexdigest() if text is not None else None):
+            raise InvalidSettlement("The response hash does not match the response text.")
+        self._store.add_observation(result)
+
+    def late_results(self, owner_id: str, intake_record_id: str) -> list[LateResult]:
+        return list(self._store.observations(owner_id, intake_record_id))
+
+    def offered_questions(self, owner_id: str, intake_record_id: str, revision_id: str) -> list[dict[str, Any]]:
+        return [dict(question) for question in self._store.offered_questions(owner_id, intake_record_id, revision_id)]
+
+    def link_revision(self, owner_id: str, attempt_id: str, revision_id: str,
+                      offered_questions: Sequence[Mapping[str, Any]] = ()) -> None:
         start = self._store.find_start(owner_id, attempt_id)
         if start is None:
             raise UnknownAttempt("No such attempt.")
@@ -229,10 +272,33 @@ class AttemptLedger:
             raise NotPublishable("Only a completed attempt with an accepted response can link to a revision.")
         if view.revision_id is not None:
             raise AlreadyLinked("This attempt already links to a revision.")
-        self._store.add_link(owner_id, attempt_id, revision_id)
+        self._store.add_link(owner_id, attempt_id, revision_id, list(offered_questions))
 
     def unpublished_results(self, owner_id: str, intake_record_id: str) -> list[AttemptView]:
         """Accepted results that no revision uses yet. Recovery publishes them from the saved text, with no new call."""
         return [view for view in self.history(owner_id, intake_record_id)
                 if view.status == "COMPLETED" and view.revision_id is None
                 and view.settlement is not None and view.settlement.parse_result == "ACCEPTED"]
+
+
+@dataclass(frozen=True)
+class LateResult:
+    """A result that arrived after its attempt settled with an unknown outcome. It is evidence, never authority."""
+
+    observation_id: str
+    attempt_id: str
+    owner_id: str
+    observed_at: dt.datetime
+    status: str
+    response_sha256: str | None
+    response_text: str | None
+    usage: Usage
+    request_count: int | None
+    error_class: str | None
+
+
+class ExecutionGuard(Protocol):
+    """Proof of who is running an attempt. An attempt is abandoned only when nobody holds its claim."""
+
+    def claim(self, attempt_id: str) -> AbstractContextManager[None]: ...
+    def is_abandoned(self, attempt_id: str) -> bool: ...

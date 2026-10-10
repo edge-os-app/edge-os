@@ -69,8 +69,35 @@ class ScriptedRunner:
         return item
 
 
+class RecordingGuard:
+    """Stands in for the claim that proves who runs an attempt. It records when the claim is held."""
+
+    def __init__(self, fail_to_claim: bool = False) -> None:
+        self.held: list[str] = []
+        self.history: list[str] = []
+        self.fail_to_claim = fail_to_claim
+
+    def claim(self, attempt_id: str):
+        guard = self
+
+        class Claim:
+            def __enter__(self) -> None:
+                if guard.fail_to_claim:
+                    raise RuntimeError("claim connection lost")
+                guard.held.append(attempt_id)
+                guard.history.append(f"claim:{attempt_id}")
+
+            def __exit__(self, *_exc: Any) -> None:
+                guard.held.remove(attempt_id)
+                guard.history.append(f"release:{attempt_id}")
+        return Claim()
+
+    def is_abandoned(self, attempt_id: str) -> bool:
+        return attempt_id not in self.held
+
+
 def build(*script: HermesTurnResult | BaseException, store: MemoryAttemptStore | None = None,
-          config: HermesInterpreterConfig = CONFIG) -> tuple[HermesInterpreter, ScriptedRunner, AttemptLedger,
+          config: HermesInterpreterConfig = CONFIG, guard: RecordingGuard | None = None) -> tuple[HermesInterpreter, ScriptedRunner, AttemptLedger,
                                                               MemoryAttemptStore]:
     store = store or MemoryAttemptStore()
     ids, ticks = itertools.count(1), itertools.count(0)
@@ -79,7 +106,7 @@ def build(*script: HermesTurnResult | BaseException, store: MemoryAttemptStore |
                            + dt.timedelta(seconds=next(ticks)))
     runner = ScriptedRunner(*script)
     clock = itertools.chain.from_iterable((100.0 + 10 * n, 102.5 + 10 * n) for n in itertools.count())
-    return HermesInterpreter(config, runner, ledger, monotonic=lambda: next(clock)), runner, ledger, store
+    return HermesInterpreter(config, runner, ledger, monotonic=lambda: next(clock), guard=guard), runner, ledger, store
 
 
 def thesis_text() -> str:
@@ -477,3 +504,68 @@ def test_a_runner_that_passes_provider_text_as_its_error_class_has_that_text_rep
     assert isinstance(result, Unavailable) and result.reason_code == "provider_failed"
     assert ledger.history(OWNER, INTAKE)[0].settlement.error_class == "ProviderError"  # type: ignore[union-attr]
     assert "sk-secret-123" not in repr(store._settlements) + repr(result)
+
+
+def test_the_claim_is_held_before_the_attempt_is_recorded_and_through_the_call_and_then_released() -> None:
+    guard = RecordingGuard()
+    interpreter, runner, ledger, _ = build(returned(thesis_text()), guard=guard)
+    seen: list[tuple[list[str], str]] = []
+    runner.probe = lambda: seen.append((list(guard.held), ledger.history(OWNER, INTAKE)[0].status))
+
+    result = interpreter.interpret(OWNER, INTAKE, THESIS_INTAKE)
+
+    assert isinstance(result, Interpreted)
+    assert seen == [([result.attempt_id], "STARTED")]
+    assert guard.held == []
+    assert guard.history == [f"claim:{result.attempt_id}", f"release:{result.attempt_id}"]
+
+
+def test_the_claim_is_released_when_the_runner_raises() -> None:
+    guard = RecordingGuard()
+    interpreter, _, ledger, _ = build(RuntimeError("boom"), guard=guard)
+
+    result = interpreter.interpret(OWNER, INTAKE, THESIS_INTAKE)
+
+    assert isinstance(result, Unavailable) and result.reason_code == "outcome_unknown"
+    assert guard.held == []
+    assert ledger.history(OWNER, INTAKE)[0].status == "UNKNOWN"
+
+
+def test_when_the_claim_cannot_be_taken_nothing_is_recorded_and_no_call_is_made() -> None:
+    guard = RecordingGuard(fail_to_claim=True)
+    interpreter, runner, ledger, _ = build(returned(thesis_text()), guard=guard)
+
+    result = interpreter.interpret(OWNER, INTAKE, THESIS_INTAKE)
+
+    assert isinstance(result, Unavailable) and result.reason_code == "attempt_not_recorded"
+    assert runner.turns == []
+    assert ledger.history(OWNER, INTAKE) == []
+
+
+def test_a_follow_up_records_the_exact_reply_and_the_revision_it_answers() -> None:
+    interpreter, _, ledger, _ = build(returned(json.dumps(hunch_response())), returned(thesis_text()))
+    first = interpreter.interpret(OWNER, INTAKE, HUNCH_INTAKE)
+    assert isinstance(first, Interpreted)
+    answer = ClarificationAnswer("reply:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", THESIS)
+
+    interpreter.follow_up(OWNER, INTAKE, HUNCH_INTAKE, first.parsed.field_evidence, "Which entry?", answer,
+                          previous_revision_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+
+    identity = ledger.history(OWNER, INTAKE)[1].start.identity
+    assert (identity.answer_ref, identity.answer_text) == ("reply:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", THESIS)
+    assert identity.previous_revision_id == "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def test_a_result_that_arrives_after_its_attempt_was_closed_is_kept_as_a_late_result_and_not_used() -> None:
+    interpreter, runner, ledger, _ = build(returned(thesis_text()))
+    runner.probe = lambda: ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
+
+    result = interpreter.interpret(OWNER, INTAKE, THESIS_INTAKE)
+
+    assert isinstance(result, Unavailable) and result.reason_code == "result_arrived_late"
+    view = ledger.history(OWNER, INTAKE)[0]
+    assert (view.status, view.completion) == ("INTERRUPTED", "UNKNOWN")  # the settlement is unchanged
+    late = ledger.late_results(OWNER, INTAKE)
+    assert len(late) == 1
+    assert (late[0].attempt_id, late[0].response_text, late[0].usage) == (result.attempt_id, thesis_text(), REPORTED)
+    assert ledger.unpublished_results(OWNER, INTAKE) == []

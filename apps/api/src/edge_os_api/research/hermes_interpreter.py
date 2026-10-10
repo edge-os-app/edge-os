@@ -11,12 +11,14 @@ import copy
 import hashlib
 import re
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from edge_os_api.records import contract_adapter as record_contract
 from .interpretation_attempts import (
-    AttemptIdentity, AttemptInFlight, AttemptLedger, AttemptSettlement, AttemptView, RetryTargetInvalid, Usage,
+    AlreadySettled, AttemptIdentity, AttemptInFlight, AttemptLedger, AttemptSettlement, AttemptView, ExecutionGuard,
+    LateResult, RetryTargetInvalid, Usage,
 )
 from .interpretation_response import (
     ADOPT_QUESTION_ID, APPLICATION_OWNED_FIELDS, ClarificationAnswer, OfferedQuestion, ParsedInterpretation, Rejection,
@@ -161,6 +163,7 @@ UNAVAILABLE_DETAIL = {
     "retry_target_invalid": "The attempt to retry does not belong to this request.",
     "attempt_not_recorded": "The attempt could not be recorded, so no model call was made.",
     "result_not_recorded": "The result could not be recorded, so it was not used.",
+    "result_arrived_late": "The result arrived after the attempt was closed. It is kept for review and was not used.",
 }
 STATUS_BY_RUNNER_STATUS = {"RETURNED": "COMPLETED", "TRUNCATED": "TRUNCATED", "PROVIDER_FAILED": "PROVIDER_FAILED",
                            "TIMED_OUT": "TIMED_OUT"}
@@ -218,28 +221,30 @@ def _task_json(task: Mapping[str, Any]) -> str:
 
 class HermesInterpreter:
     def __init__(self, config: HermesInterpreterConfig, runner: HermesTurnRunner, ledger: AttemptLedger,
-                 monotonic: Callable[[], float]) -> None:
+                 monotonic: Callable[[], float], guard: ExecutionGuard | None = None) -> None:
         if config.runtime_label not in RUNTIME_LABELS:
             raise ValueError(f"unknown runtime label {config.runtime_label!r}")
         if config.runtime_label == "LIVE" and (config.live_release is None or config.live_release.model != config.model):
             raise LiveReleaseRequired("A live runtime needs a recorded release for this provider, model and budget.")
         self._config, self._runner, self._ledger, self._monotonic = config, runner, ledger, monotonic
+        self._guard = guard
 
     def interpret(self, owner_id: str, intake_record_id: str, intake: Mapping[str, Any],
                   retry_of: str | None = None) -> InterpretResult:
         """One attempt to interpret the saved request. A retry is a new call that names the attempt it follows."""
         task = _task_json(_task_base("interpret", intake))
-        return self._attempt(owner_id, intake_record_id, "INTERPRET", task, None, retry_of,
+        return self._attempt(owner_id, intake_record_id, "INTERPRET", task, None, None, None, retry_of,
                              lambda text: parse_interpretation_response(text, intake))
 
     def follow_up(self, owner_id: str, intake_record_id: str, intake: Mapping[str, Any],
                   previous_evidence: Sequence[Mapping[str, Any]], question: str, answer: ClarificationAnswer,
-                  retry_of: str | None = None) -> InterpretResult:
+                  retry_of: str | None = None, previous_revision_id: str | None = None) -> InterpretResult:
         """One attempt to read a free-text reply to a clarification question."""
         task = _task_base("follow_up", intake)
         task.update(previous_field_evidence=_model_view(previous_evidence, task["model_fields"]),
                     question=question, answer=answer.text)
-        return self._attempt(owner_id, intake_record_id, "FOLLOW_UP", _task_json(task), answer.answer_ref, retry_of,
+        return self._attempt(owner_id, intake_record_id, "FOLLOW_UP", _task_json(task), answer.answer_ref, answer.text,
+                             previous_revision_id, retry_of,
                              lambda text: parse_follow_up_response(text, intake, previous_evidence, answer))
 
     def reparse(self, view: AttemptView, intake: Mapping[str, Any],
@@ -256,21 +261,35 @@ class HermesInterpreter:
         return parse_follow_up_response(settlement.response_text, intake, previous_evidence, answer)
 
     def _attempt(self, owner_id: str, intake_record_id: str, purpose: str, task: str, answer_ref: str | None,
-                 retry_of: str | None, parse: Callable[[str], ParsedInterpretation | Rejection]) -> InterpretResult:
+                 answer_text: str | None, previous_revision_id: str | None, retry_of: str | None,
+                 parse: Callable[[str], ParsedInterpretation | Rejection]) -> InterpretResult:
         identity = AttemptIdentity(
             purpose=purpose, prompt_version=PROMPT_VERSION, system_prompt_sha256=_sha256(SYSTEM_PROMPT),
             task_sha256=_sha256(task), task_text=task, response_shape_sha256=_sha256(RESPONSE_SHAPE),
             manifest_sha256=record_contract.manifest_sha256(), config=self._config.identity(),
-            runtime_label=self._config.runtime_label, answer_ref=answer_ref)
+            runtime_label=self._config.runtime_label, answer_ref=answer_ref, answer_text=answer_text,
+            previous_revision_id=previous_revision_id)
+        attempt_id = self._ledger.new_attempt_id()
+        with ExitStack() as held:
+            if self._guard is not None:  # the claim comes first, so a recorded attempt is never seen without its claim
+                try:
+                    held.enter_context(self._guard.claim(attempt_id))
+                except Exception:  # noqa: BLE001 - without a claim the attempt cannot be shown to be running
+                    return Unavailable(None, "attempt_not_recorded", UNAVAILABLE_DETAIL["attempt_not_recorded"])
+            return self._run_claimed(attempt_id, owner_id, intake_record_id, identity, retry_of, parse)
+
+    def _run_claimed(self, attempt_id: str, owner_id: str, intake_record_id: str, identity: AttemptIdentity,
+                     retry_of: str | None,
+                     parse: Callable[[str], ParsedInterpretation | Rejection]) -> InterpretResult:
         try:
-            start = self._ledger.begin(owner_id, intake_record_id, identity, retry_of)
+            start = self._ledger.begin(owner_id, intake_record_id, identity, retry_of, attempt_id=attempt_id)
         except AttemptInFlight:
             return Unavailable(None, "attempt_in_flight", UNAVAILABLE_DETAIL["attempt_in_flight"])
         except RetryTargetInvalid:
             return Unavailable(None, "retry_target_invalid", UNAVAILABLE_DETAIL["retry_target_invalid"])
         except Exception:  # noqa: BLE001 - storage can fail in many ways; with no record there must be no provider call
             return Unavailable(None, "attempt_not_recorded", UNAVAILABLE_DETAIL["attempt_not_recorded"])
-        turn = HermesTurn(attempt_id=start.attempt_id, system_prompt=SYSTEM_PROMPT, user_message=task,
+        turn = HermesTurn(attempt_id=start.attempt_id, system_prompt=SYSTEM_PROMPT, user_message=identity.task_text,
                           model=self._config.model, route=self._config.route,
                           max_output_tokens=self._config.max_output_tokens)
         began = self._monotonic()
@@ -313,7 +332,9 @@ class HermesInterpreter:
             parse_result=parse_result, error_class=error_class, runtime_observed=observed)
         try:
             self._ledger.settle(settlement)
-        except Exception:  # noqa: BLE001 - an unrecorded result is not released; a restart closes the attempt
+        except AlreadySettled:  # the attempt was closed as unknown while it ran: keep this result as evidence only
+            return self._keep_late(settlement)
+        except Exception:  # noqa: BLE001 - an unrecorded result is not released; abandonment is proved later
             return Unavailable(attempt_id, "result_not_recorded", UNAVAILABLE_DETAIL["result_not_recorded"])
         if isinstance(outcome, ParsedInterpretation):
             return Interpreted(attempt_id, outcome)
@@ -321,6 +342,18 @@ class HermesInterpreter:
             return OutputRejected(attempt_id, outcome)
         reason = UNAVAILABLE_BY_STATUS[status]
         return Unavailable(attempt_id, reason, UNAVAILABLE_DETAIL[reason])
+
+
+    def _keep_late(self, settlement: AttemptSettlement) -> Unavailable:
+        try:
+            self._ledger.observe_late_result(LateResult(
+                observation_id=self._ledger.new_attempt_id(), attempt_id=settlement.attempt_id,
+                owner_id=settlement.owner_id, observed_at=settlement.finished_at, status=settlement.status,
+                response_sha256=settlement.response_sha256, response_text=settlement.response_text,
+                usage=settlement.usage, request_count=settlement.request_count, error_class=settlement.error_class))
+        except Exception:  # noqa: BLE001 - nothing more can be kept; the result stays unused either way
+            return Unavailable(settlement.attempt_id, "result_not_recorded", UNAVAILABLE_DETAIL["result_not_recorded"])
+        return Unavailable(settlement.attempt_id, "result_arrived_late", UNAVAILABLE_DETAIL["result_arrived_late"])
 
 
 def _within_approved_settings(result: HermesTurnResult) -> bool:

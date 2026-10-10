@@ -15,7 +15,8 @@ import pytest
 
 from edge_os_api.research.interpretation_attempts import (
     AlreadyLinked, AlreadySettled, AttemptIdentity, AttemptInFlight, AttemptLedger, AttemptSettlement, AttemptStart,
-    InvalidIdentity, InvalidSettlement, NotPublishable, RetryTargetInvalid, UnknownAttempt, Usage,
+    InvalidIdentity, InvalidSettlement, LateResult, NotPublishable, NotUncertain, RetryTargetInvalid, UnknownAttempt,
+    Usage,
 )
 
 OWNER, OTHER_OWNER = "owner-a", "owner-b"
@@ -38,7 +39,8 @@ class MemoryAttemptStore:
     def __init__(self) -> None:
         self._starts: list[AttemptStart] = []
         self._settlements: list[AttemptSettlement] = []
-        self._links: list[tuple[str, str, str]] = []
+        self._links: list[tuple[str, str, str, tuple[dict, ...]]] = []
+        self._observations: list[LateResult] = []
 
     def add_start(self, start: AttemptStart) -> None:
         self._starts.append(start)
@@ -46,8 +48,19 @@ class MemoryAttemptStore:
     def add_settlement(self, settlement: AttemptSettlement) -> None:
         self._settlements.append(settlement)
 
-    def add_link(self, owner_id: str, attempt_id: str, revision_id: str) -> None:
-        self._links.append((owner_id, attempt_id, revision_id))
+    def add_link(self, owner_id: str, attempt_id: str, revision_id: str, offered_questions: Sequence[dict]) -> None:
+        self._links.append((owner_id, attempt_id, revision_id, tuple(offered_questions)))
+
+    def add_observation(self, observation: LateResult) -> None:
+        self._observations.append(observation)
+
+    def offered_questions(self, owner_id: str, intake_record_id: str, revision_id: str) -> Sequence[dict]:
+        ids = {s.attempt_id for s in self.starts(owner_id, intake_record_id)}
+        return next((q for o, a, r, q in self._links if o == owner_id and a in ids and r == revision_id), ())
+
+    def observations(self, owner_id: str, intake_record_id: str) -> Sequence[LateResult]:
+        ids = {s.attempt_id for s in self.starts(owner_id, intake_record_id)}
+        return [o for o in self._observations if o.owner_id == owner_id and o.attempt_id in ids]
 
     def find_start(self, owner_id: str, attempt_id: str) -> AttemptStart | None:
         return next((s for s in self._starts if s.owner_id == owner_id and s.attempt_id == attempt_id), None)
@@ -61,7 +74,7 @@ class MemoryAttemptStore:
 
     def links(self, owner_id: str, intake_record_id: str) -> Mapping[str, str]:
         ids = {s.attempt_id for s in self.starts(owner_id, intake_record_id)}
-        return {a: r for o, a, r in self._links if o == owner_id and a in ids}
+        return {a: r for o, a, r, _ in self._links if o == owner_id and a in ids}
 
 
 @pytest.fixture
@@ -103,7 +116,8 @@ def test_the_exact_request_text_and_the_users_reply_reference_are_kept_with_the_
     follow_up = AttemptIdentity(
         purpose="FOLLOW_UP", prompt_version="prompt/1", system_prompt_sha256="a" * 64, task_sha256=TASK_SHA256,
         task_text=TASK_TEXT, response_shape_sha256="c" * 64, manifest_sha256="d" * 64, config=CONFIG,
-        runtime_label="LOCAL_FAKE_PROVIDER", answer_ref="answer:11111111-1111-4111-8111-111111111111")
+        runtime_label="LOCAL_FAKE_PROVIDER", answer_ref="answer:11111111-1111-4111-8111-111111111111",
+        answer_text="make it two percent")
     start = ledger.begin(OWNER, INTAKE, follow_up)
 
     saved = ledger.history(OWNER, INTAKE)[0].start
@@ -229,12 +243,12 @@ def test_a_settlement_that_contradicts_itself_is_refused_and_the_attempt_stays_o
     assert ledger.history(OWNER, INTAKE)[0].status == "STARTED"
 
 
-def test_a_restart_closes_the_unsettled_attempt_as_interrupted_with_unknown_usage_and_never_replays_it(
+def test_an_attempt_that_is_proved_abandoned_closes_as_interrupted_with_unknown_usage_and_is_never_replayed(
         ledger: AttemptLedger) -> None:
     ledger.begin(OWNER, INTAKE, IDENTITY)
 
-    closed = ledger.interrupt_unsettled(OWNER, INTAKE)
-    again = ledger.interrupt_unsettled(OWNER, INTAKE)
+    closed = ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
+    again = ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
 
     assert [v.start.attempt_id for v in closed] == ["attempt-1"]
     assert again == []
@@ -247,20 +261,128 @@ def test_a_restart_closes_the_unsettled_attempt_as_interrupted_with_unknown_usag
     ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")  # a deliberate retry is now allowed
 
 
-def test_closing_interrupted_attempts_leaves_settled_ones_alone(ledger: AttemptLedger) -> None:
+def test_an_attempt_that_may_still_be_running_is_never_closed(ledger: AttemptLedger) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+
+    closed = ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: False)
+
+    assert closed == []
+    assert ledger.history(OWNER, INTAKE)[0].status == "STARTED"
+    with pytest.raises(AttemptInFlight):
+        ledger.begin(OWNER, INTAKE, IDENTITY)  # duplicate work is refused while abandonment is unproved
+
+
+def test_closing_abandoned_attempts_leaves_settled_ones_alone(ledger: AttemptLedger) -> None:
     ledger.begin(OWNER, INTAKE, IDENTITY)
     ledger.settle(settlement("attempt-1"))
     ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")
 
-    ledger.interrupt_unsettled(OWNER, INTAKE)
+    ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
     assert [v.status for v in ledger.history(OWNER, INTAKE)] == ["COMPLETED", "INTERRUPTED"]
 
 
 def test_history_is_private_to_the_owner(ledger: AttemptLedger) -> None:
     ledger.begin(OWNER, INTAKE, IDENTITY)
     assert ledger.history(OTHER_OWNER, INTAKE) == []
-    assert ledger.interrupt_unsettled(OTHER_OWNER, INTAKE) == []
+    assert ledger.interrupt_abandoned(OTHER_OWNER, INTAKE, lambda start: True) == []
     assert ledger.history(OWNER, INTAKE)[0].status == "STARTED"
+
+
+def test_the_attempt_id_can_be_chosen_before_the_attempt_is_recorded(ledger: AttemptLedger) -> None:
+    start = ledger.begin(OWNER, INTAKE, IDENTITY, attempt_id="11111111-1111-4111-8111-111111111111")
+    assert start.attempt_id == "11111111-1111-4111-8111-111111111111"
+    assert ledger.new_attempt_id() == "attempt-1"  # the generator was not used by the choice above
+
+
+def test_a_follow_up_keeps_the_exact_reply_and_the_revision_it_answers(ledger: AttemptLedger) -> None:
+    reply = "make the entry 2% over a quarter of an hour"
+    task = '{"task":"follow_up","answer":"' + reply + '"}'
+    identity = AttemptIdentity(
+        purpose="FOLLOW_UP", prompt_version="prompt/1", system_prompt_sha256="a" * 64,
+        task_sha256=hashlib.sha256(task.encode()).hexdigest(), task_text=task, response_shape_sha256="c" * 64,
+        manifest_sha256="d" * 64, config=CONFIG, runtime_label="LOCAL_FAKE_PROVIDER",
+        answer_ref="reply:22222222-2222-4222-8222-222222222222", answer_text=reply,
+        previous_revision_id="33333333-3333-4333-8333-333333333333")
+    ledger.begin(OWNER, INTAKE, identity)
+    saved = ledger.history(OWNER, INTAKE)[0].start.identity
+    assert (saved.answer_text, saved.previous_revision_id) == (reply, "33333333-3333-4333-8333-333333333333")
+
+
+@pytest.mark.parametrize("changes", [
+    {"answer_ref": None, "answer_text": "a reply with no reference"},
+    {"answer_ref": "reply:1", "answer_text": None},
+])
+def test_a_reply_and_its_reference_come_together(ledger: AttemptLedger, changes: dict) -> None:
+    identity = AttemptIdentity(**{**IDENTITY.__dict__, **changes})
+    with pytest.raises(InvalidIdentity):
+        ledger.begin(OWNER, INTAKE, identity)
+    assert ledger.history(OWNER, INTAKE) == []
+
+
+def test_a_link_keeps_the_questions_that_the_accepted_answer_offered(ledger: AttemptLedger) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    ledger.settle(settlement("attempt-1"))
+    questions = [{"question_id": "q1", "field_name": "entry", "text": "Which entry rule?", "options": []}]
+
+    ledger.link_revision(OWNER, "attempt-1", "revision-1", offered_questions=questions)
+
+    assert ledger.offered_questions(OWNER, INTAKE, "revision-1") == questions
+
+
+LATE_TEXT = '{"meaning_status": "SUPPORTED", "late": true}'
+
+
+def late(attempt_id: str = "attempt-1", **changes) -> LateResult:
+    values = dict(
+        observation_id="obs-1", attempt_id=attempt_id, owner_id=OWNER, observed_at=START_TIME + dt.timedelta(hours=1),
+        status="COMPLETED", response_sha256=hashlib.sha256(LATE_TEXT.encode()).hexdigest(), response_text=LATE_TEXT,
+        usage=Usage(10, 5, 15, "PROVIDER_REPORTED"), request_count=1, error_class=None)
+    values.update(changes)
+    return LateResult(**values)
+
+
+@pytest.mark.parametrize("settled_status", ["TIMED_OUT", "UNKNOWN", "INTERRUPTED"])
+def test_a_late_result_is_kept_beside_an_uncertain_attempt_and_changes_nothing_else(
+        ledger: AttemptLedger, settled_status: str) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    ledger.settle(settlement("attempt-1", settled_status, text=None, parse_result="NOT_PARSED"))
+    before = ledger.history(OWNER, INTAKE)
+
+    ledger.observe_late_result(late())
+
+    assert ledger.history(OWNER, INTAKE) == before  # settlement, status and links are unchanged
+    assert [o.observation_id for o in ledger.late_results(OWNER, INTAKE)] == ["obs-1"]
+    assert ledger.unpublished_results(OWNER, INTAKE) == []  # a late result is never recovered into a revision
+    assert len(ledger.history(OWNER, INTAKE)) == 1  # and no retry or new attempt was made
+
+
+@pytest.mark.parametrize("settled_status, text, parse_result", [
+    ("COMPLETED", RESPONSE_TEXT, "ACCEPTED"), ("TRUNCATED", RESPONSE_TEXT, "REJECTED:truncated"),
+    ("PROVIDER_FAILED", None, "NOT_PARSED")])
+def test_a_late_result_is_refused_when_the_attempt_outcome_was_already_known(
+        ledger: AttemptLedger, settled_status: str, text: str | None, parse_result: str) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    ledger.settle(settlement("attempt-1", settled_status, text=text, parse_result=parse_result))
+    with pytest.raises(NotUncertain):
+        ledger.observe_late_result(late())
+    assert ledger.late_results(OWNER, INTAKE) == []
+
+
+def test_a_late_result_for_an_open_or_foreign_attempt_is_refused(ledger: AttemptLedger) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    with pytest.raises(NotUncertain):
+        ledger.observe_late_result(late())  # still open: it may settle itself
+    ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
+    with pytest.raises(UnknownAttempt):
+        ledger.observe_late_result(late(owner_id=OTHER_OWNER))
+    assert ledger.late_results(OWNER, INTAKE) == []
+
+
+def test_a_late_result_with_a_wrong_hash_is_refused(ledger: AttemptLedger) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
+    with pytest.raises(InvalidSettlement):
+        ledger.observe_late_result(late(response_sha256="f" * 64))
 
 
 def test_an_accepted_result_can_be_recovered_without_a_new_attempt_until_it_is_linked(ledger: AttemptLedger) -> None:

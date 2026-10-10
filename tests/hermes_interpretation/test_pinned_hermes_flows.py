@@ -195,7 +195,7 @@ def test_a_restart_closes_the_unsettled_attempt_and_never_replays_it(
         {"model": "x"}, "LOCAL_FAKE_PROVIDER"))
     reopened = AttemptLedger(session.store, new_id=lambda: "attempt-after-restart", now=session.ledger.now)
 
-    closed = reopened.interrupt_unsettled(OWNER, INTAKE)
+    closed = reopened.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
 
     assert [(v.status, v.completion) for v in closed] == [("INTERRUPTED", "UNKNOWN")]
     assert closed[0].settlement.usage.source == "UNKNOWN"  # type: ignore[union-attr]
