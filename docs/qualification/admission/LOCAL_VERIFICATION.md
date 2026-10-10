@@ -83,8 +83,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 464 passed (377 existing + 87 admission), ~95 s.
-- Admission suite: 87 passed.
+- Full suite: 468 passed (377 existing + 91 admission), ~77 s.
+- Admission suite: 91 passed.
 - P15 and P02 contract checks: PASS.
 - `git diff --check`: clean.
 
@@ -129,3 +129,13 @@ unchanged.
 Live admission, API routes, UI, browser checks, production migration, provider
 enforcement and any real wallet, signing or provider action. These remain
 unresolved and are not proven by this recipe.
+
+## Gate-verdict 4/4 continuation coverage (G1-G3)
+
+- G1: a confirmed entry whose actual gas plus the retained exit gas exceeds the
+  approved cap fails closed with a breach and a saved receipt; an exit with zero
+  planned exit gas still charges its actual gas and fails closed when over cap.
+- G2: after a partial exit, the remaining inventory retains a usable exit path
+  funded from the approved budget; the subsequent exit is admitted and confirmed.
+- G3: a caller action id in the reserved `exit-hold:` namespace is denied; a
+  position's retained hold is not consumed under another action.

@@ -18,6 +18,9 @@ from edge_os_api.admission.types import (
 
 ATTEMPT_ASSET = "attempt"
 ACQUISITIONS = ("ENTRY", "ADDITION")
+# Internal per-position exit holds use a reserved action-id namespace. A caller
+# action id must never collide with it (G3).
+HOLD_ACTION_PREFIX = "exit-hold:"
 
 
 def allowance_remaining(approved: int, consumed: int, reserved: int) -> int:
@@ -65,6 +68,8 @@ def denial_reasons(
 ) -> list[str]:
     reasons: list[str] = []
 
+    if intent.action_id.startswith(HOLD_ACTION_PREFIX):
+        reasons.append("RESERVED_ACTION_ID")
     if intent.binding != approval.binding:
         reasons.append("BINDING_MISMATCH")
     if intent.policy_binding != approval.policy_binding:

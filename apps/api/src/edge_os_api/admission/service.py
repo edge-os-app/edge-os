@@ -23,6 +23,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from edge_os_api.admission.accounting import (
     ACQUISITIONS,
+    ATTEMPT_ASSET,
+    HOLD_ACTION_PREFIX,
     ReservationNeed,
     ReservationPlan,
     covered,
@@ -483,24 +485,49 @@ class AdmissionService:
 
         if intent.operation == "EXIT":
             assert position is not None
-            # The exit takes its gas/attempt coverage out of the position's retained
-            # hold, leaving the remainder for other exits. It never reserves new gas.
+            # The exit draws its gas/attempt coverage from the position's retained
+            # hold; any shortfall is funded from the wallet's approved budget, so a
+            # partial exit never strands the remaining inventory (G2).
             hold_id = _hold_action_id(intent.position_id)
             holds = session.execute(select(ReservationRow).where(
                 ReservationRow.owner_id == owner, ReservationRow.action_id == hold_id,
                 ReservationRow.position_id == intent.position_id, ReservationRow.state == "RESERVED",
                 ReservationRow.scope.in_(("GAS", "ATTEMPT")),
             ).with_for_update().execution_options(populate_existing=True)).scalars().all()
-            gas_have = sum(_int(r.raw) for r in holds if r.scope == "GAS")
-            att_have = sum(_int(r.raw) for r in holds if r.scope == "ATTEMPT")
+            hold_gas = sum(_int(r.raw) for r in holds if r.scope == "GAS")
+            hold_att = sum(_int(r.raw) for r in holds if r.scope == "ATTEMPT")
             need_gas = approval.per_exit_gas.as_int()
-            if gas_have < need_gas or att_have < 1:
-                return "EXIT_COVERAGE_MISSING"
+            take_gas = min(hold_gas, need_gas)
+            take_att = min(hold_att, 1)
+            deficit_gas = need_gas - take_gas
+            deficit_att = 1 - take_att
             other_reserved = _exit_hold(session, owner, b.agent_id, b.wallet_id, b.network_id,
                                         intent.position_id, base_asset)
             if _int(position.inventory) - other_reserved < quantity:
                 return "INVENTORY_SHORTFALL"
-            _take_from_holds(session, owner, intent, holds, need_gas, 1)
+            gas_asset = approval.gas.asset_id
+            gas_decimals = approval.gas.decimals
+            if deficit_gas > 0:
+                gas_cap = approval.gas.as_int()
+                reserved_gas = _capital_reserved(session, owner, b.agent_id, b.wallet_id, b.network_id, gas_asset)
+                gas_row, reason = _ensure_allowance(session, owner, b.agent_id, b.wallet_id, b.network_id,
+                                                    gas_asset, gas_decimals, gas_cap, approval.approval_id,
+                                                    approval.content_hash(), reserved_gas)
+                if reason is not None:
+                    return reason
+                assert gas_row is not None
+                if not covered(_int(gas_row.approved), _int(gas_row.consumed), reserved_gas, deficit_gas):
+                    return "CAPACITY_UNAVAILABLE"
+                gas_holdings = context.holdings.balances.get(gas_asset)
+                if gas_holdings is None or gas_holdings.as_int() < reserved_gas + deficit_gas:
+                    return "HOLDINGS_SHORTFALL"
+            if deficit_att > 0:
+                if _attempt_count(session, owner, b.agent_id, b.wallet_id, b.network_id) + deficit_att > approval.attempt_budget:
+                    return "ATTEMPT_BUDGET_EXHAUSTED"
+            _take_from_holds(holds, take_gas, take_att)
+            if need_gas > 0:
+                _add_exit_reservation(session, owner, intent, "GAS", gas_asset, gas_decimals, need_gas)
+            _add_exit_reservation(session, owner, intent, "ATTEMPT", ATTEMPT_ASSET, 0, 1)
 
         self._publish_reservations(session, owner, intent, plan)
         return None
@@ -846,6 +873,7 @@ def _saved_receipt(row: ReceiptRow) -> SavedReceipt:
 def _action_reservations(session: Session, row: DecisionRow, *, for_update: bool = False) -> list[ReservationRow]:
     statement = select(ReservationRow).where(
         ReservationRow.owner_id == row.owner_id, ReservationRow.action_id == row.action_id,
+        ReservationRow.operation != "EXIT_HOLD",
     ).order_by(ReservationRow.scope, ReservationRow.asset_id)
     if for_update:
         statement = statement.with_for_update().execution_options(populate_existing=True)
@@ -887,6 +915,17 @@ def _charge(session: Session, row: DecisionRow, reservation: ReservationRow, amo
     allowance.consumed = Decimal(_int(allowance.consumed) + amount)
 
 
+def _charge_amount(session: Session, row: DecisionRow, asset_id: str, decimals: int, amount: int) -> None:
+    """Charge a reconciled actual with no matching reservation (e.g. a zero-hold exit)."""
+    allowance = _lock_allowance_for(session, row, asset_id, decimals)
+    if allowance is None:
+        raise AccountingBreach("ALLOWANCE_MISSING")
+    others = _capital_reserved(session, row.owner_id, row.agent_id, row.wallet_id, row.network_id, asset_id)
+    if _int(allowance.consumed) + amount + others > _int(allowance.approved):
+        raise AccountingBreach("CONSUMED_EXCEEDS_APPROVED")
+    allowance.consumed = Decimal(_int(allowance.consumed) + amount)
+
+
 def _require_actual(amount: AssetAmount | None, asset_id: str, decimals: int, reason: str) -> int:
     if amount is None:
         raise AccountingBreach(reason)
@@ -896,7 +935,7 @@ def _require_actual(amount: AssetAmount | None, asset_id: str, decimals: int, re
 
 
 def _hold_action_id(position_id: str) -> str:
-    return f"exit-hold:{position_id}"
+    return f"{HOLD_ACTION_PREFIX}{position_id}"
 
 
 def _create_hold(session: Session, row: DecisionRow, scope: str, asset_id: str,
@@ -920,21 +959,23 @@ def _create_hold(session: Session, row: DecisionRow, scope: str, asset_id: str,
     ))
 
 
-def _take_from_holds(session: Session, owner: uuid.UUID, intent: ActionIntent,
-                     holds: list[ReservationRow], need_gas: int, need_attempt: int) -> None:
-    """Move the needed exit coverage out of the position hold into the exit action."""
+def _take_from_holds(holds: list[ReservationRow], take_gas: int, take_att: int) -> None:
+    """Reduce the position hold by the exit coverage it contributes."""
     for hold in holds:
-        take = need_gas if hold.scope == "GAS" else need_attempt
-        if take <= 0:
-            continue
-        hold.raw = Decimal(_int(hold.raw) - take)
-        session.add(ReservationRow(
-            reservation_id=uuid.uuid4(), owner_id=owner, agent_id=intent.binding.agent_id,
-            wallet_id=intent.binding.wallet_id, network_id=intent.binding.network_id,
-            action_id=intent.action_id, operation="EXIT", review_hash=intent.review_hash,
-            scope=hold.scope, position_id=intent.position_id, asset_id=hold.asset_id,
-            decimals=_int(hold.decimals), raw=Decimal(take), state="RESERVED",
-        ))
+        take = take_gas if hold.scope == "GAS" else take_att
+        if take > 0:
+            hold.raw = Decimal(_int(hold.raw) - take)
+
+
+def _add_exit_reservation(session: Session, owner: uuid.UUID, intent: ActionIntent,
+                          scope: str, asset_id: str, decimals: int, raw: int) -> None:
+    session.add(ReservationRow(
+        reservation_id=uuid.uuid4(), owner_id=owner, agent_id=intent.binding.agent_id,
+        wallet_id=intent.binding.wallet_id, network_id=intent.binding.network_id,
+        action_id=intent.action_id, operation="EXIT", review_hash=intent.review_hash,
+        scope=scope, position_id=intent.position_id, asset_id=asset_id,
+        decimals=decimals, raw=Decimal(raw), state="RESERVED",
+    ))
 
 
 def _settle(
@@ -950,6 +991,8 @@ def _settle(
     base_decimals = _int(row.binding.get("base_decimals") or 0)
     quote_asset = str(row.binding.get("quote_asset_id") or "")
     quote_decimals = _int(row.binding.get("quote_decimals") or 0)
+    gas_asset = str(row.binding.get("gas_asset_id") or "")
+    gas_decimals = _int(row.binding.get("gas_decimals") or 0)
     position = _position_row(session, row.owner_id, str(row.binding.get("position_id") or ""), for_update=True)
     if position is not None:
         expected_position = (row.agent_id, row.wallet_id, row.network_id, base_asset, base_decimals,
@@ -962,7 +1005,9 @@ def _settle(
         if position.quote_asset_id != quote_asset or _int(position.quote_decimals) != quote_decimals:
             raise AccountingBreach("QUOTE_BINDING_MISMATCH")
 
-    for reservation in _action_reservations(session, row, for_update=True):
+    reservations = _action_reservations(session, row, for_update=True)
+    has_gas_reservation = any(r.scope == "GAS" for r in reservations)
+    for reservation in reservations:
         if reservation.state != "RESERVED":
             continue
 
@@ -982,16 +1027,16 @@ def _settle(
         if reservation.scope == "GAS":
             amount = _require_actual(receipt.actual_gas, reservation.asset_id, _int(reservation.decimals),
                                      "MISSING_RECONCILED_GAS")
-            _charge(session, row, reservation, amount)
-            # An acquisition keeps its intended-exit gas as a position hold; an exit
-            # consumes its transferred gas reservation.
-            reservation.state = "CONSUMED" if operation == "EXIT" else "RELEASED"
-            reservation.reconciled_at = func.now()
-            consumed_amounts.append(_amount(reservation.asset_id, amount, _int(reservation.decimals)))
+            # Retain the intended exit gas as a position hold BEFORE charging, so the
+            # cap check counts the retained exit coverage (G1).
             if operation in ACQUISITIONS and committed:
                 exit_gas = _int(row.binding.get("exit_gas_raw") or 0)
                 if exit_gas > 0:
                     _create_hold(session, row, "GAS", reservation.asset_id, _int(reservation.decimals), exit_gas)
+            _charge(session, row, reservation, amount)
+            reservation.state = "CONSUMED" if operation == "EXIT" else "RELEASED"
+            reservation.reconciled_at = func.now()
+            consumed_amounts.append(_amount(reservation.asset_id, amount, _int(reservation.decimals)))
             continue
 
         if reservation.scope == "CAPITAL":
@@ -1065,6 +1110,13 @@ def _settle(
                 position.realized_quote = Decimal(_int(position.realized_quote) + (proceeds - removed))
             reservation.state = "CONSUMED"
             reservation.reconciled_at = func.now()
+
+    # An exit with no reserved GAS row (zero planned exit gas) still spends actual
+    # gas; account it and fail closed on an over-cap effect (G1).
+    if operation == "EXIT" and not has_gas_reservation:
+        amount = _require_actual(receipt.actual_gas, gas_asset, gas_decimals, "MISSING_RECONCILED_GAS")
+        _charge_amount(session, row, gas_asset, gas_decimals, amount)
+        consumed_amounts.append(_amount(gas_asset, amount, gas_decimals))
 
     row.status = "CONFIRMED" if committed else "REVERTED"
     session.flush()

@@ -76,14 +76,21 @@ settling.
   entry gas plus the intended-exit gas, and two attempt atoms (entry and its
   exit). Create the position at inventory zero.
 - On confirmation, the acquisition consumes only its actual entry gas and one
-  attempt. The remaining exit gas and attempt are retained as a durable
-  per-position exit hold, so a later exit uses preapproved coverage and the
-  remaining exposure is not left uncovered.
-- `EXIT`: take the exit gas and one attempt out of the position exit hold. Do
-  not reserve new gas or attempts. Require a known exit valuation mark and the
-  full durable quote binding; a missing or mismatched control denies admission.
+  attempt. The retained exit gas is created as a durable per-position hold before
+  the entry gas is charged, so the charge counts the retained coverage and an
+  over-cap actual entry fails closed with a breach.
+- `EXIT`: draw the exit gas and one attempt from the position exit hold. Any
+  shortfall is funded from the wallet's approved gas and attempt budget, so a
+  partial exit never strands the remaining inventory. Reserve no new gas beyond
+  the exit's own need. Require a known exit valuation mark and the full durable
+  quote binding; a missing or mismatched control denies admission.
 - A competing acquisition cannot take gas or attempts promised to an existing
   position's exit.
+- Every verified actual gas effect is accounted, including an exit with zero
+  planned exit gas (charged directly and failing closed when over cap).
+- The internal exit-hold action ids use a reserved `exit-hold:` namespace; a
+  caller action id in that namespace is denied, and reservations are matched to
+  the action's own operation so a hold is never consumed under another action.
 
 ## Atomicity
 

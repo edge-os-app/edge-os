@@ -551,3 +551,75 @@ def test_addition_with_altered_quote_binding_is_denied_before_reserving(
             "SELECT inventory, cost_basis FROM admission_positions WHERE owner_id = :owner"
         ), {"owner": str(fresh_owner)}).one()
     assert (int(inventory), int(basis)) == (10, 110)
+
+
+# ---------------------------------------------------------------- G1
+
+def test_entry_actual_gas_over_cap_with_retained_exit_fails_closed(admission_service, fresh_owner) -> None:
+    approval = approval_a(gas_approved_raw="2", per_action_gas_raw="1", per_exit_gas_raw="1", attempt_budget=10)
+    entry = intent_entry(quantity_raw="1", quote_input_raw="10", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    # Actual entry gas 2 plus the retained exit gas 1 exceeds the approved cap 2.
+    outcome = admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "10", "1", "2"))
+    assert outcome.decision_status == "BREACHED"
+    assert outcome.reason == "CONSUMED_EXCEEDS_APPROVED"
+    receipts = admission_service.retrieve_receipts(fresh_owner, action_id=entry.action_id)
+    assert receipts and receipts[0].breach is True
+    assert _one(admission_service.balances(fresh_owner), NATIVE).consumed_raw == "0"
+
+
+def test_exit_actual_gas_without_hold_is_accounted(admission_service, fresh_owner) -> None:
+    approval = approval_a(gas_approved_raw="1", per_action_gas_raw="1", per_exit_gas_raw="0", attempt_budget=10)
+    entry = intent_entry(quantity_raw="1", quote_input_raw="10", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    assert admission_service.reconcile(
+        fresh_owner, entry.action_id, confirm_entry(entry, "10", "1", "1")).decision_status == "CONFIRMED"
+
+    exit_intent = intent_exit(quantity_raw="1")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, exit_intent, approval, context_a(position_inventory="1")).status == "ADMITTED"
+    # No GAS hold existed; the exit's actual gas must still be accounted and fail closed.
+    outcome = admission_service.reconcile(fresh_owner, exit_intent.action_id, confirm_exit(exit_intent, "1", "12", "1"))
+    assert outcome.decision_status == "BREACHED"
+    assert outcome.reason == "CONSUMED_EXCEEDS_APPROVED"
+    assert _one(admission_service.balances(fresh_owner), NATIVE).consumed_raw == "1"
+
+
+# ---------------------------------------------------------------- G2
+
+def test_partial_exit_retains_usable_exit_path(admission_service, fresh_owner) -> None:
+    approval = approval_a(attempt_budget=10, gas_approved_raw="3", per_action_gas_raw="1", per_exit_gas_raw="1")
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+
+    first = intent_exit(quantity_raw="5")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, first, approval, context_a(position_inventory="10")).status == "ADMITTED"
+    assert admission_service.reconcile(
+        fresh_owner, first.action_id, confirm_exit(first, "5", "250", "1")).decision_status == "CONFIRMED"
+
+    # Remaining inventory 5 must still have a usable exit path under approved capacity.
+    second = intent_exit(quantity_raw="5")
+    admitted = admission_service.admit_and_reserve(fresh_owner, second, approval, context_a(position_inventory="5"))
+    assert admitted.status == "ADMITTED", admitted.reason
+    assert admission_service.reconcile(
+        fresh_owner, second.action_id, confirm_exit(second, "5", "260", "1")).decision_status == "CONFIRMED"
+
+
+# ---------------------------------------------------------------- G3
+
+def test_reserved_action_id_cannot_consume_a_position_hold(admission_service, fresh_owner) -> None:
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval_a(), context_a())
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+
+    malicious = intent_entry(action_id="exit-hold:position-a-1", position_id="position-a-2")
+    denied = admission_service.admit_and_reserve(fresh_owner, malicious, approval_a(), context_a())
+    assert denied.status == "DENIED"
+    assert "RESERVED_ACTION_ID" in denied.reason
+
+    # Position A's retained coverage is intact: its full exit remains admitted.
+    exit_intent = intent_exit(quantity_raw="10")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, exit_intent, approval_a(), context_a(position_inventory="10")).status == "ADMITTED"
