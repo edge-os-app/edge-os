@@ -600,3 +600,28 @@ def test_an_attempt_settles_as_rejected_even_when_the_parser_raises(caplog) -> N
     assert (view.status, view.settlement.parse_result) == ("COMPLETED", "REJECTED:unparseable_response")  # type: ignore[union-attr]
     assert view.settlement.usage == REPORTED  # type: ignore[union-attr]
     assert "RuntimeError" in caplog.text and "sk-LEAK" not in caplog.text
+
+
+def test_a_truncated_answer_with_no_text_settles_as_a_rejected_truncation_with_its_usage() -> None:
+    interpreter, _, ledger, _ = build(HermesTurnResult(status="TRUNCATED", text=None, usage=REPORTED, request_count=1, observed=OBSERVED_OK, error_class=None))
+
+    result = interpreter.interpret(OWNER, INTAKE, THESIS_INTAKE)
+
+    assert isinstance(result, OutputRejected) and result.rejection.reason_code == "truncated"
+    settlement = ledger.history(OWNER, INTAKE)[0].settlement
+    assert settlement is not None
+    assert (settlement.status, settlement.response_text, settlement.parse_result, settlement.usage) == (
+        "TRUNCATED", "", "REJECTED:truncated", REPORTED)
+
+
+@pytest.mark.parametrize("usage", [
+    Usage(-1, 5, 4, "PROVIDER_REPORTED"), Usage(2 ** 70, 5, 2 ** 70, "PROVIDER_REPORTED"),
+    Usage(10, -5, 5, "PROVIDER_REPORTED"), Usage(10, 5, -1, "PROVIDER_REPORTED")])
+def test_usage_that_cannot_be_saved_is_kept_as_unknown_and_the_attempt_still_settles(usage: Usage) -> None:
+    interpreter, _, ledger, _ = build(returned(thesis_text(), usage=usage))
+
+    result = interpreter.interpret(OWNER, INTAKE, THESIS_INTAKE)
+
+    assert isinstance(result, Interpreted)
+    settlement = ledger.history(OWNER, INTAKE)[0].settlement
+    assert settlement is not None and settlement.usage == Usage() and settlement.parse_result == "ACCEPTED"

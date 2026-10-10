@@ -588,3 +588,92 @@ def test_a_negative_threshold_is_read_from_the_users_words_and_compiles_after_ad
     assert evidence(bundle, "entry", 0)["value"]["args"][1]["value"] == "-0.02"
     adopted = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
     assert adopted.json()["head"]["outcome"] == "COMPILED"
+
+
+# --- Values that parse but could not be saved, and provider values that could not be settled --------------------------------
+
+def thesis_with_sizing(value: Any) -> str:
+    good = json.loads(json.dumps(case("concrete-thesis")["provider"]["model_response"]))
+    sizing = next(i for i in good["field_evidence"] if i["field_name"] == "sizing")
+    sizing["value"] = value
+    return json.dumps(good)
+
+
+def nested(levels: int) -> Any:
+    deep: Any = "x"
+    for _ in range(levels):
+        deep = [deep]
+    return deep
+
+
+@pytest.mark.parametrize("name, value, reason", [
+    ("escaped NUL", {"note": "a\x00b"}, "unstorable_text"),
+    ("escaped lone surrogate", {"note": "a\ud800b"}, "unstorable_text"),
+    ("not NFC", {"note": "é"}, "unstorable_text"),
+    ("250 levels deep", nested(250), "value_too_deep"),
+    ("300 levels deep", nested(300), "value_too_deep")])
+def test_an_unstorable_decoded_value_settles_as_a_rejected_attempt_and_the_request_stays_openable_and_retryable(
+        make_client, owner_a, name: str, value: Any, reason: str) -> None:
+    from edge_os_api.research.interpretation_attempts import Usage
+    hostile = reply(case("concrete-thesis")["provider"]["model_response"], usage=Usage(1500, 400, 1900, "PROVIDER_REPORTED"),
+                    text=thesis_with_sizing(value))
+    client = make_client(CaseRunner(hostile, turn_result(case("concrete-thesis")["provider"])))
+
+    created = create(client, owner_a, "concrete-thesis")
+
+    assert created.status_code == 201, (name, created.text)
+    bundle = created.json()
+    [attempt] = bundle["attempts"]
+    assert attempt["parse_result"] == f"REJECTED:{reason}", name
+    assert attempt["usage"]["input_tokens"] == 1500
+    assert bundle["head"]["retry"]["allowed"] is True
+    opened = client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a)
+    assert opened.status_code == 200, name
+    retried = retry(client, owner_a, bundle, attempt["attempt_id"])
+    assert retried.status_code == 201 and retried.json()["head"]["outcome"] == "NEEDS_CLARIFICATION"
+
+
+def test_a_hostile_decoded_value_in_a_reply_settles_as_rejected_and_keeps_the_saved_meaning(make_client, owner_a) -> None:
+    first = case("rough-hunch")["provider"]["model_response"]
+    hostile = {**first, "questions": [], "field_evidence": [{
+        "field_name": "entry", "state": "KNOWN", "origin": "USER_STATED", "source_passage": "up more than 1%",
+        "value": {"op": "gt", "args": [{"op": "price_return", "lookback_buckets": 3},
+                                       {"op": "constant", "value": "0.01", "unit": "DIMENSIONLESS"}], "note": "a\x00b"}}]}
+    client = make_client(CaseRunner(turn_result(case("rough-hunch")["provider"]), reply(hostile)))
+    bundle = create(client, owner_a, "rough-hunch").json()
+
+    response = answer(client, owner_a, bundle, "choose-entry", answer_text="up more than 1%")
+
+    assert response.status_code == 200, response.text
+    after = response.json()
+    assert after["attempts"][-1]["parse_result"] == "REJECTED:unstorable_text"
+    assert after["head"]["reply"]["state"] == "REJECTED" and len(after["interpretations"]) == 1
+
+
+def test_a_truncated_answer_with_no_text_is_saved_as_a_rejected_truncation_with_a_retry(make_client, owner_a) -> None:
+    from edge_os_api.research.hermes_interpreter import HermesTurnResult
+    from edge_os_api.research.interpretation_attempts import Usage
+    from hermes_cases import OBSERVED_OK
+    empty = HermesTurnResult("TRUNCATED", None, Usage(1423, 4096, 5519, "PROVIDER_REPORTED"), 1, OBSERVED_OK, None)
+    client = make_client(CaseRunner(empty, turn_result(case("concrete-thesis")["provider"])))
+
+    bundle = create(client, owner_a, "concrete-thesis").json()
+
+    [attempt] = bundle["attempts"]
+    assert (attempt["status"], attempt["completion"], attempt["parse_result"]) == ("TRUNCATED", "TRUNCATED", "REJECTED:truncated")
+    assert attempt["usage"]["output_tokens"] == 4096
+    assert bundle["head"]["retry"]["allowed"] is True
+
+
+@pytest.mark.parametrize("usage", ["negative", "huge"])
+def test_usage_the_database_cannot_hold_is_saved_as_unknown_and_the_answer_is_still_used(make_client, owner_a, usage: str) -> None:
+    from edge_os_api.research.interpretation_attempts import Usage
+    bad = Usage(-1, 5, 4, "PROVIDER_REPORTED") if usage == "negative" else Usage(2 ** 70, 5, 2 ** 70, "PROVIDER_REPORTED")
+    client = make_client(CaseRunner(reply(case("concrete-thesis")["provider"]["model_response"], usage=bad)))
+
+    created = create(client, owner_a, "concrete-thesis")
+
+    assert created.status_code == 201, created.text
+    [attempt] = created.json()["attempts"]
+    assert attempt["parse_result"] == "ACCEPTED"
+    assert attempt["usage"] == {"source": "UNKNOWN", "input_tokens": None, "output_tokens": None, "total_tokens": None}

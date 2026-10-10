@@ -195,6 +195,24 @@ def _storable(text: str) -> tuple[str, bool]:
     return text.encode("utf-8", "backslashreplace").decode("utf-8").replace("\x00", "\\x00"), False
 
 
+MAX_COUNT = 2 ** 53
+
+
+def _sane_count(value: int | None) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_COUNT else None
+
+
+def _sane_usage(usage: Usage) -> Usage:
+    """Provider-reported counts that the ledger and the database cannot hold are treated as not reported."""
+    counts = (usage.input_tokens, usage.output_tokens, usage.total_tokens)
+    if usage.source != "PROVIDER_REPORTED":
+        return Usage()
+    if usage.input_tokens is None or usage.output_tokens is None or any(
+            count is not None and _sane_count(count) is None for count in counts):
+        return Usage()
+    return usage
+
+
 def _error_class(name: str | None) -> str | None:
     """Keep a class name only. Provider text never reaches a stored or public field."""
     return name if name is not None and ERROR_CLASS.fullmatch(name) else ("ProviderError" if name else None)
@@ -330,6 +348,9 @@ class HermesInterpreter:
         if status == "COMPLETED" and result.text is None:
             status = "UNKNOWN"
         text = result.text if status in {"COMPLETED", "TRUNCATED"} else None
+        if status == "TRUNCATED" and text is None:
+            text = ""  # a cut-off answer with no visible text is still a saved, rejected truncation
+        usage, request_count = _sane_usage(result.usage), _sane_count(result.request_count)
         outcome: ParsedInterpretation | Rejection | None = None
         parse_result = "NOT_PARSED"
         if text is not None:
@@ -348,7 +369,7 @@ class HermesInterpreter:
                     log.error("parser raised for attempt %s: %s", attempt_id, type(error).__name__)
                     outcome = Rejection("unparseable_response", "", "The answer could not be read, so none of it was used.")
             parse_result = "ACCEPTED" if isinstance(outcome, ParsedInterpretation) else f"REJECTED:{outcome.reason_code}"
-        return self._settle(attempt_id, owner_id, status, text, result.usage, result.request_count,
+        return self._settle(attempt_id, owner_id, status, text, usage, request_count,
                             dict(result.observed), _error_class(result.error_class), latency_ms, parse_result, outcome)
 
     def _settle(self, attempt_id: str, owner_id: str, status: str, text: str | None, usage: Usage,

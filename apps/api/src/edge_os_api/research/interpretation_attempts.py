@@ -156,7 +156,7 @@ def _check_settlement(settlement: AttemptSettlement) -> None:
     status, text = settlement.status, settlement.response_text
     if status not in COMPLETION_BY_STATUS:
         raise InvalidSettlement("The status is not one the ledger defines.")
-    if (status == "COMPLETED" and text is None) or (status not in STATUSES_WITH_RESPONSE and text is not None):
+    if (status in STATUSES_WITH_RESPONSE) != (text is not None):  # the database holds the same rule
         raise InvalidSettlement("The response text does not fit the status.")
     expected_hash = hashlib.sha256(text.encode("utf-8")).hexdigest() if text is not None else None
     if settlement.response_sha256 != expected_hash:

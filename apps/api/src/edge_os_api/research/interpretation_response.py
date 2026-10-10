@@ -11,6 +11,7 @@ import functools
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -37,6 +38,7 @@ INTERVAL_SOURCE = "application:five-minute-buckets"
 APPLICATION_OWNED_FIELDS = frozenset({"restrictions", "market", "decision_interval_seconds"})
 CAPABILITY_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
 MEANING_STATUSES = ("SUPPORTED", "UNSUPPORTED")
+MAX_VALUE_DEPTH = 90  # a saved body may nest 100 levels; the response wraps each value in four more
 EVIDENCE_READINESS = ("READY", "UNRESOLVED")
 
 
@@ -149,7 +151,38 @@ def _decode_single_object(text: str) -> dict[str, Any] | Rejection:
         return Rejection("invalid_number", "", "The response uses a JSON number form that the contract forbids.")
     if not isinstance(value, dict):
         return Rejection("not_an_object", "", "The response is not one JSON object.")
-    return value
+    unstorable = _unstorable(value)
+    return unstorable if unstorable is not None else value
+
+
+def _unstorable(root: Any) -> Rejection | None:
+    """Reject any decoded value that a saved record cannot hold, before anything is accepted.
+
+    The check is iterative, so depth cannot exhaust the stack. It covers every key and every string, and it uses the
+    limits that stored records have: no NUL, no lone surrogate, Unicode NFC text (the P02 contract rule), and nesting
+    no deeper than a saved body may be.
+    """
+    stack: list[tuple[Any, int]] = [(root, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > MAX_VALUE_DEPTH:
+            return Rejection("value_too_deep", "", "The response nests values deeper than a saved record may.")
+        if isinstance(node, str):
+            if "\x00" in node:
+                return Rejection("unstorable_text", "", "The response holds a NUL character, which cannot be saved.")
+            try:
+                node.encode("utf-8")
+            except UnicodeEncodeError:
+                return Rejection("unstorable_text", "", "The response holds a character that cannot be saved.")
+            if not unicodedata.is_normalized("NFC", node):
+                return Rejection("unstorable_text", "", "The response holds text that is not in composed Unicode form (NFC).")
+        elif isinstance(node, dict):
+            for key, child in node.items():
+                stack.append((key, depth + 1))
+                stack.append((child, depth + 1))
+        elif isinstance(node, list):
+            stack.extend((child, depth + 1) for child in node)
+    return None
 
 
 def _check_top_level(response: Mapping[str, Any]) -> Rejection | None:

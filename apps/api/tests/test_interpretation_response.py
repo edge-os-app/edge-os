@@ -816,3 +816,117 @@ def test_no_json_value_makes_a_parser_raise() -> None:
             item[field] = copy.deepcopy(value)
             result = parse({**thesis_response(), "field_evidence": [item]})
             assert isinstance(result, (ParsedInterpretation, Rejection)), (field, value)
+
+
+# --- Decoded values that a saved record cannot hold -------------------------------------------------------------------------
+
+def with_sizing(value: Any) -> dict[str, Any]:
+    return {**thesis_response(), "field_evidence": thesis_response()["field_evidence"] + [
+        {"field_name": "sizing", "state": "KNOWN", "origin": "AGENT_PROPOSED", "adoption": "PENDING", "value": value}]}
+
+
+@pytest.mark.parametrize("value", [
+    {"note": "a\x00b"}, {"note": "a\ud800b"}, {"a\x00": 1}, {"nested": [{"deeper": "x\x00"}]},
+    {"note": "é"},  # a decomposed accent: not NFC
+])
+def test_rejects_a_decoded_value_that_a_saved_record_cannot_hold(value: Any) -> None:
+    # json.dumps writes the NUL and the surrogate as JSON escapes, so the raw text itself is plain ASCII.
+    assert_rejected(parse(with_sizing(value)), "unstorable_text")
+
+
+@pytest.mark.parametrize("levels", [91, 250, 300, 950])
+def test_rejects_a_value_nested_deeper_than_a_saved_record_may_be(levels: int) -> None:
+    deep: Any = "x"
+    for _ in range(levels):
+        deep = [deep]
+    assert_rejected(parse(with_sizing(deep)), "value_too_deep")
+
+
+@pytest.mark.parametrize("levels", [10, 40, 80])
+def test_accepts_a_value_nested_within_the_limit(levels: int) -> None:
+    deep: Any = "x"
+    for _ in range(levels):
+        deep = [deep]
+    assert isinstance(parse(with_sizing(deep)), ParsedInterpretation)
+
+
+def test_the_same_check_covers_questions_conflicts_and_replies() -> None:
+    bad_question = hunch_response()
+    bad_question["questions"][0]["text"] = "What counts as a rise\x00?"
+    assert_rejected(parse(bad_question, HUNCH_INTAKE), "unstorable_text")
+    reply_response = {**thesis_response(), "field_evidence": [{"field_name": "entry", "state": "KNOWN", "origin": "USER_STATED",
+        "source_passage": "price up more than 1%", "value": {**ENTRY_VALUE, "note": "a\x00b"}}]}
+    result = parse_follow_up_response(json.dumps(reply_response), THESIS_INTAKE, [],
+                                      ClarificationAnswer("reply:1", "price up more than 1%"))
+    assert_rejected(result, "unstorable_text")
+
+
+# --- Sweep: whatever the parser accepts must be publishable ------------------------------------------------------------------
+
+HOSTILE_VALUES: list[Any] = [
+    None, True, False, 0, -1, 2 ** 70, "", " ", "a\x00b", "a\ud800b", "é", "‮", "−", "9" * 400, "x" * 5000,
+    "sNaN", "NaN", "Infinity", "-0", "1e999", [], {}, [[]], [None], {"": None}, {"op": []}, {"op": {}}, {"args": 5},
+    ["x"] * 300,
+]
+
+
+def mutations(base: Any, path: tuple[Any, ...] = ()) -> list[tuple[tuple[Any, ...], Any]]:
+    """Every position of a JSON value, each paired with each hostile value."""
+    found: list[tuple[tuple[Any, ...], Any]] = [(path, hostile) for hostile in HOSTILE_VALUES]
+    if isinstance(base, dict):
+        for key, child in base.items():
+            found.extend(mutations(child, path + (key,)))
+    elif isinstance(base, list):
+        for index, child in enumerate(base):
+            found.extend(mutations(child, path + (index,)))
+    return found
+
+
+def plant(base: Any, path: tuple[Any, ...], value: Any) -> Any:
+    if not path:
+        return copy.deepcopy(value)
+    changed = copy.deepcopy(base)
+    node = changed
+    for step in path[:-1]:
+        node = node[step]
+    node[path[-1]] = copy.deepcopy(value)
+    return changed
+
+
+def assert_publishable(result: ParsedInterpretation, intake: dict[str, Any]) -> None:
+    """What the workflow stores for an accepted answer must pass the record contract and the storage rules."""
+    from edge_os_api.records import contract_adapter as record_contract
+    from edge_os_api.research.interpretation_response import _unstorable
+    content = {"intake_record_id": "22222222-2222-4222-8222-222222222222",
+               "interpretation_revision_id": "11111111-1111-4111-8111-111111111111",
+               "input_class": intake["input_class"], "requested_job": intake["requested_job"],
+               "field_evidence": [{**item, "interpretation_revision": "11111111-1111-4111-8111-111111111111"}
+                                  for item in result.field_evidence],
+               "clarification_history": [], "preserved_restrictions": list(intake["restrictions"]),
+               "meaning_status": result.meaning_status, "syntax_status": "VALID",
+               "evidence_readiness": result.evidence_readiness}
+    record_contract.validate_record("PromptInterpretation", content)
+    assert _unstorable(json.loads(json.dumps(content))) is None
+    assert _unstorable(json.loads(json.dumps([{"question_id": q.question_id, "field_name": q.field_name, "text": q.text,
+        "options": [{"id": o.id, "label": o.label, "value": o.value} for o in q.options]} for q in result.questions]))) is None
+
+
+@pytest.mark.parametrize("name, response, intake", [
+    ("thesis", thesis_response(), THESIS_INTAKE),
+    ("hunch", hunch_response(), HUNCH_INTAKE),
+    ("conflict", conflicting_response(), THESIS_INTAKE),
+])
+def test_no_hostile_value_at_any_position_makes_the_parser_raise_or_accept_something_unpublishable(
+        name: str, response: dict[str, Any], intake: dict[str, Any]) -> None:
+    checked = accepted = 0
+    for path, hostile in mutations(response):
+        result = parse(plant(response, path, hostile), intake)
+        assert isinstance(result, (ParsedInterpretation, Rejection)), (name, path, hostile)
+        checked += 1
+        if isinstance(result, ParsedInterpretation):
+            accepted += 1
+            try:
+                assert_publishable(result, intake)
+            except Exception as error:  # noqa: BLE001 - report the exact planting that slipped through
+                raise AssertionError(f"accepted but not publishable: {name} at {path} with {hostile!r}: {error!r}") from error
+    assert checked > 500 and accepted > 0, (name, checked, accepted)
