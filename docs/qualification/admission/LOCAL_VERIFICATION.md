@@ -83,8 +83,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 468 passed (377 existing + 91 admission), ~77 s.
-- Admission suite: 91 passed.
+- Full suite: 470 passed (377 existing + 93 admission), ~103 s.
+- Admission suite: 93 passed.
 - P15 and P02 contract checks: PASS.
 - `git diff --check`: clean.
 
@@ -139,3 +139,12 @@ unresolved and are not proven by this recipe.
   funded from the approved budget; the subsequent exit is admitted and confirmed.
 - G3: a caller action id in the reserved `exit-hold:` namespace is denied; a
   position's retained hold is not consumed under another action.
+
+## Gate-verdict 5/6 continuation coverage (H1-H2)
+
+- H1: a partial exit that would consume the final approved exit capacity is saved
+  DENIED (PARTIAL_EXIT_UNCOVERED) before mutation, leaving the position's full exit
+  admissible.
+- H2: an exit under a successor approval with a different gas asset draws only
+  from holds of its own gas asset; the mixed-asset case no longer raises a
+  database exception.

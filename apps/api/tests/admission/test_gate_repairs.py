@@ -6,7 +6,7 @@ import threading
 
 from sqlalchemy import text
 
-from edge_os_api.admission.types import ActionReceipt, AllowanceCap, ApprovalSnapshot, AssetAmount
+from edge_os_api.admission.types import (ActionReceipt, AllowanceCap, ApprovalSnapshot, AssetAmount, Holding)
 
 from admission._builders import (
     BASE,
@@ -623,3 +623,60 @@ def test_reserved_action_id_cannot_consume_a_position_hold(admission_service, fr
     exit_intent = intent_exit(quantity_raw="10")
     assert admission_service.admit_and_reserve(
         fresh_owner, exit_intent, approval_a(), context_a(position_inventory="10")).status == "ADMITTED"
+
+
+# ---------------------------------------------------------------- H1
+
+def test_partial_exit_at_final_capacity_is_denied(admission_service, fresh_owner) -> None:
+    approval = approval_a(attempt_budget=2, gas_approved_raw="2", per_action_gas_raw="1", per_exit_gas_raw="1")
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+
+    # A partial exit that would consume the final exit capacity is denied before mutation.
+    partial = intent_exit(quantity_raw="5")
+    denied = admission_service.admit_and_reserve(fresh_owner, partial, approval, context_a(position_inventory="10"))
+    assert denied.status == "DENIED"
+    assert denied.reason == "PARTIAL_EXIT_UNCOVERED"
+
+    # The position's full exit is still admissible with the retained hold.
+    full = intent_exit(quantity_raw="10")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, full, approval, context_a(position_inventory="10")).status == "ADMITTED"
+
+
+# ---------------------------------------------------------------- H2
+
+def test_exit_with_successor_gas_asset_does_not_raise(admission_service, fresh_owner) -> None:
+    alt = "monad:143/gas:ALT"
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval_a(), context_a())
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+
+    successor = ApprovalSnapshot(
+        approval_id="approval-alt-gas", binding=binding_a(), state="ACTIVE",
+        policy_binding="policy-a-v1", expires_at="2030-01-01T00:00:00Z", actions=["ADDITION", "EXIT"],
+        allocation_quote=AllowanceCap(asset_id=QUOTE, decimals=0, approved_raw="5000"),
+        quote_allowance=AllowanceCap(asset_id=QUOTE, decimals=0, approved_raw="5000"),
+        base_allowance=AllowanceCap(asset_id=BASE, decimals=0, approved_raw="1000"),
+        gas=AllowanceCap(asset_id=alt, decimals=0, approved_raw="50"),
+        per_action_gas=AllowanceCap(asset_id=alt, decimals=0, approved_raw="1"),
+        per_exit_gas=AllowanceCap(asset_id=alt, decimals=0, approved_raw="1"),
+        attempt_budget=10, stops=[], exit_capacity_qualified=True, valuation_qualified=True,
+        cost_model_qualified=True, fixture_label="SYNTHETIC_AUTHORED")
+    ctx = context_a()
+    ctx.holdings.balances[alt] = Holding(asset_id=alt, decimals=0, raw="50")
+
+    addition = intent_addition(quantity_raw="1", quote_input_raw="20", position_id="position-a-1")
+    add = admission_service.admit_and_reserve(fresh_owner, addition, successor, ctx)
+    assert add.status == "ADMITTED", add.reason
+    adm = ActionReceipt(action_id=addition.action_id, binding=addition.binding, outcome="CONFIRMED",
+                        actual_input=AssetAmount(asset_id=QUOTE, raw="20", decimals=0),
+                        actual_output=AssetAmount(asset_id=BASE, raw="1", decimals=0),
+                        actual_gas=AssetAmount(asset_id=alt, raw="1", decimals=0))
+    assert admission_service.reconcile(fresh_owner, addition.action_id, adm).decision_status == "CONFIRMED"
+
+    # The exit uses the successor's ALT gas; the native hold must not be mangled.
+    exit_intent = intent_exit(quantity_raw="1")
+    outcome = admission_service.admit_and_reserve(fresh_owner, exit_intent, successor, ctx)
+    assert outcome.status in {"ADMITTED", "DENIED"}

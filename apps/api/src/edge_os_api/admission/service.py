@@ -494,7 +494,12 @@ class AdmissionService:
                 ReservationRow.position_id == intent.position_id, ReservationRow.state == "RESERVED",
                 ReservationRow.scope.in_(("GAS", "ATTEMPT")),
             ).with_for_update().execution_options(populate_existing=True)).scalars().all()
-            hold_gas = sum(_int(r.raw) for r in holds if r.scope == "GAS")
+            gas_asset = approval.gas.asset_id
+            gas_decimals = approval.gas.decimals
+            # Draw gas only from holds of the exit's own gas asset/decimals; a hold from
+            # a different approval gas asset cannot fund this exit (H2).
+            hold_gas = sum(_int(r.raw) for r in holds
+                           if r.scope == "GAS" and r.asset_id == gas_asset and _int(r.decimals) == gas_decimals)
             hold_att = sum(_int(r.raw) for r in holds if r.scope == "ATTEMPT")
             need_gas = approval.per_exit_gas.as_int()
             take_gas = min(hold_gas, need_gas)
@@ -505,26 +510,34 @@ class AdmissionService:
                                         intent.position_id, base_asset)
             if _int(position.inventory) - other_reserved < quantity:
                 return "INVENTORY_SHORTFALL"
-            gas_asset = approval.gas.asset_id
-            gas_decimals = approval.gas.decimals
+            gas_cap = approval.gas.as_int()
+            reserved_gas = _capital_reserved(session, owner, b.agent_id, b.wallet_id, b.network_id, gas_asset)
+            gas_row, reason = _ensure_allowance(session, owner, b.agent_id, b.wallet_id, b.network_id,
+                                                gas_asset, gas_decimals, gas_cap, approval.approval_id,
+                                                approval.content_hash(), reserved_gas)
+            if reason is not None:
+                return reason
+            assert gas_row is not None
+            if not covered(_int(gas_row.approved), _int(gas_row.consumed), reserved_gas, deficit_gas):
+                return "CAPACITY_UNAVAILABLE"
             if deficit_gas > 0:
-                gas_cap = approval.gas.as_int()
-                reserved_gas = _capital_reserved(session, owner, b.agent_id, b.wallet_id, b.network_id, gas_asset)
-                gas_row, reason = _ensure_allowance(session, owner, b.agent_id, b.wallet_id, b.network_id,
-                                                    gas_asset, gas_decimals, gas_cap, approval.approval_id,
-                                                    approval.content_hash(), reserved_gas)
-                if reason is not None:
-                    return reason
-                assert gas_row is not None
-                if not covered(_int(gas_row.approved), _int(gas_row.consumed), reserved_gas, deficit_gas):
-                    return "CAPACITY_UNAVAILABLE"
                 gas_holdings = context.holdings.balances.get(gas_asset)
                 if gas_holdings is None or gas_holdings.as_int() < reserved_gas + deficit_gas:
                     return "HOLDINGS_SHORTFALL"
             if deficit_att > 0:
                 if _attempt_count(session, owner, b.agent_id, b.wallet_id, b.network_id) + deficit_att > approval.attempt_budget:
                     return "ATTEMPT_BUDGET_EXHAUSTED"
-            _take_from_holds(holds, take_gas, take_att)
+            # A partial exit must leave a usable exit path for the remaining inventory
+            # under the unchanged approval, else it is denied before mutating (H1).
+            remaining_inventory = _int(position.inventory) - other_reserved - quantity
+            if remaining_inventory > 0:
+                if approval.attempt_budget - (_attempt_count(session, owner, b.agent_id, b.wallet_id, b.network_id) + deficit_att) < 1:
+                    return "PARTIAL_EXIT_UNCOVERED"
+                gas_remaining_after = (_int(gas_row.approved) - _int(gas_row.consumed)
+                                       - (reserved_gas + deficit_gas))
+                if gas_remaining_after < need_gas:
+                    return "PARTIAL_EXIT_UNCOVERED"
+            _take_from_holds(holds, take_gas, take_att, gas_asset, gas_decimals)
             if need_gas > 0:
                 _add_exit_reservation(session, owner, intent, "GAS", gas_asset, gas_decimals, need_gas)
             _add_exit_reservation(session, owner, intent, "ATTEMPT", ATTEMPT_ASSET, 0, 1)
@@ -959,10 +972,25 @@ def _create_hold(session: Session, row: DecisionRow, scope: str, asset_id: str,
     ))
 
 
-def _take_from_holds(holds: list[ReservationRow], take_gas: int, take_att: int) -> None:
-    """Reduce the position hold by the exit coverage it contributes."""
+def _take_from_holds(holds: list[ReservationRow], take_gas: int, take_att: int,
+                     gas_asset: str, gas_decimals: int) -> None:
+    """Reduce the position hold by the exit coverage it contributes.
+
+    Gas is taken only from rows of the exit's own gas asset/decimals, and never
+    more than a row holds (H2).
+    """
+    remaining_gas, remaining_att = take_gas, take_att
     for hold in holds:
-        take = take_gas if hold.scope == "GAS" else take_att
+        if remaining_gas <= 0 and remaining_att <= 0:
+            break
+        take = 0
+        if (hold.scope == "GAS" and hold.asset_id == gas_asset
+                and _int(hold.decimals) == gas_decimals):
+            take = min(remaining_gas, _int(hold.raw))
+            remaining_gas -= take
+        elif hold.scope == "ATTEMPT":
+            take = min(remaining_att, _int(hold.raw))
+            remaining_att -= take
         if take > 0:
             hold.raw = Decimal(_int(hold.raw) - take)
 

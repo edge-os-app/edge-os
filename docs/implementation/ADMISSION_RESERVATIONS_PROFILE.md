@@ -79,10 +79,11 @@ settling.
   attempt. The retained exit gas is created as a durable per-position hold before
   the entry gas is charged, so the charge counts the retained coverage and an
   over-cap actual entry fails closed with a breach.
-- `EXIT`: draw the exit gas and one attempt from the position exit hold. Any
-  shortfall is funded from the wallet's approved gas and attempt budget, so a
-  partial exit never strands the remaining inventory. Reserve no new gas beyond
-  the exit's own need. Require a known exit valuation mark and the full durable
+- `EXIT`: draw the exit gas and one attempt from the position exit hold, using only
+  hold rows of the exit's own gas asset and decimals. Any shortfall is funded from
+  the wallet's approved gas and attempt budget. A partial exit is denied before
+  mutation when the remaining inventory would lose its exit path under the
+  unchanged approval. Require a known exit valuation mark and the full durable
   quote binding; a missing or mismatched control denies admission.
 - A competing acquisition cannot take gas or attempts promised to an existing
   position's exit.
