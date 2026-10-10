@@ -53,10 +53,54 @@ def binding_a() -> IdentityBinding:
     )
 
 
+STRATEGY_B = "strategy-b-v5"
+MANDATE_B = "mandate-b-v1"
+POLICY_B = "policy-b-v1"
+
+
+def binding_b() -> IdentityBinding:
+    return IdentityBinding(
+        agent_id=AGENT_B, wallet_id=WALLET_B, network_id=NETWORK,
+        strategy_revision=STRATEGY_B, mandate_id=MANDATE_B,
+    )
+
+
+def approval_b(*, quote_approved_raw: str = "500", base_approved_raw: str = "1000",
+               attempt_budget: int = 5) -> ApprovalSnapshot:
+    return ApprovalSnapshot(
+        approval_id="approval-b-v1", binding=binding_b(), state="ACTIVE",
+        policy_binding=POLICY_B, expires_at="2030-01-01T00:00:00Z", actions=["ENTRY", "ADDITION", "EXIT"],
+        quote_allowance=AllowanceCap(asset_id=QUOTE, decimals=0, approved_raw=quote_approved_raw),
+        base_allowance=AllowanceCap(asset_id=BASE, decimals=0, approved_raw=base_approved_raw),
+        gas=AllowanceCap(asset_id=NATIVE, decimals=0, approved_raw="50"),
+        per_action_gas=AllowanceCap(asset_id=NATIVE, decimals=0, approved_raw="2"),
+        attempt_budget=attempt_budget, fixture_label="SYNTHETIC_AUTHORED",
+    )
+
+
+def context_b(*, quote_raw: str = "5000") -> AdmissionContext:
+    return AdmissionContext(
+        checked_at="2026-10-10T00:00:00Z",
+        holdings=HoldingsSnapshot(
+            agent_id=AGENT_B, wallet_id=WALLET_B, network_id=NETWORK,
+            balances={QUOTE: Holding(asset_id=QUOTE, decimals=0, raw=quote_raw),
+                      BASE: Holding(asset_id=BASE, decimals=0, raw="0"),
+                      NATIVE: Holding(asset_id=NATIVE, decimals=0, raw="20")},
+            positions={}, unexplained_external=False,
+        ),
+    )
+
+
+def intent_entry_b(quantity_raw: str = "10", quote_input_raw: str = "110", **kwargs) -> ActionIntent:
+    return intent_a("ENTRY", quantity_raw, quote_input_raw=quote_input_raw,
+                    binding=binding_b(), policy_binding=POLICY_B, position_id=POSITION_B, **kwargs)
+
+
 def approval_a(*, state: str = "ACTIVE", expires_at: str = "2030-01-01T00:00:00Z",
                actions: tuple[str, ...] = ("ENTRY", "ADDITION", "EXIT"),
                quote_approved_raw: str = "500", base_approved_raw: str = "1000",
-               gas_approved_raw: str = "50", per_action_gas_raw: str = "2") -> ApprovalSnapshot:
+               gas_approved_raw: str = "50", per_action_gas_raw: str = "2",
+               attempt_budget: int = 5) -> ApprovalSnapshot:
     return ApprovalSnapshot(
         approval_id=APPROVAL_A,
         binding=binding_a(),
@@ -68,6 +112,7 @@ def approval_a(*, state: str = "ACTIVE", expires_at: str = "2030-01-01T00:00:00Z
         base_allowance=AllowanceCap(asset_id=BASE, decimals=0, approved_raw=base_approved_raw),
         gas=AllowanceCap(asset_id=NATIVE, decimals=0, approved_raw=gas_approved_raw),
         per_action_gas=AllowanceCap(asset_id=NATIVE, decimals=0, approved_raw=per_action_gas_raw),
+        attempt_budget=attempt_budget,
         fixture_label="SYNTHETIC_AUTHORED",
     )
 

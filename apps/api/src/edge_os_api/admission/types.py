@@ -16,14 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 OPERATIONS = ("ENTRY", "ADDITION", "EXIT")
 NETWORKS = ("monad:143", "monad-testnet:10143")
-SCOPES = ("CAPITAL", "INVENTORY", "GAS", "ATTEMPT")
-ALLOWANCE_STATES = ("ACTIVE", "REVOKED", "EXPIRED", "DENIED")
-_DECISION_STATUSES = ("PROPOSED", "ADMITTED", "DENIED", "CANCELLED", "CONFIRMED", "REVERTED", "SUBMISSION_UNKNOWN")
 
 _ASSET_ID = Field(min_length=1, max_length=200)
 _ID = Field(min_length=1, max_length=200)
-RAW_AMOUNT = re.compile(r"(?:0|[1-9][0-9]*)\Z")
-REVIEW_HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 LABEL = re.compile(r"SYNTHETIC_[A-Z0-9_]+")
 
 
@@ -39,10 +34,6 @@ def parse_utc(value: str) -> dt.datetime:
     if moment.tzinfo is None or moment.utcoffset() != dt.timedelta(0):
         raise ValueError("timestamps must carry an explicit UTC offset")
     return moment.astimezone(dt.timezone.utc)
-
-
-def utc_string(moment: dt.datetime) -> str:
-    return moment.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 class AssetAmount(StrictModel):
@@ -105,7 +96,7 @@ class ActionIntent(StrictModel):
     action_id: str = Field(min_length=1, max_length=200)
     binding: IdentityBinding
     policy_binding: str = Field(min_length=1, max_length=200)
-    position_id: str | None = Field(default=None, min_length=1, max_length=200)
+    position_id: str = Field(min_length=1, max_length=200)
     operation: Literal["ENTRY", "ADDITION", "EXIT"]
     review_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     quantity: AssetAmount
@@ -113,8 +104,6 @@ class ActionIntent(StrictModel):
 
     @model_validator(mode="after")
     def scope_requires(self) -> "ActionIntent":
-        if self.operation in {"ADDITION", "EXIT"} and not self.position_id:
-            raise ValueError("addition and exit require an exact position_id")
         if self.operation in {"ENTRY", "ADDITION"} and self.input.quote_input is None:
             raise ValueError("entry and addition require a reviewed quote buy input")
         if self.operation == "EXIT" and self.input.quote_input is not None:
@@ -142,6 +131,7 @@ class ApprovalSnapshot(StrictModel):
     base_allowance: AllowanceCap
     gas: AllowanceCap
     per_action_gas: AllowanceCap
+    attempt_budget: int = Field(ge=0, le=1_000_000)
     fixture_label: str = Field(min_length=1, max_length=80)
 
     @field_validator("actions")

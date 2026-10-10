@@ -73,6 +73,13 @@ def test_intent_requires_quote_input_for_entry() -> None:
         intent_entry(quote_input_raw=None)
 
 
+def test_intent_requires_position_id() -> None:
+    data = intent_entry().model_dump()
+    del data["position_id"]
+    with pytest.raises(ValidationError):
+        ActionIntent.model_validate(data)
+
+
 def test_intent_quote_must_use_declared_quote_asset() -> None:
     data = intent_entry().model_dump()
     data["input"]["quote_input"] = {"asset_id": "monad:143/asset:OTHER", "raw": "110", "decimals": 0}

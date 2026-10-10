@@ -42,22 +42,31 @@ leading-zero raw values are rejected.
 
 ## Accounting rules
 
-- For each `(owner, agent, wallet, network, asset)` the ledger keeps `approved`
-  (from the caller-supplied approval snapshot) and `consumed`.
+- The ledger key is `(owner, agent, wallet, network, asset)`. Different wallets
+  of one owner keep separate allowances and reservations.
+- For each key the ledger keeps `approved` (from the caller-supplied approval
+  snapshot) and `consumed`.
 - `remaining = approved - consumed - reserved`. `reserved` is the sum of live
   `RESERVED` reservation rows. `consumed + reserved <= approved` is enforced.
 - A position holds attributed inventory. An action binds to one position.
+- Attempts are separate. Every action reserves one attempt atom against a
+  per-wallet attempt budget. Confirmed and reverted actions consume it; a proved
+  pre-broadcast denial releases it; an unknown outcome retains it.
 - Approved amounts always come from the authored approval snapshot. The service
   invents no threshold. A large wallet balance never enlarges authority.
+- Reconciled holdings must cover the asset the action actually spends (buy input
+  or sell input) and gas. A base sell-capacity reservation is a permission
+  against the allowance, not a spend of held base.
 
 ## Reservation plan by operation
 
 - `ENTRY`: reserve quote buy input, base sell capacity for the resulting
-  inventory, base inventory attribution, and one per-action gas amount. Create
-  the position at inventory zero.
+  inventory, base inventory attribution, one per-action gas amount, and one
+  attempt. Create the position at inventory zero.
 - `ADDITION`: same, for an existing position.
-- `EXIT`: reserve base sell input, base inventory attribution and gas. Require a
-  known exit valuation mark; a missing or unknown mark denies admission.
+- `EXIT`: reserve base sell input, base inventory attribution, gas and one
+  attempt. Require a known exit valuation mark; a missing or unknown mark denies
+  admission.
 
 ## Atomicity
 
@@ -84,17 +93,26 @@ unresolved prior action in the same wallet and network.
 
 ## Reconciliation
 
-- `CONFIRMED`: consumes the reconciled input. An entry or addition consumes the
-  quote input and attributes inventory; the sell-capacity reservation is
-  released because attributed inventory now backs it. An exit consumes base
-  input and reduces position inventory.
-- `REVERTED`: releases trading input and consumes actual gas.
+- `CONFIRMED`: consumes the reconciled input and one attempt. An entry or
+  addition consumes the quote input and attributes inventory; the sell-capacity
+  reservation is released because attributed inventory now backs it. An exit
+  consumes base input and reduces position inventory.
+- `REVERTED`: releases trading input, consumes actual gas and one attempt.
 - `SUBMISSION_UNKNOWN`: keeps every reservation and blocks a second economic
   action for the same wallet and network until reconciled.
 - `PREBROADCAST_DENIED`: consumes neither an attempt nor trading input; releases
   reservations.
 - `CANCELLED`: allowed only before submission. Releases reservations. Cannot
   undo a broadcast transaction.
+
+A terminal outcome cannot be replaced. A later receipt for a confirmed,
+reverted, denied or cancelled action returns `RECONCILIATION_TERMINAL_STATE` and
+changes nothing.
+
+Consumption is capped. A reconciled actual that would push `consumed` past
+`approved` fails closed with `CONSUMED_EXCEEDS_APPROVED`; the transaction rolls
+back and the decision keeps its prior state. A supplied reconciled actual
+quantity must match the reserved input; a mismatch fails closed.
 
 Only demonstrated unused reservations are released. Consumed allowance stays
 consumed.

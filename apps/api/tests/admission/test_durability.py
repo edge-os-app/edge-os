@@ -45,7 +45,7 @@ def test_committed_records_survive_fresh_engine(pg, admission_service, fresh_own
         summaries = {s.asset_id: s for s in
                      restarted.balances(fresh_owner, agent_id="agent-a", wallet_id="wallet-a", network_id="monad:143")}
         assert len(decisions) == 1 and decisions[0].status == "ADMITTED"
-        assert len(reservations) == 4
+        assert len(reservations) == 5
         assert summaries[QUOTE].remaining_raw == "390"
         assert summaries[BASE].remaining_raw == "990"
         assert summaries[NATIVE].remaining_raw == "48"

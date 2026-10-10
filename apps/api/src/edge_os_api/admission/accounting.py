@@ -21,6 +21,9 @@ def allowance_remaining(approved: int, consumed: int, reserved: int) -> int:
     return approved - consumed - reserved
 
 
+ATTEMPT_ASSET = "attempt"
+
+
 def covered(approved: int, consumed: int, reserved: int, sought: int) -> bool:
     return consumed + reserved + sought <= approved
 
@@ -96,7 +99,12 @@ def plan_reservations(
     approval: ApprovalSnapshot,
     current_inventory: int | None,
 ) -> ReservationPlan:
-    """Required reservations for an admissible action, in deterministic order."""
+    """Required reservations for an admissible action, in deterministic order.
+
+    Attempts, trading input and gas stay separate. Every action reserves one
+    attempt atom; a confirmed or reverted action consumes it, a proved
+    pre-broadcast denial releases it, and an unknown outcome retains it.
+    """
     quantity = intent.quantity.as_int()
     gas = approval.per_action_gas.as_int()
     plan: list[ReservationNeed] = []
@@ -108,20 +116,16 @@ def plan_reservations(
             return ReservationPlan(ok=False, reason="MISSING_QUOTE_INPUT")
         plan.append(ReservationNeed("CAPITAL", quote.asset_id, quote.decimals, quote.as_int()))
         plan.append(ReservationNeed("CAPITAL", intent.quantity.asset_id, intent.quantity.decimals, quantity))
-        if intent.position_id:
-            plan.append(ReservationNeed("INVENTORY", intent.quantity.asset_id, intent.quantity.decimals,
-                                        quantity, intent.position_id))
+        plan.append(ReservationNeed("INVENTORY", intent.quantity.asset_id, intent.quantity.decimals,
+                                    quantity, intent.position_id))
         plan.append(ReservationNeed("GAS", approval.gas.asset_id, approval.gas.decimals, gas))
-        # Inventory that results after the addition must be sellable: an addition
-        # may not create inventory beyond the sell coverage already reserved for the
-        # acquired quantity. The plan is per-action, so nothing more is derived here.
     else:  # EXIT
         if current_inventory is None or current_inventory < quantity:
             return ReservationPlan(ok=False, reason="INVENTORY_SHORTFALL")
         plan.append(ReservationNeed("CAPITAL", intent.quantity.asset_id, intent.quantity.decimals, quantity))
-        if intent.position_id:
-            plan.append(ReservationNeed("INVENTORY", intent.quantity.asset_id, intent.quantity.decimals,
-                                        quantity, intent.position_id))
+        plan.append(ReservationNeed("INVENTORY", intent.quantity.asset_id, intent.quantity.decimals,
+                                    quantity, intent.position_id))
         plan.append(ReservationNeed("GAS", approval.gas.asset_id, approval.gas.decimals, gas))
 
+    plan.append(ReservationNeed("ATTEMPT", ATTEMPT_ASSET, 0, 1))
     return ReservationPlan(ok=True, needs=plan, requires_new_position=requires_new_position)

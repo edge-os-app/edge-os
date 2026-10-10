@@ -78,4 +78,4 @@ def test_contender_denial_is_persisted(admission_service, admission_engine, fres
             "SELECT count(*) FROM admission_reservations WHERE owner_id = :owner AND state = 'RESERVED'"
         ), {"owner": str(fresh_owner)}).scalar_one()
     assert sorted(rows) == ["ADMITTED", "DENIED"]
-    assert reservations == 4  # only one winner reserved its four atoms
+    assert reservations == 5  # only one winner reserved its five atoms

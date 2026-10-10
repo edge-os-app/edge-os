@@ -34,8 +34,6 @@ NAMING_CONVENTION = {
 }
 
 NOW = text("now()")
-ADMISSION_SCOPES = ("CAPITAL", "INVENTORY", "GAS", "ATTEMPT")
-RESERVATION_STATES = ("RESERVED", "CONSUMED", "RELEASED")
 
 
 class AdmissionBase(DeclarativeBase):

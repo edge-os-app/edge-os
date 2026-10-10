@@ -54,6 +54,14 @@ git diff --check
   submission-unknown retains reservations and blocks a second economic action.
 - Contention: two separate sessions cannot double-reserve the same capital or
   inventory.
+- Attempt budget and effects: one attempt per action; confirmed and reverted
+  consume it, a proved pre-broadcast denial releases it.
+- Capacity isolation: reservations and balances are scoped to the owner's exact
+  wallet; another wallet of the same owner is unaffected.
+- Terminal reconcile guard: a late receipt cannot replace a confirmed, reverted,
+  denied or cancelled outcome.
+- Consumption caps: a reconciled actual that would exceed the approved cap fails
+  closed with no mutation; a mismatched reconciled quantity fails closed.
 - Durability: committed records survive a fresh engine (process restart); a
   rolled-back transaction leaves no partial rows; owned tables never touch the
   migrated `public` schema.
@@ -75,8 +83,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 422 passed (377 existing + 45 admission), ~84 s.
-- Admission suite: 45 passed.
+- Full suite: 430 passed (377 existing + 53 admission), ~87 s.
+- Admission suite: 53 passed.
 - P15 and P02 contract checks: PASS.
 - `git diff --check`: clean.
 

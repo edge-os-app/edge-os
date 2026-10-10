@@ -15,6 +15,7 @@ route, provider response or production limit.
 | base allowance (MOE, 0 decimals) | 1000 |
 | gas allowance (native, 0 decimals) | 50 |
 | per-action gas | 2 |
+| attempt budget | 5 |
 | fixture label | `SYNTHETIC_AUTHORED` |
 
 ## Holdout holdings snapshot (authored)
@@ -25,9 +26,9 @@ raise authority; the approval governs.
 ## Worked examples
 
 Entry: quantity 10 base, quote input 110. Reservations are quote capital 110,
-base sell capacity 10, base inventory 10, gas 2. After admission the remaining
-allowances are quote 390, base 990, gas 48. This matches `remaining = approved -
-consumed - reserved`.
+base sell capacity 10, base inventory 10, gas 2 and one attempt. After admission
+the remaining allowances are quote 390, base 990, gas 48. This matches
+`remaining = approved - consumed - reserved`.
 
 Confirmed entry: quote consumed becomes 110; base sell capacity and inventory
 reservation settle; the position holds inventory 10; gas consumed is the
@@ -40,6 +41,14 @@ leaves position inventory 5. An exit without a known mark is denied.
 Overdraw: with approved quote 500, two entries of quote input 300 each admit
 one and deny the second. A second entry at quote input 300 has remaining 200
 available, so it fails closed with `CAPACITY_UNAVAILABLE`.
+
+Attempts: with an attempt budget of 1, a second action in the same wallet and
+network fails closed with `ATTEMPT_BUDGET_EXHAUSTED`. A confirmed or reverted
+action consumes its attempt; a proved pre-broadcast denial releases it.
+
+Holdings: reconciled holdings must cover the asset the action spends and gas.
+For an entry the spend asset is the quote; the base sell-capacity reservation is
+a permission, not a spend of held base, so it needs no base holdings.
 
 ## Cross-check
 

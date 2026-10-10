@@ -82,7 +82,7 @@ def test_entry_is_admitted_and_persisted(admission_service, admission_engine, fr
     decision = admission_service.admit_and_reserve(fresh_owner, intent, approval_a(), context_a())
     assert decision.status == "ADMITTED"
     assert decision.reason is None
-    assert len(decision.reservations) == 4  # capital quote, capital base, inventory, gas
+    assert len(decision.reservations) == 5  # capital quote, capital base, inventory, gas, attempt
 
     with admission_engine.connect() as connection:
         decisions = connection.execute(text(
@@ -97,7 +97,8 @@ def test_entry_is_admitted_and_persisted(admission_service, admission_engine, fr
 
     assert (intent.action_id, "ADMITTED") in decisions
     assert {("CAPITAL", QUOTE, 110, "RESERVED"), ("CAPITAL", BASE, 10, "RESERVED"),
-            ("INVENTORY", BASE, 10, "RESERVED"), ("GAS", NATIVE, 2, "RESERVED")} == {
+            ("INVENTORY", BASE, 10, "RESERVED"), ("GAS", NATIVE, 2, "RESERVED"),
+            ("ATTEMPT", "attempt", 1, "RESERVED")} == {
         (r.scope, r.asset_id, int(r.raw), r.state) for r in reservations
     }
     assert int(allowance_quote.approved) == 500
@@ -190,7 +191,7 @@ def test_same_action_id_preserves_idempotent_identity(admission_service, fresh_o
     second = admission_service.admit_and_reserve(fresh_owner, intent, approval_a(), context_a())
     assert first.decision_id == second.decision_id
     assert second.status == "ADMITTED"
-    assert len(second.reservations) == 4
+    assert len(second.reservations) == 5
 
 
 def test_changed_review_hash_for_same_action_is_stale(admission_service, fresh_owner) -> None:
@@ -236,7 +237,7 @@ def test_cancel_releases_reservations(admission_service, fresh_owner) -> None:
     assert admitted.status == "ADMITTED"
     outcome = admission_service.cancel(fresh_owner, intent.action_id)
     assert outcome.decision_status == "CANCELLED"
-    assert len(outcome.released) == 4
+    assert len(outcome.released) == 5
     remaining = [s for s in admission_service.balances(fresh_owner, wallet_id=WALLET_A, network_id=NETWORK)
                  if s.asset_id in (QUOTE, BASE, NATIVE)]
     assert all(s.reserved_raw == "0" for s in remaining)
@@ -296,7 +297,7 @@ def test_submission_unknown_retains_reservations(admission_service, fresh_owner)
         action_id=intent.action_id, binding=intent.binding, outcome="SUBMISSION_UNKNOWN"))
     assert outcome.decision_status == "SUBMISSION_UNKNOWN"
     retained = [amount.raw for amount in outcome.retained]
-    assert sorted(retained) == ["10", "10", "110", "2"]
+    assert sorted(retained) == ["1", "10", "10", "110", "2"]
     quote = _one(admission_service.balances(fresh_owner), QUOTE)
     assert quote.reserved_raw == "110"
 
