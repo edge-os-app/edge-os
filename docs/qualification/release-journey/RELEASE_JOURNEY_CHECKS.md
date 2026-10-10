@@ -174,7 +174,7 @@ Existing green checks:
 Record identity: `apps/api/src/edge_os_api/` compiles and stores the exact rule with content and manifest SHA-256. `docs/implementation/P06_COMPILER_PROFILE.md` and `docs/contracts/p06/` define the versioned deterministic compiler. `apps/api/tests/test_strategy_compiler.py` and `test_strategy_compilation_api.py` cover the machine form.
 
 Exact steps: the fixture interpreter matches normalized request text, requested job and input class exactly. Use the existing accepted constants from the tests, not arbitrary prose:
-- tiny negative threshold: `TINY_RULE` and `TINY_THRESHOLD` in `tests/p03/e2e.spec.mjs` (`-0.` followed by 399 zeros and `1`); `Group specific rule or thesis` as input class; fixture scenario `tiny-threshold` in `apps/api/src/edge_os_api/research/fixture_interpreter.py`.
+- tiny negative threshold: `TINY_RULE` and `TINY_THRESHOLD` in `tests/p03/e2e.spec.mjs` (`-0.` followed by 399 zeros and `1`); `Specific rule or thesis` (CONCRETE_THESIS) as input class; fixture scenario `tiny-threshold` in `apps/api/src/edge_os_api/research/fixture_interpreter.py`.
 - nested left group: `GROUPED_RULE`; right group: `GROUPED_RIGHT_RULE` (same file). Provenance for both signs reuses the negative `TINY_RULE` record and the positive `TINY_POSITIVE_RULE` with `TINY_POSITIVE_THRESHOLD` from `tests/p03/provenance.spec.mjs`.
 Type the exact text, select the `Specific rule or thesis` input class (CONCRETE_THESIS), add the accepted `no leverage` restriction, prepare, adopt the suggested settings, save, close, reopen in a fresh context and after an API restart; read the provenance rows for positive and negative signs.
 
