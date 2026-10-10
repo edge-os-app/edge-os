@@ -48,14 +48,17 @@ Use this sentence as the fixed claim: "Edge OS gives onchain traders a structure
 
 ### Script
 
+Beats sum to 120 seconds: 10 + 20 + 22 + 22 + 20 + 18 + 8.
+
 | Time | Beat | Content |
 |---|---|---|
-| 0:00 to 0:20 | The job and the cost | An onchain trader has an idea about a market. To act on it, the trader assembles a data pipeline, a research notebook, a simulator and a trading runtime, then writes permissions by hand. That assembly is slow and easy to get wrong. |
-| 0:20 to 0:45 | What Edge OS does | Edge OS takes the idea. It asks for the missing meaning, compiles exact rules, keeps the evidence and its contradictions, and separates a finding from permission to trade. |
-| 0:45 to 1:10 | Evidence lineage | Every step keeps its record. The saved result, the exact strategy revision and the decision history stay inspectable. A favourable study still does not grant permission. |
-| 1:10 to 1:30 | Exact permission and recovery | The user approves a bounded mandate for one wallet and one revision. The worker reconciles an interrupted action instead of repeating it. The owner can revoke the agent, and revocation keeps owner access. |
-| 1:30 to 1:50 | What is proved, what is not | Say plainly: the research-to-replay path works on labelled fixtures. The live path is the intended demonstration and is not yet proved. |
-| 1:50 to 2:00 | Close | The next step is the qualified live path and the first trader sessions. |
+| 0:00 to 0:10 | Team introduction | Introduce the team. Use the builder-supplied name and role placeholder until the builder verifies the identities. State the reason to build in one sentence. |
+| 0:10 to 0:30 | The job and the cost | An onchain trader has an idea about a market. To act on it, the trader assembles a data pipeline, a research notebook, a simulator and a trading runtime, then writes permissions by hand. That assembly is slow and easy to get wrong. |
+| 0:30 to 0:52 | What Edge OS does | Edge OS takes the idea. It asks for the missing meaning, compiles exact rules, keeps the evidence and its contradictions, and separates a finding from permission to trade. |
+| 0:52 to 1:14 | Evidence lineage | Every step keeps its record. The saved result, the exact strategy revision and the decision history stay inspectable. A favourable study still does not grant permission. |
+| 1:14 to 1:34 | Exact permission and recovery | The user approves a bounded mandate for one wallet and one revision. The worker reconciles an interrupted action instead of repeating it. The owner can revoke the agent, and revocation keeps owner access. The mandate, recovery and revocation stay intended until the live path proves them. |
+| 1:34 to 1:52 | What is proved, what is not | Say plainly: the research-to-replay path works on labelled fixtures. The live path is the intended demonstration and is not yet proved. |
+| 1:52 to 2:00 | Close | The next step is the qualified live path and the first trader sessions. |
 
 ### Claims to keep conditional
 
@@ -69,7 +72,7 @@ Do not claim profitable strategies, comparative safety, validated demand, exactl
 
 ### Retained pitch-video requirements
 
-The pitch video is at most 2 minutes. It introduces the team, the problem and the reason to build. It is separate from the 3-minute technical demo.
+The pitch video is at most 2 minutes. It introduces the team, the problem and the reason to build. The script above opens with the team-introduction beat (0:00 to 0:10). It is separate from the 3-minute technical demo.
 
 ## 3. Recording prerequisites
 
