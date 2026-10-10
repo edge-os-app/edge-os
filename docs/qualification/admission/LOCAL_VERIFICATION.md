@@ -102,7 +102,7 @@ unqualified required controls fail closed; reconcile and admission serialize on
 the wallet lock; and confirmed acquisitions/exits require reconciled actuals and
 update weighted cost basis and realized result.
 
-## Gate-repair coverage (verdict 2/3, candidate 8f07e22 and 6f1...)
+## Gate-repair coverage (verdict 2/3, candidate 8f07e22 -> d671884)
 
 Additional regressions for the second gate review: an addition cannot target
 another wallet's position; an exit output with the wrong quote asset or decimals
