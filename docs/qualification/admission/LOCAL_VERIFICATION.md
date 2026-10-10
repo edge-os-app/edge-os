@@ -83,8 +83,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 470 passed (377 existing + 93 admission), ~103 s.
-- Admission suite: 93 passed.
+- Full suite: 472 passed (377 existing + 95 admission), ~74 s.
+- Admission suite: 95 passed.
 - P15 and P02 contract checks: PASS.
 - `git diff --check`: clean.
 
@@ -148,3 +148,12 @@ unresolved and are not proven by this recipe.
 - H2: an exit under a successor approval with a different gas asset draws only
   from holds of its own gas asset; the mixed-asset case no longer raises a
   database exception.
+
+## Gate-verdict 6/6 continuation coverage (J1-J2)
+
+- J1: an already-funded partial exit is admitted; the hold unit that remains after
+  it consumes its own counts as coverage for the leftover inventory even with zero
+  free gas, and the final exit still admits.
+- J2: after a verified full close, this position's unused exit holds are released,
+  so an unrelated acquisition fits the freed attempt/gas capacity; other
+  positions' holds and every receipt/action record are preserved.

@@ -680,3 +680,60 @@ def test_exit_with_successor_gas_asset_does_not_raise(admission_service, fresh_o
     exit_intent = intent_exit(quantity_raw="1")
     outcome = admission_service.admit_and_reserve(fresh_owner, exit_intent, successor, ctx)
     assert outcome.status in {"ADMITTED", "DENIED"}
+
+
+# ---------------------------------------------------------------- J1
+
+def test_funded_partial_exit_with_remaining_hold_is_admitted(admission_service, fresh_owner) -> None:
+    approval = approval_a(attempt_budget=4, gas_approved_raw="4", per_action_gas_raw="1",
+                          per_exit_gas_raw="1", base_approved_raw="1000")
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+
+    addition = intent_addition(quantity_raw="1", quote_input_raw="50", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, addition, approval, context_a(position_inventory="10")).status == "ADMITTED"
+    admission_service.reconcile(fresh_owner, addition.action_id, confirm_entry(addition, "50", "1", "1"))
+
+    # Two hold units exist; the first partial exit consumes one and the remaining
+    # unit still covers the leftover inventory even with zero free gas.
+    partial = intent_exit(quantity_raw="5")
+    admitted = admission_service.admit_and_reserve(
+        fresh_owner, partial, approval, context_a(position_inventory="11"))
+    assert admitted.status == "ADMITTED", admitted.reason
+    assert admission_service.reconcile(
+        fresh_owner, partial.action_id, confirm_exit(partial, "5", "250", "1")).decision_status == "CONFIRMED"
+
+    final = intent_exit(quantity_raw="6")
+    final_admitted = admission_service.admit_and_reserve(
+        fresh_owner, final, approval, context_a(position_inventory="6"))
+    assert final_admitted.status == "ADMITTED", final_admitted.reason
+
+
+# ---------------------------------------------------------------- J2
+
+def test_full_close_releases_unused_holds(admission_service, fresh_owner) -> None:
+    approval = approval_a(attempt_budget=5, gas_approved_raw="5", per_action_gas_raw="1",
+                          per_exit_gas_raw="1", base_approved_raw="1000")
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+    addition = intent_addition(quantity_raw="1", quote_input_raw="50", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, addition, approval, context_a(position_inventory="10")).status == "ADMITTED"
+    admission_service.reconcile(fresh_owner, addition.action_id, confirm_entry(addition, "50", "1", "1"))
+
+    full = intent_exit(quantity_raw="11")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, full, approval, context_a(position_inventory="11")).status == "ADMITTED"
+    assert admission_service.reconcile(
+        fresh_owner, full.action_id, confirm_exit(full, "11", "280", "1")).decision_status == "CONFIRMED"
+
+    gas = _one(admission_service.balances(fresh_owner), NATIVE)
+    assert gas.reserved_raw == "0"  # the closed position's unused hold was released
+
+    # An unrelated acquisition now fits the freed capacity.
+    unrelated = intent_entry(quantity_raw="1", quote_input_raw="20", position_id="position-b-1")
+    declared = admission_service.admit_and_reserve(fresh_owner, unrelated, approval, context_a())
+    assert declared.status == "ADMITTED", declared.reason

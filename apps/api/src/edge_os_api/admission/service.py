@@ -528,14 +528,17 @@ class AdmissionService:
                 if _attempt_count(session, owner, b.agent_id, b.wallet_id, b.network_id) + deficit_att > approval.attempt_budget:
                     return "ATTEMPT_BUDGET_EXHAUSTED"
             # A partial exit must leave a usable exit path for the remaining inventory
-            # under the unchanged approval, else it is denied before mutating (H1).
+            # under the unchanged approval. Already-reserved hold units count as future
+            # coverage; only a true deficit is denied before mutating (J1).
             remaining_inventory = _int(position.inventory) - other_reserved - quantity
             if remaining_inventory > 0:
-                if approval.attempt_budget - (_attempt_count(session, owner, b.agent_id, b.wallet_id, b.network_id) + deficit_att) < 1:
+                remaining_hold_att = hold_att - take_att
+                attempt_free_after = approval.attempt_budget - (_attempt_count(session, owner, b.agent_id, b.wallet_id, b.network_id) + deficit_att)
+                if remaining_hold_att + attempt_free_after < 1:
                     return "PARTIAL_EXIT_UNCOVERED"
-                gas_remaining_after = (_int(gas_row.approved) - _int(gas_row.consumed)
-                                       - (reserved_gas + deficit_gas))
-                if gas_remaining_after < need_gas:
+                remaining_hold_gas = hold_gas - take_gas
+                gas_free_after = (_int(gas_row.approved) - _int(gas_row.consumed) - (reserved_gas + deficit_gas))
+                if remaining_hold_gas + gas_free_after < need_gas:
                     return "PARTIAL_EXIT_UNCOVERED"
             _take_from_holds(holds, take_gas, take_att, gas_asset, gas_decimals)
             if need_gas > 0:
@@ -912,6 +915,17 @@ def _release_all(session: Session, row: DecisionRow, status: str, reason: str | 
     return ids
 
 
+def _release_position_holds(session: Session, row: DecisionRow, position_id: str) -> None:
+    hold_id = _hold_action_id(position_id)
+    hold_rows = session.execute(select(ReservationRow).where(
+        ReservationRow.owner_id == row.owner_id, ReservationRow.action_id == hold_id,
+        ReservationRow.position_id == position_id, ReservationRow.state == "RESERVED",
+    ).with_for_update().execution_options(populate_existing=True)).scalars().all()
+    for hold in hold_rows:
+        hold.state = "RELEASED"
+        hold.reconciled_at = func.now()
+
+
 def _charge(session: Session, row: DecisionRow, reservation: ReservationRow, amount: int) -> None:
     """Add a reconciled actual to the wallet allowance, counting other live reservations.
 
@@ -1138,6 +1152,12 @@ def _settle(
                 position.realized_quote = Decimal(_int(position.realized_quote) + (proceeds - removed))
             reservation.state = "CONSUMED"
             reservation.reconciled_at = func.now()
+
+    # A verified full close proves this position needs no further exit. Release only
+    # this position's demonstrably unused exit holds, preserving other positions'
+    # holds and every receipt/action record (J2).
+    if operation == "EXIT" and committed and position is not None and _int(position.inventory) == 0:
+        _release_position_holds(session, row, position.position_id)
 
     # An exit with no reserved GAS row (zero planned exit gas) still spends actual
     # gas; account it and fail closed on an over-cap effect (G1).

@@ -82,9 +82,12 @@ settling.
 - `EXIT`: draw the exit gas and one attempt from the position exit hold, using only
   hold rows of the exit's own gas asset and decimals. Any shortfall is funded from
   the wallet's approved gas and attempt budget. A partial exit is denied before
-  mutation when the remaining inventory would lose its exit path under the
-  unchanged approval. Require a known exit valuation mark and the full durable
-  quote binding; a missing or mismatched control denies admission.
+  mutation only when the remaining inventory would truly lose its exit path: the
+  hold units that remain after this exit count as future coverage, and new free
+  capacity is required only for a real deficit. A verified full close releases
+  this position's demonstrably unused holds, preserving other positions' holds and
+  every receipt/action record. Require a known exit valuation mark and the full
+  durable quote binding; a missing or mismatched control denies admission.
 - A competing acquisition cannot take gas or attempts promised to an existing
   position's exit.
 - Every verified actual gas effect is accounted, including an exit with zero
