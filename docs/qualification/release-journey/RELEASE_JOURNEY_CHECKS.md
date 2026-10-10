@@ -41,11 +41,13 @@ Each case is a table row with the same fields:
 | J03 narrow layout | Story 79 | 390px layout without losing the primary action | Shell compact nav, AccountViews, Conversation sheet | all | none dedicated | Playwright mobile-390 project; quality no-horizontal-scroll; reopen mobile |
 | J04 pending, empty, failure | Issue acceptance check 1 | Loading, empty, failed and pending states explain themselves and keep focus | ResearchHome, RequestPage, AccountViews, Conversation | authenticated GET/POST behind them | unaffected | quality pending/failed/stale/lost-reply; e2e empty and error states |
 | J05 saved, reopened, restarted | Issue acceptance check 2 | Saved records survive reopen and an API restart read-only | RequestPage, SpotReplayPanel, AccountViews, AgentContext | GET-only reopen routes | all listed records | reopen.spec.mjs full path; e2e reopen |
-| J06 owner denial | Issue acceptance check 2 | Another owner cannot read, answer or publish | all surfaces | owner-scoped GET/POST routes | no row changes | e2e another-owner test; ownership-drive.json; test_live, test_ownership |
+| J06 owner denial | Release-cut retention of cross-owner denial and wallet-isolation checks | Another owner cannot read, answer or publish | all surfaces | owner-scoped GET/POST routes | no row changes | e2e another-owner test; ownership-drive.json; test_live, test_ownership |
 | J07 exact rule meaning | Story 79/80, P06 profile | Exact thresholds, boundaries and groupings survive save and reopen | RulesReview | `GET /v1/strategies/{id}/revisions/{revision_id}` | `strategy_revisions` with canonical hashes | e2e exact negative/right-nested; provenance both signs; reopen |
 | J08 evidence vs confidence | Issue acceptance check 5 | Unresolved outcomes and synthetic fixtures stay distinct from supported claims | InvestigationReview, EffectComparisonPanel, SpotReplayPanel, AccountViews notices | investigation/effect/replay/account-view routes | P08/09/replay/account records | e2e no-thesis and declaration; reopen report without rerun; README status |
 | J09 permission meaning | Issue acceptance check 5 | Owners can tell evidence, permission, local stop, signer removal and residual exposure apart | AccountViews permission snapshots, Shell build-scope notice | `/v1/account-views` | `PERMISSION_SNAPSHOT` records | quality P19 permission histories; e2e P19 account views; docs/contracts/account-views |
-| J10 future qualification | Release cut P40 row | Unimplemented journey segments show explicit blocked prerequisites | none (not built) | none | none | release-cut and knowledge docs only; no green check |
+| J10 future qualification | Release cut P40 row | Unimplemented journey segments show explicit blocked prerequisites (story 86 and 87 mapping below) | none (not built) | none | none | release-cut and knowledge docs only; no green check |
+
+Story to case mapping: stories 79 and 80 apply to the implemented surfaces in J01 to J03. Story 86 (qualified deployment and recorded operation) applies to the future qualification in J10 and section 13; the current repository has no deployment or recorded-operation evidence. Story 87 (a fresh agent runs the accepted path and inspects saved records from portable fixtures) applies to the fresh-operator steps in sections 5, 7 and 12; the portable fixture inputs exist (`tests/p03/fixture-auth.mjs` and the account-view fixtures, [feature map](../../../.agents/skills/verify-edge-os/feature-map.md)), but a fresh-agent run on another machine is UNRUN for this package.
 
 ## 4. Result-first and current primary action
 
@@ -139,7 +141,7 @@ Missing proof: a restart run is a browser plus database operation. This package 
 
 ## 8. Owner denial and permission meaning
 
-Requirement: issue acceptance check 2 and 5. Another owner must not read, answer or publish another owner's records. Owners must distinguish permission from evidence.
+Requirement: release-cut retention of cross-owner denial and wallet-isolation checks (see the release-cut scope precedence); issue acceptance check 5 for the permission-meaning part. Another owner must not read, answer or publish another owner's records.
 
 Existing green checks (mapped once):
 
