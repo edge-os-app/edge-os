@@ -45,7 +45,13 @@ def test_two_sessions_cannot_double_reserve_capital(admission_service, fresh_own
 
 
 def test_two_sessions_cannot_double_reserve_inventory(admission_service, fresh_owner) -> None:
+    from admission._builders import confirm_entry, intent_entry
+
     approval = approval_a()
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a())
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+
     context = context_a(position_inventory="10")
 
     def admit_exit(index: int):
@@ -78,4 +84,4 @@ def test_contender_denial_is_persisted(admission_service, admission_engine, fres
             "SELECT count(*) FROM admission_reservations WHERE owner_id = :owner AND state = 'RESERVED'"
         ), {"owner": str(fresh_owner)}).scalar_one()
     assert sorted(rows) == ["ADMITTED", "DENIED"]
-    assert reservations == 5  # only one winner reserved its five atoms
+    assert reservations == 4  # only one winner reserved its four atoms

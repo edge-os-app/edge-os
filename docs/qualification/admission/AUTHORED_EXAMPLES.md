@@ -50,6 +50,14 @@ Holdings: reconciled holdings must cover the asset the action spends and gas.
 For an entry the spend asset is the quote; the base sell-capacity reservation is
 a permission, not a spend of held base, so it needs no base holdings.
 
+Coverage: with a finite sell ceiling of 10 and an attributed inventory of 10,
+the next acquisition of 1 cannot fit the remaining ceiling and is denied
+(`SELL_CAPACITY_UNAVAILABLE`).
+
+Cost basis: acquire 10 at quote 1000, add 10 at quote 1200 (basis 2200, average
+110), then exit 5 for proceeds 650. The removed basis is 550 and realized result
+is 100. Fixed, authored numbers.
+
 ## Cross-check
 
 The admission tests compute these expected values as literals, not by calling

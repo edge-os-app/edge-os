@@ -84,6 +84,7 @@ class AllowanceRow(AdmissionBase):
     network_id: Mapped[str] = mapped_column(Text, nullable=False)
     asset_id: Mapped[str] = mapped_column(Text, nullable=False)
     decimals: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    approval_id: Mapped[str] = mapped_column(Text, nullable=False)
     approved: Mapped[Decimal] = _raw_column()
     consumed: Mapped[Decimal] = _raw_column()
 
@@ -105,6 +106,7 @@ class ReservationRow(AdmissionBase):
     wallet_id: Mapped[str] = mapped_column(Text, nullable=False)
     network_id: Mapped[str] = mapped_column(Text, nullable=False)
     action_id: Mapped[str] = mapped_column(Text, nullable=False)
+    operation: Mapped[str] = mapped_column(Text, nullable=False)
     review_hash: Mapped[str] = mapped_column(Text, nullable=False)
     scope: Mapped[str] = mapped_column(Text, nullable=False)
     position_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -126,7 +128,7 @@ class ReservationRow(AdmissionBase):
 
 
 class PositionRow(AdmissionBase):
-    """Reconciled attributed inventory per position."""
+    """Reconciled attributed inventory and cost basis per position."""
 
     __tablename__ = "admission_positions"
     owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -134,11 +136,15 @@ class PositionRow(AdmissionBase):
     agent_id: Mapped[str] = mapped_column(Text, nullable=False)
     wallet_id: Mapped[str] = mapped_column(Text, nullable=False)
     network_id: Mapped[str] = mapped_column(Text, nullable=False)
+    strategy_revision: Mapped[str] = mapped_column(Text, nullable=False)
+    mandate_id: Mapped[str] = mapped_column(Text, nullable=False)
     asset_id: Mapped[str] = mapped_column(Text, nullable=False)
     decimals: Mapped[int] = mapped_column(BigInteger, nullable=False)
     inventory: Mapped[Decimal] = _raw_column()
+    cost_basis: Mapped[Decimal] = _raw_column()
+    realized_quote: Mapped[Decimal] = _raw_column()
 
     __table_args__ = (
         PrimaryKeyConstraint("owner_id", "position_id", name="pk_admission_positions"),
-        CheckConstraint("inventory >= 0", name="ck_admission_positions_non_negative"),
+        CheckConstraint("inventory >= 0 AND cost_basis >= 0", name="ck_admission_positions_non_negative"),
     )

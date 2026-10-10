@@ -16,6 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 OPERATIONS = ("ENTRY", "ADDITION", "EXIT")
 NETWORKS = ("monad:143", "monad-testnet:10143")
+# Storage bound: the owned ledgers use NUMERIC(78, 0). A raw integer longer than
+# this cannot be stored exactly, so it is rejected at validation.
+MAX_RAW_DIGITS = 78
 
 _ASSET_ID = Field(min_length=1, max_length=200)
 _ID = Field(min_length=1, max_length=200)
@@ -40,6 +43,13 @@ class AssetAmount(StrictModel):
     asset_id: str = _ASSET_ID
     raw: str = Field(pattern=r"^(?:0|[1-9][0-9]*)$")
     decimals: int = Field(ge=0, le=255)
+
+    @field_validator("raw")
+    @classmethod
+    def raw_within_storage_bound(cls, value: str) -> str:
+        if len(value) > MAX_RAW_DIGITS:
+            raise ValueError(f"raw amount exceeds the {MAX_RAW_DIGITS}-digit storage bound")
+        return value
 
     def as_int(self) -> int:
         return int(self.raw)
@@ -120,6 +130,22 @@ class AllowanceCap(StrictModel):
         return int(self.approved_raw)
 
 
+class StopSpec(StrictModel):
+    """A scoped, local stop on the authored approval. A local stop is not signer removal."""
+
+    scope: Literal["POSITION", "AGENT_WALLET_NETWORK"]
+    mode: Literal["STOP_NEW_ENTRIES", "HALT_ALL_SWAPS"]
+    position_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def target_matches_scope(self) -> "StopSpec":
+        if self.scope == "POSITION" and self.position_id is None:
+            raise ValueError("a POSITION stop requires its exact position_id")
+        if self.scope == "AGENT_WALLET_NETWORK" and self.position_id is not None:
+            raise ValueError("an AGENT_WALLET_NETWORK stop must not name a position")
+        return self
+
+
 class ApprovalSnapshot(StrictModel):
     approval_id: str = _ID
     binding: IdentityBinding
@@ -127,11 +153,16 @@ class ApprovalSnapshot(StrictModel):
     policy_binding: str = Field(min_length=1, max_length=200)
     expires_at: str = Field(min_length=1, max_length=40)
     actions: list[str] = Field(min_length=1, max_length=20)
+    allocation_quote: AllowanceCap
     quote_allowance: AllowanceCap
     base_allowance: AllowanceCap
     gas: AllowanceCap
     per_action_gas: AllowanceCap
     attempt_budget: int = Field(ge=0, le=1_000_000)
+    stops: list[StopSpec] = Field(default_factory=list, max_length=20)
+    exit_capacity_qualified: bool
+    valuation_qualified: bool
+    cost_model_qualified: bool
     fixture_label: str = Field(min_length=1, max_length=80)
 
     @field_validator("actions")
@@ -288,7 +319,8 @@ class ActionReceipt(StrictModel):
     action_id: str = _ID
     binding: IdentityBinding
     outcome: Literal["CONFIRMED", "REVERTED", "SUBMISSION_UNKNOWN", "PREBROADCAST_DENIED", "CANCELLED"]
-    actual_quantity: AssetAmount | None = None
+    actual_input: AssetAmount | None = None
+    actual_output: AssetAmount | None = None
     actual_gas: AssetAmount | None = None
 
 

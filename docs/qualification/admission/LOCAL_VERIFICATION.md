@@ -83,10 +83,22 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 430 passed (377 existing + 53 admission), ~87 s.
-- Admission suite: 53 passed.
+- Full suite: 447 passed (377 existing + 70 admission), ~148 s.
+- Admission suite: 70 passed.
 - P15 and P02 contract checks: PASS.
 - `git diff --check`: clean.
+
+## Gate-repair coverage (verdict 1/3)
+
+Additional focused regressions for the first gate review: concurrent
+reconciliation settles once under two sessions; a receipt with a mismatched
+action identity is denied without mutation; a cross-wallet or stale position
+snapshot is denied; changed-approval-content reuse is denied while an adopted
+successor cap applies; reconciled actual gas respects other outstanding
+reservations; large-integer accounting stays exact and decimal drift is denied;
+an acquisition cannot exceed the remaining sell ceiling; scoped stops and
+unqualified required controls fail closed; and confirmed acquisitions/exits
+require reconciled actuals and update weighted cost basis and realized result.
 
 ## Not covered
 
