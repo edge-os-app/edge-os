@@ -616,7 +616,7 @@ def sql_inspection(pg: harness.Postgres, results: dict, p19_owner_id: str, p19_a
         if not key.startswith("spot-replay-") or not identity:
             continue
         owner_rows = rows(
-            "select owner_id::text, run_configuration_id from spot_replay_runs "
+            "select owner_id::text, content->>'run_configuration_id' run_configuration_id from spot_replay_runs "
             f"where replay_id='{saved['replayId']}'")
         owner_id = owner_rows[0]["owner_id"] if owner_rows else ""
         identity_rows = rows(
