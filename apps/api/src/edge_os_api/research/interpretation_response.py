@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from . import p02
+from edge_os_api.records import contract_adapter as record_contract
 
 __all__ = ["ADOPT_QUESTION_ID", "ClarificationAnswer", "OfferedOption", "OfferedQuestion", "ParsedInterpretation", "Rejection",
            "parse_follow_up_response", "parse_interpretation_response"]
@@ -131,14 +131,14 @@ def _ungrounded(value: Any, words: str) -> bool:
 def _decode_single_object(text: str) -> dict[str, Any] | Rejection:
     """Decode exactly one JSON object with the P02 strict rules (no duplicate keys, no floats, no NaN)."""
     try:
-        value = p02.strict_loads(text)
+        value = record_contract.strict_loads(text)
     except json.JSONDecodeError as error:
         if error.msg == "Extra data":
             if text[error.pos:].lstrip().startswith("{"):
                 return Rejection("multiple_objects", "", "The response holds more than one JSON object.")
             return Rejection("trailing_content", "", "The response has text after the JSON object.")
         return Rejection("invalid_json", "", "The response is not valid JSON. It may be cut off.")
-    except p02.Invalid as error:
+    except record_contract.Invalid as error:
         if "duplicate object key" in str(error):
             return Rejection("duplicate_key", "", "A JSON object repeats a key.")
         return Rejection("invalid_number", "", "The response uses a JSON number form that the contract forbids.")
@@ -193,7 +193,7 @@ def _reject(code: str, path: str, detail: str) -> Rejection:
 def _model_owned_fields(job: str) -> frozenset[str]:
     """Fields the model may report. The application owns the restrictions, the market and the decision interval."""
     if job == "CREATE_STRATEGY":
-        return frozenset(name for name in p02.CREATE_STRATEGY_FIELDS if name not in APPLICATION_OWNED_FIELDS)
+        return frozenset(name for name in record_contract.CREATE_STRATEGY_FIELDS if name not in APPLICATION_OWNED_FIELDS)
     return frozenset()
 
 
@@ -375,7 +375,7 @@ def _model_items(items: list[Any], intake: Mapping[str, Any], sources: Sequence[
             return _reject("duplicate_field", f"{at}/field_name", "The response reports this field twice.")
         seen.add(name)
         state = item.get("state")
-        if state not in p02.CONTRACT["field_states"]:
+        if state not in record_contract.CONTRACT["field_states"]:
             return _reject("invalid_value", f"{at}/state", "The state is not one the contract defines.")
         if state == "MISSING":
             built = _missing_item(item, at)
@@ -399,7 +399,7 @@ def _application_items(intake: Mapping[str, Any], meaning_status: str) -> list[d
         items.append({"field_name": "market", "state": "KNOWN", "origin": "APPLICATION_CONFIGURED",
                       "source_ref": SYNTHETIC_MARKET_SOURCE, "interpretation_revision": "",
                       "evidence_status": "HYPOTHESIS", "adoption": "PENDING",
-                      "value": copy.deepcopy(p02.FIXTURE_STRATEGY["market"])})
+                      "value": copy.deepcopy(record_contract.FIXTURE_STRATEGY["market"])})
         items.append({"field_name": "decision_interval_seconds", "state": "KNOWN", "origin": "APPLICATION_CONFIGURED",
                       "source_ref": INTERVAL_SOURCE, "interpretation_revision": "", "evidence_status": "HYPOTHESIS",
                       "adoption": "PENDING", "value": 300})

@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from . import p02
+from edge_os_api.records import contract_adapter as record_contract
 from .interpretation_attempts import (
     AttemptIdentity, AttemptInFlight, AttemptLedger, AttemptSettlement, AttemptView, RetryTargetInvalid, Usage,
 )
@@ -180,7 +180,7 @@ def _error_class(name: str | None) -> str | None:
 def _model_fields(intake: Mapping[str, Any]) -> list[str]:
     if intake["requested_job"] != "CREATE_STRATEGY":
         return []
-    return [name for name in p02.CREATE_STRATEGY_FIELDS if name not in APPLICATION_OWNED_FIELDS]
+    return [name for name in record_contract.CREATE_STRATEGY_FIELDS if name not in APPLICATION_OWNED_FIELDS]
 
 
 def _task_base(kind: str, intake: Mapping[str, Any]) -> dict[str, Any]:
@@ -188,8 +188,8 @@ def _task_base(kind: str, intake: Mapping[str, Any]) -> dict[str, Any]:
     task: dict[str, Any] = {
         "task": kind, "original_request": intake["original_request"], "restrictions": list(intake["restrictions"]),
         "requested_job": intake["requested_job"], "input_class": intake["input_class"], "model_fields": names,
-        "field_shapes": {name: copy.deepcopy(p02.FIXTURE_STRATEGY[name]) for name in names},
-        "operators": list(p02.CONTRACT["operators"]), "supported_restrictions": sorted(p02.SUPPORTED_RESTRICTIONS)}
+        "field_shapes": {name: copy.deepcopy(record_contract.FIXTURE_STRATEGY[name]) for name in names},
+        "operators": list(record_contract.CONTRACT["operators"]), "supported_restrictions": sorted(record_contract.SUPPORTED_RESTRICTIONS)}
     if intake.get("declared_market") is not None:
         task["declared_market"] = copy.deepcopy(intake["declared_market"])
     return task
@@ -213,7 +213,7 @@ def _model_view(evidence: Sequence[Mapping[str, Any]], names: Sequence[str]) -> 
 
 
 def _task_json(task: Mapping[str, Any]) -> str:
-    return p02.canonical_bytes(task).decode("utf-8")
+    return record_contract.canonical_bytes(task).decode("utf-8")
 
 
 class HermesInterpreter:
@@ -260,7 +260,7 @@ class HermesInterpreter:
         identity = AttemptIdentity(
             purpose=purpose, prompt_version=PROMPT_VERSION, system_prompt_sha256=_sha256(SYSTEM_PROMPT),
             task_sha256=_sha256(task), task_text=task, response_shape_sha256=_sha256(RESPONSE_SHAPE),
-            manifest_sha256=p02.manifest_sha256(), config=self._config.identity(),
+            manifest_sha256=record_contract.manifest_sha256(), config=self._config.identity(),
             runtime_label=self._config.runtime_label, answer_ref=answer_ref)
         try:
             start = self._ledger.begin(owner_id, intake_record_id, identity, retry_of)
@@ -372,7 +372,7 @@ def open_questions(offered: Sequence[OfferedQuestion], evidence: Sequence[Mappin
         if item is not None and item.get("adoption") == "PENDING":
             label = name.replace("_", " ").capitalize()
             items.append({"field_name": name, "label": label, "origin": item["origin"], "value": copy.deepcopy(item["value"]),
-                          "summary": p02.canonical_bytes(item["value"]).decode("utf-8"),
+                          "summary": record_contract.canonical_bytes(item["value"]).decode("utf-8"),
                           "question": f"Adopt the suggested {label.lower()}?"})
     if items:
         questions.append({"question_id": ADOPT_QUESTION_ID, "kind": "ADOPT",

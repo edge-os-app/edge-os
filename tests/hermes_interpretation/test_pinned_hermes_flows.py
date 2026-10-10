@@ -11,9 +11,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from edge_os_api.hermes_interpreter import Interpreted, OutputRejected, Unavailable, apply_choice_answer
-from edge_os_api.interpretation_attempts import AttemptLedger
-from edge_os_api.interpretation_response import ClarificationAnswer
+from edge_os_api.research.hermes_interpreter import Interpreted, OutputRejected, Unavailable, apply_choice_answer
+from edge_os_api.research.interpretation_attempts import AttemptLedger
+from edge_os_api.research.interpretation_response import ClarificationAnswer
 from test_pinned_hermes import (
     CASES, INTAKE, OWNER, Session, adopt_all, provider_script, routed,
 )
@@ -186,8 +186,8 @@ def test_a_timed_out_attempt_stays_uncertain_and_a_retry_does_not_erase_it(
 
 def test_a_restart_closes_the_unsettled_attempt_and_never_replays_it(
         pinned_hermes_image: str, run_id: str, evidence_root: Path) -> None:
-    from edge_os_api.hermes_interpreter import PROMPT_VERSION
-    from edge_os_api.interpretation_attempts import AttemptIdentity
+    from edge_os_api.research.hermes_interpreter import PROMPT_VERSION
+    from edge_os_api.research.interpretation_attempts import AttemptIdentity
     session = Session(pinned_hermes_image, run_id, evidence_root, "flow-restart", [])
     task = "restart-task"
     session.ledger.begin(OWNER, INTAKE, AttemptIdentity(

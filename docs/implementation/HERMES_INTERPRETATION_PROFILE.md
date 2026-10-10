@@ -8,9 +8,9 @@ Every result below comes from a **local fake provider**. The fake returns author
 
 | Part | Path | Job |
 |---|---|---|
-| Adapter | `apps/api/src/edge_os_api/hermes_interpreter.py` | Builds one request, records the attempt, calls an injected runner, parses the answer whole |
-| Strict parser | `apps/api/src/edge_os_api/interpretation_response.py` | Accepts one generated answer whole or rejects it whole |
-| Attempt ledger | `apps/api/src/edge_os_api/interpretation_attempts.py` | Append-only attempt history and its rules |
+| Adapter | `apps/api/src/edge_os_api/research/hermes_interpreter.py` | Builds one request, records the attempt, calls an injected runner, parses the answer whole |
+| Strict parser | `apps/api/src/edge_os_api/research/interpretation_response.py` | Accepts one generated answer whole or rejects it whole |
+| Attempt ledger | `apps/api/src/edge_os_api/research/interpretation_attempts.py` | Append-only attempt history and its rules |
 | Container job and runner | `scripts/hermes_interpretation/` | Runs one actual Hermes turn in a no-network container against the fake provider |
 | Tests | `apps/api/tests/test_hermes_interpreter.py`, `test_interpretation_response.py`, `test_interpretation_attempts.py`, `tests/hermes_interpretation/` | Unit and real-Hermes tests |
 | Authored cases | `apps/api/tests/fixtures/hermes_interpretation/cases/` | 15 cases with literal expectations |

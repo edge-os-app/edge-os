@@ -16,12 +16,12 @@ from typing import Any
 import pytest
 
 from docker_turn_runner import DockerHermesTurnRunner
-from edge_os_api import p02
-from edge_os_api.hermes_interpreter import (
+from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.research.hermes_interpreter import (
     HermesInterpreter, HermesInterpreterConfig, Interpreted, OutputRejected, apply_choice_answer,
 )
-from edge_os_api.interpretation_attempts import AttemptLedger
-from edge_os_api.interpretation_response import ParsedInterpretation
+from edge_os_api.research.interpretation_attempts import AttemptLedger
+from edge_os_api.research.interpretation_response import ParsedInterpretation
 from edge_os_api.interpreter import FixtureInterpreter
 from edge_os_api.router import route
 
@@ -68,7 +68,7 @@ def routed(intake: dict[str, Any], parsed: ParsedInterpretation, evidence: list[
               "clarification_history": [], "preserved_restrictions": list(intake["restrictions"]),
               "meaning_status": parsed.meaning_status, "syntax_status": "VALID",
               "evidence_readiness": parsed.evidence_readiness}
-    p02.validate_record("PromptInterpretation", interp)
+    record_contract.validate_record("PromptInterpretation", interp)
     return route(intake, interp, FixtureInterpreter(), None, "strategy-test")
 
 

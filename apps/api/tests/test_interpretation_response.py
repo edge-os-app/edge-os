@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from edge_os_api.interpretation_response import ParsedInterpretation, Rejection, parse_interpretation_response
+from edge_os_api.research.interpretation_response import ParsedInterpretation, Rejection, parse_interpretation_response
 
 THESIS = "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only."
 THESIS_INTAKE = {"original_request": THESIS, "restrictions": ["no leverage"], "requested_job": "CREATE_STRATEGY",
@@ -131,7 +131,7 @@ def with_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_accepted_output_is_a_valid_p02_interpretation_record() -> None:
-    from edge_os_api import p02
+    from edge_os_api.records import contract_adapter as record_contract
 
     result = parse(thesis_response())
     assert isinstance(result, ParsedInterpretation)
@@ -142,7 +142,7 @@ def test_accepted_output_is_a_valid_p02_interpretation_record() -> None:
                "clarification_history": [], "preserved_restrictions": ["no leverage"],
                "meaning_status": result.meaning_status, "syntax_status": "VALID",
                "evidence_readiness": result.evidence_readiness}
-    p02.validate_record("PromptInterpretation", content)  # raises p02.Invalid when the record is not valid
+    record_contract.validate_record("PromptInterpretation", content)  # raises Invalid when the record is not valid
 
 
 def test_keeps_an_agent_proposal_pending_and_labels_it_as_the_agent_s() -> None:
@@ -482,7 +482,7 @@ def test_checks_each_conflicting_alternative_against_its_own_quoted_words() -> N
 
 # --- Follow-up reply: the model lists only what changes; stated meaning is never silently overwritten ---
 
-from edge_os_api.interpretation_response import ClarificationAnswer, parse_follow_up_response  # noqa: E402
+from edge_os_api.research.interpretation_response import ClarificationAnswer, parse_follow_up_response  # noqa: E402
 
 ANSWER_REF = "answer:choose-entry"
 

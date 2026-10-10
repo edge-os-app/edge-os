@@ -15,12 +15,12 @@ from typing import Any
 
 import pytest
 
-from edge_os_api.hermes_interpreter import (
+from edge_os_api.research.hermes_interpreter import (
     PROMPT_VERSION, HermesInterpreter, HermesInterpreterConfig, HermesTurn, HermesTurnResult, Interpreted, LiveRelease,
     LiveReleaseRequired, OutputRejected, Unavailable, apply_choice_answer, open_questions,
 )
-from edge_os_api.interpretation_attempts import AttemptLedger, Usage
-from edge_os_api.interpretation_response import ClarificationAnswer, ParsedInterpretation
+from edge_os_api.research.interpretation_attempts import AttemptLedger, Usage
+from edge_os_api.research.interpretation_response import ClarificationAnswer, ParsedInterpretation
 from test_interpretation_attempts import MemoryAttemptStore
 from test_interpretation_response import (
     HUNCH, HUNCH_INTAKE, RESTRICTIONS_ITEM, STATED_ENTRY, THESIS, THESIS_INTAKE, TWO_PERCENT,
@@ -276,7 +276,7 @@ def test_a_second_request_while_one_is_in_flight_is_refused_before_any_provider_
 
 
 def interpreter_identity(interpreter: HermesInterpreter) -> Any:
-    from edge_os_api.interpretation_attempts import AttemptIdentity
+    from edge_os_api.research.interpretation_attempts import AttemptIdentity
     return AttemptIdentity("INTERPRET", PROMPT_VERSION, "a" * 64, hashlib.sha256(b"task").hexdigest(), "task", "c" * 64,
                            "d" * 64, {"model": "x"}, "LOCAL_FAKE_PROVIDER")
 

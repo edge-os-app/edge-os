@@ -17,8 +17,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from edge_os_api.hermes_interpreter import HermesTurn, HermesTurnResult
-from edge_os_api.interpretation_attempts import Usage
+from edge_os_api.research.hermes_interpreter import HermesTurn, HermesTurnResult
+from edge_os_api.research.interpretation_attempts import Usage
 
 PINNED_HERMES = "54bc5e509c985f37265c3d416bd2c64b10fc77ba"
 HERMES_SOURCE = Path("/Users/degencodebeast/Projects/personal/monad-hack/.tools/hermes-agent")

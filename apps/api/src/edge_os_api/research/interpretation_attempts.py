@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from . import p02
+from edge_os_api.records import contract_adapter as record_contract
 
 __all__ = ["AlreadyLinked", "AlreadySettled", "AttemptError", "AttemptIdentity", "AttemptInFlight", "AttemptLedger",
            "AttemptSettlement", "AttemptStart", "AttemptStore", "AttemptView", "InvalidIdentity", "InvalidSettlement", "NotPublishable",
@@ -188,7 +188,7 @@ class AttemptLedger:
             raise RetryTargetInvalid("A retry must name an earlier attempt of this request.")
         start = AttemptStart(attempt_id=self._new_id(), owner_id=owner_id, intake_record_id=intake_record_id,
                              sequence=len(starts) + 1, retry_of=retry_of, identity=identity,
-                             config_sha256=p02.sha256_hex(dict(identity.config)), started_at=self._now())
+                             config_sha256=record_contract.sha256_hex(dict(identity.config)), started_at=self._now())
         self._store.add_start(start)
         return start
 

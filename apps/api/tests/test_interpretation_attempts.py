@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 
 import pytest
 
-from edge_os_api.interpretation_attempts import (
+from edge_os_api.research.interpretation_attempts import (
     AlreadyLinked, AlreadySettled, AttemptIdentity, AttemptInFlight, AttemptLedger, AttemptSettlement, AttemptStart,
     InvalidIdentity, InvalidSettlement, NotPublishable, RetryTargetInvalid, UnknownAttempt, Usage,
 )
