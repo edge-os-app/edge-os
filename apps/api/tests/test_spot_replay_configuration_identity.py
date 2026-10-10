@@ -570,3 +570,236 @@ def test_migration_preserves_api_authored_uppercase_strategy_revision_uuid(clien
         assert registry_rows[0]["configuration_sha256"] == expected_hash
     finally:
         pg.psql(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+
+
+def _assert_legacy_revision_boundary_refused(client, owner_a, pg, malformation: str) -> None:
+    strategy, revision = _saved_revision(client, owner_a)
+    body = _body(strategy, revision, key=f"legacy-r9-{malformation}-{uuid.uuid4()}")
+    saved_response = client.post("/v1/spot-replays", headers=owner_a, json=body)
+    assert saved_response.status_code == 201, saved_response.text
+    saved = saved_response.json()
+    database_name, environment = _migration_target(pg, f"r9_{malformation.replace('-', '_')}")
+    engine = None
+    try:
+        assert _upgrade_to(environment, "0004").returncode == 0
+        _copy_legacy_replay_rows(pg.url, environment["EDGE_OS_DATABASE_URL"],
+                                 saved["content"]["owner_id"], revision["revision_id"],
+                                 [saved["replay_id"]])
+        engine = create_engine(environment["EDGE_OS_DATABASE_URL"])
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE spot_replay_runs DISABLE TRIGGER spot_replay_runs_immutable"))
+            replay = dict(connection.execute(text(
+                "SELECT * FROM spot_replay_runs WHERE replay_id = :replay_id"),
+                {"replay_id": uuid.UUID(saved["replay_id"])}).mappings().one())
+            content = copy.deepcopy(replay["content"])
+            if malformation == "unsupported-profile":
+                content["inputs"]["profile_version"] = "p12.spot-replay/999"
+            elif malformation == "revision-strategy-mismatch":
+                content["inputs"]["strategy"]["cost_assumptions"]["fee_rate"] = "0"
+                content["inputs"]["strategy_sha256"] = p02.sha256_hex(content["inputs"]["strategy"])
+            elif malformation not in {
+                    "revision-content-hash", "revision-manifest-hash", "revision-duplicate-key"}:
+                raise AssertionError(f"unknown R9 migration fixture: {malformation}")
+            if malformation in {"unsupported-profile", "revision-strategy-mismatch"}:
+                connection.execute(text(
+                    "UPDATE spot_replay_runs SET content = CAST(:content AS jsonb), content_sha256 = :hash "
+                    "WHERE replay_id = :replay_id"), {
+                        "content": json.dumps(content),
+                        "hash": p02.sha256_hex(content),
+                        "replay_id": uuid.UUID(saved["replay_id"]),
+                    })
+            connection.execute(text("ALTER TABLE spot_replay_runs ENABLE TRIGGER spot_replay_runs_immutable"))
+            if malformation in {"revision-content-hash", "revision-manifest-hash", "revision-duplicate-key"}:
+                column = "content_sha256" if malformation == "revision-content-hash" else "manifest_sha256"
+                connection.execute(text("ALTER TABLE strategy_revisions DISABLE TRIGGER strategy_revisions_immutable"))
+                if malformation == "revision-duplicate-key":
+                    strategy_canonical = connection.execute(text(
+                        "SELECT strategy_canonical FROM strategy_revisions WHERE revision_id = :revision_id"), {
+                            "revision_id": uuid.UUID(revision["revision_id"]),
+                        }).scalar_one()
+                    duplicate_key = strategy_canonical[:-1] + ",\"strategy_id\":" + json.dumps(strategy["strategy_id"]) + "}"
+                    connection.execute(text(
+                        "UPDATE strategy_revisions SET strategy_canonical = :strategy "
+                        "WHERE revision_id = :revision_id"), {
+                            "strategy": duplicate_key,
+                            "revision_id": uuid.UUID(revision["revision_id"]),
+                        })
+                else:
+                    column = "content_sha256" if malformation == "revision-content-hash" else "manifest_sha256"
+                    connection.execute(text(
+                        f"UPDATE strategy_revisions SET {column} = :hash WHERE revision_id = :revision_id"), {
+                            "hash": "0" * 64,
+                            "revision_id": uuid.UUID(revision["revision_id"]),
+                        })
+                connection.execute(text("ALTER TABLE strategy_revisions ENABLE TRIGGER strategy_revisions_immutable"))
+
+        def capture() -> dict[str, Any]:
+            with engine.connect() as connection:
+                replay_rows = [row[0] for row in connection.execute(text(
+                    "SELECT to_jsonb(r) FROM spot_replay_runs AS r ORDER BY created_at, replay_id"))]
+                revision_rows = [row[0] for row in connection.execute(text(
+                    "SELECT to_jsonb(r) FROM strategy_revisions AS r ORDER BY revision_id"))]
+                version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                registry_exists = connection.execute(text(
+                    "SELECT to_regclass('public.spot_replay_configurations') IS NOT NULL")).scalar_one()
+                registry_rows = []
+                if registry_exists:
+                    registry_rows = [row[0] for row in connection.execute(text(
+                        "SELECT to_jsonb(r) FROM spot_replay_configurations AS r "
+                        "ORDER BY owner_id, run_configuration_id"))]
+                return {"version": version, "registry_exists": registry_exists,
+                        "registry_rows": registry_rows, "replay_rows": replay_rows,
+                        "revision_rows": revision_rows}
+
+        before = capture()
+        upgraded = _upgrade_to(environment, "head")
+        after = capture()
+        proof = {
+            "case": malformation,
+            "api_authored_source": saved,
+            "revision_returned_by_api": revision,
+            "before": before,
+            "upgrade": {"returncode": upgraded.returncode, "stdout": upgraded.stdout,
+                        "stderr": upgraded.stderr},
+            "after": after,
+        }
+        evidence_dir = os.environ.get("P13_R9_EVIDENCE_DIR")
+        if evidence_dir:
+            output = Path(evidence_dir)
+            output.mkdir(parents=True, exist_ok=True)
+            kind = os.environ.get("P13_R9_EVIDENCE_KIND", "red")
+            (output / f"{kind}-{malformation}.json").write_text(
+                json.dumps(proof, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+        assert upgraded.returncode != 0, f"migration admitted {malformation} legacy history"
+        obstruction = {
+            "unsupported-profile": "unsupported P12 profile version",
+            "revision-strategy-mismatch": "differs from its immutable revision",
+            "revision-content-hash": "failed integrity validation",
+            "revision-manifest-hash": "failed integrity validation",
+            "revision-duplicate-key": "not canonical JSON",
+        }[malformation]
+        assert obstruction in upgraded.stderr
+        assert before["replay_rows"] == after["replay_rows"]
+        assert before["revision_rows"] == after["revision_rows"]
+        assert after["version"] == "0004"
+        assert not after["registry_exists"] and not after["registry_rows"]
+    finally:
+        if engine is not None:
+            engine.dispose()
+        pg.psql(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")
+
+
+def test_migration_refuses_unsupported_legacy_profile_version(client, owner_a, pg):
+    _assert_legacy_revision_boundary_refused(client, owner_a, pg, "unsupported-profile")
+
+
+def test_migration_refuses_hash_consistent_strategy_different_from_saved_revision(client, owner_a, pg):
+    _assert_legacy_revision_boundary_refused(client, owner_a, pg, "revision-strategy-mismatch")
+
+
+@pytest.mark.parametrize("malformation", [
+    "revision-content-hash", "revision-manifest-hash", "revision-duplicate-key",
+])
+def test_migration_refuses_corrupt_referenced_revision_integrity(client, owner_a, pg, malformation):
+    _assert_legacy_revision_boundary_refused(client, owner_a, pg, malformation)
+
+
+def test_migration_preserves_supported_profile_and_revision_spellings_for_complete_and_unavailable_rows(
+        client, owner_a, pg):
+    strategy, revision = _saved_revision(client, owner_a)
+    base_revision_id = revision["revision_id"]
+    spellings = {
+        "lower": base_revision_id.lower(),
+        "upper": base_revision_id.upper(),
+        "mixed": "".join(char.upper() if index % 2 else char.lower()
+                          for index, char in enumerate(base_revision_id)),
+    }
+    cases = {}
+    for spelling_name, spelling in spellings.items():
+        for evidence_name, evidence in (
+                ("complete", None),
+                ("unbound", {"state": "UNBOUND"}),
+                ("bound-null", {"state": "BOUND", "essential_dependencies": None})):
+            body = _body(strategy, revision, key=f"legacy-r9-valid-{uuid.uuid4()}")
+            body["strategy_revision_id"] = spelling
+            if evidence is not None:
+                body["essential_fields"]["entry"] = evidence
+            saved_response = client.post("/v1/spot-replays", headers=owner_a, json=body)
+            assert saved_response.status_code == 201, saved_response.text
+            saved = saved_response.json()
+            exact_read = client.get(f"/v1/spot-replays/{saved['replay_id']}", headers=owner_a)
+            assert exact_read.status_code == 200 and exact_read.json() == saved
+            expected_status = "COMPLETE" if evidence_name == "complete" else "UNAVAILABLE"
+            assert saved["content"]["result"]["status"] == expected_status
+            assert saved["content"]["strategy_revision_id"] == spelling
+            cases[f"{spelling_name}-{evidence_name}"] = {"request": body, "saved": saved}
+
+    database_name, environment = _migration_target(pg, "r9_valid_profile_revision_spellings")
+    engine = None
+    try:
+        assert _upgrade_to(environment, "0004").returncode == 0
+        _copy_legacy_replay_rows(pg.url, environment["EDGE_OS_DATABASE_URL"],
+                                 cases["lower-complete"]["saved"]["content"]["owner_id"],
+                                 base_revision_id,
+                                 [case["saved"]["replay_id"] for case in cases.values()])
+        engine = create_engine(environment["EDGE_OS_DATABASE_URL"])
+        with engine.connect() as connection:
+            rows_before = [dict(row) for row in connection.execute(text(
+                "SELECT * FROM spot_replay_runs ORDER BY created_at, replay_id")).mappings()]
+            revisions_before = [dict(row) for row in connection.execute(text(
+                "SELECT * FROM strategy_revisions ORDER BY revision_id")).mappings()]
+        upgraded = _upgrade_to(environment, "head")
+        assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
+        with engine.connect() as connection:
+            rows_after = [dict(row) for row in connection.execute(text(
+                "SELECT * FROM spot_replay_runs ORDER BY created_at, replay_id")).mappings()]
+            revisions_after = [dict(row) for row in connection.execute(text(
+                "SELECT * FROM strategy_revisions ORDER BY revision_id")).mappings()]
+            version_after = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            registry = [dict(row) for row in connection.execute(text(
+                "SELECT * FROM spot_replay_configurations ORDER BY owner_id, run_configuration_id"
+            )).mappings()]
+        expected_bindings = {
+            case["saved"]["content"]["run_configuration_id"]: p02.sha256_hex({
+                "schema_version": "p13.spot-replay-run/1", "inputs": case["saved"]["content"]["inputs"]})
+            for case in cases.values()
+        }
+        assert rows_after == rows_before
+        assert revisions_after == revisions_before
+        assert version_after == "0005"
+        assert len(rows_after) == len(cases) == len(registry) == 9
+        assert {row["run_configuration_id"]: row["configuration_sha256"] for row in registry} == expected_bindings
+
+        def json_safe(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {str(key): json_safe(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [json_safe(item) for item in value]
+            if isinstance(value, (datetime, uuid.UUID)):
+                return value.isoformat() if isinstance(value, datetime) else str(value)
+            return value
+
+        evidence_dir = os.environ.get("P13_R9_EVIDENCE_DIR")
+        if evidence_dir:
+            output = Path(evidence_dir)
+            output.mkdir(parents=True, exist_ok=True)
+            kind = os.environ.get("P13_R9_EVIDENCE_KIND", "green")
+            proof = {
+                "cases": cases,
+                "upgrade_returncode": upgraded.returncode,
+                "upgrade_stdout": upgraded.stdout,
+                "upgrade_stderr": upgraded.stderr,
+                "source_replays_before": json_safe(rows_before),
+                "source_replays_after": json_safe(rows_after),
+                "source_revisions_before": json_safe(revisions_before),
+                "source_revisions_after": json_safe(revisions_after),
+                "registry_after": json_safe(registry),
+                "version_after": version_after,
+            }
+            (output / f"{kind}-valid-profile-revision-spellings.json").write_text(
+                json.dumps(proof, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    finally:
+        if engine is not None:
+            engine.dispose()
+        pg.psql(f"DROP DATABASE IF EXISTS {database_name} WITH (FORCE)")

@@ -22,6 +22,7 @@ branch_labels = None
 depends_on = None
 
 _SCHEMA_VERSION = "p13.spot-replay-run/1"
+_PROFILE_VERSION = "p12.spot-replay/1"
 _ESSENTIAL_SCHEMA_VERSION = "p12.essential-evidence/1"
 _INPUT_FIELDS = {
     "profile_version", "strategy_revision_id", "strategy_id", "strategy_sha256", "strategy",
@@ -62,6 +63,15 @@ def _canonical_bytes(value: Any) -> bytes:
 
 def _configuration_sha256(inputs: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_bytes({"schema_version": _SCHEMA_VERSION, "inputs": inputs})).hexdigest()
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
 
 
 def _matches_api_uuid(value: Any, expected: Any) -> bool:
@@ -120,8 +130,19 @@ def upgrade() -> None:
 
     connection = op.get_bind()
     rows = connection.execute(sa.text(
-        "SELECT replay_id, owner_id, strategy_id, strategy_revision_id, content, content_sha256 "
-        "FROM spot_replay_runs ORDER BY created_at, replay_id"))
+        "SELECT replay.replay_id, replay.owner_id, replay.strategy_id, replay.strategy_revision_id, "
+        "replay.content, replay.content_sha256, saved_revision.revision_id AS saved_revision_id, "
+        "saved_revision.owner_id AS saved_revision_owner_id, "
+        "saved_revision.strategy_id AS saved_revision_strategy_id, "
+        "saved_revision.strategy_canonical AS saved_strategy_canonical, "
+        "saved_revision.content_sha256 AS saved_strategy_sha256, "
+        "saved_revision.manifest_sha256 AS saved_manifest_sha256 "
+        "FROM spot_replay_runs AS replay "
+        "LEFT JOIN strategy_revisions AS saved_revision "
+        "ON saved_revision.owner_id = replay.owner_id "
+        "AND saved_revision.strategy_id = replay.strategy_id "
+        "AND saved_revision.revision_id = replay.strategy_revision_id "
+        "ORDER BY replay.created_at, replay.replay_id"))
     bindings: dict[tuple[Any, str], str] = {}
     for row in rows.mappings():
         content = row["content"]
@@ -133,8 +154,11 @@ def upgrade() -> None:
         row_replay_id = str(row["replay_id"])
         row_strategy_id = str(row["strategy_id"])
         row_revision_id = str(row["strategy_revision_id"])
+        if not isinstance(inputs, dict) or set(inputs) != _INPUT_FIELDS:
+            raise RuntimeError("cannot bind P13 configuration IDs: a saved replay identity is malformed")
+        if inputs.get("profile_version") != _PROFILE_VERSION:
+            raise RuntimeError("cannot bind P13 configuration IDs: a saved replay uses an unsupported P12 profile version")
         if (not isinstance(run_configuration_id, str) or not 1 <= len(run_configuration_id) <= 200
-                or not isinstance(inputs, dict) or set(inputs) != _INPUT_FIELDS
                 or content.get("replay_id") != row_replay_id
                 or not _matches_api_uuid(content.get("strategy_revision_id"), row["strategy_revision_id"])
                 or inputs.get("run_configuration_id") != run_configuration_id
@@ -145,6 +169,39 @@ def upgrade() -> None:
                 or not isinstance(inputs.get("strategy"), dict)
                 or inputs["strategy"].get("strategy_id") != row_strategy_id):
             raise RuntimeError("cannot bind P13 configuration IDs: a saved replay identity is malformed")
+        if (row["saved_revision_id"] is None
+                or row["saved_revision_id"] != row["strategy_revision_id"]
+                or row["saved_revision_owner_id"] != row["owner_id"]
+                or row["saved_revision_strategy_id"] != row["strategy_id"]):
+            raise RuntimeError("cannot bind P13 configuration IDs: a referenced strategy revision is missing")
+        try:
+            saved_strategy_text = row["saved_strategy_canonical"]
+            if not isinstance(saved_strategy_text, str):
+                raise ValueError("saved strategy is not text")
+            saved_strategy = json.loads(saved_strategy_text, object_pairs_hook=_unique_json_object)
+            if not isinstance(saved_strategy, dict):
+                raise ValueError("saved strategy is not an object")
+            if saved_strategy.get("strategy_id") != row_strategy_id:
+                raise ValueError("saved strategy ID mismatch")
+            saved_strategy_sha256 = hashlib.sha256(_canonical_bytes(saved_strategy)).hexdigest()
+            semantic_manifest = saved_strategy.get("semantic_manifest")
+            if not isinstance(semantic_manifest, dict):
+                raise ValueError("saved strategy manifest is malformed")
+            saved_manifest_sha256 = hashlib.sha256(_canonical_bytes(semantic_manifest)).hexdigest()
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise RuntimeError(
+                "cannot bind P13 configuration IDs: the referenced strategy revision is not canonical JSON"
+            ) from None
+        if (saved_strategy_sha256 != row["saved_strategy_sha256"]
+                or saved_manifest_sha256 != row["saved_manifest_sha256"]):
+            raise RuntimeError(
+                "cannot bind P13 configuration IDs: the referenced strategy revision failed integrity validation"
+            )
+        if (inputs.get("strategy") != saved_strategy
+                or inputs.get("strategy_sha256") != row["saved_strategy_sha256"]):
+            raise RuntimeError(
+                "cannot bind P13 configuration IDs: the saved replay strategy differs from its immutable revision"
+            )
         descriptor = inputs.get("essential_evidence")
         if (not isinstance(descriptor, dict)
                 or set(descriptor) != {"schema_version", "strategy_revision", "run_configuration_id",
