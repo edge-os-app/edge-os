@@ -60,8 +60,9 @@ Route-driven (`HARNESS_EXECUTED`, real signed test tokens):
 - a conflicting wallet never overwrites a confirmed binding;
 - a mutation request that asserts an owner, wallet, setup, network or revision is rejected `422`
   before any call and changes no protected state;
-- a malformed creation or lookup result, including a malformed or unstorable field inside a
-  valid-looking `WalletEvidence`, becomes durable `UNKNOWN` with a reason, never a `500`;
+- a malformed creation or lookup result, including a malformed, unstorable or unencodable field
+  inside a valid-looking `WalletEvidence`, becomes durable `UNKNOWN` with a reason, never a `500`,
+  while valid non-ASCII text is accepted;
 - research saves and reads a revision with no wallet.
 
 Process-driven (`PROCESS_EXECUTED`, independent OS processes against the same database):

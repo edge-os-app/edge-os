@@ -1,4 +1,4 @@
-"""Gate repair regressions G1-G4 and G6.
+"""Gate repair regressions G1-G4, G6, G7 and G8.
 
 G1: resume must validate the retained result against the current lookup with the same identity rules.
 G2: a concurrent valid prepare must return the same setup, not an uncaught uniqueness failure.
@@ -6,6 +6,8 @@ G3: malformed creation or lookup results must become durable UNKNOWN, never a 50
 G4: the mutation seams must reject spoofed or changed identity assertions before any mutation or call.
 G6: a malformed field inside a WalletEvidence result must be rejected before the event write and
 never leave the setup PENDING without a reason or trigger a second creation.
+G7: an unstorable field (a NUL) must be rejected the same way.
+G8: an unencodable field (an unpaired surrogate) must be rejected the same way, while valid Unicode stays accepted.
 """
 
 from __future__ import annotations
@@ -125,6 +127,45 @@ def test_unstorable_evidence_field_becomes_unknown(wallet_client, owner_a, provi
     assert body["state"] == "UNKNOWN" and body["reason"] == "MALFORMED_RESULT"
     assert pg.psql("select count(*) from wallet_setup_events where event_type = 'RESULT_RETURNED'") == "0"
     assert pg.psql("select wallet_id is null from wallet_setups where agent_id = 'agent-nul'") == "t"
+
+
+def _unencodable(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
+def test_unencodable_evidence_field_becomes_unknown_and_never_recreates(wallet_client, owner_a, provider, pg):
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    owner_id = uuid.UUID(helpers.owner_user_id(wallet_client, owner_a))
+    for label, bad in (("high", "0x\ud800bad"), ("low", "0x\udfffbad")):
+        assert _unencodable(bad)
+        agent = f"agent-surrogate-{label}"
+        provider.create_result = WalletEvidence(wallet_id=f"wallet-surrogate-{label}", owner_id=owner_id,
+                                                chain_type="ethereum", address=bad)
+        assert _prepare(wallet_client, owner_a, agent, strategy_id, revision_id).status_code == 200
+        body = _dispatch(wallet_client, owner_a, agent).json()
+        assert body["state"] == "UNKNOWN" and body["reason"] == "MALFORMED_RESULT", label
+        assert pg.psql("select count(*) from wallet_setup_events where event_type = 'RESULT_RETURNED'") == "0"
+        for _ in range(2):
+            resumed = wallet_client.post(f"/v1/wallet-setup/agents/{agent}/resume", headers=owner_a).json()
+            assert resumed["state"] == "UNKNOWN", label
+        assert pg.psql(f"select wallet_id is null from wallet_setups where agent_id = '{agent}'") == "t"
+    assert len(provider.created) == 2  # one per agent; the four resumes created nothing
+
+
+def test_valid_non_ascii_evidence_field_confirms(wallet_client, owner_a, provider, pg):
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    owner_id = uuid.UUID(helpers.owner_user_id(wallet_client, owner_a))
+    address = "0xcaf\u00e9"  # valid UTF-8, a legal Python str
+    provider.create_result = WalletEvidence(wallet_id="wallet-unicode", owner_id=owner_id, chain_type="ethereum",
+                                            address=address)
+    assert _prepare(wallet_client, owner_a, "agent-unicode", strategy_id, revision_id).status_code == 200
+    body = _dispatch(wallet_client, owner_a, "agent-unicode").json()
+    assert body["state"] == "CONFIRMED" and body["wallet_id"] == "wallet-unicode"
+    assert pg.psql("select wallet_id from wallet_setups where agent_id = 'agent-unicode'") == "wallet-unicode"
 
 
 def test_malformed_lookup_evidence_field_becomes_unknown(wallet_client, owner_a, provider, pg):

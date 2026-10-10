@@ -30,8 +30,18 @@ def evidence_is_wellformed(evidence: WalletEvidence) -> bool:
 
 
 def _storable_text(value: object) -> bool:
-    """A non-empty string PostgreSQL can store. A NUL (U+0000) is a valid `str` but breaks a JSONB write."""
-    return isinstance(value, str) and bool(value) and "\x00" not in value
+    """A non-empty string PostgreSQL can store.
+
+    A NUL (U+0000) and an unpaired surrogate are valid Python `str` values but break a UTF-8 JSONB
+    write. Reject both at the boundary so an unretainable result becomes durable `UNKNOWN`.
+    """
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def evidence_matches_identity(row: WalletSetupRow, evidence: WalletEvidence) -> bool:

@@ -91,8 +91,9 @@ provider idempotency. The package therefore:
   malformed result — a wrong type, or a malformed field inside a valid-looking `WalletEvidence` —
   records `UNKNOWN` with a sanitized reason (`MALFORMED_RESULT` or `RECONCILE_NO_MATCH`) instead of
   failing with a `500` or leaving the setup `PENDING` without a reason. A dataclass annotation does
-  not validate a value, and an unstorable field (for example a NUL inside a string) is rejected the
-  same way before the event write.
+  not validate a value. A field PostgreSQL cannot store — a NUL (U+0000), or an unpaired surrogate
+  that is not encodable as UTF-8 — is rejected the same way before the event write, while valid
+  non-ASCII text stays accepted.
 
 The requested network stays an application binding. Provider evidence carries a chain type and
 address only, because an Ethereum provider wallet is not inherently bound to one chain ID. No
