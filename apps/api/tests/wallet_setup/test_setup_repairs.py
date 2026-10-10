@@ -32,6 +32,20 @@ def _dispatch(wallet_client, headers, agent_id):
     return wallet_client.post(f"/v1/wallet-setup/agents/{agent_id}/dispatch", headers=headers)
 
 
+def _digest(pg) -> str:
+    return pg.psql("select coalesce(md5(string_agg(setup_id::text || state || coalesce(wallet_id, ''), ',' "
+                   "order by setup_id)), '') from wallet_setups")
+
+
+def _retain_unknown_result(wallet_client, owner_a, provider, agent_id, strategy_id, revision_id, retained):
+    """Dispatch once so a RESULT_RETURNED event is retained, but leave the setup UNKNOWN (lookup fails)."""
+    assert _prepare(wallet_client, owner_a, agent_id, strategy_id, revision_id).status_code == 200
+    provider.create_result = retained
+    provider.on_lookup = lambda _wallet_id: (_ for _ in ()).throw(WalletProviderUnavailable())
+    assert _dispatch(wallet_client, owner_a, agent_id).json()["state"] == "UNKNOWN"
+    provider.on_lookup = None
+
+
 def test_resume_rejects_changed_retained_address(wallet_client, owner_a, provider, pg):
     strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
     owner_id = uuid.UUID(helpers.owner_user_id(wallet_client, owner_a))
@@ -91,16 +105,37 @@ def test_malformed_lookup_becomes_unknown(wallet_client, owner_a, provider, pg):
     assert pg.psql("select wallet_id is null from wallet_setups where agent_id = 'agent-malformed-lookup'") == "t"
 
 
-def test_mutation_handlers_reject_identity_assertions(wallet_client, owner_a, provider, pg):
+def test_resume_rejects_wrong_owner_or_chain(wallet_client, owner_a, provider, pg):
     strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
-    spoof = {"owner_id": str(uuid.uuid4()), "wallet_id": "foreign-wallet", "setup_id": str(uuid.uuid4()),
-             "network_id": 143, "strategy_revision_id": str(uuid.uuid4())}
+    owner_id = uuid.UUID(helpers.owner_user_id(wallet_client, owner_a))
+    other_owner = uuid.uuid4()
+    retained = WalletEvidence("wallet-oc", owner_id, "ethereum", "0x" + "a" * 40)
+    cases = {"owner": WalletEvidence("wallet-oc", other_owner, "ethereum", "0x" + "a" * 40),
+             "chain": WalletEvidence("wallet-oc", owner_id, "solana", "0x" + "a" * 40)}
+    for name, evidence in cases.items():
+        agent = f"agent-oc-{name}"
+        provider.create_result = None
+        _retain_unknown_result(wallet_client, owner_a, provider, agent, strategy_id, revision_id, retained)
+        provider.wallets[evidence.wallet_id] = evidence
+        resumed = wallet_client.post(f"/v1/wallet-setup/agents/{agent}/resume", headers=owner_a).json()
+        assert resumed["state"] == "UNKNOWN" and resumed["reason"] == "RECONCILE_WRONG_IDENTITY", name
+        assert pg.psql(f"select wallet_id is null from wallet_setups where agent_id = '{agent}'") == "t"
+
+
+def test_mutation_handlers_reject_each_identity_field(wallet_client, owner_a, provider, pg):
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    fields = {"owner_id": str(uuid.uuid4()), "wallet_id": "foreign-wallet", "setup_id": str(uuid.uuid4()),
+              "network_id": 143, "strategy_revision_id": str(uuid.uuid4())}
     for operation in ("dispatch", "resume", "cancel"):
         agent = f"agent-g4-{operation}"
         assert _prepare(wallet_client, owner_a, agent, strategy_id, revision_id).status_code == 200
-        response = wallet_client.post(f"/v1/wallet-setup/agents/{agent}/{operation}", json=spoof, headers=owner_a)
-        assert response.status_code == 422, response.text
-        assert response.json()["code"] == "validation_error"
+        before = _digest(pg)
+        for name, value in fields.items():
+            response = wallet_client.post(f"/v1/wallet-setup/agents/{agent}/{operation}", json={name: value},
+                                          headers=owner_a)
+            assert response.status_code == 422, (name, response.text)
+            assert response.json()["code"] == "validation_error"
+            assert _digest(pg) == before, name
     assert provider.created == []
     assert pg.psql("select count(*) from wallet_setups where wallet_id is not null") == "0"
 

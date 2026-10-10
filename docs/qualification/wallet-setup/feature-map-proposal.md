@@ -9,7 +9,7 @@ shared browser recipe cannot exercise it.
 
 | Feature | UI | API | Saved records | Evidence |
 |---|---|---|---|---|
-| P17 local wallet setup (unwired) | None. No UI route; the module is not production wiring. | Test-only `POST /v1/wallet-setup/agents/{agent_id}/prepare\|dispatch\|resume\|cancel` and `GET /v1/wallet-setup/agents/{agent_id}` in the test harness only. | Local `wallet_setup_local` tables: `wallet_setups`, append-only `wallet_setup_events`, `wallet_setup_denials`. | `apps/api/tests/wallet_setup/` (18 controls, real PostgreSQL, authored fake provider); `docs/qualification/wallet-setup/` recipe. |
+| P17 local wallet setup (unwired) | None. No UI route; the module is not production wiring. | Test-only `POST /v1/wallet-setup/agents/{agent_id}/prepare\|dispatch\|resume\|cancel` and `GET /v1/wallet-setup/agents/{agent_id}` in the test harness only. | Local `wallet_setup_local` tables: `wallet_setups`, append-only `wallet_setup_events`, `wallet_setup_denials`. | `apps/api/tests/wallet_setup/` (25 controls, real PostgreSQL, authored fake provider); `docs/qualification/wallet-setup/` recipe. |
 
 ## Proposed SQL checks
 
