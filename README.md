@@ -217,9 +217,11 @@ The specification, contracts, scoped probe plan and project workflow in this rep
 
 Track assigned work in [GitHub Issues](https://github.com/edge-os-app/edge-os/issues). Read [AGENTS.md](AGENTS.md) before an agent task. Tracker, label and domain conventions are under [docs/agents/](docs/agents/).
 
-The builder owns product decisions, all prototyping and the whole backend. One teammate implements the frontend; the other implements the gated tokenization extension after its behavior and interfaces are accepted. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records the boundaries. Assigning an owner does not approve an extension's economics or activation.
+The builder owns product decisions, prototypes and the hackathon release candidate, including its backend and frontend. The former frontend/tokenization teammate split is superseded. A quant contributor may take separately assigned quantitative/backend tickets outside the release candidate; proposed starting work is not yet an implementation assignment. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records these boundaries.
 
 Teammates implement accepted tickets on task branches and submit pull requests for builder acceptance. Only the builder merges to `main` by team agreement. The builder selected this manual gate instead of requiring GitHub-enforced approvals or branch protection. Required checks and implementation review still apply.
+
+Start with the [quant contributor brief](docs/team/QUANT_CONTRIBUTOR_BRIEF.md) and [portable contributor workflow](docs/agents/contributor-workflow.md). The latter links worker, internal-reviewer and gate prompt templates, skill setup requirements and optional native/Smux routes. Your own clone is sufficient; the builder's private workspace and tmux setup are not required.
 
 Contributor coding skills require installation in each contributor's agent environment. They are separate from the planned user-facing agent add-ons catalog. These documentation files do not install either kind of skill or create remote labels.
 
