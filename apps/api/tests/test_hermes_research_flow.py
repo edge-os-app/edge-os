@@ -414,6 +414,56 @@ def bundle_after(client, headers, bundle):
     return client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=headers).json()
 
 
+def test_a_bounded_no_thesis_request_with_no_declared_market_offers_the_synthetic_market_for_adoption(
+        make_client, owner_a) -> None:
+    undeclared = {k: v for k, v in intake_body("bounded-no-thesis").items() if k != "declared_market"}
+    runner = CaseRunner(turn_result(case("bounded-no-thesis")["provider"]))
+    client = make_client(runner)
+
+    created = client.post("/v1/research/requests", json=undeclared, headers=owner_a)
+
+    assert created.status_code == 201, created.text
+    bundle = created.json()
+    assert bundle["head"]["outcome"] == "NEEDS_CLARIFICATION"
+    [question] = bundle["head"]["questions"]
+    assert (question["question_id"], question["kind"]) == ("adopt-suggested-settings", "ADOPT")
+    assert [item["field_name"] for item in question["items"]] == ["market"]
+    market = evidence(bundle, "market", 0)
+    assert (market["origin"], market["adoption"], market["source_ref"]) == (
+        "APPLICATION_CONFIGURED", "PENDING", "application:synthetic-fixture-market")
+    assert not any(q["kind"] == "TEXT" for q in bundle["head"]["questions"]), "no question the user cannot answer"
+
+    adopted = answer(client, owner_a, bundle, "adopt-suggested-settings", choice_id="adopt")
+
+    assert adopted.status_code == 201, adopted.text
+    final = adopted.json()
+    assert final["head"]["outcome"] == "UNRESOLVED" and final["drafts"] == []
+    assert evidence(final, "market")["adoption"] == "ADOPTED"
+    assert len(runner.turns) == 1  # adopting calls no model
+
+
+@pytest.mark.parametrize("job, outcome", [
+    ("COMPARE", "NEEDS_CLARIFICATION"), ("SIMULATE", "UNSUPPORTED"), ("OBSERVE_FORWARD", "UNSUPPORTED"),
+    ("REQUEST_LIVE", "UNSUPPORTED")])
+def test_no_job_without_a_declared_market_leaves_the_user_a_question_that_cannot_be_answered(
+        make_client, owner_a, job: str, outcome: str) -> None:
+    body = {**{k: v for k, v in intake_body("bounded-no-thesis").items() if k != "declared_market"}, "requested_job": job}
+    client = make_client(CaseRunner(turn_result(case("bounded-no-thesis")["provider"])))
+
+    created = client.post("/v1/research/requests", json=body, headers=owner_a)
+
+    assert created.status_code == 201, created.text
+    bundle = created.json()
+    assert bundle["head"]["outcome"] == outcome
+    assert not any(q["kind"] == "TEXT" for q in bundle["head"]["questions"])
+    for question in bundle["head"]["questions"]:
+        assert question["kind"] == "ADOPT" or question["options"], "every open question can be answered"
+
+
+def evidence(bundle, name, index=-1):
+    return next(i for i in bundle["interpretations"][index]["content"]["field_evidence"] if i["field_name"] == name)
+
+
 # --- Ownership -----------------------------------------------------------------------------------------------------------
 
 def test_another_owner_cannot_read_answer_or_retry_a_request_and_sees_no_attempts(make_client, owner_a, owner_b) -> None:

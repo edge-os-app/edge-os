@@ -333,9 +333,11 @@ def test_the_application_owns_the_market_when_the_job_is_an_investigation() -> N
     assert {i["field_name"]: i for i in declared.field_evidence}["market"] == {
         "field_name": "market", "state": "KNOWN", "origin": "USER_STATED", "source_ref": "intake:declared_market",
         "interpretation_revision": "", "evidence_status": "HYPOTHESIS", "value": DECLARED_MARKET}
+    # No declared market: the application proposes the labelled synthetic fixture market and waits for adoption (D1).
     assert {i["field_name"]: i for i in undeclared.field_evidence}["market"] == {
-        "field_name": "market", "state": "MISSING", "origin": "USER_STATED", "source_ref": "intake:original_request",
-        "interpretation_revision": "", "evidence_status": "UNKNOWN"}
+        "field_name": "market", "state": "KNOWN", "origin": "APPLICATION_CONFIGURED",
+        "source_ref": "application:synthetic-fixture-market", "interpretation_revision": "",
+        "evidence_status": "HYPOTHESIS", "adoption": "PENDING", "value": DECLARED_MARKET}
 
 
 def test_rejects_model_evidence_for_a_job_where_the_application_owns_the_fields() -> None:

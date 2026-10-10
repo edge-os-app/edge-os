@@ -6,7 +6,7 @@ import { ATTEMPT_STATUS_LABEL, describeLatency, describeParse, describePurpose, 
 import type { Attempt, LateResult } from "../lib/types";
 
 /** Every attempt the interpreter made for this request, oldest first. A failed or unknown attempt stays listed. */
-export function InterpretationAttempts({ attempts, lateResults, open }: { attempts: Attempt[]; lateResults: LateResult[]; open: boolean }) {
+export function InterpretationAttempts({ attempts, lateResults, open, currentRevisionId = null }: { attempts: Attempt[]; lateResults: LateResult[]; open: boolean; currentRevisionId?: string | null }) {
   if (attempts.length === 0) return null;
   const byId = new Map(attempts.map((a) => [a.attempt_id, a]));
   const number = (id: string) => byId.get(id)?.sequence;
@@ -17,7 +17,7 @@ export function InterpretationAttempts({ attempts, lateResults, open }: { attemp
         {attempts.map((a) => {
           const rows: [string, string][] = [
             ["Result", ATTEMPT_STATUS_LABEL[a.status] + (a.error_class ? ` (${a.error_class})` : "")],
-            ["Answer", describeParse(a.parse_result) + (a.revision_id ? ". Used for the current meaning" : "")],
+            ["Answer", describeParse(a.parse_result) + (a.revision_id ? (a.revision_id === currentRevisionId ? ". Used for the current meaning" : ". Used for an earlier meaning") : "")],
             ["Tokens", describeUsage(a.usage)],
             ["Time", describeLatency(a.latency_ms)],
           ];

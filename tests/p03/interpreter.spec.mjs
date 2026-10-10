@@ -389,3 +389,19 @@ test("the saved-requests list tags each request from its latest attempt and neve
   await inspect(page, project, "list-read-not-saved");
   await page.unrouteAll({ behavior: "wait" });
 });
+
+test("a no-thesis question with no declared market offers the labelled synthetic market for adoption and ends unresolved", async ({ page }, info) => {
+  const project = info.project.name;
+  await open(page, tokens.a);
+  script({ case: "bounded-no-thesis" });
+  const id = await submit(page, "I have no view. Look at this market over the last two days and tell me whether anything is worth testing.", /No thesis/);
+  await expect(outcome(page)).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await expect(asked(page).getByText(/Review the suggested settings/)).toBeVisible();
+  await expect(asked(page).getByText("Synthetic fixture market (not a real pool)")).toBeVisible();
+  await expect(asked(page).getByRole("textbox")).toHaveCount(0); // no question the user must answer in words
+  await expect(page.getByText(/before the investigation can be reviewed/)).toBeVisible();
+  await inspect(page, project, "no-thesis-undeclared-market");
+  await asked(page).getByRole("button", { name: "Adopt these settings" }).click();
+  await expect(outcome(page)).toHaveAttribute("data-outcome", "UNRESOLVED");
+  record(`p05-undeclared-market-${project}`, { id });
+});

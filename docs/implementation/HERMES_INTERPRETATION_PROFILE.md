@@ -60,7 +60,7 @@ Each evidence item is one of:
 - `MISSING`: no other key.
 - `CONFLICTING`: needs two or more `{value, source_passage}` alternatives from different words.
 
-The application owns these fields. The model cannot report them: `restrictions`, `market`, `decision_interval_seconds`. The market binding stays the labelled synthetic fixture binding until a qualified market source exists. The interval is the one the compiler supports (300 seconds). Both wait for the user to adopt them.
+The application owns these fields. The model cannot report them: `restrictions`, `market`, `decision_interval_seconds`. The market binding stays the labelled synthetic fixture binding until a qualified market source exists. For a no-thesis investigation with no declared market, the application proposes that same labelled synthetic market as a pending item. The user adopts it with the usual "Adopt these settings" question. The model never asks for a market in words, because it cannot set that field. The interval is the one the compiler supports (300 seconds). Both wait for the user to adopt them.
 
 The application derives `source_ref`, `origin` for its own items, `evidence_status` and `interpretation_revision`. The model sets none of them.
 

@@ -83,7 +83,7 @@ describe("interpreter attempts", () => {
     const failed = attempt({ attempt_id: "a1", status: "PROVIDER_FAILED", completion: "NONE", parse_result: "NOT_PARSED", revision_id: null,
       usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null }, error_class: "ProviderHTTPError", latency_ms: null });
     const retry = attempt({ attempt_id: "a2", sequence: 2, retry_of: "a1" });
-    render(<InterpretationAttempts attempts={[failed, retry]} lateResults={[]} open />);
+    render(<InterpretationAttempts attempts={[failed, retry]} lateResults={[]} open currentRevisionId="r1" />);
     const [first, second] = screen.getAllByRole("listitem");
     expect(within(first).getByRole("heading", { name: "Attempt #1: First reading" })).toBeInTheDocument();
     expect(within(first).getByText("Provider failed (ProviderHTTPError)")).toBeInTheDocument();
@@ -107,6 +107,7 @@ describe("interpreter attempts", () => {
     expect(describeLatency(null)).toBe("Unknown");
     expect(describeParse("REJECTED:multiple_objects")).toBe("Rejected: multiple objects");
     expect(describeParse("NOT_PARSED")).toBe("No answer to read");
+    expect(describeParse(null)).toBe("No result saved");
   });
 
   it("finds the exact words a source points at and refuses a reference that does not fit", () => {
@@ -454,5 +455,26 @@ describe("a first request with no saved outcome and no revision", () => {
     expect(screen.getByText(/may still be running, or it may have stopped/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try this reply again" })).toBeNull();
     expect(screen.queryByText(/system failure|was not read/)).toBeNull();
+  });
+
+  it("says an attempt used for an earlier meaning was used for an earlier meaning", () => {
+    render(<InterpretationAttempts attempts={[attempt({ revision_id: "rev-old" })]} lateResults={[]} open currentRevisionId="rev-new" />);
+    expect(screen.getByText("Accepted. Used for an earlier meaning")).toBeInTheDocument();
+    expect(screen.queryByText(/current meaning/)).toBeNull();
+  });
+
+  it("never invites a choice that does not exist, and says investigation for an investigation", async () => {
+    const bundle = baseBundle("NEEDS_CLARIFICATION", { code: "missing_field", detail: "Adopt the suggested market?" },
+      { allowed: true, retry_of: "a2", reason: null }, [attempt({}), attempt({ attempt_id: "a2", sequence: 2, purpose: "FOLLOW_UP", revision_id: null, parse_result: "REJECTED:reply_changed_nothing" })],
+      { state: "REJECTED", reason_code: "reply_changed_nothing", attempt_id: "a2" });
+    bundle.intake.content.requested_job = "INVESTIGATE_EFFECT" as never;
+    bundle.head.interpretation_revision_id = "rev-1" as never;
+    bundle.head.questions = [adopt] as never;
+    (bundle as { interpretations: unknown[] }).interpretations = [{ record_id: "r1", content: { interpretation_revision_id: "rev-1", field_evidence: [] } }];
+    mocks.get.mockResolvedValue(bundle);
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByText(/before the investigation can be reviewed/)).toBeInTheDocument();
+    expect(screen.queryByText(/choose an option/)).toBeNull();
+    expect(screen.getAllByText(/answer one of the questions/).length).toBeGreaterThanOrEqual(1);
   });
 });

@@ -237,7 +237,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped || pending ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={pending ? "PENDING" : outcome} data-reading={pending?.kind}>
         <p className="visually-hidden" role="status">{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</p>
         <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${pending ? "neutral" : copy.tone}`} style={{ marginRight: 8 }}>{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
-        {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the rules can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
+        {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the {intake.requested_job === "CREATE_STRATEGY" ? "rules" : "investigation"} can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
         {outcome === "COMPILED" && <p>These rules came from your words and the settings you adopted. Check them, then save. Saving makes an immutable revision. It does not show the rules work.</p>}
         {outcome === "PUBLISHED" && <p>This revision is saved. Reopening it later shows the same record from storage.</p>}
         {pending ? (
@@ -294,7 +294,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
           {head.retry.allowed ? (
             <div className="btn-row">
               <button className="btn btn-secondary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try this reply again"}</button>
-              <span className="muted">You can also choose an option or write something different.</span>
+              <span className="muted">You can also answer one of the questions below.</span>
             </div>
           ) : <p className="muted">{RETRY_BLOCKED[head.retry.reason ?? ""] ?? ""}</p>}
         </section>
@@ -340,7 +340,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
         strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}
 
-      <InterpretationAttempts attempts={bundle.attempts} lateResults={bundle.late_results}
+      <InterpretationAttempts attempts={bundle.attempts} lateResults={bundle.late_results} currentRevisionId={head.interpretation_revision_id}
         open={Boolean(failure) || Boolean(pending) || Boolean(head.reply) || (lastAttempt !== undefined && lastAttempt.status !== "COMPLETED")} />
 
       <details>

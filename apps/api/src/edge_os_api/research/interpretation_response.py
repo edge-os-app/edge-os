@@ -247,8 +247,14 @@ def _conflicting_item(item: Mapping[str, Any], at: str, sources: Sequence[Source
 def _application_market_item(intake: Mapping[str, Any]) -> dict[str, Any]:
     declared = intake.get("declared_market")
     if declared is None:
-        return {"field_name": "market", "state": "MISSING", "origin": "USER_STATED", "source_ref": REQUEST_SOURCE,
-                "interpretation_revision": "", "evidence_status": "UNKNOWN"}
+        # The user declared no market. The application proposes the labelled synthetic fixture market, which waits for
+        # adoption (D1). It is never a question the user must answer in words, because the model cannot set this field.
+        binding = record_contract.FIXTURE_STRATEGY["market"]
+        return {"field_name": "market", "state": "KNOWN", "origin": "APPLICATION_CONFIGURED",
+                "source_ref": SYNTHETIC_MARKET_SOURCE, "interpretation_revision": "", "evidence_status": "HYPOTHESIS",
+                "adoption": "PENDING", "value": {"network": binding["network"],
+                                                 "base_asset": binding["research_binding"]["base_asset"],
+                                                 "quote_asset": binding["research_binding"]["quote_asset"]}}
     return {"field_name": "market", "state": "KNOWN", "origin": "USER_STATED", "source_ref": DECLARED_MARKET_SOURCE,
             "interpretation_revision": "", "evidence_status": "HYPOTHESIS", "value": copy.deepcopy(declared)}
 

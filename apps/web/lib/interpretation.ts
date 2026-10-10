@@ -57,7 +57,8 @@ export function describeLatency(ms: number | null): string {
 }
 
 export function describeParse(parse: string | null): string {
-  if (parse === null || parse === "NOT_PARSED") return "No answer to read";
+  if (parse === null) return "No result saved";
+  if (parse === "NOT_PARSED") return "No answer to read";
   if (parse === "ACCEPTED") return "Accepted";
   return `Rejected: ${parse.replace(/^REJECTED:/, "").replaceAll("_", " ")}`;
 }
@@ -169,7 +170,7 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
   switch (reply.state) {
     case "REJECTED":
       return reply.reason_code === "reply_changed_nothing"
-        ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or choose an option." }
+        ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or answer one of the questions." }
         : { title: "Your last reply could not be used", body: `The interpreter's reading broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
     case "UNCERTAIN":
       return { title: "We do not know if your last reply was read", body: `The interpreter may or may not have read it. This attempt was not repeated, and ${kept.toLowerCase()}` };
