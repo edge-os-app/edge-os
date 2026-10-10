@@ -164,10 +164,10 @@ def run_p05_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port:
     workdir.mkdir(parents=True, exist_ok=True)
     image = PinnedHermesImage(run_id, workdir / "image")
     process: harness.Process | None = None
-    image_built = False
+    image_started = False  # set before the build: a build that fails late can still leave a tagged image
     try:
+        image_started = True
         tag = image.build()
-        image_built = True
         identity = json.loads((workdir / "image" / "source_identity.json").read_text())
         rec.write("p05-hermes-source-identity.json", identity)
         ok &= rec.step("P05: pinned Hermes image built from the locked source (no egress at run time)",
@@ -215,14 +215,24 @@ def run_p05_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port:
                        after == snapshots and turn_count(workdir) == turns_before,
                        {"turns_before": turns_before, "turns_after": turn_count(workdir)})
     finally:
+        # Each step stands alone, so one failure cannot skip the others.
         if process is not None:
-            process.stop()
-        if image_built:
-            removal = image.remove()
-            rec.write("p05-image-removal.json", removal)
-            ok &= rec.step("P05: removed this run's image; no labelled container is left",
-                           removal["image_removed"] and not removal["labeled_containers_left"], removal)
-        current_api.stop()  # already stopped when the phase got that far; stopping again is harmless
+            try:
+                process.stop()
+            except Exception as error:  # noqa: BLE001
+                ok &= rec.step("P05: stop the Hermes API", False, f"{type(error).__name__}: {error}")
+        if image_started:
+            try:
+                removal = image.remove()
+                rec.write("p05-image-removal.json", removal)
+                ok &= rec.step("P05: removed this run's image; no labelled container is left",
+                               removal["image_removed"] and not removal["labeled_containers_left"], removal)
+            except Exception as error:  # noqa: BLE001
+                ok &= rec.step("P05: removed this run's image", False, f"{type(error).__name__}: {error}")
+        try:
+            current_api.stop()  # already stopped when the phase got that far; stopping again is harmless
+        except Exception as error:  # noqa: BLE001
+            ok &= rec.step("P05: stop the earlier API", False, f"{type(error).__name__}: {error}")
         standard = harness.start_api(env, api_port, evidence / "logs", name="api-after-p05")
         processes.append(standard)  # registered before any wait, so a failed wait cannot lose the handle
         harness.wait_http(f"{api_url}/readyz")

@@ -119,7 +119,7 @@ export interface LateResult {
 }
 
 export interface RetryState { allowed: boolean; retry_of: string | null; reason: string | null }
-export interface ReplyState { state: "REJECTED" | "FAILED" | "UNCERTAIN"; reason_code: string | null; attempt_id: string }
+export interface ReplyState { state: "REJECTED" | "FAILED" | "UNCERTAIN" | "PENDING_SAVE"; reason_code: string | null; attempt_id: string }
 
 export interface RevisionSummary {
   revision_id: string;

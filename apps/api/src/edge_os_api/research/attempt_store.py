@@ -254,7 +254,10 @@ class AdvisoryLockGuard:
             with self._engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
                 if not connection.execute(text("SELECT pg_try_advisory_lock(:key)"), key).scalar_one():
                     return False
-                connection.execute(text("SELECT pg_advisory_unlock(:key)"), key)
+                try:
+                    connection.execute(text("SELECT pg_advisory_unlock(:key)"), key)
+                except Exception:  # noqa: BLE001 - a connection that cannot unlock must not return to the pool
+                    connection.invalidate()
                 return True
         except Exception:  # noqa: BLE001
             return False

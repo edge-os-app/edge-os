@@ -45,7 +45,9 @@ def test_a_failed_phase_still_hands_its_replacement_api_to_the_caller(tmp_path: 
     monkeypatch.setattr(p05_phase.PinnedHermesImage, "build", build_fails)
     monkeypatch.setattr(harness, "start_api", start_api)
     monkeypatch.setattr(harness, "wait_http", lambda *_a, **_k: None)
-    monkeypatch.setattr(p05_phase.PinnedHermesImage, "remove", lambda self: {})
+    removals: list[bool] = []
+    monkeypatch.setattr(p05_phase.PinnedHermesImage, "remove",
+                        lambda self: removals.append(True) or {"image_removed": True, "labeled_containers_left": []})
     current, processes = FakeProcess("api"), []
 
     try:
@@ -57,6 +59,7 @@ def test_a_failed_phase_still_hands_its_replacement_api_to_the_caller(tmp_path: 
     assert [p.name for p in started] == ["api-after-p05"]
     assert started[0] in processes, "the caller's own cleanup must see the process that the phase started"
     assert current.stopped
+    assert removals == [True], "a build that failed may still have left a tagged image, so removal must run"
 
 
 def test_a_failed_wait_for_the_replacement_api_still_registers_it(tmp_path: Path, monkeypatch) -> None:

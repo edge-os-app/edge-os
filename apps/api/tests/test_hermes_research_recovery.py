@@ -349,3 +349,58 @@ def test_publishing_a_reply_twice_saves_one_revision_and_the_second_call_changes
         assert hermes._publish_reply(session, *args) is False
 
     assert counts(client, str(intake))["PromptInterpretation"] == 2
+
+
+# --- A failure outcome that was not saved in the same step is repaired ---------------------------------------------------
+
+@pytest.mark.parametrize("name, code, retry", [
+    ("provider-hang", "interpreter_outcome_unknown", "RECONCILE"),
+    ("provider-503", "interpreter_unavailable", "SAFE_SAME_KEY"),
+    ("multiple-objects", "malformed_model_output", "SAFE_SAME_KEY"),
+    ("truncated-cut-off", "malformed_model_output", "SAFE_SAME_KEY")])
+def test_a_settled_failure_whose_outcome_was_not_saved_gets_its_outcome_after_restart(
+        make_client, owner_a, monkeypatch: pytest.MonkeyPatch, name: str, code: str, retry: str) -> None:
+    first = make_client(CaseRunner(turn_result(case(name)["provider"])))
+    with monkeypatch.context() as crashing:
+        crashing.setattr(interpretation_workflow.HermesResearch, "_record_failure",
+                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("process died before the outcome")))
+        assert create(first, owner_a, "concrete-thesis").status_code == 500
+    intake = first_request_id(first, owner_a)
+    assert bundle_of(first, owner_a, intake)["outcomes"] == []
+
+    runner = CaseRunner()
+    second = make_client(runner)  # startup recovery runs here
+
+    after = bundle_of(second, owner_a, intake)
+    outcome = after["outcomes"][-1]["record"]["content"]
+    assert (outcome["outcome"], outcome["findings"][0]["code"], outcome["retry"]) == ("INVALID_INPUT", code, retry)
+    assert runner.turns == [] and len(after["attempts"]) == 1
+    for _ in range(2):  # repeating the repair adds nothing
+        second.app.state.hermes.recover_all()
+    assert len(bundle_of(second, owner_a, intake)["outcomes"]) == 1
+
+
+def test_an_attempt_closed_as_interrupted_whose_outcome_was_not_saved_gets_its_outcome(
+        make_client, owner_a, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = make_client(CaseRunner())
+    owner = _principal(client, owner_a)
+    from edge_os_api.research import service as research_service
+    with client.app.state.session_factory() as session:
+        intake = research_service.save_intake(session, owner, intake_body("concrete-thesis"))
+        session.commit()
+        intake_id, content = intake.record_id, intake.content
+    hermes = client.app.state.hermes
+    hermes.ledger.begin(str(owner.user_id), str(intake_id), _identity(hermes, content))
+    with monkeypatch.context() as crashing:
+        crashing.setattr(interpretation_workflow.HermesResearch, "_record_failure",
+                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("died after closing")))
+        with client.app.state.session_factory() as session:
+            with pytest.raises(RuntimeError):
+                hermes.reconcile(session, owner, intake_id)
+    assert bundle_of(client, owner_a, str(intake_id))["attempts"][0]["status"] == "INTERRUPTED"
+    assert bundle_of(client, owner_a, str(intake_id))["outcomes"] == []
+
+    restarted = make_client(CaseRunner())
+
+    after = bundle_of(restarted, owner_a, str(intake_id))
+    assert after["outcomes"][-1]["record"]["content"]["findings"][0]["code"] == "interpreter_outcome_unknown"

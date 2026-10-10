@@ -117,6 +117,15 @@ def retry_state(history: Sequence[AttemptView], has_interpretation: bool, head_r
     return RetryState(True, last.start.attempt_id, None)
 
 
+def failure_for(status: str, parse_result: str) -> tuple[str, str, str]:
+    """The finding code, plain words and retry hint that a settled, unusable attempt maps to."""
+    if status == "PROVIDER_FAILED":
+        return UNAVAILABLE, UNAVAILABLE_TEXT["provider_failed"], "SAFE_SAME_KEY"
+    if parse_result.startswith("REJECTED:"):
+        return MALFORMED, REJECTION_DETAIL.format(reason=parse_result.removeprefix("REJECTED:")), "SAFE_SAME_KEY"
+    return OUTCOME_UNKNOWN, UNAVAILABLE_TEXT["outcome_unknown"], "RECONCILE"
+
+
 def public_attempt(view: AttemptView) -> dict[str, Any]:
     """Structured values, hashes and sanitized codes. The generated text and the user's reply are not included."""
     start, settled, identity = view.start, view.settlement, view.start.identity
@@ -487,7 +496,8 @@ class HermesResearch:
             last = history[-1]
             parse = last.settlement.parse_result  # type: ignore[union-attr]
             reply = {"state": "REJECTED" if parse.startswith("REJECTED:") else
-                     ("UNCERTAIN" if last.status in UNCERTAIN else "FAILED"),
+                     ("UNCERTAIN" if last.status in UNCERTAIN else
+                      ("PENDING_SAVE" if parse == "ACCEPTED" else "FAILED")),
                      "reason_code": parse.removeprefix("REJECTED:") if parse.startswith("REJECTED:") else None,
                      "attempt_id": last.start.attempt_id}
         return {"attempts": [public_attempt(v) for v in history],
@@ -508,16 +518,32 @@ class HermesResearch:
     def reconcile(self, session: Session, principal: Principal, intake_id: uuid.UUID) -> None:
         """Close attempts that are proved abandoned, then publish saved accepted results. No model is called."""
         owner, iid = str(principal.user_id), str(intake_id)
-        for closed in self.ledger.interrupt_abandoned(owner, iid, lambda start: self.guard.is_abandoned(start.attempt_id)):
-            if closed.start.identity.purpose == "INTERPRET":
-                self._record_failure(session, principal, intake_id, closed.start.attempt_id, OUTCOME_UNKNOWN,
-                                     UNAVAILABLE_TEXT["outcome_unknown"], "RECONCILE")
+        self.ledger.interrupt_abandoned(owner, iid, lambda start: self.guard.is_abandoned(start.attempt_id))
         for view in self.ledger.unpublished_results(owner, iid):
             try:
                 self._recover(session, principal, intake_id, view)
             except Exception as error:  # noqa: BLE001 - one bad saved result must not block the request or other requests
                 session.rollback()
                 log.error("recovery of an accepted attempt failed: %s", type(error).__name__)
+        self._repair_failure_outcome(session, principal, intake_id)
+
+    def _repair_failure_outcome(self, session: Session, principal: Principal, intake_id: uuid.UUID) -> None:
+        """Save the system outcome of a first interpretation that settled as a failure but never got its outcome.
+
+        The settlement and the outcome are two commits. A crash between them leaves a settled failure with no outcome,
+        and nothing else would ever write it. Only the latest attempt counts, and only while no revision exists.
+        """
+        rows = service.intake_rows(session, principal, intake_id)
+        history = self.ledger.history(str(principal.user_id), str(intake_id))
+        if not history or any(r.record_type == "PromptInterpretation" for r in rows):
+            return
+        last = history[-1]
+        settled = last.settlement
+        if last.start.identity.purpose != "INTERPRET" or settled is None or (
+                settled.status == "COMPLETED" and settled.parse_result == "ACCEPTED"):
+            return
+        code, detail, retry = failure_for(settled.status, settled.parse_result)
+        self._record_failure(session, principal, intake_id, last.start.attempt_id, code, detail, retry)
 
     def _recover(self, session: Session, principal: Principal, intake_id: uuid.UUID, view: AttemptView) -> None:
         rows = service.intake_rows(session, principal, intake_id)
@@ -549,7 +575,14 @@ class HermesResearch:
                 "left join interpretation_settlements s on s.attempt_id = a.attempt_id "
                 "left join interpretation_attempt_links l on l.attempt_id = a.attempt_id "
                 "where s.attempt_id is null or (s.status = 'COMPLETED' and s.parse_result = 'ACCEPTED' "
-                "and l.attempt_id is null)")).all()
+                "and l.attempt_id is null) "
+                "union select a.owner_id, a.intake_record_id from interpretation_attempts a "
+                "join interpretation_settlements s on s.attempt_id = a.attempt_id "
+                "where a.purpose = 'INTERPRET' and not (s.status = 'COMPLETED' and s.parse_result = 'ACCEPTED') "
+                "and not exists (select 1 from records r where r.owner_id = a.owner_id and r.operation_id = a.attempt_id "
+                "and r.record_type = 'Outcome') "
+                "and not exists (select 1 from records r where r.owner_id = a.owner_id "
+                "and r.intake_record_id = a.intake_record_id and r.record_type = 'PromptInterpretation')")).all()
         for owner_id, intake_id in pairs:
             try:
                 with self._session_factory() as session:

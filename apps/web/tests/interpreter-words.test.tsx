@@ -215,4 +215,25 @@ describe("system failures on the request page", () => {
     expect(screen.getByTestId("working")).toHaveAttribute("role", "status");
     expect(screen.getByTestId("working")).toBeEmptyDOMElement();
   });
+
+  it("says an accepted reply that is not saved yet was read, and does not call it a failure", async () => {
+    const bundle = baseBundle("NEEDS_CLARIFICATION", { code: "missing_field", detail: "What should the entry rule be?" },
+      { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [attempt({}), attempt({ attempt_id: "a2", sequence: 2, purpose: "FOLLOW_UP", revision_id: null })],
+      { state: "PENDING_SAVE", reason_code: null, attempt_id: "a2" });
+    bundle.head.interpretation_revision_id = "rev-1" as never;
+    bundle.head.questions = [choice] as never;
+    mocks.get.mockResolvedValue(bundle);
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Your last reply was read but is not saved yet" })).toBeInTheDocument();
+    expect(screen.queryByText(/system failure/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try this reply again" })).toBeNull();
+  });
+
+  it("does not mark the status region busy, so its announcement is not held back", async () => {
+    mocks.get.mockResolvedValue(baseBundle("INVALID_INPUT", { code: "interpreter_unavailable", detail: "x" },
+      { allowed: true, retry_of: "a1", reason: null }, [failedAttempt]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    await screen.findByRole("heading", { name: "The interpreter did not answer" });
+    expect(screen.getByTestId("working")).not.toHaveAttribute("aria-busy");
+  });
 });

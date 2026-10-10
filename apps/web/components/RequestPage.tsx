@@ -254,16 +254,17 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
         interpretationRevisionId={head.interpretation_revision_id} /> : null}
 
       {/* The region is always on the page, so assistive technology announces the text when it changes. */}
-      <p role="status" aria-live="polite" aria-busy={work ? true : undefined} className={work ? "status stop" : "visually-hidden"} data-testid="working">{work}</p>
+      <p role="status" aria-live="polite" className={work ? "status stop" : "visually-hidden"} data-testid="working">{work}</p>
 
       {head.reply ? (
         <section className="status stop" aria-labelledby="reply-title" data-testid="reply-state" data-reply={head.reply.state}>
-          <h2 id="reply-title" style={{ fontSize: 18 }}>{head.reply.state === "REJECTED" ? "Your last reply could not be used" : head.reply.state === "UNCERTAIN" ? "We do not know if your last reply was read" : "Your last reply was not read"}</h2>
+          <h2 id="reply-title" style={{ fontSize: 18 }}>{head.reply.state === "REJECTED" ? "Your last reply could not be used" : head.reply.state === "UNCERTAIN" ? "We do not know if your last reply was read" : head.reply.state === "PENDING_SAVE" ? "Your last reply was read but is not saved yet" : "Your last reply was not read"}</h2>
           <p>{head.reply.state === "REJECTED" && head.reply.reason_code === "reply_changed_nothing"
             ? "Your reply matched what is already saved, so nothing changed. Say what you want to change, or choose an option."
             : head.reply.state === "REJECTED"
             ? `The interpreter's reading broke a rule (${head.reply.reason_code?.replaceAll("_", " ")}), so none of it was used. Your saved meaning did not change.`
-            : head.reply.state === "UNCERTAIN" ? "The interpreter may or may not have read it. Nothing was retried and your saved meaning did not change."
+            : head.reply.state === "PENDING_SAVE" ? "The interpreter read it and the answer was accepted. Saving it did not finish. It is saved the next time this request is opened for an answer or a retry, or when the service restarts. Your saved meaning has not changed yet."
+              : head.reply.state === "UNCERTAIN" ? "The interpreter may or may not have read it. Nothing was retried and your saved meaning did not change."
               : "A system failure stopped the interpreter. Your saved meaning did not change."}</p>
           {head.retry.allowed ? (
             <div className="btn-row">
