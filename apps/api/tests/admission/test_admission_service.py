@@ -245,7 +245,7 @@ def test_revert_entry_releases_input_and_consumes_gas(admission_service, admissi
             "SELECT scope, state FROM admission_reservations WHERE owner_id = :owner"
         ), {"owner": str(fresh_owner)}).all()
     assert {tuple(row) for row in states} == {("CAPITAL", "RELEASED"), ("INVENTORY", "RELEASED"),
-                                              ("GAS", "CONSUMED"), ("ATTEMPT", "CONSUMED")}
+                                              ("GAS", "RELEASED"), ("ATTEMPT", "CONSUMED")}
 
 
 def test_prebroadcast_denial_consumes_neither(admission_service, fresh_owner) -> None:

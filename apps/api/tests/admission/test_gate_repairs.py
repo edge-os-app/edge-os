@@ -6,10 +6,13 @@ import threading
 
 from sqlalchemy import text
 
-from edge_os_api.admission.types import ActionReceipt, AssetAmount
+from edge_os_api.admission.types import ActionReceipt, AllowanceCap, ApprovalSnapshot, AssetAmount
 
 from admission._builders import (
     BASE,
+    binding_a,
+    intent_a,
+    intent_addition,
     NATIVE,
     QUOTE,
     approval_a,
@@ -23,6 +26,7 @@ from admission._builders import (
     intent_entry,
     intent_entry_b,
     intent_exit,
+    prebroadcast,
 )
 
 
@@ -350,16 +354,24 @@ def test_changed_attempt_budget_under_same_approval_is_denied(admission_service,
 # ---------------------------------------------------------------- R4
 
 def test_exit_actual_cannot_consume_another_reserved_exit(admission_service, fresh_owner) -> None:
+    # Two acquisitions give the position two retained exit coverages.
     entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
     admission_service.admit_and_reserve(fresh_owner, entry, approval_a(), context_a())
     admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
-    first_exit = intent_exit(quantity_raw="5")
-    second_exit = intent_exit(quantity_raw="5")
+    addition = intent_addition(quantity_raw="10", quote_input_raw="120", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, addition, approval_a(), context_a(position_inventory="10"))
+    admission_service.reconcile(fresh_owner, addition.action_id, confirm_entry(addition, "120", "10", "1"))
+
+    first_exit = intent_exit(quantity_raw="10")
+    second_exit = intent_exit(quantity_raw="10")
     assert admission_service.admit_and_reserve(
-        fresh_owner, first_exit, approval_a(), context_a(position_inventory="10")).status == "ADMITTED"
-    assert admission_service.admit_and_reserve(
-        fresh_owner, second_exit, approval_a(), context_a(position_inventory="10")).status == "ADMITTED"
-    outcome = admission_service.reconcile(fresh_owner, first_exit.action_id, confirm_exit(first_exit, "6", "300", "1"))
+        fresh_owner, first_exit, approval_a(), context_a(position_inventory="20")).status == "ADMITTED"
+    second = admission_service.admit_and_reserve(
+        fresh_owner, second_exit, approval_a(), context_a(position_inventory="20"))
+    assert second.status == "ADMITTED"
+    # First exit's reconciled actual (11) overruns the inventory left after the second
+    # exit's reservation (20 - 10 = 10).
+    outcome = admission_service.reconcile(fresh_owner, first_exit.action_id, confirm_exit(first_exit, "11", "330", "1"))
     assert outcome.reason == "EXIT_EXCEEDS_RESERVED"
     assert outcome.decision_status == "BREACHED"
 
@@ -422,3 +434,120 @@ def test_receipt_lineage_is_persisted(admission_service, fresh_owner) -> None:
     assert receipt.action_id == entry.action_id and receipt.outcome == "CONFIRMED" and receipt.breach is False
     assert receipt.content["actual_input"] == {"asset_id": QUOTE, "raw": "110", "decimals": 0}
     assert receipt.content["actual_output"] == {"asset_id": BASE, "raw": "10", "decimals": 0}
+
+
+# ---------------------------------------------------------------- Q1
+
+def test_entry_confirm_then_exit_at_minimal_budget(admission_service, fresh_owner) -> None:
+    approval = approval_a(attempt_budget=2, gas_approved_raw="2", per_action_gas_raw="1", per_exit_gas_raw="1")
+    entry = intent_entry(quantity_raw="1", quote_input_raw="10", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    assert admission_service.reconcile(
+        fresh_owner, entry.action_id, confirm_entry(entry, "10", "1", "1")).decision_status == "CONFIRMED"
+
+    exit_intent = intent_exit(quantity_raw="1")
+    admitted = admission_service.admit_and_reserve(
+        fresh_owner, exit_intent, approval, context_a(position_inventory="1"))
+    assert admitted.status == "ADMITTED", admitted.reason
+    outcome = admission_service.reconcile(
+        fresh_owner, exit_intent.action_id, confirm_exit(exit_intent, "1", "12", "1"))
+    assert outcome.decision_status == "CONFIRMED"
+
+
+def test_competing_acquisition_cannot_take_reserved_exit_gas(admission_service, fresh_owner) -> None:
+    approval = approval_a(attempt_budget=10, gas_approved_raw="3", per_action_gas_raw="1", per_exit_gas_raw="1")
+    entry = intent_entry(quantity_raw="1", quote_input_raw="10", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "10", "1", "1"))
+
+    second = intent_entry(quantity_raw="1", quote_input_raw="10", position_id="position-a-2")
+    denied = admission_service.admit_and_reserve(fresh_owner, second, approval, context_a())
+    assert denied.status == "DENIED" and denied.reason == "CAPACITY_UNAVAILABLE"
+
+    exit_intent = intent_exit(quantity_raw="1")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, exit_intent, approval, context_a(position_inventory="1")).status == "ADMITTED"
+
+
+# ---------------------------------------------------------------- Q2
+
+def test_breach_transition_keeps_wallet_locked(admission_service, fresh_owner) -> None:
+    import time
+
+    approval = approval_a(base_approved_raw="10", attempt_budget=10)
+    entry = intent_entry(quantity_raw="1", quote_input_raw="20", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a()).status == "ADMITTED"
+
+    competitor = intent_entry(quantity_raw="1", quote_input_raw="20", position_id="position-a-2")
+    results = {}
+
+    def breach():
+        results["breach"] = admission_service.reconcile(
+            fresh_owner, entry.action_id, confirm_entry(entry, "20", "11", "1"))
+
+    def compete():
+        time.sleep(0.05)  # let the breach hold the wallet lock
+        results["compete"] = admission_service.admit_and_reserve(
+            fresh_owner, competitor, approval, context_a())
+
+    t1 = threading.Thread(target=breach)
+    t2 = threading.Thread(target=compete)
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    assert results["breach"].decision_status == "BREACHED"
+    assert results["compete"].status == "DENIED"
+    assert results["compete"].reason == "UNRESOLVED_PRIOR_ACTION"
+
+
+# ---------------------------------------------------------------- Q3
+
+def test_prebroadcast_denial_cannot_clear_a_breach(admission_service, fresh_owner) -> None:
+    approval = approval_a(base_approved_raw="10")
+    entry = intent_entry(quantity_raw="1", quote_input_raw="20", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a())
+    assert admission_service.reconcile(
+        fresh_owner, entry.action_id, confirm_entry(entry, "20", "11", "1")).decision_status == "BREACHED"
+
+    outcome = admission_service.reconcile(fresh_owner, entry.action_id, prebroadcast(entry))
+    assert outcome.decision_status == "BREACHED"
+    assert outcome.reason == "CONTRADICTORY_RECOVERY"
+    blocked = admission_service.admit_and_reserve(
+        fresh_owner, intent_entry(position_id="position-a-2"), approval, context_a())
+    assert blocked.status == "DENIED" and blocked.reason == "UNRESOLVED_PRIOR_ACTION"
+
+
+# ---------------------------------------------------------------- Q4
+
+def test_addition_with_altered_quote_binding_is_denied_before_reserving(
+        admission_service, admission_engine, fresh_owner) -> None:
+    approval = approval_a(quote_approved_raw="5000")
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a())
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+
+    # A successor approval that switches the quote asset must be denied at admission.
+    other_quote_context = context_a()
+    other_quote_context.holdings.balances["monad:143/asset:OTHER"] = \
+        type(other_quote_context.holdings.balances[QUOTE])(asset_id="monad:143/asset:OTHER", decimals=0, raw="5000")
+    successor = ApprovalSnapshot(
+        approval_id="approval-quote-switch", binding=binding_a(), state="ACTIVE",
+        policy_binding="policy-a-v1", expires_at="2030-01-01T00:00:00Z", actions=["ADDITION"],
+        allocation_quote=AllowanceCap(asset_id="monad:143/asset:OTHER", decimals=0, approved_raw="5000"),
+        quote_allowance=AllowanceCap(asset_id="monad:143/asset:OTHER", decimals=0, approved_raw="5000"),
+        base_allowance=AllowanceCap(asset_id=BASE, decimals=0, approved_raw="1000"),
+        gas=AllowanceCap(asset_id=NATIVE, decimals=0, approved_raw="50"),
+        per_action_gas=AllowanceCap(asset_id=NATIVE, decimals=0, approved_raw="2"),
+        per_exit_gas=AllowanceCap(asset_id=NATIVE, decimals=0, approved_raw="2"),
+        attempt_budget=5, stops=[], exit_capacity_qualified=True, valuation_qualified=True,
+        cost_model_qualified=True, fixture_label="SYNTHETIC_AUTHORED")
+    addition = intent_a("ADDITION", "5", quote_input_raw="50", position_id="position-a-1",
+                        binding=binding_a(), policy_binding="policy-a-v1")
+    addition.input.quote_asset_id = "monad:143/asset:OTHER"
+    denied = admission_service.admit_and_reserve(fresh_owner, addition, successor, other_quote_context)
+    assert denied.status == "DENIED"
+    assert "POSITION_QUOTE_MISMATCH" in denied.reason or "QUOTE_ASSET_MISMATCH" in denied.reason
+    with admission_engine.connect() as connection:
+        inventory, basis = connection.execute(text(
+            "SELECT inventory, cost_basis FROM admission_positions WHERE owner_id = :owner"
+        ), {"owner": str(fresh_owner)}).one()
+    assert (int(inventory), int(basis)) == (10, 110)

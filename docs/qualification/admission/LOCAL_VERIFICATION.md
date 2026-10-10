@@ -83,8 +83,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 459 passed (377 existing + 82 admission), ~78 s.
-- Admission suite: 82 passed.
+- Full suite: 464 passed (377 existing + 87 admission), ~95 s.
+- Admission suite: 87 passed.
 - P15 and P02 contract checks: PASS.
 - `git diff --check`: clean.
 
@@ -113,6 +113,16 @@ covered (attempt/gas); a breach records durable evidence and blocks new work; an
 entry is denied without cost-model qualification; a concurrent identical
 admission returns the same saved decision; and each verified receipt is
 persisted and retrievable.
+
+## Controller continuation coverage (Q1-Q4)
+
+Additional regressions for the focused continuation: entry-confirm-exit at the
+minimal attempt/gas budget (the exit uses the retained hold); a competing
+acquisition cannot take gas promised to an existing position's exit; the breach
+transition keeps the wallet lock (a competing admission is denied); a
+pre-broadcast denial cannot clear a recorded breach; and an altered quote binding
+for an existing position is denied at admission with the inventory and basis
+unchanged.
 
 ## Not covered
 

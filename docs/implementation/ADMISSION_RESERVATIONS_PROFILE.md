@@ -72,13 +72,18 @@ settling.
 
 ## Reservation plan by operation
 
-- `ENTRY`: reserve quote buy input, base sell capacity for the resulting
-  inventory, base inventory attribution, one per-action gas amount, and one
-  attempt. Create the position at inventory zero.
-- `ADDITION`: same, for an existing position.
-- `EXIT`: reserve base sell input, base inventory attribution, gas and one
-  attempt. Require a known exit valuation mark; a missing or unknown mark denies
-  admission.
+- `ENTRY` / `ADDITION`: reserve quote buy input, base inventory attribution,
+  entry gas plus the intended-exit gas, and two attempt atoms (entry and its
+  exit). Create the position at inventory zero.
+- On confirmation, the acquisition consumes only its actual entry gas and one
+  attempt. The remaining exit gas and attempt are retained as a durable
+  per-position exit hold, so a later exit uses preapproved coverage and the
+  remaining exposure is not left uncovered.
+- `EXIT`: take the exit gas and one attempt out of the position exit hold. Do
+  not reserve new gas or attempts. Require a known exit valuation mark and the
+  full durable quote binding; a missing or mismatched control denies admission.
+- A competing acquisition cannot take gas or attempts promised to an existing
+  position's exit.
 
 ## Atomicity
 
@@ -155,8 +160,15 @@ consumed.
   consumption.
 - A verified receipt that cannot fit the adopted bounds (sell coverage,
   allocation, cap, or another reserved exit) fails closed and records a durable
-  breach. The decision becomes `BREACHED`, and new affected admissions for that
-  wallet and network are blocked until reconciled.
+  breach. The breach transition commits under the same per-wallet advisory lock
+  as the settlement, so no admission can slip in between the rollback and the
+  breach record. The decision becomes `BREACHED`, and new affected admissions for
+  that wallet and network are blocked until reconciled. A contradictory
+  pre-broadcast denial cannot clear a recorded confirmed or reverted breach; it
+  is refused with `CONTRADICTORY_RECOVERY`.
+- The durable position quote asset and decimals are validated at admission for
+  additions and exits, before any reservation, so an altered quote binding is a
+  saved denial rather than a settlement-time failure.
 - A receipt must match the saved action identity (action id, strategy revision,
   mandate, agent, wallet, network). A mismatch is denied without mutation.
 - The adopted approval is bound by its full content hash; a changed budget,

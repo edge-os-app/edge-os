@@ -177,11 +177,10 @@ def plan_reservations(
         plan.append(ReservationNeed("ATTEMPT", ATTEMPT_ASSET, 0, 2))
         return ReservationPlan(ok=True, needs=plan, requires_new_position=requires_new_position)
 
-    # EXIT
+    # EXIT uses the position's retained exit coverage; it reserves only its inventory
+    # hold here. The exit gas and attempt are consumed from the position exit hold.
     if current_inventory is None or current_inventory < quantity:
         return ReservationPlan(ok=False, reason="INVENTORY_SHORTFALL")
     plan.append(ReservationNeed("INVENTORY", intent.quantity.asset_id, intent.quantity.decimals,
                                 quantity, intent.position_id))
-    plan.append(ReservationNeed("GAS", approval.gas.asset_id, approval.gas.decimals, gas))
-    plan.append(ReservationNeed("ATTEMPT", ATTEMPT_ASSET, 0, 1))
     return ReservationPlan(ok=True, needs=plan, requires_new_position=requires_new_position)
