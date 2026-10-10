@@ -418,7 +418,7 @@ Status: `COMPLETE`
 Evidence:
 
 - the builder accepted the conditional entry verdict;
-- a three-person team is planned;
+- a three-person team was planned at entry; the fixed implementation split is now superseded by [current team ownership](#9-team-ownership);
 - the schedule and unresolved official terms are recorded.
 
 ### Phase 1: read the room
