@@ -41,10 +41,13 @@ git diff --check 8d38d691e7be3d0bfd12f3e16cfdc13564c4c652..HEAD
 - Evaluation of the actual compiled revision: a `SIGNAL` decision with its exact
   operation, a determinate `FALSE` as `NO_SIGNAL`, and a missing or unknown
   required observation as `INELIGIBLE` (never a false signal or a zero). Future
-  observations and invalidation-triggered exits are covered.
+  observations, invalidation-triggered exits and a false exit with an unrequested
+  invalidation are covered.
 - Decision lineage: saved strategy, revision, content hash, manifest hash,
   market-binding hash, input identity, full inputs, per-rule states and reasons,
   decision and creation timestamps; owner-scoped retrieval.
+- Immutable revision: a returned strategy mapping cannot change the frozen
+  meaning or its declared content hash after freezing.
 - Exact intent linkage: an admitted intent links to its saved decision, and the
   P22 admission decision is saved. A replay of the same decision reuses the same
   action identity and creates no second economic action. A replay under changed
@@ -54,13 +57,15 @@ git diff --check 8d38d691e7be3d0bfd12f3e16cfdc13564c4c652..HEAD
   wallet blocks only A work and B proceeds; two concurrent ticks submit one
   action once.
 - Revalidation: an expired or revoked approval, a changed policy binding, a
-  changed revision and a scoped stop each deny submission, record the reason and
-  preserve the prior intent payload.
+  changed revision, a scoped stop, empty holdings, a lowered successor limit and
+  a cancelled saved action each deny submission with no transport call, record
+  the reason and preserve the prior intent payload.
 - Fixture submission: a confirmed swap reconciles into P22 and releases the
   claim; a definitely-unsent denial consumes no attempt and releases the claim;
   an unknown outcome retains the claim and blocks status; a lost acknowledgement
   is recorded as submission-possible; a persisted in-flight attempt after a
-  simulated crash blocks a duplicate.
+  simulated crash blocks a duplicate; a settlement breach is retained as
+  `BREACHED` and blocks a next action.
 - Status: last attempt/completion/input time, next scheduled local work, the
   queue with waiting time, delayed-exit marker and blocking reason.
 - Durability and isolation: records survive a fresh engine; the `execution_local`
@@ -85,12 +90,19 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 495 passed (472 existing + 23 execution), ~77 s, 2 known warnings.
-- Execution suite: 23 passed.
-- Focused suite (execution + admission + compiler tests): 169 passed.
+- Full suite: 501 passed (472 existing + 29 execution), ~98 s, 2 known warnings.
+- Execution suite: 29 passed.
+- Focused suite (execution + admission + compiler tests): 175 passed.
 - P15, P02 and P06 contract scripts: PASS.
 - `compileall` on owned source/tests: PASS.
 - `git diff --check` against the base: clean.
+- Gate-owned reproduction of the repaired candidate (separate PostgreSQL 18.6,
+  local fixture transport): all four prior findings now deny or block as required
+  (empty holdings, lowered successor limits, cancelled action: denied with zero
+  transport calls; settlement breach: retained `BREACHED`, claim held), and all
+  positive controls still pass (decision-before-intent, two-process contention,
+  fresh-process restart, lost-acknowledgement A-blocked/B-progress, exit
+  priority, owner denial).
 
 ## Not covered
 

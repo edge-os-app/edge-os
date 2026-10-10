@@ -20,12 +20,14 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from edge_os_api.admission.accounting import ACQUISITIONS
 from edge_os_api.admission.service import AdmissionService
 from edge_os_api.admission.types import (
     ActionIntent,
     ActionInput,
     ActionReceipt,
     AdmissionContext,
+    AllowanceCap,
     ApprovalSnapshot,
     AssetAmount,
     IdentityBinding,
@@ -105,8 +107,15 @@ def _wallet_lock(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: s
     session.execute(text("SELECT pg_advisory_xact_lock(:a, :b)"), {"a": int4(0), "b": int4(4)})
 
 
-def _cap_amount(cap: object) -> AssetAmount:
+def _cap_amount(cap: AllowanceCap) -> AssetAmount:
     return AssetAmount(asset_id=cap.asset_id, raw=cap.approved_raw, decimals=cap.decimals)
+
+
+def _cap_for(approval: ApprovalSnapshot, asset_id: str) -> int | None:
+    for cap in (approval.quote_allowance, approval.base_allowance, approval.gas):
+        if cap.asset_id == asset_id:
+            return cap.as_int()
+    return None
 
 
 class ExecutionService:
@@ -301,7 +310,7 @@ class ExecutionService:
         self, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
         approval: ApprovalSnapshot, context: AdmissionContext, revision: FrozenRevision,
         transport: SubmissionTransport, now: dt.datetime,
-    ):
+    ) -> tuple[TickResult | PreparedSubmission, ActionIntent | None, uuid.UUID | None, uuid.UUID | None]:
         with self._factory() as session:
             try:
                 _wallet_lock(session, owner, agent_id, wallet_id, network_id)
@@ -376,18 +385,27 @@ class ExecutionService:
                     SubmissionAttemptRow.attempt_id == attempt_id,
                 ).with_for_update().execution_options(populate_existing=True)).scalar_one()
                 receipt = self._receipt(action_intent, approval, outcome)
-                self._admission.reconcile(owner, entry.action_id, receipt)
+                reconciliation = self._admission.reconcile(owner, entry.action_id, receipt)
+                breached = reconciliation.decision_status == "BREACHED"
 
                 attempt.state = "TERMINAL"
                 attempt.outcome = outcome.outcome
                 attempt.detail = outcome.detail
                 attempt.completed_at = now
-                entry.state = _QUEUE_BY_OUTCOME[outcome.outcome]
-                entry.blocking_reason = "SUBMISSION_UNKNOWN" if outcome.outcome == "SUBMISSION_POSSIBLE" else None
+                if breached:
+                    # A rejected settlement is never a confirmation. Retain the
+                    # claim and surface the breach so no next action can submit
+                    # until an explicit recovery.
+                    entry.state = "BREACHED"
+                    entry.blocking_reason = f"BREACHED:{reconciliation.reason or 'UNKNOWN'}"
+                else:
+                    entry.state = _QUEUE_BY_OUTCOME[outcome.outcome]
+                    entry.blocking_reason = (
+                        "SUBMISSION_UNKNOWN" if outcome.outcome == "SUBMISSION_POSSIBLE" else None)
                 entry.updated_at = now
 
                 claim = self._active_claim(session, owner, agent_id, wallet_id, network_id)
-                if claim is not None and outcome.outcome != "SUBMISSION_POSSIBLE":
+                if claim is not None and not breached and outcome.outcome != "SUBMISSION_POSSIBLE":
                     claim.state = "RELEASED"
                     claim.released_at = now
                 session.commit()
@@ -429,14 +447,74 @@ class ExecutionService:
             return denied("APPROVAL_INACTIVE_OR_EXPIRED", "APPROVAL_INACTIVE_OR_EXPIRED")
         if context.checked_at and parse_utc(context.checked_at) < decision.decision_at:
             return denied("STALE_CONTEXT", "STALE_CONTEXT")
+
+        # The saved admission must still be live. A cancelled, denied, reconciled
+        # or breached action can never be submitted from the queue.
+        saved = self._admission.retrieve_decisions(owner, action_id=action_intent.action_id)
+        if not saved:
+            return denied("ACTION_NOT_FOUND", "ACTION_NOT_FOUND")
+        if saved[0].status != "ADMITTED":
+            identity = f"ACTION_NOT_ADMITTED:{saved[0].status}"
+            return denied(identity, identity)
+
         proposal = self._admission.propose(owner, action_intent, approval, context)
         identity = f"{proposal.status}:{proposal.reason or ''}"
         if proposal.status != "PROPOSED":
             return denied(proposal.reason or "REVALIDATION_DENIED", identity)
+
+        durable = self._durable_coverage(owner, action_intent, approval, context)
+        if durable is not None:
+            return denied(durable, durable)
+
         return RevalidationOutcome(
             status="PASSED", reason=None, revision_hash=revision_hash, approval_hash=approval_hash,
             policy_binding=approval.policy_binding, market_binding_id=decision.market_binding_id,
             validation_identity=identity)
+
+    def _durable_coverage(
+        self, owner: uuid.UUID, action_intent: ActionIntent, approval: ApprovalSnapshot,
+        context: AdmissionContext,
+    ) -> str | None:
+        """Recheck current authority, durable reservations and holdings before submission.
+
+        The saved admission state, the durable reservation ledger and the current
+        holdings must still cover the exact action under the caller's current
+        approval. A pure proposal alone cannot prove the saved reservation exists
+        or that a lowered successor limit still covers it.
+        """
+        summaries = {item.asset_id: item for item in self._admission.balances(
+            owner, agent_id=action_intent.binding.agent_id, wallet_id=action_intent.binding.wallet_id,
+            network_id=action_intent.binding.network_id)}
+        for asset_id in self._capital_assets(action_intent, approval):
+            cap = _cap_for(approval, asset_id)
+            if cap is None:
+                return "ALLOWANCE_UNSPECIFIED"
+            summary = summaries.get(asset_id)
+            consumed = int(summary.consumed_raw) if summary is not None else 0
+            reserved = int(summary.reserved_raw) if summary is not None else 0
+            if consumed + reserved > cap:
+                return "CAPACITY_UNAVAILABLE"
+        for asset_id in self._holding_assets(action_intent, approval):
+            summary = summaries.get(asset_id)
+            reserved = int(summary.reserved_raw) if summary is not None else 0
+            holding = context.holdings.balances.get(asset_id)
+            if holding is None or holding.as_int() < reserved:
+                return "HOLDINGS_SHORTFALL"
+        return None
+
+    @staticmethod
+    def _capital_assets(action_intent: ActionIntent, approval: ApprovalSnapshot) -> set[str]:
+        assets = {action_intent.quantity.asset_id, approval.gas.asset_id}
+        if action_intent.operation in ACQUISITIONS and action_intent.input.quote_input is not None:
+            assets.add(action_intent.input.quote_asset_id)
+        return assets
+
+    @staticmethod
+    def _holding_assets(action_intent: ActionIntent, approval: ApprovalSnapshot) -> set[str]:
+        assets = {approval.gas.asset_id}
+        if action_intent.operation in ACQUISITIONS and action_intent.input.quote_input is not None:
+            assets.add(action_intent.input.quote_asset_id)
+        return assets
 
     def _receipt(self, action_intent: ActionIntent, approval: ApprovalSnapshot,
                  outcome: TransportOutcome) -> ActionReceipt:

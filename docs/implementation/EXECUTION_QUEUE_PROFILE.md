@@ -42,14 +42,19 @@ the verified owner; retrieval is owner-scoped. Another owner sees nothing.
 strategy's canonical content hash, its manifest hash, its market-binding hash and
 its required warm-up. A malformed or unsupported revision raises the compiler's
 `CompilerError` before any identity is accepted. A changed rule is a new content
-identity.
+identity. The frozen revision stores the canonical strategy bytes; every
+`strategy` access returns a fresh parse of those bytes. A caller cannot change
+the revision meaning after freezing, and the evaluator re-verifies the content
+hash of the bytes it evaluates before any rule runs.
 
 ## Evaluation semantics
 
 - The evaluator runs the revision's entry, exit and invalidation rules on the
   exact scheduled five-minute UTC positions supplied in `EvaluationInputs`.
 - A flat position uses the entry rule. An open position uses the exit rule and,
-  when requested, the invalidation rule.
+  when requested, the invalidation rule. An unrequested invalidation is ignored
+  for the open-position outcome, so a determinate `FALSE` exit is a `NO_SIGNAL`
+  and not an `INELIGIBLE`.
 - `TRUE` yields a `SIGNAL` with its exact operation. A determinate `FALSE` yields
   `NO_SIGNAL`. An `UNKNOWN` required rule yields `INELIGIBLE` with its reasons. A
   missing or future required observation is `INELIGIBLE`, never a false signal or
@@ -101,15 +106,25 @@ and is not submitted.
 
 ## Revalidation before submission
 
-Immediately before the fixture call, the service rechecks the current revision
-content hash, the revision identity, the policy binding, the approval state and
-expiry, the context time against the decision time, and the full P22 admission
-proposal for the exact payload. It records the current revision hash, approval
-hash, policy binding, market-binding hash and the validation identity on the
-queue entry. A failed revalidation saves the denial and blocking reason and
-preserves the exact prior intent payload. No queued eligibility is reused. A
-denied revalidation leaves the admitted reservations in place; it does not
-silently free or alter them.
+Immediately before the fixture call, the service rechecks, for the exact payload:
+
+- the current revision content hash and revision identity;
+- the policy binding, the approval state and expiry, and the context time
+  against the decision time;
+- the pure P22 admission proposal (approval, scoped stops, quote freshness,
+  asset/decimal identity and position existence);
+- the saved P22 admission state, which must still be `ADMITTED`; a cancelled,
+  denied, reconciled or breached action is refused;
+- the durable reservation ledger and the current approval caps, so a lowered
+  successor limit or a released reservation is refused; and
+- the current holdings against the live reservations for the assets the action
+  spends from the wallet.
+
+It records the current revision hash, approval hash, policy binding,
+market-binding hash and the validation identity on the queue entry. A failed
+revalidation saves the denial and blocking reason and preserves the exact prior
+intent payload. No queued eligibility is reused. A denied revalidation leaves the
+admitted reservations in place; it does not silently free or alter them.
 
 ## Labelled local fixture submission
 
@@ -128,10 +143,16 @@ The service maps the fixture result to the accepted P22 receipt outcomes
 (`PREBROADCAST_DENIED`, `SUBMISSION_UNKNOWN`, `CONFIRMED`, `REVERTED`) and
 reconciles through `AdmissionService.reconcile`. A confirmed acquisition or exit
 uses the fixture's actuals, or the planned amounts when the fixture reports none.
+The service reads the reconciliation result. If P22 rejects the settlement and
+records `BREACHED`, the queue records `BREACHED` with its reason, retains the
+claim and blocks a next economic action until explicit recovery; a transport
+confirmation is never reported as a successful action.
 
 ## Crash and restart boundaries
 
-- The decision is persisted before the intent; the intent before admission.
+- The saved decision and its inputs are persisted before any intent is written.
+  The exact intent payload is prepared before admission; the admitted action is
+  written before the claim and the attempt.
 - The claim and an `IN_FLIGHT` submission attempt are persisted in one
   transaction before the fixture call. A crash before the call leaves them
   durable.

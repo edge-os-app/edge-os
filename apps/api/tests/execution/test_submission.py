@@ -6,9 +6,10 @@ import uuid
 
 from sqlalchemy import text
 
+from edge_os_api.admission.types import AssetAmount
 from edge_os_api.execution.models import ClaimRow, SubmissionAttemptRow
 
-from admission._builders import AGENT_A, NETWORK, WALLET_A
+from admission._builders import AGENT_A, BASE, NETWORK, WALLET_A
 from execution._builders import frozen_entry_exit
 from execution._support import enqueue_entry, transport
 
@@ -120,3 +121,27 @@ def test_in_flight_attempt_after_restart_blocks_a_duplicate(
             "SELECT count(*) FROM execution_submission_attempts WHERE owner_id = :owner"),
             {"owner": str(fresh_owner)}).scalar_one()
     assert attempts == 1
+
+
+def test_rejected_settlement_breach_is_retained_not_reported(
+        execution_service, admission_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+
+    # The fixture reports a confirmed swap that overfills the adopted sell ceiling.
+    overfill = transport("ACCEPT", action_id=result.intent.action_id,
+                         actual_output=AssetAmount(asset_id=BASE, raw="1001", decimals=0))
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, overfill)
+
+    assert tick.status == "BREACHED"
+    saved = admission_service.retrieve_decisions(fresh_owner, action_id=result.intent.action_id)[0]
+    assert saved.status == "BREACHED"
+    assert _active_claims(execution_engine, fresh_owner) == 1
+
+    status = execution_service.status(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)
+    assert (status.blocking_reason or "").startswith("BREACHED")
+
+    # A breached wallet cannot submit a next economic action.
+    blocked = _tick(execution_service, fresh_owner, revision, approval, context, transport("ACCEPT"))
+    assert blocked.status == "BLOCKED_UNKNOWN"

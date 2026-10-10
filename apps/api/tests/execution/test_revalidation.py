@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from admission._builders import AGENT_A, NETWORK, WALLET_A
-from execution._builders import frozen_entry_exit, gt_constant, scoped_approval
+from execution._builders import frozen_entry_exit, gt_constant, scoped_approval, scoped_context
 from execution._support import enqueue_entry, transport
 
 
@@ -70,3 +70,45 @@ def test_scoped_stop_denies_a_queued_entry(execution_service, fresh_owner) -> No
     assert tick.status == "REVALIDATION_DENIED"
     assert "STOPPED_NEW_ENTRIES" in (tick.reason or "")
     assert tick.queue_entry is not None and tick.queue_entry.state == "REVALIDATION_DENIED"
+
+
+def _attempt_count(engine, owner) -> int:
+    with engine.connect() as connection:
+        return connection.execute(text(
+            "SELECT count(*) FROM execution_submission_attempts WHERE owner_id = :owner"),
+            {"owner": str(owner)}).scalar_one()
+
+
+def test_empty_holdings_deny_before_submission(execution_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, _approval, _context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    empty = scoped_context(quote_raw="0", native_raw="0")
+
+    tick = _run(execution_service, fresh_owner, revision,
+                scoped_approval(revision_id=revision.revision_id), empty, result.intent.action_id)
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "HOLDINGS_SHORTFALL"
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_lowered_successor_limits_deny_before_submission(execution_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, _approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    lower = scoped_approval(revision_id=revision.revision_id, quote_approved_raw="1",
+                            gas_approved_raw="0", approval_id="gate-successor")
+
+    tick = _run(execution_service, fresh_owner, revision, lower, context, result.intent.action_id)
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "CAPACITY_UNAVAILABLE"
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_cancelled_action_denies_before_submission(execution_service, admission_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    assert admission_service.cancel(fresh_owner, result.intent.action_id).decision_status == "CANCELLED"
+
+    tick = _run(execution_service, fresh_owner, revision, approval, context, result.intent.action_id)
+    assert tick.status == "REVALIDATION_DENIED"
+    assert (tick.reason or "").startswith("ACTION_NOT_ADMITTED")
+    assert _attempt_count(execution_engine, fresh_owner) == 0

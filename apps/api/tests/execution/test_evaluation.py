@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import uuid
 
+from edge_os_api.execution.evaluator import evaluate
+from edge_os_api.execution.types import canonical_hash
+
 from admission._builders import AGENT_A, NETWORK, WALLET_A
 from execution._builders import (
     DECISION_TIME,
@@ -89,3 +92,27 @@ def test_invalidation_triggers_exit_without_the_exit_rule(execution_service, fre
     states = {rule.rule: rule.state for rule in decision.rule_results}
     assert states["exit"] == "FALSE"
     assert states["invalidation"] == "TRUE"
+
+
+def test_false_exit_with_unrequested_invalidation_is_a_no_signal(execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit(entry=gt_constant(), exit_=lt_constant())
+    # Open position, exit rule FALSE, invalidation NOT_REQUESTED.
+    decision = execution_service.evaluate_and_decide(
+        fresh_owner, revision, make_inputs(["110"], ["5"], position_open=True),
+        agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)
+    assert decision.status == "NO_SIGNAL"
+    assert decision.operation is None
+    states = {rule.rule: rule.state for rule in decision.rule_results}
+    assert states["exit"] == "FALSE"
+    assert states["invalidation"] == "NOT_REQUESTED"
+
+
+def test_frozen_revision_meaning_cannot_change_after_freeze() -> None:
+    revision = frozen_entry_exit()
+    before = evaluate(revision, make_inputs(["90"], ["5"], position_open=False))
+    # Mutating a returned mapping must not change the frozen meaning or identity.
+    revision.strategy["entry"] = gt_constant("50")
+    after = evaluate(revision, make_inputs(["90"], ["5"], position_open=False))
+    assert before.status == "NO_SIGNAL"
+    assert after.status == "NO_SIGNAL"
+    assert canonical_hash(revision.strategy) == revision.content_hash

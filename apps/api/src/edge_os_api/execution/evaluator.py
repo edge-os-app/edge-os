@@ -8,6 +8,9 @@ no-signal or a zero.
 
 from __future__ import annotations
 
+import datetime as dt
+from typing import Any
+
 from edge_os_api.admission.types import parse_utc
 from edge_os_api.strategies import compiler as strategy_compiler
 
@@ -17,11 +20,13 @@ from edge_os_api.execution.types import (
     FrozenRevision,
     InputObservation,
     RuleEvaluation,
+    canonical_hash,
 )
 
 _RULES = ("entry", "exit", "invalidation")
-_OR_TRUE = strategy_compiler.Truth.TRUE
-_OR_FALSE = strategy_compiler.Truth.FALSE
+_TRUE = strategy_compiler.Truth.TRUE
+_FALSE = strategy_compiler.Truth.FALSE
+_UNKNOWN = strategy_compiler.Truth.UNKNOWN
 
 
 def _to_observation(row: InputObservation | None, binding_id: str) -> strategy_compiler.Observation | None:
@@ -37,7 +42,8 @@ def _to_observation(row: InputObservation | None, binding_id: str) -> strategy_c
     )
 
 
-def _context(revision: FrozenRevision, inputs: EvaluationInputs) -> strategy_compiler.EvaluationContext:
+def _context(strategy: dict[str, Any], revision: FrozenRevision,
+             inputs: EvaluationInputs) -> strategy_compiler.EvaluationContext:
     binding_id = revision.market_binding_id
     prices = [_to_observation(row, binding_id) for row in inputs.prices]
     volumes = [_to_observation(row, binding_id) for row in inputs.quote_volumes]
@@ -46,11 +52,12 @@ def _context(revision: FrozenRevision, inputs: EvaluationInputs) -> strategy_com
         prices, volumes, schedule, binding_id, inputs.observed_at(), inputs.position)
 
 
-def _rule_state(revision: FrozenRevision, name: str, context: strategy_compiler.EvaluationContext) -> RuleEvaluation:
-    node = revision.strategy[name]
+def _rule_state(strategy: dict[str, Any], name: str,
+                context: strategy_compiler.EvaluationContext) -> RuleEvaluation:
+    node = strategy[name]
     if name == "invalidation" and isinstance(node, dict) and node.get("state") == "NOT_REQUESTED":
         return RuleEvaluation(rule=name, state="NOT_REQUESTED", reasons=[])
-    result = strategy_compiler.evaluate_expression(node, revision.strategy["market"], context)
+    result = strategy_compiler.evaluate_expression(node, strategy["market"], context)
     return RuleEvaluation(rule=name, state=result.state, reasons=list(result.reasons))
 
 
@@ -62,12 +69,51 @@ def _merge(*groups: list[str]) -> list[str]:
     return list(seen)
 
 
+def _flat_outcome(entry: RuleEvaluation, rule_results: list[RuleEvaluation],
+                  inputs_hash: str) -> EvaluationOutcome:
+    if entry.state == _TRUE:
+        return EvaluationOutcome(status="SIGNAL", operation="ENTRY", reasons=entry.reasons,
+                                 rule_results=rule_results, inputs_hash=inputs_hash)
+    if entry.state == _FALSE:
+        return EvaluationOutcome(status="NO_SIGNAL", operation=None, reasons=entry.reasons,
+                                 rule_results=rule_results, inputs_hash=inputs_hash)
+    return EvaluationOutcome(
+        status="INELIGIBLE", operation=None,
+        reasons=_merge(entry.reasons, ["ENTRY_NOT_EVALUABLE"]) or ["ENTRY_NOT_EVALUABLE"],
+        rule_results=rule_results, inputs_hash=inputs_hash)
+
+
+def _open_outcome(exit_state: RuleEvaluation, invalidation: RuleEvaluation,
+                  rule_results: list[RuleEvaluation], inputs_hash: str) -> EvaluationOutcome:
+    reasons = _merge(exit_state.reasons, invalidation.reasons)
+    requested = invalidation.state != "NOT_REQUESTED"
+    values = [exit_state.state, invalidation.state] if requested else [exit_state.state]
+    if _TRUE in values:
+        return EvaluationOutcome(status="SIGNAL", operation="EXIT", reasons=reasons,
+                                 rule_results=rule_results, inputs_hash=inputs_hash)
+    if all(value == _FALSE for value in values):
+        return EvaluationOutcome(status="NO_SIGNAL", operation=None, reasons=reasons,
+                                 rule_results=rule_results, inputs_hash=inputs_hash)
+    return EvaluationOutcome(
+        status="INELIGIBLE", operation=None,
+        reasons=_merge(reasons, ["EXIT_NOT_EVALUABLE"]) or ["EXIT_NOT_EVALUABLE"],
+        rule_results=rule_results, inputs_hash=inputs_hash)
+
+
 def evaluate(revision: FrozenRevision, inputs: EvaluationInputs) -> EvaluationOutcome:
     """Return SIGNAL, NO_SIGNAL or INELIGIBLE for the revision and controlled inputs."""
     inputs_hash = inputs.identity()
+    strategy = revision.strategy
+    # The declared identity must match the exact bytes actually evaluated. The
+    # frozen revision stores canonical bytes, so this defends against any future
+    # refactor that would let the meaning drift from its identity.
+    if canonical_hash(strategy) != revision.content_hash:
+        return EvaluationOutcome(
+            status="INELIGIBLE", operation=None, reasons=["REVISION_INTEGRITY_MISMATCH"],
+            rule_results=[], inputs_hash=inputs_hash)
     try:
-        context = _context(revision, inputs)
-        rule_results = [_rule_state(revision, name, context) for name in _RULES]
+        context = _context(strategy, revision, inputs)
+        rule_results = [_rule_state(strategy, name, context) for name in _RULES]
     except strategy_compiler.CompilerError as error:
         return EvaluationOutcome(
             status="INELIGIBLE", operation=None, reasons=[f"EVALUATION_ERROR:{error.code}"],
@@ -75,33 +121,5 @@ def evaluate(revision: FrozenRevision, inputs: EvaluationInputs) -> EvaluationOu
 
     states = {item.rule: item for item in rule_results}
     if not inputs.position_open:
-        entry = states["entry"]
-        if entry.state == _OR_TRUE:
-            return EvaluationOutcome(status="SIGNAL", operation="ENTRY", reasons=entry.reasons,
-                                     rule_results=rule_results, inputs_hash=inputs_hash)
-        if entry.state == _OR_FALSE:
-            return EvaluationOutcome(status="NO_SIGNAL", operation=None, reasons=entry.reasons,
-                                     rule_results=rule_results, inputs_hash=inputs_hash)
-        return EvaluationOutcome(
-            status="INELIGIBLE", operation=None,
-            reasons=_merge(entry.reasons, ["ENTRY_NOT_EVALUABLE"]) or ["ENTRY_NOT_EVALUABLE"],
-            rule_results=rule_results, inputs_hash=inputs_hash)
-
-    exit_state = states["exit"]
-    invalidation_state = states["invalidation"]
-    invalidation_value = invalidation_state.state if invalidation_state.state in (_OR_TRUE, _OR_FALSE) else (
-        None if invalidation_state.state == "NOT_REQUESTED" else strategy_compiler.Truth.UNKNOWN)
-    values = (exit_state.state, invalidation_value)
-    if _OR_TRUE in values:
-        return EvaluationOutcome(status="SIGNAL", operation="EXIT",
-                                 reasons=_merge(exit_state.reasons, invalidation_state.reasons),
-                                 rule_results=rule_results, inputs_hash=inputs_hash)
-    if all(value == _OR_FALSE for value in values):
-        return EvaluationOutcome(status="NO_SIGNAL", operation=None,
-                                 reasons=_merge(exit_state.reasons, invalidation_state.reasons),
-                                 rule_results=rule_results, inputs_hash=inputs_hash)
-    return EvaluationOutcome(
-        status="INELIGIBLE", operation=None,
-        reasons=_merge(exit_state.reasons, invalidation_state.reasons, ["EXIT_NOT_EVALUABLE"])
-        or ["EXIT_NOT_EVALUABLE"],
-        rule_results=rule_results, inputs_hash=inputs_hash)
+        return _flat_outcome(states["entry"], rule_results, inputs_hash)
+    return _open_outcome(states["exit"], states["invalidation"], rule_results, inputs_hash)

@@ -7,12 +7,12 @@ wallet authority. Amounts and identities reuse the P22 canonical types.
 
 from __future__ import annotations
 
-import copy
 import datetime as dt
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -55,7 +55,12 @@ def canonical_hash(payload: Any) -> str:
 
 @dataclass(frozen=True)
 class FrozenRevision:
-    """One immutable compiled revision identity and its exact strategy bytes."""
+    """One immutable compiled revision identity.
+
+    The compiled strategy is stored as canonical bytes. Every `strategy` access
+    returns a fresh parse of those bytes, so mutating a returned mapping cannot
+    change the revision meaning or its declared content hash.
+    """
 
     strategy_id: str
     revision_id: str
@@ -63,7 +68,11 @@ class FrozenRevision:
     manifest_hash: str
     market_binding_id: str
     warmup_buckets: int
-    strategy: Mapping[str, Any]
+    _canonical_json: bytes
+
+    @property
+    def strategy(self) -> dict[str, Any]:
+        return json.loads(self._canonical_json)
 
 
 def freeze_revision(strategy: dict[str, Any]) -> FrozenRevision:
@@ -73,17 +82,17 @@ def freeze_revision(strategy: dict[str, Any]) -> FrozenRevision:
     raises `CompilerError` before any identity is accepted.
     """
     strategy_compiler.validate_strategy(strategy)
-    frozen = copy.deepcopy(strategy)
-    content_hash = canonical_hash(frozen)
-    manifest_hash = canonical_hash(frozen["semantic_manifest"])
+    canonical = record_contract.canonical_bytes(strategy)
+    frozen = json.loads(canonical)
+    content_hash = sha256_ref(canonical)
     return FrozenRevision(
         strategy_id=frozen["strategy_id"],
         revision_id=f"{frozen['strategy_id']}:{content_hash[7:23]}",
         content_hash=content_hash,
-        manifest_hash=manifest_hash,
+        manifest_hash=canonical_hash(frozen["semantic_manifest"]),
         market_binding_id=strategy_compiler.market_binding_id(frozen["market"]),
         warmup_buckets=frozen["warmup_buckets"],
-        strategy=frozen,
+        _canonical_json=canonical,
     )
 
 
@@ -295,19 +304,9 @@ def utc_iso(moment: dt.datetime) -> str:
 
 
 def canonical_intent_id(decision_id: uuid.UUID, operation: str) -> str:
+    """The intent id equals the action id: one decision plus one operation, one intent."""
     return f"p23:{decision_id}:{operation}"
 
 
 def canonical_action_id(decision_id: uuid.UUID, operation: str) -> str:
     return f"p23:{decision_id}:{operation}"
-
-
-def review_hash_for(plan: IntentPlan) -> str:
-    payload = {
-        "decision_id": str(plan.decision_id),
-        "operation": plan.operation,
-        "position_id": plan.position_id,
-        "binding": plan.binding.model_dump(mode="json"),
-        "payload_hash": plan.payload_hash,
-    }
-    return canonical_hash(payload)
