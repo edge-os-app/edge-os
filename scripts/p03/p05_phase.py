@@ -203,7 +203,7 @@ def run_p05_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port:
         process.stop()
         process = start_hermes_api(env, api_port, tag, run_id, workdir, script_file, evidence / "logs", "api-hermes-local-restarted")
         harness.wait_http(f"{api_url}/readyz")
-        code = run_playwright(["interpreter-reopen.spec.mjs"], p05_env, evidence / "ui-p05-reopen.log")
+        code = run_playwright(["interpreter-after-restart.spec.mjs"], p05_env, evidence / "ui-p05-reopen.log")
         ok &= rec.step("P05: saved attempts and states reopen unchanged after restart (new browser context, no write)",
                        code == 0, {"exit": code})
         after = {intake_id: attempt_snapshot(pg, intake_id) for intake_id in ids}
