@@ -8,9 +8,11 @@ with decimals, and unlike assets are never summed.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import re
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -158,12 +160,20 @@ class ApprovalSnapshot(StrictModel):
     base_allowance: AllowanceCap
     gas: AllowanceCap
     per_action_gas: AllowanceCap
+    per_exit_gas: AllowanceCap
     attempt_budget: int = Field(ge=0, le=1_000_000)
     stops: list[StopSpec] = Field(default_factory=list, max_length=20)
     exit_capacity_qualified: bool
     valuation_qualified: bool
     cost_model_qualified: bool
     fixture_label: str = Field(min_length=1, max_length=80)
+
+    def content_hash(self) -> str:
+        """Canonical hash of the full immutable approval meaning (all terms, not just caps)."""
+        payload = self.model_dump(mode="json")
+        payload.pop("fixture_label", None)
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @field_validator("actions")
     @classmethod
@@ -291,6 +301,18 @@ class SavedReservation(StrictModel):
     position_id: str | None
     amount: AssetAmount
     state: str
+
+
+class SavedReceipt(StrictModel):
+    receipt_id: uuid.UUID
+    owner_id: uuid.UUID
+    action_id: str
+    position_id: str | None
+    operation: str
+    outcome: str
+    breach: bool
+    created_at: str
+    content: dict[str, Any]
 
 
 class AllowanceSummary(StrictModel):

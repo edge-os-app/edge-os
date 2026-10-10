@@ -83,8 +83,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 450 passed (377 existing + 73 admission), ~105 s.
-- Admission suite: 73 passed.
+- Full suite: 459 passed (377 existing + 82 admission), ~78 s.
+- Admission suite: 82 passed.
 - P15 and P02 contract checks: PASS.
 - `git diff --check`: clean.
 
@@ -101,6 +101,18 @@ over-fill or over-allocation fails closed and rolls back; scoped stops and
 unqualified required controls fail closed; reconcile and admission serialize on
 the wallet lock; and confirmed acquisitions/exits require reconciled actuals and
 update weighted cost basis and realized result.
+
+## Gate-repair coverage (verdict 2/3, candidate 8f07e22 and 6f1...)
+
+Additional regressions for the second gate review: an addition cannot target
+another wallet's position; an exit output with the wrong quote asset or decimals
+fails closed; a changed attempt budget or other approval term under the same
+approval identity is denied; an exit actual cannot consume inventory promised to
+another reserved exit; an acquisition is denied when its intended exit cannot be
+covered (attempt/gas); a breach records durable evidence and blocks new work; an
+entry is denied without cost-model qualification; a concurrent identical
+admission returns the same saved decision; and each verified receipt is
+persisted and retrievable.
 
 ## Not covered
 

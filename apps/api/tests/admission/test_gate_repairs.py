@@ -143,7 +143,7 @@ def test_adopted_successor_cap_is_applied(admission_service, fresh_owner) -> Non
 # ---------------------------------------------------------------- B5
 
 def test_actual_gas_respects_other_outstanding_reservations(admission_service, fresh_owner) -> None:
-    approval = approval_a(gas_approved_raw="4", per_action_gas_raw="2")
+    approval = approval_a(gas_approved_raw="4", per_action_gas_raw="2", per_exit_gas_raw="0")
     first = intent_entry(quantity_raw="1", quote_input_raw="50", position_id="position-a-1")
     second = intent_entry(quantity_raw="1", quote_input_raw="50", position_id="position-a-2")
     assert admission_service.admit_and_reserve(fresh_owner, first, approval, context_a()).status == "ADMITTED"
@@ -301,3 +301,124 @@ def test_weighted_basis_realized_on_partial_exit(admission_service, admission_en
             "SELECT inventory, cost_basis, realized_quote FROM admission_positions WHERE owner_id = :owner"
         ), {"owner": str(fresh_owner)}).one()
     assert (int(inventory), int(basis), int(realized)) == (15, 1650, 100)
+
+# ---------------------------------------------------------------- R1
+
+def test_addition_to_other_wallet_position_is_denied(admission_service, fresh_owner) -> None:
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval_a(), context_a())
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+    cross = intent_a("ADDITION", "5", quote_input_raw="50", position_id="position-a-1",
+                     binding=binding_b(), policy_binding="policy-b-v1")
+    denied = admission_service.admit_and_reserve(
+        fresh_owner, cross, approval_b(), context_b())
+    assert denied.status == "DENIED"
+    assert "POSITION_BINDING_MISMATCH" in denied.reason or "POSITION_MISSING" in denied.reason
+
+
+# ---------------------------------------------------------------- R2
+
+def test_exit_output_wrong_quote_decimals_fails_closed(admission_service, fresh_owner) -> None:
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval_a(), context_a())
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+    exit_intent = intent_exit(quantity_raw="5")
+    admission_service.admit_and_reserve(fresh_owner, exit_intent, approval_a(), context_a(position_inventory="10"))
+    bad = ActionReceipt(
+        action_id=exit_intent.action_id, binding=exit_intent.binding, outcome="CONFIRMED",
+        actual_input=AssetAmount(asset_id=BASE, raw="5", decimals=0),
+        actual_output=AssetAmount(asset_id=QUOTE, raw="250", decimals=18),
+        actual_gas=AssetAmount(asset_id=NATIVE, raw="1", decimals=0))
+    outcome = admission_service.reconcile(fresh_owner, exit_intent.action_id, bad)
+    assert outcome.reason == "MISSING_RECONCILED_OUTPUT"
+    assert outcome.decision_status == "BREACHED"
+
+
+# ---------------------------------------------------------------- R3
+
+def test_changed_attempt_budget_under_same_approval_is_denied(admission_service, fresh_owner) -> None:
+    first = intent_entry(quantity_raw="1", quote_input_raw="20", position_id="position-a-1")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, first, approval_a(attempt_budget=2), context_a()).status == "ADMITTED"
+    admission_service.cancel(fresh_owner, first.action_id)
+    second = intent_entry(quantity_raw="1", quote_input_raw="20", position_id="position-a-2")
+    denied = admission_service.admit_and_reserve(
+        fresh_owner, second, approval_a(attempt_budget=5), context_a())
+    assert denied.status == "DENIED" and denied.reason == "APPROVAL_MISMATCH"
+
+
+# ---------------------------------------------------------------- R4
+
+def test_exit_actual_cannot_consume_another_reserved_exit(admission_service, fresh_owner) -> None:
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval_a(), context_a())
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+    first_exit = intent_exit(quantity_raw="5")
+    second_exit = intent_exit(quantity_raw="5")
+    assert admission_service.admit_and_reserve(
+        fresh_owner, first_exit, approval_a(), context_a(position_inventory="10")).status == "ADMITTED"
+    assert admission_service.admit_and_reserve(
+        fresh_owner, second_exit, approval_a(), context_a(position_inventory="10")).status == "ADMITTED"
+    outcome = admission_service.reconcile(fresh_owner, first_exit.action_id, confirm_exit(first_exit, "6", "300", "1"))
+    assert outcome.reason == "EXIT_EXCEEDS_RESERVED"
+    assert outcome.decision_status == "BREACHED"
+
+
+# ---------------------------------------------------------------- R5
+
+def test_entry_denied_when_intended_exit_not_coverable(admission_service, fresh_owner) -> None:
+    # Attempt budget 1 cannot cover the entry plus its intended exit (two atoms).
+    denied = admission_service.admit_and_reserve(
+        fresh_owner, intent_entry(position_id="position-a-1"),
+        approval_a(attempt_budget=1), context_a())
+    assert denied.status == "DENIED" and denied.reason == "ATTEMPT_BUDGET_EXHAUSTED"
+
+
+def test_breach_blocks_new_work_and_keeps_receipt(admission_service, fresh_owner) -> None:
+    approval = approval_a(base_approved_raw="10")
+    entry = intent_entry(quantity_raw="1", quote_input_raw="20", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval, context_a())
+    outcome = admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "20", "11", "1"))
+    assert outcome.reason == "SELL_COVERAGE_EXCEEDED"
+    assert outcome.decision_status == "BREACHED"
+    blocked = admission_service.admit_and_reserve(
+        fresh_owner, intent_entry(position_id="position-a-2"), approval, context_a())
+    assert blocked.status == "DENIED" and blocked.reason == "UNRESOLVED_PRIOR_ACTION"
+    receipts = admission_service.retrieve_receipts(fresh_owner, action_id=entry.action_id)
+    assert receipts and receipts[0].breach is True
+
+
+# ---------------------------------------------------------------- R6
+
+def test_entry_denied_without_cost_qualification(admission_service, fresh_owner) -> None:
+    denied = admission_service.admit_and_reserve(
+        fresh_owner, intent_entry(position_id="position-a-1"),
+        approval_a(cost_model_qualified=False), context_a())
+    assert denied.status == "DENIED" and "COST_MODEL_UNQUALIFIED" in denied.reason
+
+
+# ---------------------------------------------------------------- R7
+
+def test_concurrent_identical_admission_returns_same_decision(admission_service, fresh_owner) -> None:
+    intent = intent_entry(action_id="action-identical", quantity_raw="10", quote_input_raw="110")
+
+    def admit(index):
+        return admission_service.admit_and_reserve(fresh_owner, intent, approval_a(), context_a())
+
+    results = _run_concurrently(2, admit)
+    assert all(r.status == "ADMITTED" for r in results), [r.status for r in results]
+    assert len({r.decision_id for r in results}) == 1
+
+
+# ---------------------------------------------------------------- R8
+
+def test_receipt_lineage_is_persisted(admission_service, fresh_owner) -> None:
+    entry = intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-1")
+    admission_service.admit_and_reserve(fresh_owner, entry, approval_a(), context_a())
+    admission_service.reconcile(fresh_owner, entry.action_id, confirm_entry(entry, "110", "10", "1"))
+    receipts = admission_service.retrieve_receipts(fresh_owner)
+    assert len(receipts) == 1
+    receipt = receipts[0]
+    assert receipt.action_id == entry.action_id and receipt.outcome == "CONFIRMED" and receipt.breach is False
+    assert receipt.content["actual_input"] == {"asset_id": QUOTE, "raw": "110", "decimals": 0}
+    assert receipt.content["actual_output"] == {"asset_id": BASE, "raw": "10", "decimals": 0}

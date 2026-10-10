@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -66,7 +67,7 @@ class DecisionRow(AdmissionBase):
 
     __table_args__ = (
         UniqueConstraint("owner_id", "action_id", name="uq_admission_decisions_owner_action"),
-        CheckConstraint("status IN ('PROPOSED','ADMITTED','DENIED','CANCELLED','CONFIRMED','REVERTED','SUBMISSION_UNKNOWN')",
+        CheckConstraint("status IN ('PROPOSED','ADMITTED','DENIED','CANCELLED','CONFIRMED','REVERTED','SUBMISSION_UNKNOWN','BREACHED')",
                         name="ck_admission_decisions_status"),
         Index("ix_admission_decisions_owner_wallet", "owner_id", "wallet_id", "network_id"),
         Index("ix_admission_decisions_owner_agent", "owner_id", "agent_id"),
@@ -85,6 +86,7 @@ class AllowanceRow(AdmissionBase):
     asset_id: Mapped[str] = mapped_column(Text, nullable=False)
     decimals: Mapped[int] = mapped_column(BigInteger, nullable=False)
     approval_id: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_hash: Mapped[str] = mapped_column(Text, nullable=False)
     approved: Mapped[Decimal] = _raw_column()
     consumed: Mapped[Decimal] = _raw_column()
 
@@ -140,6 +142,8 @@ class PositionRow(AdmissionBase):
     mandate_id: Mapped[str] = mapped_column(Text, nullable=False)
     asset_id: Mapped[str] = mapped_column(Text, nullable=False)
     decimals: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quote_asset_id: Mapped[str] = mapped_column(Text, nullable=False)
+    quote_decimals: Mapped[int] = mapped_column(BigInteger, nullable=False)
     inventory: Mapped[Decimal] = _raw_column()
     cost_basis: Mapped[Decimal] = _raw_column()
     realized_quote: Mapped[Decimal] = _raw_column()
@@ -147,4 +151,28 @@ class PositionRow(AdmissionBase):
     __table_args__ = (
         PrimaryKeyConstraint("owner_id", "position_id", name="pk_admission_positions"),
         CheckConstraint("inventory >= 0 AND cost_basis >= 0", name="ck_admission_positions_non_negative"),
+    )
+
+
+class ReceiptRow(AdmissionBase):
+    """Immutable verified receipt and its actual asset effects for one action transition."""
+
+    __tablename__ = "admission_receipts"
+    receipt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[str] = mapped_column(Text, nullable=False)
+    wallet_id: Mapped[str] = mapped_column(Text, nullable=False)
+    network_id: Mapped[str] = mapped_column(Text, nullable=False)
+    action_id: Mapped[str] = mapped_column(Text, nullable=False)
+    position_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    operation: Mapped[str] = mapped_column(Text, nullable=False)
+    review_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    breach: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=NOW)
+
+    __table_args__ = (
+        Index("ix_admission_receipts_owner_action", "owner_id", "action_id", "created_at"),
+        Index("ix_admission_receipts_owner_wallet", "owner_id", "wallet_id", "network_id"),
     )

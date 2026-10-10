@@ -33,6 +33,7 @@ from edge_os_api.admission.models import (
     AllowanceRow,
     DecisionRow,
     PositionRow,
+    ReceiptRow,
     ReservationRow,
 )
 from edge_os_api.admission.types import (
@@ -47,6 +48,7 @@ from edge_os_api.admission.types import (
     ReconciliationOutcome,
     ReservationView,
     SavedDecision,
+    SavedReceipt,
     SavedReservation,
 )
 
@@ -171,8 +173,8 @@ def _capital_reserved(session: Session, owner: uuid.UUID, agent_id: str, wallet_
 
 
 def _exit_hold(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
-               position_id: str, asset_id: str) -> int:
-    total = session.execute(select(func.coalesce(func.sum(ReservationRow.raw), 0)).where(
+               position_id: str, asset_id: str, *, exclude: uuid.UUID | None = None) -> int:
+    statement = select(func.coalesce(func.sum(ReservationRow.raw), 0)).where(
         ReservationRow.owner_id == owner,
         ReservationRow.agent_id == agent_id,
         ReservationRow.wallet_id == wallet_id,
@@ -182,8 +184,10 @@ def _exit_hold(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str
         ReservationRow.scope == "INVENTORY",
         ReservationRow.operation == "EXIT",
         ReservationRow.state == "RESERVED",
-    )).scalar_one()
-    return _int(total)
+    )
+    if exclude is not None:
+        statement = statement.where(ReservationRow.reservation_id != exclude)
+    return _int(session.execute(statement).scalar_one())
 
 
 def _pending_acquisition(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str,
@@ -216,19 +220,20 @@ def _attributed_inventory(session: Session, owner: uuid.UUID, agent_id: str, wal
 
 
 def _attributed_cost(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str,
-                     network_id: str) -> int:
-    """Deployed capital = the sum of every position's cost basis in the approval quote."""
+                     network_id: str, quote_asset: str) -> int:
+    """Deployed capital = cost basis of positions quoted in the adopted quote asset only."""
     total = session.execute(select(func.coalesce(func.sum(PositionRow.cost_basis), 0)).where(
         PositionRow.owner_id == owner,
         PositionRow.agent_id == agent_id,
         PositionRow.wallet_id == wallet_id,
         PositionRow.network_id == network_id,
+        PositionRow.quote_asset_id == quote_asset,
     )).scalar_one()
     return _int(total)
 
 
 def _attempt_count(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str) -> int:
-    total = session.execute(select(func.coalesce(func.count(), 0)).where(
+    total = session.execute(select(func.coalesce(func.sum(ReservationRow.raw), 0)).where(
         ReservationRow.owner_id == owner,
         ReservationRow.agent_id == agent_id,
         ReservationRow.wallet_id == wallet_id,
@@ -240,13 +245,14 @@ def _attempt_count(session: Session, owner: uuid.UUID, agent_id: str, wallet_id:
 
 
 def _ensure_allowance(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
-                      asset_id: str, decimals: int, cap: int, approval_id: str,
+                      asset_id: str, decimals: int, cap: int, approval_id: str, approval_hash: str,
                       reserved_current: int) -> tuple[AllowanceRow | None, str | None]:
     """Return the locked allowance for this wallet asset, or a denial reason.
 
-    Rejects a changed-content reuse of the same approval identity. A different
-    approval identity is treated as an explicit successor: it may raise the cap,
-    but a reduction must keep existing consumption and reservations covered.
+    Rejects a changed-content reuse of the same approval identity (compared by the
+    full approval content hash). A different approval identity is treated as an
+    explicit successor: it may raise the cap, but a reduction must keep existing
+    consumption and reservations covered.
     """
     statement = select(AllowanceRow).where(
         AllowanceRow.owner_id == owner, AllowanceRow.agent_id == agent_id,
@@ -258,7 +264,7 @@ def _ensure_allowance(session: Session, owner: uuid.UUID, agent_id: str, wallet_
         session.execute(pg_insert(AllowanceRow).values(
             allowance_id=uuid.uuid4(), owner_id=owner, agent_id=agent_id, wallet_id=wallet_id,
             network_id=network_id, asset_id=asset_id, decimals=decimals, approval_id=approval_id,
-            approved=Decimal(cap), consumed=Decimal(0),
+            approval_hash=approval_hash, approved=Decimal(cap), consumed=Decimal(0),
         ).on_conflict_do_nothing(
             index_elements=["owner_id", "agent_id", "wallet_id", "network_id", "asset_id"]))
         session.flush()
@@ -266,7 +272,7 @@ def _ensure_allowance(session: Session, owner: uuid.UUID, agent_id: str, wallet_
     if _int(row.decimals) != decimals:
         return None, "DECIMALS_MISMATCH"
     if row.approval_id == approval_id:
-        if _int(row.approved) != cap:
+        if row.approval_hash != approval_hash or _int(row.approved) != cap:
             return None, "APPROVAL_MISMATCH"
         return row, None
     # A different approval identity: an explicit successor. It must not erase
@@ -275,6 +281,7 @@ def _ensure_allowance(session: Session, owner: uuid.UUID, agent_id: str, wallet_
         return None, "RENEWAL_ERASES_COMMITMENTS"
     row.approved = Decimal(cap)
     row.approval_id = approval_id
+    row.approval_hash = approval_hash
     return row, None
 
 
@@ -325,6 +332,15 @@ class AdmissionService:
 
                 _acquire_wallet_lock(session, verified_owner_id, intent.binding.agent_id,
                                      intent.binding.wallet_id, intent.binding.network_id)
+                # Re-check the immutable action identity under the lock: a concurrent
+                # identical admission must return the same saved decision, not fail.
+                existing = _find_decision(session, verified_owner_id, intent.action_id)
+                if existing is not None:
+                    if existing.review_hash == intent.review_hash:
+                        session.commit()
+                        return _decision_view(session, existing)
+                    session.rollback()
+                    raise StaleInput(intent.action_id)
                 denial = self._admit_locked(session, verified_owner_id, intent, approval, context)
                 if denial is not None:
                     row = _save_decision(session, verified_owner_id, intent, "DENIED", denial, approval)
@@ -348,11 +364,11 @@ class AdmissionService:
         approval: ApprovalSnapshot,
         context: AdmissionContext,
     ) -> str | None:
-        # One unresolved economic transaction per agent wallet and network.
+        # One unresolved or breached economic state per agent wallet and network.
         unresolved = session.execute(select(DecisionRow.action_id).where(
             DecisionRow.owner_id == owner, DecisionRow.wallet_id == intent.binding.wallet_id,
             DecisionRow.network_id == intent.binding.network_id,
-            DecisionRow.status == "SUBMISSION_UNKNOWN").limit(1)).scalar_one_or_none()
+            DecisionRow.status.in_(("SUBMISSION_UNKNOWN", "BREACHED"))).limit(1)).scalar_one_or_none()
         if unresolved is not None:
             return "UNRESOLVED_PRIOR_ACTION"
 
@@ -367,9 +383,11 @@ class AdmissionService:
         if reasons:
             return ";".join(sorted(set(reasons)))
 
-        if intent.operation in ACQUISITIONS:
+        if intent.operation == "ENTRY":
             position = None
         else:
+            # ADDITION and EXIT both use an existing durable position; validate its
+            # complete binding before any capacity decision.
             assert durable is not None  # POSITION_MISSING already returned above
             expected = (intent.binding.agent_id, intent.binding.wallet_id, intent.binding.network_id,
                         intent.quantity.asset_id, intent.quantity.decimals,
@@ -404,7 +422,8 @@ class AdmissionService:
                 return "DECIMALS_UNKNOWN"
             reserved = _capital_reserved(session, owner, b.agent_id, b.wallet_id, b.network_id, asset_id)
             row, reason = _ensure_allowance(session, owner, b.agent_id, b.wallet_id, b.network_id,
-                                            asset_id, decimals, cap, approval.approval_id, reserved)
+                                            asset_id, decimals, cap, approval.approval_id,
+                                            approval.content_hash(), reserved)
             if reason is not None:
                 return reason
             assert row is not None
@@ -424,6 +443,7 @@ class AdmissionService:
         base_decimals = approval.base_allowance.decimals
         base_row, reason = _ensure_allowance(session, owner, b.agent_id, b.wallet_id, b.network_id,
                                              base_asset, base_decimals, base_cap, approval.approval_id,
+                                             approval.content_hash(),
                                              _attributed_inventory(session, owner, b.agent_id, b.wallet_id,
                                                                    b.network_id, base_asset)
                                              + _pending_acquisition(session, owner, b.agent_id, b.wallet_id,
@@ -443,7 +463,7 @@ class AdmissionService:
             quote_asset = intent.input.quote_asset_id
             if allocation.asset_id != quote_asset:
                 return "ALLOCATION_ASSET_MISMATCH"
-            deployed = (_attributed_cost(session, owner, b.agent_id, b.wallet_id, b.network_id)
+            deployed = (_attributed_cost(session, owner, b.agent_id, b.wallet_id, b.network_id, quote_asset)
                         + _capital_reserved(session, owner, b.agent_id, b.wallet_id, b.network_id, quote_asset))
             if deployed + intent.input.quote_input.as_int() > allocation.as_int():
                 return "ALLOCATION_EXCEEDED"
@@ -495,12 +515,15 @@ class AdmissionService:
                 decimals=need.decimals, raw=Decimal(need.raw), state="RESERVED",
             ))
         if plan.requires_new_position and intent.position_id:
+            quote = intent.input.quote_input
             session.add(PositionRow(
                 owner_id=owner, position_id=intent.position_id,
                 agent_id=intent.binding.agent_id, wallet_id=intent.binding.wallet_id,
                 network_id=intent.binding.network_id,
                 strategy_revision=intent.binding.strategy_revision, mandate_id=intent.binding.mandate_id,
                 asset_id=intent.quantity.asset_id, decimals=intent.quantity.decimals,
+                quote_asset_id=intent.input.quote_asset_id,
+                quote_decimals=quote.decimals if quote is not None else 0,
                 inventory=Decimal(0), cost_basis=Decimal(0), realized_quote=Decimal(0),
             ))
 
@@ -583,6 +606,28 @@ class AdmissionService:
                     approved=_int(row.approved), consumed=_int(row.consumed), reserved=reserved))
             return summaries
 
+    def retrieve_receipts(
+        self,
+        verified_owner_id: uuid.UUID,
+        *,
+        action_id: str | None = None,
+        wallet_id: str | None = None,
+        network_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SavedReceipt]:
+        with self._factory() as session:
+            statement = select(ReceiptRow).where(ReceiptRow.owner_id == verified_owner_id)
+            if action_id is not None:
+                statement = statement.where(ReceiptRow.action_id == action_id)
+            if wallet_id is not None:
+                statement = statement.where(ReceiptRow.wallet_id == wallet_id)
+            if network_id is not None:
+                statement = statement.where(ReceiptRow.network_id == network_id)
+            rows = session.execute(
+                statement.order_by(ReceiptRow.created_at, ReceiptRow.receipt_id).limit(limit)
+            ).scalars().all()
+            return [_saved_receipt(row) for row in rows]
+
     # ----------------------------------------------------------------- cancel
 
     def cancel(self, verified_owner_id: uuid.UUID, action_id: str) -> CancellationOutcome:
@@ -639,6 +684,7 @@ class AdmissionService:
 
                 outcome = receipt.outcome
                 if outcome == "SUBMISSION_UNKNOWN":
+                    _save_receipt(session, row, receipt, outcome, breach=False)
                     row.status = "SUBMISSION_UNKNOWN"
                     session.commit()
                     return ReconciliationOutcome(
@@ -651,11 +697,13 @@ class AdmissionService:
                         session.commit()
                         return ReconciliationOutcome(action_id=action_id, decision_status=row.status,
                                                      reason="NOT_CANCELLABLE_AFTER_SUBMISSION")
+                    _save_receipt(session, row, receipt, outcome, breach=False)
                     _release_all(session, row, "CANCELLED")
                     session.commit()
                     return ReconciliationOutcome(action_id=action_id, decision_status="CANCELLED", reason=None)
 
                 if outcome == "PREBROADCAST_DENIED":
+                    _save_receipt(session, row, receipt, outcome, breach=False)
                     _release_all(session, row, "DENIED", reason="PREBROADCAST_DENIED")
                     session.commit()
                     return ReconciliationOutcome(action_id=action_id, decision_status="DENIED",
@@ -666,8 +714,17 @@ class AdmissionService:
                         consumed, released = _settle(session, row, receipt)
                     except AccountingBreach as breach:
                         session.rollback()
-                        return ReconciliationOutcome(action_id=action_id, decision_status=row.status,
+                        # A verified receipt that cannot fit the adopted bounds is kept
+                        # as durable evidence and blocks new affected work until reconciled.
+                        row = _find_decision(session, verified_owner_id, action_id, for_update=True)
+                        assert row is not None
+                        _save_receipt(session, row, receipt, outcome, breach=True)
+                        row.status = "BREACHED"
+                        row.reason = breach.reason
+                        session.commit()
+                        return ReconciliationOutcome(action_id=action_id, decision_status="BREACHED",
                                                      reason=breach.reason)
+                    _save_receipt(session, row, receipt, outcome, breach=False)
                     session.commit()
                     return ReconciliationOutcome(
                         action_id=action_id, decision_status=row.status, reason=None,
@@ -724,6 +781,39 @@ def _saved_reservation(row: ReservationRow) -> SavedReservation:
 
 def _reservation_amount(row: ReservationRow) -> AssetAmount:
     return _amount(row.asset_id, _int(row.raw), _int(row.decimals))
+
+
+def _amount_dict(amount: AssetAmount | None) -> dict[str, Any] | None:
+    if amount is None:
+        return None
+    return {"asset_id": amount.asset_id, "raw": amount.raw, "decimals": amount.decimals}
+
+
+def _save_receipt(session: Session, row: DecisionRow, receipt: ActionReceipt,
+                  outcome: str, *, breach: bool) -> None:
+    content = {
+        "outcome": outcome,
+        "review_hash": row.review_hash,
+        "operation": row.operation,
+        "breach": breach,
+        "actual_input": _amount_dict(receipt.actual_input),
+        "actual_output": _amount_dict(receipt.actual_output),
+        "actual_gas": _amount_dict(receipt.actual_gas),
+    }
+    session.add(ReceiptRow(
+        receipt_id=uuid.uuid4(), owner_id=row.owner_id, agent_id=row.agent_id,
+        wallet_id=row.wallet_id, network_id=row.network_id, action_id=row.action_id,
+        position_id=str(row.binding.get("position_id") or ""), operation=row.operation,
+        review_hash=row.review_hash, outcome=outcome, breach=breach, content=content,
+    ))
+
+
+def _saved_receipt(row: ReceiptRow) -> SavedReceipt:
+    return SavedReceipt(
+        receipt_id=row.receipt_id, owner_id=row.owner_id, action_id=row.action_id,
+        position_id=row.position_id or None, operation=row.operation, outcome=row.outcome,
+        breach=bool(row.breach), created_at=_utc_iso(row.created_at), content=row.content,
+    )
 
 
 def _action_reservations(session: Session, row: DecisionRow, *, for_update: bool = False) -> list[ReservationRow]:
@@ -785,7 +875,18 @@ def _settle(
     base_asset = str(row.binding.get("base_asset_id") or "")
     base_decimals = _int(row.binding.get("base_decimals") or 0)
     quote_asset = str(row.binding.get("quote_asset_id") or "")
+    quote_decimals = _int(row.binding.get("quote_decimals") or 0)
     position = _position_row(session, row.owner_id, str(row.binding.get("position_id") or ""), for_update=True)
+    if position is not None:
+        expected_position = (row.agent_id, row.wallet_id, row.network_id, base_asset, base_decimals,
+                             str(row.binding.get("strategy_revision") or ""),
+                             str(row.binding.get("mandate_id") or ""))
+        actual_position = (position.agent_id, position.wallet_id, position.network_id, position.asset_id,
+                           _int(position.decimals), position.strategy_revision, position.mandate_id)
+        if actual_position != expected_position:
+            raise AccountingBreach("POSITION_BINDING_MISMATCH")
+        if position.quote_asset_id != quote_asset or _int(position.quote_decimals) != quote_decimals:
+            raise AccountingBreach("QUOTE_BINDING_MISMATCH")
 
     for reservation in _action_reservations(session, row, for_update=True):
         if reservation.state != "RESERVED":
@@ -812,12 +913,12 @@ def _settle(
                 released_amounts.append(_reservation_amount(reservation))
                 reservation.reconciled_at = func.now()
                 continue
-            amount = _require_actual(receipt.actual_input, quote_asset,
-                                     _int(reservation.decimals), "MISSING_RECONCILED_INPUT")
+            amount = _require_actual(receipt.actual_input, quote_asset, quote_decimals,
+                                     "MISSING_RECONCILED_INPUT")
             _charge(session, row, reservation, amount)
             reservation.state = "CONSUMED"
             reservation.reconciled_at = func.now()
-            consumed_amounts.append(_amount(quote_asset, amount, _int(reservation.decimals)))
+            consumed_amounts.append(_amount(quote_asset, amount, quote_decimals))
             continue
 
         if reservation.scope == "INVENTORY":
@@ -846,7 +947,7 @@ def _settle(
                 if _int(base_allowance.consumed) + coverage_others + acquired > _int(base_allowance.approved):
                     raise AccountingBreach("SELL_COVERAGE_EXCEEDED")
                 allocation_raw = _int(row.binding.get("allocation_approved_raw") or 0)
-                deployed = (_attributed_cost(session, row.owner_id, row.agent_id, row.wallet_id, row.network_id)
+                deployed = (_attributed_cost(session, row.owner_id, row.agent_id, row.wallet_id, row.network_id, quote_asset)
                             + _capital_reserved(session, row.owner_id, row.agent_id, row.wallet_id,
                                                 row.network_id, quote_asset))
                 if deployed + invested > allocation_raw:
@@ -856,14 +957,19 @@ def _settle(
             else:  # EXIT
                 exited = _require_actual(receipt.actual_input, base_asset, base_decimals,
                                          "MISSING_RECONCILED_INPUT")
-                if receipt.actual_output is None or receipt.actual_output.asset_id != quote_asset:
+                if (receipt.actual_output is None or receipt.actual_output.asset_id != quote_asset
+                        or receipt.actual_output.decimals != quote_decimals):
                     raise AccountingBreach("MISSING_RECONCILED_OUTPUT")
                 proceeds = receipt.actual_output.as_int()
                 inventory = _int(position.inventory)
-                if inventory <= 0 or exited > inventory:
+                if inventory <= 0:
                     raise AccountingBreach("INVENTORY_UNDERFLOW")
-                # Cumulative base sold increases; the inventory it covered decreases,
-                # so the sell invariant consumed + coverage stays bounded.
+                # The reconciled exit must fit the inventory not already promised to
+                # another RESERVED exit for this position.
+                others = _exit_hold(session, row.owner_id, row.agent_id, row.wallet_id, row.network_id,
+                                    position.position_id, base_asset, exclude=reservation.reservation_id)
+                if exited > inventory - others:
+                    raise AccountingBreach("EXIT_EXCEEDS_RESERVED")
                 _charge(session, row, reservation, exited)
                 basis = _int(position.cost_basis)
                 removed = basis * exited // inventory

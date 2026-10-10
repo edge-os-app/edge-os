@@ -38,7 +38,8 @@ def _gas(raw: str) -> AssetAmount:
 
 
 def test_attempt_budget_exhausted(admission_service, fresh_owner) -> None:
-    approval = approval_a(attempt_budget=1)
+    # An acquisition reserves two attempt atoms (entry and its intended exit).
+    approval = approval_a(attempt_budget=2)
     first = intent_entry(position_id="position-a-1")
     assert admission_service.admit_and_reserve(fresh_owner, first, approval, context_a()).status == "ADMITTED"
     second = intent_entry(position_id="position-a-2")
@@ -91,13 +92,17 @@ def test_second_reconcile_of_terminal_action_is_ignored(admission_service, fresh
 
 
 def test_actual_gas_over_cap_fails_closed(admission_service, fresh_owner) -> None:
-    approval = approval_a(gas_approved_raw="1", per_action_gas_raw="1")
+    approval = approval_a(gas_approved_raw="1", per_action_gas_raw="1", per_exit_gas_raw="0")
     intent = intent_entry(position_id="position-a-1")
     assert admission_service.admit_and_reserve(fresh_owner, intent, approval, context_a()).status == "ADMITTED"
     outcome = admission_service.reconcile(fresh_owner, intent.action_id, confirm_entry(intent, "110", "10", "5"))
     assert outcome.reason == "CONSUMED_EXCEEDS_APPROVED"
-    assert outcome.decision_status == "ADMITTED"
+    assert outcome.decision_status == "BREACHED"
     assert _one(admission_service.balances(fresh_owner), NATIVE).consumed_raw == "0"
+    # A breached wallet blocks new affected admissions until reconciled.
+    blocked = admission_service.admit_and_reserve(
+        fresh_owner, intent_entry(position_id="position-a-2"), approval, context_a())
+    assert blocked.status == "DENIED" and blocked.reason == "UNRESOLVED_PRIOR_ACTION"
 
 
 def test_confirm_requires_actual_output(admission_service, fresh_owner) -> None:

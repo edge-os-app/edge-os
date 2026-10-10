@@ -147,6 +147,26 @@ its prior state.
 Only demonstrated unused reservations are released. Consumed allowance stays
 consumed.
 
+## Receipts, breach state and identity bindings
+
+- Every verified receipt is persisted with its action, revision, position,
+  operation and actual asset effects, so a fresh session can read the original
+  evidence and planned reservations stay distinguishable from reconciled
+  consumption.
+- A verified receipt that cannot fit the adopted bounds (sell coverage,
+  allocation, cap, or another reserved exit) fails closed and records a durable
+  breach. The decision becomes `BREACHED`, and new affected admissions for that
+  wallet and network are blocked until reconciled.
+- A receipt must match the saved action identity (action id, strategy revision,
+  mandate, agent, wallet, network). A mismatch is denied without mutation.
+- The adopted approval is bound by its full content hash; a changed budget,
+  stop, allocation or qualification under the same approval identity is denied.
+- Each position records its adopted quote asset and decimals. Exit marks,
+  expected quotes, and reconciled outputs must match that identity; unlike raw
+  cost amounts are never aggregated.
+- An acquisition reserves its intended-exit gas and attempt capacity before the
+  exposure exists. Attempts, trading input and gas stay separate.
+
 ## Boundaries
 
 - Local fixture work only. Live admission stays closed until P21 and the

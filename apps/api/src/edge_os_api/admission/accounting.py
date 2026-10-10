@@ -100,7 +100,7 @@ def denial_reasons(
     # Required controls fail closed when not qualified for the adopted model.
     if intent.operation in ACQUISITIONS and not approval.exit_capacity_qualified:
         reasons.append("EXIT_CAPACITY_UNQUALIFIED")
-    if intent.operation in ("ADDITION", "EXIT") and not approval.cost_model_qualified:
+    if not approval.cost_model_qualified:
         reasons.append("COST_MODEL_UNQUALIFIED")
     if intent.operation == "EXIT":
         if not approval.valuation_qualified:
@@ -108,19 +108,29 @@ def denial_reasons(
         if intent.input.mark is None or intent.input.mark.state != "KNOWN":
             reasons.append("MISSING_VALUATION")
 
-    # Cross-record decimals and asset identity must agree before reserving.
+    # Cross-record asset and decimal identity must agree before reserving. The
+    # adopted quote asset governs the exit mark, expected quote and actual output.
     base_asset = intent.quantity.asset_id
+    quote_cap = approval.quote_allowance
     if base_asset != approval.base_allowance.asset_id:
         reasons.append("BASE_ASSET_MISMATCH")
     elif intent.quantity.decimals != approval.base_allowance.decimals:
         reasons.append("BASE_DECIMALS_MISMATCH")
+    if intent.input.quote_asset_id != quote_cap.asset_id:
+        reasons.append("QUOTE_ASSET_MISMATCH")
+    quote_amounts: list[tuple[str, object]] = []
     if intent.operation in ACQUISITIONS:
-        quote = intent.input.quote_input
-        if quote is not None:
-            if quote.asset_id != approval.quote_allowance.asset_id:
-                reasons.append("QUOTE_ASSET_MISMATCH")
-            elif quote.decimals != approval.quote_allowance.decimals:
-                reasons.append("QUOTE_DECIMALS_MISMATCH")
+        quote_amounts.append(("quote_input", intent.input.quote_input))
+    else:
+        quote_amounts.append(("mark", intent.input.mark.amount if intent.input.mark else None))
+    quote_amounts.append(("expected_quote", intent.input.expected_quote))
+    for name, amount in quote_amounts:
+        if amount is None:
+            continue
+        if amount.asset_id != quote_cap.asset_id:
+            reasons.append(f"{name.upper()}_ASSET_MISMATCH")
+        elif amount.decimals != quote_cap.decimals:
+            reasons.append(f"{name.upper()}_DECIMALS_MISMATCH")
     for amount in (intent.quantity, intent.input.quote_input):
         if amount is None:
             continue
@@ -150,6 +160,7 @@ def plan_reservations(
     """
     quantity = intent.quantity.as_int()
     gas = approval.per_action_gas.as_int()
+    exit_gas = approval.per_exit_gas.as_int()
     plan: list[ReservationNeed] = []
     requires_new_position = intent.operation == "ENTRY"
 
@@ -160,13 +171,17 @@ def plan_reservations(
         plan.append(ReservationNeed("CAPITAL", quote.asset_id, quote.decimals, quote.as_int()))
         plan.append(ReservationNeed("INVENTORY", intent.quantity.asset_id, intent.quantity.decimals,
                                     quantity, intent.position_id))
-        plan.append(ReservationNeed("GAS", approval.gas.asset_id, approval.gas.decimals, gas))
-    else:  # EXIT
-        if current_inventory is None or current_inventory < quantity:
-            return ReservationPlan(ok=False, reason="INVENTORY_SHORTFALL")
-        plan.append(ReservationNeed("INVENTORY", intent.quantity.asset_id, intent.quantity.decimals,
-                                    quantity, intent.position_id))
-        plan.append(ReservationNeed("GAS", approval.gas.asset_id, approval.gas.decimals, gas))
+        # An acquisition must also cover its intended exit: gas for the entry and
+        # its exit, and one attempt each. Attempts are counted as two atoms here.
+        plan.append(ReservationNeed("GAS", approval.gas.asset_id, approval.gas.decimals, gas + exit_gas))
+        plan.append(ReservationNeed("ATTEMPT", ATTEMPT_ASSET, 0, 2))
+        return ReservationPlan(ok=True, needs=plan, requires_new_position=requires_new_position)
 
+    # EXIT
+    if current_inventory is None or current_inventory < quantity:
+        return ReservationPlan(ok=False, reason="INVENTORY_SHORTFALL")
+    plan.append(ReservationNeed("INVENTORY", intent.quantity.asset_id, intent.quantity.decimals,
+                                quantity, intent.position_id))
+    plan.append(ReservationNeed("GAS", approval.gas.asset_id, approval.gas.decimals, gas))
     plan.append(ReservationNeed("ATTEMPT", ATTEMPT_ASSET, 0, 1))
     return ReservationPlan(ok=True, needs=plan, requires_new_position=requires_new_position)

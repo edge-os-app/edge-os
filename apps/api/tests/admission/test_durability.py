@@ -48,7 +48,7 @@ def test_committed_records_survive_fresh_engine(pg, admission_service, fresh_own
         assert len(reservations) == 4
         assert summaries[QUOTE].remaining_raw == "390"
         assert summaries[BASE].remaining_raw == "990"
-        assert summaries[NATIVE].remaining_raw == "48"
+        assert summaries[NATIVE].remaining_raw == "46"
     finally:
         engine.dispose()
 

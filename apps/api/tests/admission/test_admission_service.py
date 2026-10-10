@@ -88,7 +88,7 @@ def test_entry_is_admitted_and_persisted(admission_service, admission_engine, fr
 
     assert (intent.action_id, "ADMITTED") in decisions
     assert {("CAPITAL", QUOTE, 110, "RESERVED"), ("INVENTORY", BASE, 10, "RESERVED"),
-            ("GAS", NATIVE, 2, "RESERVED"), ("ATTEMPT", "attempt", 1, "RESERVED")} == {
+            ("GAS", NATIVE, 4, "RESERVED"), ("ATTEMPT", "attempt", 2, "RESERVED")} == {
         (r.scope, r.asset_id, int(r.raw), r.state) for r in reservations
     }
 
@@ -199,7 +199,7 @@ def test_retrieve_reservations_and_balances(admission_service, fresh_owner) -> N
     summaries = admission_service.balances(fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)
     assert (_one(summaries, QUOTE).remaining_raw) == "390"
     assert (_one(summaries, BASE).remaining_raw) == "990"
-    assert (_one(summaries, NATIVE).remaining_raw) == "48"
+    assert (_one(summaries, NATIVE).remaining_raw) == "46"
 
 
 # ----------------------------------------------------------------- cancel
@@ -263,7 +263,7 @@ def test_submission_unknown_retains_reservations(admission_service, fresh_owner)
     admission_service.admit_and_reserve(fresh_owner, intent, approval_a(), context_a())
     outcome = admission_service.reconcile(fresh_owner, intent.action_id, unknown(intent))
     assert outcome.decision_status == "SUBMISSION_UNKNOWN"
-    assert sorted(amount.raw for amount in outcome.retained) == ["1", "10", "110", "2"]
+    assert sorted(amount.raw for amount in outcome.retained) == ["10", "110", "2", "4"]
     assert _one(admission_service.balances(fresh_owner), QUOTE).reserved_raw == "110"
     blocked = admission_service.admit_and_reserve(
         fresh_owner, intent_entry(quantity_raw="10", quote_input_raw="110", position_id="position-a-2"),
