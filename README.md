@@ -154,11 +154,13 @@ The accepted implementation/decision outputs below are in this codebase. Accepta
 
 Also integrated: P07's offline history/lineage checker, P16's bounded one-owner signing/removal evidence, the P43 R9 design export and controller delivery/Stop safeguards. Full P07 real-history and P16 owner-linked creation, lost-response, restart and actual-backend cross-user qualification remain incomplete. P43 is a design milestone, not complete design-parity or unfamiliar-user validation.
 
-P05's Hermes interpretation adapter is staged outside this published tree and is not wired into Research. Its persistence, shared wiring, reviews and live-model qualification remain open. Real data collection, Kuru swaps, funded agent operation, withdrawals, production deployment, live LP execution and optional token/add-on extensions are not available end to end.
+P05's saved Hermes interpretation path, durable attempts, retry/recovery and Research UI are integrated and passed their local reviews and gate. Verification used actual pinned Hermes with an authored fake provider. Real-model interpretation and production Hermes hosting remain unqualified. P17 wallet setup and P22/P23 admission and decision/submission modules are locally accepted, but do not establish an integrated live wallet or trading path. Real data collection, Kuru swaps, funded agent operation, withdrawals, production deployment, live LP execution and optional token/add-on extensions are not available end to end.
 
 The earlier accepted [Probe A](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) preserved bounded interpretation and contrary evidence, and returned `UNRESOLVED` with no supported MOE/WMON candidate. Keep that evidence separate from the current fixture-backed application. Compilation, simulations, passing tests and sign-only provider results do not prove a trading edge.
 
 ### Verification snapshot
+
+On 11 October 2026, accepted integration `52e5adc` passed 953 API tests, 176 web tests, web typecheck/build and P02/P06/P15 contract checks. This publication preserves those application and verification-tooling bytes. The earlier snapshot below remains historical evidence, not verification of the newer tree. Exact-candidate P05 mapped browser/SQL/restart evidence remains separate from these combined integration checks.
 
 On 10 October 2026, code at `8ad71c4` passed all 377 API tests against isolated PostgreSQL. The same application tree passed 118 web tests, typechecking, P02/P06/P15 contract checks, 73 P07 checks, production build and the full 18-step desktop/390px browser/API/SQL/restart/cleanup path. The backend reorganization received two independent internal PASS assessments and a separate gate PASS before integration.
 
