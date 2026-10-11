@@ -1,5 +1,6 @@
 import type { Bundle, EffectRunBody, EffectRunResult, InvestigationProposal, InvestigationSaveResult,
-  PublicationResult, RequestSummary, Sample, SpotReplayBody, SpotReplayRecord } from "./types";
+  PublicationResult, RequestSummary, Sample, SpotReplayBody, SpotReplayRecord, WalletSetupPrepareBody,
+  WalletSetupRecord } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: string, public findings: { path: string; detail: string }[] = []) {
@@ -90,4 +91,19 @@ export const api = {
     request<{ revision_id: string; content_sha256: string; manifest_sha256: string; created_at: string; stored_hash_matches_content: boolean; stored_manifest_hash_matches_content: boolean }>(
       `/v1/strategies/${strategyId}/revisions/${revisionId}`).then((r) => r.body),
   operation: (id: string) => request<PublicationResult>(`/v1/operations/${id}`).then((r) => r.body),
+  /** Owner-scoped wallet-setup reads and mutations. A missing setup is a 404 ApiError. */
+  walletSetup: (agentId: string) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}`).then((r) => r.body),
+  prepareWalletSetup: (agentId: string, body: WalletSetupPrepareBody) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/prepare`,
+      { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  dispatchWalletSetup: (agentId: string) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/dispatch`,
+      { method: "POST" }).then((r) => r.body),
+  resumeWalletSetup: (agentId: string) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/resume`,
+      { method: "POST" }).then((r) => r.body),
+  cancelWalletSetup: (agentId: string) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/cancel`,
+      { method: "POST" }).then((r) => r.body),
 };

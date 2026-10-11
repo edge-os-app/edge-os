@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { agentContextApi, formatAmount, type AccountViewRecord, type AgentContextRecord } from "../lib/account-views";
 import { AgentContext } from "./AgentContext";
+import { WalletSetup } from "./WalletSetup";
 
 export function AgentRecords({ records, sourceRecordId }: { records: AccountViewRecord[]; sourceRecordId?: string }) {
   const agents = records.filter((record) => record.content.record_kind === "AGENT");
@@ -16,6 +17,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
   const [context, setContext] = useState<AgentContextRecord | null>(null);
   const [contextError, setContextError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [setupAgent, setSetupAgent] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selected) return;
@@ -83,13 +85,20 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
           <p><strong>Network gas.</strong> {content.native_gas ? `${formatAmount(content.native_gas)} ${content.native_gas.asset_id}` : "Unknown"}</p>
           <p><strong>Permission.</strong> {content.permission_state ?? "Unknown"}. Account summaries do not pool balances or permission.</p>
           <p><strong>Updated.</strong> <time dateTime={content.updated_at}>{content.updated_at}</time></p>
-          <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => setSelected(content.agent_id)}>
-            Inspect agent context
-          </button>
+          <div className="btn-row">
+            <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => setSelected(content.agent_id)}>
+              Inspect agent context
+            </button>
+            <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button"
+              onClick={() => setSetupAgent((value) => value === content.agent_id ? null : content.agent_id)}>
+              {setupAgent === content.agent_id ? "Hide wallet setup" : "Wallet setup"}
+            </button>
+          </div>
           {selected === content.agent_id && (
             context ? <AgentContext record={context} onChange={setContext} onClose={() => setSelected(null)} />
               : <div role="status" aria-live="polite">{contextError || "Loading agent context…"}{contextError && <button className="btn btn-ghost" type="button" style={{ minHeight: 44 }} onClick={() => setRefresh((value) => value + 1)}>Try again</button>}</div>
           )}
+          {setupAgent === content.agent_id && <WalletSetup agentId={content.agent_id} onClose={() => setSetupAgent(null)} />}
           <h3>Permission approval history · synthetic records</h3>
           <p>Each snapshot records history at its own time. It does not prove current permission. A change marked active was active when applied; the agent summary above shows the current saved permission state.</p>
           {!permissions.length && <p>No saved permission approval snapshots.</p>}
