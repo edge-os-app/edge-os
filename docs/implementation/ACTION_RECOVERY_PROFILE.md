@@ -51,13 +51,19 @@ reaches the P22 ledger and never releases a reservation or claim.
 ## Original-attempt binding
 
 Recovery settles only an action that reached a submission-capable original
-state. It requires at least one of: a saved P23 submission attempt, an active
-exclusive claim, a submission-owned P22 decision, or a submission-owned queue
-state. An action that was only admitted or queued, with no original attempt, has
-nothing to reconcile. Recovery blocks it with `NO_SUBMISSION_ATTEMPT` and changes
-no P22 or P23 row. A proved pre-broadcast denial for a genuine interrupted
-original attempt stays available, because that attempt leaves a saved attempt row
-or a submission-owned state.
+state. It requires at least one of: a saved P23 submission attempt for the exact
+action, the active exclusive claim for the exact action, a submission-owned P22
+decision for the exact action, or a submission-owned queue state for the exact
+action. Every proof is scoped to the requested action and queue: another action's
+claim on the same wallet is not proof. An action that was only admitted or queued,
+with no original attempt, has nothing to reconcile. Recovery blocks it with
+`NO_SUBMISSION_ATTEMPT` and changes no P22 or P23 row. A proved pre-broadcast
+denial for a genuine interrupted original attempt stays available, because that
+attempt leaves a saved attempt row or a submission-owned state.
+
+Recovery convergence releases only the claim owned by the action it converges, so
+a claim held by another still-unknown action on the same wallet keeps its
+exclusivity.
 
 ## Controlled outcome evidence
 

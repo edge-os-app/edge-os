@@ -307,10 +307,12 @@ class RecoveryService:
             SubmissionAttemptRow.owner_id == owner, SubmissionAttemptRow.action_id == action_id,
         ).order_by(SubmissionAttemptRow.started_at.desc(),
                    SubmissionAttemptRow.attempt_id.desc()).limit(1)).scalar_one_or_none()
+        # The exclusive claim is keyed by the requested action, not just the wallet.
+        # Another action's active claim must not prove this action was submitted.
         claim = session.execute(select(ClaimRow).where(
             ClaimRow.owner_id == owner, ClaimRow.agent_id == intent.agent_id,
             ClaimRow.wallet_id == intent.wallet_id, ClaimRow.network_id == intent.network_id,
-            ClaimRow.released_at.is_(None))).scalar_one_or_none()
+            ClaimRow.action_id == action_id, ClaimRow.released_at.is_(None))).scalar_one_or_none()
         decisions = self._admission.retrieve_decisions(owner, action_id=action_id)
         decision_status = decisions[0].status if decisions else None
         return _Context(intent=intent, queue=queue, attempt=attempt, claim=claim,

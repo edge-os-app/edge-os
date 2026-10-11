@@ -254,6 +254,53 @@ def test_never_submitted_action_is_blocked(
     assert _balances(admission_service, fresh_owner)[QUOTE].consumed_raw == "0"
 
 
+def test_another_actions_claim_does_not_admit_the_untouched_action(
+        recovery_factory, recovery_service, admission_service, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    # Admit two distinct entry actions before either is submitted.
+    _da, approval, context, result_a = enqueue_entry(
+        execution_service, fresh_owner, revision, position_id="position-1", quote_input="110")
+    _db, _approval_b, _context_b, result_b = enqueue_entry(
+        execution_service, fresh_owner, revision, position_id="position-2", quote_input="110")
+    assert result_a.admission_status == "ADMITTED" and result_b.admission_status == "ADMITTED"
+
+    queue = execution_service.retrieve_queue(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)
+    queued = [item.action_id for item in queue if item.state == "QUEUED"]
+    assert len(queued) == 2
+    submitted_action = queued[0]
+    untouched_action = queued[1]
+
+    # Submit only one action into the unknown state; its exclusive claim stays active.
+    tick = execution_service.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
+        context=context, revision=revision, inputs=entry_inputs(),
+        quote=quote(submitted_action, revision, "110"),
+        transport=exec_transport("UNKNOWN", action_id=submitted_action))
+    assert tick.status == "SUBMITTED_UNKNOWN", tick
+    assert tick.selected_action_id == submitted_action
+    held = active_claim(recovery_factory, fresh_owner)
+    assert held is not None and held.action_id == submitted_action
+
+    # The untouched action has no attempt of its own; another action's claim on the
+    # same wallet must not admit it.
+    evidence = evidence_for(recovery_factory, fresh_owner, untouched_action, outcome="CONFIRMED",
+                            actual_input=confirmed_actuals()[0], actual_output=confirmed_actuals()[1],
+                            actual_gas=confirmed_actuals()[2])
+    outcome = recovery_service.reconcile(fresh_owner, untouched_action, evidence)
+    assert outcome.applied is False
+    assert outcome.case.state == "NO_SUBMISSION_ATTEMPT"
+    assert load_queue(recovery_factory, fresh_owner, untouched_action).state == "QUEUED"
+    assert admission_service.retrieve_receipts(fresh_owner, action_id=untouched_action) == []
+
+    # The submitted action keeps its unknown status, reservations and exclusive claim.
+    still_held = active_claim(recovery_factory, fresh_owner)
+    assert still_held is not None and still_held.action_id == submitted_action
+    assert admission_service.retrieve_decisions(
+        fresh_owner, action_id=submitted_action)[0].status == "SUBMISSION_UNKNOWN"
+    assert load_queue(recovery_factory, fresh_owner, submitted_action).state == "SUBMITTED_UNKNOWN"
+
+
 @pytest.mark.parametrize("field,mismatch_raw", [
     ("actual_input", "109"), ("actual_output", "9"), ("actual_gas", "3"),
 ])
@@ -280,6 +327,35 @@ def test_crash_convergence_rejects_mismatched_actuals(
     assert outcome.case.state == "DISCREPANCY"
     assert outcome.case.blocking_reason == f"P22_RECEIPT_MISMATCH:{field}"
     assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_UNKNOWN"
+
+
+def test_convergence_releases_only_its_own_claim(
+        recovery_factory, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _da, approval, context, result_a = enqueue_entry(
+        execution_service, fresh_owner, revision, position_id="position-1")
+    _db, _ab, _cb, result_b = enqueue_entry(
+        execution_service, fresh_owner, revision, position_id="position-2")
+    queue = execution_service.retrieve_queue(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)
+    queued = [item.action_id for item in queue if item.state == "QUEUED"]
+    submitted_action, untouched_action = queued[0], queued[1]
+
+    tick = execution_service.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
+        context=context, revision=revision, inputs=entry_inputs(),
+        quote=quote(submitted_action, revision, "110"),
+        transport=exec_transport("UNKNOWN", action_id=submitted_action))
+    assert tick.status == "SUBMITTED_UNKNOWN"
+    assert active_claim(recovery_factory, fresh_owner).action_id == submitted_action
+
+    # Converging the untouched action must not release the submitted action's claim.
+    view = execution_service.converge_reconciled_outcome(
+        fresh_owner, action_id=untouched_action, outcome_code="CONFIRMED", detail="direct-convergence",
+        decision_status="CONFIRMED", reconciliation_reason=None)
+    assert view.state == "SUBMITTED_CONFIRMED"
+    held = active_claim(recovery_factory, fresh_owner)
+    assert held is not None and held.action_id == submitted_action
 
 
 def test_delayed_exit_reports_blocking_reason(

@@ -542,7 +542,8 @@ class ExecutionService:
                     entry.state = target_state
                     entry.blocking_reason = blocking_reason
                     entry.updated_at = now
-                    claim = self._active_claim(session, verified_owner_id, agent_id, wallet_id, network_id)
+                    claim = self._active_claim_for_action(
+                        session, verified_owner_id, agent_id, wallet_id, network_id, action_id)
                     if claim is not None and not retain_claim:
                         claim.state = "RELEASED"
                         claim.released_at = now
@@ -811,6 +812,20 @@ class ExecutionService:
     def _queue_by_action(self, session: Session, owner: uuid.UUID, action_id: str) -> QueueRow | None:
         return session.execute(select(QueueRow).where(
             QueueRow.owner_id == owner, QueueRow.action_id == action_id)).scalar_one_or_none()
+
+    def _active_claim_for_action(self, session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str,
+                                 network_id: str, action_id: str) -> ClaimRow | None:
+        """The active claim owned by one exact action.
+
+        Recovery convergence releases only the claim for the action it converges,
+        so a claim held by another still-unknown action on the same wallet is
+        never released.
+        """
+        return session.execute(select(ClaimRow).where(
+            ClaimRow.owner_id == owner, ClaimRow.agent_id == agent_id, ClaimRow.wallet_id == wallet_id,
+            ClaimRow.network_id == network_id, ClaimRow.action_id == action_id,
+            ClaimRow.released_at.is_(None),
+        ).with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
 
     def _active_claim(self, session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str,
                       network_id: str) -> ClaimRow | None:

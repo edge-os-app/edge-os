@@ -66,6 +66,10 @@ git diff --check 545434d06c3cdae9d1deff78d77ff28147719fdd..HEAD
 - Original-attempt binding: an admitted but never-attempted action is blocked as
   `NO_SUBMISSION_ATTEMPT`; its queue stays `QUEUED`, it keeps no claim and P22
   writes no receipt.
+- Claim scope: when two actions are admitted on one wallet and only one becomes
+  unknown, recovering the untouched action is blocked and the unknown action keeps
+  its exclusive claim. Convergence releases only the claim owned by the action it
+  converges.
 - Crash-convergence receipt check: after P22 settles but P23 stays stale, evidence
   whose actual input, output or gas differs from the saved P22 receipt is blocked
   as `DISCREPANCY` (`P22_RECEIPT_MISMATCH:<field>`); the queue stays stale and no
@@ -101,8 +105,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 573 passed, ~101 s, 2 known warnings.
-- Recovery suite: 20 passed. Execution suite: 46 passed. Admission suite: 100 passed.
+- Full suite: 575 passed, ~124 s, 2 known warnings.
+- Recovery suite: 22 passed. Execution suite: 46 passed. Admission suite: 100 passed.
 - P15, P02 and P06 contract scripts: PASS.
 - `compileall` on the owned recovery and leased execution source/tests: PASS.
 - `git diff --check` against the accepted base `545434d0`: clean.
