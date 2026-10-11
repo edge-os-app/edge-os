@@ -32,18 +32,9 @@ def test_review_groups_the_exact_selected_revision_wallet_and_limits(consent_eng
     assert view.network_id == support.NETWORK
 
     review = view.content["review"]
-    expected_rule_keys = {
-        "strategy_id", "schema_version", "domain", "data_inputs", "decision_interval_seconds", "market", "entry",
-        "exit", "invalidation", "sizing", "action_scope", "additions", "partial_exits", "risk_limits",
-        "cost_assumptions", "warmup_buckets", "semantic_manifest", "execution_permission",
-    }
-    assert set(review["strategy"].keys()) == expected_rule_keys
-    assert review["strategy"]["strategy_id"] == revision["strategy_id"]
-    assert review["strategy"]["entry"] == revision["strategy"]["entry"]
-    assert review["strategy"]["sizing"] == revision["strategy"]["sizing"]
-    assert review["strategy"]["decision_interval_seconds"] == revision["strategy"]["decision_interval_seconds"]
-    assert review["strategy"]["semantic_manifest"] == revision["strategy"]["semantic_manifest"]
-    assert review["strategy"]["execution_permission"] == {"state": "NOT_GRANTED", "mandate_ref": None}
+    # The review shows the whole saved revision, so no rule can be silently omitted.
+    assert set(review["strategy"].keys()) == set(revision["strategy"].keys())
+    assert review["strategy"] == revision["strategy"]
     assert review["allocation"][0]["asset_id"] == support.QUOTE
     allowance_assets = {item["amount"]["asset_id"] for item in review["allowances"]}
     assert allowance_assets == {support.QUOTE, support.BASE}

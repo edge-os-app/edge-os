@@ -324,10 +324,12 @@ class ConsentService:
                 self._deny(verified_owner_id, review.agent_id, "ADOPT", "STALE_REVIEW",
                            {"expected": request.expected_review_hash, "saved": review.review_hash})
                 raise ConsentDenied("stale_review")
-            meaning = review.content["meaning"]
-            if content_hash(meaning) != review.review_hash:
+            meaning = review.content.get("meaning")
+            if not isinstance(meaning, dict) or content_hash(meaning) != review.review_hash:
                 session.rollback()
-                raise ConsentError("stored review content does not match its review hash")
+                self._deny(verified_owner_id, review.agent_id, "ADOPT", "CORRUPT_REVIEW",
+                           {"error": "MEANING_MISMATCH"})
+                raise ConsentDenied("corrupt_review")
             try:
                 terms = ReviewedTerms.model_validate(review.content["terms"])
             except Exception as error:  # noqa: BLE001 - a corrupt stored term set is not adoptable

@@ -119,6 +119,10 @@ def test_blank_non_asset_identifiers_are_rejected() -> None:
         AllowanceTerm(name=" ", amount=AssetAmount(asset_id=support.QUOTE, raw="1", decimals=0))
     with pytest.raises(ValidationError):
         ReviewedTerms.model_validate({**support.terms().model_dump(), "supported_routes": ["  "]})
+    with pytest.raises(ValidationError):
+        ReviewedTerms.model_validate({**support.terms().model_dump(), "stop_effects": ["  "]})
+    with pytest.raises(ValidationError):
+        ReviewedTerms.model_validate({**support.terms().model_dump(), "signer": "  "})
 
 
 def test_unlike_assets_are_never_combined() -> None:

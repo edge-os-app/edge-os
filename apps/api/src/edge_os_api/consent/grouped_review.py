@@ -56,27 +56,12 @@ def parse_saved_strategy(strategy_canonical: str) -> dict[str, Any]:
 
 
 def strategy_block(strategy: dict[str, Any]) -> dict[str, Any]:
-    """The rules the owner reviews, taken verbatim from the exact saved revision."""
-    return {
-        "strategy_id": strategy["strategy_id"],
-        "schema_version": strategy["schema_version"],
-        "domain": strategy["domain"],
-        "data_inputs": strategy["data_inputs"],
-        "decision_interval_seconds": strategy["decision_interval_seconds"],
-        "market": strategy["market"],
-        "entry": strategy["entry"],
-        "exit": strategy["exit"],
-        "invalidation": strategy["invalidation"],
-        "sizing": strategy["sizing"],
-        "action_scope": strategy["action_scope"],
-        "additions": strategy["additions"],
-        "partial_exits": strategy["partial_exits"],
-        "risk_limits": strategy["risk_limits"],
-        "cost_assumptions": strategy["cost_assumptions"],
-        "warmup_buckets": strategy["warmup_buckets"],
-        "semantic_manifest": strategy["semantic_manifest"],
-        "execution_permission": strategy["execution_permission"],
-    }
+    """The rules the owner reviews, taken verbatim from the exact saved revision.
+
+    The whole saved `StrategySpec` is shown, so a later schema field cannot be
+    silently omitted from the grouped review.
+    """
+    return dict(strategy)
 
 
 def review_meaning(

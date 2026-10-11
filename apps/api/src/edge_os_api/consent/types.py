@@ -174,6 +174,20 @@ class ReviewedTerms(StrictModel):
             raise ValueError("a supported route must not be blank")
         return values
 
+    @field_validator("stop_effects")
+    @classmethod
+    def stop_effects_must_not_be_blank(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("a stop effect must not be blank")
+        return values
+
+    @field_validator("signer")
+    @classmethod
+    def signer_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("a signer identifier must not be blank")
+        return value
+
     @field_validator("supported_actions")
     @classmethod
     def actions_must_be_supported(cls, values: list[str]) -> list[str]:

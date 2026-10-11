@@ -51,7 +51,7 @@ def test_adopt_returns_clearly_inactive_consent_with_exact_identities(consent_en
     assert content["terms_hash"] == view.terms_hash
     assert content["route"]["qualification"] == "UNQUALIFIED"
     assert content["evidence_status"] == "UNRESOLVED"
-    assert "no_live_operational_gate" not in json.dumps(content)
+    assert content["status"] == "INACTIVE"
 
 
 def test_repeated_adoption_is_idempotent(consent_engine, consent_service, session) -> None:
@@ -128,6 +128,18 @@ def test_drifted_stored_terms_are_denied(consent_engine, consent_service, sessio
     assert error.value.code == "corrupt_review"
     assert session.execute(select(ConsentAdoptionRow)).scalars().all() == []
     assert "CORRUPT_REVIEW" in set(session.execute(select(ConsentDenialRow.code)).scalars())
+
+
+def test_a_review_missing_its_meaning_is_denied_not_crashed(consent_engine, consent_service, session) -> None:
+    view = _review(consent_engine, consent_service)
+    with consent_engine.begin() as connection:
+        connection.execute(text("UPDATE consent_local.consent_reviews SET content = content - 'meaning'"))
+
+    with pytest.raises(ConsentDenied) as error:
+        consent_service.adopt(support.OWNER_A, AdoptionRequest(review_id=str(view.review_id),
+                                                               expected_review_hash=view.review_hash))
+    assert error.value.code == "corrupt_review"
+    assert session.execute(select(ConsentAdoptionRow)).scalars().all() == []
 
 
 def test_another_owner_cannot_adopt_or_read_the_consent(consent_engine, consent_service) -> None:
