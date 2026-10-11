@@ -783,7 +783,13 @@ test("P17 wallet setup surface keeps controls usable and meets accessibility che
   const width = info.project.name === "desktop" ? 1280 : 390;
   await page.setViewportSize({ width, height: 900 });
   await open(page, tokens.a);
-  await publishSpotReplayStrategy(page);
+  await sample(page, "Specific thesis").click();
+  await page.getByRole("button", { name: "Prepare request" }).click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toBeVisible();
   const setup = page.getByRole("region", { name: "Agent wallet setup" });
   await expect(setup).toBeVisible();
   await expect(setup).toContainText("authored local fixture");
