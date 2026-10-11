@@ -48,11 +48,17 @@ git diff --check c217ab7a1f425130182a58e1f68cf9c5a1daa103..HEAD
   owner, the exact agent, wallet and network, the scope, the mode, the trigger and
   the exact position. Another owner reads nothing; direct SQL on
   `stops_local.scoped_stops` confirms the saved row.
-- Idempotent history: an identical repeated request returns the same record and
-  writes no second row; a different mode or target accumulates as durable history.
+- Idempotent history with preserved triggers: an identical repeated request
+  returns the same record and writes no second row; a different trigger, mode or
+  target is a distinct adopted stop and accumulates as durable history. A `USER`
+  stop followed by a `TRIAL` stop on the same wallet, position and mode yields two
+  records with both triggers visible in owner readback and in direct SQL.
 - Wallet isolation: an agent-wallet-network stop on wallet A leaves wallet B and
-  other agents unchanged. The `position_id` filter returns the position stop plus
-  every covering wallet stop.
+  other agents unchanged. A position-filtered lookup needs the exact agent, wallet
+  and network scope and returns only that wallet's position stop plus that wallet's
+  covering wallet stops; a stop on wallet B is never reported as covering A's
+  position. A position filter without the exact scope is refused. Broad owner
+  history retrieval still returns both wallets.
 - Scope refusal: a `POSITION` stop without a position, an `AGENT_WALLET_NETWORK`
   stop that names a position, a wider deployment scope and an unknown trigger are
   all refused explicitly.

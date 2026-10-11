@@ -61,11 +61,20 @@ nothing.
 
 ## Durability and idempotency
 
-One durable row exists per owner, agent, wallet, network, scope, target and mode.
-An identical repeated request is idempotent: the same record is returned and no
-second row is written. Different modes, scopes or targets accumulate, so the
-table is the durable stop history. Stop records survive a fresh engine and a true
-process restart, and they are never cleared.
+One durable row exists per owner, agent, wallet, network, scope, target, mode and
+trigger. An identical repeated request is idempotent: the same record is returned
+and no second row is written. A different trigger, mode, scope or target is a
+distinct adopted stop record and accumulates, so the table is the durable stop
+history and no adopted trigger is lost. Stop records survive a fresh engine and a
+true process restart, and they are never cleared.
+
+Owner-scoped retrieval returns the broad stop history when no position filter is
+supplied. A position-filtered lookup needs the exact agent, wallet and network
+scope, because this local module has no adopted position-to-wallet mapping. It
+returns only that wallet's position stop and that wallet's covering
+agent-wallet-network stops, so a stop on another wallet is never reported as
+covering this position. A position filter without the exact scope is refused
+rather than guessed.
 
 ## Enforcement points
 

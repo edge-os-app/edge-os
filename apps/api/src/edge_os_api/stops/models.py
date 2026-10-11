@@ -45,12 +45,14 @@ class StopBase(DeclarativeBase):
 
 
 class StopRow(StopBase):
-    """One durable scoped stop per owner, wallet, scope, target and mode.
+    """One durable scoped stop per owner, wallet, scope, target, mode and trigger.
 
     The uniqueness key makes an identical repeated request idempotent: the same
-    durable stop is returned once and a second row is not created. Different
-    modes, scopes or targets accumulate, so the table is the durable stop history.
-    Records are never cleared; this stage assigns no stop-clear or resume action.
+    durable stop is returned once and a second row is not created. A different
+    trigger, mode, scope or target is a distinct adopted stop record and
+    accumulates, so the table is the durable stop history and no adopted trigger
+    is lost. Records are never cleared; this stage assigns no stop-clear or resume
+    action.
     """
 
     __tablename__ = "scoped_stops"
@@ -67,7 +69,7 @@ class StopRow(StopBase):
 
     __table_args__ = (
         UniqueConstraint("owner_id", "agent_id", "wallet_id", "network_id", "scope", "position_id", "mode",
-                         name="uq_scoped_stops_identity"),
+                         "trigger", name="uq_scoped_stops_identity"),
         CheckConstraint("scope IN ('POSITION','AGENT_WALLET_NETWORK')", name="ck_scoped_stops_scope"),
         CheckConstraint("mode IN ('STOP_NEW_ENTRIES','HALT_ALL_SWAPS')", name="ck_scoped_stops_mode"),
         CheckConstraint("trigger IN ('USER','TRIAL','POSITION_LOSS','WALLET_LOSS')", name="ck_scoped_stops_trigger"),

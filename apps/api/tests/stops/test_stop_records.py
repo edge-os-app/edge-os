@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import text
 
-from edge_os_api.stops.types import StopRequest
+from edge_os_api.stops.types import StopError, StopRequest
 
 from admission._builders import AGENT_A, AGENT_B, NETWORK, WALLET_A, WALLET_B
 from stops._support import stop_request
@@ -58,13 +58,53 @@ def test_agent_wallet_stop_leaves_other_wallet_unchanged(stop_service, fresh_own
     assert wallet_b == []
 
 
+def test_distinct_triggers_are_preserved_and_identical_requests_stay_idempotent(
+        stop_service, stops_engine, fresh_owner) -> None:
+    user = stop_service.request_stop(fresh_owner, stop_request(trigger="USER", position_id="position-a-1"))
+    repeated = stop_service.request_stop(fresh_owner, stop_request(trigger="USER", position_id="position-a-1"))
+    trial = stop_service.request_stop(fresh_owner, stop_request(trigger="TRIAL", position_id="position-a-1"))
+
+    assert repeated.stop_id == user.stop_id
+    assert trial.stop_id != user.stop_id
+    assert {item.trigger for item in stop_service.retrieve_stops(fresh_owner)} == {"USER", "TRIAL"}
+
+    with stops_engine.connect() as connection:
+        triggers = connection.execute(text(
+            "SELECT trigger FROM stops_local.scoped_stops WHERE owner_id = :owner ORDER BY trigger"),
+            {"owner": str(fresh_owner)}).scalars().all()
+    assert triggers == ["TRIAL", "USER"]
+
+
 def test_retrieval_position_filter_includes_covering_wallet_stop(stop_service, fresh_owner) -> None:
     stop_service.request_stop(fresh_owner, stop_request(position_id="position-a-1"))
     stop_service.request_stop(fresh_owner, stop_request(scope="AGENT_WALLET_NETWORK", position_id=None))
     stop_service.request_stop(fresh_owner, stop_request(position_id="position-a-2"))
 
-    covering = stop_service.retrieve_stops(fresh_owner, position_id="position-a-1")
+    covering = stop_service.retrieve_stops(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, position_id="position-a-1")
     assert {item.position_id for item in covering} == {"position-a-1", None}
+
+
+def test_position_lookup_requires_the_exact_scope(stop_service, fresh_owner) -> None:
+    stop_service.request_stop(fresh_owner, stop_request(position_id="position-a-1"))
+
+    with pytest.raises(StopError):
+        stop_service.retrieve_stops(fresh_owner, position_id="position-a-1")
+    with pytest.raises(StopError):
+        stop_service.retrieve_stops(fresh_owner, agent_id=AGENT_A, position_id="position-a-1")
+
+
+def test_position_lookup_does_not_report_another_wallet_stop(stop_service, fresh_owner) -> None:
+    stop_service.request_stop(
+        fresh_owner, stop_request(scope="AGENT_WALLET_NETWORK", agent_id=AGENT_A, wallet_id=WALLET_A))
+    stop_service.request_stop(
+        fresh_owner, stop_request(scope="AGENT_WALLET_NETWORK", agent_id=AGENT_B, wallet_id=WALLET_B))
+
+    covering = stop_service.retrieve_stops(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, position_id="position-a-1")
+    assert {item.wallet_id for item in covering} == {WALLET_A}
+    # Broad owner history still returns both wallets.
+    assert {item.wallet_id for item in stop_service.retrieve_stops(fresh_owner)} == {WALLET_A, WALLET_B}
 
 
 def test_scope_and_trigger_validation_refuses_unmapped_scopes() -> None:

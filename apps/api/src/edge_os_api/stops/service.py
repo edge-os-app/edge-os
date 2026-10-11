@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from edge_os_api.admission.service import acquire_wallet_lock
 from edge_os_api.stops.models import StopRow
 from edge_os_api.stops.types import (
+    StopError,
     StopRequest,
     StopView,
     denial_reason,
@@ -76,13 +77,14 @@ class StopService:
                     created_at=now,
                 ).on_conflict_do_nothing(index_elements=[
                     "owner_id", "agent_id", "wallet_id", "network_id", "scope", "position_id", "mode",
+                    "trigger",
                 ]))
                 session.flush()
                 row = session.execute(select(StopRow).where(
                     StopRow.owner_id == verified_owner_id, StopRow.agent_id == request.agent_id,
                     StopRow.wallet_id == request.wallet_id, StopRow.network_id == request.network_id,
                     StopRow.scope == request.scope, StopRow.position_id == (request.position_id or ""),
-                    StopRow.mode == request.mode,
+                    StopRow.mode == request.mode, StopRow.trigger == request.trigger,
                 )).scalar_one()
                 session.commit()
                 return _view(row)
@@ -103,9 +105,19 @@ class StopService:
     ) -> list[StopView]:
         """Expose the owner-scoped durable stop records, oldest first.
 
-        Another owner sees nothing. A `position_id` filter returns the position
-        stop plus every agent-wallet-network stop that covers it.
+        Another owner sees nothing. Broad history retrieval (no `position_id`)
+        returns every owner stop, optionally filtered by agent, wallet or network.
+
+        A `position_id` filter needs the exact agent, wallet and network scope,
+        because this local module has no adopted position-to-wallet mapping. It
+        returns only that wallet's position stop and that wallet's covering
+        agent-wallet-network stops, so a stop on another wallet is never reported
+        as covering this position. A position filter without the exact scope is
+        refused rather than guessed.
         """
+        if position_id is not None and (agent_id is None or wallet_id is None or network_id is None):
+            raise StopError(
+                "a position-filtered stop lookup requires the exact agent_id, wallet_id and network_id scope")
         with self._factory() as session:
             statement = select(StopRow).where(StopRow.owner_id == verified_owner_id)
             if agent_id is not None:

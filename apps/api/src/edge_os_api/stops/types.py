@@ -33,6 +33,10 @@ _DENIED_OPERATIONS: dict[str, tuple[str, ...]] = {
 }
 
 
+class StopError(Exception):
+    pass
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
