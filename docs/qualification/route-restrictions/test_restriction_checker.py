@@ -332,6 +332,83 @@ class OneFieldAdversarialTest(unittest.TestCase):
             checker.R_MANDATE_EXPIRED,
         )
 
+    def test_recipient_empty_binding(self) -> None:
+        _expect_blocked(self, self._blocked(recipient="", approved_recipients=[""]), checker.R_RECIPIENT_NOT_ALLOWED)
+
+    def test_recipient_whitespace(self) -> None:
+        _expect_blocked(self, self._blocked(recipient="   "), checker.R_RECIPIENT_NOT_ALLOWED)
+
+    def test_entrypoint_empty_binding(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(entrypoint_address="", approved_entrypoints=[""]),
+            checker.R_ENTRYPOINT_NOT_ALLOWED,
+        )
+
+    def test_method_empty_binding(self) -> None:
+        _expect_blocked(self, self._blocked(method="", approved_methods=[""]), checker.R_METHOD_NOT_ALLOWED)
+
+    def test_signer_empty_adopted(self) -> None:
+        _expect_blocked(self, self._blocked(approved_signers=[""]), checker.R_ADOPTED_IDENTITY_INVALID)
+
+    def test_asset_empty_adopted(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(approved_assets={"": 18, "MON-native-143": 18, "USDC-143": 6}),
+            checker.R_ADOPTED_IDENTITY_INVALID,
+        )
+
+    def test_network_empty_adopted(self) -> None:
+        _expect_blocked(self, self._blocked(approved_networks=[""]), checker.R_ADOPTED_IDENTITY_INVALID)
+
+    def test_program_empty_adopted(self) -> None:
+        _expect_blocked(self, self._blocked(approved_program_hex=[""]), checker.R_ADOPTED_IDENTITY_INVALID)
+
+    def test_fee_collector_empty_binding(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(
+                fee_bps=5,
+                approved_fee_bps=5,
+                fee_collector_address="",
+                approved_fee_collectors=[""],
+                is_in_token_fee=True,
+                approved_is_in_token_fee=True,
+            ),
+            checker.R_FEE_COLLECTOR_NOT_ALLOWED,
+        )
+
+    def test_referrer_empty_binding(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(
+                referrer_fee_bps=5,
+                approved_referrer_fee_bps=5,
+                referrer_address="",
+                approved_referrers=[""],
+                is_in_token_fee=True,
+                approved_is_in_token_fee=True,
+            ),
+            checker.R_REFERRER_NOT_ALLOWED,
+        )
+
+    def test_missing_key_placeholder_still_blocks(self) -> None:
+        # The gate reproduction: an absent address with an adopted [""] placeholder.
+        data = dict(_VALID_ACTION)
+        data.pop("fee_collector_address", None)
+        data.update(
+            {
+                "fee_bps": 5,
+                "approved_fee_bps": 5,
+                "approved_fee_collectors": [""],
+                "is_in_token_fee": True,
+                "approved_is_in_token_fee": True,
+            }
+        )
+        verdict = checker.evaluate_declared_case(_ready_profile(), checker.load_action(data))
+        self.assertFalse(verdict.accepted)
+        self.assertIn(checker.R_FEE_COLLECTOR_NOT_ALLOWED, verdict.reasons)
+
 
 class MalformedDeclarationTest(unittest.TestCase):
     """A malformed declaration raises a field-specific ValueError. No coercion."""

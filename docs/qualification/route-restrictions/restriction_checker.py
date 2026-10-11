@@ -59,6 +59,7 @@ R_EVIDENCE_MISSING = "EVIDENCE_MISSING"
 R_NETWORK_NOT_ALLOWED = "NETWORK_NOT_ALLOWED"
 R_WALLET_BINDING_MISSING = "WALLET_BINDING_MISSING"
 R_WALLET_BINDING_MISMATCH = "WALLET_BINDING_MISMATCH"
+R_ADOPTED_IDENTITY_INVALID = "ADOPTED_IDENTITY_INVALID"
 R_SIGNER_NOT_ALLOWED = "SIGNER_NOT_ALLOWED"
 R_ENTRYPOINT_NOT_ALLOWED = "ENTRYPOINT_NOT_ALLOWED"
 R_METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
@@ -229,6 +230,45 @@ def _is_hex_program(value: Any) -> bool:
     return isinstance(value, str) and _HEX_BYTES.fullmatch(value) is not None
 
 
+def _has_empty_entry(approved: frozenset[str]) -> bool:
+    """True when an adopted identity set contains an empty or whitespace entry."""
+    return any(not entry.strip() for entry in approved)
+
+
+def _identity_reasons(
+    actual: str, approved: frozenset[str], not_allowed: str, applicable: bool = True
+) -> list[str]:
+    """Block an absent/empty actual identity, an invalid adopted entry, or a mismatch.
+
+    The check is independent of membership: an empty actual value blocks even
+    when the adopted set also contains an empty placeholder.
+    """
+    if not applicable:
+        return []
+    reasons: list[str] = []
+    if not actual.strip():
+        reasons.append(not_allowed)
+    if _has_empty_entry(approved):
+        reasons.append(R_ADOPTED_IDENTITY_INVALID)
+    elif actual not in approved:
+        reasons.append(not_allowed)
+    return reasons
+
+
+def _asset_reasons(actual: str, decimals: int, approved: Mapping[str, int]) -> list[str]:
+    """Block an absent/empty asset, an invalid adopted asset key, or a mismatch."""
+    reasons: list[str] = []
+    if not actual.strip():
+        reasons.append(R_ASSET_NOT_ALLOWED)
+    if any(not key.strip() for key in approved):
+        reasons.append(R_ADOPTED_IDENTITY_INVALID)
+    elif actual not in approved:
+        reasons.append(R_ASSET_NOT_ALLOWED)
+    elif approved[actual] != decimals:
+        reasons.append(R_DECIMALS_MISMATCH)
+    return reasons
+
+
 def _require_str(value: Any, field: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string")
@@ -314,10 +354,14 @@ def _fee_reasons(action: ControlledAction) -> list[str]:
     if action.fee_bps != action.approved_fee_bps or action.referrer_fee_bps != action.approved_referrer_fee_bps:
         reasons.append(R_FEE_NOT_APPROVED)
 
-    if action.fee_bps > 0 and action.fee_collector_address not in action.approved_fee_collectors:
-        reasons.append(R_FEE_COLLECTOR_NOT_ALLOWED)
-    if action.referrer_fee_bps > 0 and action.referrer_address not in action.approved_referrers:
-        reasons.append(R_REFERRER_NOT_ALLOWED)
+    if action.fee_bps > 0:
+        reasons.extend(
+            _identity_reasons(action.fee_collector_address, action.approved_fee_collectors, R_FEE_COLLECTOR_NOT_ALLOWED)
+        )
+    if action.referrer_fee_bps > 0:
+        reasons.extend(
+            _identity_reasons(action.referrer_address, action.approved_referrers, R_REFERRER_NOT_ALLOWED)
+        )
 
     if total > 0:
         if action.is_in_token_fee is None or action.approved_is_in_token_fee is None:
@@ -393,44 +437,38 @@ def _expiry_reasons(action: ControlledAction) -> list[str]:
 def _evaluate_action(action: ControlledAction) -> list[str]:
     reasons: list[str] = []
 
-    if action.network not in SUPPORTED_NETWORKS or action.network not in action.approved_networks:
+    if action.network not in SUPPORTED_NETWORKS:
         reasons.append(R_NETWORK_NOT_ALLOWED)
+    reasons.extend(_identity_reasons(action.network, action.approved_networks, R_NETWORK_NOT_ALLOWED))
 
-    if not action.wallet_id or not action.signer_id:
+    if not action.wallet_id or not action.signer_id or not action.policy_binding_wallet_id:
         reasons.append(R_WALLET_BINDING_MISSING)
     elif action.policy_binding_wallet_id != action.wallet_id:
         reasons.append(R_WALLET_BINDING_MISMATCH)
-    if action.signer_id not in action.approved_signers:
-        reasons.append(R_SIGNER_NOT_ALLOWED)
+    reasons.extend(_identity_reasons(action.signer_id, action.approved_signers, R_SIGNER_NOT_ALLOWED))
 
-    if action.entrypoint_address not in action.approved_entrypoints:
-        reasons.append(R_ENTRYPOINT_NOT_ALLOWED)
+    reasons.extend(
+        _identity_reasons(action.entrypoint_address, action.approved_entrypoints, R_ENTRYPOINT_NOT_ALLOWED)
+    )
+    reasons.extend(_identity_reasons(action.method, action.approved_methods, R_METHOD_NOT_ALLOWED))
 
-    if action.method not in action.approved_methods:
-        reasons.append(R_METHOD_NOT_ALLOWED)
-
-    if action.input_asset_id not in action.approved_assets:
-        reasons.append(R_ASSET_NOT_ALLOWED)
-    elif action.approved_assets[action.input_asset_id] != action.input_decimals:
-        reasons.append(R_DECIMALS_MISMATCH)
-    if action.output_asset_id not in action.approved_assets:
-        reasons.append(R_ASSET_NOT_ALLOWED)
-    elif action.approved_assets[action.output_asset_id] != action.output_decimals:
-        reasons.append(R_DECIMALS_MISMATCH)
+    reasons.extend(_asset_reasons(action.input_asset_id, action.input_decimals, action.approved_assets))
+    reasons.extend(_asset_reasons(action.output_asset_id, action.output_decimals, action.approved_assets))
 
     raw_reason = _validate_raw(action.input_raw)
     if raw_reason is not None:
         reasons.append(raw_reason)
     reasons.extend(_approved_raw_reasons(action.input_raw, action.approved_input_raw))
 
-    if action.recipient not in action.approved_recipients:
-        reasons.append(R_RECIPIENT_NOT_ALLOWED)
+    reasons.extend(_identity_reasons(action.recipient, action.approved_recipients, R_RECIPIENT_NOT_ALLOWED))
 
     reasons.extend(_min_output_reasons(action))
     reasons.extend(_fee_reasons(action))
 
     if not _is_hex_program(action.program_hex):
         reasons.append(R_PROGRAM_MISSING)
+    elif _has_empty_entry(action.approved_program_hex):
+        reasons.append(R_ADOPTED_IDENTITY_INVALID)
     elif action.program_hex not in action.approved_program_hex:
         reasons.append(R_PROGRAM_NOT_APPROVED)
 

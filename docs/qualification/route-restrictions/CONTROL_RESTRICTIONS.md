@@ -45,7 +45,8 @@ A fake policy simulator cannot prove an independent provider restriction. An app
 | `UNSUPPORTED_CONTROL:<name>` | The profile marks a control `UNSUPPORTED`, `UNKNOWN` or `UNSET`. |
 | `EVIDENCE_MISSING:<name>` | The profile marks a control `ENFORCED` but its evidence is `NOT_RUN`. |
 | `NETWORK_NOT_ALLOWED` | Network outside the supported set or the approval. |
-| `WALLET_BINDING_MISSING` / `WALLET_BINDING_MISMATCH` | Missing signer or a policy binding to another wallet. |
+| `WALLET_BINDING_MISSING` / `WALLET_BINDING_MISMATCH` | Missing wallet, signer or policy binding, or a policy binding to another wallet. |
+| `ADOPTED_IDENTITY_INVALID` | An adopted identity set or asset map contains an empty or whitespace entry. |
 | `SIGNER_NOT_ALLOWED` | Signer outside the adopted signer set. |
 | `ENTRYPOINT_NOT_ALLOWED` | Entrypoint outside the approval. |
 | `METHOD_NOT_ALLOWED` | Method outside the approval. |
@@ -71,6 +72,8 @@ A fake policy simulator cannot prove an independent provider restriction. An app
 | `EVIDENCE_UNMATCHED` | A local case claims a non-local result class. |
 
 The loader rejects a malformed declaration with a field-specific `ValueError`: a non-integer or negative fee, capacity or age; a non-string identifier or allow-list item; and a non-integer asset decimal. It never coerces these values.
+
+An absent, empty or whitespace-only applicable actual identity blocks **independently of membership**: an empty actual value cannot be approved by an adopted `""` placeholder. An adopted identity set that contains an empty or whitespace entry is invalid and blocks. A zero fee keeps its collector or referrer inapplicable. The normal command reports a malformed declaration as `error: ...` and exits non-zero; a failed action returns `BLOCKED`.
 
 ## Position-inventory restriction (separate)
 
