@@ -29,6 +29,24 @@ from recovery._support import (
 )
 
 
+class _SettlingAdmission(AdmissionService):
+    """An AdmissionService that runs one scheduled settlement before its first reconcile.
+
+    It changes no P22 return value; it only reproduces a settlement that commits
+    between recovery's initial decision read and its reconciliation call.
+    """
+
+    def __init__(self, session_factory, settle) -> None:
+        super().__init__(session_factory)
+        self._settle = settle
+
+    def reconcile(self, owner, action_id, receipt):
+        settle, self._settle = self._settle, None
+        if settle is not None:
+            settle()
+        return super().reconcile(owner, action_id, receipt)
+
+
 def _balances(admission_service, owner):
     return {item.asset_id: item for item in admission_service.balances(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)}
@@ -356,6 +374,59 @@ def test_convergence_releases_only_its_own_claim(
     assert view.state == "SUBMITTED_CONFIRMED"
     held = active_claim(recovery_factory, fresh_owner)
     assert held is not None and held.action_id == submitted_action
+
+
+def test_settlement_race_mismatch_is_blocked(
+        recovery_factory, recovery_service, admission_service, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _approval, _context, result = open_unknown_entry(execution_service, fresh_owner, revision)
+    action_id = result.intent.action_id
+    actual_input, actual_output, actual_gas = confirmed_actuals()
+    authoritative = evidence_for(recovery_factory, fresh_owner, action_id, outcome="CONFIRMED",
+                                 actual_input=actual_input, actual_output=actual_output,
+                                 actual_gas=actual_gas)
+
+    def settle() -> None:
+        AdmissionService(recovery_factory).reconcile(fresh_owner, action_id, authoritative.receipt())
+
+    racing = RecoveryService(recovery_factory, _SettlingAdmission(recovery_factory, settle), execution_service)
+    divergent = evidence_for(
+        recovery_factory, fresh_owner, action_id, outcome="CONFIRMED",
+        actual_input=AssetAmount(asset_id=QUOTE, raw="109", decimals=0),
+        actual_output=actual_output, actual_gas=actual_gas)
+    outcome = racing.reconcile(fresh_owner, action_id, divergent)
+    assert outcome.applied is False
+    assert outcome.case.state == "DISCREPANCY"
+    assert outcome.case.blocking_reason == "P22_RECEIPT_MISMATCH:actual_input"
+    assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_UNKNOWN"
+    assert active_claim(recovery_factory, fresh_owner) is not None
+    assert admission_service.retrieve_decisions(fresh_owner, action_id=action_id)[0].status == "CONFIRMED"
+    confirmed = [row for row in admission_service.retrieve_receipts(fresh_owner, action_id=action_id)
+                 if row.outcome == "CONFIRMED"]
+    assert len(confirmed) == 1
+    assert confirmed[0].content["actual_input"]["raw"] == "110"
+
+
+def test_settlement_race_matching_converges_once(
+        recovery_factory, admission_service, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _approval, _context, result = open_unknown_entry(execution_service, fresh_owner, revision)
+    action_id = result.intent.action_id
+    actual_input, actual_output, actual_gas = confirmed_actuals()
+    matching = evidence_for(recovery_factory, fresh_owner, action_id, outcome="CONFIRMED",
+                            actual_input=actual_input, actual_output=actual_output, actual_gas=actual_gas)
+
+    def settle() -> None:
+        AdmissionService(recovery_factory).reconcile(fresh_owner, action_id, matching.receipt())
+
+    racing = RecoveryService(recovery_factory, _SettlingAdmission(recovery_factory, settle), execution_service)
+    outcome = racing.reconcile(fresh_owner, action_id, matching)
+    assert outcome.applied is True
+    assert outcome.case.state == "CONFIRMED"
+    assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_CONFIRMED"
+    balances = _balances(admission_service, fresh_owner)
+    assert balances[QUOTE].consumed_raw == "110"
+    assert balances[NATIVE].consumed_raw == "2"
 
 
 def test_delayed_exit_reports_blocking_reason(

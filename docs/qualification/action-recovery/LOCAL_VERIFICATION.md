@@ -74,6 +74,11 @@ git diff --check 545434d06c3cdae9d1deff78d77ff28147719fdd..HEAD
   whose actual input, output or gas differs from the saved P22 receipt is blocked
   as `DISCREPANCY` (`P22_RECEIPT_MISMATCH:<field>`); the queue stays stale and no
   second receipt is written.
+- Settlement race: with two real `AdmissionService` instances and a scheduled P22
+  settlement between recovery's initial read and its reconciliation call, a
+  conflicting terminal outcome is blocked as a `DISCREPANCY` while the queue, claim
+  and the single authoritative P22 receipt are unchanged; matching evidence still
+  converges once without a second settlement.
 - Delayed exit: an unknown exit is visible with `delayed_exit` true and its real
   `SUBMISSION_UNKNOWN` blocking reason; the claim stays held.
 - Crash convergence: after a P22 reconciliation commits but the P23 queue is
@@ -105,8 +110,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 575 passed, ~124 s, 2 known warnings.
-- Recovery suite: 22 passed. Execution suite: 46 passed. Admission suite: 100 passed.
+- Full suite: 577 passed, ~200 s, 2 known warnings.
+- Recovery suite: 24 passed. Execution suite: 46 passed. Admission suite: 100 passed.
 - P15, P02 and P06 contract scripts: PASS.
 - `compileall` on the owned recovery and leased execution source/tests: PASS.
 - `git diff --check` against the accepted base `545434d0`: clean.

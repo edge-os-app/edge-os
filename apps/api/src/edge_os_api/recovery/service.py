@@ -208,16 +208,8 @@ class RecoveryService:
                 # discrepancy, never a false confirmation. This applies on a first
                 # delivery and on a resumed delivery after a crash.
                 if decision_status in _SETTLED_DECISIONS and decision_status != expected:
-                    existing.state = "REJECTED"
-                    existing.rejection_reason = f"P22_SETTLED_MISMATCH:{decision_status}"
-                    case.state = "DISCREPANCY"
-                    case.blocking_reason = f"P22_SETTLED_MISMATCH:{decision_status}"
-                    case.decision_status = decision_status
-                    case.updated_at = now
-                    session.commit()
-                    return RecoveryResult(case=self._case_view(session, case), applied=False,
-                                          duplicate=False, decision_status=decision_status,
-                                          detail=existing.rejection_reason)
+                    return self._block(session, case, existing,
+                                       f"P22_SETTLED_MISMATCH:{decision_status}", decision_status, now)
 
                 if decision_status in _SETTLED_DECISIONS:
                     # Crash convergence: P22 settled but the P23 queue is stale. The
@@ -226,22 +218,28 @@ class RecoveryService:
                     mismatch = self._terminal_receipt_mismatch(
                         verified_owner_id, action_id, evidence)
                     if mismatch is not None:
-                        existing.state = "REJECTED"
-                        existing.rejection_reason = mismatch
-                        case.state = "DISCREPANCY"
-                        case.blocking_reason = mismatch
-                        case.decision_status = decision_status
-                        case.updated_at = now
-                        session.commit()
-                        return RecoveryResult(case=self._case_view(session, case), applied=False,
-                                              duplicate=False, decision_status=decision_status,
-                                              detail=mismatch)
+                        return self._block(session, case, existing, mismatch, decision_status, now)
                     effective_status, effective_reason = decision_status, None
                 else:
                     reconciliation = self._admission.reconcile(
                         verified_owner_id, action_id, evidence.receipt())
                     effective_status = reconciliation.decision_status
                     effective_reason = reconciliation.reason
+                    # Close the interleaving: a concurrent P22 service can commit a
+                    # terminal settlement between the initial read and this call. The
+                    # authoritative terminal result must match the delivered evidence
+                    # before acceptance, or the action would report one outcome while
+                    # P22 retains incompatible actuals. A genuine breach is not a
+                    # mismatch; it converges to the blocked BREACHED state.
+                    if effective_status in _SETTLED_DECISIONS and effective_status != "BREACHED":
+                        if effective_status != expected:
+                            return self._block(session, case, existing,
+                                               f"P22_SETTLED_MISMATCH:{effective_status}",
+                                               effective_status, now)
+                        mismatch = self._terminal_receipt_mismatch(
+                            verified_owner_id, action_id, evidence)
+                        if mismatch is not None:
+                            return self._block(session, case, existing, mismatch, effective_status, now)
 
                 queue = self._execution.converge_reconciled_outcome(
                     verified_owner_id, action_id=action_id,
@@ -410,6 +408,19 @@ class RecoveryService:
         if amount is None:
             return None
         return {"asset_id": amount.asset_id, "raw": amount.raw, "decimals": amount.decimals}
+
+    def _block(self, session: Session, case: RecoveryCaseRow, existing: RecoveryEvidenceRow,
+               reason: str, decision_status: str, now: dt.datetime) -> RecoveryResult:
+        """Record a blocked discrepancy and leave the queue, claim and ledger unchanged."""
+        existing.state = "REJECTED"
+        existing.rejection_reason = reason
+        case.state = "DISCREPANCY"
+        case.blocking_reason = reason
+        case.decision_status = decision_status
+        case.updated_at = now
+        session.commit()
+        return RecoveryResult(case=self._case_view(session, case), applied=False, duplicate=False,
+                              decision_status=decision_status, detail=reason)
 
     def _terminal_receipt_mismatch(self, owner: uuid.UUID, action_id: str,
                                    evidence: OutcomeEvidence) -> str | None:

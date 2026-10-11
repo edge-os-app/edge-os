@@ -125,6 +125,13 @@ Recovery is idempotent and crash-safe:
   `DISCREPANCY` (`P22_RECEIPT_MISMATCH:actual_input|actual_output|actual_gas`) and
   the queue is not mutated. The owner never sees incompatible actuals for one
   action.
+- The same comparison closes a settlement interleaving. A concurrent P22 service
+  can commit a terminal settlement between recovery's initial decision read and
+  its reconciliation call. Recovery therefore re-checks the authoritative result
+  after `AdmissionService.reconcile` returns: when that result is terminal it must
+  match the delivered evidence outcome and actuals, or the evidence is blocked as
+  a `DISCREPANCY` before acceptance. A genuine breach is not treated as a
+  mismatch; it converges to the blocked `BREACHED` state.
 - A stale P23 queue after a crash therefore converges to the settled P22 state
   once, with no duplicate fees and no released unknown exposure.
 
