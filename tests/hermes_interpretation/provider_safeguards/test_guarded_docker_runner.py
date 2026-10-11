@@ -469,7 +469,7 @@ def test_a_container_still_present_after_a_timeout_kill_fails_the_turn(tmp_path:
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("boom"), RecursionError("deep"), UnicodeEncodeError("utf-8", "x", 0, 1, "bad"),
-                                     PermissionError("locked")])
+                                     PermissionError("locked"), KeyboardInterrupt()])
 def test_any_unexpected_error_while_sealing_removes_the_evidence_and_stops_the_turn(tmp_path: Path, monkeypatch, failure) -> None:
     credential = tmp_path / "credential"
     credential.write_text(OLD)
@@ -578,3 +578,202 @@ def test_a_result_file_that_cannot_be_read_ends_the_turn_as_unknown_not_with_an_
     result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
     assert (result.status, result.error_class) == ("UNKNOWN", "ContainerResultUnreadable")
+
+
+# --- Repairs after round-6 reviews: removal that cannot fail on locked folders, a stop that must be verified ----------
+
+def docker_double(*, present: bool = True, ps_code: int = 0, owned: bool = True, on_kill=None, record=None):
+    """A stand-in for the docker CLI. `present` stays true until a kill (if the container is ours)."""
+    state = {"present": present}
+
+    def fake(*args, **kwargs):
+        if record is not None:
+            record.append((args, kwargs))
+        if args[0] == "inspect":
+            label = "repair-test" if owned else "someone-elses-run"
+            return subprocess.CompletedProcess(args, 0 if state["present"] else 1, f"/{args[1]} {label}\n", "")
+        if args[0] == "kill":
+            state["present"] = False
+            if on_kill:
+                on_kill()
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, ps_code, "abc\n" if state["present"] else "", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+    return fake
+
+
+@pytest.mark.parametrize("mode", [0o000, 0o500])
+def test_evidence_in_a_locked_folder_is_removed_when_the_container_cannot_be_stopped(tmp_path: Path, monkeypatch, mode: int) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present, not ours, so never stoppable
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+    def behaviour(output: Path) -> None:
+        locked = output / "locked"
+        locked.mkdir()
+        (locked / "x.log").write_text(OLD)
+        locked.chmod(mode)
+
+    install_process(monkeypatch, behaviour, returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, EvidenceNotSealed)
+
+    assert not list((tmp_path / "evidence").glob("turn-*/output")), "evidence that may hold the credential was kept"
+
+
+def test_a_docker_listing_that_fails_does_not_count_as_the_container_being_gone(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False, ps_code=1))  # daemon unreachable
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    install_process(monkeypatch, lambda output: (output / "late.log").write_text(OLD), returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, EvidenceNotSealed)
+
+    assert not list((tmp_path / "evidence").glob("turn-*/output"))
+
+
+def test_absence_is_seen_twice_before_the_container_counts_as_gone(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    seen: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False, record=seen))
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    install_process(monkeypatch, lambda output: None, returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert [call[0][0] for call in seen if call[0][0] == "ps"] == ["ps", "ps"]
+
+
+def test_the_container_is_stopped_before_the_evidence_is_sealed(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folders: list[Path] = []
+
+    def dying_container_writes_last() -> None:  # the kill is what makes the container write once more
+        (folders[0] / "last-breath.log").write_text(OLD)
+
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(on_kill=dying_container_writes_last))
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    install_process(monkeypatch, lambda output: folders.append(output), returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == [], "the evidence was sealed before the container stopped"
+
+
+def test_a_container_that_is_not_ours_is_never_killed_and_every_docker_command_has_a_time_limit(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    seen: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False, record=seen))
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    install_process(monkeypatch, lambda output: None, returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, EvidenceNotSealed)
+
+    assert not [call for call in seen if call[0][0] == "kill"]
+    assert seen and all(isinstance(call[1].get("timeout"), int) and 1 <= call[1]["timeout"] <= 60 for call in seen)
+
+
+def test_an_interrupt_during_the_stop_step_still_removes_the_evidence_and_the_original_failure_propagates(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def interrupted(*args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(docker_turn_runner, "docker", interrupted)
+    real_popen = subprocess.Popen
+
+    class Process:
+        returncode = None
+
+        def __init__(self, argv, **_kw) -> None:
+            self.output = output_folder(argv)
+
+        def communicate(self, timeout=None):
+            (self.output / "late.log").write_text(OLD)
+            raise RuntimeError("the pipe broke")
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, RuntimeError)
+
+    assert not list((tmp_path / "evidence").glob("turn-*/output"))
+
+
+def test_a_folder_whose_name_holds_the_credential_is_renamed_and_its_files_are_still_sealed(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def behaviour(output: Path) -> None:
+        named = output / f"dir-{OLD}"
+        named.mkdir()
+        (named / "inner.log").write_text(OLD)
+
+    install_process(monkeypatch, behaviour)
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+    assert not [p for p in (tmp_path / "evidence").rglob("*") if OLD in p.name]
+    assert list((tmp_path / "evidence").glob("turn-*/output/redacted-name-*/inner.log"))
+
+
+def test_an_output_with_too_many_entries_is_not_scanned_and_is_removed(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(module, "MAX_ENTRIES", 5)
+    install_process(monkeypatch, lambda output: [(output / f"f{i}.log").write_text("x") for i in range(6)])
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, EvidenceNotSealed)
+
+    assert not list((tmp_path / "evidence").glob("turn-*/output"))
+
+
+def test_when_the_wait_fails_the_container_is_stopped_before_the_evidence_is_sealed(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folders: list[Path] = []
+    monkeypatch.setattr(docker_turn_runner, "docker",
+                        docker_double(on_kill=lambda: (folders[0] / "last-breath.log").write_text(OLD)))  # the kill makes it write once more
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    real_popen = subprocess.Popen
+
+    class Process:
+        returncode = None
+
+        def __init__(self, argv, **_kw) -> None:
+            folders.append(output_folder(argv))
+
+        def communicate(self, timeout=None):
+            if len(folders) == 1 and not getattr(self, "failed", False):
+                self.failed = True
+                raise RuntimeError("the pipe broke")
+            return b"", None
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, RuntimeError)
+
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == [], "the evidence was sealed before the container stopped"

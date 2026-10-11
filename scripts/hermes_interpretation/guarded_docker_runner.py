@@ -41,6 +41,7 @@ from provider_guard import GuardPolicy
 
 REDACTED = "[REDACTED]"
 MAX_SCANNED_BYTES = 64 * 1024 * 1024
+MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
 
 
@@ -111,27 +112,30 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
         Iterative, so a very deep tree cannot exhaust the recursion limit. Any error propagates to `_seal`.
         """
-        forms, found, pending = encodings(secret), False, [folder]
+        forms, found, pending, seen = encodings(secret), False, [folder], 0
         while pending:
             current = pending.pop()
             current.chmod(0o700)
             with os.scandir(current) as scan:
                 entries = list(scan)
             for entry in entries:
+                seen += 1
+                if seen > MAX_ENTRIES:
+                    raise EvidenceNotSealed("the output holds more entries than can be scanned")
                 if time.monotonic() > deadline:
                     raise EvidenceNotSealed("sealing passed its time limit")
-                path = Path(entry.path)
-                kind = stat.S_IFMT(entry.stat(follow_symlinks=False).st_mode)
+                path, kind = Path(entry.path), stat.S_IFMT(entry.stat(follow_symlinks=False).st_mode)
+                if kind not in (stat.S_IFDIR, stat.S_IFREG):  # a link, a named pipe, a socket or a device: removed, never opened
+                    path.unlink()
+                    continue
+                name = os.fsencode(path.name)  # a name that is not valid text is still bytes
+                if any(form in name for form in forms):  # rename BEFORE descending, so the folder's files are still sealed
+                    found = True
+                    path = path.rename(path.with_name(f"redacted-name-{hashlib.sha256(name).hexdigest()[:8]}"))
                 if kind == stat.S_IFDIR:
                     pending.append(path)
-                elif kind == stat.S_IFREG:
+                else:
                     found |= cls._seal_file(path, forms)
-                else:  # a link, a named pipe, a socket or a device: removed, never opened or followed
-                    path.unlink()
-                name = os.fsencode(path.name)  # a name that is not valid text is still bytes
-                if path.exists() and any(form in name for form in forms):
-                    found = True
-                    path.rename(path.with_name(f"redacted-name-{hashlib.sha256(name).hexdigest()[:8]}"))
         return found
 
     @staticmethod
@@ -150,15 +154,24 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     @staticmethod
     def _quarantine(output: Path) -> None:
-        """Remove evidence that cannot be proved clean. If it cannot be removed, say so."""
-        def unlock(function, path, _error):  # a locked folder or file: make it ours, then retry
-            try:
-                os.chmod(path, 0o700)
-                function(path)
-            except OSError:
-                pass
+        """Remove evidence that cannot be proved clean, including folders that are locked. If it stays, say so.
 
-        shutil.rmtree(output, onexc=unlock)
+        First every folder that can be reached is made ours (mode 700), then the tree is removed. Nothing in here
+        may raise anything but `EvidenceNotSealed`, and only when the folder is still there at the end.
+        """
+        try:
+            pending = [output]
+            while pending:
+                current = pending.pop()
+                try:
+                    current.chmod(0o700)
+                    with os.scandir(current) as scan:
+                        pending += [Path(e.path) for e in scan if e.is_dir(follow_symlinks=False)]
+                except OSError:
+                    continue  # too deep or already gone: the removal below handles it from the top
+            shutil.rmtree(output, ignore_errors=True)
+        except Exception:  # noqa: BLE001 - whatever went wrong, the check below says whether the evidence is gone
+            pass
         if output.exists():
             raise EvidenceNotSealed("evidence that may hold the credential could not be removed")
 
@@ -190,18 +203,25 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         except Exception:  # noqa: BLE001 - if the stop commands fail, the container is not shown to be gone
             return {"container": name, "ownership_verified": owned, "container_absent": False}
         try:
+            proc.kill()  # the client first: a client that is still starting could create the container after our check
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             proc.communicate(timeout=5)
         except Exception:  # noqa: BLE001 - reaping the client must not hide the verification below
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
+            pass
+        clear = 0
         for attempt in range(20):
             try:
-                if not cli("ps", "-a", "--filter", f"name=^{name}$", "-q").stdout.strip():
-                    return {"container": name, "ownership_verified": owned, "container_absent": True}
+                listing = cli("ps", "-a", "--filter", f"name=^{name}$", "-q")
             except Exception:  # noqa: BLE001
                 break
+            if listing.returncode == 0 and not listing.stdout.strip():  # a failed listing proves nothing
+                clear += 1
+                if clear >= 2:  # absent twice in a row, so a slow start cannot hide behind one empty answer
+                    return {"container": name, "ownership_verified": owned, "container_absent": True}
+            else:
+                clear = 0
             if attempt and time.monotonic() > plan.deadline:
                 break
             time.sleep(0.25)
@@ -230,15 +250,17 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             try:  # the same two steps as on success; the original failure is the one that propagates
                 self._confirm_stopped(plan, launch)
                 self._seal(output, plan)
-            except EvidenceNotSealed:
-                self._quarantine(output)
+            except BaseException:  # an interrupt here counts too: the evidence goes
+                self._quarantine(output)  # raises EvidenceNotSealed if the folder cannot be removed
             raise
         try:
             self._confirm_stopped(plan, launch)
             self._seal(output, plan)
-        except EvidenceNotSealed:
+        except BaseException as error:
             self._quarantine(output)
-            raise
+            if isinstance(error, EvidenceNotSealed):
+                raise
+            raise EvidenceNotSealed("the evidence could not be sealed") from error
         return result
 
     def _run_container(self, turn: HermesTurn, task_dir: Path, plan: _TurnPlan, private: Path, launch: _Launch) -> HermesTurnResult:
