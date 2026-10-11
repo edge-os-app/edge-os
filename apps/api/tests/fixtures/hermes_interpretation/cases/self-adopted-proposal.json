@@ -1,0 +1,86 @@
+{
+ "id": "self-adopted-proposal",
+ "group": "AUTHORITY",
+ "purpose": "The model cannot adopt its own proposal.",
+ "intake": {
+  "original_request": "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only.",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "CONCRETE_THESIS"
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1423,
+   "completion_tokens": 611,
+   "total_tokens": 2034
+  },
+  "model_response": {
+   "meaning_status": "SUPPORTED",
+   "missing_capability": null,
+   "evidence_readiness": "READY",
+   "field_evidence": [
+    {
+     "field_name": "entry",
+     "state": "KNOWN",
+     "origin": "USER_STATED",
+     "source_passage": "Buy when the 15-minute price return is above 1%",
+     "value": {
+      "op": "gt",
+      "args": [
+       {
+        "op": "price_return",
+        "lookback_buckets": 3
+       },
+       {
+        "op": "constant",
+        "value": "0.01",
+        "unit": "DIMENSIONLESS"
+       }
+      ]
+     }
+    },
+    {
+     "field_name": "exit",
+     "state": "KNOWN",
+     "origin": "USER_STATED",
+     "source_passage": "exit when the 5-minute return turns negative",
+     "value": {
+      "op": "lt",
+      "args": [
+       {
+        "op": "price_return",
+        "lookback_buckets": 1
+       },
+       {
+        "op": "constant",
+        "value": "0",
+        "unit": "DIMENSIONLESS"
+       }
+      ]
+     }
+    },
+    {
+     "field_name": "sizing",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "ADOPTED",
+     "value": {
+      "kind": "FIXED_QUOTE_AMOUNT",
+      "amount": "100",
+      "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+     }
+    }
+   ],
+   "questions": []
+  }
+ },
+ "expect": {
+  "result": "OutputRejected",
+  "reason_code": "proposal_must_stay_pending",
+  "attempts": 1
+ }
+}

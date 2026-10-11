@@ -418,7 +418,7 @@ Status: `COMPLETE`
 Evidence:
 
 - the builder accepted the conditional entry verdict;
-- a three-person team is planned;
+- a three-person team was planned at entry; the fixed implementation split is now superseded by [current team ownership](#9-team-ownership);
 - the schedule and unresolved official terms are recorded.
 
 ### Phase 1: read the room
@@ -746,7 +746,7 @@ The builder owns product decisions, all prototypes and the hackathon release can
 
 The contributor may implement accepted quantitative/backend tickets on a task branch, with an exact controller assignment and published inputs. This work can be core to the wider product without being part of the hackathon release candidate. It must not delay release work or overlap an active shared-file lease.
 
-Proposed first work is P14's additions/partial-exit accounting profile and independently calculated examples. Implementation waits for profile acceptance and an exact base, branch, owned paths and checks. P42 statistical qualification is an optional alternative for a contributor with the relevant experience. P10 waits for its accepted interpreter prerequisite. LP extensions retain their unresolved prerequisites. See the [quant contributor brief](team/QUANT_CONTRIBUTOR_BRIEF.md) for issue links and limits.
+The dated P14 numerical assignment permits a branch from latest main and one PR containing proposed accounting choices, implementation, tests and independently calculated examples. Preliminary profile approval is not required. Adoption of new semantics and integration still require the assigned reviews and acceptance. P42 statistical qualification is an optional alternative for a contributor with the relevant experience. P10 waits for its accepted interpreter prerequisite. LP extensions retain their unresolved prerequisites. See the [quant contributor brief](team/QUANT_CONTRIBUTOR_BRIEF.md) for issue links and limits.
 
 The contributor does not own the release candidate, live wallet setup, funded execution, deployment, submission or tokenization economics. Private courses are not required: publish sufficient permitted extracts, contracts and fixtures before assigning dependent work. Ownership alone approves no profile, provider call, spending or extension activation.
 
@@ -779,7 +779,7 @@ Minimum fixtures:
 - signer removal with a still-open order;
 - LP StrategySpec and simulated result.
 
-The frontend should work against these fixtures while the real engine is being built. Tokenization work uses its separately accepted publication contract and revision/eligibility fixtures. A fixture grants no live authority and establishes no profitability.
+Assigned frontend work can use these fixtures while the real engine is being built. Optional tokenization work uses its separately accepted publication contract and revision/eligibility fixtures. A fixture grants no live authority and establishes no profitability.
 
 ## 10. Quant course knowledge base
 

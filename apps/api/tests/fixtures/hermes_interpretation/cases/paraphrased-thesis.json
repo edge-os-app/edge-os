@@ -1,0 +1,176 @@
+{
+ "id": "paraphrased-thesis",
+ "group": "CONCRETE_THESIS",
+ "purpose": "The same rule in different words gives the same structured meaning.",
+ "intake": {
+  "original_request": "Go long once the price has climbed more than one percent across the last fifteen minutes, and get out when the five minute return goes negative.",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "CONCRETE_THESIS"
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1423,
+   "completion_tokens": 611,
+   "total_tokens": 2034
+  },
+  "model_response": {
+   "meaning_status": "SUPPORTED",
+   "missing_capability": null,
+   "evidence_readiness": "READY",
+   "field_evidence": [
+    {
+     "field_name": "entry",
+     "state": "KNOWN",
+     "origin": "USER_STATED",
+     "source_passage": "once the price has climbed more than one percent across the last fifteen minutes",
+     "value": {
+      "op": "gt",
+      "args": [
+       {
+        "op": "price_return",
+        "lookback_buckets": 3
+       },
+       {
+        "op": "constant",
+        "value": "0.01",
+        "unit": "DIMENSIONLESS"
+       }
+      ]
+     }
+    },
+    {
+     "field_name": "exit",
+     "state": "KNOWN",
+     "origin": "USER_STATED",
+     "source_passage": "get out when the five minute return goes negative",
+     "value": {
+      "op": "lt",
+      "args": [
+       {
+        "op": "price_return",
+        "lookback_buckets": 1
+       },
+       {
+        "op": "constant",
+        "value": "0",
+        "unit": "DIMENSIONLESS"
+       }
+      ]
+     }
+    },
+    {
+     "field_name": "data_inputs",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": [
+      "price"
+     ]
+    },
+    {
+     "field_name": "invalidation",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": {
+      "state": "NOT_REQUESTED",
+      "source_ref": "synthetic:adopted-no-invalidation"
+     }
+    },
+    {
+     "field_name": "sizing",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": {
+      "kind": "FIXED_QUOTE_AMOUNT",
+      "amount": "100",
+      "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+     }
+    },
+    {
+     "field_name": "additions",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": false
+    },
+    {
+     "field_name": "partial_exits",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": false
+    },
+    {
+     "field_name": "cost_assumptions",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": {
+      "fee_rate": "0.003",
+      "slippage_rate": "0.005",
+      "source_ref": "synthetic:adopted-cost-profile"
+     }
+    },
+    {
+     "field_name": "risk_limits",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": {
+      "max_quote_notional": "100",
+      "max_open_positions": 1
+     }
+    },
+    {
+     "field_name": "action_scope",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": [
+      "SPOT_BUY",
+      "SPOT_SELL_ALL_ATTRIBUTABLE"
+     ]
+    }
+   ],
+   "questions": []
+  }
+ },
+ "expect": {
+  "result": "Interpreted",
+  "entry_value": {
+   "op": "gt",
+   "args": [
+    {
+     "op": "price_return",
+     "lookback_buckets": 3
+    },
+    {
+     "op": "constant",
+     "value": "0.01",
+     "unit": "DIMENSIONLESS"
+    }
+   ]
+  },
+  "exit_value": {
+   "op": "lt",
+   "args": [
+    {
+     "op": "price_return",
+     "lookback_buckets": 1
+    },
+    {
+     "op": "constant",
+     "value": "0",
+     "unit": "DIMENSIONLESS"
+    }
+   ]
+  }
+ }
+}

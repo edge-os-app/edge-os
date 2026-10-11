@@ -83,6 +83,10 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 details { border: 1px solid var(--color-divider); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); background: var(--color-bg); }
 details > summary { cursor: pointer; font-weight: 600; min-height: var(--control-min); display: flex; align-items: center; }
 details[open] > summary { margin-bottom: var(--space-3); }
+ol.attempts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-4); }
+ol.attempts li { padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-divider); }
+ol.attempts li:last-child { border-bottom: 0; padding-bottom: 0; }
+ol.attempts h3 { font-size: 16px; margin: 0 0 var(--space-1); }
 table.records { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 14px; }
 table.records th, table.records td { text-align: left; padding: var(--space-2); border-bottom: 1px solid var(--color-divider); vertical-align: top; }
 table.records td:nth-of-type(1) { overflow-wrap: break-word; }

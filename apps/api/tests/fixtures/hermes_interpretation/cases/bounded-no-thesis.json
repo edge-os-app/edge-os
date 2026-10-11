@@ -1,0 +1,40 @@
+{
+ "id": "bounded-no-thesis",
+ "group": "BOUNDED_NO_THESIS",
+ "purpose": "A request with no thesis stays an unresolved investigation and invents no signal.",
+ "intake": {
+  "original_request": "I have no view. Look at this market over the last two days and tell me whether anything is worth testing.",
+  "restrictions": [],
+  "requested_job": "INVESTIGATE_EFFECT",
+  "input_class": "BOUNDED_NO_THESIS",
+  "declared_market": {
+   "network": "MONAD",
+   "base_asset": "0x1111111111111111111111111111111111111111",
+   "quote_asset": "0x2222222222222222222222222222222222222222"
+  }
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1423,
+   "completion_tokens": 611,
+   "total_tokens": 2034
+  },
+  "model_response": {
+   "meaning_status": "SUPPORTED",
+   "missing_capability": null,
+   "evidence_readiness": "UNRESOLVED",
+   "field_evidence": [],
+   "questions": []
+  }
+ },
+ "expect": {
+  "result": "Interpreted",
+  "outcome": "UNRESOLVED",
+  "evidence_names": [
+   "market",
+   "restrictions"
+  ]
+ }
+}

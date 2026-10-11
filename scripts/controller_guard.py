@@ -836,14 +836,13 @@ def save_binding(state_file: Path, binding: dict, replace: bool = False) -> None
                     raise ValueError("update cannot remove or rewrite review history")
             if "gate_verdicts" in binding:
                 updated = binding["gate_verdicts"]
-                if (not isinstance(updated, int) or isinstance(updated, bool) or updated < 0
-                        or (binding.get("role") == "gate" and updated > 3)):
-                    raise ValueError("update cannot reset or exceed the gate verdict limit")
+                if (not isinstance(updated, int) or isinstance(updated, bool) or updated < 0):
+                    raise ValueError("update cannot set an invalid or decreasing gate verdict count")
                 if "gate_verdicts" in old:
                     previous = old["gate_verdicts"]
                     if (not isinstance(previous, int) or isinstance(previous, bool)
                             or updated < previous):
-                        raise ValueError("update cannot reset or exceed the gate verdict limit")
+                        raise ValueError("update cannot set an invalid or decreasing gate verdict count")
             entries[index] = binding
         _atomic_json(state_file, state)
 
@@ -888,8 +887,7 @@ def _valid_binding(binding: dict, host: str, session_id: str) -> bool:
     if not isinstance(history, list) or any(not isinstance(item, str) for item in history):
         return False
     gate_verdicts = binding.get("gate_verdicts", 0)
-    if (not isinstance(gate_verdicts, int) or isinstance(gate_verdicts, bool) or gate_verdicts < 0
-            or (binding.get("role") == "gate" and gate_verdicts > 3)):
+    if (not isinstance(gate_verdicts, int) or isinstance(gate_verdicts, bool) or gate_verdicts < 0):
         return False
     return True
 

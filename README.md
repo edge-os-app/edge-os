@@ -2,7 +2,7 @@
 
 An edge-generation and alpha research system for onchain traders and liquidity providers.
 
-Current build, 10 October 2026: saved Research, descriptive comparisons, spot replay and account views work with labelled fixtures. Live trading is not available. See [current status](#current-status) for implemented scope and qualification limits.
+Current build, 11 October 2026: saved Research, descriptive comparisons, spot replay and account views work with labelled fixtures. The saved Hermes interpretation path passed local fake-provider verification. Local wallet setup, admission/reservations and decision/submission modules are integrated, but are not a qualified live trading path. Live trading is not available. See [current status](#current-status) for implemented scope and qualification limits.
 
 The approved [hackathon release cut](docs/planning/EDGE_OS_RELEASE_CUT_2026-10-10.md) targets a connected Research-to-controlled-Kuru-action demonstration. Its live portion is not yet qualified. LP expansion and general ongoing trading remain outside this submission subset.
 
@@ -154,11 +154,13 @@ The accepted implementation/decision outputs below are in this codebase. Accepta
 
 Also integrated: P07's offline history/lineage checker, P16's bounded one-owner signing/removal evidence, the P43 R9 design export and controller delivery/Stop safeguards. Full P07 real-history and P16 owner-linked creation, lost-response, restart and actual-backend cross-user qualification remain incomplete. P43 is a design milestone, not complete design-parity or unfamiliar-user validation.
 
-P05's Hermes interpretation adapter is staged outside this published tree and is not wired into Research. Its persistence, shared wiring, reviews and live-model qualification remain open. Real data collection, Kuru swaps, funded agent operation, withdrawals, production deployment, live LP execution and optional token/add-on extensions are not available end to end.
+P05's saved Hermes interpretation path, durable attempts, retry/recovery and Research UI are integrated and passed their local reviews and gate. Verification used actual pinned Hermes with an authored fake provider. Real-model interpretation and production Hermes hosting remain unqualified. P17 wallet setup and P22/P23 admission and decision/submission modules are locally accepted, but do not establish an integrated live wallet or trading path. Real data collection, Kuru swaps, funded agent operation, withdrawals, production deployment, live LP execution and optional token/add-on extensions are not available end to end.
 
 The earlier accepted [Probe A](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) preserved bounded interpretation and contrary evidence, and returned `UNRESOLVED` with no supported MOE/WMON candidate. Keep that evidence separate from the current fixture-backed application. Compilation, simulations, passing tests and sign-only provider results do not prove a trading edge.
 
 ### Verification snapshot
+
+On 11 October 2026, accepted integration `52e5adc` passed 953 API tests, 176 web tests, web typecheck/build and P02/P06/P15 contract checks. This publication preserves those application and verification-tooling bytes. The earlier snapshot below remains historical evidence, not verification of the newer tree. Exact-candidate P05 mapped browser/SQL/restart evidence remains separate from these combined integration checks.
 
 On 10 October 2026, code at `8ad71c4` passed all 377 API tests against isolated PostgreSQL. The same application tree passed 118 web tests, typechecking, P02/P06/P15 contract checks, 73 P07 checks, production build and the full 18-step desktop/390px browser/API/SQL/restart/cleanup path. The backend reorganization received two independent internal PASS assessments and a separate gate PASS before integration.
 
@@ -217,9 +219,9 @@ The specification, contracts, scoped probe plan and project workflow in this rep
 
 Track assigned work in [GitHub Issues](https://github.com/edge-os-app/edge-os/issues). Read [AGENTS.md](AGENTS.md) before an agent task. Tracker, label and domain conventions are under [docs/agents/](docs/agents/).
 
-The builder owns product decisions, prototypes and the hackathon release candidate, including its backend and frontend. The former frontend/tokenization teammate split is superseded. A quant contributor may take separately assigned quantitative/backend tickets outside the release candidate; proposed starting work is not yet an implementation assignment. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records these boundaries.
+The builder owns product decisions, prototypes and the hackathon release candidate. The controller coordinates assigned agents, reviews and local integration. The former frontend/tokenization teammate split is superseded. The quant contributor can start the bounded P14 numerical PR under its dated assignment, outside the release candidate. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records these boundaries.
 
-Teammates implement accepted tickets on task branches and submit pull requests for builder acceptance. Only the builder merges to `main` by team agreement. The builder selected this manual gate instead of requiring GitHub-enforced approvals or branch protection. Required checks and implementation review still apply.
+Contributors implement assigned accepted tickets in isolated worktrees on task branches. The controller checks both original internal reviews and the separate gate before technical acceptance and serial local integration. Publication and merging to `main` require recorded builder authorization. The builder may authorize the controller to execute a specific merge. This manual gate does not require GitHub-enforced approvals or branch protection. Required checks and independent review still apply.
 
 Start with the [quant contributor brief](docs/team/QUANT_CONTRIBUTOR_BRIEF.md) and [portable contributor workflow](docs/agents/contributor-workflow.md). The latter links worker, internal-reviewer and gate prompt templates, skill setup requirements and optional native/Smux routes. Your own clone is sufficient; the builder's private workspace and tmux setup are not required.
 
@@ -228,3 +230,5 @@ Contributor coding skills require installation in each contributor's agent envir
 For supporting evidence and required task inputs, follow the [contributor reference rules](docs/agents/domain.md#shared-documents-and-private-evidence).
 
 Use the locked toolchains and repository verification commands above. New feature work requires its assigned scope, tests and independent reviews; publication does not grant provider access or financial authority.
+
+A PASS covers the exact candidate and declared scope. Fixture tests, a component milestone or a release portion do not complete remaining live qualification or the original wider issue. See [current status](#current-status) for accepted features and their limits.

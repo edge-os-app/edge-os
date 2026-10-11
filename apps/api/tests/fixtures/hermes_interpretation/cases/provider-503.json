@@ -1,0 +1,26 @@
+{
+ "id": "provider-503",
+ "group": "UNAVAILABLE",
+ "purpose": "A provider failure is unavailable evidence, not a verdict on the idea, and leaks no provider text.",
+ "intake": {
+  "original_request": "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only.",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "CONCRETE_THESIS"
+ },
+ "provider": {
+  "kind": "http_error",
+  "status": 503,
+  "message": "upstream overloaded; key sk-LEAK-0001 for owner-ZZ"
+ },
+ "expect": {
+  "result": "Unavailable",
+  "reason_code": "provider_failed",
+  "attempts": 1,
+  "status": "PROVIDER_FAILED",
+  "completion": "NONE",
+  "usage_known": false
+ }
+}

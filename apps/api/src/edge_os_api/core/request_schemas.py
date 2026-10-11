@@ -49,9 +49,26 @@ class IntakeBody(StrictModel):
 
 
 class ClarificationBody(StrictModel):
+    """One answer to an open question: a listed choice, or the user's own words (read by the interpreter)."""
+
     previous_revision_id: Identifier
     question_id: Identifier
-    choice_id: Identifier
+    choice_id: Identifier | None = None
+    answer_text: ReviewText | None = None
+
+    @model_validator(mode="after")
+    def _one_kind_of_answer(self) -> "ClarificationBody":
+        if (self.choice_id is None) == (self.answer_text is None):
+            raise PydanticCustomError("one_answer_required", "Give either choice_id or answer_text, not both.")
+        if self.answer_text is not None and not self.answer_text.strip():
+            raise PydanticCustomError("answer_text_blank", "Write something in your own words, or choose an option.")
+        return self
+
+
+class RetryBody(StrictModel):
+    """Explicit retry of interpretation. It names the earlier attempt it follows, or null when none exists."""
+
+    retry_of: Identifier | None
 
 
 class PublicationBody(StrictModel):

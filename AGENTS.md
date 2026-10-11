@@ -30,13 +30,13 @@ Keep changes within the assigned task. Preserve unrelated changes.
 
 For a defect in an upstream dependency, including already integrated or gate-passed code, follow [upstream defects found downstream](docs/agents/controller-workflow.md#upstream-defects-found-downstream). Investigate and propose the repair. Fix owned paths normally; report outside-scope defects before upstream edits. The controller can assign that same worker after checking authority and leases. Continue independent safe work. An earlier PASS does not waive a newly verified blocker.
 
-Work on a task branch and submit a pull request. The builder accepts and merges changes. Do not push directly to `main`.
+Work in an assigned isolated worktree on a task branch. Return required checks and original independent reviews to the controller for technical acceptance and local integration under recorded authority. Publication and merging to `main` require recorded builder authorization. The builder may authorize the controller to execute a specific merge. Do not push directly to `main`.
 
 Under [controller technical acceptance](docs/agents/controller-workflow.md#controller-technical-acceptance), the controller accepts already authorized, verified ticket outputs and integrates them locally without another builder approval. Workers still leave acceptance and merges to the controller. New product decisions, publication and main merge retain separate authority.
 
 The builder authorized a one-time documentation-only initial commit and push to `main` on 2026-10-02 to establish the empty repository's baseline. This does not authorize later direct pushes, application implementation or prototype execution.
 
-The builder selected a manual merge gate on 2026-10-02. GitHub-enforced approvals, sole-code-owner review and branch protection are not required by this policy. Teammates must still leave merges to the builder. This does not waive task verification, independent code reviews or financial authorization.
+The builder selected a manual merge gate on 2026-10-02. GitHub-enforced approvals, sole-code-owner review and branch protection are not required by this policy. Contributors leave integration to the controller and `main` authorization to the builder. This does not waive task verification, independent code reviews or financial authorization.
 
 Paid services, wallet changes, delegation and financial transactions require explicit task-level authorization. Keep credentials outside source control and model inputs.
 

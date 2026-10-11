@@ -1,0 +1,195 @@
+{
+ "id": "rough-hunch",
+ "group": "LOOSE_INTUITION",
+ "purpose": "A hunch with no rule gets questions, not invented rules.",
+ "intake": {
+  "original_request": "Recent rises seem to keep running. Is that worth testing?",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "LOOSE_INTUITION"
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1423,
+   "completion_tokens": 611,
+   "total_tokens": 2034
+  },
+  "model_response": {
+   "meaning_status": "SUPPORTED",
+   "missing_capability": null,
+   "evidence_readiness": "READY",
+   "field_evidence": [
+    {
+     "field_name": "entry",
+     "state": "MISSING"
+    },
+    {
+     "field_name": "exit",
+     "state": "MISSING"
+    },
+    {
+     "field_name": "data_inputs",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": [
+      "price"
+     ]
+    },
+    {
+     "field_name": "invalidation",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": {
+      "state": "NOT_REQUESTED",
+      "source_ref": "synthetic:adopted-no-invalidation"
+     }
+    },
+    {
+     "field_name": "sizing",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": {
+      "kind": "FIXED_QUOTE_AMOUNT",
+      "amount": "100",
+      "unit": "QUOTE:0x2222222222222222222222222222222222222222"
+     }
+    },
+    {
+     "field_name": "additions",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": false
+    },
+    {
+     "field_name": "partial_exits",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": false
+    },
+    {
+     "field_name": "cost_assumptions",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": {
+      "fee_rate": "0.003",
+      "slippage_rate": "0.005",
+      "source_ref": "synthetic:adopted-cost-profile"
+     }
+    },
+    {
+     "field_name": "risk_limits",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": {
+      "max_quote_notional": "100",
+      "max_open_positions": 1
+     }
+    },
+    {
+     "field_name": "action_scope",
+     "state": "KNOWN",
+     "origin": "AGENT_PROPOSED",
+     "adoption": "PENDING",
+     "value": [
+      "SPOT_BUY",
+      "SPOT_SELL_ALL_ATTRIBUTABLE"
+     ]
+    }
+   ],
+   "questions": [
+    {
+     "question_id": "choose-entry",
+     "field_name": "entry",
+     "text": "What should count as a rise for the entry rule?",
+     "options": [
+      {
+       "id": "g3-1pct",
+       "label": "Price up more than 1% over the last 15 minutes",
+       "value": {
+        "op": "gt",
+        "args": [
+         {
+          "op": "price_return",
+          "lookback_buckets": 3
+         },
+         {
+          "op": "constant",
+          "value": "0.01",
+          "unit": "DIMENSIONLESS"
+         }
+        ]
+       }
+      },
+      {
+       "id": "g3-2pct",
+       "label": "Price up more than 2% over the last 15 minutes",
+       "value": {
+        "op": "gt",
+        "args": [
+         {
+          "op": "price_return",
+          "lookback_buckets": 3
+         },
+         {
+          "op": "constant",
+          "value": "0.02",
+          "unit": "DIMENSIONLESS"
+         }
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "question_id": "choose-exit",
+     "field_name": "exit",
+     "text": "When should the position be closed?",
+     "options": [
+      {
+       "id": "ret-below-zero",
+       "label": "When the last 5-minute price return falls below zero",
+       "value": {
+        "op": "lt",
+        "args": [
+         {
+          "op": "price_return",
+          "lookback_buckets": 1
+         },
+         {
+          "op": "constant",
+          "value": "0",
+          "unit": "DIMENSIONLESS"
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "expect": {
+  "result": "Interpreted",
+  "outcome": "NEEDS_CLARIFICATION",
+  "missing": [
+   "entry",
+   "exit"
+  ],
+  "question_ids": [
+   "choose-entry",
+   "choose-exit"
+  ],
+  "outcome_after_choices_and_adoption": "COMPILED"
+ }
+}

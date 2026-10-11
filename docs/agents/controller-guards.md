@@ -77,7 +77,7 @@ The native `SessionStart` hook reads the host's actual `session_id`, `cwd`, and 
 
 Resume and duplicate events on the same native session return the existing receipt and leave task status, reports, review history, gate counts, and delivery records unchanged. A fork has a new native session ID. To bind it, the controller must prepare a one-use same-task assignment with `fork_parent_session_id` set to the parent session from its verified receipt. The hook verifies the parent receipt, the fork's exact assigned pane, and the same worktree/task/reports/approved-work, then carries the current binding state and delivery lineage to the new ID. A missing or mismatched parent assignment leaves the fork unbound. A mismatched, expired, consumed, or malformed assignment produces no receipt and cannot replace an existing binding.
 
-An ordinary `update` changes status, reports, or approved work while retaining the verified assignment identity and any omitted binding state. It cannot change the task assignment, remove prior review history, or lower the gate-verdict count.
+An ordinary `update` changes status, reports, or approved work while retaining the verified assignment identity and any omitted binding state. It cannot change the task assignment, remove prior review history, or lower the gate-verdict count. The helper records the cumulative gate-verdict count as data: any nonnegative integer is valid and higher counts do not grant extra review rounds. The review budget belongs to the workflow and the controller, not to this helper.
 
 The hook writes a receipt to `bindings.json` and returns a small native SessionStart result. The controller must verify the receipt before it sends task activation:
 

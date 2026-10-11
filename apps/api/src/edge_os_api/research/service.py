@@ -140,8 +140,9 @@ def strategy_id_for(intake_id: uuid.UUID) -> str:
     return f"strategy-{intake_id}"
 
 
-def create_request(session: Session, principal: Principal, body: dict[str, Any]) -> dict[str, Any]:
-    operation_id, moment = uuid.uuid4(), utcnow()
+def save_intake(session: Session, principal: Principal, body: dict[str, Any], operation_id: uuid.UUID | None = None,
+                moment: dt.datetime | None = None) -> Record:
+    """Validate and add the request as written. The caller commits."""
     content: dict[str, Any] = {"original_request": body["original_request"], "restrictions": list(body["restrictions"]),
                                "requested_job": body["requested_job"], "input_class": body["input_class"]}
     if body.get("declared_market") is not None:
@@ -152,7 +153,13 @@ def create_request(session: Session, principal: Principal, body: dict[str, Any])
         detail = ("Text must use composed Unicode characters (NFC). Re-type or paste it as plain text, for example "
                   "so that an accented letter is one character.") if "NFC" in str(error) else str(error)
         raise invalid("/", detail) from None
-    intake = put_record(session, principal, "IntakeRequest", content, operation_id, moment)
+    return put_record(session, principal, "IntakeRequest", content, operation_id or uuid.uuid4(), moment or utcnow())
+
+
+def create_request(session: Session, principal: Principal, body: dict[str, Any]) -> dict[str, Any]:
+    operation_id, moment = uuid.uuid4(), utcnow()
+    intake = save_intake(session, principal, body, operation_id, moment)
+    content = intake.content
     proposal = INTERPRETER.interpret(content)
     if proposal is None:
         routed = Routed("INVALID_INPUT", "INTERPRETATION", [finding(
@@ -169,7 +176,8 @@ def create_request(session: Session, principal: Principal, body: dict[str, Any])
             "clarification_history": [], "preserved_restrictions": list(content["restrictions"]),
             "meaning_status": proposal["meaning_status"], "syntax_status": proposal["syntax_status"],
             "evidence_readiness": proposal["evidence_readiness"]}
-        routed = route(content, interp_content, INTERPRETER, proposal["scenario"], strategy_id_for(intake.record_id))
+        routed = route(content, interp_content, INTERPRETER, proposal["scenario"].missing_capability,
+                       strategy_id_for(intake.record_id))
         interp = put_record(session, principal, "PromptInterpretation", interp_content, operation_id, moment,
                             record_id=revision_id, intake_id=intake.record_id)
         persist_routed(session, principal, intake, interp, routed, operation_id, moment)
@@ -216,7 +224,8 @@ def answer_question(session: Session, principal: Principal, intake_id: str, body
                            "field_evidence": bind_revision(evidence, str(revision_id)),
                            "clarification_history": [clarification]})
     scenario = find_scenario(intake.content)
-    routed = route(intake.content, interp_content, INTERPRETER, scenario, strategy_id_for(intake.record_id))
+    routed = route(intake.content, interp_content, INTERPRETER, scenario.missing_capability if scenario else None,
+                   strategy_id_for(intake.record_id))
     try:
         interp = put_record(session, principal, "PromptInterpretation", interp_content, operation_id, moment,
                             record_id=revision_id, intake_id=intake.record_id, predecessor_id=head.record_id)
@@ -262,7 +271,7 @@ def validate_strategy_version(strategy: object) -> None:
                                 "The strategy revision uses an unsupported schema version.")
 
 
-def load_bundle(session: Session, principal: Principal, intake_id: uuid.UUID) -> dict[str, Any]:
+def load_bundle(session: Session, principal: Principal, intake_id: uuid.UUID, hermes: Any = None) -> dict[str, Any]:
     rows = intake_rows(session, principal, intake_id)
     if not rows or rows[0].record_id != intake_id or rows[0].record_type != "IntakeRequest":
         raise not_found()
@@ -282,14 +291,20 @@ def load_bundle(session: Session, principal: Principal, intake_id: uuid.UUID) ->
         StrategyRevision.draft_record_id.in_([d.record_id for d in drafts] or [uuid.UUID(int=0)]))
         .order_by(StrategyRevision.created_at)).scalars())
     questions: list[dict[str, Any]] = []
-    if head is not None and head_outcome is not None and head_outcome.content["outcome"] == "NEEDS_CLARIFICATION":
+    if hermes is not None:
+        if head is not None:
+            questions = hermes.questions(session, principal, intake_id, rows, head, head_outcome)
+    elif head is not None and head_outcome is not None and head_outcome.content["outcome"] == "NEEDS_CLARIFICATION":
         targets = [f["path"].rsplit("/", 1)[1] for f in head_outcome.content["findings"]]
         questions = open_questions(rows[0].content, INTERPRETER, head.content["field_evidence"], targets)
     head_draft = None
     if head is not None:
         head_draft = next((d for d in reversed(drafts) if d.interpretation_record_id == head.record_id), None)
+    attempts = hermes.attempt_state(principal, intake_id, head) if hermes is not None else None
     return {
-        "interpreter": INTERPRETER.label(),
+        "interpreter": hermes.label() if hermes is not None else INTERPRETER.label(),
+        "attempts": attempts["attempts"] if attempts else [],
+        "late_results": attempts["late_results"] if attempts else [],
         "intake": envelope_of(rows[0]),
         "interpretations": [envelope_of(r) for r in interps],
         "clarifications": [envelope_of(r) for r in by_type.get("Clarification", [])],
@@ -305,6 +320,8 @@ def load_bundle(session: Session, principal: Principal, intake_id: uuid.UUID) ->
             "questions": questions,
             "draft_id": str(head_draft.record_id) if head_draft else None,
             "strategy_id": head_draft.content["strategy_id"] if head_draft else None,
+            "retry": attempts["retry"] if attempts else {"allowed": False, "retry_of": None, "reason": "no_interpreter_attempts"},
+            "reply": attempts["reply"] if attempts else None,
         },
     }
 

@@ -1,0 +1,24 @@
+{
+ "id": "provider-hang",
+ "group": "UNAVAILABLE",
+ "purpose": "A call that never returns ends as timed out with unknown usage and is not retried.",
+ "intake": {
+  "original_request": "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only.",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "CONCRETE_THESIS"
+ },
+ "provider": {
+  "kind": "hang"
+ },
+ "expect": {
+  "result": "Unavailable",
+  "reason_code": "timed_out",
+  "attempts": 1,
+  "status": "TIMED_OUT",
+  "completion": "UNKNOWN",
+  "usage_known": false
+ }
+}

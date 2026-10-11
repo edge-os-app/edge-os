@@ -1,0 +1,61 @@
+{
+ "id": "reply-overwrites-chosen-entry",
+ "group": "FOLLOW_UP",
+ "base_case": "rough-hunch",
+ "intake": {
+  "original_request": "Recent rises seem to keep running. Is that worth testing?",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "LOOSE_INTUITION"
+ },
+ "purpose": "After the user chose the 1% entry, a reply about the exit makes the model change the entry. The whole answer is rejected.",
+ "answers_question": "choose-exit",
+ "after_choice": [
+  "choose-entry",
+  "g3-1pct"
+ ],
+ "reply": "Exit when the return is below zero, and make the entry more than 2%",
+ "expect": {
+  "result": "OutputRejected",
+  "reason_code": "silent_overwrite"
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1980,
+   "completion_tokens": 208,
+   "total_tokens": 2188
+  },
+  "model_response": {
+   "meaning_status": "SUPPORTED",
+   "missing_capability": null,
+   "evidence_readiness": "READY",
+   "field_evidence": [
+    {
+     "field_name": "entry",
+     "state": "KNOWN",
+     "origin": "USER_STATED",
+     "source_passage": "more than 2%",
+     "value": {
+      "op": "gt",
+      "args": [
+       {
+        "op": "price_return",
+        "lookback_buckets": 3
+       },
+       {
+        "op": "constant",
+        "value": "0.02",
+        "unit": "DIMENSIONLESS"
+       }
+      ]
+     }
+    }
+   ],
+   "questions": []
+  }
+ }
+}

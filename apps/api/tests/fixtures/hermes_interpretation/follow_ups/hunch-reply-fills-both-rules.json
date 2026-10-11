@@ -1,0 +1,104 @@
+{
+ "id": "hunch-reply-fills-both-rules",
+ "group": "FOLLOW_UP",
+ "base_case": "rough-hunch",
+ "intake": {
+  "original_request": "Recent rises seem to keep running. Is that worth testing?",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "LOOSE_INTUITION"
+ },
+ "purpose": "A free-text reply states both missing rules in the user's own words. Both become USER_STATED with exact quotes from the reply.",
+ "answers_question": "choose-entry",
+ "reply": "Enter when price is up more than 2% over the last 15 minutes, and exit when the last 5 minute return is below zero",
+ "expect": {
+  "result": "Interpreted",
+  "entry_value": {
+   "op": "gt",
+   "args": [
+    {
+     "op": "price_return",
+     "lookback_buckets": 3
+    },
+    {
+     "op": "constant",
+     "value": "0.02",
+     "unit": "DIMENSIONLESS"
+    }
+   ]
+  },
+  "exit_value": {
+   "op": "lt",
+   "args": [
+    {
+     "op": "price_return",
+     "lookback_buckets": 1
+    },
+    {
+     "op": "constant",
+     "value": "0",
+     "unit": "DIMENSIONLESS"
+    }
+   ]
+  }
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1980,
+   "completion_tokens": 208,
+   "total_tokens": 2188
+  },
+  "model_response": {
+   "meaning_status": "SUPPORTED",
+   "missing_capability": null,
+   "evidence_readiness": "READY",
+   "field_evidence": [
+    {
+     "field_name": "entry",
+     "state": "KNOWN",
+     "origin": "USER_STATED",
+     "source_passage": "price is up more than 2% over the last 15 minutes",
+     "value": {
+      "op": "gt",
+      "args": [
+       {
+        "op": "price_return",
+        "lookback_buckets": 3
+       },
+       {
+        "op": "constant",
+        "value": "0.02",
+        "unit": "DIMENSIONLESS"
+       }
+      ]
+     }
+    },
+    {
+     "field_name": "exit",
+     "state": "KNOWN",
+     "origin": "USER_STATED",
+     "source_passage": "exit when the last 5 minute return is below zero",
+     "value": {
+      "op": "lt",
+      "args": [
+       {
+        "op": "price_return",
+        "lookback_buckets": 1
+       },
+       {
+        "op": "constant",
+        "value": "0",
+        "unit": "DIMENSIONLESS"
+       }
+      ]
+     }
+    }
+   ],
+   "questions": []
+  }
+ }
+}
