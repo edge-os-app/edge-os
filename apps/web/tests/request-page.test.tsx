@@ -22,10 +22,11 @@ const strategy = {
 const bundle = {
   interpreter: { kind: "FIXTURE", id: "test", notice: "" },
   intake: { record_id: "intake-1", created_at: "2026-01-01T00:00:00Z", content: { original_request: "test request", restrictions: [], input_class: "CONCRETE_THESIS", requested_job: "CREATE_STRATEGY" } },
-  interpretations: [], clarifications: [], outcomes: [],
+  interpretations: [], clarifications: [], outcomes: [], attempts: [], late_results: [],
   drafts: [{ record_id: "draft-1", content: { source_syntax: strategy } }], publications: [],
   revisions: [{ strategy_id: "strategy-1", revision_id: "revision-1", content_sha256: "content-hash", manifest_sha256: "manifest-hash", created_at: "2026-01-01T00:00:00Z" }],
-  head: { interpretation_revision_id: null, outcome: "PUBLISHED", questions: [], draft_id: "draft-1", strategy_id: "strategy-1" },
+  head: { interpretation_revision_id: null, outcome: "PUBLISHED", questions: [], draft_id: "draft-1", strategy_id: "strategy-1",
+    retry: { allowed: false, retry_of: null, reason: "no_interpreter_attempts" }, reply: null },
 };
 
 beforeEach(() => {

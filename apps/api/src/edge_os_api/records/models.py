@@ -280,3 +280,169 @@ class SpotReplayConfiguration(Base):
         CheckConstraint("configuration_sha256 ~ '^[0-9a-f]{64}$'",
                         name="ck_spot_replay_configuration_hash"),
     )
+
+
+HEX64 = "'^[0-9a-f]{64}$'"
+SHA256_OF_TEXT = "encode(sha256(convert_to({text}, 'UTF8')), 'hex')"
+
+
+class InterpretationAttempt(Base):
+    """Append-only start of one interpretation attempt. It is written before any provider call (P05)."""
+
+    __tablename__ = "interpretation_attempts"
+    attempt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    intake_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    retry_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
+    system_prompt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    task_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    task_text: Mapped[str] = mapped_column(Text, nullable=False)
+    response_shape_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    config_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime_label: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_ref: Mapped[str | None] = mapped_column(Text)
+    answer_text: Mapped[str | None] = mapped_column(Text)
+    answer_sha256: Mapped[str | None] = mapped_column(Text)
+    previous_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "attempt_id", name="uq_attempt_owner_attempt"),
+        UniqueConstraint("owner_id", "intake_record_id", "attempt_id", name="uq_attempt_owner_intake_attempt"),
+        UniqueConstraint("owner_id", "intake_record_id", "sequence", name="uq_attempt_owner_intake_sequence"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id"], ["records.owner_id", "records.record_id"],
+                             name="fk_attempt_intake"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id", "retry_of"],
+                             ["interpretation_attempts.owner_id", "interpretation_attempts.intake_record_id",
+                              "interpretation_attempts.attempt_id"], name="fk_attempt_retry_of"),
+        ForeignKeyConstraint(["owner_id", "previous_revision_id"], ["records.owner_id", "records.record_id"],
+                             name="fk_attempt_previous_revision"),
+        CheckConstraint("sequence >= 1", name="ck_attempt_sequence"),
+        CheckConstraint("purpose IN ('INTERPRET', 'FOLLOW_UP')", name="ck_attempt_purpose"),
+        CheckConstraint("runtime_label IN ('LOCAL_FAKE_PROVIDER', 'LIVE')", name="ck_attempt_runtime_label"),
+        CheckConstraint(f"system_prompt_sha256 ~ {HEX64} AND task_sha256 ~ {HEX64} AND response_shape_sha256 ~ {HEX64} "
+                        f"AND manifest_sha256 ~ {HEX64} AND config_sha256 ~ {HEX64}", name="ck_attempt_hashes"),
+        CheckConstraint(f"task_sha256 = {SHA256_OF_TEXT.format(text='task_text')}", name="ck_attempt_task_hash"),
+        CheckConstraint("(answer_ref IS NULL) = (answer_text IS NULL) AND (answer_text IS NULL) = (answer_sha256 IS NULL)"
+                        f" AND (answer_text IS NULL OR answer_sha256 = {SHA256_OF_TEXT.format(text='answer_text')})",
+                        name="ck_attempt_answer"),
+        CheckConstraint("(purpose = 'FOLLOW_UP') = (answer_text IS NOT NULL AND previous_revision_id IS NOT NULL)",
+                        name="ck_attempt_follow_up_shape"),
+        CheckConstraint("retry_of IS NULL OR sequence > 1", name="ck_attempt_retry_is_later"),
+        Index("ix_attempt_owner_intake", "owner_id", "intake_record_id", "sequence"),
+    )
+
+
+class InterpretationSettlement(Base):
+    """Append-only result of an attempt. One row per attempt; usage stays NULL when it is unknown."""
+
+    __tablename__ = "interpretation_settlements"
+    attempt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    intake_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    finished_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column()
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    usage_source: Mapped[str] = mapped_column(Text, nullable=False)
+    request_count: Mapped[int | None] = mapped_column()
+    response_sha256: Mapped[str | None] = mapped_column(Text)
+    response_text: Mapped[str | None] = mapped_column(Text)
+    parse_result: Mapped[str] = mapped_column(Text, nullable=False)
+    error_class: Mapped[str | None] = mapped_column(Text)
+    runtime_observed: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "attempt_id", name="uq_settlement_owner_attempt"),
+        UniqueConstraint("attempt_id", "status", name="uq_settlement_attempt_status"),
+        UniqueConstraint("attempt_id", "status", "parse_result", name="uq_settlement_attempt_status_parse"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id", "attempt_id"],
+                             ["interpretation_attempts.owner_id", "interpretation_attempts.intake_record_id",
+                              "interpretation_attempts.attempt_id"], name="fk_settlement_attempt"),
+        CheckConstraint("status IN ('COMPLETED', 'TRUNCATED', 'PROVIDER_FAILED', 'TIMED_OUT', 'INTERRUPTED', 'UNKNOWN')",
+                        name="ck_settlement_status"),
+        CheckConstraint("usage_source IN ('UNKNOWN', 'PROVIDER_REPORTED')", name="ck_settlement_usage_source"),
+        CheckConstraint("(usage_source = 'PROVIDER_REPORTED') = (input_tokens IS NOT NULL AND output_tokens IS NOT NULL)"
+                        " AND (usage_source = 'PROVIDER_REPORTED' OR (input_tokens IS NULL AND output_tokens IS NULL "
+                        "AND total_tokens IS NULL))"
+                        " AND coalesce(input_tokens, 0) >= 0 AND coalesce(output_tokens, 0) >= 0 "
+                        "AND coalesce(total_tokens, 0) >= 0", name="ck_settlement_usage"),
+        CheckConstraint("coalesce(latency_ms, 0) >= 0 AND coalesce(request_count, 0) >= 0", name="ck_settlement_counts"),
+        CheckConstraint("(response_text IS NULL) = (response_sha256 IS NULL) "
+                        f"AND (response_text IS NULL OR response_sha256 = {SHA256_OF_TEXT.format(text='response_text')})",
+                        name="ck_settlement_response_hash"),
+        CheckConstraint("(status IN ('COMPLETED', 'TRUNCATED')) = (response_text IS NOT NULL)", name="ck_settlement_text"),
+        CheckConstraint("(response_text IS NULL AND parse_result = 'NOT_PARSED') "
+                        "OR (status = 'COMPLETED' AND (parse_result = 'ACCEPTED' OR parse_result ~ '^REJECTED:.+')) "
+                        "OR (status = 'TRUNCATED' AND parse_result ~ '^REJECTED:.+')", name="ck_settlement_parse_result"),
+    )
+
+
+class InterpretationAttemptLink(Base):
+    """Append-only link from an accepted attempt to the one interpretation revision published from it."""
+
+    __tablename__ = "interpretation_attempt_links"
+    attempt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    intake_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    revision_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    settled_status: Mapped[str] = mapped_column(Text, nullable=False)
+    settled_parse_result: Mapped[str] = mapped_column(Text, nullable=False)
+    offered_questions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "revision_record_id", name="uq_attempt_link_owner_revision"),
+        ForeignKeyConstraint(["attempt_id", "settled_status", "settled_parse_result"],
+                             ["interpretation_settlements.attempt_id", "interpretation_settlements.status",
+                              "interpretation_settlements.parse_result"], name="fk_attempt_link_accepted_settlement"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id", "attempt_id"],
+                             ["interpretation_attempts.owner_id", "interpretation_attempts.intake_record_id",
+                              "interpretation_attempts.attempt_id"], name="fk_attempt_link_attempt"),
+        ForeignKeyConstraint(["owner_id", "revision_record_id"], ["records.owner_id", "records.record_id"],
+                             name="fk_attempt_link_revision"),
+        CheckConstraint("settled_status = 'COMPLETED' AND settled_parse_result = 'ACCEPTED'", name="ck_attempt_link_accepted"),
+    )
+
+
+class InterpretationLateResult(Base):
+    """Append-only result that arrived after its attempt settled as unknown. Evidence only: it is never authority."""
+
+    __tablename__ = "interpretation_late_results"
+    observation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    attempt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    intake_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    settled_status: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    usage_source: Mapped[str] = mapped_column(Text, nullable=False)
+    request_count: Mapped[int | None] = mapped_column()
+    response_sha256: Mapped[str | None] = mapped_column(Text)
+    response_text: Mapped[str | None] = mapped_column(Text)
+    error_class: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["attempt_id", "settled_status"],
+                             ["interpretation_settlements.attempt_id", "interpretation_settlements.status"],
+                             name="fk_late_result_uncertain_settlement"),
+        ForeignKeyConstraint(["owner_id", "intake_record_id", "attempt_id"],
+                             ["interpretation_attempts.owner_id", "interpretation_attempts.intake_record_id",
+                              "interpretation_attempts.attempt_id"], name="fk_late_result_attempt"),
+        CheckConstraint("settled_status IN ('TIMED_OUT', 'INTERRUPTED', 'UNKNOWN')", name="ck_late_result_uncertain"),
+        CheckConstraint("usage_source IN ('UNKNOWN', 'PROVIDER_REPORTED')", name="ck_late_result_usage_source"),
+        CheckConstraint("(response_text IS NULL) = (response_sha256 IS NULL) "
+                        f"AND (response_text IS NULL OR response_sha256 = {SHA256_OF_TEXT.format(text='response_text')})",
+                        name="ck_late_result_response_hash"),
+        Index("ix_late_result_owner_intake", "owner_id", "intake_record_id", "observed_at"),
+    )

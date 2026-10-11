@@ -1,0 +1,37 @@
+{
+ "id": "unsupported-extension",
+ "group": "UNSUPPORTED_EXTENSION",
+ "purpose": "A clear idea that needs a missing capability is kept and named, not replaced.",
+ "intake": {
+  "original_request": "Tokens launched in the last 24 hours seem to keep running after a rise. Is that worth testing?",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "LOOSE_INTUITION"
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1423,
+   "completion_tokens": 611,
+   "total_tokens": 2034
+  },
+  "model_response": {
+   "meaning_status": "UNSUPPORTED",
+   "missing_capability": "token_launch_age_filter",
+   "evidence_readiness": "READY",
+   "field_evidence": [],
+   "questions": []
+  }
+ },
+ "expect": {
+  "result": "Interpreted",
+  "outcome": "UNSUPPORTED",
+  "missing_capability": "token_launch_age_filter",
+  "evidence_names": [
+   "restrictions"
+  ]
+ }
+}

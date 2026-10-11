@@ -9,6 +9,7 @@ export interface ConversationContext {
   busy: boolean;
   message?: { kind: "error" | "notice"; text: string; surface: string };
   answer(questionId: string, choiceId: string, origin?: HTMLElement): void;
+  reply(questionId: string, text: string, origin?: HTMLElement): void;
 }
 
 /** Contextual conversation. It reads the same saved request and revision as the page. It has no financial tools. */
@@ -26,7 +27,7 @@ export function Conversation({ context, idPrefix, showTitle = true }: { context:
       </>
     );
   }
-  const { bundle, busy, answer, message } = context;
+  const { bundle, busy, answer, reply, message } = context;
   const { intake, clarifications, head } = bundle;
   const text = intake.content.original_request;
   // Say what the answer changed, in the words of the saved record, not the internal choice ID.
@@ -57,7 +58,8 @@ export function Conversation({ context, idPrefix, showTitle = true }: { context:
         {clarifications.length === 0 ? <p className="muted">No questions answered yet.</p> : null}
       </div>
       {head.outcome === "NEEDS_CLARIFICATION" ? (
-        <QuestionForm questions={head.questions} busy={busy} idPrefix={idPrefix} onAnswer={answer} message={message} />
+        <QuestionForm questions={head.questions} busy={busy} idPrefix={idPrefix} onAnswer={answer}
+          onReply={bundle.interpreter.kind === "FIXTURE" ? undefined : reply} message={message} />
       ) : (
         <>
           <AnswerMessage message={message} surface={idPrefix} />

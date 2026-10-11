@@ -11,6 +11,7 @@ import copy
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from collections.abc import Sequence
 from typing import Any, Protocol
 
 from edge_os_api.records import contract_adapter as record_contract
@@ -205,6 +206,14 @@ def _missing(name: str) -> dict[str, Any]:
     return _item(name, "MISSING", "USER_STATED", "intake:original_request", "UNKNOWN")
 
 
+class QuestionBook(Protocol):
+    """What the router needs to word a clarification: the questions that an interpreter offers for a request."""
+
+    kind: str
+
+    def question_for(self, intake: dict[str, Any]) -> Sequence[Any]: ...
+
+
 class Interpreter(Protocol):
     id: str
     kind: str
@@ -297,15 +306,19 @@ def field_label(name: str) -> str:
     return name.replace("_", " ")
 
 
-def clarification_text(intake: dict[str, Any], interpreter: FixtureInterpreter, item: dict[str, Any] | None,
+def clarification_text(intake: dict[str, Any], interpreter: QuestionBook, item: dict[str, Any] | None,
                        name: str) -> str:
     """Question that names the field and ends with `?` (P02 NEEDS_CLARIFICATION finding rule)."""
-    if item is not None and item["state"] == "MISSING":
+    if item is not None and item["state"] in {"MISSING", "CONFLICTING"}:
         for question in interpreter.question_for(intake):
             if question.field_name == name:
-                return question.text
-    if item is not None and item.get("adoption") == "PENDING" and name in PROPOSALS:
-        return PROPOSALS[name][2]
+                # The contract requires the finding to name its field. A generated question may not, so the field leads.
+                return question.text if field_label(name) in question.text.casefold() else (
+                    f"For the {field_label(name)}: {question.text}")
+    if item is not None and item.get("adoption") == "PENDING":
+        if interpreter.kind == "FIXTURE" and name in PROPOSALS:
+            return PROPOSALS[name][2]
+        return f"Adopt the suggested {field_label(name)}?"
     return f"What should the {field_label(name)} be?"
 
 

@@ -12,7 +12,7 @@ from typing import Any
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.strategies import compiler as strategy_compiler
 from edge_os_api.core.errors import finding as _finding
-from edge_os_api.research.fixture_interpreter import FixtureInterpreter, Scenario, clarification_text
+from edge_os_api.research.fixture_interpreter import QuestionBook, clarification_text
 
 UNSUPPORTED_JOBS = {"SIMULATE", "OBSERVE_FORWARD", "REQUEST_LIVE"}
 INVESTIGATION_FIELDS = ["market", "restrictions"]
@@ -45,8 +45,8 @@ def build_strategy(strategy_id: str, values: dict[str, Any]) -> dict[str, Any]:
     return strategy_compiler.build_strategy(strategy_id, values)
 
 
-def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureInterpreter,
-          scenario: Scenario | None, strategy_id: str) -> Routed:
+def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: QuestionBook,
+          missing_capability: str | None, strategy_id: str) -> Routed:
     try:
         record_contract.validate_record("PromptInterpretation", interp)
     except (record_contract.Invalid, KeyError, TypeError) as error:
@@ -63,7 +63,7 @@ def route(intake: dict[str, Any], interp: dict[str, Any], interpreter: FixtureIn
                 f"The restriction {restriction!r} cannot be represented. It is kept exactly as written and "
                 "blocks compilation.")])
     if interp["meaning_status"] == "UNSUPPORTED":
-        capability = (scenario.missing_capability if scenario else None) or "unsupported_meaning"
+        capability = missing_capability or "unsupported_meaning"
         return Routed("UNSUPPORTED", "INTERPRETATION", [_finding(
             "missing_capability", "/meaning_status",
             f"The meaning is clear but needs the capability {capability!r}, which is not available. "

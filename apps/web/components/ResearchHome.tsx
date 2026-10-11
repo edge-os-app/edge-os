@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
-import { CLASS_LABEL, JOB_LABEL, OUTCOME_COPY, SUPPORTED_RESTRICTIONS, formatTime } from "../lib/describe";
+import { CLASS_LABEL, JOB_LABEL, SUPPORTED_RESTRICTIONS, formatTime } from "../lib/describe";
 import { draftKey, parseDraft } from "../lib/draft";
+import { listTag } from "../lib/interpretation";
 import type { InputClass, Job, RequestSummary, Sample } from "../lib/types";
 import { MoeExample } from "./MoeExample";
 
@@ -27,6 +28,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   const [useMarket, setUseMarket] = useState(false);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [fixtureNotice, setFixtureNotice] = useState("");
+  const [fixtureKind, setFixtureKind] = useState("FIXTURE");
   const [samplesError, setSamplesError] = useState(false);
   type FormState = { text: string; kind: InputClass; restrictions: string[]; useMarket: boolean };
   const [undoExample, setUndoExample] = useState<FormState | null>(null);
@@ -87,7 +89,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
 
   useEffect(() => {
     let cancelled = false;
-    api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); } })
+    api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); setFixtureKind(r.interpreter.kind); } })
       .catch(() => { if (!cancelled) setSamplesError(true); });
     void loadList(true);
     return () => { cancelled = true; };
@@ -178,7 +180,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         {job === "INVESTIGATE_EFFECT" ? (
           <label className="choice">
             <input type="checkbox" checked={useMarket} onChange={(e) => setUseMarket(e.target.checked)} />
-            <span>Use the synthetic fixture market. <span className="muted">Leave this off and we will ask which market.</span></span>
+            <span>Use the synthetic fixture market. <span className="muted">{fixtureKind === "FIXTURE" ? "Leave this off and we will ask which market." : "Leave this off and the application suggests the synthetic fixture market for you to adopt."}</span></span>
           </label>
         ) : null}
 
@@ -212,8 +214,8 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         </fieldset>
 
         <div className="stack" style={{ gap: 8 }}>
-          <p className="muted" id={`${formId}-examples`}>Fixture examples. {fixtureNotice || "The fixture interpreter answers only these."} Picking one fills the form; you can edit it.</p>
-          {samplesError ? <p role="status" className="muted">The fixture examples could not be loaded. You can still write your own request.</p> : null}
+          <p className="muted" id={`${formId}-examples`}>{fixtureKind === "FIXTURE" ? "Fixture examples." : "Examples."} {fixtureNotice || "The fixture interpreter answers only these."} Picking one fills the form; you can edit it.</p>
+          {samplesError ? <p role="status" className="muted">The examples could not be loaded. You can still write your own request.</p> : null}
           {undoExample ? <button type="button" className="btn btn-secondary" onClick={restoreTyped}>Restore what I typed{editedSinceExample ? " (replaces your edits)" : ""}</button> : null}
           {samples.map((s) => (
             <button key={s.scenario_id} type="button" className="example" aria-describedby={`${formId}-examples`} onClick={() => fill(s)}>
@@ -242,13 +244,13 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         {hasMore ? <p className="muted" role="status">Showing your 50 most recent requests. Older ones are saved but not listed here yet.</p> : null}
         <div className="cards">
           {(saved ?? []).map((r) => {
-            const copy = r.published ? OUTCOME_COPY.PUBLISHED : OUTCOME_COPY[r.outcome ?? "INVALID_INPUT"];
+            const copy = listTag(r);
             return (
               <button type="button" className="card-open" id={`req-${r.intake_record_id}`} key={r.intake_record_id}
                 onClick={() => go(`#/research/${r.intake_record_id}`, `req-${r.intake_record_id}`)}>
                 <span className="title">{r.original_request.length > 140 ? `${r.original_request.slice(0, 140)}…` : r.original_request}</span>
                 <span className="tags">
-                  <span className={`tag tag-${copy.tone}`}>{copy.title}</span>
+                  <span className={`tag tag-${copy.tone}`} style={{ whiteSpace: "normal" }}>{copy.title}</span>
                   <span className="tag tag-neutral">{CLASS_LABEL[r.input_class]}</span>
                   <span className="tag tag-neutral">{JOB_LABEL[r.requested_job]}</span>
                 </span>

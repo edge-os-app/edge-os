@@ -1,0 +1,55 @@
+{
+ "id": "quote-not-in-request",
+ "group": "MEANING_CHANGE",
+ "purpose": "A rewritten quotation is rejected; the user's own words are the only grounding.",
+ "intake": {
+  "original_request": "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only.",
+  "restrictions": [
+   "no leverage"
+  ],
+  "requested_job": "CREATE_STRATEGY",
+  "input_class": "CONCRETE_THESIS"
+ },
+ "provider": {
+  "kind": "content",
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1423,
+   "completion_tokens": 611,
+   "total_tokens": 2034
+  },
+  "model_response": {
+   "meaning_status": "SUPPORTED",
+   "missing_capability": null,
+   "evidence_readiness": "READY",
+   "field_evidence": [
+    {
+     "field_name": "entry",
+     "state": "KNOWN",
+     "origin": "USER_STATED",
+     "source_passage": "Buy when the 15 minute return exceeds 1 percent",
+     "value": {
+      "op": "gt",
+      "args": [
+       {
+        "op": "price_return",
+        "lookback_buckets": 3
+       },
+       {
+        "op": "constant",
+        "value": "0.01",
+        "unit": "DIMENSIONLESS"
+       }
+      ]
+     }
+    }
+   ],
+   "questions": []
+  }
+ },
+ "expect": {
+  "result": "OutputRejected",
+  "reason_code": "source_passage_not_in_request",
+  "attempts": 1
+ }
+}
