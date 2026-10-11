@@ -416,6 +416,42 @@ export interface SpotReplayInputSnapshot {
   };
 }
 
+export type WalletSetupState = "REQUESTED" | "PENDING" | "UNKNOWN" | "CONFIRMED" | "FAILED";
+export type WalletSetupCancellationIntent = "NONE" | "REQUESTED_BEFORE_DISPATCH" | "REQUESTED_AFTER_DISPATCH";
+
+/** One durable agent wallet setup. Local fixture data in this build; never real wallet evidence. */
+export interface WalletSetupRecord {
+  setup_id: string;
+  owner_id: string;
+  agent_id: string;
+  network_id: number;
+  strategy_id: string;
+  strategy_revision_id: string;
+  content_sha256: string;
+  manifest_sha256: string;
+  state: WalletSetupState;
+  cancellation_intent: WalletSetupCancellationIntent;
+  creation_dispatched: boolean;
+  wallet_id: string | null;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WalletSetupPrepareBody {
+  network_id: 143 | 10143;
+  strategy_id: string;
+  strategy_revision_id: string;
+  request_key: string;
+}
+
+/** The active wallet-creation provider mode. `create_calls`/`lookup_calls` are null unless the local fixture is active. */
+export interface WalletProviderInfo {
+  provider: "fixture" | "unavailable";
+  create_calls: number | null;
+  lookup_calls: number | null;
+}
+
 export interface SpotReplayRecord {
   schema_version: "p13.spot-replay-run/1";
   record_type: "SpotReplayRun";

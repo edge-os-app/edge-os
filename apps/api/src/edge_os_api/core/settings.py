@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # `fixture` answers scripted requests only. `hermes_local` runs the pinned Hermes against a local fake provider and
     # needs a runner handed to the application factory. No setting reaches a real provider (decision D7).
     interpreter: Literal["fixture", "hermes_local"] = "fixture"
+    # `fixture` uses the authored local wallet-creation fixture. Production refuses it and uses the
+    # fail-closed `unavailable` provider, so no real wallet provider is configured yet.
+    wallet_provider: Literal["fixture", "unavailable"] = "unavailable"
 
     @field_validator("privy_app_id")
     @classmethod
@@ -111,6 +114,8 @@ class Settings(BaseSettings):
                 problems.append("database_url: test database name must start with edge_os_test_")
         if self.env == "production" and self.interpreter != "fixture":
             problems.append("interpreter: only the fixture interpreter is available in production")
+        if self.env == "production" and self.wallet_provider != "unavailable":
+            problems.append("wallet_provider: only the unavailable provider is allowed in production")
         if self.env == "production" and self.privy_app_id == TEST_APP_ID:
             problems.append("privy_app_id: the test app id is refused in production")
         if problems:

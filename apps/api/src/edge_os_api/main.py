@@ -32,6 +32,8 @@ from edge_os_api.core.errors import AppError, finding, install_handlers, invalid
 from edge_os_api.research.fixture_interpreter import samples
 from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, InvestigationBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
+from edge_os_api.wallet_setup import router as wallet_setup
+from edge_os_api.wallet_setup.adapter import build_wallet_provider
 
 log = logging.getLogger("edge_os")
 MAX_BODY_BYTES = 256 * 1024
@@ -107,6 +109,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
         engine.dispose()
         raise
     verifier = Verifier(settings.privy_app_id, settings.verification_keys)
+    # The local fixture is the only available wallet provider; production uses the fail-closed one.
+    wallet_provider = build_wallet_provider(settings.wallet_provider)
     session_factory = make_session_factory(engine)
     started_at = service.utcnow().isoformat()
     hermes = (HermesResearch(hermes_runner, session_factory, AdvisoryLockGuard(engine), time.monotonic)
@@ -127,6 +131,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
                   redoc_url="/redoc" if docs else None, openapi_url="/openapi.json" if docs else None)
     app.state.settings, app.state.verifier = settings, verifier
     app.state.engine, app.state.session_factory, app.state.hermes = engine, session_factory, hermes
+    app.state.wallet_provider = wallet_provider
     install_handlers(app)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
                        allow_headers=["Authorization", "Content-Type"], allow_credentials=False)
@@ -311,4 +316,5 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     app.include_router(private)
     app.include_router(account_views.router)
     app.include_router(agent_context.router)
+    app.include_router(wallet_setup.router)
     return app

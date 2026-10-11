@@ -11,6 +11,7 @@ import { AnswerMessage, QuestionForm } from "./QuestionForm";
 import { RulesReview } from "./RulesReview";
 import { InvestigationReview } from "./InvestigationReview";
 import { SpotReplayPanel } from "./SpotReplayPanel";
+import { WalletSetup } from "./WalletSetup";
 
 interface Props {
   id: string;
@@ -336,6 +337,8 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
           </dl>
         </section>
       )}
+
+      {revision && <WalletSetup revision={{ strategyId: revision.strategy_id, strategyRevisionId: revision.revision_id }} />}
 
       {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
         strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}

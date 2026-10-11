@@ -1,7 +1,7 @@
 """Wallet-setup identities and setup states.
 
-Local preparation only. This package is not production wiring. It creates no wallet, signer,
-funding, mandate activation, position or trading action.
+The application mounts these authenticated routes over an authored local fixture provider. It
+creates no wallet, signer, funding, mandate activation, position or trading action.
 """
 
 from __future__ import annotations
