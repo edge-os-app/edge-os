@@ -101,6 +101,8 @@ class RemovalObservationRow(RevocationBase):
     matched: Mapped[bool] = mapped_column(Boolean, nullable=False)
     contradictory: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     denial_code: Mapped[str | None] = mapped_column(Text)
+    derived_state: Mapped[str | None] = mapped_column(Text)
+    derived_reason: Mapped[str | None] = mapped_column(Text)
     provenance: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     observed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     sequence: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False, unique=True)
@@ -112,6 +114,8 @@ class RemovalObservationRow(RevocationBase):
                         name="ck_removal_observations_state"),
         CheckConstraint("(matched AND denial_code IS NULL) OR (NOT matched AND denial_code IS NOT NULL)",
                         name="ck_removal_observations_denial"),
+        CheckConstraint("derived_state IS NULL OR derived_state IN ('NOT_REQUESTED', 'REQUESTED', 'PENDING', "
+                        "'UNKNOWN', 'CONFIRMED', 'FAILED')", name="ck_removal_observations_derived_state"),
         Index("ix_removal_observations_request", "request_id", "sequence"),
     )
 

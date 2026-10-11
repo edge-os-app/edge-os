@@ -117,8 +117,8 @@ rows carry a denial code; a `contradictory = true` row never restores permission
 Candidate commit recorded in the P30 candidate receipt. Numbers from the assigned
 worktree, base `9210bc1d054f1d5623693f787737a7b80563185a`.
 
-- Full suite: 1151 passed, 12 warnings, 146.79 s.
-- Focused revocation suite: 52 passed.
+- Full suite: 1153 passed, 12 warnings, 147.68 s.
+- Focused revocation suite: 54 passed.
 - Affected accepted suites (admission, execution, recovery, stops, funding,
   consent, wallet setup, compiler, compilation API, ownership, account views):
   387 passed.

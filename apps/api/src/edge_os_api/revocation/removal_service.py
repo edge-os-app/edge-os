@@ -219,16 +219,21 @@ class RemovalService:
                 )).scalar_one_or_none()
                 if existing is not None:
                     if self._observation_identical(existing, observation):
+                        # Return the recorded outcome of the original observation, not
+                        # the later derived state, and replay nothing.
                         session.commit()
                         return ReconcileOutcome(request_id=row.request_id, accepted=bool(existing.matched),
-                                                denial_code=existing.denial_code, state=state.state,
-                                                reason=state.reason, view=self._view(session, row))
+                                                denial_code=existing.denial_code,
+                                                state=existing.derived_state or state.state,
+                                                reason=existing.derived_reason or state.reason,
+                                                view=self._view(session, row))
                     raise RemovalError("this observation key was already used with different content")
                 denial = self._denial_code(row, state, observation, binding)
                 now = self._clock()
                 if denial is not None:
                     self._record_observation(session, row, observation, matched=False,
-                                             contradictory=False, denial_code=denial, now=now)
+                                             contradictory=False, denial_code=denial, now=now,
+                                             derived_state=state.state, derived_reason=state.reason)
                     session.commit()
                     return ReconcileOutcome(request_id=row.request_id, accepted=False, denial_code=denial,
                                             state=state.state, reason=state.reason,
@@ -236,12 +241,14 @@ class RemovalService:
                 new_state, reason, evidenced_signer, evidenced_policy = self._derive(row, observation)
                 if state.state == "CONFIRMED":
                     # The confirmed removal is sticky. A later observation that does
-                    # not re-confirm the exact same target is retained as a
-                    # contradiction and never replaces the confirmed signer.
+                    # not re-confirm the exact same evidenced target, including one
+                    # that omits the evidence, is retained as a contradiction and
+                    # never replaces the confirmed signer.
                     conflict = self._confirms_a_different_target(
                         state, observation, evidenced_signer, evidenced_policy)
                     self._record_observation(session, row, observation, matched=True,
-                                             contradictory=conflict, denial_code=None, now=now)
+                                             contradictory=conflict, denial_code=None, now=now,
+                                             derived_state=state.state, derived_reason=state.reason)
                     if conflict:
                         state.contradictory = True
                         state.updated_at = now
@@ -250,7 +257,8 @@ class RemovalService:
                                             state=state.state, reason=state.reason,
                                             view=self._view(session, row))
                 observation_id = self._record_observation(session, row, observation, matched=True,
-                                                          contradictory=False, denial_code=None, now=now)
+                                                          contradictory=False, denial_code=None, now=now,
+                                                          derived_state=new_state, derived_reason=reason)
                 state.state = new_state
                 state.reason = reason
                 state.evidenced_signer = evidenced_signer
@@ -365,14 +373,16 @@ class RemovalService:
         state: RemovalStateRow, observation: RemovalObservation,
         evidenced_signer: str | None, evidenced_policy: str | None,
     ) -> bool:
-        """True when a later observation contradicts an already confirmed removal."""
+        """True when a later observation contradicts an already confirmed removal.
+
+        The later evidenced target must equal the confirmed target exactly,
+        including when the later observation omits the signer or policy evidence.
+        """
         if observation.observed_state != "CONFIRMED":
             return True
-        if (evidenced_signer is not None and state.evidenced_signer is not None
-                and evidenced_signer != state.evidenced_signer):
+        if evidenced_signer != state.evidenced_signer:
             return True
-        if (evidenced_policy is not None and state.evidenced_policy is not None
-                and evidenced_policy != state.evidenced_policy):
+        if evidenced_policy != state.evidenced_policy:
             return True
         return False
 
@@ -408,6 +418,8 @@ class RemovalService:
         contradictory: bool,
         denial_code: str | None,
         now: dt.datetime,
+        derived_state: str,
+        derived_reason: str,
     ) -> uuid.UUID:
         observation_id = uuid.uuid4()
         session.add(RemovalObservationRow(
@@ -416,7 +428,8 @@ class RemovalService:
             agent_id=observation.agent_id, wallet_id=observation.wallet_id,
             network_id=observation.network_id, signer_identity=observation.signer_identity,
             policy_identity=observation.policy_identity, matched=matched, contradictory=contradictory,
-            denial_code=denial_code, provenance=observation.provenance.model_dump(mode="json"),
+            denial_code=denial_code, derived_state=derived_state, derived_reason=derived_reason,
+            provenance=observation.provenance.model_dump(mode="json"),
             observed_at=parse_utc(observation.observed_at), created_at=now,
         ))
         session.flush()

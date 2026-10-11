@@ -66,10 +66,11 @@ provider-style observation and the derived state separate. It takes the shared
 per-wallet advisory lock, locks the request and state rows, and re-reads the
 current binding under the accepted `wallet_setups` `FOR UPDATE` row lock (held
 through commit) in the same transaction. An exact repeated observation key with
-the same material content is idempotent: its recorded outcome is returned and
-nothing is replayed. A changed reuse of the same observation key is refused with a
-stable error. An observation is refused, and recorded with a stable denial code,
-when:
+the same material content is idempotent: the recorded outcome of that observation
+(its accepted or denial status and the derived state and reason it produced) is
+returned, not the later derived state, and nothing is replayed. A changed reuse of
+the same observation key is refused with a stable error. An observation is refused,
+and recorded with a stable denial code, when:
 
 - the current wallet binding is missing or no longer matches the request
   (`STALE_WALLET_BINDING`);
@@ -85,9 +86,10 @@ request nor the observation evidences a signer or policy, the derived state stay
 `UNKNOWN` (`SIGNER_EVIDENCE_UNKNOWN`) rather than fabricating confirmation. A
 `PENDING`, `UNKNOWN` or `FAILED` observation derives that state. Once `CONFIRMED`,
 the removal is sticky: a later observation that does not re-confirm the exact same
-evidenced target is retained as contradictory (`contradictory = true`) and neither
-restores removed permission nor replaces the confirmed signer. Every observation
-is append-only and auditable.
+evidenced target, including one that omits the signer or policy evidence, is
+retained as contradictory (`contradictory = true`) and neither restores removed
+permission nor replaces the confirmed signer. Every observation is append-only and
+auditable.
 
 ## Derived state and the local P30 check
 

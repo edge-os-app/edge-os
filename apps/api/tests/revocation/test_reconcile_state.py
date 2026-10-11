@@ -194,3 +194,35 @@ def test_now_iso_observation_matches_the_clock(revocation_engine, removal_servic
         OWNER_A, observation(view.request_id, observation_key="o1", observed_state="PENDING"))
     assert outcome.state == "PENDING"
     assert removal_service.read_removal(OWNER_A, wallet_id=WALLET_A, network_id=NETWORK)[0].state == "PENDING"
+
+
+def test_exact_observation_repeat_returns_the_recorded_outcome_after_progress(revocation_engine, removal_service):
+    view = _requested(revocation_engine, removal_service)
+    first = removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="first",
+                                                           observed_state="PENDING"))
+    assert first.state == "PENDING"
+    later = removal_service.reconcile(OWNER_A, observation(
+        view.request_id, observation_key="later", observed_state="CONFIRMED",
+        observed_at="2026-01-01T00:17:00Z"))
+    assert later.state == "CONFIRMED"
+    repeat = removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="first",
+                                                            observed_state="PENDING"))
+    assert repeat.accepted is True
+    assert repeat.state == "PENDING"
+    assert repeat.reason == "OBSERVED_PENDING"
+    # The latest derived state stays available through the owner read.
+    assert removal_service.read_removal(OWNER_A)[0].state == "CONFIRMED"
+
+
+def test_later_confirmation_without_the_confirmed_evidence_is_contradictory(revocation_engine, removal_service):
+    view = _requested(revocation_engine, removal_service, signer_identity=None, policy_identity=None)
+    first = removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="o1",
+                                                           observed_state="CONFIRMED",
+                                                           signer_identity="signer-a", policy_identity=None))
+    assert first.view.evidenced_signer == "signer-a"
+    second = removal_service.reconcile(OWNER_A, observation(
+        view.request_id, observation_key="o2", observed_state="CONFIRMED", signer_identity=None,
+        policy_identity=None, observed_at="2026-01-01T00:17:00Z"))
+    assert second.state == "CONFIRMED"
+    assert second.view.evidenced_signer == "signer-a"
+    assert second.view.contradictory is True
