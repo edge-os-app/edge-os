@@ -387,3 +387,18 @@ class EffectRunBody(StrictModel):
 class EffectAttemptBody(StrictModel):
     operation_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
     idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+
+
+class WalletSetupPrepareBody(StrictModel):
+    """One durable agent setup. The owner comes from the verified credential, never the body."""
+
+    network_id: Literal[143, 10143]
+    strategy_id: Identifier
+    strategy_revision_id: Identifier
+    request_key: Identifier
+
+
+class WalletSetupMutationBody(StrictModel):
+    """A dispatch, resume or cancel accepts no identity; any supplied field is rejected."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)

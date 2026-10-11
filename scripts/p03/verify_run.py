@@ -339,6 +339,8 @@ def main() -> int:
         api_port, web_port = harness.free_port(), harness.free_port()
         api_url, web_url = f"http://127.0.0.1:{api_port}", f"http://127.0.0.1:{web_port}"
         env = harness.api_env(database_url=pg.url, public_pem=signer.public_pem, previous_pem=None, cors=[web_url])
+        # This isolated run uses the authored local wallet-creation fixture; production refuses it.
+        env["EDGE_OS_WALLET_PROVIDER"] = "fixture"
 
         migration = harness.migrate(env)
         rec.write("migrate.log", migration.stdout + migration.stderr)
