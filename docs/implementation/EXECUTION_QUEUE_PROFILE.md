@@ -122,11 +122,16 @@ Immediately before the fixture call, the service rechecks, for the exact payload
   unqualified observation denies with `INPUTS_CHANGED` and no transport call,
   covering changes before the next-decision boundary as well as at it;
 - an explicit current action quote for the exact action: the caller supplies an
-  authored `ActionQuote` (quote identity, amount and units, observation and
-  expiry). The revalidation requires it to match the saved intent's quote
-  identity, units and reviewed amount, and to be fresh and unexpired. A missing,
-  stale, expired, wrong-identity, wrong-units or changed quote denies with the
-  reason and no transport call; the saved payload is never silently repriced;
+  authored `ActionQuote` bound by explicit typed fields to the exact action id,
+  immutable revision (id and content hash) and saved market binding, plus quote
+  identity, amount and units, observation and expiry. The revalidation requires
+  the action/revision/market binding and the quote identity, units and reviewed
+  amount to match the saved intent and decision, and the quote to be fresh and
+  unexpired. A missing, stale, expired, wrong-identity, wrong-units, changed,
+  wrong-action, wrong-revision or wrong-market quote denies with the reason and
+  no transport call before any ownership transition; the saved payload is never
+  silently repriced. `source_ref` is labelled provenance only, never the
+  authorization check;
 - the pure P22 admission proposal (approval, scoped stops, quote freshness,
   asset/decimal identity and position existence);
 - the saved P22 admission state, which must still be `ADMITTED`; a cancelled,

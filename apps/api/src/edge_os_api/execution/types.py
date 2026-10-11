@@ -160,12 +160,17 @@ class EvaluationInputs(StrictModel):
 class ActionQuote(StrictModel):
     """Authored current action quote for one exact action.
 
-    This is controlled local evidence, not a real provider quote. It carries the
-    quote identity, amount and units, and an observation and expiry time. The
-    submission revalidation requires it to be current and compatible with the
-    saved intent before any transport call.
+    This is controlled local evidence, not a real provider quote. It binds the
+    quote to the exact intended action, immutable revision and market, and carries
+    the quote identity, amount and units, and an observation and expiry time. The
+    submission revalidation requires the binding and the quote to be current and
+    compatible with the saved intent before any transport call.
     """
 
+    action_id: str = Field(min_length=1, max_length=200)
+    revision_id: str = Field(min_length=1, max_length=200)
+    revision_content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    market_binding_id: str = Field(min_length=1, max_length=200)
     quote_asset_id: str = Field(min_length=1, max_length=200)
     amount: AssetAmount
     observed_at: str = Field(min_length=1, max_length=40)

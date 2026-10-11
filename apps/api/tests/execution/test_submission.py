@@ -18,10 +18,11 @@ from execution._support import entry_inputs, enqueue_entry, quote, transport
 from execution.conftest import NOW
 
 
-def _tick(execution_service, owner, revision, approval, context, fixture):
+def _tick(execution_service, owner, revision, approval, context, result, fixture):
     return execution_service.tick(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"), transport=fixture)
+        context=context, revision=revision, inputs=entry_inputs(),
+        quote=quote(result.intent.action_id, revision, "110"), transport=fixture)
 
 
 def _active_claims(engine, owner) -> int:
@@ -36,7 +37,7 @@ def test_confirmed_submission_reconciles_and_releases_claim(
     revision = frozen_entry_exit()
     _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
 
-    tick = _tick(execution_service, fresh_owner, revision, approval, context,
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, result,
                  transport("ACCEPT", action_id=result.intent.action_id))
 
     assert tick.status == "SUBMITTED_CONFIRMED"
@@ -49,7 +50,7 @@ def test_definitely_unsent_denial_consumes_no_attempt(execution_service, admissi
     revision = frozen_entry_exit()
     _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
 
-    tick = _tick(execution_service, fresh_owner, revision, approval, context,
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, result,
                  transport("DENY", action_id=result.intent.action_id))
 
     assert tick.status == "DENIED_UNSENT"
@@ -63,12 +64,13 @@ def test_unknown_outcome_retains_claim_and_blocks_status(execution_service, exec
     revision = frozen_entry_exit()
     _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
 
-    tick = _tick(execution_service, fresh_owner, revision, approval, context,
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, result,
                  transport("UNKNOWN", action_id=result.intent.action_id))
     assert tick.status == "SUBMITTED_UNKNOWN"
     assert _active_claims(execution_engine, fresh_owner) == 1
 
-    blocked = _tick(execution_service, fresh_owner, revision, approval, context, transport("ACCEPT"))
+    blocked = _tick(execution_service, fresh_owner, revision, approval, context, result,
+                 transport("ACCEPT"))
     assert blocked.status == "BLOCKED_UNKNOWN"
 
     status = execution_service.status(
@@ -87,7 +89,7 @@ def test_lost_acknowledgement_is_submission_possible(execution_service, executio
     revision = frozen_entry_exit()
     _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
 
-    tick = _tick(execution_service, fresh_owner, revision, approval, context,
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, result,
                  transport("UNKNOWN", action_id=result.intent.action_id, lose_acknowledgement=True))
 
     assert tick.status == "SUBMITTED_UNKNOWN"
@@ -117,7 +119,7 @@ def test_in_flight_attempt_after_restart_blocks_a_duplicate(
             content={}, completed_at=None))
         session.commit()
 
-    tick = _tick(execution_service, fresh_owner, revision, approval, context,
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, result,
                  transport("ACCEPT", action_id=result.intent.action_id))
     assert tick.status == "BLOCKED_UNKNOWN"
     with execution_engine.connect() as connection:
@@ -135,7 +137,8 @@ def test_rejected_settlement_breach_is_retained_not_reported(
     # The fixture reports a confirmed swap that overfills the adopted sell ceiling.
     overfill = transport("ACCEPT", action_id=result.intent.action_id,
                          actual_output=AssetAmount(asset_id=BASE, raw="1001", decimals=0))
-    tick = _tick(execution_service, fresh_owner, revision, approval, context, overfill)
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, result,
+                 overfill)
 
     assert tick.status == "BREACHED"
     saved = admission_service.retrieve_decisions(fresh_owner, action_id=result.intent.action_id)[0]
@@ -147,7 +150,8 @@ def test_rejected_settlement_breach_is_retained_not_reported(
     assert (status.blocking_reason or "").startswith("BREACHED")
 
     # A breached wallet cannot submit a next economic action.
-    blocked = _tick(execution_service, fresh_owner, revision, approval, context, transport("ACCEPT"))
+    blocked = _tick(execution_service, fresh_owner, revision, approval, context, result,
+                 transport("ACCEPT"))
     assert blocked.status == "BLOCKED_UNKNOWN"
 
 
@@ -173,7 +177,7 @@ def test_claim_wins_cancellation_is_refused_and_capital_is_not_reused(
             observed["competing_reason"] = competing.reason
             return TransportOutcome(outcome="CONFIRMED", detail="effect after refused cancellation")
 
-    tick = _tick(execution_service, fresh_owner, revision, approval, context, CancellingTransport())
+    tick = _tick(execution_service, fresh_owner, revision, approval, context, result, CancellingTransport())
 
     # The ownership transition won: cancellation is refused and no capital is reused.
     assert tick.status == "SUBMITTED_CONFIRMED"
@@ -220,7 +224,7 @@ def test_cancellation_before_the_ownership_transition_makes_no_call(
     racing = ExecutionService(execution_factory, CancellingAdmission(), clock=lambda: NOW)
     tick = racing.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"), transport=fixture)
+        context=context, revision=revision, inputs=entry_inputs(), quote=quote(action_id, revision, "110"), transport=fixture)
 
     assert tick.status == "SUBMISSION_NOT_OWNED"
     assert fixture.calls == 0
@@ -262,7 +266,7 @@ def test_preexisting_unknown_blocks_ownership_and_writes_no_extra_receipt(
     racing = ExecutionService(execution_factory, UnknownFirstAdmission(), clock=lambda: NOW)
     tick = racing.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"), transport=fixture)
+        context=context, revision=revision, inputs=entry_inputs(), quote=quote(action_id, revision, "110"), transport=fixture)
 
     assert tick.status == "SUBMISSION_NOT_OWNED"
     assert fixture.calls == 0

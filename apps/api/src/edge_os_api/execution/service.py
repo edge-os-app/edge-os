@@ -542,7 +542,7 @@ class ExecutionService:
         # the saved intent's quote identity, units and amount, and be fresh and
         # unexpired. A missing, stale or changed quote denies without a call and
         # without silently repricing the saved payload.
-        quote_reason = self._check_action_quote(action_intent, quote, now)
+        quote_reason = self._check_action_quote(action_intent, intent_row, decision, quote, now)
         if quote_reason is not None:
             return denied(quote_reason, quote_reason)
 
@@ -570,10 +570,19 @@ class ExecutionService:
             validation_identity=identity, submission_at=_iso(now))
 
     @staticmethod
-    def _check_action_quote(action_intent: ActionIntent, quote: ActionQuote | None,
-                           now: dt.datetime) -> str | None:
+    def _check_action_quote(action_intent: ActionIntent, intent_row: IntentRow, decision: DecisionRow,
+                            quote: ActionQuote | None, now: dt.datetime) -> str | None:
         if quote is None:
             return "QUOTE_MISSING"
+        # Bind the quote to the exact intended action, immutable revision and saved
+        # market identity. Matching amounts or a continued signal cannot establish
+        # this binding; source_ref stays provenance only.
+        if quote.action_id != action_intent.action_id:
+            return "QUOTE_ACTION_MISMATCH"
+        if quote.revision_id != intent_row.revision_id or quote.revision_content_hash != decision.content_hash:
+            return "QUOTE_REVISION_MISMATCH"
+        if quote.market_binding_id != decision.market_binding_id:
+            return "QUOTE_MARKET_MISMATCH"
         if quote.quote_asset_id != action_intent.input.quote_asset_id:
             return "QUOTE_IDENTITY_MISMATCH"
         expected = action_intent.input.expected_quote or action_intent.input.quote_input

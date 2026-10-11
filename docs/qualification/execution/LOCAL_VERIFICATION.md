@@ -58,12 +58,13 @@ git diff --check 8d38d691e7be3d0bfd12f3e16cfdc13564c4c652..HEAD
   action once.
 - Revalidation: an expired or revoked approval, a changed policy binding, a
   changed revision, a scoped stop, an expired intent, a stale submission
-  context, changed or missing submission-time observations, a missing, stale,
-  expired, wrong-identity, wrong-units or changed current action quote, empty
-  holdings, a lowered successor limit and a cancelled saved action each deny
-  submission with no transport call, record the reason and preserve the prior
-  intent payload. A newer `NO_SIGNAL` input and the next-decision boundary both
-  deny.
+  context, changed or missing submission-time observations, and a current action
+  quote that is missing, stale, expired, wrong-identity, wrong-units, changed,
+  wrong-action, wrong-revision or wrong-market each deny submission with no
+  transport call, record the reason and preserve the prior intent payload. The
+  quote is bound by typed action/revision/market fields; empty identity fields
+  fail closed at construction. A newer `NO_SIGNAL` input and the next-decision
+  boundary both deny.
 - Submission ownership: before the fixture call the action is moved atomically
   from `ADMITTED` to submission-owned through `acquire_submission`, which writes
   no receipt. A cancellation that wins the transition makes no call
@@ -103,20 +104,21 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 519 passed (472 existing + 47 execution/admission additions),
-  ~101 s, 2 known warnings.
-- Execution suite: 42 passed. Admission suite: 100 passed.
-- Focused suite (execution + admission + compiler tests): 193 passed.
+- Full suite: 523 passed (472 existing + 51 execution/admission additions),
+  ~83 s, 2 known warnings.
+- Execution suite: 46 passed. Admission suite: 100 passed.
+- Focused suite (execution + admission + compiler tests): 197 passed.
 - P15, P02 and P06 contract scripts: PASS.
 - `compileall` on owned source/tests and the leased admission source: PASS.
 - `git diff --check` against the base: clean.
 - The regressions cover the current action quote (changed while the rule stays
-  `SIGNAL`, missing, stale, expired, wrong identity, wrong units, and a compatible
-  control) and submission ownership (cancellation-before-acquire makes no call;
-  acquire wins refuses cancellation, denies competing admission and retains
-  reservations; an already-unknown action blocks with no call and no extra
-  receipt; a proved definitely-unsent releases), on a labelled PostgreSQL 18
-  instance with the local fixture transport.
+  `SIGNAL`, missing, stale, expired, wrong identity, wrong units, wrong action,
+  wrong revision id, wrong revision content hash, wrong market, empty identity
+  fields, and a compatible control) and submission ownership
+  (cancellation-before-acquire makes no call; acquire wins refuses cancellation,
+  denies competing admission and retains reservations; an already-unknown action
+  blocks with no call and no extra receipt; a proved definitely-unsent releases),
+  on a labelled PostgreSQL 18 instance with the local fixture transport.
 
 ## Not covered
 

@@ -5,9 +5,14 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import text
 
-from admission._builders import AGENT_A, BASE, NETWORK, WALLET_A
+from edge_os_api.admission.types import AssetAmount
+from edge_os_api.execution.types import ActionQuote
+
+from admission._builders import AGENT_A, BASE, NETWORK, QUOTE, WALLET_A
 from execution._builders import (
     DECISION_TIME,
     frozen_entry_exit,
@@ -29,7 +34,7 @@ def _payload_hash(engine, owner, action_id: str) -> str:
 def _run(execution_service, owner, revision, approval, context, action_id):
     return execution_service.tick(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"),
+        context=context, revision=revision, inputs=entry_inputs(), quote=quote(action_id, revision, "110"),
         transport=transport("ACCEPT", action_id=action_id))
 
 
@@ -133,7 +138,7 @@ def test_expired_intent_denies_before_submission(execution_service, execution_en
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
         approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
-        inputs=entry_inputs(), quote=quote("110"), transport=transport("ACCEPT"), now=late)
+        inputs=entry_inputs(), quote=quote(result.intent.action_id, revision, "110"), transport=transport("ACCEPT"), now=late)
     assert tick.status == "REVALIDATION_DENIED"
     assert tick.reason == "INTENT_EXPIRED"
     assert _attempt_count(execution_engine, fresh_owner) == 0
@@ -147,7 +152,7 @@ def test_stale_submission_context_denies_before_submission(execution_service, ex
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
         approval=scoped_approval(revision_id=revision.revision_id), context=stale, revision=revision,
-        inputs=entry_inputs(), quote=quote("110"), transport=transport("ACCEPT"))
+        inputs=entry_inputs(), quote=quote(result.intent.action_id, revision, "110"), transport=transport("ACCEPT"))
     assert tick.status == "REVALIDATION_DENIED"
     assert tick.reason == "STALE_CONTEXT"
     assert _attempt_count(execution_engine, fresh_owner) == 0
@@ -162,7 +167,7 @@ def test_changed_current_inputs_deny_before_submission(execution_service, execut
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
         approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
-        inputs=changed, quote=quote("110"), transport=transport("ACCEPT"))
+        inputs=changed, quote=quote(result.intent.action_id, revision, "110"), transport=transport("ACCEPT"))
     assert tick.status == "REVALIDATION_DENIED"
     assert tick.reason == "INPUTS_CHANGED"
     assert _attempt_count(execution_engine, fresh_owner) == 0
@@ -176,7 +181,7 @@ def test_missing_current_input_denies_before_submission(execution_service, execu
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
         approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
-        inputs=missing, quote=quote("110"), transport=transport("ACCEPT"))
+        inputs=missing, quote=quote(result.intent.action_id, revision, "110"), transport=transport("ACCEPT"))
     assert tick.status == "REVALIDATION_DENIED"
     assert tick.reason == "INPUTS_CHANGED"
     assert _attempt_count(execution_engine, fresh_owner) == 0
@@ -190,7 +195,7 @@ def test_next_bucket_boundary_denies_the_old_intent(execution_service, execution
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
         approval=scoped_approval(revision_id=revision.revision_id), context=context, revision=revision,
-        inputs=entry_inputs(), quote=quote("110"), transport=transport("ACCEPT"), now=next_bucket)
+        inputs=entry_inputs(), quote=quote(result.intent.action_id, revision, "110"), transport=transport("ACCEPT"), now=next_bucket)
     assert tick.status == "REVALIDATION_DENIED"
     assert tick.reason == "INTENT_EXPIRED"
     assert _attempt_count(execution_engine, fresh_owner) == 0
@@ -208,7 +213,7 @@ def test_changed_action_quote_denies_while_the_signal_stays_true(execution_servi
     _decision, _approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
     # The rule still yields SIGNAL (price 110); only the action quote changed.
     tick = _tick_with_quote(execution_service, fresh_owner, revision,
-                            scoped_approval(revision_id=revision.revision_id), context, quote("120"))
+                            scoped_approval(revision_id=revision.revision_id), context, quote(result.intent.action_id, revision, "120"))
     assert tick.status == "REVALIDATION_DENIED"
     assert tick.reason == "QUOTE_CHANGED"
     assert _attempt_count(execution_engine, fresh_owner) == 0
@@ -231,13 +236,13 @@ def test_stale_or_expired_action_quote_denies(execution_service, execution_engin
     owner_a = uuid.uuid4()
     _d1, _a1, context1, _r1 = enqueue_entry(execution_service, owner_a, revision)
     stale = _tick_with_quote(execution_service, owner_a, revision, approval, context1,
-                             quote("110", observed_at="2026-01-01T00:05:00Z"))
+                             quote(_r1.intent.action_id, revision, "110", observed_at="2026-01-01T00:05:00Z"))
     assert stale.status == "REVALIDATION_DENIED" and stale.reason == "QUOTE_STALE"
 
     owner_b = uuid.uuid4()
     _d2, _a2, context2, _r2 = enqueue_entry(execution_service, owner_b, revision)
     expired = _tick_with_quote(execution_service, owner_b, revision, approval, context2,
-                               quote("110", expires_at="2026-01-01T00:15:00Z"))
+                               quote(_r2.intent.action_id, revision, "110", expires_at="2026-01-01T00:15:00Z"))
     assert expired.status == "REVALIDATION_DENIED" and expired.reason == "QUOTE_EXPIRED"
     assert _attempt_count(execution_engine, owner_a) == 0
     assert _attempt_count(execution_engine, owner_b) == 0
@@ -250,14 +255,14 @@ def test_wrong_identity_or_units_action_quote_denies(execution_service, executio
     owner_a = uuid.uuid4()
     _d1, _a1, context1, _r1 = enqueue_entry(execution_service, owner_a, revision)
     wrong_asset = _tick_with_quote(execution_service, owner_a, revision, approval, context1,
-                                   quote("110", asset=BASE))
+                                   quote(_r1.intent.action_id, revision, "110", asset=BASE))
     assert wrong_asset.status == "REVALIDATION_DENIED"
     assert wrong_asset.reason == "QUOTE_IDENTITY_MISMATCH"
 
     owner_b = uuid.uuid4()
     _d2, _a2, context2, _r2 = enqueue_entry(execution_service, owner_b, revision)
     wrong_units = _tick_with_quote(execution_service, owner_b, revision, approval, context2,
-                                   quote("110", decimals=6))
+                                   quote(_r2.intent.action_id, revision, "110", decimals=6))
     assert wrong_units.status == "REVALIDATION_DENIED"
     assert wrong_units.reason == "QUOTE_UNITS_MISMATCH"
     assert _attempt_count(execution_engine, owner_a) == 0
@@ -269,6 +274,63 @@ def test_compatible_action_quote_submits(execution_service, fresh_owner) -> None
     _decision, approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"),
-        transport=transport("ACCEPT"))
+        context=context, revision=revision, inputs=entry_inputs(),
+        quote=quote(result.intent.action_id, revision, "110"), transport=transport("ACCEPT"))
     assert tick.status == "SUBMITTED_CONFIRMED"
+
+
+def test_quote_bound_to_a_different_action_denies(execution_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    approval = scoped_approval(revision_id=revision.revision_id)
+    _decision, _approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    foreign = quote("p23:00000000-0000-0000-0000-000000000000:ENTRY", revision, "110")
+
+    tick = _tick_with_quote(execution_service, fresh_owner, revision, approval, context, foreign)
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "QUOTE_ACTION_MISMATCH"
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_quote_bound_to_a_different_market_denies(execution_service, execution_engine, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    approval = scoped_approval(revision_id=revision.revision_id)
+    _decision, _approval, context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    foreign = quote(result.intent.action_id, revision, "110", market_binding_id="other-market-binding")
+
+    tick = _tick_with_quote(execution_service, fresh_owner, revision, approval, context, foreign)
+    assert tick.status == "REVALIDATION_DENIED"
+    assert tick.reason == "QUOTE_MARKET_MISMATCH"
+    assert _attempt_count(execution_engine, fresh_owner) == 0
+
+
+def test_quote_bound_to_a_different_revision_denies(execution_service, execution_engine) -> None:
+    revision = frozen_entry_exit()
+    approval = scoped_approval(revision_id=revision.revision_id)
+
+    owner_a = uuid.uuid4()
+    _d1, _a1, context1, result1 = enqueue_entry(execution_service, owner_a, revision)
+    wrong_revision = quote(result1.intent.action_id, revision, "110", revision_id="other-revision")
+    tick_a = _tick_with_quote(execution_service, owner_a, revision, approval, context1, wrong_revision)
+    assert tick_a.status == "REVALIDATION_DENIED" and tick_a.reason == "QUOTE_REVISION_MISMATCH"
+
+    owner_b = uuid.uuid4()
+    _d2, _a2, context2, result2 = enqueue_entry(execution_service, owner_b, revision)
+    wrong_hash = quote(result2.intent.action_id, revision, "110",
+                       revision_content_hash="sha256:" + "c" * 64)
+    tick_b = _tick_with_quote(execution_service, owner_b, revision, approval, context2, wrong_hash)
+    assert tick_b.status == "REVALIDATION_DENIED" and tick_b.reason == "QUOTE_REVISION_MISMATCH"
+    assert _attempt_count(execution_engine, owner_a) == 0
+    assert _attempt_count(execution_engine, owner_b) == 0
+
+
+def test_action_quote_requires_nonempty_identity_fields() -> None:
+    revision = frozen_entry_exit()
+    base = dict(
+        action_id="p23:ok:ENTRY", revision_id=revision.revision_id,
+        revision_content_hash=revision.content_hash, market_binding_id=revision.market_binding_id,
+        quote_asset_id=QUOTE, amount=AssetAmount(asset_id=QUOTE, raw="110", decimals=0),
+        observed_at="2026-01-01T00:16:00Z", expires_at="2026-01-01T00:21:00Z", source_ref="x")
+    ActionQuote(**base)  # a complete binding constructs
+    for field in ("action_id", "revision_id", "market_binding_id", "revision_content_hash"):
+        with pytest.raises(ValidationError):
+            ActionQuote(**{**base, field: ""})
