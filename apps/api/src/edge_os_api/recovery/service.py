@@ -130,9 +130,26 @@ class RecoveryService:
                 case = self._ensure_case(session, verified_owner_id, context)
                 now = self._clock()
 
+                fingerprint = evidence.fingerprint()
+                existing = self._evidence(session, verified_owner_id, action_id, fingerprint)
+                # A recorded outcome is never re-applied. An accepted record is a
+                # duplicate no-op; a rejected record returns its recorded rejection
+                # instead of escalating on replay. The economic content therefore
+                # stays applied at most once.
+                if existing is not None and existing.state in {"ACCEPTED", "REJECTED"}:
+                    session.commit()
+                    return RecoveryResult(case=self._case_view(session, case), applied=False,
+                                          duplicate=True, decision_status=context.decision_status or "",
+                                          detail=existing.rejection_reason)
+
+                # Foreign or altered evidence is rejected before it can reach the
+                # P22 ledger.
                 reference = self._reference_error(context, evidence)
                 if reference is not None:
-                    record = self._record_evidence(session, case, evidence, "REJECTED", reference, now)
+                    if existing is None:
+                        existing = self._record_evidence(session, case, evidence, "REJECTED", reference, now)
+                    existing.state = "REJECTED"
+                    existing.rejection_reason = reference
                     case.state = "DISCREPANCY"
                     case.blocking_reason = f"EVIDENCE_REJECTED:{reference}"
                     case.updated_at = now
@@ -141,22 +158,16 @@ class RecoveryService:
                                           duplicate=False, decision_status=context.decision_status or "",
                                           detail=reference)
 
-                fingerprint = evidence.fingerprint()
-                existing = self._evidence(session, verified_owner_id, action_id, fingerprint)
-                if existing is not None and existing.state == "ACCEPTED":
-                    session.commit()
-                    return RecoveryResult(case=self._case_view(session, case), applied=False,
-                                          duplicate=True, decision_status=context.decision_status or "")
-                is_new = existing is None
-                if is_new:
+                if existing is None:
                     existing = self._record_evidence(session, case, evidence, "PENDING", None, now)
 
                 decision_status = context.decision_status
                 expected = _OUTCOME_TO_DECISION[evidence.outcome]
 
-                # A brand-new outcome that contradicts an already-settled action is
-                # retained as a visible discrepancy, never a false confirmation.
-                if is_new and decision_status in _SETTLED_DECISIONS and decision_status != expected:
+                # An outcome that contradicts an already-settled action is a visible
+                # discrepancy, never a false confirmation. This applies on a first
+                # delivery and on a resumed delivery after a crash.
+                if decision_status in _SETTLED_DECISIONS and decision_status != expected:
                     existing.state = "REJECTED"
                     existing.rejection_reason = f"P22_SETTLED_MISMATCH:{decision_status}"
                     case.state = "DISCREPANCY"
@@ -207,6 +218,7 @@ class RecoveryService:
         """Expose the owner-scoped recovery status for one original action."""
         with self._factory() as session:
             try:
+                _case_lock(session, verified_owner_id, action_id)
                 context = self._load_context(session, verified_owner_id, action_id)
                 if context is None:
                     raise RecoveryError(f"no saved action {action_id} for this owner")
@@ -223,7 +235,8 @@ class RecoveryService:
         with self._factory() as session:
             rows = session.execute(select(RecoveryCaseRow).where(
                 RecoveryCaseRow.owner_id == verified_owner_id,
-            ).order_by(RecoveryCaseRow.opened_at, RecoveryCaseRow.case_id)).scalars().all()
+            ).order_by(RecoveryCaseRow.opened_at.desc(),
+                       RecoveryCaseRow.case_id.desc())).scalars().all()
             return [self._case_view(session, row) for row in rows]
 
     # ------------------------------------------------------------------ helpers

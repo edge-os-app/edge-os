@@ -60,6 +60,9 @@ git diff --check 545434d06c3cdae9d1deff78d77ff28147719fdd..HEAD
 - Contradictory terminal evidence: a new outcome that conflicts with a settled
   P22 decision is blocked as `P22_SETTLED_MISMATCH`, not reported as a
   confirmation.
+- Stable rejection: re-delivering a rejected record returns the recorded
+  rejection as a duplicate; it never escalates to `ACCEPTED` and never mutates
+  the settled queue of the action.
 - Crash convergence: after a P22 reconciliation commits but the P23 queue is
   stale, a re-delivered evidence record converges the queue without a second
   reconciliation and without duplicate consumption.
@@ -89,8 +92,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 566 passed, ~95 s, 2 known warnings.
-- Recovery suite: 13 passed. Execution suite: 46 passed. Admission suite: 100 passed.
+- Full suite: 568 passed, ~132 s, 2 known warnings.
+- Recovery suite: 15 passed. Execution suite: 46 passed. Admission suite: 100 passed.
 - P15, P02 and P06 contract scripts: PASS.
 - `compileall` on the owned recovery and leased execution source/tests: PASS.
 - `git diff --check` against the accepted base `545434d0`: clean.

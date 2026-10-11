@@ -195,6 +195,45 @@ def test_contradictory_terminal_evidence_is_blocked(
     assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_CONFIRMED"
 
 
+def test_replayed_rejection_does_not_escalate(
+        recovery_factory, recovery_service, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    action_id = _confirmed_entry(execution_service, fresh_owner, revision)
+    contradictory = evidence_for(
+        recovery_factory, fresh_owner, action_id, outcome="REVERTED",
+        actual_gas=confirmed_actuals()[2])
+
+    first = recovery_service.reconcile(fresh_owner, action_id, contradictory)
+    assert first.case.state == "DISCREPANCY"
+    assert first.case.evidence[-1].state == "REJECTED"
+
+    second = recovery_service.reconcile(fresh_owner, action_id, contradictory)
+    assert second.applied is False and second.duplicate is True
+    assert second.case.state == "DISCREPANCY"
+    assert second.case.evidence[-1].state == "REJECTED"
+    assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_CONFIRMED"
+
+
+def test_replayed_foreign_evidence_stays_rejected(
+        recovery_factory, recovery_service, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _approval, _context, result = open_unknown_entry(execution_service, fresh_owner, revision)
+    action_id = result.intent.action_id
+    intent = load_intent(recovery_factory, fresh_owner, action_id)
+    foreign = evidence_for(
+        recovery_factory, fresh_owner, action_id, outcome="CONFIRMED",
+        actual_input=confirmed_actuals()[0], actual_output=confirmed_actuals()[1],
+        actual_gas=confirmed_actuals()[2], binding=_foreign_binding(intent))
+
+    first = recovery_service.reconcile(fresh_owner, action_id, foreign)
+    second = recovery_service.reconcile(fresh_owner, action_id, foreign)
+    assert first.case.state == second.case.state == "DISCREPANCY"
+    assert second.duplicate is True
+    assert second.case.evidence[-1].state == "REJECTED"
+    assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_UNKNOWN"
+    assert active_claim(recovery_factory, fresh_owner) is not None
+
+
 def test_restart_after_reconcile_converges_stale_queue_without_second_accounting(
         recovery_factory, recovery_service, admission_service, execution_service, fresh_owner) -> None:
     revision = frozen_entry_exit()
