@@ -1,28 +1,37 @@
-# Wallet setup profile (P17 local preparation)
+# Wallet setup profile (P17 wiring)
 
-Task: `OC-P17-LOCAL-20261010-01`, issue [#22](https://github.com/edge-os-app/edge-os/issues/22).
-Status: **local preparation only. Not production wiring.** The application exposes no wallet
-setup route. This package creates no wallet, signer, funding, mandate activation, position or
-trading action. External wallet creation and lookup are authored fakes, not provider evidence.
-Full P17 stays open, and no live provider or financial action follows from this profile.
+Task: `OC-P17-WIRING-20261011-01`, issue [#22](https://github.com/edge-os-app/edge-os/issues/22).
+The earlier `OC-P17-LOCAL-20261010-01` preparation is now wired through the application.
+Status: **authenticated application wiring over an authored local fixture.** The application
+mounts the setup routes and persists them through one additive migration. The only concrete
+provider is an authored local fixture, enabled only in local/test configuration and refused in
+production; real mode is the fail-closed `unavailable` provider, so no Privy call, key or lookup
+happens. This package creates no wallet, signer, funding, mandate activation, position or trading
+action. Full P17 stays open: a real provider qualification, funding, signer attachment and
+activation remain future work, and no live provider or financial action follows from this profile.
 
 ## Scope
 
-New code lives in one owner-scoped package:
+The wallet-setup package and its wiring:
 
 ```text
 apps/api/src/edge_os_api/wallet_setup/
   types.py         setup states, cancellation intent, networks, events, reasons, records
   provider.py      the wallet-creation boundary port and its evidence types
-  persistence.py   the local `wallet_setup_local` schema and row helpers
+  persistence.py   the `wallet_setups`/`wallet_setup_events`/`wallet_setup_denials` metadata and row helpers
   recovery.py      uncertain-setup reconciliation
   service.py       prepare, dispatch, cancel, resume and read
+  router.py        the authenticated routes mounted by the application
+  adapter.py       provider selection: the authored local fixture, or the fail-closed unavailable provider
 ```
 
-New tests live in `apps/api/tests/wallet_setup/`. New qualification material lives in
-`docs/qualification/wallet-setup/`. Nothing else changes: no shared model, router, migration,
-fixture, UI, contract, verifier map, lockfile, configuration, hook or script is edited. P05 keeps
-the shared-file lease. P23 keeps execution ownership.
+Tests live in `apps/api/tests/wallet_setup/`. Qualification material lives in
+`docs/qualification/wallet-setup/`. The wiring edits are limited to the owner-scoped package plus
+`apps/api/src/edge_os_api/main.py`, `core/settings.py`, `core/request_schemas.py`,
+`migrations/env.py`, the one additive `0007_wallet_setup` migration, the web `WalletSetup`
+component and its `AgentRecords`/`RequestPage` entry, and the verify-edge-os map, recipe and
+browser steps. No shared model, admission/execution/recovery/funding path, contract, lockfile,
+hook or execution ownership changes.
 
 ## Accepted inputs
 
@@ -106,12 +115,15 @@ crash boundaries: during dispatch after the intent commit, and after the result 
 the binding commit. In both cases the setup stays uncertain, no second creation happens, and an
 exact retained result reconciles to `CONFIRMED` without rewriting history.
 
-## Local schema
+## Schema
 
 Three tables in a dedicated `wallet_setup_local` metadata: `wallet_setups`, append-only
 `wallet_setup_events` and `wallet_setup_denials`. `owner_id` follows the verified `users.id` by
-application convention and carries no foreign key, so the local schema is self-contained and ships
-no migration. The test harness creates these tables in its run-labelled database only.
+application convention and carries no foreign key, so the schema stays self-contained. Migration
+`0007_wallet_setup` creates these tables through the normal additive path, and `migrations/env.py`
+compares both metadatas so `alembic check` agrees with the migrated database. The test harness's
+`wallet_client` drives the application's own mounted router and points `app.state.wallet_provider`
+at a controlled fake.
 
 ## What this does not prove
 

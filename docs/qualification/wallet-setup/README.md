@@ -1,9 +1,10 @@
 # Local wallet-setup qualification recipe
 
-Task `OC-P17-LOCAL-20261010-01`, issue [#22](https://github.com/edge-os-app/edge-os/issues/22).
-This recipe exercises the local preparation in `apps/api/src/edge_os_api/wallet_setup/`. It is
-**not** a production or provider qualification. No wallet, signer, funding, mandate or trading
-action is created. The application exposes no wallet setup route. Full P17 stays open.
+Task `OC-P17-WIRING-20261011-01`, issue [#22](https://github.com/edge-os-app/edge-os/issues/22).
+This recipe exercises the wired wallet setup in `apps/api/src/edge_os_api/wallet_setup/` over the
+application's own authenticated routes. It is **not** a production or provider qualification. No
+wallet, signer, funding, mandate or trading action is created. The only provider is an authored
+local fixture, refused in production; the real provider stays fail-closed. Full P17 stays open.
 
 ## Evidence classes
 
@@ -37,10 +38,13 @@ python3 -B -m unittest discover -s docs/qualification/p16 -p 'test_*.py'
 python3 -B -m compileall -q apps/api/src/edge_os_api/wallet_setup apps/api/tests/wallet_setup
 ```
 
-The pytest session starts one run-labelled PostgreSQL container, migrates the P02/P06 schema,
-creates only the `wallet_setup_local` tables, and removes only its own container and volume. The
-`wallet_client` fixture adds the test-only router to a fresh app. The router uses the real
-`require_principal` and the real verifier with signed test tokens; it is not production wiring.
+The pytest session starts one run-labelled PostgreSQL container, migrates the P02/P06 schema plus
+the additive `0007_wallet_setup` tables, and removes only its own container and volume. The
+`wallet_client` fixture builds the real application and points `app.state.wallet_provider` at a
+controlled authored fake; the routes are the application's own mounted router, which uses the real
+`require_principal` and the real verifier with signed test tokens. The unmounted fake is the only
+test seam. The full `scripts/p03/verify_run.py` recipe additionally drives the mounted routes
+through the browser with the local fixture provider enabled.
 
 ## Covered controls
 
@@ -76,6 +80,7 @@ Process-driven (`PROCESS_EXECUTED`, independent OS processes against the same da
 
 ## Current results
 
-Recorded in the worker evidence directory `.scratch/p17-l3/evidence/`. Baseline candidate identity,
-command output, timings and the contributed-table digest are captured there. Provider and owner
-checks are `NOT RUN`; browser and live checks are not claimed because the module is unwired.
+Recorded in the worker evidence directory `.scratch/wallet-wave/p17/evidence/`. Baseline candidate
+identity, command output, timings and the verify-edge-os recipe run are captured there. Provider
+and owner checks are `NOT RUN`; the browser checks run only against the authored local fixture and
+prove the wiring, never a real provider. Full P17 (real provider qualification) stays open.
