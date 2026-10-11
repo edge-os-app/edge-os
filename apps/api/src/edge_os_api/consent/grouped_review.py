@@ -10,14 +10,15 @@ same records cannot drift the reviewed meaning. Every review is INACTIVE.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 
-from edge_os_api.consent.types import CONSENT_STATUS, ReviewedTerms
+from edge_os_api.consent.types import CONSENT_STATUS, ReviewedTerms, canonical_sha256
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.strategies import compiler
 from edge_os_api.wallet_setup.types import NetworkId
+
+# The reviewed and adopted meanings share one canonical hash shape.
+content_hash = canonical_sha256
 
 # The accepted binding network ids mapped to their accepted contract names.
 BINDING_NETWORK_NAMES = {
@@ -61,6 +62,7 @@ def strategy_block(strategy: dict[str, Any]) -> dict[str, Any]:
         "schema_version": strategy["schema_version"],
         "domain": strategy["domain"],
         "data_inputs": strategy["data_inputs"],
+        "decision_interval_seconds": strategy["decision_interval_seconds"],
         "market": strategy["market"],
         "entry": strategy["entry"],
         "exit": strategy["exit"],
@@ -72,6 +74,7 @@ def strategy_block(strategy: dict[str, Any]) -> dict[str, Any]:
         "risk_limits": strategy["risk_limits"],
         "cost_assumptions": strategy["cost_assumptions"],
         "warmup_buckets": strategy["warmup_buckets"],
+        "semantic_manifest": strategy["semantic_manifest"],
         "execution_permission": strategy["execution_permission"],
     }
 
@@ -93,11 +96,6 @@ def review_meaning(
         "terms_hash": terms.content_hash(),
         "status": CONSENT_STATUS,
     }
-
-
-def content_hash(payload: dict[str, Any]) -> str:
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def strategy_identity(*, strategy_id: str, revision_id: str, content_sha256: str,

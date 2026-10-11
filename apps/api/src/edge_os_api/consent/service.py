@@ -121,7 +121,8 @@ class ConsentService:
         try:
             with self._factory() as session:
                 return get_setup(session, self._principal(owner_id), agent_id=agent_id)
-        except AppError:
+        except (AppError, SQLAlchemyError):
+            # A missing or unreadable binding is treated as not confirmed.
             return None
 
     def _funding_facts(self, owner_id: uuid.UUID, agent_id: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -129,7 +130,8 @@ class ConsentService:
         try:
             with self._factory() as session:
                 balances = wallet_funding_summary(session, self._principal(owner_id), agent_id=agent_id)
-        except AppError:
+        except (AppError, SQLAlchemyError):
+            # A missing or unreadable funding state stays explicitly unknown, never an invented balance.
             return [], ["FUNDING_STATE_UNKNOWN"]
         facts = [{"asset_class": str(balance.asset_class), "asset_id": balance.asset_id,
                   "available": {"asset_id": balance.available.asset_id, "raw": balance.available.raw,

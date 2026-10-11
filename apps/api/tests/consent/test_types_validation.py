@@ -112,6 +112,15 @@ def test_adoption_request_requires_a_canonical_review_hash() -> None:
     assert ok.expected_review_hash.startswith("sha256:")
 
 
+def test_blank_non_asset_identifiers_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ReviewedRoute(adapter="   ")
+    with pytest.raises(ValidationError):
+        AllowanceTerm(name=" ", amount=AssetAmount(asset_id=support.QUOTE, raw="1", decimals=0))
+    with pytest.raises(ValidationError):
+        ReviewedTerms.model_validate({**support.terms().model_dump(), "supported_routes": ["  "]})
+
+
 def test_unlike_assets_are_never_combined() -> None:
     reviewed = support.terms()
     asset_ids = {amount.asset_id for amount in reviewed.allocation} | {term.amount.asset_id for term in reviewed.allowances}

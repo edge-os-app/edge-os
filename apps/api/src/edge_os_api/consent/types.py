@@ -30,11 +30,24 @@ EVIDENCE_STATUSES = ("HYPOTHESIS", "DESCRIPTIVE_ONLY", "UNRESOLVED", "SUPPORTED"
 # this stage can never claim a live operational gate passed.
 UNQUALIFIED_STATES = ("UNQUALIFIED", "UNKNOWN")
 CONSENT_STATUS = "INACTIVE"
-# Storage bound: the owned ledgers use NUMERIC(78, 0). A raw integer longer than
-# this cannot be stored exactly, so it is rejected at validation.
+# Storage bound: the accepted funding ledger uses NUMERIC(78, 0). A raw integer
+# longer than this cannot be stored exactly by that accepted ledger, so consent
+# rejects it at validation too.
 MAX_RAW_DIGITS = 78
 
 AGENT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+
+
+def canonical_sha256(payload: dict[str, Any]) -> str:
+    """One canonical SHA256 for every reviewed or adopted meaning. Never a second hash shape."""
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _not_blank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("an identifier must not be blank")
+    return value
 
 
 class StrictModel(BaseModel):
@@ -77,6 +90,11 @@ class ReviewedRoute(StrictModel):
     identity_state: Literal["KNOWN", "UNKNOWN"] = "UNKNOWN"
     identity: str | None = Field(default=None, max_length=200)
 
+    @field_validator("adapter")
+    @classmethod
+    def adapter_not_blank(cls, value: str) -> str:
+        return _not_blank(value)
+
     @model_validator(mode="after")
     def identity_matches_state(self) -> "ReviewedRoute":
         if (self.identity_state == "KNOWN") != (self.identity is not None):
@@ -90,6 +108,11 @@ class ReviewedPolicy(StrictModel):
     policy_id: str = Field(min_length=1, max_length=200)
     status: Literal["UNQUALIFIED", "UNKNOWN"]
     content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("policy_id")
+    @classmethod
+    def policy_id_not_blank(cls, value: str) -> str:
+        return _not_blank(value)
 
 
 class ReviewedEvidence(StrictModel):
@@ -106,6 +129,11 @@ class AllowanceTerm(StrictModel):
 
     name: str = Field(min_length=1, max_length=40)
     amount: AssetAmount
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value: str) -> str:
+        return _not_blank(value)
 
 
 class ReviewedTerms(StrictModel):
@@ -139,6 +167,13 @@ class ReviewedTerms(StrictModel):
         parse_utc(value)
         return value
 
+    @field_validator("supported_routes")
+    @classmethod
+    def routes_must_not_be_blank(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("a supported route must not be blank")
+        return values
+
     @field_validator("supported_actions")
     @classmethod
     def actions_must_be_supported(cls, values: list[str]) -> list[str]:
@@ -167,9 +202,7 @@ class ReviewedTerms(StrictModel):
 
     def content_hash(self) -> str:
         """Canonical SHA256 of the full reviewed meaning, independent of the fixture label."""
-        payload = self.model_dump(mode="json", exclude_none=False)
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return canonical_sha256(self.model_dump(mode="json", exclude_none=False))
 
 
 class ReviewRequest(StrictModel):
