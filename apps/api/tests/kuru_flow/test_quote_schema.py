@@ -26,7 +26,7 @@ def test_transaction_shape_parses_and_normalizes_unprefixed_calldata():
 
 
 def test_build_response_shape_is_unsupported_not_invented():
-    parsed = parse_quote_response(build_response(), ResponseProvenance.DOCUMENTATION)
+    parsed = parse_quote_response(build_response(), ResponseProvenance.AUTHORED)
     assert parsed.variant is QuoteSchemaVariant.BUILD_RESPONSE
     assert parsed.calldata_hex is None
     assert parsed.reasons == [R_SCHEMA_UNSUPPORTED]

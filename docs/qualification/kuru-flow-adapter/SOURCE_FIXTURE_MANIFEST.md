@@ -1,6 +1,6 @@
 # Source and fixture manifest
 
-Prepared 2026-10-11 at base `9210bc1d054f1d5623693f787737a7b80563185a`. This manifest lists the fixtures and the sources behind the offline adapter. Every fixture is labelled `AUTHORED` or `DOCUMENTATION`. No `RECORDED` response exists.
+Prepared 2026-10-11 at base `9210bc1d054f1d5623693f787737a7b80563185a`. This manifest lists the fixtures and the sources behind the offline adapter. Every fixture is labelled `AUTHORED`. No `DOCUMENTATION` fixture and no `RECORDED` response exists.
 
 ## Fixture file
 
