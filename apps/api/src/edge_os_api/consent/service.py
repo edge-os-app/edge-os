@@ -32,6 +32,7 @@ from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError
 from edge_os_api.funding.service import wallet_funding_summary
 from edge_os_api.records.models import StrategyRevision
+from edge_os_api.wallet_setup.persistence import load_setup
 from edge_os_api.wallet_setup.service import get_setup
 from edge_os_api.wallet_setup.types import SetupState
 
@@ -305,7 +306,14 @@ class ConsentService:
     # -------------------------------------------------------------------- adopt
 
     def adopt(self, verified_owner_id: uuid.UUID, request: AdoptionRequest) -> ConsentView:
-        """Persist explicit owner adoption of one exact reviewed meaning. Always INACTIVE."""
+        """Persist explicit owner adoption of one exact reviewed meaning. Always INACTIVE.
+
+        The whole check-and-save runs in one transaction. After acquiring the
+        per-review advisory lock, the current wallet binding is re-read with the
+        accepted wallet-setup row lock (`SELECT ... FOR UPDATE`) and held through
+        commit, so a binding that becomes unconfirmed between any earlier read and
+        the save cannot be adopted.
+        """
         now = self._clock()
         review_id = _parse_uuid(request.review_id)
         if review_id is None:
@@ -319,65 +327,55 @@ class ConsentService:
                 session.rollback()
                 self._deny(verified_owner_id, None, "ADOPT", "UNKNOWN_REVIEW", {"review_id": request.review_id})
                 raise ConsentNotFound("review")
+            agent_id = review.agent_id
             if request.expected_review_hash != review.review_hash:
                 session.rollback()
-                self._deny(verified_owner_id, review.agent_id, "ADOPT", "STALE_REVIEW",
+                self._deny(verified_owner_id, agent_id, "ADOPT", "STALE_REVIEW",
                            {"expected": request.expected_review_hash, "saved": review.review_hash})
                 raise ConsentDenied("stale_review")
             meaning = review.content.get("meaning")
             if not isinstance(meaning, dict) or content_hash(meaning) != review.review_hash:
                 session.rollback()
-                self._deny(verified_owner_id, review.agent_id, "ADOPT", "CORRUPT_REVIEW",
-                           {"error": "MEANING_MISMATCH"})
+                self._deny(verified_owner_id, agent_id, "ADOPT", "CORRUPT_REVIEW", {"error": "MEANING_MISMATCH"})
                 raise ConsentDenied("corrupt_review")
             try:
                 terms = ReviewedTerms.model_validate(review.content["terms"])
             except Exception as error:  # noqa: BLE001 - a corrupt stored term set is not adoptable
                 session.rollback()
-                self._deny(verified_owner_id, review.agent_id, "ADOPT", "CORRUPT_REVIEW",
-                           {"error": type(error).__name__})
+                self._deny(verified_owner_id, agent_id, "ADOPT", "CORRUPT_REVIEW", {"error": type(error).__name__})
                 raise ConsentDenied("corrupt_review") from None
             # The adopted terms must equal the exact reviewed meaning: the stored
             # terms still hash to the recorded terms_hash, and the meaning binds it.
             if terms.content_hash() != review.terms_hash or meaning.get("terms_hash") != review.terms_hash:
                 session.rollback()
-                self._deny(verified_owner_id, review.agent_id, "ADOPT", "CORRUPT_REVIEW",
+                self._deny(verified_owner_id, agent_id, "ADOPT", "CORRUPT_REVIEW",
                            {"stored_terms_hash": terms.content_hash(), "review_terms_hash": review.terms_hash})
                 raise ConsentDenied("corrupt_review")
-            agent_id = review.agent_id
-            strategy_id = review.strategy_id
-            strategy_revision_id = review.strategy_revision_id
-            saved_content_sha = review.content_sha256
-            saved_manifest_sha = review.manifest_sha256
-            saved_wallet_id = review.wallet_id
-            saved_network_id = review.network_id
-
             if parse_utc(terms.expiry) <= now:
                 session.rollback()
                 self._deny(verified_owner_id, agent_id, "ADOPT", "EXPIRED_TERMS", {"expiry": terms.expiry})
                 raise ConsentDenied("expired_terms")
 
-        with self._factory() as session:
-            current_revision = self._load_owned_revision(session, verified_owner_id, strategy_id,
-                                                         str(strategy_revision_id))
-        if (current_revision is None or current_revision["content_sha256"] != saved_content_sha
-                or current_revision["manifest_sha256"] != saved_manifest_sha):
-            self._deny(verified_owner_id, agent_id, "ADOPT", "REVISION_DRIFTED",
-                       {"strategy_revision_id": str(strategy_revision_id)})
-            raise ConsentDenied("revision_drifted")
-        setup = self._confirmed_setup(verified_owner_id, agent_id)
-        if (setup is None or setup.state != SetupState.CONFIRMED or setup.wallet_id != saved_wallet_id
-                or network_name(setup.network_id) != saved_network_id):
-            self._deny(verified_owner_id, agent_id, "ADOPT", "WALLET_DRIFTED",
-                       {"agent_id": agent_id, "saved_wallet_id": saved_wallet_id})
-            raise ConsentDenied("wallet_drifted")
-
-        with self._factory() as session:
-            review = session.execute(select(ConsentReviewRow).where(
-                ConsentReviewRow.owner_id == verified_owner_id,
-                ConsentReviewRow.review_id == review_id,
-            )).scalar_one()
+            # Serialize competing adopters, then hold the accepted wallet-setup row
+            # lock through commit so a concurrent binding change cannot slip in.
             acquire_review_lock(session, verified_owner_id, review_id)
+            setup_row = load_setup(session, verified_owner_id, agent_id, lock=True)
+            if (setup_row is None or setup_row.state != SetupState.CONFIRMED.value
+                    or setup_row.wallet_id != review.wallet_id
+                    or network_name(setup_row.network_id) != review.network_id):
+                session.rollback()
+                self._deny(verified_owner_id, agent_id, "ADOPT", "WALLET_DRIFTED",
+                           {"agent_id": agent_id, "saved_wallet_id": review.wallet_id})
+                raise ConsentDenied("wallet_drifted")
+            current_revision = self._load_owned_revision(session, verified_owner_id, review.strategy_id,
+                                                         str(review.strategy_revision_id))
+            if (current_revision is None or current_revision["content_sha256"] != review.content_sha256
+                    or current_revision["manifest_sha256"] != review.manifest_sha256):
+                session.rollback()
+                self._deny(verified_owner_id, agent_id, "ADOPT", "REVISION_DRIFTED",
+                           {"strategy_revision_id": str(review.strategy_revision_id)})
+                raise ConsentDenied("revision_drifted")
+
             content = consent_content(
                 review_row=review, meaning=meaning, route=terms.route.model_dump(mode="json"),
                 policy=terms.policy.model_dump(mode="json") if terms.policy is not None else None,
@@ -404,8 +402,7 @@ class ConsentService:
                 existing = find_adoption(session, verified_owner_id, review_id)
                 if existing is not None and existing.consent_hash == expected_consent_hash:
                     return to_consent_view(existing)
-                self._deny(verified_owner_id, agent_id, "ADOPT", "CHANGED_ADOPTION",
-                           {"review_id": str(review_id)})
+                self._deny(verified_owner_id, agent_id, "ADOPT", "CHANGED_ADOPTION", {"review_id": str(review_id)})
                 raise ConsentConflict("changed_adoption") from None
             except SQLAlchemyError:
                 session.rollback()

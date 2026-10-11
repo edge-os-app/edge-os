@@ -70,12 +70,15 @@ A second review for the same `(owner, agent, revision)` with changed terms is a
 `adopt` re-validates the stored review against the current revision and wallet
 binding, re-hashes the stored terms and the reviewed meaning against the recorded
 `terms_hash` and `review_hash`, checks the expiry, then persists one adoption per
-`(owner, review)` under a per-review advisory transaction lock. It binds the
-strategy revision/hash, wallet/network, the reviewed term version/hash, and the
-route/policy identity when present. An identical repeated adoption is idempotent
-with the same `consent_hash`; a changed reuse of the same identity conflicts. A
-crash or a concurrent adopter cannot adopt a different meaning under the same
-identity or create a second consent.
+`(owner, review)` in one transaction. After the per-review advisory lock it
+re-reads the accepted wallet-setup row with the same row lock the wallet-setup
+writer takes (`SELECT ... FOR UPDATE`) and holds it through commit, so a binding
+that becomes unconfirmed between any earlier read and the save is denied. It binds
+the strategy revision/hash, wallet/network, the reviewed term version/hash, and
+the route/policy identity when present. An identical repeated adoption is
+idempotent with the same `consent_hash`; a changed reuse of the same identity
+conflicts. A crash, a concurrent adopter or a concurrent wallet change cannot
+adopt a different meaning under the same identity or create a second consent.
 
 ## Fail-closed denials
 

@@ -18,7 +18,7 @@ run-labelled test database only.
 | Refusal saves no affirmative consent | Packet refusal rule | `test_stale_review_hash_is_denied_and_saves_no_consent`, `test_expired_terms_are_denied`, drift tests | PASS, authored fixtures |
 | Stale/mismatched revision/wallet/network/terms, changed terms, absent/invalid limits, expired terms and drifted bindings are denied | Packet denial list | `test_mismatched_network_wrong_network_asset_and_wallet_revision_are_denied`, `test_changed_terms_for_the_same_revision_conflict`, `test_expired_terms_are_denied`, `test_revision_drift_after_review_denies_adoption`, `test_wallet_drift_after_review_denies_adoption` | PASS, authored fixtures |
 | Missing/unknown versus zero, Boolean/integer coercion, asset units, malformed/blank identifiers, negative/non-finite amounts | Packet failure checks | `tests/consent/test_types_validation.py` | PASS, authored fixtures |
-| Identical repeated adoption idempotent; changed reuse conflicts; concurrent/stale/rollback/lost-response safety; durable exact readback in a new process | Packet atomicity check | `test_repeated_adoption_is_idempotent`, `test_concurrent_adoption_yields_one_consent`, `test_true_process_reopen_reads_the_durable_consent` | PASS, authored fixtures |
+| Identical repeated adoption idempotent; changed reuse conflicts; concurrent/stale/rollback/lost-response safety; durable exact readback in a new process | Packet atomicity check | `test_repeated_adoption_is_idempotent`, `test_concurrent_adoption_yields_one_consent`, `test_second_process_adoption_is_idempotent`, `test_wallet_becoming_unknown_before_the_adoption_lock_denies`, `test_true_process_reopen_reads_the_durable_consent` | PASS, authored fixtures |
 | Consent records/reads change no holdings, allocation, consumed allowances, reservations, claims, pending recovery, stop history, breach state or another agent; cannot reset or raise a budget | Packet isolation check | `tests/consent/test_isolation_inactive.py` | PASS, authored fixtures |
 | API route, UI, production migration | Packet boundary | none | NOT_RUN |
 | Real provider, signer/policy binding, live route, full P26 activation | Packet boundary | none | NOT_RUN |
@@ -39,5 +39,10 @@ in the worker's `.scratch/smux-release-next/p26/evidence/` submission packet.
 - The reviewed terms are authored (`SYNTHETIC`). They are not a numeric product
   mandate, a policy binding or a provider configuration.
 - The route and policy qualification stay `UNQUALIFIED`; no live gate is claimed.
+- The concurrency tests use separate database connections: two threads for
+  competing adoption, and a separate OS process for the cross-process duplicate
+  and reopen checks. The wallet-change regression interleaves two connections in
+  one process. These prove the local database serialization, not a distributed
+  exactly-once guarantee across hosts.
 - The true-process reopen proves durable storage readback, not a distributed
   exactly-once guarantee.

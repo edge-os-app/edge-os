@@ -63,7 +63,11 @@ run-labelled database only, and drops the owned schemas at session end.
   mismatch, unconfirmed wallet, changed terms, stale review, expired terms,
   revision drift and wallet drift.
 - Adoption is idempotent on an identical repeat, conflicts on a changed reuse,
-  and yields exactly one consent under two concurrent adopters.
+  and yields exactly one consent under two concurrent adopters, including a
+  second OS process adopting the same review.
+- A wallet that becomes unconfirmed between the first read and the adoption save
+  is denied: the current binding is re-read under the wallet-setup row lock in the
+  transaction that saves the consent.
 - A genuinely new process reads the same durable consent hash.
 - Review and adoption leave the accepted admission, execution, recovery, stops,
   funding, strategy, wallet and user rows byte-identical, including a

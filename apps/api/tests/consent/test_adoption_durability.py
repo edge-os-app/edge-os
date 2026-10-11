@@ -13,7 +13,8 @@ import threading
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import event, select, text
+from sqlalchemy.orm import Session
 
 import harness
 from consent import _support as support
@@ -172,6 +173,69 @@ def test_concurrent_adoption_yields_one_consent(consent_engine, consent_service,
     rows = session.execute(select(ConsentAdoptionRow)).scalars().all()
     assert len(rows) == 1
     assert rows[0].consent_hash == results[0].consent_hash
+
+
+def test_wallet_becoming_unknown_before_the_adoption_lock_denies(consent_engine, consent_service) -> None:
+    """Deterministic regression: the wallet is changed after the first read, before the save."""
+    revision = support.seed_revision(consent_engine, support.OWNER_A)
+    support.seed_wallet_setup(consent_engine, support.OWNER_A, revision)
+    view = consent_service.review(support.OWNER_A, support.review_request(revision))
+    request = AdoptionRequest(review_id=str(view.review_id), expected_review_hash=view.review_hash)
+
+    at_lock, release = threading.Event(), threading.Event()
+    result: dict = {}
+
+    def pause_at_lock(connection, cursor, statement, parameters, context, executemany):
+        if "pg_advisory_xact_lock" in statement and threading.current_thread().name == "race-adopter":
+            at_lock.set()
+            if not release.wait(15):
+                raise RuntimeError("lock pause timed out")
+
+    def adopter() -> None:
+        try:
+            result["view"] = consent_service.adopt(support.OWNER_A, request)
+        except Exception as error:  # noqa: BLE001 - the denial is the expected outcome
+            result["error"] = error
+
+    event.listen(consent_engine, "before_cursor_execute", pause_at_lock)
+    try:
+        thread = threading.Thread(target=adopter, name="race-adopter")
+        thread.start()
+        assert at_lock.wait(15), "adoption never reached its advisory lock"
+        with consent_engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE public.wallet_setups SET state = 'UNKNOWN', wallet_id = NULL WHERE owner_id = CAST(:owner AS uuid)"),
+                {"owner": support.OWNER_A})
+        release.set()
+        thread.join(15)
+        assert not thread.is_alive(), "adopter did not finish"
+    finally:
+        release.set()
+        event.remove(consent_engine, "before_cursor_execute", pause_at_lock)
+
+    assert isinstance(result.get("error"), ConsentDenied)
+    assert result["error"].code == "wallet_drifted"
+    with Session(consent_engine) as session:
+        assert session.execute(select(ConsentAdoptionRow)).scalars().all() == []
+        assert "WALLET_DRIFTED" in set(session.execute(select(ConsentDenialRow.code)).scalars())
+
+
+def test_second_process_adoption_is_idempotent(consent_engine, consent_service, pg) -> None:
+    view = _review(consent_engine, consent_service)
+    first = consent_service.adopt(support.OWNER_A, AdoptionRequest(review_id=str(view.review_id),
+                                                                   expected_review_hash=view.review_hash))
+
+    result = subprocess.run(
+        [harness.api_python(), str(HERE / "adopt_driver.py"), pg.url, str(support.OWNER_A), str(view.review_id),
+         view.review_hash],
+        capture_output=True, text=True, timeout=60, check=True)
+    second = json.loads(result.stdout)
+
+    assert second["consent_hash"] == first.consent_hash
+    assert second["status"] == "INACTIVE"
+    assert second["adoption_id"] == str(first.adoption_id)
+    with Session(consent_engine) as session:
+        assert len(session.execute(select(ConsentAdoptionRow)).scalars().all()) == 1
 
 
 def test_true_process_reopen_reads_the_durable_consent(consent_engine, consent_service, pg) -> None:
