@@ -10,13 +10,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from edge_os_api.admission.service import AdmissionService
+from edge_os_api.admission.types import AssetAmount
 from edge_os_api.execution.service import ExecutionService
 from edge_os_api.recovery.service import RecoveryService
 from edge_os_api.recovery.types import RecoveryError
 
 from admission._builders import AGENT_A, AGENT_B, BASE, NATIVE, NETWORK, QUOTE, WALLET_A, WALLET_B
-from execution._builders import frozen_entry_exit
-from execution._support import enqueue_entry, entry_inputs, quote
+from execution._builders import exit_terms, frozen_entry_exit, make_inputs, scoped_context
+from execution._support import enqueue_entry, entry_inputs, exit_inputs, open_position, quote
 from execution._support import transport as exec_transport
 from recovery._support import (
     active_claim,
@@ -234,6 +235,65 @@ def test_replayed_foreign_evidence_stays_rejected(
     assert active_claim(recovery_factory, fresh_owner) is not None
 
 
+def test_never_submitted_action_is_blocked(
+        recovery_factory, recovery_service, admission_service, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    _decision, _approval, _context, result = enqueue_entry(execution_service, fresh_owner, revision)
+    action_id = result.intent.action_id
+    assert result.admission_status == "ADMITTED"
+
+    evidence = evidence_for(recovery_factory, fresh_owner, action_id, outcome="CONFIRMED",
+                            actual_input=confirmed_actuals()[0], actual_output=confirmed_actuals()[1],
+                            actual_gas=confirmed_actuals()[2])
+    outcome = recovery_service.reconcile(fresh_owner, action_id, evidence)
+    assert outcome.applied is False
+    assert outcome.case.state == "NO_SUBMISSION_ATTEMPT"
+    assert load_queue(recovery_factory, fresh_owner, action_id).state == "QUEUED"
+    assert active_claim(recovery_factory, fresh_owner) is None
+    assert admission_service.retrieve_receipts(fresh_owner, action_id=action_id) == []
+    assert _balances(admission_service, fresh_owner)[QUOTE].consumed_raw == "0"
+
+
+@pytest.mark.parametrize("field,mismatch_raw", [
+    ("actual_input", "109"), ("actual_output", "9"), ("actual_gas", "3"),
+])
+def test_crash_convergence_rejects_mismatched_actuals(
+        recovery_factory, recovery_service, admission_service, execution_service, fresh_owner,
+        field, mismatch_raw) -> None:
+    revision = frozen_entry_exit()
+    _approval, _context, result = open_unknown_entry(execution_service, fresh_owner, revision)
+    action_id = result.intent.action_id
+    actual_input, actual_output, actual_gas = confirmed_actuals()
+    good = evidence_for(recovery_factory, fresh_owner, action_id, outcome="CONFIRMED",
+                        actual_input=actual_input, actual_output=actual_output, actual_gas=actual_gas)
+
+    # The P22 terminal receipt is committed with the good actuals; P23 stays stale.
+    settlement = admission_service.reconcile(fresh_owner, action_id, good.receipt())
+    assert settlement.decision_status == "CONFIRMED"
+    assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_UNKNOWN"
+
+    amounts = {"actual_input": actual_input, "actual_output": actual_output, "actual_gas": actual_gas}
+    amounts[field] = AssetAmount(asset_id=amounts[field].asset_id, raw=mismatch_raw, decimals=0)
+    divergent = evidence_for(recovery_factory, fresh_owner, action_id, outcome="CONFIRMED", **amounts)
+    outcome = recovery_service.reconcile(fresh_owner, action_id, divergent)
+    assert outcome.applied is False
+    assert outcome.case.state == "DISCREPANCY"
+    assert outcome.case.blocking_reason == f"P22_RECEIPT_MISMATCH:{field}"
+    assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_UNKNOWN"
+
+
+def test_delayed_exit_reports_blocking_reason(
+        recovery_service, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    action_id = _unknown_exit(execution_service, fresh_owner, revision)
+    view = recovery_service.status(fresh_owner, action_id)
+    assert view.operation == "EXIT"
+    assert view.state == "UNKNOWN"
+    assert view.delayed_exit is True
+    assert view.claim_held is True
+    assert view.blocking_reason == "SUBMISSION_UNKNOWN"
+
+
 def test_restart_after_reconcile_converges_stale_queue_without_second_accounting(
         recovery_factory, recovery_service, admission_service, execution_service, fresh_owner) -> None:
     revision = frozen_entry_exit()
@@ -319,6 +379,27 @@ def test_foreign_owner_action_is_not_found(recovery_service) -> None:
     # No saved action exists for this owner/action pair; the lookup fails closed.
     with pytest.raises(RecoveryError):
         recovery_service.status(owner, "p23:does-not-exist:ENTRY")
+
+
+def _unknown_exit(service, owner, revision):
+    """Open a position, then leave an exit in the submission-unknown state."""
+    approval, _context = open_position(service, owner, revision)
+    position_context = scoped_context(position_inventory="10", position_id="position-1",
+                                      revision_id=revision.revision_id)
+    decision = service.evaluate_and_decide(
+        owner, revision, make_inputs(["90"], ["5"], position_open=True),
+        agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK)
+    enqueued = service.enqueue(owner, decision.decision_id,
+                               exit_terms(position_id="position-1", quantity="5"),
+                               approval, position_context)
+    assert enqueued.admission_status == "ADMITTED", enqueued.admission_reason
+    tick = service.tick(
+        owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
+        context=position_context, revision=revision, inputs=exit_inputs(),
+        quote=quote(enqueued.intent.action_id, revision, "250"),
+        transport=exec_transport("UNKNOWN", action_id=enqueued.intent.action_id))
+    assert tick.status == "SUBMITTED_UNKNOWN", tick
+    return enqueued.intent.action_id
 
 
 def _foreign_binding(intent) -> object:

@@ -37,6 +37,7 @@ NOW = text("now()")
 CASE_STATES = (
     "OPEN", "CONFIRMED", "REVERTED", "DENIED_UNSENT", "UNKNOWN",
     "BREACHED", "RECONCILE_MISMATCH", "DISCREPANCY", "NO_ADMISSION_DECISION",
+    "NO_SUBMISSION_ATTEMPT",
 )
 EVIDENCE_STATES = ("PENDING", "ACCEPTED", "REJECTED")
 
@@ -80,7 +81,7 @@ class RecoveryCaseRow(RecoveryBase):
         UniqueConstraint("owner_id", "action_id", name="uq_recovery_cases_owner_action"),
         CheckConstraint(
             "state IN ('OPEN','CONFIRMED','REVERTED','DENIED_UNSENT','UNKNOWN','BREACHED',"
-            "'RECONCILE_MISMATCH','DISCREPANCY','NO_ADMISSION_DECISION')",
+            "'RECONCILE_MISMATCH','DISCREPANCY','NO_ADMISSION_DECISION','NO_SUBMISSION_ATTEMPT')",
             name="ck_recovery_cases_state",
         ),
         Index("ix_recovery_cases_owner_wallet", "owner_id", "wallet_id", "network_id"),

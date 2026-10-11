@@ -97,6 +97,28 @@ class _Context:
     decision_status: str | None
 
 
+# A queue state that proves the original action reached a submission-capable
+# step. A merely admitted or queued action has not been attempted.
+_SUBMISSION_OWNED_STATES = {"CLAIMED", "SUBMITTED_UNKNOWN", "BREACHED", "RECONCILE_MISMATCH"}
+
+
+def _submission_owned(context: _Context) -> bool:
+    """True when the original action reached a submission-capable state.
+
+    Recovery settles only an action that was actually attempted: it has a saved
+    P23 submission attempt, an active exclusive claim, a submission-owned P22
+    decision, or a submission-owned queue state. An action that was only admitted
+    or queued has no original attempt to recover.
+    """
+    if context.attempt is not None:
+        return True
+    if context.claim is not None:
+        return True
+    if context.decision_status == "SUBMISSION_UNKNOWN":
+        return True
+    return context.queue is not None and context.queue.state in _SUBMISSION_OWNED_STATES
+
+
 class RecoveryService:
     def __init__(self, session_factory: sessionmaker[Session], admission: AdmissionService,
                  execution: ExecutionService, *, clock=None) -> None:
@@ -158,6 +180,24 @@ class RecoveryService:
                                           duplicate=False, decision_status=context.decision_status or "",
                                           detail=reference)
 
+                # Recovery only settles an action that actually reached a
+                # submission-capable original state. An admitted but never
+                # attempted action has nothing to reconcile, so it is blocked
+                # rather than confirmed.
+                if not _submission_owned(context):
+                    if existing is None:
+                        existing = self._record_evidence(
+                            session, case, evidence, "REJECTED", "NO_SUBMISSION_ATTEMPT", now)
+                    existing.state = "REJECTED"
+                    existing.rejection_reason = "NO_SUBMISSION_ATTEMPT"
+                    case.state = "NO_SUBMISSION_ATTEMPT"
+                    case.blocking_reason = "NO_SUBMISSION_ATTEMPT"
+                    case.updated_at = now
+                    session.commit()
+                    return RecoveryResult(case=self._case_view(session, case), applied=False,
+                                          duplicate=False, decision_status=context.decision_status or "",
+                                          detail="NO_SUBMISSION_ATTEMPT")
+
                 if existing is None:
                     existing = self._record_evidence(session, case, evidence, "PENDING", None, now)
 
@@ -180,7 +220,22 @@ class RecoveryService:
                                           detail=existing.rejection_reason)
 
                 if decision_status in _SETTLED_DECISIONS:
-                    # Crash convergence: P22 settled but the P23 queue is stale.
+                    # Crash convergence: P22 settled but the P23 queue is stale. The
+                    # saved P22 receipt is authoritative, so the evidence actuals
+                    # must match it before the queue converges.
+                    mismatch = self._terminal_receipt_mismatch(
+                        verified_owner_id, action_id, evidence)
+                    if mismatch is not None:
+                        existing.state = "REJECTED"
+                        existing.rejection_reason = mismatch
+                        case.state = "DISCREPANCY"
+                        case.blocking_reason = mismatch
+                        case.decision_status = decision_status
+                        case.updated_at = now
+                        session.commit()
+                        return RecoveryResult(case=self._case_view(session, case), applied=False,
+                                              duplicate=False, decision_status=decision_status,
+                                              detail=mismatch)
                     effective_status, effective_reason = decision_status, None
                 else:
                     reconciliation = self._admission.reconcile(
@@ -347,6 +402,30 @@ class RecoveryService:
             ClaimRow.owner_id == owner, ClaimRow.agent_id == intent.agent_id,
             ClaimRow.wallet_id == intent.wallet_id, ClaimRow.network_id == intent.network_id,
             ClaimRow.released_at.is_(None)).limit(1)).scalar_one_or_none() is not None
+
+    @staticmethod
+    def _amount_dict(amount) -> dict[str, object] | None:
+        if amount is None:
+            return None
+        return {"asset_id": amount.asset_id, "raw": amount.raw, "decimals": amount.decimals}
+
+    def _terminal_receipt_mismatch(self, owner: uuid.UUID, action_id: str,
+                                   evidence: OutcomeEvidence) -> str | None:
+        """Compare evidence actuals with the saved P22 terminal receipt.
+
+        A settled P22 receipt is authoritative. Crash convergence must not accept
+        evidence whose outcome or actual input, output or gas differs from that
+        receipt, so a mismatch stays visible and blocked.
+        """
+        receipts = [row for row in self._admission.retrieve_receipts(
+            owner, action_id=action_id) if row.outcome == evidence.outcome]
+        if not receipts:
+            return "P22_RECEIPT_MISSING"
+        saved = receipts[-1].content
+        for name in ("actual_input", "actual_output", "actual_gas"):
+            if saved.get(name) != self._amount_dict(getattr(evidence, name)):
+                return f"P22_RECEIPT_MISMATCH:{name}"
+        return None
 
     def _case_view(self, session: Session, case: RecoveryCaseRow) -> RecoveryCaseView:
         evidence = session.execute(select(RecoveryEvidenceRow).where(

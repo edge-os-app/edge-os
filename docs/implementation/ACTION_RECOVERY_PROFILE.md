@@ -48,6 +48,17 @@ is rejected as `OPERATION_MISMATCH`, `REVISION_MISMATCH`, `POLICY_MISMATCH` or
 `PAYLOAD_MISMATCH`. A rejection is recorded and shown as a discrepancy; it never
 reaches the P22 ledger and never releases a reservation or claim.
 
+## Original-attempt binding
+
+Recovery settles only an action that reached a submission-capable original
+state. It requires at least one of: a saved P23 submission attempt, an active
+exclusive claim, a submission-owned P22 decision, or a submission-owned queue
+state. An action that was only admitted or queued, with no original attempt, has
+nothing to reconcile. Recovery blocks it with `NO_SUBMISSION_ATTEMPT` and changes
+no P22 or P23 row. A proved pre-broadcast denial for a genuine interrupted
+original attempt stays available, because that attempt leaves a saved attempt row
+or a submission-owned state.
+
 ## Controlled outcome evidence
 
 `OutcomeEvidence` is authored local fixture evidence, not a real provider or
@@ -102,6 +113,12 @@ Recovery is idempotent and crash-safe:
   but before the P23 queue converges leaves the action settled in P22; on restart
   recovery detects the settled decision and converges the P23 queue and claim
   without a second reconciliation or a second economic call.
+- On that convergence path the saved P22 terminal receipt is authoritative. The
+  delivered evidence is compared against the saved receipt's actual input, output
+  and gas before the queue converges. A mismatch stays a visible, blocked
+  `DISCREPANCY` (`P22_RECEIPT_MISMATCH:actual_input|actual_output|actual_gas`) and
+  the queue is not mutated. The owner never sees incompatible actuals for one
+  action.
 - A stale P23 queue after a crash therefore converges to the settled P22 state
   once, with no duplicate fees and no released unknown exposure.
 
