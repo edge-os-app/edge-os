@@ -1397,3 +1397,80 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await page.getByRole("button", { name: "Research" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 });
+
+test("P17 wallet setup: prepare, dispatch, uncertain and cancelled states through the saved revision", async ({ page }, info) => {
+  const project = info.project.name;
+  const saved = JSON.parse(fs.readFileSync(resultsFile, "utf8"));
+  const thesis = saved[`thesis-${project}`];
+  expect(thesis && thesis.url, "the thesis test must have saved a revision first").toBeTruthy();
+  await open(page, tokens.a);
+  await page.goto(thesis.url);
+  const setup = page.getByRole("region", { name: "Agent wallet setup" });
+  await expect(setup).toBeVisible();
+  await expect(setup).toContainText("authored local fixture");
+  await expect(setup).toContainText("It is not a real wallet or provider");
+
+  const dispatchPosts = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/v1\/wallet-setup\/agents\/[^/]+\/dispatch$/.test(new URL(request.url()).pathname)) {
+      dispatchPosts.push(new URL(request.url()).pathname);
+    }
+  });
+
+  // 1. An exact saved revision prepares one durable setup, then one creation binds a wallet.
+  const agentId = `p17-wallet-${project}`;
+  await setup.getByLabel("Agent ID").fill(agentId);
+  await setup.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setup.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setup.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await setup.getByRole("button", { name: "Create wallet now" }).click();
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
+  const walletId = (await setup.getByTestId("wallet-setup-wallet").innerText()).trim();
+  expect(walletId.startsWith("fixture:")).toBe(true);
+  expect(dispatchPosts).toHaveLength(1);
+  await shot(page, project, "p17-wallet-confirmed");
+
+  // 2. A reload reconciles the saved identity by reading; it never replays a creation.
+  await page.reload();
+  const setupAfterReload = page.getByRole("region", { name: "Agent wallet setup" });
+  await setupAfterReload.getByLabel("Agent ID").fill(agentId);
+  await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
+  await expect(setupAfterReload.getByTestId("wallet-setup-wallet")).toHaveText(walletId);
+  expect(dispatchPosts).toHaveLength(1);
+
+  // 3. A lost response stays unknown and offers no second creation.
+  const lostAgent = `p17-lost-${project}-fixture-lost-response`;
+  await setupAfterReload.getByLabel("Agent ID").fill(lostAgent);
+  await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await setupAfterReload.getByRole("button", { name: "Create wallet now" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Outcome unknown");
+  await expect(setupAfterReload.getByTestId("wallet-setup-wallet")).toHaveText("Not bound");
+  await expect(setupAfterReload.getByRole("button", { name: "Create wallet now" })).toHaveCount(0);
+  await expect(setupAfterReload.getByRole("button", { name: "Check the saved setup again" })).toBeVisible();
+  await shot(page, project, "p17-wallet-unknown");
+
+  // 4. A pre-dispatch cancel is a proved cancellation with no creation call.
+  const cancelAgent = `p17-cancel-${project}`;
+  await setupAfterReload.getByLabel("Agent ID").fill(cancelAgent);
+  await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await setupAfterReload.getByRole("button", { name: "Cancel before creating" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Cancelled before dispatch");
+  await expect(setupAfterReload).toContainText("No creation call was made");
+  await shot(page, project, "p17-wallet-cancelled");
+
+  record(`p17-setup-${project}`, {
+    revisionId: thesis.revisionId,
+    confirmed: { agentId, walletId },
+    unknown: { agentId: lostAgent },
+    cancelled: { agentId: cancelAgent },
+    dispatchPostPaths: dispatchPosts,
+  });
+});

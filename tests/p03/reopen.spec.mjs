@@ -264,4 +264,25 @@ test("after an API restart the saved rules reopen with their exact review text",
   }
   expect(p19Writes, "reopen after API restart must only issue reads").toBe(0);
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-account-context-reopened-after-restart.png`), fullPage: true });
+
+  const p17Setup = results[`p17-setup-${info.project.name}`];
+  const p17Thesis = results[`thesis-${info.project.name}`];
+  expect(p17Setup && p17Thesis, "the first browser drive must save a P17 wallet setup").toBeTruthy();
+  let p17Dispatches = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/v1\/wallet-setup\/agents\/[^/]+\/dispatch$/.test(new URL(request.url()).pathname)) p17Dispatches += 1;
+  });
+  await page.goto(p17Thesis.url);
+  const reopenedSetup = page.getByRole("region", { name: "Agent wallet setup" });
+  await reopenedSetup.getByLabel("Agent ID").fill(p17Setup.confirmed.agentId);
+  await reopenedSetup.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(reopenedSetup.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
+  await expect(reopenedSetup.getByTestId("wallet-setup-wallet")).toHaveText(p17Setup.confirmed.walletId);
+  await expect(reopenedSetup.getByTestId("wallet-setup-wallet")).toHaveText(/^fixture:/);
+  await reopenedSetup.getByLabel("Agent ID").fill(p17Setup.unknown.agentId);
+  await reopenedSetup.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(reopenedSetup.getByTestId("wallet-setup-state")).toHaveText("Outcome unknown");
+  await expect(reopenedSetup.getByRole("button", { name: "Create wallet now" })).toHaveCount(0);
+  expect(p17Dispatches, "reopen after API restart must never replay a wallet creation").toBe(0);
+  await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p17-wallet-setup-reopened-after-restart.png`), fullPage: true });
 });

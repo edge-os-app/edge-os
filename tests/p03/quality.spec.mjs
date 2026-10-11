@@ -778,3 +778,72 @@ test("P19 expanded permission histories keep every saved value inside the viewpo
       .toBe(true);
   }
 });
+
+test("P17 wallet setup surface keeps controls usable and meets accessibility checks", async ({ page }, info) => {
+  const width = info.project.name === "desktop" ? 1280 : 390;
+  await page.setViewportSize({ width, height: 900 });
+  await open(page, tokens.a);
+  await publishSpotReplayStrategy(page);
+  const setup = page.getByRole("region", { name: "Agent wallet setup" });
+  await expect(setup).toBeVisible();
+  await expect(setup).toContainText("authored local fixture");
+
+  const axeTags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+  const overflow = () => page.evaluate(() => ({ innerWidth: window.innerWidth, documentWidth: document.documentElement.scrollWidth }));
+  const serious = async () => (await new AxeBuilder({ page }).withTags(axeTags).analyze()).violations
+    .filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""))
+    .map((violation) => ({ id: violation.id, help: violation.help }));
+
+  const states = {};
+  const inspect = async (name) => {
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+    states[name] = { small: await smallControls(page), serious: await serious(), contrast: await lowContrast(page),
+      overflow: await overflow() };
+    await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p17-quality-${name}.png`), fullPage: true });
+  };
+
+  // Confirmed empty state: no setup saved yet.
+  await inspect("empty");
+
+  // Saved, not dispatched: the setup records before any creation.
+  const confirmedAgent = `q17-wallet-${info.project.name}`;
+  await setup.getByLabel("Agent ID").fill(confirmedAgent);
+  await setup.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setup.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setup.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await inspect("saved");
+  await setup.getByRole("button", { name: "Create wallet now" }).focus();
+  await expect(setup.getByRole("button", { name: "Create wallet now" })).toBeFocused();
+  await setup.getByRole("button", { name: "Create wallet now" }).click();
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
+  await inspect("confirmed");
+
+  // Unknown state: a lost response stays uncertain.
+  const lostAgent = `q17-lost-${info.project.name}-fixture-lost-response`;
+  await setup.getByLabel("Agent ID").fill(lostAgent);
+  await setup.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setup.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setup.getByRole("button", { name: "Save wallet setup" }).click();
+  await setup.getByRole("button", { name: "Create wallet now" }).click();
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Outcome unknown");
+  await inspect("unknown");
+
+  // Cancelled before dispatch.
+  const cancelAgent = `q17-cancel-${info.project.name}`;
+  await setup.getByLabel("Agent ID").fill(cancelAgent);
+  await setup.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setup.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setup.getByRole("button", { name: "Save wallet setup" }).click();
+  await setup.getByRole("button", { name: "Cancel before creating" }).click();
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Cancelled before dispatch");
+  await inspect("cancelled");
+
+  fs.writeFileSync(path.join(outDir, `p17-accessibility-${info.project.name}.json`), JSON.stringify(states, null, 2));
+  for (const [name, result] of Object.entries(states)) {
+    expect(result.small, `${name} controls: ${JSON.stringify(result.small)}`).toEqual([]);
+    expect(result.serious, `${name} axe: ${JSON.stringify(result.serious)}`).toEqual([]);
+    expect(result.contrast, `${name} contrast: ${JSON.stringify(result.contrast)}`).toEqual([]);
+    expect(result.overflow.documentWidth, `${name} must not widen the page`).toBeLessThanOrEqual(width);
+  }
+});

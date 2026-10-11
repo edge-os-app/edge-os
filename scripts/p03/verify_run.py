@@ -410,6 +410,10 @@ def main() -> int:
                 ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
                 storage_before_restart = p13_storage_snapshot(pg)
                 rec.write("p13-storage-before-restart.json", storage_before_restart)
+                p17_before_restart = p17_inspection(pg, results)
+                rec.write("p17-inspection.json", p17_before_restart)
+                ok &= rec.step("P17 wallet-setup rows match the UI run (direct SQL and event counts)",
+                               p17_before_restart["all_checks_pass"], p17_before_restart["checks"])
 
                 # cross-owner denial against the real saved rows
                 denial = ownership_drive(pg, api_url, token_a, token_b)
@@ -425,6 +429,9 @@ def main() -> int:
                 ok &= rec.step("saved revision reopens unchanged after restart (new browser context)", code == 0, {"exit": code})
                 after_restart = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
                 ok &= rec.step("records unchanged by the restart", after_restart["checks"] == inspection["checks"])
+                p17_after_restart = p17_inspection(pg, results)
+                ok &= rec.step("P17 wallet-setup rows and event counts unchanged by the restart",
+                               p17_after_restart["checks"] == p17_before_restart["checks"])
                 storage_after_restart = p13_storage_snapshot(pg)
                 rec.write("p13-storage-after-restart.json", storage_after_restart)
                 ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",
@@ -870,6 +877,65 @@ def p13_storage_snapshot(pg: harness.Postgres) -> dict[str, list[dict]]:
             "spot_replay_configurations": [item["row"] for item in configuration_rows]}
 
 
+def p17_inspection(pg: harness.Postgres, results: dict) -> dict:
+    """Direct-SQL evidence for the P17 wallet-setup rows the browser drive created and read.
+
+    The durable append-only events stand in for the fixture call counter: exactly one
+    `DISPATCH_INTENT` per dispatched agent and none for a pre-dispatch cancel.
+    """
+    checks: list[dict] = []
+
+    def expect(name: str, condition: bool) -> None:
+        checks.append({"name": name, "pass": bool(condition)})
+
+    def agents(*agent_ids: str) -> str:
+        return ", ".join(sql_literal(agent_id) for agent_id in agent_ids)
+
+    for project in ("desktop", "mobile-390"):
+        entry = results.get(f"p17-setup-{project}")
+        expect(f"p17 {project} result recorded", bool(entry))
+        if not entry:
+            continue
+        confirmed, unknown, cancelled = entry["confirmed"], entry["unknown"], entry["cancelled"]
+        expect(f"p17 {project} one setup row per agent",
+               pg.psql("select count(*) from wallet_setups where agent_id in "
+                       f"({agents(confirmed['agentId'], unknown['agentId'], cancelled['agentId'])})") == "3")
+        stage = pg.psql("select string_agg(e.event_type, ',' order by e.sequence) from wallet_setups s "
+                        "join wallet_setup_events e using (setup_id) "
+                        f"where s.agent_id = {sql_literal(confirmed['agentId'])}")
+        expect(f"p17 {project} confirmed agent event order",
+               stage == "PREPARED,DISPATCH_INTENT,RESULT_RETURNED,WALLET_BOUND")
+        expect(f"p17 {project} confirmed row is CONFIRMED and bound to the UI wallet",
+               pg.psql("select state || '|' || coalesce(wallet_id, '') from wallet_setups "
+                       f"where agent_id = {sql_literal(confirmed['agentId'])}") == f"CONFIRMED|{confirmed['walletId']}")
+        expect(f"p17 {project} confirmed row binds the exact saved revision",
+               pg.psql("select strategy_revision_id from wallet_setups "
+                       f"where agent_id = {sql_literal(confirmed['agentId'])}") == entry["revisionId"])
+        expect(f"p17 {project} exactly one creation call for the confirmed agent",
+               pg.psql("select count(*) from wallet_setups s join wallet_setup_events e using (setup_id) "
+                       f"where s.agent_id = {sql_literal(confirmed['agentId'])} "
+                       "and e.event_type = 'DISPATCH_INTENT'") == "1")
+        unknown_state, unknown_reason, unknown_wallet = (
+            pg.psql("select state || '|' || coalesce(reason, '') || '|' || coalesce(wallet_id, '') "
+                    f"from wallet_setups where agent_id = {sql_literal(unknown['agentId'])}").split("|") + ["", "", ""])[:3]
+        expect(f"p17 {project} unknown row stays UNKNOWN with no bound wallet",
+               unknown_state == "UNKNOWN" and unknown_wallet == "")
+        expect(f"p17 {project} unknown row records a safe reason",
+               unknown_reason in {"RESPONSE_LOST", "PROVIDER_UNAVAILABLE", "MALFORMED_RESULT"})
+        cancel_state, cancel_reason, cancel_intent = (
+            pg.psql("select state || '|' || coalesce(reason, '') || '|' || cancellation_intent "
+                    f"from wallet_setups where agent_id = {sql_literal(cancelled['agentId'])}").split("|") + ["", "", ""])[:3]
+        expect(f"p17 {project} cancel row is FAILED with the cancellation reason",
+               cancel_state == "FAILED" and cancel_reason == "CANCELLED_BEFORE_DISPATCH")
+        expect(f"p17 {project} cancel keeps the separate cancellation intent",
+               cancel_intent == "REQUESTED_BEFORE_DISPATCH")
+        expect(f"p17 {project} cancel made zero creation calls",
+               pg.psql("select count(*) from wallet_setups s join wallet_setup_events e using (setup_id) "
+                       f"where s.agent_id = {sql_literal(cancelled['agentId'])} "
+                       "and e.event_type = 'DISPATCH_INTENT'") == "0")
+    return {"all_checks_pass": all(check["pass"] for check in checks), "checks": checks}
+
+
 def sql_literal(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
@@ -942,8 +1008,24 @@ def ownership_drive(pg: harness.Postgres, api_url: str, token_a: str, token_b: s
         effect_ok = (results["read_other_effect_run"] == 404 and results["list_other_effect_runs"] == 404
             and results["attempt_other_effect_run"] == 404 and results["owner_a_reads_effect_run"] == 200
             and before_events == after_events and before_reports == after_reports)
+    setup_agent = pg.psql("select agent_id from wallet_setups order by created_at, agent_id limit 1")
+    if setup_agent:
+        results["read_other_setup"] = http("GET", f"{api_url}/v1/wallet-setup/agents/{setup_agent}", token_b)[0]
+        results["dispatch_other_setup"] = http("POST", f"{api_url}/v1/wallet-setup/agents/{setup_agent}/dispatch",
+                                               token_b)[0]
+        results["cancel_other_setup"] = http("POST", f"{api_url}/v1/wallet-setup/agents/{setup_agent}/cancel",
+                                             token_b)[0]
+        setup_rows_before = pg.psql("select count(*) from wallet_setups")
+        results["owner_a_reads_setup"] = http("GET", f"{api_url}/v1/wallet-setup/agents/{setup_agent}", token_a)[0]
+        results["setup_rows_before_after"] = [setup_rows_before, pg.psql("select count(*) from wallet_setups")]
+        setup_ok = (results["read_other_setup"] == 404 and results["dispatch_other_setup"] == 404
+                    and results["cancel_other_setup"] == 404 and results["owner_a_reads_setup"] == 200
+                    and setup_rows_before == results["setup_rows_before_after"][1])
+    else:
+        setup_ok = False
     return {**results, "all_denied": all(c == 404 for c in denied) and results["publish_other_draft_real_body"] == 404
-            and results["owner_a_still_reads"] == 200 and rows_unchanged == "1" and investigation_ok and effect_ok}
+            and results["owner_a_still_reads"] == 200 and rows_unchanged == "1" and investigation_ok and effect_ok
+            and setup_ok}
 
 
 if __name__ == "__main__":

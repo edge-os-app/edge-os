@@ -157,7 +157,7 @@ export function WalletSetup({ agentId, revision, onClose }: {
             <dt>Requested network</dt><dd>{record.network_id}</dd>
             <dt>Strategy revision</dt><dd className="mono">{record.strategy_revision_id}</dd>
             <dt>Cancellation intent</dt><dd>{record.cancellation_intent}</dd>
-            <dt>Wallet</dt><dd className="mono">{record.wallet_id ?? "Not bound"}</dd>
+            <dt>Wallet</dt><dd className="mono" data-testid="wallet-setup-wallet">{record.wallet_id ?? "Not bound"}</dd>
             <dt>Updated</dt><dd><time dateTime={record.updated_at}>{record.updated_at}</time></dd>
           </dl>
           <p>Requested network is an application binding. It does not prove provider-chain enforcement.</p>
