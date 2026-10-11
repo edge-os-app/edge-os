@@ -86,20 +86,25 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def __init__(self, *, policy: GuardPolicy, credential_file: Path | None = None, seal_grace_seconds: float = 5.0,
                  **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        for label, value in (("timeout_seconds", self.timeout_seconds), ("seal_grace_seconds", seal_grace_seconds)):
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-                raise ValueError(f"{label} must be a finite number")  # a NaN would switch every deadline off
+        self._check_deadline_settings(self.timeout_seconds, seal_grace_seconds)
         self.policy, self.credential_file, self.seal_grace_seconds = policy, credential_file, seal_grace_seconds
         self._turn_lock = threading.Lock()
         self._token = uuid.uuid4().hex[:6]  # two runner objects with one run_id must not share container names
 
+    @staticmethod
+    def _check_deadline_settings(timeout: Any, grace: Any) -> None:
+        for label, value in (("timeout_seconds", timeout), ("seal_grace_seconds", grace)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f"{label} must be a finite number")  # a NaN would switch every deadline off
+
     def _plan(self) -> _TurnPlan:
         with self._turn_lock:
-            self.turn_count += 1
-            sequence = self.turn_count
             policy, source, timeout = self.policy, self.credential_file, self.timeout_seconds
             image, run_id, budget, forbidden = self.image, self.run_id, self.run_budget_seconds, tuple(self.forbidden)
             grace = self.seal_grace_seconds
+            self._check_deadline_settings(timeout, grace)  # before a turn number is used or anything starts
+            self.turn_count += 1
+            sequence = self.turn_count
         secret = None
         if source is not None:
             try:
@@ -165,6 +170,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         """Remove `root` and everything under it, making locked folders ours first. Raises `TimeoutError` after `until`."""
         pending: list[tuple[Path, bool]] = [(root, False)]
         while pending:
+            if time.monotonic() > until:  # every step ticks the clock, including the removal of an empty folder
+                raise TimeoutError("removal passed its time limit")
             path, emptied = pending.pop()
             if emptied:
                 path.rmdir()
@@ -181,7 +188,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                         os.unlink(entry.path)
 
     def _quarantine(self, output: Path, plan: _TurnPlan) -> None:
-        """Take evidence that cannot be proved clean out of reach. Never raises anything but `EvidenceNotSealed`.
+        """Take evidence that cannot be proved clean out of reach. It returns when the folder is gone, else raises `EvidenceNotSealed`.
 
         Removal has the rest of the turn's budget (a tenth of a second at least, so a small output is always removed).
         If it is not finished by then, the rest is MOVED, in one step, to a private `quarantine-*` folder beside the turn
@@ -189,10 +196,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         """
         try:
             self._remove_tree(output, max(plan.deadline, time.monotonic() + 0.1))
-        except TimeoutError:
+        except Exception:  # noqa: BLE001 - out of time, or the plain walk cannot go on: never an unbounded removal; move it
             pass
-        except Exception:  # noqa: BLE001 - a path too long for the plain walk, or a surprise: the fd-based removal may still work
-            shutil.rmtree(output, ignore_errors=True)
         if not output.exists():
             return
         held = output.parent.parent / f"quarantine-{output.parent.name}-{uuid.uuid4().hex[:6]}"
@@ -201,12 +206,20 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             held.chmod(0o700)
         except OSError as error:
             raise EvidenceNotSealed("evidence that may hold the credential could not be removed or moved") from error
-        raise EvidenceNotSealed("evidence that may hold the credential was not removed in time; it is in a private quarantine folder")
+        raise EvidenceNotSealed(f"evidence that may hold the credential was not removed in time; it is in the private folder {held.name}")
 
     def purge_quarantine(self) -> None:
-        """Remove every quarantine folder. This has no clock: run it between turns."""
+        """Remove every quarantine folder. This has no clock: run it between turns. Raises if any folder is left."""
+        left = []
         for held in self.evidence_dir.glob("quarantine-*"):
-            self._remove_tree(held, float("inf"))
+            try:
+                self._remove_tree(held, float("inf"))
+            except Exception:  # noqa: BLE001 - e.g. a chain longer than the path limit: the fd-based removal copes with that
+                shutil.rmtree(held, ignore_errors=True)
+            if held.exists():
+                left.append(held.name)
+        if left:
+            raise EvidenceNotSealed(f"quarantine folders are still there: {', '.join(left)}")
 
     def _seal(self, output: Path, plan: _TurnPlan) -> bool:
         """Seal the output. Any failure at all removes it and raises `EvidenceNotSealed`."""
@@ -279,10 +292,10 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         if launch.proc is None or launch.stopped:
             return
         if launch.stopping:  # the stop was tried in this turn and failed: no renewed commands, no fresh budget
-            raise EvidenceNotSealed("a container that may still write could not be stopped")
+            raise EvidenceNotSealed(f"container {plan.name} may still write and could not be stopped")
         launch.stopping = self._stop_owned(plan, launch.proc)
         if not launch.stopping["container_absent"]:
-            raise EvidenceNotSealed("a container that may still write could not be stopped")
+            raise EvidenceNotSealed(f"container {plan.name} may still write and could not be stopped")
         launch.stopped = True
 
     # --- One turn -------------------------------------------------------------------------------------------------
@@ -300,11 +313,12 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             try:  # the same two steps as on success
                 self._confirm_stopped(plan, launch)
                 self._seal(output, plan)
-            except BaseException:  # an interrupt here counts too: the evidence goes
+            except BaseException as cleanup_error:  # an interrupt here counts too: the evidence goes
                 self._quarantine(output, plan)  # raises EvidenceNotSealed unless the folder was removed
-                if isinstance(failure, Exception):  # say that the container or the evidence could not be secured
-                    raise EvidenceNotSealed("the turn failed and its container or evidence could not be secured") from failure
-            raise  # an interrupt, or a failure after which everything was secured, propagates as it was
+                if isinstance(failure, Exception) and not isinstance(failure, EvidenceNotSealed):  # say it, with the cause
+                    detail = str(cleanup_error) if isinstance(cleanup_error, EvidenceNotSealed) else type(cleanup_error).__name__
+                    raise EvidenceNotSealed(f"the turn failed and its container or evidence could not be secured ({detail})") from failure
+            raise  # an interrupt, a failure already reported as EvidenceNotSealed, or one after which all was secured
         try:
             self._confirm_stopped(plan, launch)
             self._seal(output, plan)

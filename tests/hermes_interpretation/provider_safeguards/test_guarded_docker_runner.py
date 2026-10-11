@@ -361,6 +361,27 @@ def test_a_container_that_is_not_ours_or_will_not_stop_fails_the_turn_without_a_
 
 # --- Repairs after round-5 reviews: one exception-safe lifecycle ----------------------------------------------------
 
+def write_deep_chain(output: Path, depth: int, files: int = 0, secret: str | None = None) -> None:
+    """Builds a folder chain longer than the host path limit with directory file descriptors, never with chdir.
+
+    The working directory belongs to the whole process, so a test that changes it can write into another test's folder.
+    """
+    fd = os.open(output, os.O_RDONLY)
+    try:
+        for _ in range(depth):
+            os.mkdir("a", dir_fd=fd)
+            below = os.open("a", os.O_RDONLY, dir_fd=fd)
+            os.close(fd)
+            fd = below
+        names = [f"f{index}.log" for index in range(files)] + ([] if secret is None else ["deep.log"])
+        for name in names:
+            handle = os.open(name, os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd)
+            os.write(handle, (secret if name == "deep.log" else "x").encode())
+            os.close(handle)
+    finally:
+        os.close(fd)
+
+
 def run_expecting(runner, exception) -> None:
     with pytest.raises(exception):
         runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
@@ -491,15 +512,7 @@ def test_a_directory_chain_longer_than_the_path_limit_cannot_keep_the_credential
     credential.write_text(OLD)
 
     def behaviour(output: Path) -> None:
-        origin = os.getcwd()
-        try:
-            os.chdir(output)
-            for _ in range(700):  # about 1,400 characters of path: more than the host path limit
-                os.mkdir("a")
-                os.chdir("a")
-            Path("deep.log").write_text(OLD)
-        finally:
-            os.chdir(origin)
+        write_deep_chain(output, 700, secret=OLD)  # about 1,400 characters of path: more than the host path limit
 
     install_process(monkeypatch, behaviour)
     runner, _, _ = build(tmp_path, credential)
@@ -997,3 +1010,128 @@ def test_a_timeout_or_grace_that_is_not_a_finite_number_is_refused_at_constructi
 
     with pytest.raises(ValueError):
         GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path, policy=POLICY, script_for=lambda t: {}, **kwargs)
+
+
+# --- Repairs after round-9 reviews: every step of removal ticks the clock, and no removal is left without one ---------
+
+def run_removal_turn(tmp_path: Path, monkeypatch, behaviour, *, grace: float = 0.2):
+    """A turn whose container cannot be stopped, so the whole output must be removed or moved. Returns the result."""
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(module, "MAX_ENTRIES", 10_000_000)  # the count limit is not what is being tested
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present and not ours: never stoppable
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    job_seconds: list[float] = []
+
+    def timed(output: Path) -> None:
+        began = time.monotonic()
+        behaviour(output)
+        job_seconds.append(time.monotonic() - began)
+
+    install_process(monkeypatch, timed, returncode=-9)
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=grace)
+    outcome: list = []
+
+    def go() -> None:
+        started = time.monotonic()
+        try:
+            runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+            outcome.append("returned")
+        except EvidenceNotSealed as error:
+            outcome.append(str(error))
+        outcome.append(time.monotonic() - started - job_seconds[0])
+
+    worker = threading.Thread(target=go, daemon=True)
+    worker.start()
+    worker.join(timeout=90)
+    assert not worker.is_alive(), "the turn did not finish"
+    return runner, outcome
+
+
+def test_a_flood_of_empty_directories_cannot_run_the_turn_past_its_bound(tmp_path: Path, monkeypatch) -> None:
+    def flood(output: Path) -> None:
+        crowd = output / "crowd"
+        crowd.mkdir()
+        for index in range(40_000):
+            os.mkdir(crowd / f"d{index}")
+
+    runner, outcome = run_removal_turn(tmp_path, monkeypatch, flood)
+
+    assert outcome[1] <= 0.1 + 0.2 + 0.4, outcome
+    assert not list((tmp_path / "evidence").glob("turn-*/output"))
+    runner.purge_quarantine()
+    assert not list((tmp_path / "evidence").glob("quarantine-*"))
+
+
+def test_a_path_too_long_for_the_plain_walk_is_moved_not_removed_without_a_clock(tmp_path: Path, monkeypatch) -> None:
+    def chain_and_files(output: Path) -> None:
+        write_deep_chain(output, 700, files=1_500, secret=OLD)  # deep files are slow to create and to remove: about 1.5 ms each
+
+    runner, outcome = run_removal_turn(tmp_path, monkeypatch, chain_and_files)
+
+    assert outcome[1] <= 0.1 + 0.2 + 0.4, outcome
+    assert not list((tmp_path / "evidence").glob("turn-*/output"))
+    assert "quarantine-" in outcome[0], "the error must name the folder that holds the evidence"
+    runner.purge_quarantine()  # has no clock, and must cope with a chain longer than the path limit
+    assert not list((tmp_path / "evidence").glob("quarantine-*"))
+
+
+def test_purge_goes_on_past_a_folder_it_cannot_remove_and_says_what_is_left(tmp_path: Path) -> None:
+    runner = GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path, policy=POLICY, script_for=lambda t: {})
+    (tmp_path / "quarantine-a").mkdir()
+    (tmp_path / "quarantine-b").mkdir()
+    (tmp_path / "quarantine-b" / "kept.log").write_text("x")
+    (tmp_path / "quarantine-b").chmod(0o000)  # unreadable, so the plain walk cannot enter it before it is made ours
+
+    runner.purge_quarantine()
+
+    assert not list(tmp_path.glob("quarantine-*"))
+
+
+@pytest.mark.parametrize("field", ["timeout_seconds", "seal_grace_seconds"])
+def test_a_deadline_setting_changed_to_a_non_finite_number_after_construction_stops_the_turn_before_any_job(tmp_path: Path, monkeypatch, field: str) -> None:
+    launched = install_process(monkeypatch, lambda output: None)
+    runner = GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path, policy=POLICY, script_for=lambda t: {})
+    setattr(runner, field, float("nan"))
+
+    with pytest.raises(ValueError):
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched == []
+
+
+def test_the_error_for_a_container_that_cannot_be_stopped_names_the_container(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    launched = install_process(monkeypatch, lambda output: None, returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    with pytest.raises(EvidenceNotSealed) as failure:
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched[0][launched[0].index("--name") + 1] in str(failure.value), "an operator needs the name of the orphan"
+
+
+def test_when_the_plain_walk_fails_for_any_reason_the_output_is_moved_and_never_removed_without_a_clock(tmp_path: Path, monkeypatch) -> None:
+    def many_files(output: Path) -> None:
+        crowd = output / "crowd"
+        crowd.mkdir()
+        for index in range(40_000):
+            (crowd / f"f{index}.log").write_text("x")
+        (crowd / "secret.log").write_text(OLD)
+
+    def fails_at_once(*_args, **_kwargs):
+        raise OSError(63, "File name too long")  # what the plain walk raises on a path the host cannot take
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_remove_tree", staticmethod(fails_at_once))
+    runner, outcome = run_removal_turn(tmp_path, monkeypatch, many_files)
+
+    assert outcome[1] <= 0.1 + 0.2 + 0.4, outcome  # an unbounded removal of 40,000 files would take seconds
+    assert "quarantine-" in outcome[0] and not list((tmp_path / "evidence").glob("turn-*/output"))
+    monkeypatch.undo()
+    GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                            script_for=lambda t: {}).purge_quarantine()
+    assert not list((tmp_path / "evidence").glob("quarantine-*"))
