@@ -3,7 +3,8 @@
 Only an authored local fixture is available outside production. Production refuses the fixture and
 uses the fail-closed unavailable provider, so real mode stays unavailable: no provider call, no
 key and no lookup. The fixture derives one deterministic wallet per `(owner, agent)` so a restarted
-local process reconciles the same exact identity.
+local process reconciles the same exact identity, and it counts its own calls so a verifier can
+measure provider calls independently of the HTTP or UI response.
 """
 
 from __future__ import annotations
@@ -31,18 +32,26 @@ class FixtureWalletProvider:
     """AUTHORED LOCAL FIXTURE. Its wallets are not provider, wallet or financial evidence.
 
     Enabled only in local and test configuration. An agent id that ends with the reserved
-    `fixture-lost-response` marker makes creation return no result, so the local verify path can
-    exercise the uncertain/lost-response state without a real provider.
+    `fixture-lost-response` marker creates its wallet and then loses the response, so the local
+    verify path exercises a committed response loss. `create_calls` and `lookup_calls` count the
+    provider calls the service actually made.
     """
 
     LOSE_RESPONSE_SUFFIX = "fixture-lost-response"
 
+    def __init__(self) -> None:
+        self.create_calls = 0
+        self.lookup_calls = 0
+
     def create_wallet(self, request: CreationRequest) -> WalletEvidence | None:
+        self.create_calls += 1
+        evidence = self._evidence(self._wallet_id(request.owner_id, request.agent_id))
         if request.agent_id.endswith(self.LOSE_RESPONSE_SUFFIX):
-            return None
-        return self._evidence(self._wallet_id(request.owner_id, request.agent_id))
+            return None  # the wallet exists provider-side; only the response is lost
+        return evidence
 
     def lookup_wallet(self, wallet_id: str) -> WalletEvidence | None:
+        self.lookup_calls += 1
         return None if self._owner_of(wallet_id) is None else self._evidence(wallet_id)
 
     def _wallet_id(self, owner_id: uuid.UUID, agent_id: str) -> str:
@@ -69,3 +78,11 @@ class FixtureWalletProvider:
 def build_wallet_provider(mode: str) -> UnavailableWalletProvider | FixtureWalletProvider:
     """Build the provider for one configuration mode. Any other mode stays fail-closed."""
     return FixtureWalletProvider() if mode == FIXTURE_MODE else UnavailableWalletProvider()
+
+
+def provider_info(provider: object) -> dict[str, object]:
+    """The active provider mode and, for the local fixture, its independent call counters."""
+    if isinstance(provider, FixtureWalletProvider):
+        return {"provider": FIXTURE_MODE, "create_calls": provider.create_calls,
+                "lookup_calls": provider.lookup_calls}
+    return {"provider": UNAVAILABLE_MODE, "create_calls": None, "lookup_calls": None}

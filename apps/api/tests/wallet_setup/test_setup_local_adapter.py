@@ -73,6 +73,32 @@ def test_unavailable_provider_is_fail_closed(wallet_client, settings, owner_a, p
     assert pg.psql("select count(*) from wallet_setups where wallet_id is not null") == "0"
 
 
+def test_local_fixture_reports_its_independent_call_counters(wallet_client, settings, owner_a, pg):
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    with _app_client(settings, FixtureWalletProvider()) as client:
+        assert client.get("/v1/wallet-setup/provider", headers=owner_a).json() == {
+            "provider": "fixture", "create_calls": 0, "lookup_calls": 0}
+        client.post("/v1/wallet-setup/agents/agent-count/prepare",
+                    json=_prepare_body(strategy_id, revision_id, "count-key"), headers=owner_a)
+        created = client.post("/v1/wallet-setup/agents/agent-count/dispatch", headers=owner_a).json()
+        assert created["state"] == "CONFIRMED"
+        client.post("/v1/wallet-setup/agents/agent-lost-count-fixture-lost-response/prepare",
+                    json=_prepare_body(strategy_id, revision_id, "count-lost-key"), headers=owner_a)
+        lost = client.post("/v1/wallet-setup/agents/agent-lost-count-fixture-lost-response/dispatch",
+                           headers=owner_a).json()
+        assert lost["state"] == "UNKNOWN" and lost["reason"] == "RESPONSE_LOST"
+        # Two real provider create calls and one exact lookup, measured on the provider instance itself.
+        after = client.get("/v1/wallet-setup/provider", headers=owner_a).json()
+        assert after == {"provider": "fixture", "create_calls": 2, "lookup_calls": 1}
+    assert pg.psql("select count(*) from wallet_setups where wallet_id is not null") == "1"
+
+
+def test_unavailable_provider_reports_its_mode_without_counters(settings, owner_a):
+    with _app_client(settings, UnavailableWalletProvider()) as client:
+        assert client.get("/v1/wallet-setup/provider", headers=owner_a).json() == {
+            "provider": "unavailable", "create_calls": None, "lookup_calls": None}
+
+
 def test_build_wallet_provider_selects_by_mode():
     assert isinstance(build_wallet_provider("fixture"), FixtureWalletProvider)
     assert isinstance(build_wallet_provider("unavailable"), UnavailableWalletProvider)

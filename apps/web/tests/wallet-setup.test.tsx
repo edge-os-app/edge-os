@@ -1,14 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/api";
 import type { WalletSetupRecord } from "../lib/types";
 import { WalletSetup } from "../components/WalletSetup";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), prepare: vi.fn(), dispatch: vi.fn(), resume: vi.fn(), cancel: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), prepare: vi.fn(), dispatch: vi.fn(), resume: vi.fn(), cancel: vi.fn(), provider: vi.fn() }));
 vi.mock("../lib/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("../lib/api")>();
   return { ...original, api: { ...original.api,
+    walletProvider: (...args: unknown[]) => mocks.provider(...args),
     walletSetup: (...args: unknown[]) => mocks.get(...args),
     prepareWalletSetup: (...args: unknown[]) => mocks.prepare(...args),
     dispatchWalletSetup: (...args: unknown[]) => mocks.dispatch(...args),
@@ -27,7 +28,17 @@ function record(over: Partial<WalletSetupRecord>): WalletSetupRecord {
     created_at: "2026-10-11T00:00:00Z", updated_at: "2026-10-11T00:00:00Z", ...over };
 }
 
-beforeEach(() => { vi.resetAllMocks(); });
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.provider.mockResolvedValue({ provider: "fixture", create_calls: 0, lookup_calls: 0 });
+});
 
 describe("wallet setup UI", () => {
   it("shows a confirmed empty state and creates nothing on load or refresh", async () => {
@@ -86,5 +97,78 @@ describe("wallet setup UI", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save wallet setup" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("This agent already holds a different setup.");
     expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("suppresses creation after an uncertain dispatch until a read confirms the state", async () => {
+    mocks.get.mockResolvedValueOnce(record({ state: "REQUESTED" }))
+      .mockResolvedValue(record({ state: "UNKNOWN", reason: "RESPONSE_LOST", creation_dispatched: true }));
+    mocks.dispatch.mockRejectedValue(new ApiError(0, "timeout", "The service did not answer in time."));
+    render(<WalletSetup agentId="agent-a" />);
+    await screen.findByText("Saved, not dispatched");
+
+    await userEvent.click(screen.getByRole("button", { name: "Create wallet now" }));
+    // The reconcile read returns UNKNOWN; creation is not offered.
+    expect(await screen.findByText("Outcome unknown")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create wallet now" })).toBeNull();
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps creation paused when the reconcile read also fails", async () => {
+    mocks.get.mockResolvedValueOnce(record({ state: "REQUESTED" }))
+      .mockRejectedValue(new ApiError(503, "service_unavailable", "A required service is unavailable."));
+    mocks.dispatch.mockRejectedValue(new ApiError(0, "network_error", "The service could not be reached."));
+    render(<WalletSetup agentId="agent-a" />);
+    await screen.findByText("Saved, not dispatched");
+
+    await userEvent.click(screen.getByRole("button", { name: "Create wallet now" }));
+    expect(await screen.findByRole("button", { name: "Check the saved setup" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create wallet now" })).toBeNull();
+    expect(screen.queryByTestId("wallet-setup-state")).toBeNull();
+  });
+
+  it("clears the prior agent's record when a new read starts", async () => {
+    mocks.get.mockResolvedValueOnce(record({ state: "REQUESTED", agent_id: "agent-a" }));
+    render(<WalletSetup revision={REVISION} />);
+    await userEvent.type(screen.getByLabelText("Agent ID"), "agent-a");
+    await userEvent.click(screen.getByTestId("wallet-setup-check"));
+    expect(await screen.findByText("Saved, not dispatched")).toBeInTheDocument();
+
+    const pending = deferred<WalletSetupRecord>();
+    mocks.get.mockReturnValueOnce(pending.promise);
+    await userEvent.clear(screen.getByLabelText("Agent ID"));
+    await userEvent.type(screen.getByLabelText("Agent ID"), "agent-b");
+    await userEvent.click(screen.getByTestId("wallet-setup-check"));
+    // The prior agent's actions are hidden while the new read is pending.
+    await waitFor(() => expect(screen.queryByTestId("wallet-setup-state")).toBeNull());
+    expect(screen.queryByRole("button", { name: "Create wallet now" })).toBeNull();
+  });
+
+  it("ignores a late response from an older agent read", async () => {
+    const slowA = deferred<WalletSetupRecord>();
+    const fastB = deferred<WalletSetupRecord>();
+    mocks.get.mockReturnValueOnce(slowA.promise).mockReturnValueOnce(fastB.promise);
+    render(<WalletSetup revision={REVISION} />);
+    await userEvent.type(screen.getByLabelText("Agent ID"), "agent-a");
+    await userEvent.click(screen.getByTestId("wallet-setup-check"));
+    await userEvent.clear(screen.getByLabelText("Agent ID"));
+    await userEvent.type(screen.getByLabelText("Agent ID"), "agent-b");
+    await userEvent.click(screen.getByTestId("wallet-setup-check"));
+
+    fastB.resolve(record({ state: "CONFIRMED", wallet_id: "fixture:owner-a:agent-b", agent_id: "agent-b" }));
+    expect(await screen.findByText("Wallet confirmed")).toBeInTheDocument();
+    slowA.resolve(record({ state: "REQUESTED", agent_id: "agent-a" }));
+    await waitFor(() => expect(screen.queryByText("Saved, not dispatched")).toBeNull());
+    expect(screen.getByText("Wallet confirmed")).toBeInTheDocument();
+  });
+
+  it("shows no creation when no provider is configured and reports the mode truthfully", async () => {
+    mocks.provider.mockResolvedValue({ provider: "unavailable", create_calls: null, lookup_calls: null });
+    mocks.get.mockRejectedValue(new ApiError(404, "not_found", "missing"));
+    render(<WalletSetup agentId="agent-a" revision={REVISION} />);
+    expect(await screen.findByText(/Real wallet creation is unavailable in this build/i)).toBeInTheDocument();
+    await screen.findByText("No wallet setup saved");
+    expect(screen.queryByRole("button", { name: "Save wallet setup" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create wallet now" })).toBeNull();
+    expect(screen.queryByText(/authored local fixture/i)).toBeNull();
   });
 });

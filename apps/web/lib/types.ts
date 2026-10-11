@@ -445,6 +445,13 @@ export interface WalletSetupPrepareBody {
   request_key: string;
 }
 
+/** The active wallet-creation provider mode. `create_calls`/`lookup_calls` are null unless the local fixture is active. */
+export interface WalletProviderInfo {
+  provider: "fixture" | "unavailable";
+  create_calls: number | null;
+  lookup_calls: number | null;
+}
+
 export interface SpotReplayRecord {
   schema_version: "p13.spot-replay-run/1";
   record_type: "SpotReplayRun";

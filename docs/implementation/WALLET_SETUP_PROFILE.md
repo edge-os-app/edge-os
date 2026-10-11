@@ -73,7 +73,7 @@ Only the five accepted P15 states are stored: `REQUESTED`, `PENDING`, `UNKNOWN`,
 `REQUESTED_AFTER_DISPATCH`). The P16 harness-only `CANCELLED` state is not added.
 
 - A proved pre-dispatch cancellation moves `REQUESTED` to `FAILED` with reason
-  `CANCELLED_BEFORE_DISPATCH` and causes zero creation calls.
+  `CANCELLED_BEFORE_DISPATCH` and makes no provider call.
 - A post-dispatch cancellation records intent and keeps the setup uncertain. It cannot undo a
   dispatched request.
 

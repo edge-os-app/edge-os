@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from edge_os_api.core.authentication import Principal, require_principal
 from edge_os_api.core.request_schemas import WalletSetupMutationBody, WalletSetupPrepareBody
 from edge_os_api.wallet_setup import service
+from edge_os_api.wallet_setup.adapter import provider_info
 from edge_os_api.wallet_setup.provider import WalletCreationPort
 from edge_os_api.wallet_setup.types import SetupRecord
 
@@ -84,3 +85,13 @@ def read(agent_id: str, principal: Principal = Depends(require_principal),
          session: Session = Depends(get_session)) -> dict[str, Any]:
     """Owner-scoped read. A foreign or absent setup is a `404`."""
     return serialize(service.get_setup(session, principal, agent_id=agent_id))
+
+
+@router.get("/provider")
+def provider_status(principal: Principal = Depends(require_principal),
+                    provider: WalletCreationPort = Depends(get_provider)) -> dict[str, Any]:
+    """The active provider mode and, in local fixture mode, its independent call counters.
+
+    It never reports a real provider: production refuses the fixture and answers `unavailable`.
+    """
+    return provider_info(provider)

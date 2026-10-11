@@ -5,7 +5,12 @@ import { RequestPage } from "../components/RequestPage";
 const mocks = vi.hoisted(() => ({ get: vi.fn(), revision: vi.fn() }));
 vi.mock("../lib/api", () => ({
   ApiError: class extends Error { status = 503; detail = "Unavailable"; },
-  api: { get: (...args: unknown[]) => mocks.get(...args), revision: (...args: unknown[]) => mocks.revision(...args) },
+  api: {
+    get: (...args: unknown[]) => mocks.get(...args),
+    revision: (...args: unknown[]) => mocks.revision(...args),
+    walletProvider: async () => ({ provider: "unavailable", create_calls: null, lookup_calls: null }),
+    walletSetup: async () => { throw new Error("no saved wallet setup"); },
+  },
 }));
 
 const strategy = {

@@ -1,6 +1,6 @@
 import type { Bundle, EffectRunBody, EffectRunResult, InvestigationProposal, InvestigationSaveResult,
-  PublicationResult, RequestSummary, Sample, SpotReplayBody, SpotReplayRecord, WalletSetupPrepareBody,
-  WalletSetupRecord } from "./types";
+  PublicationResult, RequestSummary, Sample, SpotReplayBody, SpotReplayRecord, WalletProviderInfo,
+  WalletSetupPrepareBody, WalletSetupRecord } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: string, public findings: { path: string; detail: string }[] = []) {
@@ -91,6 +91,8 @@ export const api = {
     request<{ revision_id: string; content_sha256: string; manifest_sha256: string; created_at: string; stored_hash_matches_content: boolean; stored_manifest_hash_matches_content: boolean }>(
       `/v1/strategies/${strategyId}/revisions/${revisionId}`).then((r) => r.body),
   operation: (id: string) => request<PublicationResult>(`/v1/operations/${id}`).then((r) => r.body),
+  /** The active wallet-creation provider mode. Reports `unavailable` in any non-local configuration. */
+  walletProvider: () => request<WalletProviderInfo>("/v1/wallet-setup/provider").then((r) => r.body),
   /** Owner-scoped wallet-setup reads and mutations. A missing setup is a 404 ApiError. */
   walletSetup: (agentId: string) =>
     request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}`).then((r) => r.body),

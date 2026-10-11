@@ -414,6 +414,10 @@ def main() -> int:
                 rec.write("p17-inspection.json", p17_before_restart)
                 ok &= rec.step("P17 wallet-setup rows match the UI run (direct SQL and event counts)",
                                p17_before_restart["all_checks_pass"], p17_before_restart["checks"])
+                p17_calls = p17_provider_calls(pg, api_url, token_a)
+                rec.write("p17-provider-calls.json", p17_calls)
+                ok &= rec.step("P17 local fixture provider call counters match the durable event rows",
+                               p17_calls["consistent"], p17_calls)
 
                 # cross-owner denial against the real saved rows
                 denial = ownership_drive(pg, api_url, token_a, token_b)
@@ -432,6 +436,11 @@ def main() -> int:
                 p17_after_restart = p17_inspection(pg, results)
                 ok &= rec.step("P17 wallet-setup rows and event counts unchanged by the restart",
                                p17_after_restart["checks"] == p17_before_restart["checks"])
+                p17_calls_after = p17_provider_calls(pg, api_url, token_a)
+                rec.write("p17-provider-calls-after-restart.json", p17_calls_after)
+                ok &= rec.step("P17 reopen after restart created no wallet (provider counters reset and stay zero)",
+                               p17_calls_after["body"].get("create_calls") == 0
+                               and p17_calls_after["body"].get("lookup_calls") == 0, p17_calls_after)
                 storage_after_restart = p13_storage_snapshot(pg)
                 rec.write("p13-storage-after-restart.json", storage_after_restart)
                 ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",
@@ -911,7 +920,7 @@ def p17_inspection(pg: harness.Postgres, results: dict) -> dict:
         expect(f"p17 {project} confirmed row binds the exact saved revision",
                pg.psql("select strategy_revision_id from wallet_setups "
                        f"where agent_id = {sql_literal(confirmed['agentId'])}") == entry["revisionId"])
-        expect(f"p17 {project} exactly one creation call for the confirmed agent",
+        expect(f"p17 {project} exactly one durable dispatch intent for the confirmed agent",
                pg.psql("select count(*) from wallet_setups s join wallet_setup_events e using (setup_id) "
                        f"where s.agent_id = {sql_literal(confirmed['agentId'])} "
                        "and e.event_type = 'DISPATCH_INTENT'") == "1")
@@ -929,11 +938,28 @@ def p17_inspection(pg: harness.Postgres, results: dict) -> dict:
                cancel_state == "FAILED" and cancel_reason == "CANCELLED_BEFORE_DISPATCH")
         expect(f"p17 {project} cancel keeps the separate cancellation intent",
                cancel_intent == "REQUESTED_BEFORE_DISPATCH")
-        expect(f"p17 {project} cancel made zero creation calls",
+        expect(f"p17 {project} cancel recorded no dispatch intent",
                pg.psql("select count(*) from wallet_setups s join wallet_setup_events e using (setup_id) "
                        f"where s.agent_id = {sql_literal(cancelled['agentId'])} "
                        "and e.event_type = 'DISPATCH_INTENT'") == "0")
     return {"all_checks_pass": all(check["pass"] for check in checks), "checks": checks}
+
+
+def p17_provider_calls(pg: harness.Postgres, api_url: str, token_a: str) -> dict:
+    """The mounted local fixture's own call counters, cross-checked against the durable event rows.
+
+    The counters come from the provider instance (independent of the HTTP/UI dispatch response). The
+    durable `DISPATCH_INTENT` count is a dispatch intent, not a call; the durable `RESULT_RETURNED`
+    count is one provider result. Both must equal the counters when the fixture ran correctly.
+    """
+    status, body = http("GET", f"{api_url}/v1/wallet-setup/provider", token_a)
+    intents = int(pg.psql("select count(*) from wallet_setup_events where event_type = 'DISPATCH_INTENT'"))
+    returned = int(pg.psql("select count(*) from wallet_setup_events where event_type = 'RESULT_RETURNED'"))
+    consistent = (status == 200 and isinstance(body, dict) and body.get("provider") == "fixture"
+                  and body.get("create_calls") == intents and body.get("lookup_calls") == returned
+                  and intents > 0)
+    return {"status": status, "body": body, "durable_dispatch_intents": intents,
+            "durable_results_returned": returned, "consistent": consistent}
 
 
 def sql_literal(text: str) -> str:

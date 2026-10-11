@@ -58,7 +58,7 @@ Route-driven (`HARNESS_EXECUTED`, real signed test tokens):
 - a changed network or revision for one agent gets `409 changed_setup_identity` and changes nothing;
 - one wallet binding per agent across replays and a new request key;
 - a second agent gets a distinct wallet;
-- a proved pre-dispatch cancel causes zero creation calls;
+- a proved pre-dispatch cancel records no dispatch intent and makes no provider call;
 - a lost response stays `UNKNOWN` and never retries creation;
 - wrong-owner provider evidence stays `UNKNOWN`;
 - a conflicting wallet never overwrites a confirmed binding;
