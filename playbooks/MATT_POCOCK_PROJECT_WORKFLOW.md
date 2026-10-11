@@ -120,19 +120,27 @@ The repository configuration is the source of truth for commands and paths. Do n
 
 Builder approved the Codex route on 2026-10-01 and added the Claude route on 2026-10-06. Choose the worker host according to available subscription capacity. These are operating defaults, not benchmark results. This section is the authoritative model-routing policy.
 
+Builder correction, 2026-10-07: defaults do not authorize changing an existing pane's model, effort or speed. Follow [preserve pane model selections](../docs/agents/controller-workflow.md#preserve-pane-model-selections). Inspect first and use a compatible selection unchanged. Report reset-induced mismatches. Only an explicit builder instruction authorizes a pane-setting change. Fresh internal reviewer launches still use the prescribed route below.
+
 | Host and role | Model | Model selection | Effort | Assignment |
 |---|---|---|---|---|
 | Codex controller and independent gate | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Check scope, dependencies, candidate evidence, verified defects and acceptance. The gate remains independent of the worker and its two internal reviewers. |
 | Codex implementer | GPT-6 Luna | `gpt-6-luna` | `high` | Implement one accepted bounded ticket with tests and runtime evidence. |
 | Codex internal reviewer 1 | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Check specification compliance, correctness, tests and integration. |
-| Codex internal reviewer 2 | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Challenge assumptions, missing failures, permissions and recovery. Check statistical validity when relevant. |
+| Codex internal reviewer 2 | GPT-6.1 Sol | `gpt-6.1-sol` | `high` | Check repository standards and maintainability. Challenge assumptions, missing failures, permissions and recovery. Check statistical validity when relevant. |
+| OpenCode implementer | DeepSeek Flash | Preserve the explicitly approved provider/model ID | Record actual supported effort | Implement the accepted task; qualify configuration and return route before activation. |
+| OpenCode internal reviewers A and B | GLM-5.3 Flash | Explicit provider/model selection in two separate native reviewer contexts | Record actual supported setting | Apply the same A/B assignments; do not replace independence with two passes in one context. |
 | Claude implementer | Sonnet | Explicitly select account-available Sonnet and record its exact version | Record actual host-supported effort | Implement the same accepted ticket and verification requirements. |
 | Claude internal reviewer 1 | Sonnet | Explicit Sonnet selection in a native reviewer context | Record actual host-supported effort | Check specification compliance, correctness, tests and integration. |
-| Claude internal reviewer 2 | Sonnet | Explicit Sonnet selection in a separate native reviewer context | Record actual host-supported effort | Challenge assumptions, missing failures, permissions and recovery. Check statistical validity when relevant. |
+| Claude internal reviewer 2 | Sonnet | Explicit Sonnet selection in a separate native reviewer context | Record actual host-supported effort | Check repository standards and maintainability. Challenge assumptions, missing failures, permissions and recovery. Check statistical validity when relevant. |
 
-Use Standard speed for Codex by default. Luna is not a default reviewer. Claude reviewers must select Sonnet explicitly rather than inherit a possibly different implementer model. Confirm the actual model before accepting a review. Account aliases can change versions.
+Use Standard speed for Codex by default. Luna is not a default reviewer. Claude reviewers must select Sonnet explicitly rather than inherit a possibly different implementer model. The worker explicitly selects the prescribed reviewer model and effort at launch and records the configured selection. Account aliases can change versions.
+
+Builder clarification, 2026-10-07: model selection is the dispatcher's responsibility, not a separate gate audit. Gates do not require original model-dispatch receipts, reviewer self-introspection or inaccessible serving-backend telemetry. A configured Sol 6.1/high review is not blocked because its reviewer cannot independently inspect those settings. Retain both original independent candidate-bound reports, applied skills, checks and verdicts. A concrete reported model substitution must be corrected within the task's existing authority and budget; do not invent a configuration mismatch from unavailable telemetry. This clarification applies to P04's current intake and future reviews. It does not waive technical findings, missing original reviews or review budgets.
 
 For a very difficult Claude ticket, use Opus for one internal reviewer when complex cross-module behavior, consequential ambiguity or repeated failed repairs justify it. Record the reason, bounded review question, available model and review budget before invoking it. Opus is not automatic for every financial ticket or for cosmetic work. The independent Codex gate still checks financial/security boundaries and required qualification evidence. A gate or stronger model cannot substitute for tests or actual provider enforcement.
+
+The builder selected GLM-5.3 Flash for OpenCode internal reviews on 2026-10-10. This does not change the Claude Sonnet or Codex Sol review routes. Provider/model IDs and availability must be verified in the destination environment; the names above do not install or authorize a provider. Preserve active recorded selections and financial limits.
 
 Use native internal reviewers on the active host, followed by the separate Codex gate. Keep OMC disabled for this workflow. The existing tmux lanes and handoff packets are sufficient; this policy installs no orchestrator or cross-provider bridge.
 
@@ -140,7 +148,7 @@ Use native internal reviewers on the active host, followed by the separate Codex
 
 - Give either implementer explicit inputs, outputs, constraints, acceptance behavior and required checks.
 - Return missing product decisions to the controller. An implementer must not invent accepted behavior.
-- For Codex implementation, escalate to GPT-6.1 Sol when semantic ambiguity or repeated failed repairs prevent completion. For Claude implementation, return a blocker to the controller before changing the implementer model. The approved difficult-ticket exception above concerns review, not an automatic Opus implementer switch.
+- When semantic ambiguity or repeated failed repairs suggest a stronger implementer, report the proposed escalation and reason. An existing pane-model change requires explicit builder instruction. The approved difficult-ticket exception above concerns review, not an automatic implementer switch.
 - Record the reason and actual model before the escalated attempt.
 - Run each internal review in a separate context from the implementer and the other reviewer.
 - Give both reviewers the approved behavior, relevant contracts, exact change, and verification evidence.
@@ -150,7 +158,7 @@ Use native internal reviewers on the active host, followed by the separate Codex
 - Record each verdict against the exact reviewed revision.
 - After a fix, review the changed scope and affected invariants again. Earlier approval does not cover the replacement revision.
 - Two reviewers using the same model can share blind spots. Require reproducible tests and inspectable evidence before acceptance.
-- After both internal reviews pass, send the same candidate and evidence to the independent Codex gate. Gate approval cannot replace a missing internal review.
+- After both internal reviews pass, send the same candidate and evidence to the independent Codex gate. Gate approval cannot replace a missing initial internal review. Later gate-requested repairs follow [gate-stage repair review](../docs/agents/controller-workflow.md#gate-stage-repair-review); preserve the baseline pair and approve only the exact resulting candidate.
 - When switching worker hosts, stop the old worker first. Preserve its task, worktree, branch, base, changes, checks and remaining work. The replacement verifies those records before editing. One lane has one active writer.
 - Record the new worker host and review route. The replacement candidate needs both internal reviews under that route and the gate's assessment. Preserve earlier reviews as historical evidence.
 
@@ -179,7 +187,7 @@ Choose one executor for each work unit. Record its installed skill path and vers
 
 Matt `implement-spec` and Superpowers `subagent-driven-development` provide their own orchestration. Select either as the owner of an approved execution plan, rather than nesting a second scheduler under the controller. A change of executor does not grant merge, publishing, financial, or additional delegation authority.
 
-Use architectural exploration only for unresolved design choices. Use additional review panels when their distinct purpose justifies the cost. Record a time or review-round budget and an escalation condition for each work unit. At the limit, the controller selects a focused fix, narrower scope, or deferral; unresolved blockers remain visible.
+Use architectural exploration only for unresolved design choices. Use additional review panels when their distinct purpose justifies the cost. Any separate exploration time limit must be explicit. Internal ticket repairs and independent replacement reviews repeat until both PASS on one candidate, without a numeric round cap. Only the independent gate has the three-verdict limit under [the controller review policy](../docs/agents/controller-workflow.md#review-budgets-and-host-changes). Genuine authority, capacity, unsafe-delivery or approved run-limit obstructions remain visible.
 
 ## Step 0: configure the repository
 
@@ -424,8 +432,8 @@ For the default `implement` route, the Worker must:
 4. Run focused tests and type checking during the change.
 5. Run the full required checks and capture evidence of the affected behavior.
 6. Create a local candidate commit containing all ticket changes. Record the base and candidate SHAs.
-7. Run both internal reviews under the approved model policy on that committed candidate against the specification and repository standards.
-8. Repair valid blocking findings. Run the affected checks, commit a replacement candidate, and review the changed scope and any affected invariants within the recorded review budget.
+7. Read Matt's `code-review`. Run the existing two internal assignments under the [adapted Matt procedure](../docs/agents/controller-workflow.md#adapted-matt-internal-review) and approved model policy on that committed candidate.
+8. Repair valid internal-review blocking findings. Run affected checks, commit a replacement and repeat both independent candidate-bound reviews until both PASS before the first gate verdict. Later gate-requested repairs follow [gate-stage repair review](../docs/agents/controller-workflow.md#gate-stage-repair-review). Internal rounds have no numeric cap. Preserve original report identities/history; the SAME separate gate retains its three-verdict limit.
 9. Return the final candidate SHA, acceptance-check results, runtime evidence, and remaining risks to the controller.
 
 The installed `code-review` uses `git diff <fixed-point>...HEAD`; uncommitted changes are excluded. Confirm that `HEAD` is the candidate and that the reviewed diff contains every ticket change. Any later implementation change invalidates approval of the earlier candidate. Keep upstream skill files unchanged; the task packet supplies this project review sequence.
@@ -477,7 +485,7 @@ Owned files and shared-contract boundaries:
 Permitted tools, external operations, and delegation:
 Acceptance behavior and agreed TDD seams:
 Required checks and runtime evidence:
-Review owner, scope, budget, and escalation condition:
+Review owner, scope, gate counter, external/run limits, and escalation condition:
 Actual models, reasoning effort, speed, and approved overrides:
 Return format and completion route:
 Controller/reply pane and worker/gate destinations:

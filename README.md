@@ -2,7 +2,7 @@
 
 An edge-generation and alpha research system for onchain traders and liquidity providers.
 
-Current build, 10 October 2026: saved Research, descriptive comparisons, spot replay and account views work with labelled fixtures. Live trading is not available. See [current status](#current-status) for implemented scope and qualification limits.
+Current build, 11 October 2026: saved Research, descriptive comparisons, spot replay and account views work with labelled fixtures. The saved Hermes interpretation path passed local fake-provider verification. Local wallet setup, admission/reservations and decision/submission modules are integrated, but are not a qualified live trading path. Live trading is not available. See [current status](#current-status) for implemented scope and qualification limits.
 
 The approved [hackathon release cut](docs/planning/EDGE_OS_RELEASE_CUT_2026-10-10.md) targets a connected Research-to-controlled-Kuru-action demonstration. Its live portion is not yet qualified. LP expansion and general ongoing trading remain outside this submission subset.
 
@@ -217,9 +217,11 @@ The specification, contracts, scoped probe plan and project workflow in this rep
 
 Track assigned work in [GitHub Issues](https://github.com/edge-os-app/edge-os/issues). Read [AGENTS.md](AGENTS.md) before an agent task. Tracker, label and domain conventions are under [docs/agents/](docs/agents/).
 
-The builder owns product decisions, prototypes and financial permissions. The Codex controller coordinates implementation agents and explicitly assigned contributors, reviews their evidence and integrates accepted work locally. The former fixed frontend/backend/tokenization split is retired. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records current responsibilities and assignment boundaries.
+The builder owns product decisions, prototypes and the hackathon release candidate. The controller coordinates assigned agents, reviews and local integration. The former frontend/tokenization teammate split is superseded. The quant contributor can start the bounded P14 numerical PR under its dated assignment, outside the release candidate. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records these boundaries.
 
 Contributors implement assigned accepted tickets in isolated worktrees on task branches. The controller checks both original internal reviews and the separate gate before technical acceptance and serial local integration. Publication and merging to `main` require recorded builder authorization. The builder may authorize the controller to execute a specific merge. This manual gate does not require GitHub-enforced approvals or branch protection. Required checks and independent review still apply.
+
+Start with the [quant contributor brief](docs/team/QUANT_CONTRIBUTOR_BRIEF.md) and [portable contributor workflow](docs/agents/contributor-workflow.md). The latter links worker, internal-reviewer and gate prompt templates, skill setup requirements and optional native/Smux routes. Your own clone is sufficient; the builder's private workspace and tmux setup are not required.
 
 Contributor coding skills require installation in each contributor's agent environment. They are separate from the planned user-facing agent add-ons catalog. These documentation files do not install either kind of skill or create remote labels.
 
