@@ -14,7 +14,7 @@ import hashlib
 import uuid
 from datetime import timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -103,6 +103,36 @@ def _lock_keys(owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str)
 def _acquire_wallet_lock(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str) -> None:
     key_a, key_b = _lock_keys(owner, agent_id, wallet_id, network_id)
     session.execute(text("SELECT pg_advisory_xact_lock(:key_a, :key_b)"), {"key_a": key_a, "key_b": key_b})
+
+
+def acquire_wallet_lock(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str) -> None:
+    """Public entry to the shared per-wallet admission lock.
+
+    The lock serializes admission, submission ownership and any durable scoped
+    stop write for one owner, agent, wallet and network. It defines the atomic
+    ordering between a committed stop and the submission-ownership transition.
+    """
+    _acquire_wallet_lock(session, owner, agent_id, wallet_id, network_id)
+
+
+class StopReader(Protocol):
+    """Read-only durable stop lookup used by admission and execution.
+
+    The implementation reads the persisted stop records inside the caller's
+    transaction. It never writes and it never consults a caller-supplied stop.
+    """
+
+    def denial_reasons(
+        self,
+        session: Session,
+        verified_owner_id: uuid.UUID,
+        *,
+        agent_id: str,
+        wallet_id: str,
+        network_id: str,
+        position_id: str,
+        operation: str,
+    ) -> list[str]: ...
 
 
 def _binding_snapshot(intent: ActionIntent, approval: ApprovalSnapshot) -> dict[str, Any]:
@@ -296,8 +326,32 @@ def _ensure_allowance(session: Session, owner: uuid.UUID, agent_id: str, wallet_
 
 
 class AdmissionService:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, session_factory: sessionmaker[Session], *, stops: StopReader | None = None) -> None:
         self._factory = session_factory
+        self._stops = stops
+
+    def _stop_denial(self, session: Session, owner: uuid.UUID, intent: ActionIntent) -> str | None:
+        """The durable stop reason that denies this intent, or None.
+
+        Reads the persisted stop records inside the caller's transaction. When no
+        stop reader is wired, behavior is unchanged.
+        """
+        if self._stops is None:
+            return None
+        reasons = self._stops.denial_reasons(
+            session, owner, agent_id=intent.binding.agent_id, wallet_id=intent.binding.wallet_id,
+            network_id=intent.binding.network_id, position_id=intent.position_id,
+            operation=intent.operation)
+        return ";".join(reasons) if reasons else None
+
+    def _stop_denial_for_row(self, session: Session, owner: uuid.UUID, row: DecisionRow) -> str | None:
+        """The durable stop reason that denies a saved decision, or None."""
+        if self._stops is None:
+            return None
+        reasons = self._stops.denial_reasons(
+            session, owner, agent_id=row.agent_id, wallet_id=row.wallet_id, network_id=row.network_id,
+            position_id=str(row.binding.get("position_id") or ""), operation=row.operation)
+        return ";".join(reasons) if reasons else None
 
     # ----------------------------------------------------------------- propose
 
@@ -381,6 +435,14 @@ class AdmissionService:
             DecisionRow.status.in_(("SUBMISSION_UNKNOWN", "BREACHED"))).limit(1)).scalar_one_or_none()
         if unresolved is not None:
             return "UNRESOLVED_PRIOR_ACTION"
+
+        # Durable scoped stops. The persisted records are consulted inside this
+        # transaction under the per-wallet lock, so a newly recorded stop denies
+        # the exact scoped operation. This never rewrites the immutable approval
+        # snapshot and it never widens a selected stop.
+        stop_reason = self._stop_denial(session, owner, intent)
+        if stop_reason is not None:
+            return stop_reason
 
         durable = _position_row(session, owner, intent.position_id, for_update=True)
         snapshot = context.holdings.positions.get(intent.position_id)
@@ -751,6 +813,14 @@ class AdmissionService:
                 if row.status != "ADMITTED":
                     session.commit()
                     return row.status
+                # Atomic durable-stop guard. This runs under the same per-wallet
+                # lock the stop write uses, so a stop that committed before this
+                # transition refuses ownership and the caller makes no transport
+                # call. An action already submission-owned is unaffected by a later
+                # stop; it reconciles its original reference.
+                if self._stop_denial_for_row(session, verified_owner_id, row) is not None:
+                    session.commit()
+                    return "STOPPED_SCOPE"
                 row.status = "SUBMISSION_UNKNOWN"
                 session.commit()
                 return "ACQUIRED"
