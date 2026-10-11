@@ -1466,11 +1466,46 @@ test("P17 wallet setup: prepare, dispatch, uncertain and cancelled states throug
   await expect(setupAfterReload).toContainText("No creation call was made");
   await shot(page, project, "p17-wallet-cancelled");
 
+  // 5. A committed HTTP reply loss: the dispatch reaches the server (which commits the intent and creates the
+  //    wallet), but the client never receives the reply. The UI must reconcile with a saved-state GET and show
+  //    the true state without any second dispatch or provider call.
+  const committedAgent = `p17-committed-${project}`;
+  await setupAfterReload.getByLabel("Agent ID").fill(committedAgent);
+  await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+
+  const committedPath = `/v1/wallet-setup/agents/${committedAgent}/dispatch`;
+  const providerUrl = `${process.env.P03_API_URL}/v1/wallet-setup/provider`;
+  const providerHeaders = { Authorization: `Bearer ${tokens.a}` };
+  const providerBefore = await (await page.request.get(providerUrl, { headers: providerHeaders })).json();
+  let droppedReply = false;
+  await page.route(`**${committedPath}`, async (route) => {
+    if (droppedReply) { await route.continue(); return; }
+    droppedReply = true;
+    await route.fetch();           // the server processes and commits
+    await route.abort("failed");   // the browser never receives the reply
+  });
+  await setupAfterReload.getByRole("button", { name: "Create wallet now" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
+  await expect(setupAfterReload.getByTestId("wallet-setup-wallet")).toContainText("fixture:");
+  const committedWallet = (await setupAfterReload.getByTestId("wallet-setup-wallet").innerText()).trim();
+  const providerAfter = await (await page.request.get(providerUrl, { headers: providerHeaders })).json();
+  await page.unroute(`**${committedPath}`);
+  await shot(page, project, "p17-wallet-committed-reply-loss");
+
+  const committedPosts = dispatchPosts.filter((path) => path.endsWith(`/agents/${committedAgent}/dispatch`));
+  expect(committedPosts).toHaveLength(1);
+
   record(`p17-setup-${project}`, {
     revisionId: thesis.revisionId,
     confirmed: { agentId, walletId },
     unknown: { agentId: lostAgent },
     cancelled: { agentId: cancelAgent },
+    committed: { agentId: committedAgent, walletId: committedWallet, committedPosts: committedPosts.length,
+      providerDelta: { create: providerAfter.create_calls - providerBefore.create_calls,
+        lookup: providerAfter.lookup_calls - providerBefore.lookup_calls } },
     dispatchPostPaths: dispatchPosts,
   });
 });

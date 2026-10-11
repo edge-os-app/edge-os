@@ -161,6 +161,28 @@ describe("wallet setup UI", () => {
     expect(screen.getByText("Wallet confirmed")).toBeInTheDocument();
   });
 
+  it("keeps a newer agent selection when an older mutation returns late", async () => {
+    const slowPrepare = deferred<WalletSetupRecord>();
+    mocks.get.mockRejectedValue(new ApiError(404, "not_found", "missing"));
+    mocks.prepare.mockReturnValueOnce(slowPrepare.promise);
+    render(<WalletSetup revision={REVISION} />);
+    await userEvent.type(screen.getByLabelText("Agent ID"), "agent-a");
+    await userEvent.click(screen.getByTestId("wallet-setup-check"));
+    await screen.findByText("No wallet setup saved");
+    await userEvent.click(screen.getByRole("button", { name: "Save wallet setup" })); // agent-a save is pending
+
+    await userEvent.clear(screen.getByLabelText("Agent ID"));
+    await userEvent.type(screen.getByLabelText("Agent ID"), "agent-b");
+    await userEvent.click(screen.getByTestId("wallet-setup-check"));
+    await screen.findByText("No wallet setup saved");
+
+    // agent-a's save now returns a record; it must not restore agent-a's actions under the agent-b selection.
+    slowPrepare.resolve(record({ state: "REQUESTED", agent_id: "agent-a" }));
+    await waitFor(() => expect(screen.queryByTestId("wallet-setup-state")).toBeNull());
+    expect(screen.queryByRole("button", { name: "Create wallet now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel before creating" })).toBeNull();
+  });
+
   it("shows no creation when no provider is configured and reports the mode truthfully", async () => {
     mocks.provider.mockResolvedValue({ provider: "unavailable", create_calls: null, lookup_calls: null });
     mocks.get.mockRejectedValue(new ApiError(404, "not_found", "missing"));

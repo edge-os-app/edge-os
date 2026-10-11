@@ -912,9 +912,24 @@ def p17_inspection(pg: harness.Postgres, results: dict) -> dict:
         if not entry:
             continue
         confirmed, unknown, cancelled = entry["confirmed"], entry["unknown"], entry["cancelled"]
+        committed = entry.get("committed")
         expect(f"p17 {project} one setup row per agent",
                pg.psql("select count(*) from wallet_setups where agent_id in "
-                       f"({agents(confirmed['agentId'], unknown['agentId'], cancelled['agentId'])})") == "3")
+                       f"({agents(confirmed['agentId'], unknown['agentId'], cancelled['agentId'],
+                                  committed['agentId'] if committed else confirmed['agentId'])})")
+               == ("4" if committed else "3"))
+        if committed:
+            committed_state = pg.psql("select state from wallet_setups "
+                                       f"where agent_id = {sql_literal(committed['agentId'])}")
+            committed_intents = pg.psql("select count(*) from wallet_setups s join wallet_setup_events e using (setup_id) "
+                                        f"where s.agent_id = {sql_literal(committed['agentId'])} "
+                                        "and e.event_type = 'DISPATCH_INTENT'")
+            expect(f"p17 {project} committed-reply-loss row is CONFIRMED with one dispatch intent",
+                   committed_state == "CONFIRMED" and committed_intents == "1")
+            expect(f"p17 {project} committed-reply-loss made exactly one provider create and lookup call",
+                   committed["providerDelta"]["create"] == 1 and committed["providerDelta"]["lookup"] == 1)
+            expect(f"p17 {project} committed-reply-loss sent exactly one dispatch HTTP POST",
+                   committed["committedPosts"] == 1)
         stage = pg.psql("select string_agg(e.event_type, ',' order by e.sequence) from wallet_setups s "
                         "join wallet_setup_events e using (setup_id) "
                         f"where s.agent_id = {sql_literal(confirmed['agentId'])}")

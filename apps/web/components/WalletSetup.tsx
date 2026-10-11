@@ -58,8 +58,9 @@ export function WalletSetup({ agentId, revision, onClose }: {
   const [uncertain, setUncertain] = useState(false);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<"fixture" | "unavailable" | null>(null);
-  // Every read gets a sequence number so a late response for an older agent can never overwrite the current one.
-  const readSeq = useRef(0);
+  // One sequence for every operation that changes what the panel shows. A late response, from an older
+  // read or an older mutation, can never overwrite the current selection.
+  const viewSeq = useRef(0);
 
   useEffect(() => {
     let current = true;
@@ -69,7 +70,7 @@ export function WalletSetup({ agentId, revision, onClose }: {
   }, []);
 
   const load = useCallback(async (id: string) => {
-    const seq = (readSeq.current += 1);
+    const seq = (viewSeq.current += 1);
     setError("");
     setUncertain(false);
     setRecord(null);
@@ -78,14 +79,14 @@ export function WalletSetup({ agentId, revision, onClose }: {
     setPhase("loading");
     try {
       const saved = await api.walletSetup(id);
-      if (seq !== readSeq.current) return; // a newer read superseded this one
+      if (seq !== viewSeq.current) return; // a newer read superseded this one
       setRecord(saved); setPhase("loaded");
     } catch (failure) {
-      if (seq !== readSeq.current) return;
+      if (seq !== viewSeq.current) return;
       if (failure instanceof ApiError && failure.status === 404) { setRecord(null); setPhase("empty"); }
       else { setError(failure instanceof ApiError ? failure.detail : "The wallet setup could not be loaded."); setPhase("error"); }
     } finally {
-      if (seq === readSeq.current) setBusy(false);
+      if (seq === viewSeq.current) setBusy(false);
     }
   }, []);
 
@@ -95,21 +96,21 @@ export function WalletSetup({ agentId, revision, onClose }: {
   // Read the exact saved setup. It never mutates. Used after an uncertain mutation and by the retry button.
   const check = useCallback(async (id: string) => {
     if (!id) return;
-    const seq = (readSeq.current += 1);
+    const seq = (viewSeq.current += 1);
     setBusy(true);
     try {
       const saved = await api.walletSetup(id);
-      if (seq !== readSeq.current) return;
+      if (seq !== viewSeq.current) return;
       setRecord(saved); setPhase("loaded"); setUncertain(false); setError("");
     } catch (failure) {
-      if (seq !== readSeq.current) return;
+      if (seq !== viewSeq.current) return;
       if (failure instanceof ApiError && failure.status === 404) {
         setRecord(null); setPhase("empty"); setUncertain(false); setError("");
       } else {
         setError("The saved setup could not be checked. The outcome stays unconfirmed until a read succeeds.");
       }
     } finally {
-      if (seq === readSeq.current) setBusy(false);
+      if (seq === viewSeq.current) setBusy(false);
     }
   }, []);
 
@@ -117,28 +118,34 @@ export function WalletSetup({ agentId, revision, onClose }: {
   // setup before offering any further creation. Until that read succeeds, creation stays suppressed.
   const run = useCallback(async (id: string, action: () => Promise<WalletSetupRecord>, fallback: string) => {
     if (busy || uncertain) return;
+    const seq = (viewSeq.current += 1);
     setBusy(true); setError("");
     try {
-      setRecord(await action());
+      const saved = await action();
+      if (seq !== viewSeq.current) return; // a newer selection or read superseded this mutation
+      setRecord(saved);
       setPhase("loaded");
     } catch (failure) {
+      if (seq !== viewSeq.current) return; // the pending outcome stays tied to its original agent
       setUncertain(true);
       setError(failure instanceof ApiError && failure.status !== 0
         ? failure.detail
         : "The outcome is not confirmed. The saved setup is being checked before any further action.");
-      const seq = (readSeq.current += 1);
       try {
         const saved = await api.walletSetup(id);
-        if (seq === readSeq.current) { setRecord(saved); setPhase("loaded"); setUncertain(false); setError(""); }
+        if (seq !== viewSeq.current) return;
+        setRecord(saved); setPhase("loaded"); setUncertain(false); setError("");
       } catch (readFailure) {
-        if (seq !== readSeq.current) return;
+        if (seq !== viewSeq.current) return;
         if (readFailure instanceof ApiError && readFailure.status === 404) {
           setRecord(null); setPhase("empty"); setUncertain(false);
         } else {
           setError("The outcome is not confirmed and the saved setup could not be checked. Check it again before any further action.");
         }
       }
-    } finally { setBusy(false); }
+    } finally {
+      if (seq === viewSeq.current) setBusy(false);
+    }
   }, [busy, uncertain]);
 
   const canPrepare = Boolean(revision) && /^[A-Za-z0-9_-]{1,64}$/.test(agent) && mode === "fixture";
