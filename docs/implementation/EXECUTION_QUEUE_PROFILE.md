@@ -121,6 +121,12 @@ Immediately before the fixture call, the service rechecks, for the exact payload
   eligible operation. A newer `NO_SIGNAL`, a changed or missing quote, or an
   unqualified observation denies with `INPUTS_CHANGED` and no transport call,
   covering changes before the next-decision boundary as well as at it;
+- an explicit current action quote for the exact action: the caller supplies an
+  authored `ActionQuote` (quote identity, amount and units, observation and
+  expiry). The revalidation requires it to match the saved intent's quote
+  identity, units and reviewed amount, and to be fresh and unexpired. A missing,
+  stale, expired, wrong-identity, wrong-units or changed quote denies with the
+  reason and no transport call; the saved payload is never silently repriced;
 - the pure P22 admission proposal (approval, scoped stops, quote freshness,
   asset/decimal identity and position existence);
 - the saved P22 admission state, which must still be `ADMITTED`; a cancelled,
@@ -139,36 +145,41 @@ free or alter them.
 
 ## Submission ownership and cancellation coordination
 
-After revalidation, before any fixture call, the service makes one durable
-submission-ownership transition on the exact action: it reconciles the action to
-the accepted P22 `SUBMISSION_UNKNOWN` state. That state is not cancellable, blocks
-a competing admission, and retains the action's reservations.
+After revalidation, before any fixture call, the service acquires submission
+ownership for the exact action through a minimal leased P22 helper,
+`AdmissionService.acquire_submission`. Under the existing per-wallet advisory
+lock it moves the action from the eligible `ADMITTED` state to the
+submission-owned `SUBMISSION_UNKNOWN` state, and returns whether *this* call
+acquired ownership. It writes no receipt: ownership is a truthful pre-call state,
+not a transport outcome. The P23 claim and `IN_FLIGHT` attempt are the caller's
+pre-call evidence.
 
-- If the transition succeeds, the action is submission-owned. A concurrent P22
+- If ownership is acquired, the action is submission-owned. A concurrent P22
   `cancel` is refused (`NOT_CANCELLABLE_AFTER_SUBMISSION`) and a competing
   admission is denied (`UNRESOLVED_PRIOR_ACTION`). The original capital is not
   reusable while the effect may be in flight.
-- If a cancellation already won before the transition, the transition returns a
-  non-`SUBMISSION_UNKNOWN` status and the service makes no fixture call. The
-  queue records `SUBMISSION_NOT_OWNED` and the attempt is recorded definitely
-  unsent.
-- A proved definitely-unsent result releases the ownership and its reservations
-  through `AdmissionService.reconcile` with `PREBROADCAST_DENIED`; a confirmed or
-  reverted result settles from the owned state. A submission-possible result
-  retains the ownership.
+- If the action is already unknown, breached, cancelled or otherwise not
+  `ADMITTED`, `acquire_submission` returns that status, and the service makes no
+  fixture call. The queue records `SUBMISSION_NOT_OWNED` and the attempt is
+  recorded definitely unsent. An already-unknown original action blocks another
+  submission; it never becomes permission to call.
+- A proved definitely-unsent result releases the acquired action and its
+  reservations through `AdmissionService.reconcile` with `PREBROADCAST_DENIED`; a
+  confirmed or reverted result settles from the owned state. A submission-possible
+  result retains the ownership.
 - `RECONCILE_MISMATCH` remains a defensive backstop for any residual interleaving.
 
 The P23 claim is committed before this transition, so a crash between them leaves
 the durable claim blocking a repeat. A crash after the transition leaves the
 action submission-owned (capacity retained, cancellation and competing admission
-blocked) with the claim held. No transaction is held across the fixture call and
-no replacement or retry path is added.
+blocked) with the claim held, and no fabricated submission receipt. No transaction
+is held across the fixture call and no replacement or retry path is added.
 
-This coordination uses one minimal addition in the leased P22 path:
-`SUBMISSION_UNKNOWN` is added to the pre-broadcast clearable set so a proved
-definite-unsent can release a submission-owned action. No new state, table, model
-or migration is added, and existing accounting, owner isolation and default
-behavior are unchanged.
+This coordination uses two minimal additions in the leased P22 path: the
+`acquire_submission` helper, and `SUBMISSION_UNKNOWN` added to the pre-broadcast
+clearable set so a proved definite-unsent can release a submission-owned action.
+No new state, table, model or migration is added, and existing accounting, owner
+isolation and default behavior are unchanged.
 
 ## Labelled local fixture submission
 
@@ -248,11 +259,12 @@ local assumptions, never qualified live thresholds.
   `execution_local` schema of the run-labelled test database. The P22
   `admission_local` schema stays separate.
 - P05 keeps its shared-wiring lease. Shared files stay read-only.
-- The cancellation/submission guard uses one bounded addition in the leased P22
-  path: `SUBMISSION_UNKNOWN` is added to the pre-broadcast clearable set in
-  `edge_os_api/admission/service.py`, with focused regressions under
-  `apps/api/tests/admission/`. This is the only P22 source change; no other
-  admission path, type, model, contract, migration or shared file changed.
+- The cancellation/submission guard uses two bounded additions in the leased P22
+  path: the `acquire_submission` helper and `SUBMISSION_UNKNOWN` added to the
+  pre-broadcast clearable set in `edge_os_api/admission/service.py`, with focused
+  regressions under `apps/api/tests/admission/`. These are the only P22 source
+  changes; no other admission path, type, model, contract, migration or shared
+  file changed.
 
 ## Evidence classification
 

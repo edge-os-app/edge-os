@@ -49,6 +49,7 @@ from edge_os_api.execution.transport import (
 )
 from edge_os_api.execution.types import (
     DECISION_STATUSES,
+    ActionQuote,
     EnqueueResult,
     EvaluationInputs,
     ExecutionError,
@@ -298,27 +299,25 @@ class ExecutionService:
         context: AdmissionContext,
         revision: FrozenRevision,
         inputs: EvaluationInputs,
+        quote: ActionQuote | None,
         transport: SubmissionTransport,
         now: dt.datetime | None = None,
     ) -> TickResult:
         now = now or self._clock()
         prepared, intention, queue_id, attempt_id = self._begin_submission(
             verified_owner_id, agent_id, wallet_id, network_id, approval, context, revision, inputs,
-            transport, now)
+            quote, transport, now)
         if isinstance(prepared, TickResult):
             return prepared
 
-        # P22 submission-ownership guard. Make the exact action non-cancellable and
-        # capacity-retaining before any fixture call. If a cancellation wins this
-        # transition, make no call and release the claim.
-        ownership = self._admission.reconcile(
-            verified_owner_id, intention.action_id,
-            ActionReceipt(action_id=intention.action_id, binding=intention.binding,
-                          outcome="SUBMISSION_UNKNOWN"))
-        if ownership.decision_status != "SUBMISSION_UNKNOWN":
+        # P22 submission-ownership guard. Atomically move the exact action from the
+        # eligible ADMITTED state to submission-owned before any fixture call. If a
+        # prior unknown, breach, cancellation or other change wins, make no call.
+        ownership = self._admission.acquire_submission(verified_owner_id, intention.action_id)
+        if ownership != "ACQUIRED":
             return self._abort_submission(
                 verified_owner_id, agent_id, wallet_id, network_id, queue_id, attempt_id,
-                ownership.decision_status, now)
+                ownership, now)
 
         try:
             outcome = transport.submit(prepared)
@@ -366,7 +365,8 @@ class ExecutionService:
     def _begin_submission(
         self, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
         approval: ApprovalSnapshot, context: AdmissionContext, revision: FrozenRevision,
-        inputs: EvaluationInputs, transport: SubmissionTransport, now: dt.datetime,
+        inputs: EvaluationInputs, quote: ActionQuote | None, transport: SubmissionTransport,
+        now: dt.datetime,
     ) -> tuple[TickResult | PreparedSubmission, ActionIntent | None, uuid.UUID | None, uuid.UUID | None]:
         with self._factory() as session:
             try:
@@ -390,7 +390,8 @@ class ExecutionService:
                 action_intent = ActionIntent.model_validate(intent_row.payload)
 
                 revalidation = self._revalidate(
-                    session, owner, entry, intent_row, action_intent, approval, context, revision, inputs, now)
+                    session, owner, entry, intent_row, action_intent, approval, context, revision,
+                    inputs, quote, now)
                 entry.revalidation = revalidation.model_dump(mode="json")
                 entry.updated_at = now
                 if revalidation.status == "DENIED":
@@ -492,7 +493,7 @@ class ExecutionService:
     def _revalidate(
         self, session: Session, owner: uuid.UUID, entry: QueueRow, intent_row: IntentRow,
         action_intent: ActionIntent, approval: ApprovalSnapshot, context: AdmissionContext,
-        revision: FrozenRevision, inputs: EvaluationInputs, now: dt.datetime,
+        revision: FrozenRevision, inputs: EvaluationInputs, quote: ActionQuote | None, now: dt.datetime,
     ) -> RevalidationOutcome:
         decision = session.execute(select(DecisionRow).where(
             DecisionRow.owner_id == owner, DecisionRow.decision_id == entry.decision_id,
@@ -536,6 +537,15 @@ class ExecutionService:
             identity = f"INPUTS_CHANGED:{current.status}:{current.operation or ''}"
             return denied("INPUTS_CHANGED", identity)
 
+        # Explicit current action-quote evidence for the exact action. A current
+        # rule signal is not a current action quote. The authored quote must match
+        # the saved intent's quote identity, units and amount, and be fresh and
+        # unexpired. A missing, stale or changed quote denies without a call and
+        # without silently repricing the saved payload.
+        quote_reason = self._check_action_quote(action_intent, quote, now)
+        if quote_reason is not None:
+            return denied(quote_reason, quote_reason)
+
         # The saved admission must still be live. A cancelled, denied, reconciled
         # or breached action can never be submitted from the queue.
         saved = self._admission.retrieve_decisions(owner, action_id=action_intent.action_id)
@@ -558,6 +568,27 @@ class ExecutionService:
             status="PASSED", reason=None, revision_hash=revision_hash, approval_hash=approval_hash,
             policy_binding=approval.policy_binding, market_binding_id=decision.market_binding_id,
             validation_identity=identity, submission_at=_iso(now))
+
+    @staticmethod
+    def _check_action_quote(action_intent: ActionIntent, quote: ActionQuote | None,
+                           now: dt.datetime) -> str | None:
+        if quote is None:
+            return "QUOTE_MISSING"
+        if quote.quote_asset_id != action_intent.input.quote_asset_id:
+            return "QUOTE_IDENTITY_MISMATCH"
+        expected = action_intent.input.expected_quote or action_intent.input.quote_input
+        if expected is None:
+            return "QUOTE_UNSPECIFIED"
+        if quote.amount.asset_id != expected.asset_id or quote.amount.decimals != expected.decimals:
+            return "QUOTE_UNITS_MISMATCH"
+        observed = parse_utc(quote.observed_at)
+        if observed > now or now - observed > _CONTEXT_FRESHNESS:
+            return "QUOTE_STALE"
+        if now > parse_utc(quote.expires_at):
+            return "QUOTE_EXPIRED"
+        if quote.amount.raw != expected.raw:
+            return "QUOTE_CHANGED"
+        return None
 
     def _durable_coverage(
         self, owner: uuid.UUID, action_intent: ActionIntent, approval: ApprovalSnapshot,

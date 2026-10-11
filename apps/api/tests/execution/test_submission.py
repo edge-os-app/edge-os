@@ -7,21 +7,21 @@ import uuid
 from sqlalchemy import text
 
 from edge_os_api.admission.service import AdmissionService
-from edge_os_api.admission.types import AssetAmount
+from edge_os_api.admission.types import ActionReceipt, AssetAmount
 from edge_os_api.execution.models import ClaimRow, SubmissionAttemptRow
 from edge_os_api.execution.service import ExecutionService
 from edge_os_api.execution.transport import TransportOutcome
 
 from admission._builders import AGENT_A, BASE, NETWORK, WALLET_A, approval_a, context_a, intent_entry
 from execution._builders import frozen_entry_exit
-from execution._support import entry_inputs, enqueue_entry, transport
+from execution._support import entry_inputs, enqueue_entry, quote, transport
 from execution.conftest import NOW
 
 
 def _tick(execution_service, owner, revision, approval, context, fixture):
     return execution_service.tick(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, inputs=entry_inputs(), transport=fixture)
+        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"), transport=fixture)
 
 
 def _active_claims(engine, owner) -> int:
@@ -200,11 +200,11 @@ def test_cancellation_before_the_ownership_transition_makes_no_call(
             super().__init__(execution_factory)
             self._done = False
 
-        def reconcile(self, owner, called_action_id, receipt):
-            if receipt.outcome == "SUBMISSION_UNKNOWN" and not self._done:
+        def acquire_submission(self, owner, called_action_id):
+            if not self._done:
                 self._done = True
                 self.cancel(owner, called_action_id)
-            return super().reconcile(owner, called_action_id, receipt)
+            return super().acquire_submission(owner, called_action_id)
 
     class CountingTransport:
         transport_id = "test-count/1"
@@ -220,8 +220,51 @@ def test_cancellation_before_the_ownership_transition_makes_no_call(
     racing = ExecutionService(execution_factory, CancellingAdmission(), clock=lambda: NOW)
     tick = racing.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, inputs=entry_inputs(), transport=fixture)
+        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"), transport=fixture)
 
     assert tick.status == "SUBMISSION_NOT_OWNED"
     assert fixture.calls == 0
     assert admission_service.retrieve_decisions(fresh_owner, action_id=action_id)[0].status == "CANCELLED"
+
+
+def test_preexisting_unknown_blocks_ownership_and_writes_no_extra_receipt(
+        execution_factory, admission_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    service = ExecutionService(execution_factory, admission_service, clock=lambda: NOW)
+    _decision, approval, context, result = enqueue_entry(service, fresh_owner, revision)
+    action_id = result.intent.action_id
+
+    class UnknownFirstAdmission(AdmissionService):
+        """An independent actor reconciles the action to unknown before our acquire."""
+
+        def __init__(self) -> None:
+            super().__init__(execution_factory)
+            self._done = False
+
+        def acquire_submission(self, owner, called_action_id):
+            if not self._done:
+                self._done = True
+                super().reconcile(owner, called_action_id, ActionReceipt(
+                    action_id=called_action_id, binding=result.intent.binding, outcome="SUBMISSION_UNKNOWN"))
+            return super().acquire_submission(owner, called_action_id)
+
+    class CountingTransport:
+        transport_id = "test-count-unknown/1"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def submit(self, prepared):
+            self.calls += 1
+            return TransportOutcome(outcome="CONFIRMED", detail="must not be called")
+
+    fixture = CountingTransport()
+    racing = ExecutionService(execution_factory, UnknownFirstAdmission(), clock=lambda: NOW)
+    tick = racing.tick(
+        fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
+        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"), transport=fixture)
+
+    assert tick.status == "SUBMISSION_NOT_OWNED"
+    assert fixture.calls == 0
+    receipts = admission_service.retrieve_receipts(fresh_owner, action_id=action_id)
+    assert [item.outcome for item in receipts] == ["SUBMISSION_UNKNOWN"]

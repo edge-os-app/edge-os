@@ -4,15 +4,27 @@ from __future__ import annotations
 
 import threading
 
+from edge_os_api.admission.types import AssetAmount
 from edge_os_api.execution.transport import FixturePlan, LocalFixtureTransport
+from edge_os_api.execution.types import ActionQuote
 
-from admission._builders import AGENT_A, NETWORK, WALLET_A
+from admission._builders import AGENT_A, NETWORK, QUOTE, WALLET_A
 from execution._builders import (
     entry_terms,
     make_inputs,
     scoped_approval,
     scoped_context,
 )
+
+
+def quote(amount_raw: str = "110", *, asset: str = QUOTE, decimals: int = 0,
+          observed_at: str = "2026-01-01T00:16:00Z",
+          expires_at: str = "2026-01-01T00:21:00Z",
+          source_ref: str = "synthetic:authored-current-action-quote") -> ActionQuote:
+    """An authored current action quote. Not a real provider quote."""
+    return ActionQuote(
+        quote_asset_id=asset, amount=AssetAmount(asset_id=asset, raw=amount_raw, decimals=decimals),
+        observed_at=observed_at, expires_at=expires_at, source_ref=source_ref)
 
 
 def transport(mode: str, *, action_id: str | None = None, **plan) -> LocalFixtureTransport:
@@ -55,7 +67,7 @@ def open_position(service, owner, revision, *, quantity: str = "10", quote_input
     assert result.admission_status == "ADMITTED", result.admission_reason
     tick = service.tick(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=context, revision=revision, inputs=entry_inputs(),
+        context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"),
         transport=transport("ACCEPT", action_id=result.intent.action_id))
     assert tick.status == "SUBMITTED_CONFIRMED", tick
     return approval, context

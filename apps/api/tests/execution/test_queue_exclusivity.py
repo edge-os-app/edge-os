@@ -21,6 +21,7 @@ from execution._support import (
     enqueue_entry,
     exit_inputs,
     open_position,
+    quote,
     run_concurrently,
     transport,
 )
@@ -93,7 +94,7 @@ def test_exit_is_selected_before_an_unsubmitted_entry(execution_service, fresh_o
 
     tick = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-        context=position_context, revision=revision, inputs=exit_inputs(),
+        context=position_context, revision=revision, inputs=exit_inputs(), quote=quote("250"),
         transport=transport("ACCEPT", action_id=exit_enqueue.intent.action_id))
     assert tick.selected_action_id == exit_enqueue.intent.action_id
     assert tick.status == "SUBMITTED_CONFIRMED"
@@ -105,13 +106,13 @@ def test_unknown_outcome_blocks_only_its_wallet(execution_service, fresh_owner) 
 
     first = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval_a,
-        context=context_a, revision=revision, inputs=entry_inputs(),
+        context=context_a, revision=revision, inputs=entry_inputs(), quote=quote("110"),
         transport=transport("UNKNOWN", action_id=result_a.intent.action_id))
     assert first.status == "SUBMITTED_UNKNOWN"
 
     blocked = execution_service.tick(
         fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval_a,
-        context=context_a, revision=revision, inputs=entry_inputs(), transport=transport("ACCEPT"))
+        context=context_a, revision=revision, inputs=entry_inputs(), quote=quote("110"), transport=transport("ACCEPT"))
     assert blocked.status == "BLOCKED_UNKNOWN"
 
     # Wallet B is independent and can still proceed.
@@ -126,7 +127,7 @@ def test_unknown_outcome_blocks_only_its_wallet(execution_service, fresh_owner) 
     assert enqueue_b.admission_status == "ADMITTED", enqueue_b.admission_reason
     tick_b = execution_service.tick(
         fresh_owner, agent_id=AGENT_B, wallet_id=WALLET_B, network_id=NETWORK, approval=approval_b,
-        context=context_b, revision=revision, inputs=entry_inputs(),
+        context=context_b, revision=revision, inputs=entry_inputs(), quote=quote("110"),
         transport=transport("ACCEPT", action_id=enqueue_b.intent.action_id))
     assert tick_b.status == "SUBMITTED_CONFIRMED"
 
@@ -139,7 +140,7 @@ def test_two_concurrent_ticks_submit_once(execution_service, execution_engine, f
     def tick(_index: int) -> str:
         return execution_service.tick(
             fresh_owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,
-            context=context, revision=revision, inputs=entry_inputs(),
+            context=context, revision=revision, inputs=entry_inputs(), quote=quote("110"),
             transport=transport("ACCEPT", action_id=action_id)).status
 
     statuses = run_concurrently(2, tick)

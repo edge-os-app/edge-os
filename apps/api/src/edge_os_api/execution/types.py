@@ -157,6 +157,33 @@ class EvaluationInputs(StrictModel):
         return parse_utc(self.decision_time)
 
 
+class ActionQuote(StrictModel):
+    """Authored current action quote for one exact action.
+
+    This is controlled local evidence, not a real provider quote. It carries the
+    quote identity, amount and units, and an observation and expiry time. The
+    submission revalidation requires it to be current and compatible with the
+    saved intent before any transport call.
+    """
+
+    quote_asset_id: str = Field(min_length=1, max_length=200)
+    amount: AssetAmount
+    observed_at: str = Field(min_length=1, max_length=40)
+    expires_at: str = Field(min_length=1, max_length=40)
+    source_ref: str = Field(min_length=1, max_length=200)
+
+    @field_validator("observed_at", "expires_at")
+    @classmethod
+    def times_are_utc(cls, value: str) -> str:
+        return _parse_required(value)
+
+    @model_validator(mode="after")
+    def amount_matches_asset(self) -> "ActionQuote":
+        if self.amount.asset_id != self.quote_asset_id:
+            raise ValueError("the quote amount must use the declared quote asset")
+        return self
+
+
 class RuleEvaluation(StrictModel):
     rule: str = Field(min_length=1, max_length=20)
     state: str = Field(min_length=1, max_length=20)

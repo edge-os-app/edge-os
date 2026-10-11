@@ -724,6 +724,40 @@ class AdmissionService:
                 session.rollback()
                 raise
 
+    # -------------------------------------------------------- acquire submission
+
+    def acquire_submission(self, verified_owner_id: uuid.UUID, action_id: str) -> str:
+        """Atomically acquire submission ownership for one action.
+
+        Under the per-wallet advisory lock, move an `ADMITTED` action to the
+        submission-owned `SUBMISSION_UNKNOWN` state and return `ACQUIRED`. If the
+        action is missing, already unknown, breached, cancelled or otherwise not
+        `ADMITTED`, return its current status and change nothing. No receipt is
+        written: ownership is a pre-call state, not a transport outcome, and the
+        caller records its own pre-call attempt evidence.
+        """
+        with self._factory() as session:
+            try:
+                row = _find_decision(session, verified_owner_id, action_id)
+                if row is None:
+                    return "NOT_FOUND"
+                agent_id, wallet_id, network_id = row.agent_id, row.wallet_id, row.network_id
+                session.rollback()
+                _acquire_wallet_lock(session, verified_owner_id, agent_id, wallet_id, network_id)
+                session.expire_all()
+                row = _find_decision(session, verified_owner_id, action_id, for_update=True)
+                if row is None:
+                    return "NOT_FOUND"
+                if row.status != "ADMITTED":
+                    session.commit()
+                    return row.status
+                row.status = "SUBMISSION_UNKNOWN"
+                session.commit()
+                return "ACQUIRED"
+            except SQLAlchemyError:
+                session.rollback()
+                raise
+
     # -------------------------------------------------------------- reconcile
 
     def reconcile(
