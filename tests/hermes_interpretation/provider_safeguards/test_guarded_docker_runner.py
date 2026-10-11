@@ -182,6 +182,14 @@ def output_folder(argv: list[str]) -> Path:
     return Path(next(part.split("src=")[1].split(",")[0] for part in argv if part.endswith("dst=/job/output")))
 
 
+@pytest.fixture(autouse=True)
+def no_real_docker_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every docker CLI call in these tests answers "no such container" unless a test installs its own answer."""
+    def absent(*args, **_kwargs):
+        return subprocess.CompletedProcess(args, 1 if args[0] == "inspect" else 0, "", "")
+    monkeypatch.setattr(docker_turn_runner, "docker", absent)
+
+
 def install_process(monkeypatch: pytest.MonkeyPatch, behaviour, returncode: int = 3) -> list[list[str]]:
     """Stands in for the `docker run` process only. `behaviour(output_folder)` runs while the process is alive."""
     launched: list[list[str]] = []
@@ -521,7 +529,18 @@ def test_a_directory_chain_longer_than_the_path_limit_cannot_keep_the_credential
     except EvidenceNotSealed:
         pass
 
-    assert not list((tmp_path / "evidence").glob("turn-*/output")), "evidence that cannot be sealed must not be kept"
+    for output in (tmp_path / "evidence").glob("turn-*/output"):  # sealed in place: read the deep file through descriptors
+        fd = os.open(output, os.O_RDONLY)
+        try:
+            for _ in range(700):
+                below = os.open("a", os.O_RDONLY, dir_fd=fd)
+                os.close(fd)
+                fd = below
+            handle = os.open("deep.log", os.O_RDONLY, dir_fd=fd)
+            assert OLD.encode() not in os.read(handle, 1 << 16), "the deep file kept the credential"
+            os.close(handle)
+        finally:
+            os.close(fd)
 
 
 @pytest.mark.parametrize("content", ["", "   \n\t"])
@@ -969,24 +988,30 @@ def test_removing_a_huge_output_after_a_missed_bound_cannot_run_the_turn_past_th
 
 
 def test_a_directory_listing_is_cut_off_at_the_entry_limit_instead_of_being_read_whole(tmp_path: Path, monkeypatch) -> None:
+    import itertools
+    import sys
     import guarded_docker_runner as module
     monkeypatch.setattr(module, "MAX_ENTRIES", 5)
+    for index in range(3):
+        (tmp_path / f"f{index}.log").write_text("x")
 
-    class Endless:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_exc):
-            return False
-
+    class Endless:  # a folder that never ends; reading it whole would never return
         def __iter__(self):
-            index = 0
-            while True:  # a folder that never ends; reading it whole would never return
-                index += 1
-                yield type("Entry", (), {"path": f"/nonexistent/{index}", "stat": lambda self, follow_symlinks=False: os.stat_result((0o100644,) + (0,) * 9)})()
+            return (type("Entry", (), {"name": f"f{index % 3}.log"})() for index in itertools.count())
+
+        def close(self) -> None:
+            pass
 
     real_scandir = os.scandir
-    monkeypatch.setattr(os, "scandir", lambda path: Endless() if str(path) == str(tmp_path) else real_scandir(path))
+    served = {"done": False}
+
+    def scandir(path):
+        if not served["done"] and sys._getframe(1).f_code.co_name == "_walk":
+            served["done"] = True
+            return Endless()
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
     outcome: list = []
 
     def go() -> None:
@@ -1139,7 +1164,8 @@ def test_when_the_plain_walk_fails_for_any_reason_the_output_is_moved_and_never_
 
 # --- Repairs after round-10 review: removal must not follow a link that a surviving container swaps in -----------------
 
-def _swap_a_queued_folder_for_a_link_after_the_first_listing(monkeypatch, output_holder: list, victim: Path) -> None:
+def _swap_a_queued_folder_for_a_link_after_the_first_listing(monkeypatch, output_holder: list, victim: Path,
+                                                             caller: str = "_walk") -> dict:
     """After the removal has listed the output once, a folder it has queued becomes a link to a host folder.
 
     That is what a container that is still alive could do between the listing and the visit. The hook fires once, only for
@@ -1158,7 +1184,7 @@ def _swap_a_queued_folder_for_a_link_after_the_first_listing(monkeypatch, output
         queued.symlink_to(victim, target_is_directory=True)
 
     def from_remove_tree() -> bool:
-        return sys._getframe(2).f_code.co_name == "_remove_tree"
+        return sys._getframe(2).f_code.co_name == caller
 
     def scandir(path):
         result = real_scandir(path)
@@ -1177,6 +1203,7 @@ def _swap_a_queued_folder_for_a_link_after_the_first_listing(monkeypatch, output
 
     monkeypatch.setattr(os, "scandir", scandir)
     monkeypatch.setattr(os, "listdir", listdir)
+    return state
 
 
 class _ListedEntries:
@@ -1191,6 +1218,9 @@ class _ListedEntries:
 
     def __iter__(self):
         return iter(self.entries)
+
+    def close(self) -> None:
+        pass
 
 
 def shutil_rmtree(path: Path) -> None:
@@ -1211,8 +1241,9 @@ def test_removal_does_not_follow_a_link_that_a_surviving_container_swaps_in(tmp_
         (output / "queued" / "inner.log").write_text(OLD)
         (output / "other.log").write_text("x")
 
-    _swap_a_queued_folder_for_a_link_after_the_first_listing(monkeypatch, holder, victim)
+    swap = _swap_a_queued_folder_for_a_link_after_the_first_listing(monkeypatch, holder, victim)
     run_removal_turn(tmp_path, monkeypatch, behaviour, grace=2.0)
+    assert swap["done"], "the swap did not happen, so this test proved nothing"
 
     assert (victim / "keep.txt").read_text() == "a file of the host, not evidence", "removal followed the link out of the evidence"
     assert victim.stat().st_mode & 0o777 == 0o755, "removal changed the mode of a host folder"
@@ -1266,7 +1297,7 @@ def test_removal_does_not_follow_a_link_swapped_in_between_the_check_and_the_ope
 
     def stat_then_swap(path, *args, **kwargs):
         result = real_stat(path, *args, **kwargs)
-        if not state["done"] and path == "queued" and sys._getframe(1).f_code.co_name == "_remove_tree":
+        if not state["done"] and path == "queued" and sys._getframe(1).f_code.co_name in ("_remove_tree", "_walk"):
             state["done"] = True  # the check has just seen a real folder; now it becomes a link
             shutil_rmtree(holder[0] / "queued")
             (holder[0] / "queued").symlink_to(victim, target_is_directory=True)
@@ -1283,3 +1314,104 @@ def test_removal_does_not_follow_a_link_swapped_in_between_the_check_and_the_ope
     assert state["done"], "the swap did not happen, so this test proved nothing"
     assert (victim / "keep.txt").read_text() == "a file of the host, not evidence"
     assert victim.stat().st_mode & 0o777 == 0o755
+
+
+# --- Repairs after round-11 reviews: verify the container after ANY client exit, and seal on descriptors ------------
+
+@pytest.mark.parametrize("returncode", [0, 1, 125])
+def test_a_client_that_exits_while_its_container_still_runs_does_not_skip_the_stop(tmp_path: Path, monkeypatch, returncode: int) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folders: list[Path] = []
+    calls: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(
+        record=calls, on_kill=lambda: (folders[0] / "last-breath.log").write_text(OLD)))  # the container still writes once
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    install_process(monkeypatch, lambda output: folders.append(output), returncode=returncode)
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert any(call[0][0] == "kill" for call in calls), "the client exit code was trusted as proof that the container is gone"
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_sealing_does_not_follow_a_link_swapped_in_after_the_listing(tmp_path: Path, monkeypatch) -> None:
+    victim = tmp_path / "host-folder"
+    victim.mkdir()
+    (victim / "keep.txt").write_text(f"a host file that happens to hold {OLD}")
+    (victim / "keep.txt").chmod(0o644)
+    (victim / "host-link").symlink_to(tmp_path)
+    victim.chmod(0o755)
+    holder: list[Path] = []
+
+    def behaviour(output: Path) -> None:
+        holder.append(output)
+        (output / "queued").mkdir()
+        (output / "queued" / "inner.log").write_text(OLD)
+
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    install_process(monkeypatch, behaviour)
+    import sys
+    state = {"listings": 0, "swapped": False}
+    real_scandir = os.scandir
+
+    def scandir(path):
+        if sys._getframe(1).f_code.co_name in ("_redact", "_walk"):
+            state["listings"] += 1
+            if state["listings"] == 2 and not state["swapped"]:  # the folder was classified and is about to be listed
+                state["swapped"] = True
+                shutil_rmtree(holder[0] / "queued")
+                (holder[0] / "queued").symlink_to(victim, target_is_directory=True)
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    runner, _, _ = build(tmp_path, credential)
+
+    try:
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    except EvidenceNotSealed:
+        pass
+
+    assert (victim / "keep.txt").read_text() == f"a host file that happens to hold {OLD}", "sealing rewrote a host file"
+    assert (victim / "keep.txt").stat().st_mode & 0o777 == 0o644 and victim.stat().st_mode & 0o777 == 0o755
+    assert (victim / "host-link").is_symlink(), "sealing deleted a host link"
+    assert state["swapped"], "the swap did not happen, so this test proved nothing"
+
+
+def test_a_file_that_becomes_a_named_pipe_before_sealing_opens_it_cannot_block_the_turn(tmp_path: Path, monkeypatch) -> None:
+    import sys
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    holder: list[Path] = []
+    state = {"done": False}
+    real_stat = os.stat
+
+    def stat_then_swap(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if not state["done"] and str(path).endswith("f.log") and sys._getframe(1).f_code.co_name in ("_redact", "_seal_file", "_walk"):
+            state["done"] = True  # classified as a regular file; now it becomes a pipe that nobody writes to
+            os.unlink(holder[0] / "f.log")
+            os.mkfifo(holder[0] / "f.log")
+        return result
+
+    def behaviour(output: Path) -> None:
+        holder.append(output)
+        (output / "f.log").write_text(OLD)
+
+    install_process(monkeypatch, behaviour)
+    monkeypatch.setattr(os, "stat", stat_then_swap)
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=1.0)
+    done: list = []
+    worker = threading.Thread(target=lambda: done.append(runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))),
+                              daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    hung = worker.is_alive()
+    if hung:  # release the blocked reader so the test can clean up
+        os.close(os.open(holder[0] / "f.log", os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(timeout=5)
+
+    assert state["done"], "the swap did not happen, so this test proved nothing"
+    assert not hung, "sealing blocked on a named pipe"

@@ -33,6 +33,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 import docker_turn_runner
@@ -119,97 +120,155 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     # --- Sealing evidence -----------------------------------------------------------------------------------------
 
+    _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    @classmethod
+    def _open_dir(cls, parent: int, name: str) -> int:
+        """Open a folder by name relative to the folder `parent`, never through a link, and make it ours (mode 700).
+
+        A locked folder gets a no-follow mode change first. A link that was swapped in fails here (ELOOP or ENOTDIR).
+        """
+        try:
+            fd = os.open(name, cls._DIR_FLAGS, dir_fd=parent)
+        except PermissionError:
+            os.chmod(name, 0o700, dir_fd=parent, follow_symlinks=False)
+            fd = os.open(name, cls._DIR_FLAGS, dir_fd=parent)
+        try:
+            os.fchmod(fd, 0o700)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    @classmethod
+    def _walk(cls, root: Path, until: float, visit: Callable[[int, str, int], bool | None], timeout: type[BaseException],
+              remove_dirs: bool) -> None:
+        """Walk `root` depth first on directory descriptors. Never follows a link. Ticks the clock at every step.
+
+        `visit(dir_fd, name, mode)` is called for every entry that is not a folder; it returns nothing or a value the
+        caller collects itself. Folders are entered through `_open_dir`; with `remove_dirs` each emptied folder is removed.
+        Entries are read one at a time, so a huge folder cannot be read whole before the next clock check.
+        """
+        parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
+        frames: list[tuple[int, str, int, Any, Any]] = []  # (descriptor, name, parent descriptor, scan, iterator)
+        try:
+            fd = cls._open_dir(parent_fd, root.name)
+            scan = os.scandir(fd)
+            frames.append((fd, root.name, parent_fd, scan, iter(scan)))
+            while frames:
+                if time.monotonic() > until:  # every step ticks the clock, including leaving an empty folder
+                    raise timeout("the walk passed its time limit")
+                fd, name, parent, scan, entries = frames[-1]
+                entry = next(entries, None)
+                if entry is None:
+                    frames.pop()
+                    scan.close()
+                    os.close(fd)
+                    if remove_dirs:
+                        os.rmdir(name, dir_fd=parent)
+                    continue
+                child = entry.name
+                mode = os.stat(child, dir_fd=fd, follow_symlinks=False).st_mode
+                if stat.S_ISDIR(mode):
+                    child = visit(fd, child, mode) or child  # a visit may rename a folder before it is entered
+                    below = cls._open_dir(fd, child)
+                    try:
+                        scan = os.scandir(below)
+                    except BaseException:
+                        os.close(below)
+                        raise
+                    frames.append((below, child, fd, scan, iter(scan)))
+                else:
+                    visit(fd, child, mode)
+        finally:
+            for fd, _name, _parent, scan, _entries in frames:
+                scan.close()
+                os.close(fd)
+            os.close(parent_fd)
+
     @classmethod
     def _redact(cls, folder: Path, secret: str, deadline: float) -> bool:
         """Remove the credential from every file and name under `folder`. True when something held it.
 
-        Iterative, so a very deep tree cannot exhaust the recursion limit. Any error propagates to `_seal`.
+        Works on directory descriptors and never follows a link, so a container that is still writing cannot lead it
+        outside `folder`. Links, pipes, sockets and devices are removed without being opened. Any error propagates.
         """
-        forms, found, pending, seen = encodings(secret), False, [folder], 0
-        while pending:
-            current = pending.pop()
-            current.chmod(0o700)
-            with os.scandir(current) as scan:  # read no more than the limit allows, so a folder that never ends cannot hang us
-                entries = list(itertools.islice(scan, MAX_ENTRIES - seen + 1))
-            if len(entries) > MAX_ENTRIES - seen:
+        forms, found, seen = encodings(secret), [False], [0]
+
+        def visit(dir_fd: int, name: str, mode: int) -> str | None:
+            seen[0] += 1
+            if seen[0] > MAX_ENTRIES:
                 raise EvidenceNotSealed("the output holds more entries than can be scanned")
-            for entry in entries:
-                seen += 1
-                if time.monotonic() > deadline:
-                    raise EvidenceNotSealed("sealing passed its time limit")
-                path, kind = Path(entry.path), stat.S_IFMT(entry.stat(follow_symlinks=False).st_mode)
-                if kind not in (stat.S_IFDIR, stat.S_IFREG):  # a link, a named pipe, a socket or a device: removed, never opened
-                    path.unlink()
-                    continue
-                name = os.fsencode(path.name)  # a name that is not valid text is still bytes
-                if any(form in name for form in forms):  # rename BEFORE descending, so the folder's files are still sealed
-                    found = True
-                    path = path.rename(path.with_name(f"redacted-name-{hashlib.sha256(name).hexdigest()[:8]}"))
-                if kind == stat.S_IFDIR:
-                    pending.append(path)
-                else:
-                    found |= cls._seal_file(path, forms)
-        return found
+            raw = os.fsencode(name)  # a name that is not valid text is still bytes
+            if any(form in raw for form in forms):  # rename BEFORE descending, so the folder's files are still sealed
+                found[0] = True
+                renamed = f"redacted-name-{hashlib.sha256(raw).hexdigest()[:8]}"
+                os.rename(name, renamed, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                name = renamed
+            if stat.S_ISDIR(mode):
+                return name
+            if not stat.S_ISREG(mode):
+                os.unlink(name, dir_fd=dir_fd)
+                return None
+            found[0] |= cls._seal_file(dir_fd, name, forms)
+            return None
+
+        cls._walk(folder, deadline, visit, EvidenceNotSealed, remove_dirs=False)
+        return found[0]
 
     @staticmethod
-    def _seal_file(path: Path, forms: list[bytes]) -> bool:
-        path.chmod(0o600)
-        if path.stat().st_size > MAX_SCANNED_BYTES:  # too large to scan whole: not kept
-            path.unlink()
+    def _seal_file(dir_fd: int, name: str, forms: list[bytes]) -> bool:
+        """Seal one file through a descriptor. A link or a pipe swapped in for it is removed, never followed or read."""
+        def open_nofollow(flags: int) -> int:
+            return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+
+        try:
+            fd = open_nofollow(os.O_RDONLY)
+        except PermissionError:  # a locked file: change its own mode, never a link's target
+            os.chmod(name, 0o600, dir_fd=dir_fd, follow_symlinks=False)
+            fd = open_nofollow(os.O_RDONLY)
+        except OSError:  # a link swapped in (ELOOP) or a pipe with no writer: remove the name
+            os.unlink(name, dir_fd=dir_fd)
             return True
-        data = path.read_bytes()
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SCANNED_BYTES:  # not a plain file, or too large to scan
+                os.unlink(name, dir_fd=dir_fd)
+                return True
+            os.fchmod(fd, 0o600)
+            chunks = []
+            while chunk := os.read(fd, 1 << 20):
+                chunks.append(chunk)
+            data = b"".join(chunks)
+        finally:
+            os.close(fd)
         if not any(form in data for form in forms):
             return False
         for form in forms:
             data = data.replace(form, REDACTED.encode())
-        path.write_bytes(data)
+        out = open_nofollow(os.O_WRONLY)
+        try:
+            after = os.fstat(out)
+            if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino):  # the name now points elsewhere: drop it
+                os.unlink(name, dir_fd=dir_fd)
+                return True
+            os.ftruncate(out, 0)
+            view = memoryview(data)
+            while view:
+                view = view[os.write(out, view):]
+        finally:
+            os.close(out)
         return True
 
-    @staticmethod
-    def _remove_tree(root: Path, until: float) -> None:
+    @classmethod
+    def _remove_tree(cls, root: Path, until: float) -> None:
         """Remove `root` and everything under it without ever following a link. Raises `TimeoutError` after `until`.
 
-        Works on directory file descriptors, so a folder that a still-running container swaps for a link while this runs
-        is unlinked as a link and never entered: nothing outside `root` can be touched. Every step ticks the clock.
-        Folders are made ours (mode 700) as they are entered. A very deep tree needs more descriptors than the process
-        may hold; that raises, and the caller moves the tree instead.
+        A folder that a still-running container swaps for a link is unlinked as a link and never entered. A very deep
+        tree needs more descriptors than the process may hold; that raises, and the caller moves the tree instead.
         """
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-
-        def open_folder(parent: int, name: str) -> int:
-            """Open a folder by name relative to `parent`, never through a link; make a locked one ours first."""
-            try:
-                fd = os.open(name, flags, dir_fd=parent)
-            except PermissionError:  # a locked folder: change its own mode (not a link's target), then open it
-                os.chmod(name, 0o700, dir_fd=parent, follow_symlinks=False)
-                fd = os.open(name, flags, dir_fd=parent)
-            os.fchmod(fd, 0o700)
-            return fd
-
-        parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
-        frames: list[tuple[int, str, int, Any]] = []  # (descriptor, name, parent descriptor, names still to visit)
-        try:
-            fd = open_folder(parent_fd, root.name)
-            frames.append((fd, root.name, parent_fd, iter(os.listdir(fd))))
-            while frames:
-                if time.monotonic() > until:  # every step ticks the clock, including the removal of an empty folder
-                    raise TimeoutError("removal passed its time limit")
-                fd, name, parent, names = frames[-1]
-                child = next(names, None)
-                if child is None:
-                    frames.pop()
-                    os.close(fd)
-                    os.rmdir(name, dir_fd=parent)
-                    continue
-                if stat.S_ISDIR(os.stat(child, dir_fd=fd, follow_symlinks=False).st_mode):
-                    below = open_folder(fd, child)  # a link swapped in since the check fails here (ELOOP)
-                    frames.append((below, child, fd, iter(os.listdir(below))))
-                else:
-                    os.unlink(child, dir_fd=fd)
-        finally:
-            for fd, *_ in frames:
-                os.close(fd)
-            os.close(parent_fd)
+        cls._walk(root, until, lambda dir_fd, name, mode: None if stat.S_ISDIR(mode) else os.unlink(name, dir_fd=dir_fd),
+                  TimeoutError, remove_dirs=True)
 
     def _quarantine(self, output: Path, plan: _TurnPlan) -> None:
         """Take evidence that cannot be proved clean out of reach. It returns when the folder is gone, else raises `EvidenceNotSealed`.
@@ -395,10 +454,9 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             (task_dir / "container-lifecycle.json").write_text(json.dumps(launch.stopping, indent=1) + "\n")
             return HermesTurnResult(status="TIMED_OUT", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="TimeoutExpired")
-        if proc.returncode is not None and proc.returncode >= 0:
-            launch.stopped = True  # the client returned, so the container it waited for has exited
-        else:
-            self._confirm_stopped(plan, launch)  # the client died of a signal: the container may still run
+        # Whatever the client's exit code, the container may still run (a client that lost its daemon exits with an
+        # error while the container goes on). Verify it is gone before any evidence is touched.
+        self._confirm_stopped(plan, launch)
         scrubbed = stdout
         for form in (encodings(plan.secret) if plan.secret else []):
             scrubbed = scrubbed.replace(form, REDACTED.encode())
