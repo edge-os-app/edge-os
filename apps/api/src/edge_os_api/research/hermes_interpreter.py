@@ -20,7 +20,7 @@ from typing import Any, Protocol
 from edge_os_api.records import contract_adapter as record_contract
 from .interpretation_attempts import (
     AlreadySettled, AttemptIdentity, AttemptInFlight, AttemptLedger, AttemptSettlement, AttemptView, ExecutionGuard,
-    LateResult, RetryTargetInvalid, Usage,
+    LateResult, RetryTargetInvalid, RevisionMoved, Usage,
 )
 from .interpretation_response import (
     ADOPT_QUESTION_ID, APPLICATION_OWNED_FIELDS, ClarificationAnswer, OfferedQuestion, ParsedInterpretation, Rejection,
@@ -180,6 +180,7 @@ UNAVAILABLE_DETAIL = {
     "outcome_unknown": "It is not known whether the model provider finished. The request is saved.",
     "attempt_in_flight": "An earlier attempt for this request has not finished.",
     "retry_target_invalid": "The attempt to retry does not belong to this request.",
+    "revision_moved": "The saved meaning changed after this was requested, so no model call was made.",
     "attempt_not_recorded": "The attempt could not be recorded, so no model call was made.",
     "result_not_recorded": "The result could not be recorded, so it was not used.",
     "result_arrived_late": "The result arrived after the attempt was closed. It is kept for review and was not used.",
@@ -311,11 +312,18 @@ class HermesInterpreter:
 
     def follow_up(self, owner_id: str, intake_record_id: str, intake: Mapping[str, Any],
                   previous_evidence: Sequence[Mapping[str, Any]], question: str, answer: ClarificationAnswer,
-                  retry_of: str | None = None, previous_revision_id: str | None = None) -> InterpretResult:
-        """One attempt to read a free-text reply to a clarification question."""
+                  retry_of: str | None = None, previous_revision_id: str | None = None,
+                  question_id: str | None = None) -> InterpretResult:
+        """One attempt to read a free-text reply to a clarification question.
+
+        The identifier of the question the user answered is part of the saved task, so a retry or a recovery names the
+        same question and never guesses it from the question text.
+        """
         task = _task_base("follow_up", intake)
         task.update(previous_field_evidence=_model_view(previous_evidence, task["model_fields"]),
                     question=question, answer=answer.text)
+        if question_id is not None:
+            task["question_id"] = question_id
         return self._attempt(owner_id, intake_record_id, "FOLLOW_UP", _task_json(task), answer.answer_ref, answer.text,
                              previous_revision_id, retry_of,
                              lambda text: self._publishable_reply(
@@ -380,6 +388,8 @@ class HermesInterpreter:
             return Unavailable(None, "attempt_in_flight", UNAVAILABLE_DETAIL["attempt_in_flight"])
         except RetryTargetInvalid:
             return Unavailable(None, "retry_target_invalid", UNAVAILABLE_DETAIL["retry_target_invalid"])
+        except RevisionMoved:
+            return Unavailable(None, "revision_moved", UNAVAILABLE_DETAIL["revision_moved"])
         except Exception as error:  # noqa: BLE001 - storage can fail in many ways; with no record there must be no provider call
             log.error("attempt not recorded: %s", type(error).__name__)
             return Unavailable(None, "attempt_not_recorded", UNAVAILABLE_DETAIL["attempt_not_recorded"])

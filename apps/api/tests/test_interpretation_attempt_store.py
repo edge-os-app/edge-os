@@ -140,7 +140,7 @@ def test_a_second_attempt_is_refused_while_one_is_open_and_allowed_after_it_sett
     first = ledger.begin(owner, intake, identity())
     with pytest.raises(AttemptInFlight):
         ledger.begin(owner, intake, identity())
-    ledger.settle(settled(first.attempt_id, owner))
+    ledger.settle(settled(first.attempt_id, owner, "PROVIDER_FAILED", None, error_class="ProviderHTTPError"))
 
     second = ledger.begin(owner, intake, identity(), retry_of=first.attempt_id)
 

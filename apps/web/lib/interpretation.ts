@@ -74,7 +74,9 @@ export function sourceQuote(sourceRef: string, original: string): string | null 
   const match = /^intake:original_request#c(\d+)-(\d+)$/.exec(sourceRef);
   if (!match) return null;
   const start = Number(match[1]), end = Number(match[2]);
-  return end > start && end <= original.length ? original.slice(start, end) : null;
+  // The API counts offsets in Unicode characters (code points). A string index counts UTF-16 units, so an emoji would shift it.
+  const characters = Array.from(original);
+  return end > start && end <= characters.length ? characters.slice(start, end).join("") : null;
 }
 
 /**

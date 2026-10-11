@@ -118,6 +118,15 @@ describe("interpreter attempts", () => {
     expect(systemFailure([{ code: "missing_capability", path: "/", detail: "" }])).toBeNull();
     expect(systemFailure([{ code: "interpreter_unavailable", path: "/", detail: "" }])).toBe("UNAVAILABLE");
   });
+
+  it("counts the stored offsets in characters, so an emoji before or inside a passage does not shift the quote", () => {
+    const original = "🚀 Buy when the 15-minute price return is above 1%";
+    // the API stores code point offsets: the emoji is one character, the quote starts at 2 and ends at 49
+    expect(sourceQuote("intake:original_request#c2-49", original)).toBe("Buy when the 15-minute price return is above 1%");
+    const inside = "Buy 🚀 when above 1%";
+    expect(sourceQuote("intake:original_request#c0-19", inside)).toBe("Buy 🚀 when above 1%");
+    expect(sourceQuote("intake:original_request#c0-20", inside)).toBeNull();
+  });
 });
 
 const baseBundle = (outcome: string, finding: { code: string; detail: string }, retry: object, attempts: Attempt[], reply: object | null = null) => ({

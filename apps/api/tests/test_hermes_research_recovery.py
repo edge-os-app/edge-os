@@ -318,13 +318,17 @@ def _accepted_follow_up(client: TestClient, owner_headers: dict[str, str], bundl
     return hermes, principal, result, ClarificationAnswer(answer_ref, WORDS)
 
 
-def test_a_reply_is_not_published_when_the_saved_meaning_moved_on(make_client, owner_a) -> None:
+def test_a_reply_is_not_published_when_the_saved_meaning_moved_on(make_client, owner_a, monkeypatch) -> None:
     runner = CaseRunner(turn_result(case("rough-hunch")["provider"]))
     client = make_client(runner)
     bundle = create(client, owner_a, "rough-hunch").json()
     first_revision = bundle["head"]["interpretation_revision_id"]
-    moved = answer(client, owner_a, bundle, "choose-entry", choice_id="g3-1pct").json()
+    # the reply was admitted and answered while the first meaning was current; the meaning moved before it was published
     hermes, principal, result, words = _accepted_follow_up(client, owner_a, bundle, first_revision)
+    with monkeypatch.context() as patch:
+        # recovery would publish the saved reply first; this test is about the publish guard when that has not happened
+        patch.setattr(interpretation_workflow.HermesResearch, "reconcile", lambda *args, **kwargs: None)
+        moved = answer(client, owner_a, bundle, "choose-entry", choice_id="g3-1pct").json()
 
     with client.app.state.session_factory() as session:
         from edge_os_api.core.errors import AppError
@@ -509,3 +513,131 @@ def test_a_saved_accepted_result_that_the_current_rules_reject_is_logged_by_reas
     assert "saved accepted answer rejected by the current rules: unpublishable_response" in caplog.text
     after = bundle_of(second, owner_a, intake)
     assert after["attempts"][0]["parse_result"] == "ACCEPTED" and after["interpretations"] == []
+
+
+# --- Gate 1: the answered question, and a retry that waited before admission --------------------------------------------
+
+EXIT_RULE = {"op": "lt", "args": [{"op": "price_return", "lookback_buckets": 1},
+                                  {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}]}
+EXIT_REPLY = "exit when the last 5 minute return is below zero"
+
+
+def same_text_questions() -> dict[str, Any]:
+    first = json.loads(json.dumps(case("rough-hunch")["provider"]["model_response"]))
+    for question in first["questions"]:
+        question["text"] = "Which value do you mean?"
+    return first
+
+
+def exit_reply_result() -> Any:
+    from hermes_cases import turn_result as as_result  # noqa: F401
+    from test_hermes_research_flow import reply
+    first = case("rough-hunch")["provider"]["model_response"]
+    delta = [{"field_name": "exit", "state": "KNOWN", "origin": "USER_STATED", "source_passage": EXIT_REPLY, "value": EXIT_RULE}]
+    return reply({**first, "field_evidence": delta, "questions": []})
+
+
+def saved_clarification_question(client: TestClient, intake_id: str) -> list[str]:
+    return [row[0] for row in rows(client, "select content->>'question_id' from records where record_type = 'Clarification' "
+                                           "and intake_record_id = :i order by created_at", i=intake_id)]
+
+
+def test_a_retried_reply_is_saved_for_the_question_the_user_answered_even_when_two_questions_share_one_text(
+        make_client, owner_a) -> None:
+    from test_hermes_research_flow import reply
+    runner = CaseRunner(reply(same_text_questions()), turn_result(case("provider-503")["provider"]), exit_reply_result())
+    client = make_client(runner)
+    bundle = create(client, owner_a, "rough-hunch").json()
+    failed = answer(client, owner_a, bundle, "choose-exit", answer_text=EXIT_REPLY).json()
+    assert failed["attempts"][-1]["status"] == "PROVIDER_FAILED"
+
+    retried = retry(client, owner_a, failed, failed["attempts"][-1]["attempt_id"])
+
+    assert retried.status_code == 201, retried.text
+    assert saved_clarification_question(client, bundle["intake"]["record_id"]) == ["choose-exit"]
+
+
+def test_a_reply_recovered_after_a_crash_is_saved_for_the_question_the_user_answered_even_when_texts_repeat(
+        make_client, owner_a, monkeypatch) -> None:
+    from test_hermes_research_flow import reply
+    runner = CaseRunner(reply(same_text_questions()), exit_reply_result())
+    client = make_client(runner)
+    bundle = create(client, owner_a, "rough-hunch").json()
+
+    def crash(*args: Any, **kwargs: Any):
+        raise RuntimeError("the process died after the answer was saved and before the revision was")
+    with monkeypatch.context() as patch:
+        patch.setattr(interpretation_workflow.HermesResearch, "_publish_reply", crash)
+        crashed = answer(client, owner_a, bundle, "choose-exit", answer_text=EXIT_REPLY)
+        assert crashed.status_code == 500  # the answer was saved by the attempt; the revision was not
+
+    reopened = make_client(CaseRunner())  # its startup recovery re-reads the saved answer without a model call
+    assert reopened.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).status_code == 200
+    assert saved_clarification_question(reopened, bundle["intake"]["record_id"]) == ["choose-exit"]
+
+
+def test_a_retry_that_waited_before_admission_does_not_make_a_second_call_after_another_retry_succeeded(
+        make_client, owner_a, monkeypatch) -> None:
+    runner = CaseRunner(turn_result(case("provider-503")["provider"]), turn_result(case("concrete-thesis")["provider"]),
+                        turn_result(case("concrete-thesis")["provider"]))
+    client = make_client(runner)
+    failed = create(client, owner_a, "concrete-thesis").json()
+    attempt_id = failed["attempts"][0]["attempt_id"]
+    waiting, release, calls = threading.Event(), threading.Event(), []
+    real = interpretation_workflow.HermesResearch._interpret
+
+    def paused_first_call(self, *args: Any, **kwargs: Any):
+        calls.append(1)
+        if len(calls) == 1:
+            waiting.set()
+            assert release.wait(30)  # the first retry has passed its eligibility check and waits before admission
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(interpretation_workflow.HermesResearch, "_interpret", paused_first_call)
+    late: dict[str, Any] = {}
+    worker = threading.Thread(target=lambda: late.update(response=retry(client, owner_a, failed, attempt_id)))
+    worker.start()
+    try:
+        assert waiting.wait(30)
+        prompt = retry(client, owner_a, failed, attempt_id)
+        assert prompt.status_code == 201, prompt.text
+    finally:
+        release.set()
+        worker.join(30)
+
+    assert late["response"].status_code == 409, late["response"].text
+    assert len(runner.turns) == 2, "the late retry must not call the provider"
+    final = bundle_of(client, owner_a, failed["intake"]["record_id"])
+    assert [a["sequence"] for a in final["attempts"]] == [1, 2] and final["attempts"][1]["revision_id"] is not None
+
+
+def test_a_reply_that_waited_before_admission_makes_no_call_once_the_meaning_it_answers_has_moved(
+        make_client, owner_a, monkeypatch) -> None:
+    """The shared admission rule: work starts only on the saved meaning it was checked against."""
+    from edge_os_api.research.hermes_interpreter import HermesInterpreter
+    runner = CaseRunner(turn_result(case("rough-hunch")["provider"]), exit_reply_result())
+    client = make_client(runner)
+    bundle = create(client, owner_a, "rough-hunch").json()
+    waiting, release = threading.Event(), threading.Event()
+    real = HermesInterpreter.follow_up
+
+    def paused(self, *args: Any, **kwargs: Any):
+        waiting.set()
+        assert release.wait(30)  # the reply has passed its checks and waits before the attempt is admitted
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(HermesInterpreter, "follow_up", paused)
+    late: dict[str, Any] = {}
+    worker = threading.Thread(target=lambda: late.update(response=answer(
+        client, owner_a, bundle, "choose-exit", answer_text=EXIT_REPLY)))
+    worker.start()
+    try:
+        assert waiting.wait(30)
+        moved = answer(client, owner_a, bundle, "choose-entry", choice_id="g3-1pct")
+        assert moved.status_code == 201, moved.text
+    finally:
+        release.set()
+        worker.join(30)
+
+    assert late["response"].status_code == 409, late["response"].text
+    assert len(runner.turns) == 1, "the late reply must not call the provider"
+    final = bundle_of(client, owner_a, bundle["intake"]["record_id"])
+    assert [a["sequence"] for a in final["attempts"]] == [1] and len(final["interpretations"]) == 2

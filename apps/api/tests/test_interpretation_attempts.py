@@ -299,7 +299,7 @@ def test_an_attempt_that_may_still_be_running_is_never_closed(ledger: AttemptLed
 def test_closing_abandoned_attempts_leaves_settled_ones_alone(ledger: AttemptLedger) -> None:
     ledger.begin(OWNER, INTAKE, IDENTITY)
     ledger.settle(settlement("attempt-1"))
-    ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")
+    ledger.begin(OWNER, INTAKE, IDENTITY)
 
     ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
     assert [v.status for v in ledger.history(OWNER, INTAKE)] == ["COMPLETED", "INTERRUPTED"]
@@ -470,3 +470,24 @@ def test_the_ledger_refuses_the_settlements_that_the_database_would_refuse(ledge
     with pytest.raises(InvalidSettlement):
         ledger.settle(dataclasses.replace(settlement("attempt-1", status, **changes), request_count=request_count))
     assert ledger.history(OWNER, INTAKE)[0].status == "STARTED"
+
+
+def test_a_retry_names_the_latest_attempt_only(ledger: AttemptLedger) -> None:
+    """Eligibility is decided at admission: a retry that names an attempt another retry already moved past is refused."""
+    failure = dict(status="PROVIDER_FAILED", text=None, parse_result="NOT_PARSED", error_class="ProviderHTTPError")
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    ledger.settle(settlement("attempt-1", **failure))
+    ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")
+    ledger.settle(settlement("attempt-2", **failure))
+
+    with pytest.raises(RetryTargetInvalid):
+        ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")
+    assert ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-2").sequence == 3
+
+
+def test_an_accepted_attempt_is_not_retried(ledger: AttemptLedger) -> None:
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    ledger.settle(settlement("attempt-1"))
+
+    with pytest.raises(RetryTargetInvalid):
+        ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")

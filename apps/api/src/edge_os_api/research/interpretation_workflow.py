@@ -184,6 +184,8 @@ class HermesResearch:
             raise _conflict("attempt_in_flight", "An earlier attempt for this request has not finished.")
         if reason == "retry_target_invalid":
             raise _conflict("retry_target_invalid", "The attempt to retry does not belong to this request.")
+        if reason == "revision_moved":
+            raise _conflict("parent_revision_conflict", "The saved meaning changed first. Reload the request.")
         if reason in {"attempt_not_recorded", "result_not_recorded"} or result.attempt_id is None:
             raise service_unavailable("RECONCILE")
         known = reason == "provider_failed"
@@ -301,7 +303,7 @@ class HermesResearch:
             session.commit()
         except record_contract.Invalid as error:
             session.rollback()  # keep the saved reading as it was
-            log.error("record refused by the contract: %s", error)
+            log.error("record refused by the contract: %s", type(error).__name__)
             if "byte" not in str(error):
                 raise  # not a size problem: let it show as the failure it is
             raise invalid("/", "This answer produces a record that is too large to save.", "record_too_large") from None
@@ -324,13 +326,13 @@ class HermesResearch:
         answer = ClarificationAnswer(f"reply:{uuid.uuid4()}", body["answer_text"])
         result = self.interpreter.follow_up(
             str(principal.user_id), str(intake_id), intake.content, head.content["field_evidence"], question, answer,
-            previous_revision_id=head.content["interpretation_revision_id"])
+            previous_revision_id=head.content["interpretation_revision_id"], question_id=body["question_id"])
         return self._publish_follow_up(session, principal, intake_id, result, answer, body["question_id"], question)
 
     def _publish_follow_up(self, session: Session, principal: Principal, intake_id: uuid.UUID, result: InterpretResult,
                            answer: ClarificationAnswer, question_id: str, question: str) -> tuple[int, dict[str, Any]]:
         if isinstance(result, Unavailable):
-            if result.reason_code in {"attempt_in_flight", "retry_target_invalid", "attempt_not_recorded",
+            if result.reason_code in {"attempt_in_flight", "retry_target_invalid", "revision_moved", "attempt_not_recorded",
                                       "result_not_recorded"}:
                 self._raise_or_record_unavailable(session, principal, intake_id, result)
             return 200, service.load_bundle(session, principal, intake_id, self)
@@ -385,20 +387,28 @@ class HermesResearch:
         identity = last.start.identity
         task = json.loads(identity.task_text)
         answer = ClarificationAnswer(identity.answer_ref or "", identity.answer_text or "")
-        question_id = self._question_id_of(session, principal, intake.record_id, head, task["question"])
+        question_id = self._question_id_of(session, principal, intake.record_id, head, task)
         session.rollback()  # no transaction is open while the provider is called
         result = self.interpreter.follow_up(
             str(principal.user_id), str(intake.record_id), intake.content, head.content["field_evidence"],
             task["question"], answer, retry_of=last.start.attempt_id,
-            previous_revision_id=head.content["interpretation_revision_id"])
+            previous_revision_id=head.content["interpretation_revision_id"], question_id=question_id)
         return self._publish_follow_up(session, principal, intake.record_id, result, answer, question_id, task["question"])
 
-    def _question_id_of(self, session: Session, principal: Principal, intake_id: uuid.UUID, head: Record, text_: str) -> str:
+    def _question_id_of(self, session: Session, principal: Principal, intake_id: uuid.UUID, head: Record,
+                        task: dict[str, Any]) -> str:
+        """The identifier of the question that the saved reply answered.
+
+        The task saved with the attempt names it. An attempt saved before that field existed names only the question
+        text; then the text must match exactly one open question, and any other case stays unguessed.
+        """
+        saved = task.get("question_id")
+        if isinstance(saved, str) and saved:
+            return saved
         rows = service.intake_rows(session, principal, intake_id)
-        for question in self._open_for(session, principal, intake_id, rows, head):
-            if question["text"] == text_:
-                return question["question_id"]
-        return f"{TEXT_QUESTION_PREFIX}{text_}"
+        matches = [q["question_id"] for q in self._open_for(session, principal, intake_id, rows, head)
+                   if q["text"] == task["question"]]
+        return matches[0] if len(matches) == 1 else f"{TEXT_QUESTION_PREFIX}{task['question']}"
 
     # --- questions and views ------------------------------------------------------------------------------------
 
@@ -580,7 +590,7 @@ class HermesResearch:
         answer = ClarificationAnswer(identity.answer_ref or "", identity.answer_text or "")
         parsed = self.interpreter.reparse(view, intake, head.content["field_evidence"], answer)
         if isinstance(parsed, ParsedInterpretation):
-            question_id = self._question_id_of(session, principal, intake_id, head, task["question"])
+            question_id = self._question_id_of(session, principal, intake_id, head, task)
             self._publish_reply(session, principal, intake_id, view.start.attempt_id, parsed, answer, question_id,
                                 task["question"])
         else:

@@ -26,7 +26,8 @@ from edge_os_api.records.models import (
 )
 
 from .interpretation_attempts import (
-    AlreadyLinked, AlreadySettled, AttemptIdentity, AttemptInFlight, AttemptStart, AttemptSettlement, LateResult, Usage,
+    AlreadyLinked, AlreadySettled, AttemptIdentity, AttemptInFlight, AttemptStart, AttemptSettlement, LateResult,
+    RevisionMoved, Usage,
 )
 
 __all__ = ["AdvisoryLockGuard", "ClaimHeld", "PostgresAttemptStore"]
@@ -120,8 +121,33 @@ class PostgresAttemptStore:
             previous_revision_id=uuid.UUID(identity.previous_revision_id) if identity.previous_revision_id else None,
             started_at=start.started_at)
         with self._unit() as session:  # the unique (owner, request, sequence) is what separates concurrent admissions
+            self._require_current_basis(session, start)
             self._insert(session, row, {"uq_attempt_owner_intake_sequence": AttemptInFlight(
                 "Another attempt for this request took this place first.")})
+
+    @staticmethod
+    def _require_current_basis(session: Session, start: AttemptStart) -> None:
+        """Admit a reply only while the saved meaning it answers is still the current one.
+
+        The request row is locked for the check and the insert, the same lock that every writer of a revision takes. A
+        writer then either finished first, and this call sees the new head, or it starts later and sees this open
+        attempt. A request that was checked earlier and waited cannot start a second provider call on an old basis.
+        """
+        if start.identity.previous_revision_id is None:
+            return  # a first reading reads the request itself; the ledger's latest-attempt rule covers its retries
+        found = session.execute(text(
+            "select 1 from records where owner_id = :o and record_id = :i and record_type = 'IntakeRequest' for update"),
+            {"o": uuid.UUID(start.owner_id), "i": uuid.UUID(start.intake_record_id)}).first()
+        if found is None:
+            return  # the ledger is used on its own in unit tests; a stored request always has its row
+        head = session.execute(text(
+            "select p.content ->> 'interpretation_revision_id' from records p "
+            "where p.owner_id = :o and p.intake_record_id = :i and p.record_type = 'PromptInterpretation' "
+            "and not exists (select 1 from records s where s.owner_id = p.owner_id and s.record_type = 'PromptInterpretation' "
+            "and s.predecessor_record_id = p.record_id) order by p.created_at desc limit 1"),
+            {"o": uuid.UUID(start.owner_id), "i": uuid.UUID(start.intake_record_id)}).scalar_one_or_none()
+        if head != start.identity.previous_revision_id:
+            raise RevisionMoved("The saved meaning changed after this attempt was requested.")
 
     def add_settlement(self, settlement: AttemptSettlement) -> None:
         with self._unit() as session:

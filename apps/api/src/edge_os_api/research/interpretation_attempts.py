@@ -30,6 +30,10 @@ class AttemptInFlight(AttemptError):
     """Another attempt for this request has not settled."""
 
 
+class RevisionMoved(AttemptError):
+    """The saved meaning that this attempt would read is no longer the current one."""
+
+
 class RetryTargetInvalid(AttemptError):
     """A retry must name an earlier attempt of the same owner and request."""
 
@@ -206,8 +210,16 @@ class AttemptLedger:
         settled = {settlement.attempt_id for settlement in self._store.settlements(owner_id, intake_record_id)}
         if any(start.attempt_id not in settled for start in starts):
             raise AttemptInFlight("Another attempt for this request has not settled.")
-        if retry_of is not None and retry_of not in {start.attempt_id for start in starts}:
-            raise RetryTargetInvalid("A retry must name an earlier attempt of this request.")
+        if retry_of is not None:
+            # Eligibility is decided here, where the unique (owner, request, sequence) separates concurrent callers: a
+            # retry follows the LATEST attempt, and only when that attempt did not give a usable answer. A request that
+            # was checked earlier and admitted later names an attempt that another retry may have moved past.
+            latest = starts[-1] if starts else None
+            if latest is None or latest.attempt_id != retry_of:
+                raise RetryTargetInvalid("A retry must name the latest attempt of this request.")
+            target = next((s for s in self._store.settlements(owner_id, intake_record_id) if s.attempt_id == retry_of), None)
+            if target is not None and target.status == "COMPLETED" and target.parse_result == "ACCEPTED":
+                raise RetryTargetInvalid("An accepted attempt is not retried.")
         start = AttemptStart(attempt_id=attempt_id or self._new_id(), owner_id=owner_id, intake_record_id=intake_record_id,
                              sequence=len(starts) + 1, retry_of=retry_of, identity=identity,
                              config_sha256=record_contract.sha256_hex(dict(identity.config)), started_at=self._now())

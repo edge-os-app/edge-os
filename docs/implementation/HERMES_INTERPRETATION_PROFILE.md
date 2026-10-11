@@ -105,7 +105,7 @@ Choosing an offered option and adopting the pending settings are deterministic. 
 
 Two append-only rows per attempt: a start (before the call) and a settlement (after).
 
-- Start: owner, request, sequence, `retry_of`, purpose, prompt version, system-prompt hash, the **exact task text** and its hash (the ledger refuses a hash that does not match the text), response-shape hash, P02 manifest hash, configuration and its hash, runtime label, and for a follow-up the `answer_ref` of the user's reply. P02's `Clarification` record keeps only a reference string, so the task text in the start row is where a free-text reply is kept.
+- Start: owner, request, sequence, `retry_of`, purpose, prompt version, system-prompt hash, the **exact task text** and its hash (for a reply the task text also names the question the user answered, so a retry or a recovery never guesses it from the question text) (the ledger refuses a hash that does not match the text), response-shape hash, P02 manifest hash, configuration and its hash, runtime label, and for a follow-up the `answer_ref` of the user's reply. P02's `Clarification` record keeps only a reference string, so the task text in the start row is where a free-text reply is kept.
 - Settlement: status, finish time, measured latency, usage, provider request count, response hash and exact text, parse result, error class, what the runtime reported about itself.
 
 | Status | Completion |
@@ -115,7 +115,7 @@ Two append-only rows per attempt: a start (before the call) and a settlement (af
 | `PROVIDER_FAILED` | `NONE` |
 | `TIMED_OUT`, `INTERRUPTED`, `UNKNOWN` | `UNKNOWN` |
 
-Rules the ledger enforces: sequence numbers rise by one; a retry names an earlier attempt of the same owner and request; only one attempt may be open per request; an attempt settles once; hashes must match the saved text; usage is either reported with input and output counts or unknown; a truncated response is never accepted; an attempt links to one revision, and only if it completed and was accepted.
+Rules the ledger enforces: sequence numbers rise by one; a retry names the LATEST attempt of the same owner and request, and only when that attempt did not give an accepted answer (decided at admission, so a retry that waited cannot start a second call after another retry moved past it); a reply is admitted only while the saved meaning it answers is still current (the store locks the request row for that check and the insert, the same lock every writer of a revision takes); only one attempt may be open per request; an attempt settles once; hashes must match the saved text; usage is either reported with input and output counts or unknown; a truncated response is never accepted; an attempt links to one revision, and only if it completed and was accepted.
 
 **Unknown stays unknown.** Usage that the provider did not report is stored as empty, never as zero. A restart closes an unsettled attempt as `INTERRUPTED` with unknown usage only when nobody holds its claim. A held claim means the attempt may still run, so it stays open. Nothing is replayed. An accepted result that no revision uses yet can be recovered by parsing the saved text again. That makes no model call.
 

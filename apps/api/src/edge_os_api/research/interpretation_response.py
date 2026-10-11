@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import math
-import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
