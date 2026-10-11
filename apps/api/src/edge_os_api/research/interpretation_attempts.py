@@ -210,6 +210,9 @@ class AttemptLedger:
         settled = {settlement.attempt_id for settlement in self._store.settlements(owner_id, intake_record_id)}
         if any(start.attempt_id not in settled for start in starts):
             raise AttemptInFlight("Another attempt for this request has not settled.")
+        if retry_of is None and identity.purpose == "INTERPRET" and starts:
+            # A first reading is the first attempt. Any later reading of the request is a retry that names its target.
+            raise RetryTargetInvalid("A first reading is the first attempt of this request.")
         if retry_of is not None:
             # Eligibility is decided here, where the unique (owner, request, sequence) separates concurrent callers: a
             # retry follows the LATEST attempt, and only when that attempt did not give a usable answer. A request that

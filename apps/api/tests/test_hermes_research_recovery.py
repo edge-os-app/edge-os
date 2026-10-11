@@ -641,3 +641,46 @@ def test_a_reply_that_waited_before_admission_makes_no_call_once_the_meaning_it_
     assert len(runner.turns) == 1, "the late reply must not call the provider"
     final = bundle_of(client, owner_a, bundle["intake"]["record_id"])
     assert [a["sequence"] for a in final["attempts"]] == [1] and len(final["interpretations"]) == 2
+
+
+def test_a_first_reading_start_that_waited_before_admission_does_not_make_a_second_call(
+        make_client, owner_a, monkeypatch) -> None:
+    """A saved request with no attempt offers a start without a target; two such starts must read it once."""
+    from edge_os_api.research.attempt_store import AdvisoryLockGuard
+    runner = CaseRunner(turn_result(case("concrete-thesis")["provider"]), turn_result(case("concrete-thesis")["provider"]))
+    client = make_client(runner)
+    with monkeypatch.context() as patch:
+        def refuse(self, attempt_id):
+            raise RuntimeError("no claim")
+        patch.setattr(AdvisoryLockGuard, "claim", refuse)
+        created = create(client, owner_a, "concrete-thesis")
+    assert created.status_code == 503, created.text
+    intake = first_request_id(client, owner_a)
+    never_read = bundle_of(client, owner_a, intake)
+    assert never_read["attempts"] == [] and never_read["head"]["retry"]["allowed"] is True
+
+    waiting, release, calls = threading.Event(), threading.Event(), []
+    real = interpretation_workflow.HermesResearch._interpret
+
+    def paused_first_call(self, *args: Any, **kwargs: Any):
+        calls.append(1)
+        if len(calls) == 1:
+            waiting.set()
+            assert release.wait(30)
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(interpretation_workflow.HermesResearch, "_interpret", paused_first_call)
+    late: dict[str, Any] = {}
+    worker = threading.Thread(target=lambda: late.update(response=retry(client, owner_a, never_read, None)))
+    worker.start()
+    try:
+        assert waiting.wait(30)
+        prompt = retry(client, owner_a, never_read, None)
+        assert prompt.status_code == 201, prompt.text
+    finally:
+        release.set()
+        worker.join(30)
+
+    assert late["response"].status_code == 409, late["response"].text
+    assert len(runner.turns) == 1, "the late start must not call the provider"
+    final = bundle_of(client, owner_a, intake)
+    assert [a["sequence"] for a in final["attempts"]] == [1] and final["attempts"][0]["revision_id"] is not None

@@ -298,11 +298,12 @@ def test_an_attempt_that_may_still_be_running_is_never_closed(ledger: AttemptLed
 
 def test_closing_abandoned_attempts_leaves_settled_ones_alone(ledger: AttemptLedger) -> None:
     ledger.begin(OWNER, INTAKE, IDENTITY)
-    ledger.settle(settlement("attempt-1"))
-    ledger.begin(OWNER, INTAKE, IDENTITY)
+    ledger.settle(settlement("attempt-1", "PROVIDER_FAILED", text=None, parse_result="NOT_PARSED",
+                             error_class="ProviderHTTPError"))
+    ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")
 
     ledger.interrupt_abandoned(OWNER, INTAKE, lambda start: True)
-    assert [v.status for v in ledger.history(OWNER, INTAKE)] == ["COMPLETED", "INTERRUPTED"]
+    assert [v.status for v in ledger.history(OWNER, INTAKE)] == ["PROVIDER_FAILED", "INTERRUPTED"]
 
 
 def test_history_is_private_to_the_owner(ledger: AttemptLedger) -> None:
@@ -491,3 +492,12 @@ def test_an_accepted_attempt_is_not_retried(ledger: AttemptLedger) -> None:
 
     with pytest.raises(RetryTargetInvalid):
         ledger.begin(OWNER, INTAKE, IDENTITY, retry_of="attempt-1")
+
+
+def test_a_first_reading_is_admitted_only_as_the_first_attempt(ledger: AttemptLedger) -> None:
+    """A start that was checked while the request had no attempt and waited must not become a second reading."""
+    ledger.begin(OWNER, INTAKE, IDENTITY)
+    ledger.settle(settlement("attempt-1"))
+
+    with pytest.raises(RetryTargetInvalid):
+        ledger.begin(OWNER, INTAKE, IDENTITY)

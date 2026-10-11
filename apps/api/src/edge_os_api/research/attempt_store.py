@@ -134,7 +134,7 @@ class PostgresAttemptStore:
         attempt. A request that was checked earlier and waited cannot start a second provider call on an old basis.
         """
         if start.identity.previous_revision_id is None:
-            return  # a first reading reads the request itself; the ledger's latest-attempt rule covers its retries
+            return  # a first reading reads the request itself; the ledger admits it only as the first attempt or as a retry of the latest one
         found = session.execute(text(
             "select 1 from records where owner_id = :o and record_id = :i and record_type = 'IntakeRequest' for update"),
             {"o": uuid.UUID(start.owner_id), "i": uuid.UUID(start.intake_record_id)}).first()
