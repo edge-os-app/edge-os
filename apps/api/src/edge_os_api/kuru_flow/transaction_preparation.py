@@ -21,6 +21,7 @@ from edge_os_api.kuru_flow.restriction_validation import UNKNOWN_ONLY_REASONS, v
 from edge_os_api.kuru_flow.types import (
     R_CALLDATA_MISSING,
     R_SCHEMA_UNSUPPORTED,
+    AdapterError,
     ApprovedAdapterConfiguration,
     DecodedFlowCall,
     PreparationOutcome,
@@ -29,6 +30,7 @@ from edge_os_api.kuru_flow.types import (
     StrictModel,
     UnsignedTransactionCandidate,
     candidate_identity,
+    dedupe,
 )
 
 
@@ -42,16 +44,11 @@ class PreparationResult(StrictModel):
     candidate: UnsignedTransactionCandidate | None = None
 
 
-def _dedupe(reasons: list[str]) -> list[str]:
-    seen: list[str] = []
-    for reason in reasons:
-        if reason not in seen:
-            seen.append(reason)
-    return seen
-
-
 def _build_candidate(
-    parsed: ParsedQuote, call: DecodedFlowCall, config: ApprovedAdapterConfiguration
+    parsed: ParsedQuote,
+    call: DecodedFlowCall,
+    config: ApprovedAdapterConfiguration,
+    variant: QuoteSchemaVariant,
 ) -> UnsignedTransactionCandidate:
     data_hex = parsed.calldata_hex or ""
     value_raw = parsed.value_raw or "0"
@@ -80,7 +77,7 @@ def _build_candidate(
         program_hex=call.program_hex,
         receiver=call.receiver,
         response_provenance=parsed.provenance,
-        schema_variant=parsed.variant or QuoteSchemaVariant.TRANSACTION_CALLDATA,
+        schema_variant=variant,
     )
 
 
@@ -94,6 +91,10 @@ def prepare_unsigned_transaction(
     input_age_seconds: int | None = None,
 ) -> PreparationResult:
     """Prepare one offline candidate or return a specific blocked/unknown result."""
+    for name, value in (("quote_age_seconds", quote_age_seconds), ("input_age_seconds", input_age_seconds)):
+        if value is not None and (isinstance(value, bool) or value < 0):
+            raise AdapterError(f"{name} must be a non-negative integer or null")
+
     parsed = parse_quote_response(quote_response, provenance)
 
     schema_reasons = list(parsed.reasons)
@@ -107,7 +108,7 @@ def prepare_unsigned_transaction(
             outcome=PreparationOutcome.BLOCKED,
             provenance=provenance,
             schema_variant=parsed.variant,
-            reasons=_dedupe(schema_reasons),
+            reasons=dedupe(schema_reasons),
         )
 
     try:
@@ -133,7 +134,7 @@ def prepare_unsigned_transaction(
             outcome=PreparationOutcome.ACCEPTED,
             provenance=provenance,
             schema_variant=parsed.variant,
-            candidate=_build_candidate(parsed, call, config),
+            candidate=_build_candidate(parsed, call, config, parsed.variant),
         )
     if set(reasons) <= UNKNOWN_ONLY_REASONS:
         return PreparationResult(

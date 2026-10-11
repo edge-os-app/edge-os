@@ -55,6 +55,19 @@ def test_success_without_deltas_leaves_effects_unproven():
     assert verdict.actual_input is None and verdict.actual_output is None
 
 
+def test_success_with_known_deltas_but_unknown_gas_leaves_effects_unproven():
+    observation = ObservationInput(
+        status="SUCCESS",
+        receipt_present=True,
+        actual_input=AssetAmount(asset_id="monad:143/native", raw="1000000000000000000", decimals=18),
+        actual_output=AssetAmount(asset_id="monad:143/usdc", raw="1450000", decimals=6),
+    )
+    verdict = _normalize(observation)
+    assert verdict.state is ObservationState.CONFIRMED
+    assert verdict.effects_proven is False
+    assert verdict.reasons == [OBS_EFFECTS_UNPROVEN]
+
+
 def test_success_without_receipt_is_rejected():
     observation = ObservationInput(status="SUCCESS", receipt_present=False)
     verdict = _normalize(observation)

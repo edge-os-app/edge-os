@@ -17,6 +17,7 @@ from edge_os_api.kuru_flow.types import (
     R_CALLDATA_MISSING,
     R_CALLDATA_NOT_HEX,
     R_PROVENANCE_INVALID,
+    R_QUOTE_STATUS_ERROR,
     R_SCHEMA_AMBIGUOUS,
     R_SCHEMA_UNSUPPORTED,
     AdapterError,
@@ -41,8 +42,8 @@ class ParsedQuote(StrictModel):
     to: str | None = None
     value_raw: str | None = None
     calldata_hex: str | None = None
-    gas_prices: dict | None = None
-    declared_intent: dict | None = None
+    gas_prices: dict[str, Any] | None = None
+    declared_intent: dict[str, Any] | None = None
     reasons: list[str] = []
 
 
@@ -76,7 +77,7 @@ def _require_recorded_metadata(mapping: Mapping[str, Any]) -> None:
         raise AdapterError(f"{R_PROVENANCE_INVALID}: _provenance.source_url is required")
     if not isinstance(captured_at, str) or not captured_at.strip():
         raise AdapterError(f"{R_PROVENANCE_INVALID}: _provenance.captured_at is required")
-    if not isinstance(digest, str) or len(digest) != 64:
+    if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdefABCDEF" for char in digest):
         raise AdapterError(f"{R_PROVENANCE_INVALID}: _provenance.sha256 must be a 64-character hex digest")
 
 
@@ -142,12 +143,12 @@ def parse_quote_response(
     has_build = "buildResponse" in mapping or "path" in mapping
 
     if has_transaction and has_build:
-        return ParsedQuote(variant=None, provenance=provenance, reasons=[R_SCHEMA_AMBIGUOUS])
-    if has_transaction:
-        return _parse_transaction_shape(mapping, provenance)
-    if has_build:
+        parsed = ParsedQuote(variant=None, provenance=provenance, reasons=[R_SCHEMA_AMBIGUOUS])
+    elif has_transaction:
+        parsed = _parse_transaction_shape(mapping, provenance)
+    elif has_build:
         declared = mapping.get("buildResponse")
-        return ParsedQuote(
+        parsed = ParsedQuote(
             variant=QuoteSchemaVariant.BUILD_RESPONSE,
             provenance=provenance,
             reference_output_raw=_normalize_raw(mapping.get("output")),
@@ -156,4 +157,9 @@ def parse_quote_response(
             declared_intent=declared if isinstance(declared, dict) else None,
             reasons=[R_SCHEMA_UNSUPPORTED],
         )
-    return ParsedQuote(variant=None, provenance=provenance, reasons=[R_SCHEMA_UNSUPPORTED])
+    else:
+        parsed = ParsedQuote(variant=None, provenance=provenance, reasons=[R_SCHEMA_UNSUPPORTED])
+
+    if "status" in mapping and mapping["status"] != "success":
+        return parsed.model_copy(update={"reasons": parsed.reasons + [R_QUOTE_STATUS_ERROR]})
+    return parsed

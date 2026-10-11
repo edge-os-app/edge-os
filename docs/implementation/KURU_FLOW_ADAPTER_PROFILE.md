@@ -42,7 +42,7 @@ The adapter decodes the supplied calldata using the approved method layout and c
 - network and chain id; entrypoint `to`; selector; method;
 - input and output asset addresses; exact raw input; minimum received at or below the quote estimate;
 - fee bound `feeBps + referrerFeeBps <= 10000`, exact fee values, fee-collector and referrer addresses, input/output fee mode;
-- native versus ERC-20 value; the separate ERC-20 allowance requirement;
+- native versus ERC-20 value (exact native value; zero for an ERC-20 input); the separate ERC-20 owner allowance must cover the decoded input amount;
 - exact route `program` bytes; the explicit receiver when the method encodes one;
 - quote and input freshness, and local intent and mandate expiry;
 - a conflicting declared decoded summary.
@@ -55,7 +55,7 @@ This environment has no Ethereum Keccak-256 and no installed Keccak library. The
 
 ## Observation boundary
 
-`normalize_observation` binds one observation to the original expected action and candidate identity. A missing receipt, a lost acknowledgement, a timeout, a pending result, a reverted result, a network, wallet or transaction mismatch and unknown actual deltas stay unknown or rejected. A success status alone is not proof of all asset effects: without reconciled deltas the effects stay unproven. The normalizer never retries, replaces a route, produces a second action or builds a durable queue.
+`normalize_observation` binds one observation to the original expected action and candidate identity. A missing receipt, a lost acknowledgement, a timeout, a pending result, a reverted result and a network, wallet or transaction mismatch stay unknown or rejected. A success status alone is not proof of all asset effects: unless the reconciled input, output and gas are all present, `effects_proven` stays false. The normalizer never retries, replaces a route, produces a second action or builds a durable queue.
 
 ## Wiring seam
 

@@ -107,7 +107,11 @@ def normalize_observation(
     if observation.status == "SUCCESS":
         if not observation.receipt_present:
             return verdict(ObservationState.REJECTED, reasons=[OBS_MISSING_RECEIPT])
-        if observation.actual_input is None or observation.actual_output is None:
+        if (
+            observation.actual_input is None
+            or observation.actual_output is None
+            or observation.actual_gas is None
+        ):
             return verdict(ObservationState.CONFIRMED, effects_proven=False, reasons=[OBS_EFFECTS_UNPROVEN])
         return verdict(ObservationState.CONFIRMED, effects_proven=True)
 

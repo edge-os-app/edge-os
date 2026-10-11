@@ -10,7 +10,7 @@ Run from `apps/api`:
 uv run --frozen pytest tests/kuru_flow -ra
 ```
 
-Expected literal: `60 passed` (the count rises only with new owned tests). The suite opens no provider socket and requests no shared `pg` fixture, so no shared session fixture starts an instance for this suite.
+Expected literal: `65 passed` (the count rises only with new owned tests). The suite opens no provider socket and requests no shared `pg` fixture, so no shared session fixture starts an instance for this suite.
 
 Static guards inside the suite:
 
@@ -50,6 +50,9 @@ git diff --check 9210bc1d054f1d5623693f787737a7b80563185a HEAD
 | Native value below input | `NATIVE_VALUE_INSUFFICIENT` |
 | ERC-20 value not zero | `ERC20_VALUE_NOT_ZERO` |
 | ERC-20 allowance absent | `ALLOWANCE_UNKNOWN` |
+| ERC-20 allowance below input | `ALLOWANCE_NOT_APPROVED` |
+| Quote `status` not `success` | `QUOTE_STATUS_ERROR` |
+| Success without reconciled input, output or gas | `CONFIRMED`, effects unproven |
 | Truncated or inconsistent ABI | `TRUNCATED_ABI` / `INCONSISTENT_ABI` |
 | Non-canonical word | `NON_CANONICAL_WORD` |
 | Conflicting declared summary | `CONFLICTING_SUMMARY` |

@@ -11,6 +11,7 @@ from __future__ import annotations
 from edge_os_api.kuru_flow.quote_schema import ParsedQuote
 from edge_os_api.kuru_flow.types import (
     METHOD_EXECUTE_SWAP_WITH_RECEIVER,
+    R_ALLOWANCE_NOT_APPROVED,
     R_ALLOWANCE_UNKNOWN,
     R_ASSET_NOT_ALLOWED,
     R_CONFLICTING_SUMMARY,
@@ -28,7 +29,6 @@ from edge_os_api.kuru_flow.types import (
     R_MANDATE_EXPIRED,
     R_METHOD_NOT_ALLOWED,
     R_MIN_OUTPUT_INVALID,
-    R_MIN_OUTPUT_MISSING,
     R_NATIVE_VALUE_INSUFFICIENT,
     R_PROGRAM_NOT_APPROVED,
     R_QUOTE_UNKNOWN,
@@ -40,6 +40,7 @@ from edge_os_api.kuru_flow.types import (
     R_VALUE_NOT_APPROVED,
     ApprovedAdapterConfiguration,
     DecodedFlowCall,
+    dedupe,
     parse_utc,
 )
 
@@ -94,8 +95,11 @@ def _validate_value(parsed: ParsedQuote, call: DecodedFlowCall, config: Approved
         return []
     if value_raw != "0":
         return [R_ERC20_VALUE_NOT_ZERO]
-    if config.approved_allowance_raw is None:
+    approved_allowance = config.approved_allowance_raw
+    if approved_allowance is None:
         return [R_ALLOWANCE_UNKNOWN]
+    if int(call.intent.amount_user_sells) > int(approved_allowance):
+        return [R_ALLOWANCE_NOT_APPROVED]
     return []
 
 
@@ -118,8 +122,6 @@ def _validate_fees(call: DecodedFlowCall, config: ApprovedAdapterConfiguration) 
 
 def _validate_min_output(parsed: ParsedQuote, call: DecodedFlowCall, config: ApprovedAdapterConfiguration) -> list[str]:
     approved_min = config.approved_min_output_raw
-    if approved_min is None:
-        return [R_MIN_OUTPUT_MISSING]
     if call.intent.min_amount_user_buys != approved_min:
         return [R_MIN_OUTPUT_INVALID]
     if parsed.reference_output_raw is None:
@@ -200,8 +202,4 @@ def validate_candidate(
     reasons.extend(_validate_conflicting_summary(parsed, call))
     reasons.extend(_validate_freshness(config, quote_age_seconds, input_age_seconds, now))
 
-    seen: list[str] = []
-    for reason in reasons:
-        if reason not in seen:
-            seen.append(reason)
-    return tuple(seen)
+    return tuple(dedupe(reasons))

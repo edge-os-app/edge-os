@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from edge_os_api.kuru_flow.transaction_preparation import prepare_unsigned_transaction
 from edge_os_api.kuru_flow.types import (
+    R_ALLOWANCE_NOT_APPROVED,
     R_ALLOWANCE_UNKNOWN,
     R_CALLDATA_MISSING,
     R_CONFLICTING_SUMMARY,
@@ -17,9 +20,11 @@ from edge_os_api.kuru_flow.types import (
     R_NATIVE_VALUE_INSUFFICIENT,
     R_PROGRAM_NOT_APPROVED,
     R_RECIPIENT_NOT_ALLOWED,
+    R_QUOTE_STATUS_ERROR,
     R_SCHEMA_UNSUPPORTED,
     R_SELECTOR_NOT_ALLOWED,
     R_STALE_QUOTE,
+    AdapterError,
     ResponseProvenance,
 )
 
@@ -63,8 +68,7 @@ def test_accepted_candidate_is_immutable_with_literal_identity():
     assert candidate.intent.amount_user_sells == FIXTURE_ORDER
     assert candidate.intent.min_amount_user_buys == FIXTURE_MIN_OUT
     assert candidate.program_hex == PROGRAM_HEX
-    assert candidate.candidate_hash.startswith("sha256:")
-    assert len(candidate.candidate_hash) == 71
+    assert candidate.candidate_hash == "sha256:2c176702addc761f494c1a9d23130683991dc44ef577e314b19b72c186e4e05b"
 
 
 def test_selector_mismatch_blocked():
@@ -118,6 +122,32 @@ def test_erc20_missing_allowance_blocked():
     data = encode_execute_swap(token_user_sells="0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A")
     result = _prepare(transaction_response(data, value=0), erc20_config(allowance_raw=None))
     assert R_ALLOWANCE_UNKNOWN in result.reasons
+
+
+def test_erc20_allowance_below_input_blocked():
+    data = encode_execute_swap(token_user_sells="0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A")
+    result = _prepare(transaction_response(data, value=0), erc20_config(allowance_raw="1"))
+    assert result.outcome.value == "BLOCKED"
+    assert R_ALLOWANCE_NOT_APPROVED in result.reasons
+
+
+def test_erc20_allowance_covering_input_accepted():
+    data = encode_execute_swap(token_user_sells="0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A")
+    result = _prepare(transaction_response(data, value=0), erc20_config(allowance_raw=FIXTURE_ORDER))
+    assert result.outcome.value == "ACCEPTED"
+
+
+def test_quote_status_error_blocked():
+    response = transaction_response(encode_execute_swap())
+    response["status"] = "error"
+    result = _prepare(response, base_config())
+    assert result.outcome.value == "BLOCKED"
+    assert R_QUOTE_STATUS_ERROR in result.reasons
+
+
+def test_negative_age_rejected():
+    with pytest.raises(AdapterError):
+        _prepare(transaction_response(encode_execute_swap()), base_config(), quote_age_seconds=-1)
 
 
 def test_conflicting_declared_summary_blocked():

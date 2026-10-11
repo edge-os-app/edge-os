@@ -100,14 +100,11 @@ class FlowMethod(str, enum.Enum):
     EXECUTE_SWAP_WITH_RECEIVER = METHOD_EXECUTE_SWAP_WITH_RECEIVER
 
 
-R_NETWORK_NOT_ALLOWED = "NETWORK_NOT_ALLOWED"
 R_ENTRYPOINT_NOT_ALLOWED = "ENTRYPOINT_NOT_ALLOWED"
 R_SELECTOR_NOT_ALLOWED = "SELECTOR_NOT_ALLOWED"
 R_METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
 R_ASSET_NOT_ALLOWED = "ASSET_NOT_ALLOWED"
-R_DECIMALS_MISMATCH = "DECIMALS_MISMATCH"
 R_INPUT_NOT_APPROVED = "INPUT_NOT_APPROVED"
-R_MIN_OUTPUT_MISSING = "MIN_OUTPUT_MISSING"
 R_MIN_OUTPUT_INVALID = "MIN_OUTPUT_INVALID"
 R_QUOTE_UNKNOWN = "QUOTE_UNKNOWN"
 R_RECIPIENT_NOT_ALLOWED = "RECIPIENT_NOT_ALLOWED"
@@ -118,7 +115,6 @@ R_ALLOWANCE_UNKNOWN = "ALLOWANCE_UNKNOWN"
 R_ALLOWANCE_NOT_APPROVED = "ALLOWANCE_NOT_APPROVED"
 R_PROGRAM_MISSING = "PROGRAM_MISSING"
 R_PROGRAM_NOT_APPROVED = "PROGRAM_NOT_APPROVED"
-R_FEE_UNKNOWN = "FEE_UNKNOWN"
 R_FEE_NOT_APPROVED = "FEE_NOT_APPROVED"
 R_FEE_BOUND_EXCEEDED = "FEE_BOUND_EXCEEDED"
 R_FEE_COLLECTOR_NOT_ALLOWED = "FEE_COLLECTOR_NOT_ALLOWED"
@@ -133,9 +129,9 @@ R_INTENT_EXPIRED = "INTENT_EXPIRED"
 R_MANDATE_EXPIRED = "MANDATE_EXPIRED"
 R_SCHEMA_UNSUPPORTED = "SCHEMA_UNSUPPORTED"
 R_SCHEMA_AMBIGUOUS = "SCHEMA_AMBIGUOUS"
+R_QUOTE_STATUS_ERROR = "QUOTE_STATUS_ERROR"
 R_CALLDATA_MISSING = "CALLDATA_MISSING"
 R_CALLDATA_NOT_HEX = "CALLDATA_NOT_HEX"
-R_SELECTOR_MISMATCH = "SELECTOR_MISMATCH"
 R_TRUNCATED_ABI = "TRUNCATED_ABI"
 R_INCONSISTENT_ABI = "INCONSISTENT_ABI"
 R_NON_CANONICAL_WORD = "NON_CANONICAL_WORD"
@@ -168,10 +164,13 @@ class FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
 
-def _require_nonempty(value: str, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise AdapterError(f"{field} must be a non-empty string")
-    return value
+def dedupe(items: list[str]) -> list[str]:
+    """Return the items in order with duplicates removed."""
+    seen: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.append(item)
+    return seen
 
 
 def _require_optional_nonneg_int(value: int | None, field: str) -> int | None:
@@ -190,6 +189,13 @@ class AdapterAsset(StrictModel):
     asset_id: str = Field(min_length=1, max_length=200)
     token_address: str = Field(min_length=42, max_length=42)
     decimals: int = Field(ge=0, le=255)
+
+    @field_validator("asset_id")
+    @classmethod
+    def asset_id_is_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("asset_id must not be empty or whitespace")
+        return value
 
     @field_validator("token_address")
     @classmethod
