@@ -142,6 +142,7 @@ Not shown: any real model behavior, real cost or latency, or an upstream billing
 - The ledger has no operator path to resolve an UNKNOWN reservation except late usage evidence. A planned "one explicit retry per case" therefore has no mechanism after an UNKNOWN attempt. A later change must add a recorded decision path.
 - The ledger uses one flat price per token kind. The provider may charge more for tiers or cache. Recompute from the provider's documents at release.
 - If a delegate reports two requests, the runner keeps one reservation as liability. The guard prevents the second request. A host-level count is still needed.
+- Credential redaction and the leak scan cover the plain secret and its upper and lower case, URL-encoded, reversed, hex, base64 (aligned and offset), Authorization header and JSON `\u` escape forms, in file contents and file names. A secret that is split, compressed or encrypted is not covered. Evidence that cannot be scanned (over 64 MiB) is deleted, and a folder that cannot be cleared stops the turn with `EvidenceNotSealed`.
 - The SDK-retry refusal is proved at guard level only. This Hermes build sent no second request after a 503.
 
 ## 10. Evidence to keep per attempt

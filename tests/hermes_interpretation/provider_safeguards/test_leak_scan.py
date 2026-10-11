@@ -15,7 +15,9 @@ SECRET = "sk-test-DUMMY-SENTINEL-0123456789abcdef"
 
 @pytest.mark.parametrize("written", [
     SECRET, urllib.parse.quote(SECRET, safe=""), base64.b64encode(SECRET.encode()).decode(),
-    base64.b64encode(f"Bearer {SECRET}".encode()).decode(), SECRET[::-1]])
+    base64.b64encode(f"Bearer {SECRET}".encode()).decode(), SECRET[::-1], SECRET.upper(), SECRET.lower(),
+    SECRET.encode().hex(), SECRET.encode().hex().upper(), base64.b64encode(b"xx" + SECRET.encode()).decode()[3:-2],
+    base64.b64encode(b"x" + SECRET.encode()).decode()[2:-2], SECRET.replace("-", "\\u002d")])
 def test_a_secret_written_in_any_known_form_is_found(tmp_path: Path, written: str) -> None:
     (tmp_path / "deep" / "er").mkdir(parents=True)
     (tmp_path / "deep" / "er" / "log.txt").write_text(f"line before {written} line after")

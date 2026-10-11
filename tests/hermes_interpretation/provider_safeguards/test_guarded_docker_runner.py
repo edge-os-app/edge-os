@@ -36,10 +36,15 @@ class StubProcess:
     returncode = 3
     timeout = False
 
+    explode = False
+    stdout = f"stdout with {SENTINEL}".encode()
+
     def communicate(self, timeout=None):
         if StubProcess.timeout and timeout is not None and timeout > 25:
             raise subprocess.TimeoutExpired("docker", timeout)
-        return f"stdout with {SENTINEL}", None
+        if StubProcess.explode:
+            raise RuntimeError("the pipe broke")
+        return StubProcess.stdout, None
 
     def kill(self) -> None:
         pass
@@ -48,7 +53,8 @@ class StubProcess:
 @pytest.mark.parametrize("timeout, returncode, status", [(False, 3, "UNKNOWN"), (True, 0, "TIMED_OUT")])
 def test_the_credential_is_removed_from_evidence_when_the_job_fails_or_times_out(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout: bool, returncode: int, status: str) -> None:
-    StubProcess.timeout, StubProcess.returncode = timeout, returncode
+    StubProcess.timeout, StubProcess.returncode, StubProcess.explode = timeout, returncode, False
+    StubProcess.stdout = f"stdout with {SENTINEL}".encode()
     real_popen = subprocess.Popen
 
     def popen(argv, **kwargs):  # only the job's own `docker run` is stood in for; the cleanup commands run for real
@@ -67,7 +73,8 @@ def test_the_credential_is_removed_from_evidence_when_the_job_fails_or_times_out
 
 
 def test_a_credential_file_that_ends_in_a_newline_is_still_removed_from_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    StubProcess.timeout, StubProcess.returncode = False, 3
+    StubProcess.timeout, StubProcess.returncode, StubProcess.explode = False, 3, False
+    StubProcess.stdout = f"stdout with {SENTINEL}".encode()
     real_popen = subprocess.Popen
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: StubProcess(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
     credential = tmp_path / "private-credential"
@@ -78,3 +85,66 @@ def test_a_credential_file_that_ends_in_a_newline_is_still_removed_from_evidence
     runner.run_turn(TURN)
 
     assert find_leaks(tmp_path, SENTINEL, exclude=[credential, *tmp_path.glob("evidence/turn-*/input.json")]) == []
+
+
+def run_with(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, prepare=None, explode=False, stdout: bytes | None = None, expect_raise=None):
+    StubProcess.timeout, StubProcess.returncode, StubProcess.explode = False, 3, explode
+    StubProcess.stdout = stdout if stdout is not None else f"stdout with {SENTINEL}".encode()
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: StubProcess(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    credential = tmp_path / "private-credential"
+    credential.write_text(SENTINEL)
+    runner = GuardedDockerTurnRunner(image="unused", run_id="redact-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                     credential_file=credential, script_for=lambda turn: {}, timeout_seconds=60)
+    if prepare:
+        monkeypatch.setattr(StubProcess, "extra", prepare, raising=False)
+    if expect_raise:
+        with pytest.raises(expect_raise):
+            runner.run_turn(TURN)
+    else:
+        runner.run_turn(TURN)
+    return credential
+
+
+def leaks(tmp_path: Path, credential: Path) -> list[str]:
+    return find_leaks(tmp_path, SENTINEL, exclude=[credential, *tmp_path.glob("evidence/turn-*/input.json")])
+
+
+def test_output_that_is_not_utf8_text_on_the_process_pipe_is_redacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    credential = run_with(tmp_path, monkeypatch, stdout=b"\xff\xfe" + SENTINEL.encode() + b"\x80")
+
+    assert leaks(tmp_path, credential) == []
+
+
+def test_evidence_is_sealed_even_when_the_run_fails_in_an_unexpected_place(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    credential = run_with(tmp_path, monkeypatch, explode=True, expect_raise=RuntimeError)
+
+    assert leaks(tmp_path, credential) == []
+
+
+def hostile_evidence(self_output: Path) -> None:
+    pass
+
+
+def test_links_hidden_folders_read_only_files_odd_names_and_huge_files_are_all_sealed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    outside = tmp_path / "outside-file.txt"
+    outside.write_text(f"not evidence {SENTINEL}")
+    original_init = StubProcess.__init__
+
+    def init(self, argv, **kwargs):
+        original_init(self, argv, **kwargs)
+        output = Path(next(part.split("src=")[1].split(",")[0] for part in argv if part.endswith("dst=/job/output")))
+        (output / "link").symlink_to(outside)                                   # a link out of the evidence folder
+        hidden = output / "hidden"; hidden.mkdir(); (hidden / "x.log").write_text(SENTINEL); hidden.chmod(0o000)
+        locked = output / "locked"; locked.mkdir(); (locked / "y.log").write_text(SENTINEL); (locked / "y.log").chmod(0o444); locked.chmod(0o555)
+        (output / f"name-{SENTINEL}.txt").write_text("clean content")           # the secret in a file NAME
+        (output / "hex.txt").write_text(SENTINEL.encode().hex())
+        with (output / "huge.bin").open("wb") as stream:                          # too large to scan: not kept
+            stream.truncate(80 * 1024 * 1024)
+    monkeypatch.setattr(StubProcess, "__init__", init)
+
+    credential = run_with(tmp_path, monkeypatch)
+
+    assert [name for name in leaks(tmp_path, credential) if name != "outside-file.txt"] == []  # the outside file is the bait
+    assert outside.read_text() == f"not evidence {SENTINEL}", "a link must never lead the redaction outside the evidence folder"
+    assert not any("huge.bin" in str(path) for path in tmp_path.glob("evidence/**/*"))
