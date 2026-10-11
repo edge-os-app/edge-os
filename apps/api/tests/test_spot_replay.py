@@ -947,7 +947,8 @@ def test_wc02_reconciles_shared_reservation_literals_without_runtime_portfolio_s
     assert case["runtime_support"] == "UNSUPPORTED_SHARED_POSITION"
 
 
-def test_wc03_reconciles_partial_exit_literals_but_rejects_runtime_partial_exit() -> None:
+@pytest.mark.parametrize("unsupported_field", ("additions", "partial_exits"))
+def test_wc03_reconciles_partial_exit_literals_but_rejects_runtime_extensions(unsupported_field: str) -> None:
     case = _reference_case("WC-03")
     bought_base = Decimal("400") / Decimal("8")
     buy_basis = Decimal(case["buy_basis_quote"])
@@ -972,13 +973,13 @@ def test_wc03_reconciles_partial_exit_literals_but_rejects_runtime_partial_exit(
     assert case["status"] == "ACCOUNTING_CONFORMANCE_ONLY"
 
     strategy, replay_input, _ = _wc01_input()
-    strategy["partial_exits"] = True
+    strategy[unsupported_field] = True
     try:
         run_spot_replay(strategy, replay_input)
     except ValueError as error:
         assert getattr(error, "code") == case["runtime_support"]
     else:
-        raise AssertionError("WC-03 arithmetic must not enable production partial exits")
+        raise AssertionError("WC-03 arithmetic must not enable a production P12/1 extension")
 
 
 def test_wc04_midrun_missing_mark_preserves_terminal_gain_but_not_full_drawdown() -> None:
