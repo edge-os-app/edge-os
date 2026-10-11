@@ -22,9 +22,9 @@ from sqlalchemy.exc import IntegrityError
 
 from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding, invalid, not_found
-from edge_os_api.funding.accounting import (InvalidFundingValue, canonical_raw, classify_asset, declared_amount,
-                                            parse_asset_amount, storable_text, validate_address, validate_decimals,
-                                            validate_identifier)
+from edge_os_api.funding.accounting import (InvalidFundingValue, asset_belongs_to_network, canonical_raw,
+                                            classify_asset, declared_amount, parse_asset_amount, storable_text,
+                                            validate_address, validate_decimals, validate_identifier)
 from edge_os_api.funding.observation import DepositObservation, DepositObservationPort, ObservationUnavailable
 from edge_os_api.funding.persistence import (FundingCreditRow, FundingFlowRow, FundingProfileRow, credit_for_identity,
                                              credits_for_wallet, flows_for_wallet, insert_observation, list_flows,
@@ -111,6 +111,14 @@ def declare_funding_assets(session: Any, principal: Principal, *, agent_id: str,
         raise invalid("/declaration", str(error), "invalid_declaration") from None
     if (compute_id is None) != (compute_dp is None):
         raise invalid("/compute_asset", "A compute asset needs both an id and decimals.", "invalid_declaration")
+    declared_ids = [trading_id, gas_id] + ([compute_id] if compute_id is not None else [])
+    for declared_id in declared_ids:
+        if not asset_belongs_to_network(declared_id, network_id):
+            raise invalid("/declaration", "Every declared asset must belong to the requested Monad network.",
+                          "wrong_network_asset")
+    if len(set(declared_ids)) != len(declared_ids):
+        raise invalid("/declaration", "The gas, trading and compute assets must be distinct.",
+                      "duplicate_declared_asset")
     binding = _require_binding(session, principal, agent_id)
     if binding.network_id != network_id:
         record_denial(session, principal.user_id, agent_id, FundingReason.NETWORK_MISMATCH.value,
@@ -144,8 +152,8 @@ def declare_funding_assets(session: Any, principal: Principal, *, agent_id: str,
 
 def prepare_funding(session: Any, principal: Principal, *, agent_id: str, kind: FlowKind | str, asset_id: str,
                     raw: str, decimals: int, transport: str, reference: str, sender: str | None = None,
-                    recipient: str | None = None, declared_fee_raw: str | None = None,
-                    declared_fee_decimals: int | None = None) -> FundingFlowRecord:
+                    recipient: str | None = None, declared_fee_asset_id: str | None = None,
+                    declared_fee_raw: str | None = None, declared_fee_decimals: int | None = None) -> FundingFlowRecord:
     """Persist one reviewed funding flow before any transfer. Idempotent per `(owner, agent, reference)`."""
     agent_id = _validate_agent_id(agent_id)
     try:
@@ -158,8 +166,7 @@ def prepare_funding(session: Any, principal: Principal, *, agent_id: str, kind: 
         clean_sender = validate_address(sender, field="sender") if sender is not None else None
         clean_recipient = validate_address(recipient, field="recipient") if recipient is not None else None
         amount = parse_asset_amount(asset_id, raw, decimals)
-        fee = (parse_asset_amount(asset_id, declared_fee_raw, declared_fee_decimals)
-               if declared_fee_raw is not None or declared_fee_decimals is not None else None)
+        fee = _parse_declared_fee(declared_fee_asset_id, declared_fee_raw, declared_fee_decimals)
     except InvalidFundingValue as error:
         raise invalid("/flow", str(error), "invalid_flow") from None
     binding = _require_binding(session, principal, agent_id)
@@ -168,6 +175,11 @@ def prepare_funding(session: Any, principal: Principal, *, agent_id: str, kind: 
                       {"kind": flow_kind.value})
         session.commit()
         raise _conflict("unsupported_kind", "This local stage prepares deposits only.")
+    if not asset_belongs_to_network(amount.asset_id, binding.network_id):
+        record_denial(session, principal.user_id, agent_id, FundingReason.WRONG_NETWORK.value,
+                      {"asset_id": amount.asset_id, "network_id": binding.network_id})
+        session.commit()
+        raise _conflict("wrong_network_asset", "The flow asset does not belong to the wallet network.")
     profile_row = load_profile(session, principal.user_id, agent_id, lock=False)
     if profile_row is None:
         raise not_found("funding declaration")
@@ -184,6 +196,18 @@ def prepare_funding(session: Any, principal: Principal, *, agent_id: str, kind: 
                       {"declared_decimals": declared.decimals, "requested_decimals": amount.decimals})
         session.commit()
         raise _conflict("decimals_mismatch", "The amount decimals do not match the declared asset decimals.")
+    if fee is not None:
+        fee_declared = declared_amount(profile, fee.asset_id)
+        if fee_declared is None or classify_asset(profile, fee.asset_id) not in _SUPPORTED_CLASSES:
+            record_denial(session, principal.user_id, agent_id, FundingReason.UNSUPPORTED_ASSET.value,
+                          {"fee_asset_id": fee.asset_id})
+            session.commit()
+            raise _conflict("unsupported_fee_asset", "The fee asset is not a declared asset for this wallet.")
+        if fee.decimals != fee_declared.decimals:
+            record_denial(session, principal.user_id, agent_id, FundingReason.DECIMALS_MISMATCH.value,
+                          {"fee_declared_decimals": fee_declared.decimals, "fee_requested_decimals": fee.decimals})
+            session.commit()
+            raise _conflict("fee_decimals_mismatch", "The fee decimals do not match the declared fee asset decimals.")
     existing = load_flow_by_reference(session, principal.user_id, binding.wallet_id, binding.network_id, clean_reference)
     if existing is not None:
         if _flow_matches(existing, flow_kind, amount, clean_transport, clean_sender, clean_recipient, fee):
@@ -199,7 +223,8 @@ def prepare_funding(session: Any, principal: Principal, *, agent_id: str, kind: 
                          wallet_id=binding.wallet_id, network_id=binding.network_id, kind=flow_kind.value,
                          asset_id=amount.asset_id, declared_raw=int(amount.raw), decimals=amount.decimals,
                          declared_fee_raw=int(fee.raw) if fee is not None else None,
-                         declared_fee_decimals=fee.decimals if fee is not None else None, transport=clean_transport,
+                         declared_fee_decimals=fee.decimals if fee is not None else None,
+                         declared_fee_asset_id=fee.asset_id if fee is not None else None, transport=clean_transport,
                          sender=clean_sender, recipient=clean_recipient, state=FlowState.PENDING.value,
                          reference=clean_reference, transaction_reference=None, reason=None, created_at=now,
                          updated_at=now)
@@ -228,7 +253,21 @@ def _flow_matches(row: FundingFlowRow, kind: FlowKind, amount: AssetAmount, tran
     return (row.kind == kind.value and row.asset_id == amount.asset_id and int(row.declared_raw) == int(amount.raw)
             and int(row.decimals) == amount.decimals and row.transport == transport and row.sender == sender
             and row.recipient == recipient and _row_fee(row) == (int(fee.raw) if fee is not None else None)
+            and row.declared_fee_asset_id == (fee.asset_id if fee is not None else None)
             and (row.declared_fee_decimals is None or fee is None or int(row.declared_fee_decimals) == fee.decimals))
+
+
+def _parse_declared_fee(asset_id: str | None, raw: str | None, decimals: int | None) -> AssetAmount | None:
+    """A declared fee needs an explicit asset id, raw amount and decimals, or it stays unknown.
+
+    The fee keeps its own asset identity, so a native MON network fee stays separate from a trading
+    asset fee. A partially specified fee is rejected rather than stored under a false asset.
+    """
+    if asset_id is None and raw is None and decimals is None:
+        return None
+    if asset_id is None or raw is None or decimals is None:
+        raise InvalidFundingValue("a declared fee needs an asset id, a raw amount and decimals")
+    return parse_asset_amount(asset_id, raw, decimals)
 
 
 def _row_fee(row: FundingFlowRow) -> int | None:
@@ -344,7 +383,8 @@ def _record(session: Any, principal: Principal, agent_id: str, binding: WalletBi
                              actual_raw=int(actual.raw) if actual is not None else None,
                              decimals=actual.decimals if actual is not None else None,
                              fee_raw=int(fee.raw) if fee is not None else None,
-                             fee_decimals=fee.decimals if fee is not None else None, event_id=event_id,
+                             fee_decimals=fee.decimals if fee is not None else None,
+                             fee_asset_id=fee.asset_id if fee is not None else None, event_id=event_id,
                              transaction_reference=observation.reference, status=status.value, sender=observation.sender,
                              recipient=observation.recipient, reason=reason, observed_at=observation.observed_at)
     return to_observation(row)
@@ -373,6 +413,13 @@ def _apply_observation(session: Any, principal: Principal, agent_id: str, bindin
     if flow is None:
         _malformed(session, principal, agent_id, binding, observation, FundingReason.NO_MATCHING_FLOW.value)
         return
+    if storable_text(observation.asset_id) and not asset_belongs_to_network(observation.asset_id, binding.network_id):
+        record_denial(session, principal.user_id, agent_id, FundingReason.WRONG_NETWORK.value,
+                      {"asset_id": observation.asset_id, "network_id": binding.network_id})
+        _record(session, principal, agent_id, binding, observation, status=ObservationStatus.UNKNOWN,
+                flow_id=flow.flow_id, reason=FundingReason.WRONG_NETWORK.value, asset_id=None, actual=None, fee=None,
+                event_id=None)
+        return
     if profile is None or not storable_text(observation.asset_id) or observation.asset_id != flow.asset_id \
             or classify_asset(profile, observation.asset_id) not in _SUPPORTED_CLASSES:
         record_denial(session, principal.user_id, agent_id, FundingReason.UNSUPPORTED_ASSET.value,
@@ -380,7 +427,7 @@ def _apply_observation(session: Any, principal: Principal, agent_id: str, bindin
         _record(session, principal, agent_id, binding, observation, status=ObservationStatus.UNKNOWN, flow_id=flow.flow_id,
                 reason=FundingReason.UNSUPPORTED_ASSET.value, asset_id=None, actual=None, fee=None, event_id=None)
         return
-    actual, fee = _parse_observed_amounts(observation, flow)
+    actual, fee = _parse_observed_amounts(observation, flow, profile)
     if observation.status == ObservationStatus.CONFIRMED:
         _credit_confirmed(session, principal, agent_id, binding, flow, observation, actual, fee, results)
     elif observation.status == ObservationStatus.DUPLICATE:
@@ -397,19 +444,37 @@ def _apply_observation(session: Any, principal: Principal, agent_id: str, bindin
         _add_result(results, flow, record)
 
 
-def _parse_observed_amounts(observation: DepositObservation, flow: FundingFlowRow
-                            ) -> tuple[AssetAmount | None, AssetAmount | None]:
-    actual = fee = None
+def _parse_observed_amounts(observation: DepositObservation, flow: FundingFlowRow,
+                            profile: FundingProfileRecord) -> tuple[AssetAmount | None, AssetAmount | None]:
     try:
+        actual = None
         if observation.raw is not None and observation.decimals is not None:
             actual = AssetAmount(asset_id=flow.asset_id, raw=canonical_raw(observation.raw),
                                  decimals=validate_decimals(observation.decimals))
-        if observation.fee_raw is not None and observation.fee_decimals is not None:
-            fee = AssetAmount(asset_id=flow.asset_id, raw=canonical_raw(observation.fee_raw),
-                              decimals=validate_decimals(observation.fee_decimals))
     except InvalidFundingValue:
         return None, None
-    return actual, fee
+    return actual, _parse_observed_fee(observation, profile)
+
+
+def _parse_observed_fee(observation: DepositObservation, profile: FundingProfileRecord) -> AssetAmount | None:
+    """An observed fee keeps its own asset identity and declared decimals, or it stays unknown.
+
+    A fee with no asset id, a non-declared asset, malformed values or non-matching decimals is left
+    unknown rather than stored under the transfer's asset. The actual credit amount is unaffected.
+    """
+    if observation.fee_asset_id is None or observation.fee_raw is None or observation.fee_decimals is None:
+        return None
+    try:
+        raw = canonical_raw(observation.fee_raw)
+        decimals = validate_decimals(observation.fee_decimals)
+    except InvalidFundingValue:
+        return None
+    fee_declared = declared_amount(profile, observation.fee_asset_id)
+    if fee_declared is None or classify_asset(profile, observation.fee_asset_id) not in _SUPPORTED_CLASSES:
+        return None
+    if decimals != fee_declared.decimals:
+        return None
+    return AssetAmount(asset_id=observation.fee_asset_id, raw=raw, decimals=decimals)
 
 
 def _credit_confirmed(session: Any, principal: Principal, agent_id: str, binding: WalletBinding, flow: FundingFlowRow,
@@ -442,7 +507,8 @@ def _credit_confirmed(session: Any, principal: Principal, agent_id: str, binding
                                   wallet_id=binding.wallet_id, network_id=binding.network_id, asset_id=flow.asset_id,
                                   actual_raw=int(actual.raw), decimals=actual.decimals,
                                   fee_raw=int(fee.raw) if fee is not None else None,
-                                  fee_decimals=fee.decimals if fee is not None else None, event_id=observation.event_id,
+                                  fee_decimals=fee.decimals if fee is not None else None,
+                                  fee_asset_id=fee.asset_id if fee is not None else None, event_id=observation.event_id,
                                   flow_id=flow.flow_id, observation_id=record.observation_id, created_at=utcnow())
     try:
         with session.begin_nested():
@@ -467,6 +533,17 @@ def _record_existing_credit(session: Any, principal: Principal, agent_id: str, b
                             flow: FundingFlowRow, observation: DepositObservation, actual: AssetAmount,
                             fee: AssetAmount | None, existing: FundingCreditRow,
                             results: dict[uuid.UUID, ReconciliationResult]) -> None:
+    if existing.owner_id != principal.user_id or existing.agent_id != agent_id:
+        # The once-only identity already belongs to another owner or agent. The event is not this
+        # owner's, so this flow stays unavailable and the foreign event stays inspectable.
+        record_denial(session, principal.user_id, agent_id, FundingReason.WRONG_OWNER.value,
+                      {"event_id": observation.event_id, "credited_owner": str(existing.owner_id),
+                       "credited_agent": existing.agent_id})
+        record = _record(session, principal, agent_id, binding, observation, status=ObservationStatus.UNKNOWN,
+                         flow_id=flow.flow_id, reason=FundingReason.WRONG_OWNER.value, asset_id=flow.asset_id,
+                         actual=actual, fee=fee, event_id=observation.event_id)
+        _add_result(results, flow, record)
+        return
     if _credit_matches(existing, actual, fee):
         record = _record(session, principal, agent_id, binding, observation, status=ObservationStatus.DUPLICATE,
                          flow_id=flow.flow_id, reason=FundingReason.DUPLICATE_EVENT.value, asset_id=flow.asset_id,
@@ -488,9 +565,10 @@ def _record_existing_credit(session: Any, principal: Principal, agent_id: str, b
 def _credit_matches(existing: FundingCreditRow, actual: AssetAmount, fee: AssetAmount | None) -> bool:
     if int(existing.actual_raw) != int(actual.raw) or int(existing.decimals) != actual.decimals:
         return False
-    existing_fee = None if existing.fee_raw is None else (str(int(existing.fee_raw)),
-                                                          int(existing.fee_decimals) if existing.fee_decimals is not None else None)
-    new_fee = None if fee is None else (fee.raw, fee.decimals)
+    existing_fee = None if existing.fee_raw is None else (
+        existing.fee_asset_id, str(int(existing.fee_raw)),
+        int(existing.fee_decimals) if existing.fee_decimals is not None else None)
+    new_fee = None if fee is None else (fee.asset_id, fee.raw, fee.decimals)
     return existing_fee == new_fee
 
 

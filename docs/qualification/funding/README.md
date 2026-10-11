@@ -61,11 +61,18 @@ Service and database (`HARNESS_EXECUTED`, real PostgreSQL):
   one reference; a changed identity is denied;
 - missing and unconfirmed P17 bindings are `404`; an unsupported asset, a withdrawal and a decimals
   mismatch are denied;
+- every declared asset must belong to the wallet network, and the gas, trading and compute asset ids
+  must be distinct; a testnet asset on a mainnet wallet and a duplicate class are denied;
 - a confirmed observation credits the reconciled actual amount once;
 - pending, failed and unknown observations stay unavailable;
 - a replayed event credits once and records `DUPLICATE`; a conflicting terminal amount fails closed
   with a recorded reason and never overwrites the credit;
-- wrong-wallet, wrong-network, unsupported and orphan observations are recorded and never credited;
+- a foreign owner's event on the same wallet string is denied `WRONG_OWNER`, credits nothing and does
+  not confirm the requesting owner's flow;
+- wrong-wallet, wrong-network (including a wrong-network asset id), unsupported and orphan
+  observations are recorded and never credited;
+- a declared and an observed fee keep their own asset identity and declared decimals; a fee with no
+  asset id, a non-declared asset or wrong decimals stays unknown, never the transfer's asset;
 - no cross-wallet or cross-asset pooling; native gas, the trading asset and compute stay separate;
 - observation history is preserved; an unavailable observer credits nothing.
 

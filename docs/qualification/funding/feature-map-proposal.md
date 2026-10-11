@@ -16,10 +16,10 @@ browser recipe cannot exercise it.
 ```sql
 select agent_id, network_id, state, asset_id, declared_raw, decimals, transaction_reference
 from funding_local.funding_flows order by created_at;
-select flow_id, sequence, status, asset_id, actual_raw, event_id, reason
+select flow_id, sequence, status, asset_id, actual_raw, fee_asset_id, event_id, reason
 from funding_local.funding_observations order by sequence;
-select wallet_id, network_id, asset_id, event_id, actual_raw, count(*)
-from funding_local.funding_credits group by 1,2,3,4,5 having count(*) > 1;  -- must be empty
+select wallet_id, network_id, asset_id, event_id, actual_raw, fee_asset_id, count(*)
+from funding_local.funding_credits group by 1,2,3,4,5,6 having count(*) > 1;  -- must be empty
 select code, count(*) from funding_local.funding_denials group by code order by code;
 select asset_id, sum(actual_raw) from funding_local.funding_credits
 where wallet_id = 'wallet-a' group by asset_id order by asset_id;  -- per-asset, never pooled

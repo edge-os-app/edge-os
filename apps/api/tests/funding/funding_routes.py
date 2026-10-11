@@ -42,6 +42,7 @@ class FlowBody(StrictModel):
     reference: Identifier
     sender: Identifier | None = None
     recipient: Identifier | None = None
+    declared_fee_asset_id: Identifier | None = None
     declared_fee_raw: Identifier | None = None
     declared_fee_decimals: int | None = None
 
@@ -114,6 +115,7 @@ def build_funding_router() -> APIRouter:
         record = service.prepare_funding(session, principal, agent_id=agent_id, kind=data.kind, asset_id=data.asset_id,
                                          raw=data.raw, decimals=data.decimals, transport=data.transport,
                                          reference=data.reference, sender=data.sender, recipient=data.recipient,
+                                         declared_fee_asset_id=data.declared_fee_asset_id,
                                          declared_fee_raw=data.declared_fee_raw,
                                          declared_fee_decimals=data.declared_fee_decimals)
         return serialize_flow(record)

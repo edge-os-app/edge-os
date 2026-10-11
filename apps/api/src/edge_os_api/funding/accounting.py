@@ -7,12 +7,22 @@ malformed value becomes a typed denial, never a stored `0` or a `500`.
 
 from __future__ import annotations
 
-from edge_os_api.funding.types import (MAX_ADDRESS, MAX_DECIMALS, MAX_IDENTIFIER, MAX_RAW_DIGITS, RAW_PATTERN,
-                                       AssetAmount, AssetClass, FundingProfileRecord)
+from edge_os_api.funding.types import (MAX_ADDRESS, MAX_DECIMALS, MAX_IDENTIFIER, MAX_RAW_DIGITS, MONAD_NETWORK_PREFIX,
+                                       RAW_PATTERN, AssetAmount, AssetClass, FundingProfileRecord)
 
 
 class InvalidFundingValue(ValueError):
     """A caller or observation value is not a valid funding field."""
+
+
+def asset_belongs_to_network(asset_id: str, network_id: int) -> bool:
+    """True only when the asset id carries this exact Monad network prefix.
+
+    An asset id names its network (`monad:143/...` or `monad-testnet:10143/...`). A declared or
+    observed asset from another network never belongs to this wallet's network.
+    """
+    prefix = MONAD_NETWORK_PREFIX.get(network_id)
+    return prefix is not None and isinstance(asset_id, str) and asset_id.startswith(prefix + "/")
 
 
 def storable_text(value: object) -> bool:

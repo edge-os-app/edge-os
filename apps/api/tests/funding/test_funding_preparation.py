@@ -18,8 +18,8 @@ def test_prepare_persists_exact_review(funding_engine, funding_factory):
     h.seed_confirmed_binding(funding_engine, owner)
     with funding_factory() as session:
         h.declare(session, owner)
-        flow = h.prepare(session, owner, raw="500000000", decimals=6, recipient="wallet-a", declared_fee_raw="1000",
-                         declared_fee_decimals=6)
+        flow = h.prepare(session, owner, raw="500000000", decimals=6, recipient="wallet-a",
+                         declared_fee_asset_id=h.TRADING_ASSET, declared_fee_raw="1000", declared_fee_decimals=6)
     assert flow.state is FlowState.PENDING
     assert flow.asset.asset_id == h.TRADING_ASSET
     assert flow.asset.raw == "500000000" and flow.asset.decimals == 6
@@ -27,6 +27,7 @@ def test_prepare_persists_exact_review(funding_engine, funding_factory):
     assert flow.sender is None
     assert flow.recipient == "wallet-a"
     assert flow.declared_fee is not None and flow.declared_fee.raw == "1000"
+    assert flow.declared_fee.asset_id == h.TRADING_ASSET
     assert flow.transaction_reference is None
     assert flow.reason is None
 

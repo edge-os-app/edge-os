@@ -91,6 +91,7 @@ class FundingFlowRow(FundingBase):
     decimals: Mapped[int] = mapped_column(Integer, nullable=False)
     declared_fee_raw: Mapped[Decimal | None] = _raw_nullable_column()
     declared_fee_decimals: Mapped[int | None] = mapped_column(Integer)
+    declared_fee_asset_id: Mapped[str | None] = mapped_column(Text)
     transport: Mapped[str] = mapped_column(Text, nullable=False)
     sender: Mapped[str | None] = mapped_column(Text)
     recipient: Mapped[str | None] = mapped_column(Text)
@@ -126,6 +127,7 @@ class FundingObservationRow(FundingBase):
     decimals: Mapped[int | None] = mapped_column(Integer)
     fee_raw: Mapped[Decimal | None] = _raw_nullable_column()
     fee_decimals: Mapped[int | None] = mapped_column(Integer)
+    fee_asset_id: Mapped[str | None] = mapped_column(Text)
     event_id: Mapped[str | None] = mapped_column(Text)
     transaction_reference: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False)
@@ -156,6 +158,7 @@ class FundingCreditRow(FundingBase):
     decimals: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_raw: Mapped[Decimal | None] = _raw_nullable_column()
     fee_decimals: Mapped[int | None] = mapped_column(Integer)
+    fee_asset_id: Mapped[str | None] = mapped_column(Text)
     event_id: Mapped[str] = mapped_column(Text, nullable=False)
     flow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     observation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -203,8 +206,10 @@ def to_profile(row: FundingProfileRow) -> FundingProfileRecord:
 
 
 def to_flow(row: FundingFlowRow) -> FundingFlowRecord:
-    fee = (AssetAmount(asset_id=row.asset_id, raw=str(int(row.declared_fee_raw)), decimals=int(row.declared_fee_decimals))
-           if row.declared_fee_raw is not None and row.declared_fee_decimals is not None else None)
+    fee = (AssetAmount(asset_id=row.declared_fee_asset_id, raw=str(int(row.declared_fee_raw)),
+                       decimals=int(row.declared_fee_decimals))
+           if row.declared_fee_asset_id is not None and row.declared_fee_raw is not None
+           and row.declared_fee_decimals is not None else None)
     return FundingFlowRecord(
         flow_id=row.flow_id, owner_id=row.owner_id, agent_id=row.agent_id, wallet_id=row.wallet_id,
         network_id=row.network_id, kind=FlowKind(row.kind), asset=_amount(row.asset_id, row.declared_raw, row.decimals),
@@ -216,8 +221,8 @@ def to_flow(row: FundingFlowRow) -> FundingFlowRecord:
 def to_observation(row: FundingObservationRow) -> ObservationRecord:
     actual = (_amount(row.asset_id, row.actual_raw, int(row.decimals))
               if row.asset_id is not None and row.actual_raw is not None and row.decimals is not None else None)
-    fee = (_amount(row.asset_id, row.fee_raw, int(row.fee_decimals))
-           if row.asset_id is not None and row.fee_raw is not None and row.fee_decimals is not None else None)
+    fee = (_amount(row.fee_asset_id, row.fee_raw, int(row.fee_decimals))
+           if row.fee_asset_id is not None and row.fee_raw is not None and row.fee_decimals is not None else None)
     return ObservationRecord(
         observation_id=row.observation_id, owner_id=row.owner_id, agent_id=row.agent_id, wallet_id=row.wallet_id,
         network_id=row.network_id, asset_id=row.asset_id, actual=actual, fee=fee, event_id=row.event_id,
@@ -226,8 +231,8 @@ def to_observation(row: FundingObservationRow) -> ObservationRecord:
 
 
 def to_credit(row: FundingCreditRow) -> CreditRecord:
-    fee = (_amount(row.asset_id, row.fee_raw, int(row.fee_decimals))
-           if row.fee_raw is not None and row.fee_decimals is not None else None)
+    fee = (_amount(row.fee_asset_id, row.fee_raw, int(row.fee_decimals))
+           if row.fee_asset_id is not None and row.fee_raw is not None and row.fee_decimals is not None else None)
     return CreditRecord(
         credit_id=row.credit_id, owner_id=row.owner_id, agent_id=row.agent_id, wallet_id=row.wallet_id,
         network_id=row.network_id, asset_id=row.asset_id, amount=_amount(row.asset_id, row.actual_raw, row.decimals),

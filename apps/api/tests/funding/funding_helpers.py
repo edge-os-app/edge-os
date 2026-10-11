@@ -71,11 +71,12 @@ def declare(session, owner_id: uuid.UUID, *, agent_id: str = "agent-a", network_
 def prepare(session, owner_id: uuid.UUID, *, agent_id: str = "agent-a", kind: FlowKind = FlowKind.DEPOSIT,
             asset_id: str = TRADING_ASSET, raw: str = "500000000", decimals: int = 6, transport: str = "deposit-address",
             reference: str = "ref-1", sender: str | None = None, recipient: str | None = None,
-            declared_fee_raw: str | None = None, declared_fee_decimals: int | None = None):
+            declared_fee_asset_id: str | None = None, declared_fee_raw: str | None = None,
+            declared_fee_decimals: int | None = None):
     return service.prepare_funding(session, principal(owner_id), agent_id=agent_id, kind=kind, asset_id=asset_id,
                                    raw=raw, decimals=decimals, transport=transport, reference=reference,
-                                   sender=sender, recipient=recipient, declared_fee_raw=declared_fee_raw,
-                                   declared_fee_decimals=declared_fee_decimals)
+                                   sender=sender, recipient=recipient, declared_fee_asset_id=declared_fee_asset_id,
+                                   declared_fee_raw=declared_fee_raw, declared_fee_decimals=declared_fee_decimals)
 
 
 def driver_env() -> dict[str, str]:

@@ -35,6 +35,7 @@ class DepositObservation:
     event_id: str | None
     sender: str | None
     recipient: str | None
+    fee_asset_id: str | None
     fee_raw: str | None
     fee_decimals: int | None
     observed_at: dt.datetime

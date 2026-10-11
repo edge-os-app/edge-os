@@ -42,16 +42,25 @@ usage stay separate. Boolean, float, negative, leading-zero and over-long raw va
 raw value is bounded to 78 digits (the owned ledger storage bound). Decimals and asset identity must
 agree between the flow and the observation before any credit.
 
+An asset id names its network (`monad:143/...` or `monad-testnet:10143/...`). Every declared or
+observed asset must carry the wallet's own network prefix. An asset from another network is denied,
+stays visible and never becomes available.
+
 ## Declared assets and flows
 
 - `declare_funding_assets` persists the declared supported assets for one `(owner, agent)` confirmed
-  wallet: a trading asset, a native gas asset and an optional compute asset. It is idempotent per
-  agent; a changed declaration for an existing wallet is denied. This is the server-side "declared
-  supported asset", not a per-request caller assertion.
+  wallet: a trading asset, a native gas asset and an optional compute asset. Every declared asset must
+  belong to the requested Monad network, and the gas, trading and compute asset ids must be distinct.
+  It is idempotent per agent; a changed declaration for an existing wallet is denied. This is the
+  server-side "declared supported asset", not a per-request caller assertion.
 - `prepare_funding` persists one reviewed flow before any transfer: kind, asset, declared raw amount,
   decimals, optional declared fee, reviewed transport, sender/recipient where known and a reference.
   Unknown fields stay `None`, never `0`. A reviewed transport or address is not a sent transfer. This
   stage prepares deposits only; a withdrawal is denied as unsupported.
+- A declared fee keeps its own asset identity: it needs an explicit asset id, raw amount and decimals,
+  and the fee asset must be a declared asset with matching decimals. A partially specified fee is
+  rejected rather than stored under the transfer's asset. A native MON network fee therefore stays
+  separate from a trading-asset fee.
 
 ## Observation boundary and once-only credit
 
@@ -67,7 +76,14 @@ Credit is once-only on the exact `(wallet_id, network_id, asset_id, event_id)` i
 - a replayed event, a concurrent process, a lost commit response or a fresh process finds the
   existing credit and records a `DUPLICATE` observation without a second credit;
 - a conflicting terminal amount or fee for the same event fails closed with a recorded reason and
-  never overwrites the credit.
+  never overwrites the credit;
+- an existing credit that belongs to another owner or agent is not this owner's duplicate: the flow
+  stays unavailable, no credit is added, and a `WRONG_OWNER` denial is recorded. A foreign event
+  stays inspectable.
+
+An observed fee keeps its own asset identity and declared decimals. A fee with no asset id, a
+non-declared asset, malformed values or non-matching decimals is left unknown rather than stored
+under the transfer's asset. The actual credit amount is unaffected.
 
 Available credit counts only `CONFIRMED` credits, per wallet and asset. It never pools across wallets
 or across asset classes.

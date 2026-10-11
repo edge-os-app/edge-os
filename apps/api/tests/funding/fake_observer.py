@@ -16,12 +16,14 @@ from edge_os_api.funding.types import ObservationStatus
 
 def observation(*, wallet_id: str, network_id: int, reference: str, status: ObservationStatus, asset_id: str,
                 raw: str | None = None, decimals: int | None = None, event_id: str | None = None,
-                sender: str | None = None, recipient: str | None = None, fee_raw: str | None = None,
-                fee_decimals: int | None = None, observed_at: dt.datetime | None = None) -> DepositObservation:
+                sender: str | None = None, recipient: str | None = None, fee_asset_id: str | None = None,
+                fee_raw: str | None = None, fee_decimals: int | None = None,
+                observed_at: dt.datetime | None = None) -> DepositObservation:
     """Build one authored observation with explicit fields. Unknown fields stay `None`."""
     return DepositObservation(wallet_id=wallet_id, network_id=network_id, reference=reference, status=status,
                               asset_id=asset_id, raw=raw, decimals=decimals, event_id=event_id, sender=sender,
-                              recipient=recipient, fee_raw=fee_raw, fee_decimals=fee_decimals,
+                              recipient=recipient, fee_asset_id=fee_asset_id, fee_raw=fee_raw,
+                              fee_decimals=fee_decimals,
                               observed_at=observed_at or dt.datetime(2026, 10, 11, 12, 0, tzinfo=dt.timezone.utc))
 
 
