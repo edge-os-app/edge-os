@@ -114,6 +114,22 @@ def test_revision_drift_after_review_denies_adoption(consent_engine, consent_ser
     assert session.execute(select(ConsentAdoptionRow)).scalars().all() == []
 
 
+def test_drifted_stored_terms_are_denied(consent_engine, consent_service, session) -> None:
+    view = _review(consent_engine, consent_service)
+    # The stored reviewed terms change without changing the recorded terms_hash.
+    with consent_engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE consent_local.consent_reviews "
+            "SET content = jsonb_set(content, '{terms,evidence,status}', '\"SUPPORTED\"')"))
+
+    with pytest.raises(ConsentDenied) as error:
+        consent_service.adopt(support.OWNER_A, AdoptionRequest(review_id=str(view.review_id),
+                                                               expected_review_hash=view.review_hash))
+    assert error.value.code == "corrupt_review"
+    assert session.execute(select(ConsentAdoptionRow)).scalars().all() == []
+    assert "CORRUPT_REVIEW" in set(session.execute(select(ConsentDenialRow.code)).scalars())
+
+
 def test_another_owner_cannot_adopt_or_read_the_consent(consent_engine, consent_service) -> None:
     view = _review(consent_engine, consent_service)
     with pytest.raises(ConsentNotFound):

@@ -12,6 +12,7 @@ activation, signing, admission, scheduler or provider-policy operation.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from typing import Any
 
@@ -33,6 +34,8 @@ from edge_os_api.funding.service import wallet_funding_summary
 from edge_os_api.records.models import StrategyRevision
 from edge_os_api.wallet_setup.service import get_setup
 from edge_os_api.wallet_setup.types import SetupState
+
+log = logging.getLogger("edge_os.consent")
 
 
 class ConsentError(Exception):
@@ -90,10 +93,14 @@ class ConsentService:
 
     def _deny(self, owner_id: uuid.UUID, agent_id: str | None, operation: str, code: str,
               detail: dict[str, Any]) -> None:
-        with self._factory() as session:
-            session.add(ConsentDenialRow(denial_id=uuid.uuid4(), owner_id=owner_id, agent_id=agent_id,
-                                         operation=operation, code=code, detail=detail))
-            session.commit()
+        try:
+            with self._factory() as session:
+                session.add(ConsentDenialRow(denial_id=uuid.uuid4(), owner_id=owner_id, agent_id=agent_id,
+                                             operation=operation, code=code, detail=detail))
+                session.commit()
+        except SQLAlchemyError:
+            # Recording the denial must never mask the domain denial or write a consent.
+            log.warning("consent denial could not be saved operation=%s code=%s", operation, code)
 
     @staticmethod
     def _load_owned_revision(session: Session, owner_id: uuid.UUID, strategy_id: str,
@@ -145,25 +152,34 @@ class ConsentService:
                          network_id: str) -> tuple[list[dict[str, Any]], list[str]]:
         if self._admission is None:
             return [], ["ALLOWANCE_STATE_UNKNOWN"]
-        summaries = self._admission.balances(owner_id, agent_id=agent_id, wallet_id=wallet_id,
-                                             network_id=network_id)
+        try:
+            summaries = self._admission.balances(owner_id, agent_id=agent_id, wallet_id=wallet_id,
+                                                 network_id=network_id)
+        except (AppError, SQLAlchemyError):
+            return [], ["ALLOWANCE_STATE_UNKNOWN"]
         return [summary.model_dump(mode="json") for summary in summaries], []
 
     def _decision_facts(self, owner_id: uuid.UUID, agent_id: str, wallet_id: str,
-                        network_id: str) -> list[dict[str, Any]]:
+                        network_id: str) -> tuple[list[dict[str, Any]], list[str]]:
         if self._admission is None:
-            return []
-        decisions = self._admission.retrieve_decisions(owner_id, agent_id=agent_id, wallet_id=wallet_id,
-                                                       network_id=network_id)
+            return [], ["DECISION_STATE_UNKNOWN"]
+        try:
+            decisions = self._admission.retrieve_decisions(owner_id, agent_id=agent_id, wallet_id=wallet_id,
+                                                           network_id=network_id)
+        except (AppError, SQLAlchemyError):
+            return [], ["DECISION_STATE_UNKNOWN"]
         return [{"action_id": item.action_id, "operation": item.operation, "status": item.status,
-                 "reason": item.reason} for item in decisions]
+                 "reason": item.reason} for item in decisions], []
 
     def _stop_facts(self, owner_id: uuid.UUID, agent_id: str, wallet_id: str,
                     network_id: str) -> tuple[list[dict[str, Any]], list[str]]:
         if self._stops is None:
             return [], ["STOP_STATE_UNKNOWN"]
-        views = self._stops.retrieve_stops(owner_id, agent_id=agent_id, wallet_id=wallet_id,
-                                           network_id=network_id)
+        try:
+            views = self._stops.retrieve_stops(owner_id, agent_id=agent_id, wallet_id=wallet_id,
+                                               network_id=network_id)
+        except (AppError, SQLAlchemyError):
+            return [], ["STOP_STATE_UNKNOWN"]
         return [{"scope": view.scope, "mode": view.mode, "trigger": view.trigger,
                  "position_id": view.position_id, "created_at": view.created_at} for view in views], []
 
@@ -237,10 +253,10 @@ class ConsentService:
         funding, funding_unknowns = self._funding_facts(verified_owner_id, request.agent_id)
         allowances, allowance_unknowns = self._allowance_facts(verified_owner_id, request.agent_id, wallet_id,
                                                                resolved_network)
-        decisions = self._decision_facts(verified_owner_id, request.agent_id, wallet_id, resolved_network)
+        decisions, decision_unknowns = self._decision_facts(verified_owner_id, request.agent_id, wallet_id, resolved_network)
         stops, stop_unknowns = self._stop_facts(verified_owner_id, request.agent_id, wallet_id,
                                                 resolved_network)
-        unknowns = funding_unknowns + allowance_unknowns + stop_unknowns
+        unknowns = funding_unknowns + allowance_unknowns + decision_unknowns + stop_unknowns
         content = build_review_content(meaning=meaning, terms=terms, strategy=strategy_block(strategy),
                                        funding=funding, existing_allowances=allowances,
                                        existing_decisions=decisions, stops=stops, unknowns=unknowns)
@@ -319,6 +335,13 @@ class ConsentService:
                 self._deny(verified_owner_id, review.agent_id, "ADOPT", "CORRUPT_REVIEW",
                            {"error": type(error).__name__})
                 raise ConsentDenied("corrupt_review") from None
+            # The adopted terms must equal the exact reviewed meaning: the stored
+            # terms still hash to the recorded terms_hash, and the meaning binds it.
+            if terms.content_hash() != review.terms_hash or meaning.get("terms_hash") != review.terms_hash:
+                session.rollback()
+                self._deny(verified_owner_id, review.agent_id, "ADOPT", "CORRUPT_REVIEW",
+                           {"stored_terms_hash": terms.content_hash(), "review_terms_hash": review.terms_hash})
+                raise ConsentDenied("corrupt_review")
             agent_id = review.agent_id
             strategy_id = review.strategy_id
             strategy_revision_id = review.strategy_revision_id

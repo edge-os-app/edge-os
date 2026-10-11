@@ -68,13 +68,14 @@ A second review for the same `(owner, agent, revision)` with changed terms is a
 ## Durable adoption
 
 `adopt` re-validates the stored review against the current revision and wallet
-binding, checks the expiry and the exact reviewed content identities, then
-persists one adoption per `(owner, review)` under a per-review advisory
-transaction lock. It binds the strategy revision/hash, wallet/network, the
-reviewed term version/hash, and the route/policy identity when present. An
-identical repeated adoption is idempotent with the same `consent_hash`; a changed
-reuse of the same identity conflicts. A crash or a concurrent adopter cannot
-adopt a different meaning under the same identity or create a second consent.
+binding, re-hashes the stored terms and the reviewed meaning against the recorded
+`terms_hash` and `review_hash`, checks the expiry, then persists one adoption per
+`(owner, review)` under a per-review advisory transaction lock. It binds the
+strategy revision/hash, wallet/network, the reviewed term version/hash, and the
+route/policy identity when present. An identical repeated adoption is idempotent
+with the same `consent_hash`; a changed reuse of the same identity conflicts. A
+crash or a concurrent adopter cannot adopt a different meaning under the same
+identity or create a second consent.
 
 ## Fail-closed denials
 
