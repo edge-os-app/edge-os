@@ -6,7 +6,6 @@ import uuid
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
 
 from edge_os_api.revocation.types import RemovalError
 
@@ -151,13 +150,41 @@ def test_observation_identity_must_match_the_request_network(revocation_engine, 
     assert outcome.denial_code == "OBSERVATION_IDENTITY_MISMATCH"
 
 
-def test_repeated_observation_key_is_refused(revocation_engine, removal_service):
+def test_exact_observation_repeat_is_idempotent(revocation_engine, removal_service):
+    view = _requested(revocation_engine, removal_service)
+    first = removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="o1",
+                                                           observed_state="PENDING"))
+    second = removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="o1",
+                                                            observed_state="PENDING"))
+    assert first.state == second.state == "PENDING"
+    with revocation_engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT count(*) FROM revocation_local.removal_observations")).scalar_one() == 1
+
+
+def test_changed_reuse_of_an_observation_key_is_refused(revocation_engine, removal_service):
     view = _requested(revocation_engine, removal_service)
     removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="o1",
                                                    observed_state="PENDING"))
-    with pytest.raises(IntegrityError):
+    with pytest.raises(RemovalError):
         removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="o1",
                                                        observed_state="UNKNOWN"))
+    assert removal_service.read_removal(OWNER_A)[0].state == "PENDING"
+
+
+def test_later_confirmation_cannot_replace_the_confirmed_signer(revocation_engine, removal_service):
+    view = _requested(revocation_engine, removal_service, signer_identity=None, policy_identity=None)
+    first = removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="o1",
+                                                           observed_state="CONFIRMED",
+                                                           signer_identity="signer-a", policy_identity=None))
+    assert first.state == "CONFIRMED"
+    assert first.view.evidenced_signer == "signer-a"
+    second = removal_service.reconcile(OWNER_A, observation(
+        view.request_id, observation_key="o2", observed_state="CONFIRMED", signer_identity="signer-b",
+        policy_identity=None, observed_at="2026-01-01T00:17:00Z"))
+    assert second.state == "CONFIRMED"
+    assert second.view.evidenced_signer == "signer-a"
+    assert second.view.contradictory is True
 
 
 def test_now_iso_observation_matches_the_clock(revocation_engine, removal_service):

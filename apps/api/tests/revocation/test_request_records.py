@@ -13,6 +13,7 @@ from revocation._support import (
     NETWORK,
     OWNER_A,
     OWNER_B,
+    SIGNER_OTHER,
     WALLET_A,
     WALLET_B,
     removal_request,
@@ -55,12 +56,28 @@ def test_exact_repeated_request_is_idempotent(revocation_engine, removal_service
     assert len(removal_service.read_removal(OWNER_A)) == 1
 
 
-def test_changed_key_for_the_same_identity_conflicts(revocation_engine, removal_service):
+def test_changed_observation_key_for_the_same_identity_conflicts(revocation_engine, removal_service):
     seed_wallet_binding(revocation_engine, OWNER_A)
     removal_service.request_removal(OWNER_A, removal_request(request_key="req-1"))
     with pytest.raises(RemovalError):
         removal_service.request_removal(OWNER_A, removal_request(request_key="req-2"))
     assert len(removal_service.read_removal(OWNER_A)) == 1
+
+
+def test_changed_request_signer_is_refused(revocation_engine, removal_service):
+    seed_wallet_binding(revocation_engine, OWNER_A)
+    removal_service.request_removal(OWNER_A, removal_request(request_key="req-1"))
+    with pytest.raises(RemovalError):
+        removal_service.request_removal(OWNER_A, removal_request(request_key="req-1",
+                                                                 signer_identity=SIGNER_OTHER))
+    assert removal_service.read_removal(OWNER_A)[0].signer_identity == "signer-a"
+
+
+def test_changed_request_reason_is_refused(revocation_engine, removal_service):
+    seed_wallet_binding(revocation_engine, OWNER_A)
+    removal_service.request_removal(OWNER_A, removal_request(request_key="req-1", reason="owner revoked"))
+    with pytest.raises(RemovalError):
+        removal_service.request_removal(OWNER_A, removal_request(request_key="req-1", reason="different reason"))
 
 
 def test_a_foreign_owner_sees_only_their_own_records(revocation_engine, removal_service):

@@ -46,12 +46,15 @@ binding (a read-only owner-scoped read), not from a caller field.
 - resolves the current `CONFIRMED` wallet binding for the requested agent and
   network; a missing binding is refused;
 - refuses a supplied `expected_wallet_id` that disagrees with the saved binding;
-- takes the shared per-wallet advisory lock, re-reads the binding under the lock
-  and refuses a binding that changed during the request;
+- takes the shared per-wallet advisory lock, then re-reads the binding under the
+  accepted `wallet_setups` `FOR UPDATE` row lock (the same lock the accepted
+  wallet setup writer uses) and holds it through commit, so a concurrent binding
+  change cannot commit between the validation and the durable write;
 - persists the request (identity, reason, evidenced signer/policy, provenance,
   requested time) before any controlled effect;
-- is idempotent on an exact repeat (same request key returns the same durable
-  record) and refuses a changed request key for the same removal identity.
+- is idempotent on an exact repeat (same request key and the same material
+  content returns the same durable record) and refuses any changed reuse (a
+  different request key, signer, policy or reason) for the same removal identity.
 
 The derived state after a request is `REQUESTED`. No rebinding, reactivation or
 clear operation exists in this stage.
@@ -60,9 +63,13 @@ clear operation exists in this stage.
 
 `reconcile(verified_owner_id, RemovalObservation)` keeps the owner request, the
 provider-style observation and the derived state separate. It takes the shared
-per-wallet advisory lock, locks the request and state rows and re-reads the
-current binding in the same transaction. An observation is refused, and recorded
-with a stable denial code, when:
+per-wallet advisory lock, locks the request and state rows, and re-reads the
+current binding under the accepted `wallet_setups` `FOR UPDATE` row lock (held
+through commit) in the same transaction. An exact repeated observation key with
+the same material content is idempotent: its recorded outcome is returned and
+nothing is replayed. A changed reuse of the same observation key is refused with a
+stable error. An observation is refused, and recorded with a stable denial code,
+when:
 
 - the current wallet binding is missing or no longer matches the request
   (`STALE_WALLET_BINDING`);
@@ -76,9 +83,10 @@ A matched observation derives its state. Only a `CONFIRMED` observation **with
 evidenced signer or policy identity** produces `CONFIRMED`; when neither the
 request nor the observation evidences a signer or policy, the derived state stays
 `UNKNOWN` (`SIGNER_EVIDENCE_UNKNOWN`) rather than fabricating confirmation. A
-`PENDING`, `UNKNOWN` or `FAILED` observation derives that state. A later
-observation that contradicts a `CONFIRMED` removal is retained as contradictory
-(`contradictory = true`) and never restores removed permission. Every observation
+`PENDING`, `UNKNOWN` or `FAILED` observation derives that state. Once `CONFIRMED`,
+the removal is sticky: a later observation that does not re-confirm the exact same
+evidenced target is retained as contradictory (`contradictory = true`) and neither
+restores removed permission nor replaces the confirmed signer. Every observation
 is append-only and auditable.
 
 ## Derived state and the local P30 check

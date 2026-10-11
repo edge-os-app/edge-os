@@ -224,3 +224,18 @@ def request_probe(url: str, owner: uuid.UUID, request) -> dict:
         capture_output=True, text=True, cwd=str(API_DIR), env=env, check=False)
     assert completed.returncode == 0, f"probe failed: {completed.stderr}"
     return json.loads(completed.stdout)
+
+
+class AuthoredProviderRefusal:
+    """An authored local stand-in for a provider that refuses to sign for a removed signer.
+
+    It is a controlled fixture only. It is NOT independent live Privy enforcement
+    and it never proves real provider behavior. Its refusal token is deliberately
+    distinct from the local P30 tokens so a test can show the two are separate.
+    """
+
+    ACCEPTED = "ACCEPTED"
+    REFUSED = "PROVIDER_REFUSED_REMOVED_SIGNER"
+
+    def submit(self, state: str) -> str:
+        return self.REFUSED if state == "CONFIRMED" else self.ACCEPTED

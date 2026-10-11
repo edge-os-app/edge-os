@@ -66,25 +66,37 @@ class WalletBinding:
 
 class WalletBindingReader(Protocol):
     def current_binding(
-        self, session: Session, verified_owner_id: uuid.UUID, *, agent_id: str, network_id: str,
+        self, session: Session, verified_owner_id: uuid.UUID, *,
+        agent_id: str, network_id: str, lock: bool = False,
     ) -> WalletBinding | None: ...
 
 
 class SavedWalletBindingReader:
-    """Read-only reader of the accepted saved `wallet_setups` binding row."""
+    """Reader of the accepted saved `wallet_setups` binding row.
+
+    With `lock=True` it takes the same `FOR UPDATE` row lock the accepted wallet
+    setup writer uses, so a concurrent binding change cannot commit between the
+    validation and the removal save. The read order is the shared per-wallet
+    advisory lock first, then this binding row lock; the wallet setup writer takes
+    only the row lock, so the ordering has no cycle.
+    """
 
     def current_binding(
-        self, session: Session, verified_owner_id: uuid.UUID, *, agent_id: str, network_id: str,
+        self, session: Session, verified_owner_id: uuid.UUID, *,
+        agent_id: str, network_id: str, lock: bool = False,
     ) -> WalletBinding | None:
         network_int = NETWORK_TO_INT.get(network_id)
         if network_int is None:
             return None
-        row = session.execute(select(WalletSetupRow).where(
+        statement = select(WalletSetupRow).where(
             WalletSetupRow.owner_id == verified_owner_id,
             WalletSetupRow.agent_id == agent_id,
             WalletSetupRow.network_id == network_int,
             WalletSetupRow.state == "CONFIRMED",
-        )).scalar_one_or_none()
+        )
+        if lock:
+            statement = statement.with_for_update(of=WalletSetupRow)
+        row = session.execute(statement).scalar_one_or_none()
         if row is None or row.wallet_id is None:
             return None
         return WalletBinding(owner_id=verified_owner_id, agent_id=agent_id,
@@ -124,8 +136,12 @@ class RemovalService:
                 acquire_wallet_lock(session, verified_owner_id, request.agent_id,
                                     binding.wallet_id, request.network_id)
                 session.expire_all()
+                # Re-read the binding under the accepted row lock and hold it
+                # through commit, so a concurrent binding change cannot commit
+                # between this validation and the durable request write.
                 current = self._bindings.current_binding(
-                    session, verified_owner_id, agent_id=request.agent_id, network_id=request.network_id)
+                    session, verified_owner_id, agent_id=request.agent_id,
+                    network_id=request.network_id, lock=True)
                 if current is None or current.wallet_id != binding.wallet_id:
                     raise RemovalError("the saved wallet binding changed during the request")
                 now = self._clock()
@@ -145,8 +161,14 @@ class RemovalService:
                     RemovalRequestRow.wallet_id == binding.wallet_id,
                     RemovalRequestRow.network_id == request.network_id,
                 )).scalar_one()
-                if row.request_key != request.request_key:
-                    raise RemovalError("this wallet already has a removal request under a different key")
+                # An exact repeat is idempotent. A changed request key or changed
+                # material content for the same removal identity is refused, so a
+                # lost-reply retry can never appear to request a new signer.
+                if (row.request_key != request.request_key
+                        or row.signer_identity != request.signer_identity
+                        or row.policy_identity != request.policy_identity
+                        or row.reason != request.reason):
+                    raise RemovalError("this wallet already has a different removal request")
                 self._ensure_state(session, row, now)
                 session.commit()
                 return self._view(session, row)
@@ -186,7 +208,22 @@ class RemovalService:
                     RemovalStateRow.request_id == row.request_id,
                 ).with_for_update().execution_options(populate_existing=True)).scalar_one()
                 binding = self._bindings.current_binding(
-                    session, verified_owner_id, agent_id=row.agent_id, network_id=row.network_id)
+                    session, verified_owner_id, agent_id=row.agent_id,
+                    network_id=row.network_id, lock=True)
+                # An exact observation repeat is idempotent: return its recorded
+                # outcome and replay nothing. A changed reuse of the same key is
+                # refused, so an uncertain result is never hidden or re-applied.
+                existing = session.execute(select(RemovalObservationRow).where(
+                    RemovalObservationRow.owner_id == verified_owner_id,
+                    RemovalObservationRow.observation_key == observation.observation_key,
+                )).scalar_one_or_none()
+                if existing is not None:
+                    if self._observation_identical(existing, observation):
+                        session.commit()
+                        return ReconcileOutcome(request_id=row.request_id, accepted=bool(existing.matched),
+                                                denial_code=existing.denial_code, state=state.state,
+                                                reason=state.reason, view=self._view(session, row))
+                    raise RemovalError("this observation key was already used with different content")
                 denial = self._denial_code(row, state, observation, binding)
                 now = self._clock()
                 if denial is not None:
@@ -196,16 +233,22 @@ class RemovalService:
                     return ReconcileOutcome(request_id=row.request_id, accepted=False, denial_code=denial,
                                             state=state.state, reason=state.reason,
                                             view=self._view(session, row))
-                if state.state == "CONFIRMED" and observation.observed_state != "CONFIRMED":
+                new_state, reason, evidenced_signer, evidenced_policy = self._derive(row, observation)
+                if state.state == "CONFIRMED":
+                    # The confirmed removal is sticky. A later observation that does
+                    # not re-confirm the exact same target is retained as a
+                    # contradiction and never replaces the confirmed signer.
+                    conflict = self._confirms_a_different_target(
+                        state, observation, evidenced_signer, evidenced_policy)
                     self._record_observation(session, row, observation, matched=True,
-                                             contradictory=True, denial_code=None, now=now)
-                    state.contradictory = True
-                    state.updated_at = now
+                                             contradictory=conflict, denial_code=None, now=now)
+                    if conflict:
+                        state.contradictory = True
+                        state.updated_at = now
                     session.commit()
                     return ReconcileOutcome(request_id=row.request_id, accepted=True, denial_code=None,
                                             state=state.state, reason=state.reason,
                                             view=self._view(session, row))
-                new_state, reason, evidenced_signer, evidenced_policy = self._derive(row, observation)
                 observation_id = self._record_observation(session, row, observation, matched=True,
                                                           contradictory=False, denial_code=None, now=now)
                 state.state = new_state
@@ -302,6 +345,36 @@ class RemovalService:
                 and row.policy_identity != observation.policy_identity):
             return "WRONG_POLICY"
         return None
+
+    @staticmethod
+    def _observation_identical(existing: RemovalObservationRow, observation: RemovalObservation) -> bool:
+        """True when a repeated observation key carries the same material content."""
+        return (
+            existing.request_id == observation.request_id
+            and existing.observed_state == observation.observed_state
+            and existing.agent_id == observation.agent_id
+            and existing.wallet_id == observation.wallet_id
+            and existing.network_id == observation.network_id
+            and existing.signer_identity == observation.signer_identity
+            and existing.policy_identity == observation.policy_identity
+            and existing.observed_at == parse_utc(observation.observed_at)
+        )
+
+    @staticmethod
+    def _confirms_a_different_target(
+        state: RemovalStateRow, observation: RemovalObservation,
+        evidenced_signer: str | None, evidenced_policy: str | None,
+    ) -> bool:
+        """True when a later observation contradicts an already confirmed removal."""
+        if observation.observed_state != "CONFIRMED":
+            return True
+        if (evidenced_signer is not None and state.evidenced_signer is not None
+                and evidenced_signer != state.evidenced_signer):
+            return True
+        if (evidenced_policy is not None and state.evidenced_policy is not None
+                and evidenced_policy != state.evidenced_policy):
+            return True
+        return False
 
     @staticmethod
     def _derive(

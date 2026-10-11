@@ -16,6 +16,7 @@ from revocation._support import (
     OWNER_B,
     WALLET_A,
     WALLET_B,
+    AuthoredProviderRefusal,
     observation,
     removal_request,
     seed_admission_admitted,
@@ -116,13 +117,23 @@ def test_b_positive_control_b_wallet_is_unaffected(revocation_engine, removal_se
     assert [decision.status for decision in decisions] == ["ADMITTED"]
 
 
-def test_controlled_provider_style_refusal_is_distinct_from_local_denial(
+def test_controlled_provider_style_submission_refusal_is_separate_from_the_local_check(
         revocation_engine, removal_service, session):
-    # A controlled provider-style refusal (FAILED) is not a confirmed removal and does not deny.
-    view = _requested(revocation_engine, removal_service)
+    seed_wallet_binding(revocation_engine, OWNER_A)
+    view = removal_service.request_removal(OWNER_A, removal_request())
     removal_service.reconcile(OWNER_A, observation(view.request_id, observation_key="o1",
-                                                   observed_state="FAILED"))
+                                                   observed_state="CONFIRMED"))
+    # The local P30 check denies with its own token.
     assert removal_service.submission_denial(session, OWNER_A, agent_id=AGENT_A, wallet_id=WALLET_A,
-                                             network_id=NETWORK) == []
-    # The authored admission builder stays usable independently of the removal record.
+                                             network_id=NETWORK) == ["REMOVAL_CONFIRMED"]
+    # A direct controlled provider-style submission for removed A is refused by the
+    # authored fixture transport, separately from the local check and with a
+    # distinct token. This is an authored fixture, not live Privy enforcement.
+    provider = AuthoredProviderRefusal()
+    state = removal_service.read_removal(OWNER_A, agent_id=AGENT_A, wallet_id=WALLET_A,
+                                         network_id=NETWORK)[0].state
+    assert provider.submit(state) == AuthoredProviderRefusal.REFUSED
+    assert provider.submit("REQUESTED") == AuthoredProviderRefusal.ACCEPTED
+    assert AuthoredProviderRefusal.REFUSED != "REMOVAL_CONFIRMED"
+    # A controlled FAILED removal is not a confirmed removal and does not deny.
     assert admission_builders.intent_entry().operation == "ENTRY"
