@@ -158,3 +158,26 @@ def test_a_refused_request_never_reaches_the_transport() -> None:
     assert handler(body(), AUTH)[0] == 200
     assert handler(body(), AUTH)[0] == 429
     assert len(reached) == 1
+
+
+def test_simultaneous_requests_admit_exactly_one() -> None:
+    import sys
+    import threading
+
+    attempt, results, start = guard(), [], threading.Barrier(16)
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)  # switch threads often, so a missing lock shows
+
+    def send() -> None:
+        start.wait()
+        results.append(attempt.admit(body(), AUTH).admitted)
+
+    threads = [threading.Thread(target=send) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    sys.setswitchinterval(interval)
+
+    assert sorted(results) == [False] * 15 + [True]
+    assert (attempt.admitted_count, attempt.seen_count) == (1, 16)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,11 +54,16 @@ class ProviderRequestGuard:
         self.admitted_count = 0
         self.seen_count = 0
         self._evidence: list[dict[str, Any]] = []
+        self._lock = threading.Lock()  # Hermes and the SDK may call the transport from more than one thread
 
     def evidence(self) -> list[dict[str, Any]]:
         return [dict(record) for record in self._evidence]
 
     def admit(self, raw: bytes, headers: Mapping[str, str]) -> Decision:
+        with self._lock:
+            return self._admit(raw, headers)
+
+    def _admit(self, raw: bytes, headers: Mapping[str, str]) -> Decision:
         self.seen_count += 1
         parsed = self._parse(raw)
         phase = self._phase(parsed)
