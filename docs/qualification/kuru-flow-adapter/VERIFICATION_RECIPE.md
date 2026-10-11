@@ -10,7 +10,7 @@ Run from `apps/api`:
 uv run --frozen pytest tests/kuru_flow -ra
 ```
 
-Expected literal: `75 passed` (the count rises only with new owned tests). The suite opens no provider socket and requests no shared `pg` fixture, so no shared session fixture starts an instance for this suite.
+Expected literal: `78 passed` (the count rises only with new owned tests). The suite opens no provider socket and requests no shared `pg` fixture, so no shared session fixture starts an instance for this suite.
 
 Static guards inside the suite:
 
@@ -52,9 +52,12 @@ git diff --check 9210bc1d054f1d5623693f787737a7b80563185a HEAD
 | ERC-20 allowance absent | `ALLOWANCE_UNKNOWN` |
 | ERC-20 allowance below input | `ALLOWANCE_NOT_APPROVED` |
 | Wrong positive-fee referrer | `BLOCKED` `REFERRER_NOT_ALLOWED`, never `NameError` |
-| Nonzero dynamic-program padding | `NON_CANONICAL_PADDING` |
+| Nonzero dynamic-program padding (both layouts) | `NON_CANONICAL_PADDING` |
 | Float, string or Boolean age | `AdapterError` |
+| Observation without the chain binding | `REJECTED` `OBS_CHAIN_MISSING`, effects unproven |
+| Observation without the wallet binding | `REJECTED` `OBS_WALLET_MISSING`, effects unproven |
 | Observation without the candidate binding | `REJECTED` `OBS_BINDING_MISSING`, effects unproven |
+| Observation without the expected transaction binding | `REJECTED` `OBS_TX_MISSING`, effects unproven |
 | Quote `status` not `success` | `QUOTE_STATUS_ERROR` |
 | Success without reconciled input, output or gas | `CONFIRMED`, effects unproven |
 | Truncated or inconsistent ABI | `TRUNCATED_ABI` / `INCONSISTENT_ABI` |

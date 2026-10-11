@@ -177,6 +177,15 @@ def test_nonzero_program_padding_blocked():
     assert R_NON_CANONICAL_PADDING in result.reasons
 
 
+def test_receiver_variant_nonzero_padding_blocked():
+    config = base_config(method="EXECUTE_SWAP_WITH_RECEIVER", selector=AUTHORED_RECEIVER_SELECTOR)
+    data = encode_execute_swap_with_receiver(receiver=WALLET)
+    altered = data[:-2] + "01"
+    result = _prepare(transaction_response(altered), config)
+    assert result.outcome.value == "BLOCKED"
+    assert R_NON_CANONICAL_PADDING in result.reasons
+
+
 def test_float_age_rejected():
     with pytest.raises(AdapterError):
         _prepare(transaction_response(encode_execute_swap()), base_config(), quote_age_seconds=0.5)

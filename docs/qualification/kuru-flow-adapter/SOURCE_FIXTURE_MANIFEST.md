@@ -20,7 +20,7 @@ All fixtures are `AUTHORED`. A fixture is an invented payload. It follows a docu
 | `authored-build-response-shape` | AUTHORED | Authored stand-in for the documented K3 `path`/`buildResponse` shape; inner schema unpublished | `35f5d120dceb8e8d418b77fd2d6ac798bb22361182ba1cb5c855f360ef6e33f2` |
 | `authored-transaction-calldata-shape` | AUTHORED | Authored stand-in for the documented K2 `transaction.calldata` shape with unprefixed `calldata` | `ed82d73a26eb0065db79855067da792b69786886ec95856302e656e3cc27562d` |
 
-The two `executeSwap` calldata values are identical because both use the same authored intent; the shape fixture differs only in that its `calldata` is stored without the `0x` prefix, as the K2 guide documents.
+The two `executeSwap` calldata values are identical: both are authored, and both are stored without the `0x` prefix, as the K2 guide documents. Neither is a captured or published example.
 
 ## Source pins
 
