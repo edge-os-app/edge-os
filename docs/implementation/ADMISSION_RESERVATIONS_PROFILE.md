@@ -174,9 +174,13 @@ consumed.
   breach. The breach transition commits under the same per-wallet advisory lock
   as the settlement, so no admission can slip in between the rollback and the
   breach record. The decision becomes `BREACHED`, and new affected admissions for
-  that wallet and network are blocked until reconciled. A contradictory
-  pre-broadcast denial cannot clear a recorded confirmed or reverted breach; it
-  is refused with `CONTRADICTORY_RECOVERY`.
+  that wallet and network are blocked until reconciled. A recorded breach is never
+  silently replaced. A later confirmed, reverted or unknown receipt cannot settle
+  or downgrade it, and a contradictory pre-broadcast denial cannot clear it; each
+  is refused with `CONTRADICTORY_RECOVERY` and writes no new receipt, so the
+  durable breach, its receipt and its unreleased exposure are preserved. A
+  cancellation on a breached action is refused with
+  `NOT_CANCELLABLE_AFTER_SUBMISSION`.
 - The durable position quote asset and decimals are validated at admission for
   additions and exits, before any reservation, so an altered quote binding is a
   saved denial rather than a settlement-time failure.
