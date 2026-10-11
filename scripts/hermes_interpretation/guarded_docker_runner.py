@@ -12,14 +12,17 @@ turn before any job starts: a configured credential is never silently dropped.
 On EVERY path out of a turn (a result, a timeout, any exception including KeyboardInterrupt) the same two steps run,
 in this order: a container that may still run is stopped and verified gone, then the output folder is sealed. If either
 step fails, for any reason, the output folder is removed and `EvidenceNotSealed` is raised: evidence that may hold the
-credential is never kept and never reported as clean. Sealing works on bytes, removes links and special files without
+credential is never reported as clean. Removal is itself bounded: what cannot be removed in time is moved in one step to
+a private quarantine folder, which the error names, and `purge_quarantine` removes it later. Sealing works on bytes, removes links and special files without
 opening them, deletes files too large to scan, and has to finish by the job timeout plus `seal_grace_seconds`.
 """
 
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
+import math
 import os
 import shutil
 import stat
@@ -83,6 +86,9 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def __init__(self, *, policy: GuardPolicy, credential_file: Path | None = None, seal_grace_seconds: float = 5.0,
                  **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        for label, value in (("timeout_seconds", self.timeout_seconds), ("seal_grace_seconds", seal_grace_seconds)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f"{label} must be a finite number")  # a NaN would switch every deadline off
         self.policy, self.credential_file, self.seal_grace_seconds = policy, credential_file, seal_grace_seconds
         self._turn_lock = threading.Lock()
         self._token = uuid.uuid4().hex[:6]  # two runner objects with one run_id must not share container names
@@ -118,12 +124,12 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         while pending:
             current = pending.pop()
             current.chmod(0o700)
-            with os.scandir(current) as scan:
-                entries = list(scan)
+            with os.scandir(current) as scan:  # read no more than the limit allows, so a folder that never ends cannot hang us
+                entries = list(itertools.islice(scan, MAX_ENTRIES - seen + 1))
+            if len(entries) > MAX_ENTRIES - seen:
+                raise EvidenceNotSealed("the output holds more entries than can be scanned")
             for entry in entries:
                 seen += 1
-                if seen > MAX_ENTRIES:
-                    raise EvidenceNotSealed("the output holds more entries than can be scanned")
                 if time.monotonic() > deadline:
                     raise EvidenceNotSealed("sealing passed its time limit")
                 path, kind = Path(entry.path), stat.S_IFMT(entry.stat(follow_symlinks=False).st_mode)
@@ -155,27 +161,52 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         return True
 
     @staticmethod
-    def _quarantine(output: Path) -> None:
-        """Remove evidence that cannot be proved clean, including folders that are locked. If it stays, say so.
+    def _remove_tree(root: Path, until: float) -> None:
+        """Remove `root` and everything under it, making locked folders ours first. Raises `TimeoutError` after `until`."""
+        pending: list[tuple[Path, bool]] = [(root, False)]
+        while pending:
+            path, emptied = pending.pop()
+            if emptied:
+                path.rmdir()
+                continue
+            path.chmod(0o700)
+            pending.append((path, True))
+            with os.scandir(path) as scan:
+                for entry in scan:
+                    if time.monotonic() > until:
+                        raise TimeoutError("removal passed its time limit")
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append((Path(entry.path), False))
+                    else:
+                        os.unlink(entry.path)
 
-        First every folder that can be reached is made ours (mode 700), then the tree is removed. Nothing in here
-        may raise anything but `EvidenceNotSealed`, and only when the folder is still there at the end.
+    def _quarantine(self, output: Path, plan: _TurnPlan) -> None:
+        """Take evidence that cannot be proved clean out of reach. Never raises anything but `EvidenceNotSealed`.
+
+        Removal has the rest of the turn's budget (a tenth of a second at least, so a small output is always removed).
+        If it is not finished by then, the rest is MOVED, in one step, to a private `quarantine-*` folder beside the turn
+        folders and the turn says so. `purge_quarantine` removes those folders when no clock runs.
         """
         try:
-            pending = [output]
-            while pending:
-                current = pending.pop()
-                try:
-                    current.chmod(0o700)
-                    with os.scandir(current) as scan:
-                        pending += [Path(e.path) for e in scan if e.is_dir(follow_symlinks=False)]
-                except OSError:
-                    continue  # too deep or already gone: the removal below handles it from the top
-            shutil.rmtree(output, ignore_errors=True)
-        except Exception:  # noqa: BLE001 - whatever went wrong, the check below says whether the evidence is gone
+            self._remove_tree(output, max(plan.deadline, time.monotonic() + 0.1))
+        except TimeoutError:
             pass
-        if output.exists():
-            raise EvidenceNotSealed("evidence that may hold the credential could not be removed")
+        except Exception:  # noqa: BLE001 - a path too long for the plain walk, or a surprise: the fd-based removal may still work
+            shutil.rmtree(output, ignore_errors=True)
+        if not output.exists():
+            return
+        held = output.parent.parent / f"quarantine-{output.parent.name}-{uuid.uuid4().hex[:6]}"
+        try:
+            output.rename(held)
+            held.chmod(0o700)
+        except OSError as error:
+            raise EvidenceNotSealed("evidence that may hold the credential could not be removed or moved") from error
+        raise EvidenceNotSealed("evidence that may hold the credential was not removed in time; it is in a private quarantine folder")
+
+    def purge_quarantine(self) -> None:
+        """Remove every quarantine folder. This has no clock: run it between turns."""
+        for held in self.evidence_dir.glob("quarantine-*"):
+            self._remove_tree(held, float("inf"))
 
     def _seal(self, output: Path, plan: _TurnPlan) -> bool:
         """Seal the output. Any failure at all removes it and raises `EvidenceNotSealed`."""
@@ -184,7 +215,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         try:
             return self._redact(output, plan.secret, plan.deadline)
         except BaseException as error:
-            self._quarantine(output)
+            self._quarantine(output, plan)
             if isinstance(error, EvidenceNotSealed):
                 raise
             raise EvidenceNotSealed("the evidence could not be sealed") from error
@@ -270,7 +301,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 self._confirm_stopped(plan, launch)
                 self._seal(output, plan)
             except BaseException:  # an interrupt here counts too: the evidence goes
-                self._quarantine(output)  # raises EvidenceNotSealed if the folder cannot be removed
+                self._quarantine(output, plan)  # raises EvidenceNotSealed unless the folder was removed
                 if isinstance(failure, Exception):  # say that the container or the evidence could not be secured
                     raise EvidenceNotSealed("the turn failed and its container or evidence could not be secured") from failure
             raise  # an interrupt, or a failure after which everything was secured, propagates as it was
@@ -278,7 +309,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             self._confirm_stopped(plan, launch)
             self._seal(output, plan)
         except BaseException as error:
-            self._quarantine(output)
+            self._quarantine(output, plan)
             if isinstance(error, EvidenceNotSealed):
                 raise
             raise EvidenceNotSealed("the evidence could not be sealed") from error

@@ -904,3 +904,96 @@ def test_the_pauses_between_listings_are_part_of_the_same_budget(tmp_path: Path,
 
     assert outcome == "EvidenceNotSealed" and elapsed <= 0.1 + 1.0 + 0.25, elapsed
     assert not list(evidence.glob("turn-*/output"))
+
+
+# --- Repairs after round-8 review: removal of a huge output is bounded, and the settings are checked ---------------
+
+def test_removing_a_huge_output_after_a_missed_bound_cannot_run_the_turn_past_the_deadline(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(module, "MAX_ENTRIES", 10_000_000)  # the count limit is not what stops this one
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present and not ours: never stoppable
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+    job_seconds: list[float] = []
+
+    def behaviour(output: Path) -> None:  # the job itself takes a while to write this much; that time is not the runner's
+        began = time.monotonic()
+        crowd = output / "crowd"
+        crowd.mkdir()
+        for index in range(40_000):
+            (crowd / f"f{index}.log").write_text("x")
+        (crowd / "secret.log").write_text(OLD)
+        job_seconds.append(time.monotonic() - began)
+
+    install_process(monkeypatch, behaviour, returncode=-9)
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=0.1)
+    outcome: list = []
+
+    def go() -> None:
+        started = time.monotonic()
+        try:
+            runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+            outcome.append("returned")
+        except EvidenceNotSealed as error:
+            outcome.append(str(error))
+        outcome.append(time.monotonic() - started)
+
+    worker = threading.Thread(target=go, daemon=True)
+    worker.start()
+    worker.join(timeout=60)
+
+    assert not worker.is_alive(), "the turn did not finish"
+    assert outcome[1] - job_seconds[0] <= 0.1 + 0.1 + 0.4, outcome  # deleting 40,000 files takes seconds; the turn must not wait for it
+    folders = list((tmp_path / "evidence").glob("turn-*/output"))
+    assert folders == [], "evidence was left where a reader would find it as the turn's output"
+    held = list((tmp_path / "evidence").glob("quarantine-*"))
+    if held:  # removal did not finish: it is explicit, private and removable afterwards
+        assert "quarantine" in outcome[0] and held[0].stat().st_mode & 0o077 == 0
+        runner.purge_quarantine()
+    assert not list((tmp_path / "evidence").glob("quarantine-*")) and plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_a_directory_listing_is_cut_off_at_the_entry_limit_instead_of_being_read_whole(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    monkeypatch.setattr(module, "MAX_ENTRIES", 5)
+
+    class Endless:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def __iter__(self):
+            index = 0
+            while True:  # a folder that never ends; reading it whole would never return
+                index += 1
+                yield type("Entry", (), {"path": f"/nonexistent/{index}", "stat": lambda self, follow_symlinks=False: os.stat_result((0o100644,) + (0,) * 9)})()
+
+    real_scandir = os.scandir
+    monkeypatch.setattr(os, "scandir", lambda path: Endless() if str(path) == str(tmp_path) else real_scandir(path))
+    outcome: list = []
+
+    def go() -> None:
+        try:
+            GuardedDockerTurnRunner._redact(tmp_path, OLD, time.monotonic() + 30)
+            outcome.append("returned")
+        except EvidenceNotSealed:
+            outcome.append("EvidenceNotSealed")
+
+    worker = threading.Thread(target=go, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+
+    assert outcome == ["EvidenceNotSealed"]
+
+
+@pytest.mark.parametrize("field", ["timeout_seconds", "seal_grace_seconds"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), "5", None])
+def test_a_timeout_or_grace_that_is_not_a_finite_number_is_refused_at_construction(tmp_path: Path, field: str, value) -> None:
+    kwargs = {"timeout_seconds": 60, "seal_grace_seconds": 5.0, field: value}
+
+    with pytest.raises(ValueError):
+        GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path, policy=POLICY, script_for=lambda t: {}, **kwargs)
