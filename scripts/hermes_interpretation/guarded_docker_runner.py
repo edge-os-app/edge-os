@@ -167,25 +167,49 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     @staticmethod
     def _remove_tree(root: Path, until: float) -> None:
-        """Remove `root` and everything under it, making locked folders ours first. Raises `TimeoutError` after `until`."""
-        pending: list[tuple[Path, bool]] = [(root, False)]
-        while pending:
-            if time.monotonic() > until:  # every step ticks the clock, including the removal of an empty folder
-                raise TimeoutError("removal passed its time limit")
-            path, emptied = pending.pop()
-            if emptied:
-                path.rmdir()
-                continue
-            path.chmod(0o700)
-            pending.append((path, True))
-            with os.scandir(path) as scan:
-                for entry in scan:
-                    if time.monotonic() > until:
-                        raise TimeoutError("removal passed its time limit")
-                    if entry.is_dir(follow_symlinks=False):
-                        pending.append((Path(entry.path), False))
-                    else:
-                        os.unlink(entry.path)
+        """Remove `root` and everything under it without ever following a link. Raises `TimeoutError` after `until`.
+
+        Works on directory file descriptors, so a folder that a still-running container swaps for a link while this runs
+        is unlinked as a link and never entered: nothing outside `root` can be touched. Every step ticks the clock.
+        Folders are made ours (mode 700) as they are entered. A very deep tree needs more descriptors than the process
+        may hold; that raises, and the caller moves the tree instead.
+        """
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+        def open_folder(parent: int, name: str) -> int:
+            """Open a folder by name relative to `parent`, never through a link; make a locked one ours first."""
+            try:
+                fd = os.open(name, flags, dir_fd=parent)
+            except PermissionError:  # a locked folder: change its own mode (not a link's target), then open it
+                os.chmod(name, 0o700, dir_fd=parent, follow_symlinks=False)
+                fd = os.open(name, flags, dir_fd=parent)
+            os.fchmod(fd, 0o700)
+            return fd
+
+        parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
+        frames: list[tuple[int, str, int, Any]] = []  # (descriptor, name, parent descriptor, names still to visit)
+        try:
+            fd = open_folder(parent_fd, root.name)
+            frames.append((fd, root.name, parent_fd, iter(os.listdir(fd))))
+            while frames:
+                if time.monotonic() > until:  # every step ticks the clock, including the removal of an empty folder
+                    raise TimeoutError("removal passed its time limit")
+                fd, name, parent, names = frames[-1]
+                child = next(names, None)
+                if child is None:
+                    frames.pop()
+                    os.close(fd)
+                    os.rmdir(name, dir_fd=parent)
+                    continue
+                if stat.S_ISDIR(os.stat(child, dir_fd=fd, follow_symlinks=False).st_mode):
+                    below = open_folder(fd, child)  # a link swapped in since the check fails here (ELOOP)
+                    frames.append((below, child, fd, iter(os.listdir(below))))
+                else:
+                    os.unlink(child, dir_fd=fd)
+        finally:
+            for fd, *_ in frames:
+                os.close(fd)
+            os.close(parent_fd)
 
     def _quarantine(self, output: Path, plan: _TurnPlan) -> None:
         """Take evidence that cannot be proved clean out of reach. It returns when the folder is gone, else raises `EvidenceNotSealed`.
@@ -194,11 +218,16 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         If it is not finished by then, the rest is MOVED, in one step, to a private `quarantine-*` folder beside the turn
         folders and the turn says so. `purge_quarantine` removes those folders when no clock runs.
         """
+        interrupt = None
         try:
             self._remove_tree(output, max(plan.deadline, time.monotonic() + 0.1))
-        except Exception:  # noqa: BLE001 - out of time, or the plain walk cannot go on: never an unbounded removal; move it
+        except Exception:  # noqa: BLE001 - out of time, or the walk cannot go on: never an unbounded removal; move it
             pass
+        except BaseException as stopped:  # an interrupt: still move the folder first, then let the interrupt through
+            interrupt = stopped
         if not output.exists():
+            if interrupt is not None:
+                raise interrupt
             return
         held = output.parent.parent / f"quarantine-{output.parent.name}-{uuid.uuid4().hex[:6]}"
         try:
@@ -206,6 +235,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             held.chmod(0o700)
         except OSError as error:
             raise EvidenceNotSealed("evidence that may hold the credential could not be removed or moved") from error
+        if interrupt is not None:
+            raise interrupt
         raise EvidenceNotSealed(f"evidence that may hold the credential was not removed in time; it is in the private folder {held.name}")
 
     def purge_quarantine(self) -> None:

@@ -1135,3 +1135,151 @@ def test_when_the_plain_walk_fails_for_any_reason_the_output_is_moved_and_never_
     GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path / "evidence", policy=POLICY,
                             script_for=lambda t: {}).purge_quarantine()
     assert not list((tmp_path / "evidence").glob("quarantine-*"))
+
+
+# --- Repairs after round-10 review: removal must not follow a link that a surviving container swaps in -----------------
+
+def _swap_a_queued_folder_for_a_link_after_the_first_listing(monkeypatch, output_holder: list, victim: Path) -> None:
+    """After the removal has listed the output once, a folder it has queued becomes a link to a host folder.
+
+    That is what a container that is still alive could do between the listing and the visit. The hook fires once, only for
+    a listing made from `_remove_tree`, and works for both ways of listing a folder.
+    """
+    import sys
+    state = {"done": False}
+    real_scandir, real_listdir = os.scandir, os.listdir
+
+    def swap() -> None:
+        if state["done"]:
+            return
+        state["done"] = True
+        queued = output_holder[0] / "queued"
+        shutil_rmtree(queued)
+        queued.symlink_to(victim, target_is_directory=True)
+
+    def from_remove_tree() -> bool:
+        return sys._getframe(2).f_code.co_name == "_remove_tree"
+
+    def scandir(path):
+        result = real_scandir(path)
+        if from_remove_tree():
+            entries = list(result)
+            result.close()
+            swap()
+            return _ListedEntries(entries)
+        return result
+
+    def listdir(path="."):
+        result = real_listdir(path)
+        if from_remove_tree():
+            swap()
+        return result
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    monkeypatch.setattr(os, "listdir", listdir)
+
+
+class _ListedEntries:
+    def __init__(self, entries) -> None:
+        self.entries = entries
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def __iter__(self):
+        return iter(self.entries)
+
+
+def shutil_rmtree(path: Path) -> None:
+    import shutil
+    shutil.rmtree(path)
+
+
+def test_removal_does_not_follow_a_link_that_a_surviving_container_swaps_in(tmp_path: Path, monkeypatch) -> None:
+    victim = tmp_path / "host-folder"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("a file of the host, not evidence")
+    victim.chmod(0o755)
+    holder: list[Path] = []
+
+    def behaviour(output: Path) -> None:
+        holder.append(output)
+        (output / "queued").mkdir()
+        (output / "queued" / "inner.log").write_text(OLD)
+        (output / "other.log").write_text("x")
+
+    _swap_a_queued_folder_for_a_link_after_the_first_listing(monkeypatch, holder, victim)
+    run_removal_turn(tmp_path, monkeypatch, behaviour, grace=2.0)
+
+    assert (victim / "keep.txt").read_text() == "a file of the host, not evidence", "removal followed the link out of the evidence"
+    assert victim.stat().st_mode & 0o777 == 0o755, "removal changed the mode of a host folder"
+
+
+def test_a_second_interrupt_during_removal_still_moves_the_evidence_and_then_lets_the_interrupt_through(tmp_path: Path, monkeypatch) -> None:
+    holder: list[Path] = []
+
+    def interrupted(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_remove_tree", staticmethod(interrupted))
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    install_process(monkeypatch, lambda output: (holder.append(output), (output / "late.log").write_text(OLD)), returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert not list((tmp_path / "evidence").glob("turn-*/output")), "the output was left where a reader would find it"
+    assert list((tmp_path / "evidence").glob("quarantine-*"))
+
+
+def test_purge_says_which_folders_are_left_when_it_cannot_remove_them(tmp_path: Path, monkeypatch) -> None:
+    import shutil
+    runner = GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path, policy=POLICY, script_for=lambda t: {})
+    (tmp_path / "quarantine-stuck").mkdir()
+
+    def fails(*_args, **_kwargs):
+        raise OSError("busy")
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_remove_tree", staticmethod(fails))
+    monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)
+
+    with pytest.raises(EvidenceNotSealed, match="quarantine-stuck"):
+        runner.purge_quarantine()
+
+
+def test_removal_does_not_follow_a_link_swapped_in_between_the_check_and_the_open(tmp_path: Path, monkeypatch) -> None:
+    import sys
+    victim = tmp_path / "host-folder"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("a file of the host, not evidence")
+    victim.chmod(0o755)
+    holder: list[Path] = []
+    state = {"done": False}
+    real_stat = os.stat
+
+    def stat_then_swap(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if not state["done"] and path == "queued" and sys._getframe(1).f_code.co_name == "_remove_tree":
+            state["done"] = True  # the check has just seen a real folder; now it becomes a link
+            shutil_rmtree(holder[0] / "queued")
+            (holder[0] / "queued").symlink_to(victim, target_is_directory=True)
+        return result
+
+    def behaviour(output: Path) -> None:
+        holder.append(output)
+        (output / "queued").mkdir()
+        (output / "queued" / "inner.log").write_text(OLD)
+
+    monkeypatch.setattr(os, "stat", stat_then_swap)
+    run_removal_turn(tmp_path, monkeypatch, behaviour, grace=2.0)
+
+    assert state["done"], "the swap did not happen, so this test proved nothing"
+    assert (victim / "keep.txt").read_text() == "a file of the host, not evidence"
+    assert victim.stat().st_mode & 0o777 == 0o755
