@@ -190,10 +190,12 @@ def install_process(monkeypatch: pytest.MonkeyPatch, behaviour, returncode: int 
     class Process:
         def __init__(self, argv, **_kwargs) -> None:
             launched.append(list(argv))
-            self.returncode, self.output = returncode, output_folder(argv)
+            self.returncode, self.output, self.ran = returncode, output_folder(argv), False
 
         def communicate(self, timeout=None):
-            behaviour(self.output)
+            if not self.ran:  # the job's behaviour happens once, however often the runner waits on the process
+                self.ran = True
+                behaviour(self.output)
             return b"controlled failure", None
 
         def kill(self) -> None:
@@ -320,7 +322,7 @@ def test_a_container_that_may_still_run_is_stopped_or_the_turn_fails_before_seal
         calls.append(args)
         done = subprocess.CompletedProcess(args, 0, "", "")
         if args[0] == "inspect":
-            return subprocess.CompletedProcess(args, 0 if state["present"] else 1, "/p05-repair-test-01 repair-test\n", "")
+            return subprocess.CompletedProcess(args, 0 if state["present"] else 1, f"/{args[1]} repair-test\n", "")
         if args[0] == "kill":
             state["present"] = False
         if args[0] == "ps":
@@ -328,12 +330,12 @@ def test_a_container_that_may_still_run_is_stopped_or_the_turn_fails_before_seal
         return done
 
     monkeypatch.setattr(docker_turn_runner, "docker", fake_docker)
-    install_process(monkeypatch, lambda output: (output / "late.log").write_text(OLD), returncode=-9)  # the client was killed
+    launched = install_process(monkeypatch, lambda output: (output / "late.log").write_text(OLD), returncode=-9)  # the client was killed
     runner, _, _ = build(tmp_path, credential)
 
     runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
-    assert ("kill", "p05-repair-test-01") in calls
+    assert ("kill", launched[0][launched[0].index("--name") + 1]) in calls
     assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
 
 
@@ -343,7 +345,7 @@ def test_a_container_that_is_not_ours_or_will_not_stop_fails_the_turn_without_a_
 
     def stubborn(*args, **_kwargs):
         if args[0] == "inspect":
-            return subprocess.CompletedProcess(args, 0, "/p05-repair-test-01 someone-elses-run\n", "")
+            return subprocess.CompletedProcess(args, 0, f"/{args[1]} someone-elses-run\n", "")
         if args[0] == "ps":
             return subprocess.CompletedProcess(args, 0, "abc\n", "")
         return subprocess.CompletedProcess(args, 0, "", "")
@@ -355,3 +357,224 @@ def test_a_container_that_is_not_ours_or_will_not_stop_fails_the_turn_without_a_
 
     with pytest.raises(EvidenceNotSealed):
         runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+
+# --- Repairs after round-5 reviews: one exception-safe lifecycle ----------------------------------------------------
+
+def run_expecting(runner, exception) -> None:
+    with pytest.raises(exception):
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("the pipe broke"), KeyboardInterrupt(), subprocess.SubprocessError("x")])
+def test_any_failure_while_waiting_for_the_job_stops_the_container_before_the_evidence_is_sealed(tmp_path: Path, monkeypatch, failure) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    calls: list[tuple[str, ...]] = []
+    state = {"present": True}
+
+    def fake_docker(*args, **_kwargs):
+        calls.append(args)
+        if args[0] == "inspect":
+            return subprocess.CompletedProcess(args, 0 if state["present"] else 1, f"/{args[1]} repair-test\n", "")
+        if args[0] == "kill":
+            state["present"] = False
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, "abc\n" if state["present"] else "", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(docker_turn_runner, "docker", fake_docker)
+    real_popen = subprocess.Popen
+
+    class Process:
+        returncode = None
+
+        def __init__(self, argv, **_kw) -> None:
+            self.output = output_folder(argv)
+
+        def communicate(self, timeout=None):
+            if not state.get("raised"):
+                state["raised"] = True
+                (self.output / "late.log").write_text(OLD)
+                raise failure
+            return b"", None
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, type(failure))
+
+    assert any(call[0] == "kill" for call in calls), "the container was not stopped"
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_a_container_that_cannot_be_stopped_after_a_failure_leaves_no_evidence_behind(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def stubborn(*args, **_kwargs):
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, "abc\n", "")
+        if args[0] == "inspect":
+            return subprocess.CompletedProcess(args, 0, f"/{args[1]} repair-test\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(docker_turn_runner, "docker", stubborn)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    install_process(monkeypatch, lambda output: (output / "late.log").write_text(OLD), returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, EvidenceNotSealed)
+
+    assert not list((tmp_path / "evidence").glob("turn-*/output"))
+
+
+def test_a_container_still_present_after_a_timeout_kill_fails_the_turn(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def stubborn(*args, **_kwargs):
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, "abc\n", "")
+        if args[0] == "inspect":
+            return subprocess.CompletedProcess(args, 0, f"/{args[1]} repair-test\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(docker_turn_runner, "docker", stubborn)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    real_popen = subprocess.Popen
+
+    class Hung:
+        returncode = None
+
+        def __init__(self, argv, **_kw) -> None:
+            self.calls = 0
+
+        def communicate(self, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired("docker", timeout)
+            return b"", None
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Hung(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, EvidenceNotSealed)
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("boom"), RecursionError("deep"), UnicodeEncodeError("utf-8", "x", 0, 1, "bad"),
+                                     PermissionError("locked")])
+def test_any_unexpected_error_while_sealing_removes_the_evidence_and_stops_the_turn(tmp_path: Path, monkeypatch, failure) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    install_process(monkeypatch, lambda output: (output / "provider-error.log").write_text(OLD))
+
+    def explode(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_seal_file", staticmethod(explode))
+    runner, _, _ = build(tmp_path, credential)
+
+    run_expecting(runner, EvidenceNotSealed)
+
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_a_directory_chain_longer_than_the_path_limit_cannot_keep_the_credential(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def behaviour(output: Path) -> None:
+        origin = os.getcwd()
+        try:
+            os.chdir(output)
+            for _ in range(700):  # about 1,400 characters of path: more than the host path limit
+                os.mkdir("a")
+                os.chdir("a")
+            Path("deep.log").write_text(OLD)
+        finally:
+            os.chdir(origin)
+
+    install_process(monkeypatch, behaviour)
+    runner, _, _ = build(tmp_path, credential)
+    try:
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    except EvidenceNotSealed:
+        pass
+
+    assert not list((tmp_path / "evidence").glob("turn-*/output")), "evidence that cannot be sealed must not be kept"
+
+
+@pytest.mark.parametrize("content", ["", "   \n\t"])
+def test_an_empty_credential_file_stops_the_turn_before_any_job_starts(tmp_path: Path, monkeypatch, content: str) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(content)
+    launched = install_process(monkeypatch, lambda output: None)
+    runner, spend, guarded = build(tmp_path, credential)
+
+    with pytest.raises(RuntimeError) as failure:
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched == [] and "empty" in str(failure.value)
+    assert (spend.state("attempt-1"), spend.committed_usd()) == ("UNKNOWN", RESERVATION)
+
+
+def test_the_job_is_given_exactly_the_value_the_host_captured_even_if_the_file_changes_in_between(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    given: list[str] = []
+    real_popen = subprocess.Popen
+
+    class Process:
+        returncode = 3
+
+        def __init__(self, argv, **_kw) -> None:
+            mount = next(part for part in argv if part.endswith("dst=/job/credential,readonly"))
+            given.append(Path(mount.split("src=")[1].split(",")[0]).read_text())
+            self.output = output_folder(argv)
+
+        def communicate(self, timeout=None):
+            return b"", None
+
+    def change_the_file_after_capture(turn):  # runs after the host captured the credential and before the job starts
+        credential.write_text(NEW)
+        return {}
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential, script_for=change_the_file_after_capture)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert given == [OLD]
+
+
+def test_two_runner_objects_with_the_same_run_id_do_not_share_container_names(tmp_path: Path, monkeypatch) -> None:
+    launched = install_process(monkeypatch, lambda output: None)
+    (tmp_path / "one").mkdir()
+    (tmp_path / "two").mkdir()
+    first = build(tmp_path / "one", None)[0]
+    second = build(tmp_path / "two", None)[0]
+
+    first.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    second.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    names = [argv[argv.index("--name") + 1] for argv in launched]
+    assert len(set(names)) == 2
+
+
+def test_a_result_file_that_cannot_be_read_ends_the_turn_as_unknown_not_with_an_exception(tmp_path: Path, monkeypatch) -> None:
+    def behaviour(output: Path) -> None:
+        (output / "container-result.json").write_text("[" * 100_000)  # deep enough to exhaust the parser's recursion
+
+    install_process(monkeypatch, behaviour, returncode=0)
+    runner = build(tmp_path, None)[0]
+
+    result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert (result.status, result.error_class) == ("UNKNOWN", "ContainerResultUnreadable")
