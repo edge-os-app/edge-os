@@ -120,14 +120,14 @@
  "support_files_sha256": {
   "Dockerfile": "f1d0b5ee429cb2c66911645a5d1034dce9ec0e6c2ab82b72304cb0a2491e37b3",
   "docker_turn_runner.py": "03cde6e8f9e37c67b67239647b5129bd3ec01b0ecbbe9f24eb1b756e041da7bb",
-  "guarded_docker_runner.py": "437acf0239c3b8cdacb3f04ca997214c2246650fde1c3afd9262a39a00241c22",
+  "guarded_docker_runner.py": "5971af64d6f5bfb1071e017dbc2796202d135dfa870a7e8eec3c82601a3b63e1",
   "guarded_turn_job.py": "ac280577dde476f71beb6cf1cf8382d4c4a58fcf440004d5cd4b99bf4f50e9df",
-  "guarded_turn_runner.py": "9b30397bf312a89752e51453e8ea34adcdf305d20fc9c632f83dcd6ae90fa701",
+  "guarded_turn_runner.py": "aa1d10399dd609dcb8868db081e6cb9baf4d8ca4a1c2f194f9b7be12841cf94c",
   "hermes_turn_job.py": "3186380733669cb5f7c2d48198ec67117415aa41b90ef1f475033373ee03870d",
   "leak_scan.py": "106f28f9f354841ea196c7625c323d0e6713c3246c95f1bee47f0a3e50a802ae",
   "meaning_check.py": "455a2280509ba13e2e7d1f87a692fc8e72995abb99979390ced111bada088213",
-  "provider_guard.py": "40a5e6f015985b66416228c82ba5153191fcd335c60619e59369e91d14f8ba64",
-  "spend_ledger.py": "d0cff182c86f33dca5e018851d2ceb5a32220cda01747f68c6ca725321e56c14"
+  "provider_guard.py": "54289721f3747091c6ba2fe7be0554d2b6cad95d6dd04e8430b5fb49ba66f6c7",
+  "spend_ledger.py": "f5085631f44803885f8a893c5f00ac3d94d3045b2a1797fe9d55d4705b52249a"
  },
  "system_prompt_chars": 3749,
  "system_prompt_sha256": "ea2ae47f810b287b7ad93cd31d7e3e1f0068c4ea4cdc8fe79d8df68fea1ae460"

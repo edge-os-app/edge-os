@@ -76,7 +76,8 @@ class GuardedTurnRunner:
     def _account(self, turn: HermesTurn, result: HermesTurnResult) -> HermesTurnResult:
         ledger, count = self._ledger, result.request_count
         try:
-            if count == 0 and result.status != "TIMED_OUT":
+            guard_agrees = result.observed.get("guard_admitted", 0) == 0  # a request count of 0 needs the guard to agree
+            if count == 0 and result.status != "TIMED_OUT" and guard_agrees:
                 ledger.release_unsent(turn.attempt_id, reason=result.error_class or result.status)
                 state, charge = "RELEASED", "0"
             elif count == 1 and result.status in COUNTED:

@@ -50,6 +50,7 @@ class Decision:
 
 class ProviderRequestGuard:
     def __init__(self, policy: GuardPolicy, logical: LogicalRequest, credential: str | None) -> None:
+        """`credential=None` means no credential is expected, as in a local run without one. A live job always passes it."""
         self._policy, self._logical, self._credential = policy, logical, credential
         self.admitted_count = 0
         self.seen_count = 0
@@ -79,8 +80,13 @@ class ProviderRequestGuard:
 
     @staticmethod
     def _parse(raw: bytes) -> dict[str, Any] | None:
+        def no_repeats(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            if len({key for key, _ in pairs}) != len(pairs):
+                raise ValueError("a key is repeated, so two readers could see two requests")
+            return dict(pairs)
+
         try:
-            value = json.loads(raw.decode("utf-8"))
+            value = json.loads(raw.decode("utf-8"), object_pairs_hook=no_repeats)
         except (UnicodeDecodeError, ValueError):
             return None
         return value if isinstance(value, dict) else None
@@ -107,7 +113,7 @@ class ProviderRequestGuard:
         if wire.get("model") != policy.model:
             return "model_not_as_configured"
         limit = wire.get("max_tokens")
-        if isinstance(limit, bool) or limit != policy.max_output_tokens:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit != policy.max_output_tokens:
             return "output_limit_not_as_configured"
         if set(wire) - ENVELOPE_FIELDS - set(policy.required_extra):
             return "unpermitted_field"

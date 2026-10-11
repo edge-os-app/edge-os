@@ -15,7 +15,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from docker_turn_runner import HERE, LABEL, DockerHermesTurnRunner, docker
+from docker_turn_runner import HERE, LABEL, DockerHermesTurnRunner
 from edge_os_api.research.hermes_interpreter import HermesTurn, HermesTurnResult
 from edge_os_api.research.interpretation_attempts import Usage
 from provider_guard import GuardPolicy
@@ -74,16 +74,18 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             stdout, _ = proc.communicate(timeout=self.timeout_seconds)
         except subprocess.TimeoutExpired:
             lifecycle = self._kill_owned(name, proc)
+            if (secret := self._secret()):
+                self._redact(output, secret)  # a job that was killed may have left the credential in its evidence
             (task_dir / "container-lifecycle.json").write_text(json.dumps(lifecycle, indent=1) + "\n")
             return HermesTurnResult(status="TIMED_OUT", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="TimeoutExpired")
         secret = self._secret()
         (task_dir / "container-stdout.txt").write_text(stdout.replace(secret, REDACTED) if secret else stdout, encoding="utf-8")
+        echoed = bool(secret) and self._redact(output, secret)  # every exit path, not only a clean one
         result_path = output / "container-result.json"
         if proc.returncode != 0 or not result_path.exists():
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerExit")
-        echoed = bool(secret) and self._redact(output, secret)
         raw = json.loads(result_path.read_text(encoding="utf-8"))
         mapped = self._map(raw)
         guard = raw["guard"]

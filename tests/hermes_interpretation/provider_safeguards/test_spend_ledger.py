@@ -93,7 +93,7 @@ def test_the_cap_is_exact_decimal_money_not_binary_floating_point(tmp_path: Path
 
 @pytest.mark.parametrize("usage", [
     (None, None), (100, None), (None, 100), (True, 5), (5, True), (-1, 5), (5, -1), ("12", 5), (1.5, 5), (5, float("nan")),
-    (2 ** 70, 5)])
+    (2 ** 70, 5), (0, 5), (0, 0)])
 def test_missing_or_invalid_usage_keeps_the_whole_reservation_as_liability(tmp_path: Path, usage) -> None:
     spend = ledger(tmp_path)
     spend.reserve("attempt-1", scope="case-a", max_input_tokens=7_300, max_output_tokens=4_096)

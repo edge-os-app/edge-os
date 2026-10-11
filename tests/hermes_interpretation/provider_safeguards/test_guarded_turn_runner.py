@@ -160,6 +160,16 @@ def test_when_no_request_was_admitted_the_reservation_is_released(ledger: SpendL
     assert (ledger.state("attempt-1"), ledger.committed_usd()) == ("RELEASED", Decimal("0"))
 
 
+def test_a_zero_request_count_that_the_guard_contradicts_keeps_liability(ledger: SpendLedger) -> None:
+    contradicted = returned(status="UNKNOWN", text=None, usage=Usage(), request_count=0, error_class="RuntimeError",
+                            observed={"guard_admitted": 1})
+    guarded, _ = runner(ledger, contradicted)
+
+    guarded.run_turn(turn())
+
+    assert (ledger.state("attempt-1"), ledger.committed_usd()) == ("UNKNOWN", RESERVATION)
+
+
 def test_a_failure_of_the_boundary_keeps_liability_and_still_raises(ledger: SpendLedger) -> None:
     guarded, _ = runner(ledger, OSError("pipe broke"))
 

@@ -181,3 +181,11 @@ def test_simultaneous_requests_admit_exactly_one() -> None:
 
     assert sorted(results) == [False] * 15 + [True]
     assert (attempt.admitted_count, attempt.seen_count) == (1, 16)
+
+
+def test_a_float_output_limit_or_a_repeated_key_is_not_the_configured_request() -> None:
+    as_float = body().replace(b'"max_tokens": 4096', b'"max_tokens": 4096.0')
+    repeated = body().replace(b'"max_tokens": 4096', b'"max_tokens": 1, "max_tokens": 4096')
+
+    assert guard().admit(as_float, AUTH).reason == "output_limit_not_as_configured"
+    assert guard().admit(repeated, AUTH).reason == "body_not_a_json_object"

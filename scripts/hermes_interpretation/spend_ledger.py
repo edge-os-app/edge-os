@@ -73,8 +73,8 @@ class TokenPrice:
 
     def nano_usd(self, input_tokens: int, output_tokens: int) -> int:
         """The cost of these tokens, rounded up to a whole nano-USD."""
-        total = (EXACT.multiply(Decimal(input_tokens), self.prompt_usd_per_million)
-                 + EXACT.multiply(Decimal(output_tokens), self.completion_usd_per_million)) * 1000
+        total = EXACT.multiply(EXACT.add(EXACT.multiply(Decimal(input_tokens), self.prompt_usd_per_million),
+                                         EXACT.multiply(Decimal(output_tokens), self.completion_usd_per_million)), Decimal(1000))
         return int(total.to_integral_value(rounding=ROUND_CEILING, context=EXACT))
 
 
@@ -112,6 +112,11 @@ def _usd(nano: int) -> Decimal:
 
 def _valid_tokens(*counts: object) -> bool:
     return all(isinstance(count, int) and not isinstance(count, bool) and 0 <= count <= MAX_TOKENS for count in counts)
+
+
+def _valid_usage(input_tokens: object, output_tokens: object) -> bool:
+    """Reported usage that can fix a charge. A request that carried a prompt has at least one input token."""
+    return _valid_tokens(input_tokens, output_tokens) and input_tokens >= 1  # type: ignore[operator]
 
 
 def _now() -> str:
@@ -220,7 +225,7 @@ class SpendLedger:
                 return self._compare_evidence(connection, attempt_id, row, input_tokens, output_tokens)
             if row["state"] != "RESERVED":
                 raise NotReserved(f"{attempt_id} is {row['state']}")
-            if not _valid_tokens(input_tokens, output_tokens):
+            if not _valid_usage(input_tokens, output_tokens):
                 self._to_unknown(connection, attempt_id, "INVALID_USAGE")
                 return Settlement("UNKNOWN", _usd(row["reserved"]))
             return self._charge(connection, attempt_id, row, input_tokens, output_tokens, "SETTLED", "")  # type: ignore[arg-type]
@@ -244,8 +249,8 @@ class SpendLedger:
 
     def reconcile(self, attempt_id: str, *, input_tokens: int, output_tokens: int, source: str) -> Settlement:
         """Late evidence about an attempt. It records what arrived and never frees or doubles liability."""
-        if not _valid_tokens(input_tokens, output_tokens):
-            raise ValueError("late evidence needs whole token counts")
+        if not _valid_usage(input_tokens, output_tokens):
+            raise ValueError("late evidence needs whole token counts, with at least one input token")
         with self._write() as connection:
             row = self._row(connection, attempt_id)
             if row["state"] == "SETTLED":
@@ -280,7 +285,7 @@ class SpendLedger:
     def _compare_evidence(self, connection: sqlite3.Connection, attempt_id: str, row: dict[str, object],
                           input_tokens: object, output_tokens: object) -> Settlement:
         charged: int = row["charged"]  # type: ignore[assignment]
-        if not _valid_tokens(input_tokens, output_tokens):
+        if not _valid_usage(input_tokens, output_tokens):
             self._event(connection, attempt_id, "INVALID_EVIDENCE", "unusable usage after settlement")
             return Settlement("SETTLED", _usd(charged))
         cost = self._price.nano_usd(input_tokens, output_tokens)  # type: ignore[arg-type]
