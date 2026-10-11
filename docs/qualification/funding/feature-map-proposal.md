@@ -9,7 +9,7 @@ browser recipe cannot exercise it.
 
 | Feature | UI | API | Saved records | Evidence |
 |---|---|---|---|---|
-| P18 local funding reconciliation (unwired) | None. No UI route; the module is not production wiring. | Test-only `POST /v1/funding/agents/{agent_id}/declare\|flows\|reconcile`, `GET /v1/funding/agents/{agent_id}/flows\|flows/{flow_id}\|balances\|available` in the test harness only. | Local `funding_local` tables: `funding_profiles`, `funding_flows`, append-only `funding_observations`, once-only `funding_credits` (unique `wallet_id, network_id, asset_id, event_id`), `funding_denials`. | `apps/api/tests/funding/` (39 controls, real PostgreSQL, authored fake observer, independent-process driver); `docs/qualification/funding/` recipe. |
+| P18 local funding reconciliation (unwired) | None. No UI route; the module is not production wiring. | Test-only `POST /v1/funding/agents/{agent_id}/declare\|flows\|reconcile`, `GET /v1/funding/agents/{agent_id}/flows\|flows/{flow_id}\|balances\|available` in the test harness only. | Local `funding_local` tables: `funding_profiles`, `funding_flows`, append-only `funding_observations`, once-only `funding_credits` (unique `wallet_id, network_id, asset_id, event_id`), `funding_denials`. | `apps/api/tests/funding/` (47 controls, real PostgreSQL, authored fake observer, independent-process driver); `docs/qualification/funding/` recipe. |
 
 ## Proposed SQL checks
 
