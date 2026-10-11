@@ -10,7 +10,7 @@ Run from `apps/api`:
 uv run --frozen pytest tests/kuru_flow -ra
 ```
 
-Expected literal: `65 passed` (the count rises only with new owned tests). The suite opens no provider socket and requests no shared `pg` fixture, so no shared session fixture starts an instance for this suite.
+Expected literal: `75 passed` (the count rises only with new owned tests). The suite opens no provider socket and requests no shared `pg` fixture, so no shared session fixture starts an instance for this suite.
 
 Static guards inside the suite:
 
@@ -33,8 +33,8 @@ git diff --check 9210bc1d054f1d5623693f787737a7b80563185a HEAD
 |---|---|
 | Fixtures schema | `p20-kuru-flow-adapter/1` |
 | Fixtures file | `apps/api/tests/kuru_flow/fixtures.json` |
-| Fixtures file SHA256 | `c61c6cb137fd8e8b4e907ba84e17a40a837c777f699146e4b33f104b5986ec86` |
-| Labels | `AUTHORED`, `DOCUMENTATION` only; no `RECORDED` |
+| Fixtures file SHA256 | `5cf658ef759075f02b66cc834d05c103ee88e5dc1ed386abe82914410b5058f8` |
+| Labels | `AUTHORED` only; no `DOCUMENTATION`, no `RECORDED` |
 | Result vocabulary | `ACCEPTED`, `BLOCKED`, `UNKNOWN`; observation states `CONFIRMED`/`REVERTED`/`PENDING`/`SUBMISSION_UNKNOWN`/`ACKNOWLEDGEMENT_LOST`/`TIMEOUT`/`REJECTED` |
 
 ## Failure checks (expected literals)
@@ -51,6 +51,10 @@ git diff --check 9210bc1d054f1d5623693f787737a7b80563185a HEAD
 | ERC-20 value not zero | `ERC20_VALUE_NOT_ZERO` |
 | ERC-20 allowance absent | `ALLOWANCE_UNKNOWN` |
 | ERC-20 allowance below input | `ALLOWANCE_NOT_APPROVED` |
+| Wrong positive-fee referrer | `BLOCKED` `REFERRER_NOT_ALLOWED`, never `NameError` |
+| Nonzero dynamic-program padding | `NON_CANONICAL_PADDING` |
+| Float, string or Boolean age | `AdapterError` |
+| Observation without the candidate binding | `REJECTED` `OBS_BINDING_MISSING`, effects unproven |
 | Quote `status` not `success` | `QUOTE_STATUS_ERROR` |
 | Success without reconciled input, output or gas | `CONFIRMED`, effects unproven |
 | Truncated or inconsistent ABI | `TRUNCATED_ABI` / `INCONSISTENT_ABI` |

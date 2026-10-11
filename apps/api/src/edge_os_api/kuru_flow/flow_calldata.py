@@ -18,6 +18,7 @@ from edge_os_api.kuru_flow.types import (
     R_CALLDATA_NOT_HEX,
     R_INCONSISTENT_ABI,
     R_METHOD_LAYOUT_UNKNOWN,
+    R_NON_CANONICAL_PADDING,
     R_NON_CANONICAL_WORD,
     R_PROGRAM_MISSING,
     R_TRUNCATED_ABI,
@@ -108,7 +109,12 @@ def decode_flow_call(*, data_hex: str, method: str) -> DecodedFlowCall:
     if program_length == 0:
         raise CalldataDecodeError(R_PROGRAM_MISSING)
 
-    program_hex = "0x" + body[region_start + _WORD_BYTES : region_start + _WORD_BYTES + program_length].hex()
+    program_start = region_start + _WORD_BYTES
+    padding = body[program_start + program_length : program_end]
+    if any(byte != 0 for byte in padding):
+        raise CalldataDecodeError(R_NON_CANONICAL_PADDING)
+
+    program_hex = "0x" + body[program_start : program_start + program_length].hex()
 
     receiver: str | None = None
     if method == METHOD_EXECUTE_SWAP_WITH_RECEIVER:

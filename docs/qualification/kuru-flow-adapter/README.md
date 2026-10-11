@@ -23,7 +23,7 @@ Stage: **offline preparation only.** No provider request, wallet, funding, signa
 3. The documented `transaction.to` label ("Router contract address") conflicts with the source-inspected `KuruFlowEntrypoint`. The adapter checks `to` against the approved entrypoint; which address is correct stays `UNKNOWN` until live/deployed qualification.
 4. Deployed mainnet bytecode identity versus the pinned public source stays `UNKNOWN`.
 5. The opaque route `program` bytes cannot be pinned by any documented provider-policy operator. That mandatory control stays `UNSUPPORTED` at the independent-policy layer.
-6. No `RECORDED` provider response exists. The fixtures are `AUTHORED` or `DOCUMENTATION` only.
+6. No `RECORDED` provider response exists. All fixtures are `AUTHORED` stand-ins for documented response shapes. An invented payload is not a published example.
 
 ## Authority
 

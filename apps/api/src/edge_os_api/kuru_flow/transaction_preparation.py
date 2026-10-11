@@ -44,6 +44,14 @@ class PreparationResult(StrictModel):
     candidate: UnsignedTransactionCandidate | None = None
 
 
+def _require_age(value: int | None, name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AdapterError(f"{name} must be a non-negative integer or null")
+    return value
+
+
 def _build_candidate(
     parsed: ParsedQuote,
     call: DecodedFlowCall,
@@ -91,9 +99,8 @@ def prepare_unsigned_transaction(
     input_age_seconds: int | None = None,
 ) -> PreparationResult:
     """Prepare one offline candidate or return a specific blocked/unknown result."""
-    for name, value in (("quote_age_seconds", quote_age_seconds), ("input_age_seconds", input_age_seconds)):
-        if value is not None and (isinstance(value, bool) or value < 0):
-            raise AdapterError(f"{name} must be a non-negative integer or null")
+    quote_age_seconds = _require_age(quote_age_seconds, "quote_age_seconds")
+    input_age_seconds = _require_age(input_age_seconds, "input_age_seconds")
 
     parsed = parse_quote_response(quote_response, provenance)
 

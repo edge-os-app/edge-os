@@ -1,6 +1,6 @@
 {
   "schema": "p20-kuru-flow-adapter/1",
-  "recorded_responses": "NONE: no real provider response was captured; no RECORDED fixture exists.",
+  "recorded_responses": "NONE: no real provider response was captured; no RECORDED fixture exists. All fixtures are AUTHORED stand-ins for documented response shapes.",
   "fixtures": [
     {
       "name": "authored-execute-swap",
@@ -78,10 +78,10 @@
       "sha256": "8ea82b92de5aefc4a48d273b90ca817756eabd30fa06ed65d30ef8ed9084bdea"
     },
     {
-      "name": "documentation-build-response",
-      "label": "DOCUMENTATION",
-      "provenance": "DOCUMENTATION",
-      "note": "K3 Kuru OpenAPI shape; inner buildResponse schema unknown.",
+      "name": "authored-build-response-shape",
+      "label": "AUTHORED",
+      "provenance": "AUTHORED",
+      "note": "Authored stand-in for the documented K3 path/buildResponse shape; the inner schema is unpublished.",
       "response": {
         "output": "1500000",
         "path": {
@@ -97,10 +97,10 @@
       "sha256": "35f5d120dceb8e8d418b77fd2d6ac798bb22361182ba1cb5c855f360ef6e33f2"
     },
     {
-      "name": "documentation-transaction-calldata",
-      "label": "DOCUMENTATION",
-      "provenance": "DOCUMENTATION",
-      "note": "K2 Monad-guide shape with unprefixed calldata.",
+      "name": "authored-transaction-calldata-shape",
+      "label": "AUTHORED",
+      "provenance": "AUTHORED",
+      "note": "Authored stand-in for the documented K2 transaction.calldata shape (unprefixed calldata).",
       "response": {
         "output": "1500000",
         "minOut": "1000000",

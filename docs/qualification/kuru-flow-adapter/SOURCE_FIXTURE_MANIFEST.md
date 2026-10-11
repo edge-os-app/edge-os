@@ -6,8 +6,10 @@ Prepared 2026-10-11 at base `9210bc1d054f1d5623693f787737a7b80563185a`. This man
 
 - Path: `apps/api/tests/kuru_flow/fixtures.json`
 - Schema tag: `p20-kuru-flow-adapter/1`
-- File SHA256: `c61c6cb137fd8e8b4e907ba84e17a40a837c777f699146e4b33f104b5986ec86`
+- File SHA256: `5cf658ef759075f02b66cc834d05c103ee88e5dc1ed386abe82914410b5058f8`
 - Each fixture hash is the SHA-256 of the canonical JSON (`sort_keys`, compact separators) of its `response` object. The test `test_fixture_manifest_is_intact` recomputes every hash.
+
+All fixtures are `AUTHORED`. A fixture is an invented payload. It follows a documented response *shape* only where the note says so; the shape reference does not make the payload a published example. No `RECORDED` fixture exists.
 
 | Fixture | Label | Purpose | SHA256 |
 |---|---|---|---|
@@ -15,10 +17,10 @@ Prepared 2026-10-11 at base `9210bc1d054f1d5623693f787737a7b80563185a`. This man
 | `authored-execute-swap-with-receiver` | AUTHORED | Explicit receiver, `executeSwapWithReceiver` layout | `dfb9c2b6a711c8ceeb55ffff20b159f50da45446b6dc480f2e4dd84bfd775002` |
 | `authored-erc20-execute-swap` | AUTHORED | ERC-20 input, `value` 0 | `1dd84e50710421daf7cec8865c34409144aefb9309227155fe8f84f2ec1cc15d` |
 | `authored-missing-calldata` | AUTHORED | `transaction` object without `calldata` | `8ea82b92de5aefc4a48d273b90ca817756eabd30fa06ed65d30ef8ed9084bdea` |
-| `documentation-build-response` | DOCUMENTATION | K3 `path`/`buildResponse` shape | `35f5d120dceb8e8d418b77fd2d6ac798bb22361182ba1cb5c855f360ef6e33f2` |
-| `documentation-transaction-calldata` | DOCUMENTATION | K2 shape with unprefixed `calldata` | `ed82d73a26eb0065db79855067da792b69786886ec95856302e656e3cc27562d` |
+| `authored-build-response-shape` | AUTHORED | Authored stand-in for the documented K3 `path`/`buildResponse` shape; inner schema unpublished | `35f5d120dceb8e8d418b77fd2d6ac798bb22361182ba1cb5c855f360ef6e33f2` |
+| `authored-transaction-calldata-shape` | AUTHORED | Authored stand-in for the documented K2 `transaction.calldata` shape with unprefixed `calldata` | `ed82d73a26eb0065db79855067da792b69786886ec95856302e656e3cc27562d` |
 
-The two `executeSwap` calldata values are identical because both use the same authored intent; the documentation fixture differs only in that its `calldata` is stored without the `0x` prefix, as the K2 guide documents.
+The two `executeSwap` calldata values are identical because both use the same authored intent; the shape fixture differs only in that its `calldata` is stored without the `0x` prefix, as the K2 guide documents.
 
 ## Source pins
 

@@ -2,10 +2,12 @@
 
 This binds one supplied observation to the original expected action identity and
 preserves missing receipts, lost acknowledgements, timeouts, pending or reverted
-results, identity mismatches and unknown actual deltas. A success status alone is
-not proof of all asset effects: without reconciled deltas the effects stay
-unproven. The normalizer never retries, replaces a route, produces a second
-action or builds a durable queue.
+results, identity mismatches and unknown actual deltas. The bytes/action binding
+is required: an observation that omits the candidate identity, or the transaction
+identity when one is expected, is rejected with ``OBS_BINDING_MISSING`` and never
+proves effects. A success status alone is not proof of all asset effects: without
+reconciled input, output and gas the effects stay unproven. The normalizer never
+retries, replaces a route, produces a second action or builds a durable queue.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ OBS_NETWORK_MISMATCH = "OBS_NETWORK_MISMATCH"
 OBS_WALLET_MISMATCH = "OBS_WALLET_MISMATCH"
 OBS_TX_MISMATCH = "OBS_TX_MISMATCH"
 OBS_IDENTITY_MISMATCH = "OBS_IDENTITY_MISMATCH"
+OBS_BINDING_MISSING = "OBS_BINDING_MISSING"
 OBS_MISSING_RECEIPT = "OBS_MISSING_RECEIPT"
 OBS_EFFECTS_UNPROVEN = "OBS_EFFECTS_UNPROVEN"
 
@@ -96,10 +99,15 @@ def normalize_observation(
         return verdict(ObservationState.REJECTED, reasons=[OBS_NETWORK_MISMATCH])
     if observation.wallet_id is not None and observation.wallet_id != expected_wallet:
         return verdict(ObservationState.REJECTED, reasons=[OBS_WALLET_MISMATCH])
-    if observation.candidate_hash is not None and observation.candidate_hash != expected_candidate_hash:
+    if observation.candidate_hash is None:
+        return verdict(ObservationState.REJECTED, reasons=[OBS_BINDING_MISSING])
+    if observation.candidate_hash != expected_candidate_hash:
         return verdict(ObservationState.REJECTED, reasons=[OBS_IDENTITY_MISMATCH])
-    if expected_tx_hash is not None and observation.tx_hash is not None and observation.tx_hash != expected_tx_hash:
-        return verdict(ObservationState.REJECTED, reasons=[OBS_TX_MISMATCH])
+    if expected_tx_hash is not None:
+        if observation.tx_hash is None:
+            return verdict(ObservationState.REJECTED, reasons=[OBS_BINDING_MISSING])
+        if observation.tx_hash != expected_tx_hash:
+            return verdict(ObservationState.REJECTED, reasons=[OBS_TX_MISMATCH])
 
     if observation.status == "REVERTED":
         return verdict(ObservationState.REVERTED)

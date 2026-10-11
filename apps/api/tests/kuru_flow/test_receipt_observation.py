@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from edge_os_api.admission.types import AssetAmount
 from edge_os_api.kuru_flow.receipt_observation import (
+    OBS_BINDING_MISSING,
     OBS_EFFECTS_UNPROVEN,
     OBS_IDENTITY_MISMATCH,
     OBS_MISSING_RECEIPT,
@@ -47,7 +48,9 @@ def test_success_with_reconciled_deltas_proves_effects():
 
 
 def test_success_without_deltas_leaves_effects_unproven():
-    observation = ObservationInput(status="SUCCESS", receipt_present=True, tx_hash=TX, chain_id=143, wallet_id=WALLET)
+    observation = ObservationInput(
+        status="SUCCESS", receipt_present=True, tx_hash=TX, chain_id=143, wallet_id=WALLET, candidate_hash=HASH
+    )
     verdict = _normalize(observation)
     assert verdict.state is ObservationState.CONFIRMED
     assert verdict.effects_proven is False
@@ -59,6 +62,7 @@ def test_success_with_known_deltas_but_unknown_gas_leaves_effects_unproven():
     observation = ObservationInput(
         status="SUCCESS",
         receipt_present=True,
+        candidate_hash=HASH,
         actual_input=AssetAmount(asset_id="monad:143/native", raw="1000000000000000000", decimals=18),
         actual_output=AssetAmount(asset_id="monad:143/usdc", raw="1450000", decimals=6),
     )
@@ -69,14 +73,14 @@ def test_success_with_known_deltas_but_unknown_gas_leaves_effects_unproven():
 
 
 def test_success_without_receipt_is_rejected():
-    observation = ObservationInput(status="SUCCESS", receipt_present=False)
+    observation = ObservationInput(status="SUCCESS", receipt_present=False, candidate_hash=HASH)
     verdict = _normalize(observation)
     assert verdict.state is ObservationState.REJECTED
     assert verdict.reasons == [OBS_MISSING_RECEIPT]
 
 
 def test_reverted_retains_optional_gas():
-    observation = ObservationInput(status="REVERTED", receipt_present=True, actual_gas=None)
+    observation = ObservationInput(status="REVERTED", receipt_present=True, actual_gas=None, candidate_hash=HASH)
     verdict = _normalize(observation)
     assert verdict.state is ObservationState.REVERTED
     assert verdict.actual_gas is None
@@ -99,9 +103,31 @@ def test_pending_is_not_confirmation():
 
 
 def test_missing_receipt_state_is_submission_unknown():
-    verdict = _normalize(ObservationInput())
+    verdict = _normalize(ObservationInput(candidate_hash=HASH))
     assert verdict.state is ObservationState.SUBMISSION_UNKNOWN
     assert verdict.reasons == [OBS_MISSING_RECEIPT]
+
+
+def test_success_without_candidate_binding_is_rejected():
+    observation = ObservationInput(
+        status="SUCCESS",
+        receipt_present=True,
+        actual_input=AssetAmount(asset_id="monad:143/native", raw="1000000000000000000", decimals=18),
+        actual_output=AssetAmount(asset_id="monad:143/usdc", raw="1450000", decimals=6),
+        actual_gas=AssetAmount(asset_id="monad:143/native", raw="21000", decimals=18),
+    )
+    verdict = _normalize(observation, expected_tx_hash=TX)
+    assert verdict.state is ObservationState.REJECTED
+    assert verdict.effects_proven is False
+    assert verdict.reasons == [OBS_BINDING_MISSING]
+
+
+def test_missing_transaction_binding_is_rejected():
+    observation = ObservationInput(status="SUCCESS", receipt_present=True, candidate_hash=HASH)
+    verdict = _normalize(observation, expected_tx_hash=TX)
+    assert verdict.state is ObservationState.REJECTED
+    assert verdict.effects_proven is False
+    assert verdict.reasons == [OBS_BINDING_MISSING]
 
 
 def test_network_mismatch_rejected():
@@ -123,6 +149,6 @@ def test_candidate_identity_mismatch_rejected():
 
 
 def test_tx_hash_mismatch_rejected():
-    verdict = _normalize(ObservationInput(tx_hash="0x" + "d" * 64), expected_tx_hash=TX)
+    verdict = _normalize(ObservationInput(candidate_hash=HASH, tx_hash="0x" + "d" * 64), expected_tx_hash=TX)
     assert verdict.state is ObservationState.REJECTED
     assert verdict.reasons == [OBS_TX_MISMATCH]

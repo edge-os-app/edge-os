@@ -8,6 +8,7 @@ from edge_os_api.kuru_flow.types import (
     R_CALLDATA_NOT_HEX,
     R_INCONSISTENT_ABI,
     R_METHOD_LAYOUT_UNKNOWN,
+    R_NON_CANONICAL_PADDING,
     R_NON_CANONICAL_WORD,
     R_PROGRAM_MISSING,
     R_TRUNCATED_ABI,
@@ -109,3 +110,11 @@ def test_empty_program_rejected():
     with pytest.raises(CalldataDecodeError) as error:
         decode_flow_call(data_hex=encode_execute_swap(program_hex="0x"), method="EXECUTE_SWAP")
     assert error.value.reason == R_PROGRAM_MISSING
+
+
+def test_nonzero_program_padding_rejected():
+    data = encode_execute_swap()
+    altered = data[:-2] + "01"
+    with pytest.raises(CalldataDecodeError) as error:
+        decode_flow_call(data_hex=altered, method="EXECUTE_SWAP")
+    assert error.value.reason == R_NON_CANONICAL_PADDING

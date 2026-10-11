@@ -100,7 +100,7 @@ def test_fixture_manifest_is_intact():
     document = load_fixtures()
     assert document["schema"] == "p20-kuru-flow-adapter/1"
     labels = {fixture["label"] for fixture in document["fixtures"]}
-    assert labels <= {"AUTHORED", "DOCUMENTATION"}
+    assert labels == {"AUTHORED"}
     assert "RECORDED" not in labels
     for fixture in document["fixtures"]:
         assert _canonical_sha(fixture["response"]) == fixture["sha256"], fixture["name"]

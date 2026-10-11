@@ -47,7 +47,7 @@ The adapter decodes the supplied calldata using the approved method layout and c
 - quote and input freshness, and local intent and mandate expiry;
 - a conflicting declared decoded summary.
 
-Booleans, floats, malformed or empty identities, non-canonical or out-of-range quantities, invalid hex, unknown selectors, truncated or inconsistent ABI fields and non-canonical words are rejected. Unsupported decoding stays blocked.
+Booleans, floats, malformed or empty identities, non-canonical or out-of-range quantities, invalid hex, unknown selectors, truncated or inconsistent ABI fields, non-canonical words and nonzero dynamic-program padding are rejected. The two age inputs must be non-negative integers or null; a float, string or Boolean raises `AdapterError`. Unsupported decoding stays blocked.
 
 ## Ethereum hash boundary
 
@@ -55,7 +55,7 @@ This environment has no Ethereum Keccak-256 and no installed Keccak library. The
 
 ## Observation boundary
 
-`normalize_observation` binds one observation to the original expected action and candidate identity. A missing receipt, a lost acknowledgement, a timeout, a pending result, a reverted result and a network, wallet or transaction mismatch stay unknown or rejected. A success status alone is not proof of all asset effects: unless the reconciled input, output and gas are all present, `effects_proven` stays false. The normalizer never retries, replaces a route, produces a second action or builds a durable queue.
+`normalize_observation` binds one observation to the original expected action and candidate identity. The bytes/action binding is required: an observation that omits the candidate identity, or the transaction identity when one is expected, is rejected with `OBS_BINDING_MISSING` and never proves effects. A missing receipt, a lost acknowledgement, a timeout, a pending result, a reverted result and a network, wallet or transaction mismatch stay unknown or rejected. A success status alone is not proof of all asset effects: unless the reconciled input, output and gas are all present, `effects_proven` stays false. The normalizer never retries, replaces a route, produces a second action or builds a durable queue.
 
 ## Wiring seam
 

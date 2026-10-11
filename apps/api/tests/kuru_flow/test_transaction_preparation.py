@@ -18,8 +18,10 @@ from edge_os_api.kuru_flow.types import (
     R_INTENT_EXPIRED,
     R_MIN_OUTPUT_INVALID,
     R_NATIVE_VALUE_INSUFFICIENT,
+    R_NON_CANONICAL_PADDING,
     R_PROGRAM_NOT_APPROVED,
     R_RECIPIENT_NOT_ALLOWED,
+    R_REFERRER_NOT_ALLOWED,
     R_QUOTE_STATUS_ERROR,
     R_SCHEMA_UNSUPPORTED,
     R_SELECTOR_NOT_ALLOWED,
@@ -32,6 +34,8 @@ from kuru_flow._support import (
     AUTHORED_RECEIVER_SELECTOR,
     FIXTURE_MIN_OUT,
     FIXTURE_ORDER,
+    NATIVE_TOKEN_ADDRESS,
+    OTHER_WALLET,
     PROGRAM_HEX,
     WALLET,
     base_config,
@@ -148,6 +152,51 @@ def test_quote_status_error_blocked():
 def test_negative_age_rejected():
     with pytest.raises(AdapterError):
         _prepare(transaction_response(encode_execute_swap()), base_config(), quote_age_seconds=-1)
+
+
+def test_wrong_referrer_blocks_without_exception():
+    config = base_config(referrer_fee_bps=100)
+    data = encode_execute_swap(referrer_fee_bps=100, referrer_address=OTHER_WALLET)
+    result = _prepare(transaction_response(data), config)
+    assert result.outcome.value == "BLOCKED"
+    assert R_REFERRER_NOT_ALLOWED in result.reasons
+
+
+def test_approved_referrer_accepted():
+    config = base_config(referrer_fee_bps=100)
+    data = encode_execute_swap(referrer_fee_bps=100, referrer_address=NATIVE_TOKEN_ADDRESS)
+    result = _prepare(transaction_response(data), config)
+    assert result.outcome.value == "ACCEPTED"
+
+
+def test_nonzero_program_padding_blocked():
+    data = encode_execute_swap()
+    altered = data[:-2] + "01"
+    result = _prepare(transaction_response(altered), base_config())
+    assert result.outcome.value == "BLOCKED"
+    assert R_NON_CANONICAL_PADDING in result.reasons
+
+
+def test_float_age_rejected():
+    with pytest.raises(AdapterError):
+        _prepare(transaction_response(encode_execute_swap()), base_config(), quote_age_seconds=0.5)
+
+
+def test_string_age_rejected():
+    with pytest.raises(AdapterError):
+        _prepare(transaction_response(encode_execute_swap()), base_config(), input_age_seconds="1")
+
+
+def test_boolean_age_rejected():
+    with pytest.raises(AdapterError):
+        _prepare(transaction_response(encode_execute_swap()), base_config(), quote_age_seconds=True)
+
+
+def test_zero_age_accepted():
+    result = _prepare(
+        transaction_response(encode_execute_swap()), base_config(), quote_age_seconds=0, input_age_seconds=0
+    )
+    assert result.outcome.value == "ACCEPTED"
 
 
 def test_conflicting_declared_summary_blocked():
