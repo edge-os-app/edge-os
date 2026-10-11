@@ -39,10 +39,26 @@ python3 -B -m compileall -q apps/api/src/edge_os_api/funding apps/api/tests/fund
 ```
 
 The pytest session starts one run-labelled PostgreSQL container, migrates the P02/P06 schema, creates
-the owned `funding_local` tables and the accepted P17 `wallet_setup` tables, and removes only its own
-container, volume and tables. The `funding_client` fixture adds the test-only router to a fresh app.
-The router uses the real `require_principal` and the real verifier with signed test tokens; it is not
-production wiring.
+the owned `funding_local` tables and reuses the migrated `public.wallet_setup` tables (owned by
+migration `0007_wallet_setup`). It truncates only test rows in those migrated tables and never drops
+them, so the migrated `public` schema stays structurally identical for the whole session. It removes
+only its own container, volume and `funding_local` schema. The `funding_client` fixture adds the
+test-only router to a fresh app. The router uses the real `require_principal` and the real verifier
+with signed test tokens; it is not production wiring.
+
+## Lifecycle regression
+
+The funding fixtures run against the accepted migrated schema before they create or use their owned
+`funding_local` tables, and they do not depend on test collection order. The regression is the
+existing funding tests followed by the existing migration-head test, in this order (from `apps/api`):
+
+```sh
+uv run --frozen pytest -p no:cacheprovider tests/funding tests/test_settings_routes.py::test_m1_m2_migration_head_matches_models -q
+```
+
+Before the lifecycle repair this ordered run failed (the funding teardown dropped the migration-owned
+`public.wallet_setup` tables, so `alembic check` observed a drifted schema). It now passes: the
+migrated tables stay present and unchanged.
 
 ## Covered controls
 
