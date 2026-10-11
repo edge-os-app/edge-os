@@ -189,3 +189,19 @@ def test_a_float_output_limit_or_a_repeated_key_is_not_the_configured_request() 
 
     assert guard().admit(as_float, AUTH).reason == "output_limit_not_as_configured"
     assert guard().admit(repeated, AUTH).reason == "body_not_a_json_object"
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_an_unexpected_field_inside_any_message_never_reaches_the_transport(index: int) -> None:
+    reached: list[bytes] = []
+    messages = [{"role": "system", "content": WRAPPED}, {"role": "user", "content": TASK}]
+    messages[index]["tool_calls"] = [{"id": "x", "type": "function", "function": {"name": "unapproved", "arguments": "{}"}}]
+    handler = guard_handler(guard(), lambda raw, headers: reached.append(raw) or (200, b"{}"))
+
+    status, _ = handler(body(messages=messages), AUTH)
+
+    assert (status, reached) == (429, [])
+
+
+def test_a_message_without_its_role_or_content_is_not_the_configured_request() -> None:
+    assert guard().admit(body(messages=[{"role": "system"}, {"role": "user", "content": TASK}]), AUTH).reason == "messages_not_as_configured"

@@ -148,3 +148,210 @@ def test_links_hidden_folders_read_only_files_odd_names_and_huge_files_are_all_s
     assert [name for name in leaks(tmp_path, credential) if name != "outside-file.txt"] == []  # the outside file is the bait
     assert outside.read_text() == f"not evidence {SENTINEL}", "a link must never lead the redaction outside the evidence folder"
     assert not any("huge.bin" in str(path) for path in tmp_path.glob("evidence/**/*"))
+
+
+# --- Repairs after gate verdict 3/3: one captured plan per turn, no blocking on odd entries, a time bound ----------------
+
+import os
+import threading
+import time
+from decimal import Decimal
+
+import docker_turn_runner
+from edge_os_api.research.hermes_interpreter import HermesTurn as Turn
+from guarded_docker_runner import EvidenceNotSealed
+from guarded_turn_runner import GuardedTurnRunner
+from spend_ledger import SpendLedger, TokenPrice
+
+OLD = "sk-test-DUMMY-OLD-0a1b2c3d4e5f60718293a4b5c6d7e8f9"
+NEW = "sk-test-DUMMY-NEW-9f8e7d6c5b4a39281706f5e4d3c2b1a0"
+RESERVATION = Decimal("0.054848")  # (12,000 + 64) x 2.00 / 1e6 + 4,096 x 7.50 / 1e6
+
+
+def plain_bytes_leak(root: Path, secret: str) -> list[str]:
+    """Independent oracle: plain bytes only, no shared scanner. Evidence input scripts and the source file are skipped."""
+    found = []
+    for path in root.rglob("*"):
+        if path.is_file() and not path.is_symlink() and path.name not in {"input.json", "credential"} \
+                and secret.encode() in path.read_bytes():
+            found.append(str(path.relative_to(root)))
+    return found
+
+
+def output_folder(argv: list[str]) -> Path:
+    return Path(next(part.split("src=")[1].split(",")[0] for part in argv if part.endswith("dst=/job/output")))
+
+
+def install_process(monkeypatch: pytest.MonkeyPatch, behaviour, returncode: int = 3) -> list[list[str]]:
+    """Stands in for the `docker run` process only. `behaviour(output_folder)` runs while the process is alive."""
+    launched: list[list[str]] = []
+    real_popen = subprocess.Popen
+
+    class Process:
+        def __init__(self, argv, **_kwargs) -> None:
+            launched.append(list(argv))
+            self.returncode, self.output = returncode, output_folder(argv)
+
+        def communicate(self, timeout=None):
+            behaviour(self.output)
+            return b"controlled failure", None
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    return launched
+
+
+def build(tmp_path: Path, credential: Path | None, **kwargs):
+    runner = GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                     credential_file=credential, script_for=kwargs.pop("script_for", lambda turn: {}),
+                                     timeout_seconds=kwargs.pop("timeout_seconds", 60), **kwargs)
+    spend = SpendLedger(tmp_path / "spend.sqlite", cap_usd=Decimal("0.30"), price=TokenPrice(Decimal("2.00"), Decimal("7.50")))
+    return runner, spend, GuardedTurnRunner(runner, spend, POLICY, scope_for=lambda turn: turn.attempt_id)
+
+
+@pytest.mark.parametrize("change", ["replace", "remove"])
+def test_the_credential_a_job_was_given_is_sealed_out_of_evidence_even_if_the_source_file_changes_later(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD + "\n")
+
+    def behaviour(output: Path) -> None:
+        (output / "provider-error.log").write_text("Authorization: Bearer " + OLD)
+        credential.write_text(NEW) if change == "replace" else credential.unlink()
+
+    install_process(monkeypatch, behaviour)
+    _, spend, guarded = build(tmp_path, credential)
+
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert result.status == "UNKNOWN" and result.error_class == "ContainerExit"
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+    assert (spend.state("attempt-1"), spend.committed_usd()) == ("UNKNOWN", RESERVATION)
+
+
+def test_a_credential_file_that_is_gone_before_the_turn_fails_with_a_message_that_names_no_path_or_value(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential-that-is-missing"
+    install_process(monkeypatch, lambda output: None)
+    _, spend, guarded = build(tmp_path, credential)
+
+    with pytest.raises(RuntimeError) as failure:
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert "credential-that-is-missing" not in str(failure.value) and str(tmp_path) not in str(failure.value)
+    assert (spend.state("attempt-1"), spend.committed_usd()) == ("UNKNOWN", RESERVATION)
+
+
+def test_concurrent_turns_get_distinct_evidence_folders_and_container_names(tmp_path: Path, monkeypatch) -> None:
+    arrived = threading.Barrier(2)
+
+    def script(turn):  # both turns are inside the runner before either continues
+        arrived.wait(timeout=10)
+        return {}
+
+    launched = install_process(monkeypatch, lambda output: None)
+    _, spend, guarded = build(tmp_path, None, script_for=script)
+    turns = [Turn("attempt-a", "prompt", "task", "m", "route", 4096), Turn("attempt-b", "prompt", "task", "m", "route", 4096)]
+
+    threads = [threading.Thread(target=guarded.run_turn, args=(turn,)) for turn in turns]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    names = [argv[argv.index("--name") + 1] for argv in launched]
+    folders = {output_folder(argv) for argv in launched}
+    assert len(names) == 2 and len(set(names)) == 2 and len(folders) == 2
+    assert sorted(p.name.split("-", 2)[2] for p in (tmp_path / "evidence").iterdir()) == ["attempt-a", "attempt-b"]
+    assert spend.committed_usd() == RESERVATION * 2 and {spend.state("attempt-a"), spend.state("attempt-b")} == {"UNKNOWN"}
+
+
+def test_a_named_pipe_in_the_output_cannot_block_the_runner_and_the_log_beside_it_is_still_sealed(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    pipes: list[Path] = []
+
+    def behaviour(output: Path) -> None:
+        os.mkfifo(output / "pipe")
+        pipes.append(output / "pipe")
+        (output / "provider-error.log").write_text(OLD)
+
+    install_process(monkeypatch, behaviour)
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, run_budget_seconds=0.1)
+    outcome: list = []
+    worker = threading.Thread(target=lambda: outcome.append(runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))), daemon=True)
+    started = time.monotonic()
+    worker.start()
+    worker.join(timeout=5)
+    hung = worker.is_alive()
+    for pipe in pipes:  # owned cleanup: release a blocked reader if there is one, then remove the test's own pipe
+        try:
+            os.close(os.open(pipe, os.O_WRONLY | os.O_NONBLOCK))
+        except OSError:
+            pass
+        pipe.unlink(missing_ok=True)
+    worker.join(timeout=5)
+
+    assert not hung, "the runner blocked on a named pipe in the evidence"
+    assert time.monotonic() - started < 5 and outcome and outcome[0].error_class == "ContainerExit"
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_evidence_that_cannot_be_sealed_in_time_stops_the_turn_and_is_not_left_behind(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    install_process(monkeypatch, lambda output: (output / "provider-error.log").write_text(OLD))
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=-1.0)  # no time at all to seal
+
+    with pytest.raises(EvidenceNotSealed):
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_a_container_that_may_still_run_is_stopped_or_the_turn_fails_before_sealing(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    calls: list[tuple[str, ...]] = []
+    state = {"present": True}
+
+    def fake_docker(*args, **_kwargs):
+        calls.append(args)
+        done = subprocess.CompletedProcess(args, 0, "", "")
+        if args[0] == "inspect":
+            return subprocess.CompletedProcess(args, 0 if state["present"] else 1, "/p05-repair-test-01 repair-test\n", "")
+        if args[0] == "kill":
+            state["present"] = False
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, "abc\n" if state["present"] else "", "")
+        return done
+
+    monkeypatch.setattr(docker_turn_runner, "docker", fake_docker)
+    install_process(monkeypatch, lambda output: (output / "late.log").write_text(OLD), returncode=-9)  # the client was killed
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert ("kill", "p05-repair-test-01") in calls
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_a_container_that_is_not_ours_or_will_not_stop_fails_the_turn_without_a_clean_claim(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def stubborn(*args, **_kwargs):
+        if args[0] == "inspect":
+            return subprocess.CompletedProcess(args, 0, "/p05-repair-test-01 someone-elses-run\n", "")
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, "abc\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(docker_turn_runner, "docker", stubborn)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    install_process(monkeypatch, lambda output: None, returncode=-9)
+    runner, _, _ = build(tmp_path, credential)
+
+    with pytest.raises(EvidenceNotSealed):
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))

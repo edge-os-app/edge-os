@@ -8,6 +8,7 @@ proposal's limits rest on. It says nothing about how a real model reads these re
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,16 @@ FOLLOW_UPS = {
 RECEIPTS: list[dict[str, Any]] = []
 
 
+IDENTITIES = json.loads((REPO / "docs/qualification/hermes-provider/IDENTITIES.json").read_text())["cases"]
+
+
+def sent_task(rig: Rig, turn: int) -> dict[str, Any]:
+    """The task that actually left in the wire request, read from the saved body (not recomputed from the code under test)."""
+    [path] = sorted(rig.evidence.glob(f"turn-{turn:02d}-*/output/requests/request-1.json"))
+    content = json.loads(path.read_text())["messages"][1]["content"]
+    return {"content": content, "sha256": hashlib.sha256(content.encode()).hexdigest(), "task": json.loads(content)}
+
+
 def settled_text(rig: Rig) -> dict[str, Any]:
     return json.loads(rig.ledger.history(OWNER, INTAKE)[-1].settlement.response_text)  # type: ignore[union-attr]
 
@@ -97,6 +108,7 @@ def test_a_first_case_passes_the_guard_the_parser_and_the_meaning_check(case_id,
     result = rig.interpreter.interpret(OWNER, INTAKE, case["intake"])
 
     assert isinstance(result, Interpreted), result
+    assert sent_task(rig, 1)["sha256"] == IDENTITIES[case_id]["task_sha256"], "the sent task differs from the published identity"
     failures = check_meaning(settled_text(rig), case["expect"], LITERALS, [case["intake"]["original_request"]])
     record(rig, case_id, 1, failures)
     assert failures == []
@@ -117,12 +129,16 @@ def test_a_follow_up_case_passes_the_guard_the_parser_and_the_meaning_check(case
     question = next(q.text for q in first.parsed.questions if q.question_id == case["answers_question"])
 
     result = rig.interpreter.follow_up(OWNER, INTAKE, base["intake"], evidence, question,
-                                       ClarificationAnswer(f"answer:{case['answers_question']}", case["reply"]))
+                                       ClarificationAnswer(f"answer:{case['answers_question']}", case["reply"]),
+                                       question_id=case["answers_question"])  # as the saved-Research caller supplies it
 
     if case["application_outcome"] == "Interpreted":
         assert isinstance(result, Interpreted), result
     else:  # the application's own safe outcome for a reply that changes nothing; the answer is still saved and checked
         assert f"OutputRejected:{result.rejection.reason_code}" == case["application_outcome"], result
+    sent = sent_task(rig, 2)
+    assert sent["task"]["question_id"] == case["answers_question"]
+    assert sent["sha256"] == IDENTITIES[case_id]["task_sha256"], "the sent task differs from the published identity"
     failures = check_meaning(settled_text(rig), case["expect"], LITERALS,
                              [base["intake"]["original_request"], case["reply"]])
     record(rig, case_id, 2, failures)

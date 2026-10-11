@@ -70,7 +70,7 @@ Source: Context7 library `/openrouterteam/docs` (OpenRouter public documentation
 | Request bytes, first reading | 8,448 | Largest controlled wire request 7,754 bytes |
 | Request bytes, follow-up | 10,240 | Largest controlled wire request 9,510 bytes |
 | System envelope | 2,500 characters over the prompt | Controlled runs stayed under it |
-| Whole-process deadline | 60 seconds | Local runner kills an owned container |
+| Whole-process deadline | 60 seconds, plus a 5-second grace for stopping the container and sealing evidence | Local runner kills an owned container; a turn that cannot seal its evidence in time raises `EvidenceNotSealed` |
 | Tools, streaming, fallback models | none | Guard refuses the fields |
 
 Input tokens are bounded by request bytes plus 64, because a token covers at least one byte of text. This is an assumption about tokenizers, not a proven ceiling for the chosen model. A bytes/4 estimate is not a ceiling and the ledger does not use it. Probe A's 3,000 input-token bound is not used.
@@ -142,7 +142,7 @@ Not shown: any real model behavior, real cost or latency, or an upstream billing
 - The ledger has no operator path to resolve an UNKNOWN reservation except late usage evidence. A planned "one explicit retry per case" therefore has no mechanism after an UNKNOWN attempt. A later change must add a recorded decision path.
 - The ledger uses one flat price per token kind. The provider may charge more for tiers or cache. Recompute from the provider's documents at release.
 - If a delegate reports two requests, the runner keeps one reservation as liability. The guard prevents the second request. A host-level count is still needed.
-- Credential redaction and the leak scan cover the plain secret and its upper and lower case, URL-encoded, reversed, hex, base64 (aligned and offset), Authorization header and JSON `\u` escape forms, in file contents and file names. A secret that is split, compressed or encrypted is not covered. Evidence that cannot be scanned (over 64 MiB) is deleted, and a folder that cannot be cleared stops the turn with `EvidenceNotSealed`.
+- Credential redaction and the leak scan cover the plain secret and its upper and lower case, URL-encoded, reversed, hex, base64 (aligned and offset), Authorization header and JSON `\u` escape forms, in file contents and file names. A secret that is split, compressed or encrypted is not covered. Evidence that cannot be scanned (over 64 MiB) is deleted, and a folder that cannot be cleared stops the turn with `EvidenceNotSealed`. Each turn captures its number, policy and credential value once, at its start. The job reads a private copy of the credential, so a later change to the source file cannot change what the host seals. Named pipes, sockets, devices and links in the evidence are removed and never opened. A container that may still run is stopped, or the turn raises, before sealing.
 - The SDK-retry refusal is proved at guard level only. This Hermes build sent no second request after a 503.
 
 ## 10. Evidence to keep per attempt

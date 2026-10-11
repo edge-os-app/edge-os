@@ -22,6 +22,7 @@ from typing import Any
 __all__ = ["Decision", "GuardPolicy", "LogicalRequest", "ProviderRequestGuard", "guard_handler"]
 
 ENVELOPE_FIELDS = frozenset({"model", "messages", "max_tokens", "session_id"})
+MESSAGE_FIELDS = frozenset({"role", "content"})  # the pinned Hermes shape; a tool call or any other field is not permitted
 SUMMARY_MARKER = "summarizing what you've found and accomplished so far"
 CONTINUATION_MARKER = "Continue exactly where you left off"
 
@@ -126,7 +127,7 @@ class ProviderRequestGuard:
     def _messages_refusal(self, messages: object) -> str | None:
         shape = (isinstance(messages, list) and len(messages) == 2 and all(isinstance(m, dict) for m in messages)
                  and [m.get("role") for m in messages] == ["system", "user"]
-                 and all(isinstance(m.get("content"), str) for m in messages))
+                 and all(set(m) == MESSAGE_FIELDS and isinstance(m["content"], str) for m in messages))
         if not shape:
             return "messages_not_as_configured"
         system, user = messages[0]["content"], messages[1]["content"]  # type: ignore[index]
