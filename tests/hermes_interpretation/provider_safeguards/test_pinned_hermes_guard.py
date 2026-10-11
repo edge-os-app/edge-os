@@ -33,7 +33,7 @@ OWNER, INTAKE = "owner-a-7f3c", "intake-5e21"
 class Rig:
     """One interpreter over the guarded runner, a durable spend ledger and a private credential file."""
 
-    def __init__(self, image: str, run_id: str, root: Path, name: str, script: dict[str, Any], policy: GuardPolicy = POLICY,
+    def __init__(self, image: str, run_id: str, root: Path, name: str, script: dict[str, Any] | list[dict[str, Any]], policy: GuardPolicy = POLICY,
                  cap: Decimal = Decimal("0.20"), timeout_seconds: int = 90) -> None:
         import itertools
         import datetime as dt
@@ -46,7 +46,7 @@ class Rig:
         self.evidence = self.root / "evidence"
         self.spend = SpendLedger(self.root / "spend.sqlite", cap_usd=cap, price=PRICE)
         self.docker = GuardedDockerTurnRunner(
-            image=image, run_id=run_id, evidence_dir=self.evidence, script_for=lambda turn: script, policy=policy,
+            image=image, run_id=run_id, evidence_dir=self.evidence, script_for=lambda turn: script.pop(0) if isinstance(script, list) else script, policy=policy,
             credential_file=self.credential, forbidden=[OWNER, INTAKE], timeout_seconds=timeout_seconds)
         self.runner = GuardedTurnRunner(self.docker, self.spend, policy, scope_for=lambda turn: "case-a")
         self.store = MemoryAttemptStore()
