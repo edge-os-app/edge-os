@@ -73,7 +73,7 @@ A fake policy simulator cannot prove an independent provider restriction. An app
 
 The loader rejects a malformed declaration with a field-specific `ValueError`: a non-integer or negative fee, capacity or age; a non-string identifier or allow-list item; and a non-integer asset decimal. It never coerces these values.
 
-An absent, empty or whitespace-only applicable actual identity blocks **independently of membership**: an empty actual value cannot be approved by an adopted `""` placeholder. An adopted identity set that contains an empty or whitespace entry is invalid and blocks. A zero fee keeps its collector or referrer inapplicable. The normal command reports a malformed declaration as `error: ...` and exits non-zero; a failed action returns `BLOCKED`.
+An absent, empty or whitespace-only applicable actual identity blocks **independently of membership**: an empty actual value cannot be approved by an adopted `""` placeholder. An adopted identity set that contains an empty or whitespace entry is invalid and blocks. The agent wallet, signer and policy binding must each be a concrete non-whitespace identity; otherwise `WALLET_BINDING_MISSING`. A zero fee keeps its collector or referrer inapplicable. The normal command reports a malformed declaration as `error: ...` and exits non-zero; a failed action returns `BLOCKED`.
 
 ## Position-inventory restriction (separate)
 

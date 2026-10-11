@@ -152,6 +152,26 @@ class OneFieldAdversarialTest(unittest.TestCase):
     def test_missing_signer(self) -> None:
         _expect_blocked(self, self._blocked(signer_id=""), checker.R_WALLET_BINDING_MISSING)
 
+    def test_wallet_whitespace(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(wallet_id=" ", policy_binding_wallet_id=" "),
+            checker.R_WALLET_BINDING_MISSING,
+        )
+
+    def test_wallet_tabs_newline(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(wallet_id="\t\n", policy_binding_wallet_id="\t\n"),
+            checker.R_WALLET_BINDING_MISSING,
+        )
+
+    def test_signer_whitespace(self) -> None:
+        _expect_blocked(self, self._blocked(signer_id=" "), checker.R_WALLET_BINDING_MISSING)
+
+    def test_policy_whitespace(self) -> None:
+        _expect_blocked(self, self._blocked(policy_binding_wallet_id=" "), checker.R_WALLET_BINDING_MISSING)
+
     def test_method_not_allowed(self) -> None:
         _expect_blocked(self, self._blocked(method="executeSwapWithReceiver"), checker.R_METHOD_NOT_ALLOWED)
 

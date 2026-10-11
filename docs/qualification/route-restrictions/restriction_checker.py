@@ -441,7 +441,11 @@ def _evaluate_action(action: ControlledAction) -> list[str]:
         reasons.append(R_NETWORK_NOT_ALLOWED)
     reasons.extend(_identity_reasons(action.network, action.approved_networks, R_NETWORK_NOT_ALLOWED))
 
-    if not action.wallet_id or not action.signer_id or not action.policy_binding_wallet_id:
+    if (
+        not action.wallet_id.strip()
+        or not action.signer_id.strip()
+        or not action.policy_binding_wallet_id.strip()
+    ):
         reasons.append(R_WALLET_BINDING_MISSING)
     elif action.policy_binding_wallet_id != action.wallet_id:
         reasons.append(R_WALLET_BINDING_MISMATCH)

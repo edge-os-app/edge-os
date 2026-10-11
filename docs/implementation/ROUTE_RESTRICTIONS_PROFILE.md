@@ -47,6 +47,7 @@ Twelve mandatory controls gate a real action: `chain`, `wallet_signer_binding`, 
 - A control marked `ENFORCED` with `NOT_RUN` evidence returns `EVIDENCE_MISSING:<name>`.
 - The action must match its adopted bindings: network, entrypoint, signer, method, assets and decimals, recipient, exact input, route program, fee value, fee-collector address, referrer address, input/output fee mode, and owner allowance.
 - An absent, empty or whitespace-only applicable actual identity returns the control's not-allowed reason, independently of membership. An adopted identity set or asset map with an empty or whitespace entry returns `ADOPTED_IDENTITY_INVALID`. A zero fee keeps its collector or referrer inapplicable.
+- The agent wallet, signer and policy binding must each be a nonempty, non-whitespace identity. Otherwise the action returns `WALLET_BINDING_MISSING`. A nonempty mismatch returns `WALLET_BINDING_MISMATCH`.
 - Amounts are canonical unsigned base-10 strings that match the whole value. Boolean, float, negative, leading-zero and trailing-character raw values are rejected.
 - The route program must be present, hex and at least one byte.
 - An unknown required value (gas, gas used, action capacity, quote age, input age, fee, allowance, evaluation time, intent expiry, mandate expiry) is not zero and blocks the action. An unknown quote returns `QUOTE_UNKNOWN`.
