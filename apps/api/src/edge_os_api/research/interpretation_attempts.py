@@ -210,6 +210,19 @@ class AttemptLedger:
         settled = {settlement.attempt_id for settlement in self._store.settlements(owner_id, intake_record_id)}
         if any(start.attempt_id not in settled for start in starts):
             raise AttemptInFlight("Another attempt for this request has not settled.")
+        if starts:
+            # An answer that was accepted but not yet saved already holds this input. A second call on the same basis
+            # would be a duplicate: recovery saves the first answer instead. A basis that has moved on is not held.
+            latest_start = starts[-1]
+            latest_settlement = next((x for x in self._store.settlements(owner_id, intake_record_id)
+                                      if x.attempt_id == latest_start.attempt_id), None)
+            if (latest_settlement is not None and latest_settlement.status == "COMPLETED"
+                    and latest_settlement.parse_result == "ACCEPTED"
+                    and latest_start.attempt_id not in self._store.links(owner_id, intake_record_id)
+                    and latest_start.identity.purpose == identity.purpose
+                    and latest_start.identity.previous_revision_id == identity.previous_revision_id
+                    and retry_of is None):
+                raise AttemptInFlight("An earlier answer for this input is accepted and not saved yet.")
         if retry_of is None and identity.purpose == "INTERPRET" and starts:
             # A first reading is the first attempt. Any later reading of the request is a retry that names its target.
             raise RetryTargetInvalid("A first reading is the first attempt of this request.")

@@ -497,7 +497,21 @@ def test_an_accepted_attempt_is_not_retried(ledger: AttemptLedger) -> None:
 def test_a_first_reading_is_admitted_only_as_the_first_attempt(ledger: AttemptLedger) -> None:
     """A start that was checked while the request had no attempt and waited must not become a second reading."""
     ledger.begin(OWNER, INTAKE, IDENTITY)
-    ledger.settle(settlement("attempt-1"))
+    ledger.settle(settlement("attempt-1", "PROVIDER_FAILED", text=None, parse_result="NOT_PARSED",
+                             error_class="ProviderHTTPError"))
 
     with pytest.raises(RetryTargetInvalid):
         ledger.begin(OWNER, INTAKE, IDENTITY)
+
+
+def test_a_new_reply_on_the_same_basis_is_refused_while_an_accepted_answer_is_not_saved(ledger: AttemptLedger) -> None:
+    """The accepted answer already holds this input; recovery saves it, and a second call would be a duplicate."""
+    reply = dataclasses.replace(IDENTITY, purpose="FOLLOW_UP", previous_revision_id="revision-1",
+                                answer_ref="reply:1", answer_text="up two percent")
+    ledger.begin(OWNER, INTAKE, reply)
+    ledger.settle(settlement("attempt-1"))
+
+    with pytest.raises(AttemptInFlight):
+        ledger.begin(OWNER, INTAKE, reply)
+    moved_on = dataclasses.replace(reply, previous_revision_id="revision-2")
+    assert ledger.begin(OWNER, INTAKE, moved_on).sequence == 2  # a basis that moved on is not held

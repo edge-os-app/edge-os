@@ -684,3 +684,41 @@ def test_a_first_reading_start_that_waited_before_admission_does_not_make_a_seco
     assert len(runner.turns) == 1, "the late start must not call the provider"
     final = bundle_of(client, owner_a, intake)
     assert [a["sequence"] for a in final["attempts"]] == [1] and final["attempts"][0]["revision_id"] is not None
+
+
+def test_a_reply_that_waited_before_admission_makes_no_call_while_an_earlier_reply_is_accepted_but_not_saved(
+        make_client, owner_a, monkeypatch) -> None:
+    from edge_os_api.research.hermes_interpreter import HermesInterpreter
+    runner = CaseRunner(turn_result(case("rough-hunch")["provider"]), exit_reply_result(), exit_reply_result())
+    client = make_client(runner)
+    bundle = create(client, owner_a, "rough-hunch").json()
+    waiting, release, calls = threading.Event(), threading.Event(), []
+    real = HermesInterpreter.follow_up
+
+    def paused_first_reply(self, *args: Any, **kwargs: Any):
+        calls.append(1)
+        if len(calls) == 1:
+            waiting.set()
+            assert release.wait(30)  # this reply passed its checks and waits before the attempt is admitted
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(HermesInterpreter, "follow_up", paused_first_reply)
+    late: dict[str, Any] = {}
+    worker = threading.Thread(target=lambda: late.update(response=answer(
+        client, owner_a, bundle, "choose-exit", answer_text=EXIT_REPLY)))
+    worker.start()
+    try:
+        assert waiting.wait(30)
+        with monkeypatch.context() as patch:
+            def crash(*args: Any, **kwargs: Any):
+                raise RuntimeError("the process died after the answer was accepted and before it was saved")
+            patch.setattr(interpretation_workflow.HermesResearch, "_publish_reply", crash)
+            earlier = answer(client, owner_a, bundle, "choose-exit", answer_text=EXIT_REPLY)
+        assert earlier.status_code == 500
+    finally:
+        release.set()
+        worker.join(30)
+
+    assert late["response"].status_code == 409, late["response"].text
+    assert len(runner.turns) == 2, "the late reply must not call the provider"
+    final = bundle_of(client, owner_a, bundle["intake"]["record_id"])
+    assert [a["sequence"] for a in final["attempts"]] == [1, 2]
