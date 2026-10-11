@@ -681,10 +681,10 @@ def test_a_container_that_is_not_ours_is_never_killed_and_every_docker_command_h
     run_expecting(runner, EvidenceNotSealed)
 
     assert not [call for call in seen if call[0][0] == "kill"]
-    assert seen and all(isinstance(call[1].get("timeout"), int) and 1 <= call[1]["timeout"] <= 60 for call in seen)
+    assert seen and all(0 < call[1].get("timeout", 0) <= 60 for call in seen)
 
 
-def test_an_interrupt_during_the_stop_step_still_removes_the_evidence_and_the_original_failure_propagates(tmp_path: Path, monkeypatch) -> None:
+def test_an_interrupt_during_the_stop_step_still_removes_the_evidence_and_the_failure_stays_explicit(tmp_path: Path, monkeypatch) -> None:
     credential = tmp_path / "credential"
     credential.write_text(OLD)
 
@@ -710,8 +710,10 @@ def test_an_interrupt_during_the_stop_step_still_removes_the_evidence_and_the_or
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
     runner, _, _ = build(tmp_path, credential)
 
-    run_expecting(runner, RuntimeError)
+    with pytest.raises(EvidenceNotSealed) as failure:  # the failure is explicit and keeps the original as its cause
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
+    assert isinstance(failure.value.__cause__, RuntimeError)
     assert not list((tmp_path / "evidence").glob("turn-*/output"))
 
 
@@ -777,3 +779,128 @@ def test_when_the_wait_fails_the_container_is_stopped_before_the_evidence_is_sea
     run_expecting(runner, RuntimeError)
 
     assert plain_bytes_leak(tmp_path / "evidence", OLD) == [], "the evidence was sealed before the container stopped"
+
+
+# --- Repairs after gate verdict 4/4: ONE remaining budget for stop, reap, pauses and sealing -----------------------
+
+def timed_turn(tmp_path: Path, monkeypatch, *, docker, communicate_after_timeout=None, fail_wait=False, grace=1.0,
+               secret: bool = True, ledger: bool = True):
+    """Runs one guarded turn with a slow docker CLI. Returns (elapsed, outcome, spend, evidence, calls)."""
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    calls: list[tuple[float, tuple, float | None]] = []
+    started = time.monotonic()
+
+    def cli(*args, timeout=None, **_kw):
+        calls.append((time.monotonic() - started, args, timeout))
+        return docker(*args, timeout=timeout)
+
+    monkeypatch.setattr(docker_turn_runner, "docker", cli)
+    real_popen = subprocess.Popen
+
+    class Process:
+        returncode = -9
+
+        def __init__(self, argv, **_kw) -> None:
+            self.output, self.waits = output_folder(argv), 0
+
+        def communicate(self, timeout=None):
+            self.waits += 1
+            if self.waits == 1:
+                (self.output / "late.log").write_text(OLD)
+                if fail_wait:
+                    raise RuntimeError("the pipe broke")
+                time.sleep(timeout)  # a real wait takes the time it was given before it times out
+                raise subprocess.TimeoutExpired("docker", timeout)
+            if communicate_after_timeout is not None:  # the reaping wait takes exactly the time it was given
+                time.sleep(timeout if timeout is not None else communicate_after_timeout)
+                raise subprocess.TimeoutExpired("docker", timeout)
+            return b"", None
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=grace)
+    outcome: list = []
+
+    def go() -> None:
+        started_at = time.monotonic()
+        try:
+            guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+            outcome.append("returned")
+        except BaseException as error:  # noqa: BLE001
+            outcome.append(type(error).__name__)
+        outcome.append(time.monotonic() - started_at)
+
+    worker = threading.Thread(target=go, daemon=True)
+    worker.start()
+    worker.join(timeout=grace + 12)  # a watchdog: the old behaviour needed up to six seconds more than its grace
+    assert not worker.is_alive(), "the turn did not finish"
+    return outcome[1], outcome[0], spend, tmp_path / "evidence", calls
+
+
+def sleeps_exactly_its_timeout(*args, timeout=None, **_kw):
+    time.sleep(timeout)
+    raise subprocess.TimeoutExpired("controlled-owned-stop", timeout)
+
+
+def test_a_stop_command_that_hangs_cannot_run_the_turn_past_the_job_timeout_plus_grace(tmp_path: Path, monkeypatch) -> None:
+    elapsed, outcome, spend, evidence, calls = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=1.0)
+
+    assert outcome == "EvidenceNotSealed" and elapsed <= 0.1 + 1.0 + 0.25, elapsed
+    assert (spend.state("attempt-1"), spend.committed_usd()) == ("UNKNOWN", RESERVATION)
+    assert not list(evidence.glob("turn-*/output")) and plain_bytes_leak(evidence, OLD) == []
+    assert len(calls) == 1, "a second command was started after the first had used the budget"
+
+
+def test_no_command_starts_once_the_budget_is_spent(tmp_path: Path, monkeypatch) -> None:
+    elapsed, outcome, _, evidence, calls = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=0.0)
+
+    assert outcome == "EvidenceNotSealed" and calls == [] and elapsed <= 0.1 + 0.25
+    assert not list(evidence.glob("turn-*/output"))
+
+
+def test_every_docker_command_fits_inside_the_remaining_budget(tmp_path: Path, monkeypatch) -> None:
+    elapsed, _, _, _, calls = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=0.8)
+
+    assert calls and all(started + timeout <= 0.1 + 0.8 + 0.05 for started, _, timeout in calls)
+    assert elapsed <= 0.1 + 0.8 + 0.25
+
+
+def healthy_docker(*args, timeout=None, **_kw):
+    if args[0] == "inspect":
+        return subprocess.CompletedProcess(args, 1, "", "")
+    return subprocess.CompletedProcess(args, 0, "", "")
+
+
+def test_the_wait_for_the_stopped_client_is_part_of_the_same_budget(tmp_path: Path, monkeypatch) -> None:
+    elapsed, outcome, _, evidence, _ = timed_turn(tmp_path, monkeypatch, docker=healthy_docker, communicate_after_timeout=5.0, grace=1.0)
+
+    assert elapsed <= 0.1 + 1.0 + 0.25, elapsed  # a fresh five-second wait would have taken five seconds
+    assert outcome in ("returned", "EvidenceNotSealed") and plain_bytes_leak(evidence, OLD) == []
+
+
+@pytest.mark.parametrize("fail_wait", [True, False])  # False: the job times out and the stop runs inside the turn first
+def test_a_failed_stop_is_not_repeated_by_the_cleanup_of_the_failure(tmp_path: Path, monkeypatch, fail_wait: bool) -> None:
+    def failing(*args, timeout=None, **_kw):
+        raise subprocess.TimeoutExpired("controlled-owned-stop", 0.01)
+
+    _, outcome, spend, evidence, calls = timed_turn(tmp_path, monkeypatch, docker=failing, fail_wait=fail_wait, grace=1.0)
+
+    assert outcome == "EvidenceNotSealed"  # the failed stop is reported, not hidden behind the original failure
+    assert len([call for call in calls if call[1][0] == "inspect"]) == 1
+    assert (spend.state("attempt-1"), spend.committed_usd()) == ("UNKNOWN", RESERVATION)
+    assert not list(evidence.glob("turn-*/output"))
+
+
+def test_the_pauses_between_listings_are_part_of_the_same_budget(tmp_path: Path, monkeypatch) -> None:
+    def present_forever(*args, timeout=None, **_kw):
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, "abc\n", "")
+        return subprocess.CompletedProcess(args, 0, f"/{args[1]} repair-test\n" if args[0] == "inspect" else "", "")
+
+    elapsed, outcome, _, evidence, _ = timed_turn(tmp_path, monkeypatch, docker=present_forever, grace=1.0)
+
+    assert outcome == "EvidenceNotSealed" and elapsed <= 0.1 + 1.0 + 0.25, elapsed
+    assert not list(evidence.glob("turn-*/output"))

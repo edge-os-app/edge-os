@@ -67,6 +67,7 @@ class _TurnPlan:
     run_budget: int
     forbidden: tuple[str, ...]
     deadline: float  # monotonic time by which the process wait, the stop step and the sealing must be done
+    stop_deadline: float  # the stop step must be done by this time; the rest of the budget is kept for removing evidence
 
 
 @dataclass
@@ -101,8 +102,9 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 raise CredentialUnavailable("the credential file could not be read") from None
             if not secret:
                 raise CredentialUnavailable("the credential file is empty")
+        deadline = time.monotonic() + timeout + grace
         return _TurnPlan(sequence, f"p05-{run_id}-{self._token}-{sequence:02d}", run_id, image, policy, secret, timeout,
-                         budget, forbidden, time.monotonic() + timeout + grace)
+                         budget, forbidden, deadline, deadline - max(0.0, min(0.5, grace / 10)))
 
     # --- Sealing evidence -----------------------------------------------------------------------------------------
 
@@ -190,46 +192,63 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     # --- Stopping the container ------------------------------------------------------------------------------------
 
     def _stop_owned(self, plan: _TurnPlan, proc: Any) -> dict[str, Any]:
-        """Stop this turn's own container if it is still there, and verify it is gone. Each command has a time limit."""
-        def cli(*args: str) -> subprocess.CompletedProcess[str]:
-            return docker_turn_runner.docker(*args, timeout=int(max(1.0, min(60.0, plan.deadline - time.monotonic()))), check=False)
+        """Stop this turn's own container if it is still there, and verify it is gone.
 
+        Every command, the wait for the client and every pause draw on ONE remaining budget (`plan.stop_deadline`).
+        No command or wait starts once the budget is spent, and none is longer than what is left, so the step cannot
+        pass the deadline. If it cannot show the container gone in time, it says so.
+        """
         name, owned = plan.name, False
+
+        def left() -> float:
+            return plan.stop_deadline - time.monotonic()
+
+        def cli(*args: str) -> subprocess.CompletedProcess[str]:
+            if left() <= 0:
+                raise TimeoutError("the stop budget is spent")
+            return docker_turn_runner.docker(*args, timeout=min(60.0, left()), check=False)
+
+        def failed() -> dict[str, Any]:
+            return {"container": name, "ownership_verified": owned, "container_absent": False}
+
+        try:
+            proc.kill()  # the client first: a client that is still starting could create the container after our check
+        except Exception:  # noqa: BLE001
+            pass
         try:
             info = cli("inspect", name, "--format", f'{{{{.Name}}}} {{{{index .Config.Labels "{LABEL}"}}}}')
             owned = info.returncode == 0 and info.stdout.strip() == f"/{name} {plan.run_id}"
             if owned:
                 cli("kill", name)
         except Exception:  # noqa: BLE001 - if the stop commands fail, the container is not shown to be gone
-            return {"container": name, "ownership_verified": owned, "container_absent": False}
-        try:
-            proc.kill()  # the client first: a client that is still starting could create the container after our check
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            proc.communicate(timeout=5)
-        except Exception:  # noqa: BLE001 - reaping the client must not hide the verification below
-            pass
+            return failed()
+        if left() > 0:
+            try:
+                proc.communicate(timeout=min(5.0, left()))  # reap the client, within what is left
+            except Exception:  # noqa: BLE001 - reaping the client must not hide the verification below
+                pass
         clear = 0
-        for attempt in range(20):
+        for _ in range(20):  # at most 20 listings, and none after the budget is spent
+            if left() <= 0:
+                break
             try:
                 listing = cli("ps", "-a", "--filter", f"name=^{name}$", "-q")
             except Exception:  # noqa: BLE001
-                break
+                return failed()
             if listing.returncode == 0 and not listing.stdout.strip():  # a failed listing proves nothing
                 clear += 1
                 if clear >= 2:  # absent twice in a row, so a slow start cannot hide behind one empty answer
                     return {"container": name, "ownership_verified": owned, "container_absent": True}
             else:
                 clear = 0
-            if attempt and time.monotonic() > plan.deadline:
-                break
-            time.sleep(0.25)
-        return {"container": name, "ownership_verified": owned, "container_absent": False}
+            time.sleep(max(0.0, min(0.25, left())))
+        return failed()
 
     def _confirm_stopped(self, plan: _TurnPlan, launch: _Launch) -> None:
         if launch.proc is None or launch.stopped:
             return
+        if launch.stopping:  # the stop was tried in this turn and failed: no renewed commands, no fresh budget
+            raise EvidenceNotSealed("a container that may still write could not be stopped")
         launch.stopping = self._stop_owned(plan, launch.proc)
         if not launch.stopping["container_absent"]:
             raise EvidenceNotSealed("a container that may still write could not be stopped")
@@ -246,13 +265,15 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         try:
             with tempfile.TemporaryDirectory(prefix="p05-credential-") as private:
                 result = self._run_container(turn, task_dir, plan, Path(private), launch)
-        except BaseException:
-            try:  # the same two steps as on success; the original failure is the one that propagates
+        except BaseException as failure:
+            try:  # the same two steps as on success
                 self._confirm_stopped(plan, launch)
                 self._seal(output, plan)
             except BaseException:  # an interrupt here counts too: the evidence goes
                 self._quarantine(output)  # raises EvidenceNotSealed if the folder cannot be removed
-            raise
+                if isinstance(failure, Exception):  # say that the container or the evidence could not be secured
+                    raise EvidenceNotSealed("the turn failed and its container or evidence could not be secured") from failure
+            raise  # an interrupt, or a failure after which everything was secured, propagates as it was
         try:
             self._confirm_stopped(plan, launch)
             self._seal(output, plan)
