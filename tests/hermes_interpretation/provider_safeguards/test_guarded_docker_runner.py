@@ -6,6 +6,7 @@ failing job could, then exits or times out. The runner and its redaction are the
 
 from __future__ import annotations
 
+import base64
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,8 @@ class StubProcess:
     def __init__(self, argv, **_kwargs) -> None:
         output = next(part.split("src=")[1].split(",")[0] for part in argv if part.endswith("dst=/job/output"))
         (Path(output) / "partial.log").write_text(f"trace with {SENTINEL}")
+        (Path(output) / "binary.bin").write_bytes(b"\xff\xfe" + SENTINEL.encode() + b"\x80")  # not UTF-8 text
+        (Path(output) / "encoded.txt").write_text(base64.b64encode(f"Bearer {SENTINEL}".encode()).decode())
         self.returncode, self.argv = StubProcess.returncode, argv
 
     returncode = 3
@@ -60,4 +63,18 @@ def test_the_credential_is_removed_from_evidence_when_the_job_fails_or_times_out
     result = runner.run_turn(TURN)
 
     assert result.status == status
+    assert find_leaks(tmp_path, SENTINEL, exclude=[credential, *tmp_path.glob("evidence/turn-*/input.json")]) == []
+
+
+def test_a_credential_file_that_ends_in_a_newline_is_still_removed_from_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    StubProcess.timeout, StubProcess.returncode = False, 3
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: StubProcess(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    credential = tmp_path / "private-credential"
+    credential.write_text(SENTINEL + "\n")  # an editor or a secret store often adds the newline
+    runner = GuardedDockerTurnRunner(image="unused", run_id="redact-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                     credential_file=credential, script_for=lambda turn: {}, timeout_seconds=60)
+
+    runner.run_turn(TURN)
+
     assert find_leaks(tmp_path, SENTINEL, exclude=[credential, *tmp_path.glob("evidence/turn-*/input.json")]) == []

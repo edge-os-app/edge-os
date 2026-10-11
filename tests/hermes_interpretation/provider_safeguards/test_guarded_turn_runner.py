@@ -151,8 +151,18 @@ def test_the_reported_liability_is_this_attempts_reservation_not_the_ledger_tota
     assert result.observed["spend_charge_usd"] == "0.04532" and ledger.committed_usd() == Decimal("0.0074285") + RESERVATION
 
 
+def test_a_zero_request_count_without_the_guards_report_keeps_liability(ledger: SpendLedger) -> None:
+    unreported = returned(status="UNKNOWN", text=None, usage=Usage(), request_count=0, error_class="RuntimeError", observed={})
+    guarded, _ = runner(ledger, unreported)
+
+    guarded.run_turn(turn())
+
+    assert (ledger.state("attempt-1"), ledger.committed_usd()) == ("UNKNOWN", RESERVATION)
+
+
 def test_when_no_request_was_admitted_the_reservation_is_released(ledger: SpendLedger) -> None:
-    refused = returned(status="UNKNOWN", text=None, usage=Usage(), request_count=0, error_class="RuntimeError")
+    refused = returned(status="UNKNOWN", text=None, usage=Usage(), request_count=0, error_class="RuntimeError",
+                       observed={"guard_admitted": 0})
     guarded, _ = runner(ledger, refused)
 
     guarded.run_turn(turn())

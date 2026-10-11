@@ -1,7 +1,7 @@
 {
   "manifest_version": "p05-qualification-cases/1",
   "label": "AUTHORED_EXPECTATIONS_NOT_RUN",
-  "note": "Every request text and every expected literal below was written by hand for the proposed real-model batch. No model has seen them. The expectations come from the user's own words, not from any fixture or model output. A parsed answer is not a pass. A case passes on meaning only when meaning_check.py returns no failure.",
+  "note": "Seven request texts are new. Four (g1-concrete, g2-hunch, g3-no-thesis, g4-unsupported) are also used by earlier local fixtures, and their expectations here were still written from the user's own words, not from any fixture or model output. No real model has seen any of them. Quotes must match the user's words exactly, so a person should read a quote-only failure before counting it as a meaning failure. A parsed answer is not a pass. A case passes on meaning only when meaning_check.py returns no failure.",
   "literals": {
     "gt_return15_1pct": {
       "op": "gt",

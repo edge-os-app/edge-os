@@ -33,6 +33,12 @@ def ledger(tmp_path: Path, cap: Decimal = CAP, price: TokenPrice = PRICE) -> Spe
     return SpendLedger(tmp_path / "spend.sqlite", cap_usd=cap, price=price)
 
 
+@pytest.mark.parametrize("prompt, completion", [("-1", "7.50"), ("2.00", "-0.01"), ("NaN", "1"), ("Infinity", "1")])
+def test_a_token_price_must_be_a_finite_non_negative_amount(prompt: str, completion: str) -> None:
+    with pytest.raises(ValueError):
+        TokenPrice(Decimal(prompt), Decimal(completion))
+
+
 def test_a_reservation_is_the_worst_case_for_its_token_bounds(tmp_path: Path) -> None:
     spend = ledger(tmp_path)
 

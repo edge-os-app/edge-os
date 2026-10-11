@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from docker_turn_runner import HERE, LABEL, DockerHermesTurnRunner
+from leak_scan import encodings
 from edge_os_api.research.hermes_interpreter import HermesTurn, HermesTurnResult
 from edge_os_api.research.interpretation_attempts import Usage
 from provider_guard import GuardPolicy
@@ -30,16 +31,30 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         self.policy, self.credential_file = policy, credential_file
 
     def _secret(self) -> str | None:
-        return self.credential_file.read_text(encoding="utf-8") if self.credential_file else None
+        """The credential without the newline that an editor or a secret store adds."""
+        return (self.credential_file.read_text(encoding="utf-8").strip() or None) if self.credential_file else None
 
     @staticmethod
     def _redact(folder: Path, secret: str) -> bool:
-        """Saved evidence never keeps the credential, even when a provider echoes it. True when something was echoed."""
-        echoed = False
+        """Saved evidence never keeps the credential, even when a provider echoes it. True when something was echoed.
+
+        Works on bytes, so a file that is not UTF-8 text is redacted too. It replaces every form that `leak_scan` looks
+        for. A file that cannot be rewritten is deleted: evidence that may hold the credential is not kept.
+        """
+        forms, echoed = encodings(secret), False
         for path in folder.rglob("*"):
-            if path.is_file() and secret.encode() in path.read_bytes():
+            if not path.is_file():
+                continue
+            try:
+                data = path.read_bytes()
+                if any(form in data for form in forms):
+                    echoed = True
+                    for form in forms:
+                        data = data.replace(form, REDACTED.encode())
+                    path.write_bytes(data)
+            except OSError:
                 echoed = True
-                path.write_text(path.read_text(encoding="utf-8").replace(secret, REDACTED), encoding="utf-8")
+                path.unlink(missing_ok=True)
         return echoed
 
     def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
@@ -80,7 +95,10 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             return HermesTurnResult(status="TIMED_OUT", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="TimeoutExpired")
         secret = self._secret()
-        (task_dir / "container-stdout.txt").write_text(stdout.replace(secret, REDACTED) if secret else stdout, encoding="utf-8")
+        scrubbed = stdout.encode("utf-8", "replace")
+        for form in (encodings(secret) if secret else []):
+            scrubbed = scrubbed.replace(form, REDACTED.encode())
+        (task_dir / "container-stdout.txt").write_bytes(scrubbed)  # stdout is evidence too
         echoed = bool(secret) and self._redact(output, secret)  # every exit path, not only a clean one
         result_path = output / "container-result.json"
         if proc.returncode != 0 or not result_path.exists():

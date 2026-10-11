@@ -7,7 +7,7 @@ This folder prepares a later real-model check of the saved Research interpretati
 | File | What it holds |
 |---|---|
 | `QUALIFICATION_PROPOSAL.md` | The proposed batch: route, request ceilings, spend arithmetic, pass conditions, stop rules, open decisions. |
-| `CASE_MANIFEST.json` | Eleven hand-written cases with expected literals and user quotations. |
+| `CASE_MANIFEST.json` | Eleven cases with expected literals and user quotations. Four request texts also appear in earlier local fixtures. |
 | `IDENTITIES.json` | The pinned identities. A test compares it with the code. |
 | `HOSTING_ASSESSMENT.md` | What a production host must provide. Names no vendor choice. |
 | `LIVE_RELEASE_CHECKLIST.md` | The separate checklist that a controller release must complete before any live request. |

@@ -29,7 +29,7 @@ class GuardedProvider(base.FakeProvider):
     def __init__(self, job: dict) -> None:
         super().__init__(job)
         policy = GuardPolicy(**job["guard"]["policy"])
-        credential = CREDENTIAL.read_text(encoding="utf-8") if CREDENTIAL.exists() else None
+        credential = CREDENTIAL.read_text(encoding="utf-8").strip() if CREDENTIAL.exists() else None
         self.guard = ProviderRequestGuard(policy, LogicalRequest(job["system_prompt"], job["user_message"]), credential)
         GUARDS.append(self.guard)
 
@@ -49,7 +49,7 @@ def inject_credential() -> bool:
 
     if not CREDENTIAL.exists():
         return False
-    secret, real = CREDENTIAL.read_text(encoding="utf-8"), openai.OpenAI
+    secret, real = CREDENTIAL.read_text(encoding="utf-8").strip(), openai.OpenAI
 
     def with_credential(*args, **kwargs):
         kwargs["api_key"] = secret

@@ -18,5 +18,7 @@ Status: a blank checklist. NOT_RUN. This file is not authority. It makes no live
 | 12 | The batch is the 11 manifest cases, one request each, no automatic retry | `CASE_MANIFEST.json` |
 | 13 | Rollback: live setting off, key revoked or limited, ledger kept | Controller record |
 | 14 | Owner of each step and the reply pane | Controller record |
+| 15 | The live job always gives the guard the injected credential (`credential=None` is for local runs only) | Live job review |
+| 16 | A recorded decision path exists to resolve an UNKNOWN reservation without late evidence, before any retry slot is used | Separate ticket |
 
 Do not run any step of this list from the Hermes tests. The tests use dummy credentials only.

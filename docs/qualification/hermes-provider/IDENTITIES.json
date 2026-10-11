@@ -1,6 +1,6 @@
 {
  "base_commit": "3ab45e7240910433f4bdcd84eae86833dd9f406c",
- "case_manifest_sha256": "b3291eaaa3c1ad27411f9fafd156bc646ec98ecc3c57d9e3567ceb30855c4d24",
+ "case_manifest_sha256": "34a8c4986c321e5b06cda6959219c46de211f58b6b68374641e0a70cd867f666",
  "cases": {
   "g1-concrete": {
    "group": "CONCRETE_THESIS",
@@ -120,14 +120,14 @@
  "support_files_sha256": {
   "Dockerfile": "f1d0b5ee429cb2c66911645a5d1034dce9ec0e6c2ab82b72304cb0a2491e37b3",
   "docker_turn_runner.py": "03cde6e8f9e37c67b67239647b5129bd3ec01b0ecbbe9f24eb1b756e041da7bb",
-  "guarded_docker_runner.py": "5971af64d6f5bfb1071e017dbc2796202d135dfa870a7e8eec3c82601a3b63e1",
-  "guarded_turn_job.py": "ac280577dde476f71beb6cf1cf8382d4c4a58fcf440004d5cd4b99bf4f50e9df",
-  "guarded_turn_runner.py": "aa1d10399dd609dcb8868db081e6cb9baf4d8ca4a1c2f194f9b7be12841cf94c",
+  "guarded_docker_runner.py": "03c3702f3204db2dc8d6e82f5983f356ea115779dbdb48595e2869c3ff5ee158",
+  "guarded_turn_job.py": "e673c319b5be86e27ab317c219fe2b4aba2c397b992f58ce7adcee2474d93eac",
+  "guarded_turn_runner.py": "281d3c2e57f87247abfeac792c54da1df0478dcc6eea3ca8fa107e910e270a73",
   "hermes_turn_job.py": "3186380733669cb5f7c2d48198ec67117415aa41b90ef1f475033373ee03870d",
   "leak_scan.py": "106f28f9f354841ea196c7625c323d0e6713c3246c95f1bee47f0a3e50a802ae",
   "meaning_check.py": "455a2280509ba13e2e7d1f87a692fc8e72995abb99979390ced111bada088213",
   "provider_guard.py": "54289721f3747091c6ba2fe7be0554d2b6cad95d6dd04e8430b5fb49ba66f6c7",
-  "spend_ledger.py": "f5085631f44803885f8a893c5f00ac3d94d3045b2a1797fe9d55d4705b52249a"
+  "spend_ledger.py": "aaaae6c01c7f62fd0266660fb52fce107849d12bdd237ad5c085fae437505a08"
  },
  "system_prompt_chars": 3749,
  "system_prompt_sha256": "ea2ae47f810b287b7ad93cd31d7e3e1f0068c4ea4cdc8fe79d8df68fea1ae460"

@@ -32,7 +32,7 @@ All values are in `IDENTITIES.json`. A test recomputes them from the code.
 | Case manifest SHA-256 | see `IDENTITIES.json` field `case_manifest_sha256` and the value below |
 | Guard, ledger, job and runner files | SHA-256 values in `IDENTITIES.json` field `support_files_sha256` |
 
-Case manifest SHA-256: b3291eaaa3c1ad27411f9fafd156bc646ec98ecc3c57d9e3567ceb30855c4d24
+Case manifest SHA-256: 34a8c4986c321e5b06cda6959219c46de211f58b6b68374641e0a70cd867f666
 
 Each case has a task hash, a text hash and a logical request size in `IDENTITIES.json`. The wire request differs from the logical request. Hermes wraps the system prompt and adds a runtime note that holds a path. So the guard checks structure, not one fixed hash. It checks that the system message holds the prompt verbatim, that the user message equals the task verbatim, that the envelope is small, and that no other field is present.
 
@@ -93,7 +93,7 @@ Historical allowances (USD 0.60, USD 2, Probe A) give no current authority.
 
 ## 7. Cases and pass conditions
 
-`CASE_MANIFEST.json` holds 11 hand-written cases in the five groups.
+`CASE_MANIFEST.json` holds 11 cases in the five groups. Seven request texts are new. Four also appear in earlier local fixtures (`g1-concrete`, `g2-hunch`, `g3-no-thesis`, `g4-unsupported`). All expected values come from the user's own words.
 
 | Group | Cases | Requests |
 |---|---|---|
@@ -133,9 +133,16 @@ All with controlled responses. No provider, key or network.
 - The ledger reserves before the request, charges exact decimal cost, keeps unknown liability, blocks a retry in the same scope, survives a kill and a reopen, and records late evidence once.
 - The saved Research path records a refused attempt with request count 0, and no boundary call, when the cap is gone.
 - A dummy credential does not appear in logs, saved attempts, evidence files or the ledger.
-- All 11 manifest cases run through pinned Hermes with controlled faithful answers, and the meaning checker passes them. The checker fails answers that parse but change the meaning, such as a reversed direction.
+- All 11 manifest cases run through pinned Hermes with controlled faithful answers, and the meaning checker passes them. Three of those runs (`g2-conflict`, `g3-no-market`, `g4-mixed`) reuse the answer of a sibling case, so the checker's conflict path is proved by unit tests only. The checker fails answers that parse but change the meaning, such as a reversed direction.
 
 Not shown: any real model behavior, real cost or latency, or an upstream billing ceiling.
+
+## 9a. Known gaps in the local safeguards
+
+- The ledger has no operator path to resolve an UNKNOWN reservation except late usage evidence. A planned "one explicit retry per case" therefore has no mechanism after an UNKNOWN attempt. A later change must add a recorded decision path.
+- The ledger uses one flat price per token kind. The provider may charge more for tiers or cache. Recompute from the provider's documents at release.
+- If a delegate reports two requests, the runner keeps one reservation as liability. The guard prevents the second request. A host-level count is still needed.
+- The SDK-retry refusal is proved at guard level only. This Hermes build sent no second request after a 503.
 
 ## 10. Evidence to keep per attempt
 

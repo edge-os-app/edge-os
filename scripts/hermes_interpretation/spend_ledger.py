@@ -71,6 +71,11 @@ class TokenPrice:
     prompt_usd_per_million: Decimal
     completion_usd_per_million: Decimal
 
+    def __post_init__(self) -> None:
+        for price in (self.prompt_usd_per_million, self.completion_usd_per_million):
+            if not price.is_finite() or price < 0:
+                raise ValueError("a token price must be a finite amount that is not negative")
+
     def nano_usd(self, input_tokens: int, output_tokens: int) -> int:
         """The cost of these tokens, rounded up to a whole nano-USD."""
         total = EXACT.multiply(EXACT.add(EXACT.multiply(Decimal(input_tokens), self.prompt_usd_per_million),
