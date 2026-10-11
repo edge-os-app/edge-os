@@ -21,7 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from edge_os_api.admission.accounting import ACQUISITIONS
-from edge_os_api.admission.service import AdmissionService
+from edge_os_api.admission.service import AdmissionService, StopReader
 from edge_os_api.admission.types import (
     ActionIntent,
     ActionInput,
@@ -151,9 +151,10 @@ def _cap_for(approval: ApprovalSnapshot, asset_id: str) -> int | None:
 
 class ExecutionService:
     def __init__(self, session_factory: sessionmaker[Session], admission: AdmissionService, *,
-                 clock=None) -> None:
+                 stops: StopReader | None = None, clock=None) -> None:
         self._factory = session_factory
         self._admission = admission
+        self._stops = stops
         self._clock = clock or _utc_now
 
     # ------------------------------------------------------------------ decision
@@ -619,6 +620,19 @@ class ExecutionService:
         if saved[0].status != "ADMITTED":
             identity = f"ACTION_NOT_ADMITTED:{saved[0].status}"
             return denied(identity, identity)
+
+        # Durable scoped stops. The persisted records are consulted inside this
+        # submission transaction, so a queued action cannot bypass a newly
+        # recorded stop by replay, restart or stale input. A denied revalidation
+        # makes no transport call and leaves the admitted reservations in place.
+        if self._stops is not None:
+            stop_reasons = self._stops.denial_reasons(
+                session, owner, agent_id=action_intent.binding.agent_id,
+                wallet_id=action_intent.binding.wallet_id, network_id=action_intent.binding.network_id,
+                position_id=str(entry.position_id or ""), operation=action_intent.operation)
+            if stop_reasons:
+                reason = ";".join(stop_reasons)
+                return denied(reason, reason)
 
         proposal = self._admission.propose(owner, action_intent, approval, context)
         identity = f"{proposal.status}:{proposal.reason or ''}"
