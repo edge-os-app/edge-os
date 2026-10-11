@@ -42,7 +42,9 @@ _VALID_ACTION = {
     "quote_output_raw": "1000000",
     "fee_bps": 0,
     "referrer_fee_bps": 0,
-    "fee_recipient": "wallet-A",
+    "fee_collector_address": "",
+    "referrer_address": "",
+    "is_in_token_fee": None,
     "program_hex": "0xdeadbeef",
     "allowance_raw": "1000000000000000000",
     "gas_capacity_raw": "50000000000000000",
@@ -66,7 +68,9 @@ _VALID_ACTION = {
     "approved_program_hex": ["0xdeadbeef"],
     "approved_fee_bps": 0,
     "approved_referrer_fee_bps": 0,
-    "approved_fee_recipients": ["wallet-A"],
+    "approved_fee_collectors": [],
+    "approved_referrers": [],
+    "approved_is_in_token_fee": None,
     "approved_allowance_raw": "1000000000000000000",
     "claimed_result_class": "AUTHORED_FAKE_ONLY",
 }
@@ -260,8 +264,48 @@ class OneFieldAdversarialTest(unittest.TestCase):
     def test_referrer_fee_unknown(self) -> None:
         _expect_blocked(self, self._blocked(referrer_fee_bps=None), checker.R_FEE_UNKNOWN)
 
-    def test_fee_recipient_not_allowed(self) -> None:
-        _expect_blocked(self, self._blocked(fee_recipient="wallet-B"), checker.R_FEE_RECIPIENT_NOT_ALLOWED)
+    def test_fee_collector_not_allowed(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(fee_bps=5, approved_fee_bps=5, fee_collector_address="wallet-B"),
+            checker.R_FEE_COLLECTOR_NOT_ALLOWED,
+        )
+
+    def test_fee_collector_missing(self) -> None:
+        _expect_blocked(self, self._blocked(fee_bps=5, approved_fee_bps=5), checker.R_FEE_COLLECTOR_NOT_ALLOWED)
+
+    def test_referrer_not_allowed(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(referrer_fee_bps=5, approved_referrer_fee_bps=5, referrer_address="wallet-B"),
+            checker.R_REFERRER_NOT_ALLOWED,
+        )
+
+    def test_fee_mode_unknown(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(
+                fee_bps=5,
+                approved_fee_bps=5,
+                fee_collector_address="wallet-FC",
+                approved_fee_collectors=["wallet-FC"],
+            ),
+            checker.R_FEE_MODE_UNKNOWN,
+        )
+
+    def test_fee_mode_not_approved(self) -> None:
+        _expect_blocked(
+            self,
+            self._blocked(
+                fee_bps=5,
+                approved_fee_bps=5,
+                fee_collector_address="wallet-FC",
+                approved_fee_collectors=["wallet-FC"],
+                is_in_token_fee=True,
+                approved_is_in_token_fee=False,
+            ),
+            checker.R_FEE_MODE_NOT_APPROVED,
+        )
 
     def test_allowance_unknown(self) -> None:
         _expect_blocked(self, self._blocked(allowance_raw=None), checker.R_ALLOWANCE_UNKNOWN)
@@ -389,11 +433,12 @@ class FixtureExpectationTest(unittest.TestCase):
 
 
 class OfflinePropertyTest(unittest.TestCase):
-    _ALLOWED_IMPORTS = {"__future__", "json", "re", "sys", "dataclasses", "enum", "pathlib", "typing"}
+    _ALLOWED_IMPORTS = {"__future__", "json", "re", "sys", "dataclasses", "enum", "pathlib", "typing", "fractions"}
     _FORBIDDEN_CALLS = {"eval", "exec", "compile", "__import__"}
+    _MODULE_PATHS = (_CHECKER_PATH, _HERE / "capacity_examples.py")
 
-    def test_checker_imports_are_offline_only(self) -> None:
-        tree = ast.parse(_CHECKER_PATH.read_text(encoding="utf-8"))
+    def _imports(self, path: Path) -> set[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         imported: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -401,17 +446,22 @@ class OfflinePropertyTest(unittest.TestCase):
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     imported.add(node.module.split(".")[0])
-        unexpected = imported - self._ALLOWED_IMPORTS
-        self.assertEqual(unexpected, set(), f"checker imports non-offline modules: {unexpected}")
+        return imported
+
+    def test_checker_imports_are_offline_only(self) -> None:
+        for path in self._MODULE_PATHS:
+            unexpected = self._imports(path) - self._ALLOWED_IMPORTS
+            self.assertEqual(unexpected, set(), f"{path.name} imports non-offline modules: {unexpected}")
 
     def test_checker_has_no_dynamic_execution(self) -> None:
-        tree = ast.parse(_CHECKER_PATH.read_text(encoding="utf-8"))
-        called = {
-            node.func.id
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        self.assertEqual(called & self._FORBIDDEN_CALLS, set())
+        for path in self._MODULE_PATHS:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            called = {
+                node.func.id
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            }
+            self.assertEqual(called & self._FORBIDDEN_CALLS, set(), f"{path.name} has dynamic execution")
 
     def test_default_command_runs_offline_and_reports_not_run(self) -> None:
         result = subprocess.run(

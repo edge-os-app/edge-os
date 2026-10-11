@@ -25,7 +25,7 @@ A fake policy simulator cannot prove an independent provider restriction. An app
 | 5 | `raw_input` | Exact non-negative base-10 base-unit input; no float, Boolean, negative, leading zero or trailing character. The value must equal the approved input. | `CONTRACT` (`amountUserSells`) + `HOST` | `SOURCE_INSPECTED` | Enforced offline. |
 | 6 | `recipient` | Only the agent wallet (`msg.sender`) or an allowed explicit receiver. | `CONTRACT` | `SOURCE_INSPECTED` | Enforced offline. |
 | 7 | `minimum_output` | A real minimum received, in raw units, at or below the quote; never derived from the estimate. An unknown quote blocks the action. | `CONTRACT` (post-fee check) + `HOST` | `SOURCE_INSPECTED` | Enforced offline. |
-| 8 | `fees` | `feeBps + referrerFeeBps <= 10000`; the fee value and recipient must equal the adopted values. | `CONTRACT` | `SOURCE_INSPECTED` | Fee recipient/payout live behavior `NOT_RUN`. |
+| 8 | `fees` | `feeBps + referrerFeeBps <= 10000`; the fee values, the fee-collector address, the referrer address and the input/output fee mode must equal the adopted values when the corresponding fee is nonzero. | `CONTRACT` | `SOURCE_INSPECTED` | Fee recipient/payout live behavior `NOT_RUN`. |
 | 9 | `approvals` | The owner allowance to the entrypoint is declared and equals the adopted allowance; it is bounded and revoked. | `CONTRACT` (entrypoint resets its own router approval) + `HOST` | `SOURCE_INSPECTED` | Owner-to-entrypoint allowance lifetime/revocation `UNQUALIFIED`. |
 | 10 | `gas_action_capacity` | A known native gas budget, a known action/attempt budget and no over-cap actual. | `HOST` (reservations) + `CONTRACT` (gas limit) | `SOURCE_INSPECTED` | Exact budget `UNSET`; unknown is not zero. |
 | 11 | `expiry_freshness` | Bounded quote age, bounded input age, and a local intent and mandate expiry that are not past. | `HOST` | `DOCUMENTED` | The Flow intent has no on-chain deadline; local expiry cannot revoke a broadcast. |
@@ -56,7 +56,9 @@ A fake policy simulator cannot prove an independent provider restriction. An app
 | `MIN_OUTPUT_MISSING` / `MIN_OUTPUT_INVALID` | No minimum, or a minimum above the quote. |
 | `QUOTE_UNKNOWN` | The quote output is unknown, so the minimum-output bound cannot be checked. |
 | `FEE_UNKNOWN` | The fee value or the adopted fee is absent. |
-| `FEE_NOT_APPROVED` / `FEE_RECIPIENT_NOT_ALLOWED` | Fee outside the adopted value, or a fee recipient outside the adopted set. |
+| `FEE_NOT_APPROVED` | Fee value outside the adopted value. |
+| `FEE_COLLECTOR_NOT_ALLOWED` / `REFERRER_NOT_ALLOWED` | A nonzero fee has a missing or unapproved fee-collector or referrer address. |
+| `FEE_MODE_UNKNOWN` / `FEE_MODE_NOT_APPROVED` | A nonzero fee has an unknown or unapproved input/output fee mode. |
 | `FEE_BOUND_EXCEEDED` | `feeBps + referrerFeeBps > 10000`. |
 | `PROGRAM_MISSING` | Empty, non-hex or zero-byte route program. |
 | `PROGRAM_NOT_APPROVED` | Route bytes outside the adopted route. |

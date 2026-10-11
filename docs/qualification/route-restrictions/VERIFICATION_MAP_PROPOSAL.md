@@ -6,7 +6,7 @@ Deliverable under Ownership and outputs. Prepared 2026-10-10. This is a proposal
 
 - Default command: `python3 -B docs/qualification/route-restrictions/restriction_checker.py`.
 - Test suite: `python3 -B -m unittest discover -s docs/qualification/route-restrictions -p 'test_*.py' -v`.
-- Capacity check: `python3 -B -m unittest docs/qualification/route-restrictions/test_capacity_examples.py -v`.
+- Capacity check: `python3 -B -m unittest discover -s docs/qualification/route-restrictions -p 'test_capacity_examples.py' -v`.
 - Public interface: `evaluate_declared_case(profile, action)`, `profile_readiness_reasons(profile)`, `load_profile(mapping)`, `load_action(mapping)`.
 
 ## Local fixture and evidence identities

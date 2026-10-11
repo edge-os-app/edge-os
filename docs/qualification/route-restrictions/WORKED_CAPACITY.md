@@ -37,7 +37,7 @@ P1 entry needs 300 USDC. P2 entry needs 200 USDC. Each entry reserves 2 attempts
 ## Example B - addition and partial exit
 
 - P1 addition of 100 USDC: reserved buy input `500 + 100 = 600` USDC; remaining `400` USDC. The addition reserves its own 2 attempts. Reserved attempts reach 6; remaining attempts 0.
-- Gas check for two entries: entry gas 0.004 MON each, retained exit gas 0.004 MON each. Reserved gas = `4000000000000000 + 4000000000000000 = 8000000000000000` raw (0.008 MON). Remaining gas = `0.300 - 0.008 = 0.292` MON.
+- Gas at the named checkpoint (all three acquisitions reserved; none confirmed): each acquisition reserves `0.002` entry gas plus `0.002` retained exit gas = `0.004` MON (`4000000000000000` raw). Two initial entries plus the P1 addition give `gas_total(4000000000000000, 3) = 12000000000000000` raw (0.012 MON). Remaining gas = `0.300 - 0.012 = 0.288` MON (`288000000000000000` raw). A confirmation consumes only actual entry gas and keeps the retained exit hold; do not release a retained hold early.
 - P2 acquires 1,000 MON actual; the quote estimate was 900 MON. A full intended exit must cover the **attributable inventory** (1,000 MON actual), not the quote estimate and not the whole wallet balance.
 - Fully worked partial exit (accepted P15 cost literal shape): first acquisition 10 units at 1000 quote; addition 10 units at 1200 quote. Total 20 units, 2200 quote. Weighted-average basis = `2200 / 20 = 110`. Partial exit of 5 units: removed basis = `5 * 110 = 550`. Reconciled proceeds = 650. Realized result before fees = `650 - 550 = 100`. The remaining 15 units keep the retained exit path. These literals are computed by `capacity_examples.py` and checked by `test_capacity_examples.py` with independent expected values. They reuse the accepted P15 cost and allowance fixtures; they are not production defaults.
 
@@ -60,8 +60,9 @@ These literals are computed by `capacity_examples.py` and asserted by `test_capa
 |---|---|---|
 | Buy input remaining | `1000000000 - 300000000 - 200000000` | `500000000` |
 | Buy input after addition | `500000000 - 100000000` | `400000000` |
-| Gas reserved (raw) | `4000000000000000 + 4000000000000000` | `8000000000000000` |
-| Gas remaining (raw) | `300000000000000000 - 8000000000000000` | `292000000000000000` |
+| Gas per acquisition (raw, entry + retained exit) | `2000000000000000 + 2000000000000000` | `4000000000000000` |
+| Gas total, three acquisitions (raw) | `4000000000000000 * 3` | `12000000000000000` |
+| Gas remaining, three acquisitions (raw) | `300000000000000000 - 12000000000000000` | `288000000000000000` |
 | Weighted-average basis | `2200 / 20` | `110` |
 | Removed basis | `110 * 5` | `550` |
 | Realized result before fees | `650 - 550` | `100` |

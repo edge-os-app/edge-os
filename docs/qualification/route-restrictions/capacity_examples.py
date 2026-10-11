@@ -69,6 +69,11 @@ def gas_reserved(entry_gas: int, exit_gas: int) -> int:
     return _nonneg(entry_gas, "entry_gas") + _nonneg(exit_gas, "exit_gas")
 
 
+def gas_total(per_acquisition_gas: int, acquisitions: int) -> int:
+    """Total native gas reserved across acquisitions at a checkpoint."""
+    return _nonneg(per_acquisition_gas, "per_acquisition_gas") * _nonneg(acquisitions, "acquisitions")
+
+
 def sell_reserved_remaining(sell_allowance: int, consumed: int, reserved: int) -> int:
     """Remaining sell capacity in base-asset units."""
     return allowance_remaining(sell_allowance, consumed, reserved)

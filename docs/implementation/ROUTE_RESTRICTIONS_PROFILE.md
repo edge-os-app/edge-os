@@ -32,7 +32,7 @@ Names describe responsibility. The ticket number is not a module name.
 
 `RestrictionProfile` holds one `ControlDeclaration` per mandatory control: `state` (`ENFORCED`/`UNSUPPORTED`/`UNKNOWN`/`UNSET`), `layer` (`HOST`/`CONTRACT`/`INDEPENDENT_POLICY`) and `evidence` (`DOCUMENTED`/`SOURCE_INSPECTED`/`LOCAL_TESTED`/`PROVIDER_ACTUAL`/`NOT_RUN`).
 
-`ControlledAction` carries the action plus its authored approval bounds. The adopted bindings are `approved_networks`, `approved_entrypoints`, `approved_signers`, `approved_assets`, `approved_methods`, `approved_recipients`, `approved_input_raw`, `approved_program_hex`, `approved_fee_bps`, `approved_referrer_fee_bps`, `approved_fee_recipients` and `approved_allowance_raw`. Each action value must match its adopted binding. Fee values, allowance, input age, intent expiry and mandate expiry are explicit or unknown.
+`ControlledAction` carries the action plus its authored approval bounds. The adopted bindings are `approved_networks`, `approved_entrypoints`, `approved_signers`, `approved_assets`, `approved_methods`, `approved_recipients`, `approved_input_raw`, `approved_program_hex`, `approved_fee_bps`, `approved_referrer_fee_bps`, `approved_fee_collectors`, `approved_referrers`, `approved_is_in_token_fee` and `approved_allowance_raw`. Each action value must match its adopted binding. Fee values, fee recipients, fee mode, allowance, input age, intent expiry and mandate expiry are explicit or unknown.
 
 `CaseVerdict` reports `accepted`, `result_class` (`AUTHORED_FAKE_ONLY` or `BLOCKED`) and the ordered, de-duplicated `reasons`.
 
@@ -45,7 +45,7 @@ Twelve mandatory controls gate a real action: `chain`, `wallet_signer_binding`, 
 - A missing mandatory control returns `MISSING_MANDATORY_CONTROL:<name>`.
 - A control that is `UNSUPPORTED`, `UNKNOWN` or `UNSET` returns `UNSUPPORTED_CONTROL:<name>`.
 - A control marked `ENFORCED` with `NOT_RUN` evidence returns `EVIDENCE_MISSING:<name>`.
-- The action must match its adopted bindings: network, entrypoint, signer, method, assets and decimals, recipient, exact input, route program, fee value and recipient, and owner allowance.
+- The action must match its adopted bindings: network, entrypoint, signer, method, assets and decimals, recipient, exact input, route program, fee value, fee-collector address, referrer address, input/output fee mode, and owner allowance.
 - Amounts are canonical unsigned base-10 strings that match the whole value. Boolean, float, negative, leading-zero and trailing-character raw values are rejected.
 - The route program must be present, hex and at least one byte.
 - An unknown required value (gas, gas used, action capacity, quote age, input age, fee, allowance, evaluation time, intent expiry, mandate expiry) is not zero and blocks the action. An unknown quote returns `QUOTE_UNKNOWN`.

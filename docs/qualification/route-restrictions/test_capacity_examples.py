@@ -52,6 +52,20 @@ class GasTest(unittest.TestCase):
     def test_gas_reserved_two_entries(self) -> None:
         self.assertEqual(capacity.gas_reserved(4000000000000000, 4000000000000000), 8000000000000000)
 
+    def test_gas_per_acquisition(self) -> None:
+        # 0.002 entry + 0.002 retained exit = 0.004 per acquisition.
+        self.assertEqual(capacity.gas_reserved(2000000000000000, 2000000000000000), 4000000000000000)
+
+    def test_gas_total_two_acquisitions(self) -> None:
+        self.assertEqual(capacity.gas_total(4000000000000000, 2), 8000000000000000)
+
+    def test_gas_total_three_acquisitions(self) -> None:
+        # Two entries plus one addition, all reserved at the checkpoint.
+        self.assertEqual(capacity.gas_total(4000000000000000, 3), 12000000000000000)
+
+    def test_gas_remaining_after_three_acquisitions(self) -> None:
+        self.assertEqual(300000000000000000 - capacity.gas_total(4000000000000000, 3), 288000000000000000)
+
     def test_gas_negative_rejected(self) -> None:
         with self.assertRaises(capacity.CapacityError):
             capacity.gas_reserved(-1, 0)

@@ -73,7 +73,10 @@ R_MIN_OUTPUT_INVALID = "MIN_OUTPUT_INVALID"
 R_QUOTE_UNKNOWN = "QUOTE_UNKNOWN"
 R_FEE_UNKNOWN = "FEE_UNKNOWN"
 R_FEE_NOT_APPROVED = "FEE_NOT_APPROVED"
-R_FEE_RECIPIENT_NOT_ALLOWED = "FEE_RECIPIENT_NOT_ALLOWED"
+R_FEE_COLLECTOR_NOT_ALLOWED = "FEE_COLLECTOR_NOT_ALLOWED"
+R_REFERRER_NOT_ALLOWED = "REFERRER_NOT_ALLOWED"
+R_FEE_MODE_UNKNOWN = "FEE_MODE_UNKNOWN"
+R_FEE_MODE_NOT_APPROVED = "FEE_MODE_NOT_APPROVED"
 R_FEE_BOUND_EXCEEDED = "FEE_BOUND_EXCEEDED"
 R_PROGRAM_MISSING = "PROGRAM_MISSING"
 R_PROGRAM_NOT_APPROVED = "PROGRAM_NOT_APPROVED"
@@ -164,7 +167,9 @@ class ControlledAction:
     quote_output_raw: Optional[str]
     fee_bps: Optional[int]
     referrer_fee_bps: Optional[int]
-    fee_recipient: str
+    fee_collector_address: str
+    referrer_address: str
+    is_in_token_fee: Optional[bool]
     program_hex: Optional[str]
     allowance_raw: Optional[str]
     gas_capacity_raw: Optional[str]
@@ -188,7 +193,9 @@ class ControlledAction:
     approved_program_hex: frozenset[str]
     approved_fee_bps: Optional[int]
     approved_referrer_fee_bps: Optional[int]
-    approved_fee_recipients: frozenset[str]
+    approved_fee_collectors: frozenset[str]
+    approved_referrers: frozenset[str]
+    approved_is_in_token_fee: Optional[bool]
     approved_allowance_raw: Optional[str]
     claimed_result_class: str
 
@@ -249,6 +256,14 @@ def _strict_optional_nonneg_int(value: Any, field: str) -> Optional[int]:
     return _strict_nonneg_int(value, field)
 
 
+def _strict_optional_bool(value: Any, field: str) -> Optional[bool]:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"{field} must be a boolean")
+    return value
+
+
 def profile_readiness_reasons(profile: RestrictionProfile) -> Tuple[str, ...]:
     """Return reasons the declared profile cannot back a real action.
 
@@ -284,21 +299,31 @@ def _approved_raw_reasons(actual: Optional[str], approved: Optional[str]) -> lis
 
 
 def _fee_reasons(action: ControlledAction) -> list[str]:
-    reasons: list[str] = []
     if (
         action.fee_bps is None
         or action.referrer_fee_bps is None
         or action.approved_fee_bps is None
         or action.approved_referrer_fee_bps is None
     ):
-        reasons.append(R_FEE_UNKNOWN)
-    else:
-        if action.fee_bps + action.referrer_fee_bps > 10000:
-            reasons.append(R_FEE_BOUND_EXCEEDED)
-        if action.fee_bps != action.approved_fee_bps or action.referrer_fee_bps != action.approved_referrer_fee_bps:
-            reasons.append(R_FEE_NOT_APPROVED)
-    if action.fee_recipient not in action.approved_fee_recipients:
-        reasons.append(R_FEE_RECIPIENT_NOT_ALLOWED)
+        return [R_FEE_UNKNOWN]
+
+    reasons: list[str] = []
+    total = action.fee_bps + action.referrer_fee_bps
+    if total > 10000:
+        reasons.append(R_FEE_BOUND_EXCEEDED)
+    if action.fee_bps != action.approved_fee_bps or action.referrer_fee_bps != action.approved_referrer_fee_bps:
+        reasons.append(R_FEE_NOT_APPROVED)
+
+    if action.fee_bps > 0 and action.fee_collector_address not in action.approved_fee_collectors:
+        reasons.append(R_FEE_COLLECTOR_NOT_ALLOWED)
+    if action.referrer_fee_bps > 0 and action.referrer_address not in action.approved_referrers:
+        reasons.append(R_REFERRER_NOT_ALLOWED)
+
+    if total > 0:
+        if action.is_in_token_fee is None or action.approved_is_in_token_fee is None:
+            reasons.append(R_FEE_MODE_UNKNOWN)
+        elif action.is_in_token_fee != action.approved_is_in_token_fee:
+            reasons.append(R_FEE_MODE_NOT_APPROVED)
     return reasons
 
 
@@ -520,7 +545,9 @@ def load_action(mapping: Mapping[str, Any]) -> ControlledAction:
         quote_output_raw=mapping.get("quote_output_raw"),
         fee_bps=_strict_optional_nonneg_int(mapping.get("fee_bps"), "fee_bps"),
         referrer_fee_bps=_strict_optional_nonneg_int(mapping.get("referrer_fee_bps"), "referrer_fee_bps"),
-        fee_recipient=_require_str(mapping.get("fee_recipient", ""), "fee_recipient"),
+        fee_collector_address=_require_str(mapping.get("fee_collector_address", ""), "fee_collector_address"),
+        referrer_address=_require_str(mapping.get("referrer_address", ""), "referrer_address"),
+        is_in_token_fee=_strict_optional_bool(mapping.get("is_in_token_fee"), "is_in_token_fee"),
         program_hex=mapping.get("program_hex"),
         allowance_raw=mapping.get("allowance_raw"),
         gas_capacity_raw=mapping.get("gas_capacity_raw"),
@@ -554,7 +581,13 @@ def load_action(mapping: Mapping[str, Any]) -> ControlledAction:
         approved_referrer_fee_bps=_strict_optional_nonneg_int(
             mapping.get("approved_referrer_fee_bps"), "approved_referrer_fee_bps"
         ),
-        approved_fee_recipients=_string_set(mapping.get("approved_fee_recipients", []), "approved_fee_recipients"),
+        approved_fee_collectors=_string_set(
+            mapping.get("approved_fee_collectors", []), "approved_fee_collectors"
+        ),
+        approved_referrers=_string_set(mapping.get("approved_referrers", []), "approved_referrers"),
+        approved_is_in_token_fee=_strict_optional_bool(
+            mapping.get("approved_is_in_token_fee"), "approved_is_in_token_fee"
+        ),
         approved_allowance_raw=mapping.get("approved_allowance_raw"),
         claimed_result_class=_require_str(mapping.get("claimed_result_class", RESULT_BLOCKED), "claimed_result_class"),
     )
