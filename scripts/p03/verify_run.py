@@ -437,7 +437,13 @@ def main() -> int:
                 ok &= rec.step("P17 wallet-setup rows and event counts unchanged by the restart",
                                p17_after_restart["checks"] == p17_before_restart["checks"])
                 p17_calls_after = p17_provider_calls(pg, api_url, token_a)
-                rec.write("p17-provider-calls-after-restart.json", p17_calls_after)
+                # A fresh API process, so these counters are process-local and start at zero; the durable
+                # rows persist. Write the counters without the before-drive equality field.
+                rec.write("p17-provider-calls-after-restart.json",
+                          {"status": p17_calls_after["status"], "body": p17_calls_after["body"],
+                           "durable_dispatch_intents": p17_calls_after["durable_dispatch_intents"],
+                           "durable_results_returned": p17_calls_after["durable_results_returned"],
+                           "note": "process-local counters in a fresh API process the reopen did not call"})
                 ok &= rec.step("P17 reopen after restart created no wallet (provider counters reset and stay zero)",
                                p17_calls_after["body"].get("create_calls") == 0
                                and p17_calls_after["body"].get("lookup_calls") == 0, p17_calls_after)
