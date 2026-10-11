@@ -36,10 +36,11 @@ def active_claim(factory: sessionmaker, owner: uuid.UUID) -> ClaimRow | None:
 
 
 def open_unknown_entry(service, owner, revision, *, quantity: str = "10", quote_input: str = "110",
-                       position_id: str = "position-1", mode: str = "UNKNOWN"):
+                       position_id: str = "position-1", mode: str = "UNKNOWN", approval=None):
     """Admit an entry and leave it in the submission-unknown (lost or unknown ack) state."""
     _decision, approval, context, result = enqueue_entry(
-        service, owner, revision, quantity=quantity, quote_input=quote_input, position_id=position_id)
+        service, owner, revision, quantity=quantity, quote_input=quote_input, position_id=position_id,
+        approval=approval)
     assert result.admission_status == "ADMITTED", result.admission_reason
     tick = service.tick(
         owner, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK, approval=approval,

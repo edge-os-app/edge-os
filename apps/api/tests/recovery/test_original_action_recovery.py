@@ -16,7 +16,7 @@ from edge_os_api.recovery.service import RecoveryService
 from edge_os_api.recovery.types import RecoveryError
 
 from admission._builders import AGENT_A, AGENT_B, BASE, NATIVE, NETWORK, QUOTE, WALLET_A, WALLET_B
-from execution._builders import exit_terms, frozen_entry_exit, make_inputs, scoped_context
+from execution._builders import exit_terms, frozen_entry_exit, make_inputs, scoped_approval, scoped_context
 from execution._support import enqueue_entry, entry_inputs, exit_inputs, open_position, quote
 from execution._support import transport as exec_transport
 from recovery._support import (
@@ -427,6 +427,34 @@ def test_settlement_race_matching_converges_once(
     balances = _balances(admission_service, fresh_owner)
     assert balances[QUOTE].consumed_raw == "110"
     assert balances[NATIVE].consumed_raw == "2"
+
+
+def test_settlement_race_retained_breach_is_blocked(
+        recovery_factory, admission_service, execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    tight = scoped_approval(revision_id=revision.revision_id, gas_approved_raw="2",
+                            per_action_gas_raw="1", per_exit_gas_raw="1")
+    _approval, _context, result = open_unknown_entry(
+        execution_service, fresh_owner, revision, approval=tight)
+    action_id = result.intent.action_id
+    actual_input, actual_output, actual_gas = confirmed_actuals()
+    evidence = evidence_for(recovery_factory, fresh_owner, action_id, outcome="CONFIRMED",
+                            actual_input=actual_input, actual_output=actual_output, actual_gas=actual_gas)
+
+    def settle() -> None:
+        AdmissionService(recovery_factory).reconcile(fresh_owner, action_id, evidence.receipt())
+
+    racing = RecoveryService(recovery_factory, _SettlingAdmission(recovery_factory, settle), execution_service)
+    outcome = racing.reconcile(fresh_owner, action_id, evidence)
+    assert outcome.applied is False
+    assert outcome.case.state == "DISCREPANCY"
+    assert outcome.case.blocking_reason == "P22_BREACH_RETAINED"
+    assert load_queue(recovery_factory, fresh_owner, action_id).state == "SUBMITTED_UNKNOWN"
+    assert active_claim(recovery_factory, fresh_owner) is not None
+    assert admission_service.retrieve_decisions(fresh_owner, action_id=action_id)[0].status == "BREACHED"
+    receipts = admission_service.retrieve_receipts(fresh_owner, action_id=action_id)
+    assert sum(1 for row in receipts if row.breach) == 1
+    assert not [row for row in receipts if row.outcome == "CONFIRMED" and not row.breach]
 
 
 def test_delayed_exit_reports_blocking_reason(

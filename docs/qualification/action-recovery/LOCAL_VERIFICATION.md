@@ -79,6 +79,11 @@ git diff --check 545434d06c3cdae9d1deff78d77ff28147719fdd..HEAD
   conflicting terminal outcome is blocked as a `DISCREPANCY` while the queue, claim
   and the single authoritative P22 receipt are unchanged; matching evidence still
   converges once without a second settlement.
+- Retained breach: a later confirmed, reverted or unknown receipt cannot replace a
+  recorded breach (blocked with `CONTRADICTORY_RECOVERY`; the breach decision, its
+  single receipt and its exposure are preserved). A scheduled breach between
+  recovery's read and its reconcile is a visible `DISCREPANCY`
+  (`P22_BREACH_RETAINED`) that keeps the queue, claim and breach receipt.
 - Delayed exit: an unknown exit is visible with `delayed_exit` true and its real
   `SUBMISSION_UNKNOWN` blocking reason; the claim stays held.
 - Crash convergence: after a P22 reconciliation commits but the P23 queue is
@@ -110,8 +115,8 @@ python3 scripts/p03/harness.py remove-orphan <run_id>
 
 ## Last recorded run
 
-- Full suite: 577 passed, ~200 s, 2 known warnings.
-- Recovery suite: 24 passed. Execution suite: 46 passed. Admission suite: 100 passed.
+- Full suite: 580 passed, ~160 s, 2 known warnings.
+- Recovery suite: 25 passed. Execution suite: 46 passed. Admission suite: 102 passed.
 - P15, P02 and P06 contract scripts: PASS.
 - `compileall` on the owned recovery and leased execution source/tests: PASS.
 - `git diff --check` against the accepted base `545434d0`: clean.

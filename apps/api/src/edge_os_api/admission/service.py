@@ -786,6 +786,16 @@ class AdmissionService:
                                                  reason="RECONCILIATION_TERMINAL_STATE")
 
                 outcome = receipt.outcome
+                if row.status == "BREACHED" and outcome in {"CONFIRMED", "REVERTED", "SUBMISSION_UNKNOWN"}:
+                    # A recorded breach is never silently replaced. A later receipt
+                    # that would settle or downgrade it is refused, so the durable
+                    # breach, its receipts, its reservations and its exposure are
+                    # preserved. A proved pre-broadcast denial and a cancellation keep
+                    # their existing contradictory handling below.
+                    session.commit()
+                    return ReconciliationOutcome(action_id=action_id, decision_status="BREACHED",
+                                                 reason="CONTRADICTORY_RECOVERY")
+
                 if outcome == "SUBMISSION_UNKNOWN":
                     _save_receipt(session, row, receipt, outcome, breach=False)
                     row.status = "SUBMISSION_UNKNOWN"

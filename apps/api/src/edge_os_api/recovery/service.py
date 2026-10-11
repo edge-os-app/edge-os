@@ -231,15 +231,24 @@ class RecoveryService:
                     # before acceptance, or the action would report one outcome while
                     # P22 retains incompatible actuals. A genuine breach is not a
                     # mismatch; it converges to the blocked BREACHED state.
-                    if effective_status in _SETTLED_DECISIONS and effective_status != "BREACHED":
-                        if effective_status != expected:
-                            return self._block(session, case, existing,
-                                               f"P22_SETTLED_MISMATCH:{effective_status}",
-                                               effective_status, now)
-                        mismatch = self._terminal_receipt_mismatch(
-                            verified_owner_id, action_id, evidence)
-                        if mismatch is not None:
-                            return self._block(session, case, existing, mismatch, effective_status, now)
+                    if effective_status in _SETTLED_DECISIONS:
+                        if effective_status == "BREACHED":
+                            # A genuine breach produced by this evidence converges to
+                            # the blocked BREACHED state. A retained pre-existing
+                            # breach that a later receipt cannot replace contradicts
+                            # the delivered evidence, so it stays a visible block.
+                            if effective_reason == "CONTRADICTORY_RECOVERY":
+                                return self._block(session, case, existing, "P22_BREACH_RETAINED",
+                                                   effective_status, now)
+                        else:
+                            if effective_status != expected:
+                                return self._block(session, case, existing,
+                                                   f"P22_SETTLED_MISMATCH:{effective_status}",
+                                                   effective_status, now)
+                            mismatch = self._terminal_receipt_mismatch(
+                                verified_owner_id, action_id, evidence)
+                            if mismatch is not None:
+                                return self._block(session, case, existing, mismatch, effective_status, now)
 
                 queue = self._execution.converge_reconciled_outcome(
                     verified_owner_id, action_id=action_id,

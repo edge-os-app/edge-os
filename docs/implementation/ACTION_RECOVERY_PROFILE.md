@@ -125,6 +125,12 @@ Recovery is idempotent and crash-safe:
   `DISCREPANCY` (`P22_RECEIPT_MISMATCH:actual_input|actual_output|actual_gas`) and
   the queue is not mutated. The owner never sees incompatible actuals for one
   action.
+- A recorded breach is never silently replaced. If the authoritative result is
+  `BREACHED` because the delivered evidence produced the breach, recovery
+  converges to the blocked `BREACHED` state. If the action was already breached
+  and the delivered receipt cannot replace it, the authoritative reason is
+  `CONTRADICTORY_RECOVERY`; recovery records a visible `DISCREPANCY`
+  (`P22_BREACH_RETAINED`) and leaves the queue, claim and breach receipt intact.
 - The same comparison closes a settlement interleaving. A concurrent P22 service
   can commit a terminal settlement between recovery's initial decision read and
   its reconciliation call. Recovery therefore re-checks the authoritative result
