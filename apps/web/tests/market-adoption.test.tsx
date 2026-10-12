@@ -29,6 +29,7 @@ const qualified = {
     amount_conversion_version: "v2/1", data_route: "ENVIO_QUICKNODE_CORROBORATED", evidence_class: "SYNTHETIC_FIXTURE",
     qualification: "UNQUALIFIED" },
   window_start: "2026-09-25T10:00:00Z", window_end: "2026-09-25T12:00:00Z", declaration_id: "decl-1", job_id: "job-1",
+  readable_until: "2026-09-25T11:00:00Z",
   declared_rules: [{ evaluation_id: "e0000000-0000-4000-8000-000000000001", variant_id: "rule-1",
     price_expression: { op: "gt", args: [{ op: "price_return", lookback_buckets: 1 }, { op: "constant", value: "0", unit: "DIMENSIONLESS" }] },
     volume_expression: { op: "gt", args: [{ op: "quote_volume" }, { op: "constant", value: "100", unit: QUOTE }] } }],

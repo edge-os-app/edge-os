@@ -116,12 +116,22 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   const mismatch = await apiPost(page, tokens.a, "/v1/spot-replays", {
     idempotency_key: `rg05-mismatch-${crypto.randomUUID()}`, strategy_id: strategyId, strategy_revision_id: fixtureRevision,
     history_dataset_id: datasetId, run_configuration_id: `rg05-mismatch-${crypto.randomUUID()}`,
-    window_start: "2026-09-25T10:20:00Z", window_end: "2026-09-25T11:20:00Z", initial_cash_quote: "1000",
+    window_start: "2026-09-25T10:20:00Z", window_end: "2026-09-25T11:00:00Z", initial_cash_quote: "1000",
     initial_base_amount: "0", initial_basis_quote: "0", essential_fields: {
       entry: { state: "BOUND", essential_dependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -3 }] },
       exit: { state: "BOUND", essential_dependencies: [{ series: "price", offset_buckets: 0 }, { series: "price", offset_buckets: -1 }] } } });
   expect(mismatch.status).toBe(201);
   expect(mismatch.body.content.result.reason.code).toBe("MARKET_BINDING_MISMATCH");
+  // Validation and holdout buckets of the declaration are never replayed.
+  const protectedReplay = await apiPost(page, tokens.a, "/v1/spot-replays", {
+    idempotency_key: `rg05-protected-${crypto.randomUUID()}`, strategy_id: strategyId, strategy_revision_id: historyRevision,
+    history_dataset_id: datasetId, run_configuration_id: `rg05-protected-${crypto.randomUUID()}`,
+    window_start: "2026-09-25T10:20:00Z", window_end: "2026-09-25T11:05:00Z", initial_cash_quote: "1000",
+    initial_base_amount: "0", initial_basis_quote: "0", essential_fields: {
+      entry: { state: "BOUND", essential_dependencies: [{ series: "price", offset_buckets: 0 }] },
+      exit: { state: "BOUND", essential_dependencies: [{ series: "price", offset_buckets: 0 }] } } });
+  expect(protectedReplay.status).toBe(409);
+  expect(protectedReplay.body.code).toBe("protected_partition_not_authorized");
 
   record(`research-${project}`, { reportId, datasetId, strategyUrl, strategyIntake, strategyId, fixtureRevision,
     historyRevision, replayId, mismatchReplayId: mismatch.body.replay_id });

@@ -27,9 +27,9 @@ def research(env, migrated):
         yield client
 
 
-def history_strategy(client, headers, source_id="recorded-syn-qualified/1"):
+def history_strategy(client, headers, source_id="recorded-syn-qualified/1", direction="OUTPERFORM"):
     """A fixture revision, then a NEW revision on the dataset market. Returns ids for both."""
-    dataset_id = reported_dataset(client, headers, source_id=source_id)
+    dataset_id = reported_dataset(client, headers, source_id=source_id, direction=direction)
     bundle = compiled_thesis(client, headers)
     first, _ = publish(client, headers, bundle)
     parent = first.json()["revision_id"]
@@ -63,7 +63,7 @@ def test_adopted_revision_replays_on_its_dataset_with_exact_lineage(research, ow
     assert "Simulated fills" in content["notice"]
     dataset = research.get(f"/v1/research/history-datasets/{dataset_id}", headers=owner_a).json()
     assert content["inputs"]["buckets"] == [bucket for bucket in dataset["content"]["buckets"]
-                                            if bucket["bucket_end"] < "2026-09-25T11:20:00Z"]
+                                            if bucket["bucket_end"] < "2026-09-25T11:00:00Z"]
     assert lineage["declaration_id"] == dataset["content"]["declaration_id"]
     again = research.get(f"/v1/spot-replays/{saved['replay_id']}", headers=owner_a).json()
     assert again == saved
@@ -82,7 +82,7 @@ def test_original_fixture_revision_still_fails_on_the_history_market(research, o
     ("2026-09-25T11:30:00Z", "2026-09-25T12:30:00Z", "DATASET_COVERAGE_UNPROVEN"),  # window truncated by the data
 ])
 def test_warmup_and_truncated_windows_are_refused_by_the_runtime(research, owner_a, start, end, code):
-    strategy_id, _, revision_id, dataset_id = history_strategy(research, owner_a)
+    strategy_id, _, revision_id, dataset_id = history_strategy(research, owner_a, direction="DESCRIPTIVE")
     saved = replay(research, owner_a, history_replay_body(strategy_id, revision_id, dataset_id, start=start, end=end))
     assert saved["content"]["result"]["status"] == "UNAVAILABLE"
     assert saved["content"]["result"]["reason"]["code"] == code
@@ -127,7 +127,7 @@ def test_actual_provider_class_is_passed_through_and_refused_by_the_runtime(rese
         row = session.get(history_inputs.history_dataset.HistoryDatasetRow, uuid.UUID(dataset_id))
         session.expunge(row)
     row.content = {**row.content, "profile_evidence_class": "PROVIDER_ACTUAL"}
-    window_end = dt.datetime(2026, 9, 25, 11, 20, tzinfo=dt.timezone.utc)
+    window_end = dt.datetime(2026, 9, 25, 11, 0, tzinfo=dt.timezone.utc)
     dataset = history_inputs.replay_dataset(row, window_end)
     assert dataset.evidence_class == "PROVIDER_ACTUAL"
     run = simulator.ReplayInput(strategy_revision_id=revision_id, run_configuration_id="actual-check",
@@ -137,3 +137,25 @@ def test_actual_provider_class_is_passed_through_and_refused_by_the_runtime(rese
     with pytest.raises(simulator.ReplayError) as refused:
         simulator.run_spot_replay(strategy, run)
     assert refused.value.code == "EVIDENCE_CLASS_UNSUPPORTED"
+
+
+def test_replay_never_reads_validation_or_holdout_buckets(research, owner_a):
+    strategy_id, _, revision_id, dataset_id = history_strategy(research, owner_a)  # train 10:00-11:00, then protected
+    before = research.get("/v1/spot-replays/00000000-0000-4000-8000-000000000000", headers=owner_a).status_code
+    refused = research.post("/v1/spot-replays", headers=owner_a, json=history_replay_body(
+        strategy_id, revision_id, dataset_id, end="2026-09-25T11:05:00Z"))
+    assert before == 404
+    assert refused.status_code == 409 and refused.json()["code"] == "protected_partition_not_authorized"
+    listed = research.get("/v1/research/history-datasets", headers=owner_a).json()["datasets"]
+    assert next(item for item in listed if item["dataset_id"] == dataset_id)["readable_until"] == "2026-09-25T11:00:00Z"
+    allowed = replay(research, owner_a, history_replay_body(strategy_id, revision_id, dataset_id))
+    assert max(bucket["bucket_end"] for bucket in allowed["content"]["inputs"]["buckets"]) <= "2026-09-25T11:00:00Z"
+
+
+def test_descriptive_dataset_reads_its_whole_window(research, owner_a):
+    strategy_id, _, revision_id, dataset_id = history_strategy(research, owner_a, direction="DESCRIPTIVE")
+    listed = research.get("/v1/research/history-datasets", headers=owner_a).json()["datasets"]
+    assert next(item for item in listed if item["dataset_id"] == dataset_id)["readable_until"] == "2026-09-25T12:00:00Z"
+    saved = replay(research, owner_a, history_replay_body(strategy_id, revision_id, dataset_id,
+                                                          end="2026-09-25T11:20:00Z"))
+    assert saved["content"]["result"]["status"] == "COMPLETE"

@@ -46,6 +46,8 @@ BUNDLE_PATH = (Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "res
                / "recorded_history_v1.json")
 COMPLETE_STATUSES = frozenset({"COMPLETE_OCCUPIED", "COMPLETE_EMPTY"})
 UNAVAILABLE_STATES = ("SOURCE_UNAVAILABLE", "PARTIAL_COVERAGE", "VERDICT_LIMITED", "VERDICT_UNRESOLVED")
+# Partitions whose outcomes no research surface may read: the comparison skips them and replays stop before them.
+PROTECTED_ROLES = frozenset({"VALIDATION", "HOLDOUT"})
 
 NAMING_CONVENTION = {
     "ix": "%(column_0_label)s_idx",
@@ -320,4 +322,27 @@ def list_datasets(session: Session, principal: Principal) -> dict[str, Any]:
                           "quote_unit": None if row.content["strategy_market"] is None
                           else row.content["strategy_market"]["quote_unit"],
                           "declared_rules": rules(row.declaration_id),
+                          "readable_until": readable_until(session, row),
                           **{key: row.content[key] for key in keys}} for row in rows]}
+
+
+def protected_from(session: Session, row: HistoryDatasetRow) -> str | None:
+    """The start of the declaration's first protected partition, or None when it declares none."""
+    from edge_os_api.records.models import InvestigationDeclaration
+
+    declaration = session.execute(select(InvestigationDeclaration).where(
+        InvestigationDeclaration.owner_id == row.owner_id,
+        InvestigationDeclaration.declaration_id == row.declaration_id)).scalar_one()
+    starts = [_utc_text(item["start"]) for item in declaration.content["configuration"]["partitions"]
+              if item["role"] in PROTECTED_ROLES]
+    return min(starts) if starts else None
+
+
+def readable_until(session: Session, row: HistoryDatasetRow) -> str:
+    """The latest instant a replay may read: the first protected partition start, else the dataset window end."""
+    return protected_from(session, row) or row.content["window_end"]
+
+
+def _utc_text(value: str) -> str:
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(dt.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")

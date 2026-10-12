@@ -199,6 +199,7 @@ def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
                  strategy: dict[str, Any]) -> tuple[dict[str, Any], spot_replay.ReplayInput, str]:
     """The owner's saved dataset through the unchanged runtime. The runtime decides every refusal."""
     row = history_inputs.load(session, principal, body.history_dataset_id or "")
+    history_inputs.refuse_protected(session, row, body.window_end)
     dataset = history_inputs.replay_dataset(row, body.window_end)
     try:
         profile_hash = _sha256(PROFILE_PATH)

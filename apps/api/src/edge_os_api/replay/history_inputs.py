@@ -38,6 +38,16 @@ def load(session: Session, principal: Principal, dataset_id: str) -> history_dat
     return row
 
 
+def refuse_protected(session: Session, row: history_dataset.HistoryDatasetRow, window_end: dt.datetime) -> None:
+    """Refuse a window that would pass validation or holdout buckets to the runtime. Nothing is read or saved."""
+    protected = history_dataset.protected_from(session, row)
+    if protected is not None and window_end > _moment(protected):
+        raise AppError(409, "SPOT_REPLAY", "UNAVAILABLE", "protected_partition_not_authorized",
+                       [finding("protected_partition_not_authorized", "/window_end",
+                                f"The declaration protects data from {protected}. "
+                                "End the replay window at or before that time.")])
+
+
 def replay_dataset(row: history_dataset.HistoryDatasetRow, window_end: dt.datetime) -> spot_replay.ReplayDataset:
     """Every saved bucket that ends before the run's exclusive end, unchanged. Later buckets are not passed in."""
     content = row.content

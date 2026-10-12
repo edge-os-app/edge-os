@@ -61,7 +61,9 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
     const chosen = datasets.find((item) => item.dataset_id === value);
     if (chosen) {
       setWindowStart(plusMinutes(chosen.window_start, 5 * (strategy.warmup_buckets + 1)));
-      setWindowEnd(plusMinutes(chosen.window_start, 5 * (strategy.warmup_buckets + 13)));
+      const wanted = plusMinutes(chosen.window_start, 5 * (strategy.warmup_buckets + 13));
+      // Validation and holdout data stay unread: the default window ends at the dataset's readable limit.
+      setWindowEnd(new Date(wanted) > new Date(chosen.readable_until) ? chosen.readable_until : wanted);
     }
   };
   const availableSeries = useMemo(() => strategy.data_inputs.filter(
@@ -135,7 +137,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       </div>
       {dataset ? (
         <div className="stack" data-testid="spot-replay-history-source" style={{ overflowWrap: "anywhere" }}>
-          <p className="status stop">Simulated fills on saved recorded-history dataset {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. These prices are synthetic recorded responses, not observed market history. The replay runs only if this revision uses the same market.</p>
+          <p className="status stop">Simulated fills on saved recorded-history dataset {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. These prices are synthetic recorded responses, not observed market history. The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
           <div className="field">
             <label htmlFor="spot-replay-window-start">Window start (UTC)</label>
             <input id="spot-replay-window-start" className="input mono" value={windowStart} onChange={(event) => setWindowStart(event.target.value.trim())} />

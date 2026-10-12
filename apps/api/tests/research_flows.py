@@ -129,11 +129,11 @@ def start(client, headers, intake_id: str, declaration_id: str, key: str | None 
                              "request_key": key or f"job-{uuid.uuid4()}"})
 
 
-def reported_dataset(client, headers, source_id: str = QUALIFIED) -> str:
+def reported_dataset(client, headers, source_id: str = QUALIFIED, direction: str = "OUTPERFORM") -> str:
     """Declare, run one job to its report with a local worker, and return the saved dataset id."""
     from edge_os_api.research.investigation_jobs import InvestigationWorker
 
-    intake_id, declaration_id, _ = declare(client, headers, source_id=source_id)
+    intake_id, declaration_id, _ = declare(client, headers, source_id=source_id, direction=direction)
     job_id = start(client, headers, intake_id, declaration_id).json()["job_id"]
     InvestigationWorker(client.app.state.session_factory, client.app.state.settings).run_job(uuid.UUID(job_id))
     view = client.get(f"/v1/research/investigation-jobs/{job_id}", headers=headers).json()
@@ -170,7 +170,7 @@ def adoption_body(bundle, dataset_id: str, *, evaluation_id: str | None = None, 
 
 
 def history_replay_body(strategy_id: str, revision_id: str, dataset_id: str, *, start: str = "2026-09-25T10:20:00Z",
-                        end: str = "2026-09-25T11:20:00Z", key: str | None = None) -> dict[str, Any]:
+                        end: str = "2026-09-25T11:00:00Z", key: str | None = None) -> dict[str, Any]:
     return {"idempotency_key": key or f"replay-{uuid.uuid4()}", "strategy_id": strategy_id,
             "strategy_revision_id": revision_id, "history_dataset_id": dataset_id,
             "run_configuration_id": f"history-{uuid.uuid4()}", "window_start": start, "window_end": end,

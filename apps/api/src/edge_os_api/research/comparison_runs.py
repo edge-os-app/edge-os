@@ -22,7 +22,7 @@ from edge_os_api.research.effect_comparison import compare_effects, evaluate_p06
 from edge_os_api.core.errors import AppError, finding, internal_error, not_found, service_unavailable
 from edge_os_api.records.models import EffectReport, EffectRunDeclaration, EffectRunEvent, InvestigationDeclaration
 from edge_os_api.core.request_schemas import EffectAttemptBody, EffectRunBody
-from edge_os_api.research.history_dataset import feature_rows
+from edge_os_api.research.history_dataset import PROTECTED_ROLES, feature_rows
 from edge_os_api.research.service import get_owned, parse_uuid
 
 SCHEMA_VERSION = "p09.effect-run-declaration/1"
@@ -531,6 +531,7 @@ def list_effect_runs(session: Session, principal: Principal, intake_id: str) -> 
 HISTORY_REPORT_VERSION = "edge-os.investigation-report/1"
 # Training and descriptive partitions may be read. Validation and holdout outcomes stay unread here.
 EVALUABLE_ROLES = frozenset({"DESCRIPTIVE", "TRAINING"})
+assert not EVALUABLE_ROLES & PROTECTED_ROLES
 
 
 def _variant_outcome(variant: dict[str, Any]) -> str:

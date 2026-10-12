@@ -355,7 +355,8 @@ describe("P13 spot replay", () => {
 describe("RG05 replay on a saved recorded-history dataset", () => {
   const dataset = { dataset_id: "d0000000-0000-4000-8000-000000000001", source_id: "recorded-syn-qualified/1",
     evidence_class: "RECORDED_RESPONSE", content_label: "SYNTHETIC_FIXTURE", binding_state: "QUALIFIED_BINDING",
-    verdict: { overall: "QUALIFIED" }, window_start: "2026-09-25T10:00:00Z", window_end: "2026-09-25T12:00:00Z" };
+    verdict: { overall: "QUALIFIED" }, window_start: "2026-09-25T10:00:00Z", window_end: "2026-09-25T12:00:00Z",
+    readable_until: "2026-09-25T11:00:00Z" };
 
   it("sends the dataset instead of the fixture and labels the fills simulated", async () => {
     const user = userEvent.setup();
@@ -367,7 +368,8 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
     await user.selectOptions(screen.getByLabelText("Price data"), dataset.dataset_id);
     expect(screen.getByTestId("spot-replay-history-source")).toHaveTextContent("Simulated fills");
     expect(screen.getByLabelText("Window start (UTC)")).toHaveValue("2026-09-25T10:20:00Z");
-    expect(screen.getByLabelText("Window end (UTC, exclusive)")).toHaveValue("2026-09-25T11:20:00Z");
+    expect(screen.getByLabelText("Window end (UTC, exclusive)")).toHaveValue("2026-09-25T11:00:00Z"); // protected after 11:00
+    expect(screen.getByTestId("spot-replay-history-source")).toHaveTextContent("Data after 2026-09-25T11:00:00Z is protected");
     await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
     await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
     await user.click(screen.getByRole("button", { name: "Save replay on recorded history" }));
