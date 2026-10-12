@@ -217,9 +217,11 @@ def _values(items: list[str | None]) -> list[Decimal]:
         if item is None:
             continue
         try:
-            out.append(Decimal(item))
+            value = Decimal(item)
         except InvalidOperation:  # pragma: no cover - extraction already validated the text
             continue
+        if value.is_finite():
+            out.append(value)
     return out
 
 
@@ -236,7 +238,7 @@ def _refs(evidence: NansenEvidence, operation: str) -> tuple[str, ...]:
                  if source.operation == operation and source.response_sha256)
 
 
-def _holder_findings(evidence: NansenEvidence) -> list[Finding]:
+def _holder_findings(evidence: NansenEvidence, order_field: str) -> list[Finding]:
     holder = evidence.holder
     assert holder is not None
     rows = list(holder.rows)
@@ -246,8 +248,9 @@ def _holder_findings(evidence: NansenEvidence) -> list[Finding]:
     if rows:
         findings.append(Finding(
             code="HOLDER_INVENTORY", verdict="SUPPORTED",
-            statement=(f"{len(rows)} address records returned in provider descending balance order; "
-                       "an address can be a contract or an account, not a distinct person."),
+            statement=(f"{len(rows)} address records returned in the requested provider order "
+                       f"({order_field} descending); an address can be a contract or an account, "
+                       "not a distinct person."),
             source_refs=refs, limitations=()))
     else:
         findings.append(Finding(
@@ -395,7 +398,7 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
     claims, uncovered = question_coverage(request.question, request.token_symbol)
     findings: list[Finding] = []
     if evidence.holder is not None:
-        findings.extend(_holder_findings(evidence))
+        findings.extend(_holder_findings(evidence, request.holder_query.order_field))
     if evidence.flows is not None:
         findings.extend(_flow_findings(evidence, request.flow_query.label))
 

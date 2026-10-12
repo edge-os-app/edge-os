@@ -86,7 +86,7 @@ No retry, no upgrade, no alternate paid route, no x402 payment path exists.
 | Timing/quality | requested window, bucket start/end, completeness, missing and duplicate starts, warnings, returned and uncollected coverage, availability (recorded as `unknown` when the provider sends none) |
 | Field meaning | unit verdict per field, null meaning, label tier, classification limits |
 
-Raw numeric text: the client parses response JSON with `parse_float=str` and keeps the exact decimal text. It never divides by `10^18`, never converts a null to zero and never sums fractional or negative count fields.
+Raw numeric text: the client parses response JSON with `parse_float=str` and keeps the exact decimal text. It never divides by `10^18`, never converts a null to zero and never sums fractional or negative count fields. A nonfinite value (`NaN`, a signaling NaN, a positive or negative infinity, quoted or as a JSON literal) is refused as a malformed response on every holder and flow numeric field, with no uncontrolled exception and no false finite amount.
 
 ## Frozen report interface
 
@@ -100,7 +100,7 @@ Finding codes and permitted verdicts:
 
 | Code | Verdict | Statement rule |
 |---|---|---|
-| `HOLDER_INVENTORY` | `SUPPORTED` | "N address records returned in provider descending balance order." Addresses are contracts or accounts, not people. |
+| `HOLDER_INVENTORY` | `SUPPORTED` | "N address records returned in the requested provider order (`<order_field>` descending)." Addresses are contracts or accounts, not people. The statement names the actual requested order field, never an unevidenced balance ranking. |
 | `HOLDER_PAGINATION` | `LIMITED` | Reflects `is_last_page`. A non-last page never becomes 100%. |
 | `HOLDER_LABELS` | `LIMITED` | Provider address classifications. Do not add overlapping categories as disjoint groups. |
 | `HOLDER_OWNERSHIP_PERCENTAGE` | `UNRESOLVED` | Raw text retained; denominator and scaling unqualified. |

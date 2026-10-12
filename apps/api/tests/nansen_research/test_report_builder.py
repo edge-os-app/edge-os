@@ -311,3 +311,48 @@ def test_an_unseparated_second_quantity_is_not_absorbed() -> None:
         assert run.report.answer_state != "SUPPORTED_OBSERVATIONS", question
         codes = {item.code: item.verdict for item in run.report.findings}
         assert codes.get("AMOUNT") == "UNRESOLVED", question
+
+
+def test_holder_inventory_statement_reports_the_requested_order() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    for order in ("token_amount", "address", "ownership_percentage", "value_usd"):
+        run = support.run(support.request(operations=("holders",),
+                                          holder_query=support.holder_query(order_field=order)),
+                          [support.response(200, holders)])
+        finding = next(item for item in run.report.findings if item.code == "HOLDER_INVENTORY")
+        assert finding.verdict == "SUPPORTED", order
+        assert order in finding.statement, order
+        assert "balance order" not in finding.statement, order
+
+
+def test_nonfinite_numeric_fields_are_refused_not_a_crash() -> None:
+    for value in ("NaN", "sNaN", "Infinity", "-Infinity"):
+        bucket = support.flow_bucket("2026-10-06T09:00:00Z", bucket_end="2026-10-06T10:00:00Z",
+                                     total_inflows_count=value)
+        run = support.run(support.request(operations=("flows",)),
+                          [support.response(200, support.flow_payload([bucket]))])
+        assert run.evidence.flows is None, value
+        assert run.evidence.stop_reason == "MALFORMED_PROVIDER_RESPONSE", value
+
+        holders = support.holder_payload([support.holder_row("0xaaa", token_amount=value)])
+        run = support.run(support.request(operations=("holders",)), [support.response(200, holders)])
+        assert run.evidence.holder is None, value
+        assert run.evidence.stop_reason == "MALFORMED_PROVIDER_RESPONSE", value
+
+
+def test_json_literal_nonfinite_is_refused_not_a_crash() -> None:
+    literal = (b'{"data": [{"date": "2026-10-06T09:00:00Z", "total_inflows_count": NaN, '
+               b'"bucket_end": "2026-10-06T10:00:00Z", "is_complete": true}], '
+               b'"pagination": {"page": 1, "per_page": 100, "is_last_page": true}}')
+    run = support.run(support.request(operations=("flows",)), [support.raw_response(200, literal)])
+    assert run.evidence.flows is None
+    assert run.evidence.stop_reason == "MALFORMED_PROVIDER_RESPONSE"
+
+
+def test_a_finite_nonzero_count_still_works() -> None:
+    bucket = support.flow_bucket("2026-10-06T09:00:00Z", bucket_end="2026-10-06T10:00:00Z",
+                                 total_inflows_count="1.5")
+    run = support.run(support.request(operations=("flows",)),
+                      [support.response(200, support.flow_payload([bucket]))])
+    assert run.evidence.flows is not None
+    assert run.evidence.flows.buckets[0].total_inflows_count == "1.5"

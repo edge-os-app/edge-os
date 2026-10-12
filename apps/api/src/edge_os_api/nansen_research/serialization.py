@@ -62,8 +62,10 @@ def raw_decimal(value: Any) -> str | None:
     """The provider's exact decimal text, or ``None`` when the value is null.
 
     A JSON null stays ``None``. An integer becomes its decimal text. A kept float
-    literal is validated but stored unchanged. Any other type is refused so the
-    caller can branch instead of coercing.
+    literal is validated but stored unchanged. A nonfinite value (``NaN``, a
+    signaling NaN, a positive or negative infinity, or their quoted form) is
+    refused so it never becomes a false finite amount. Any other type is refused
+    so the caller can branch instead of coercing.
     """
     if value is None:
         return None
@@ -76,9 +78,11 @@ def raw_decimal(value: Any) -> str | None:
         if not text:
             raise ValueError("an empty string is not a decimal value")
         try:
-            Decimal(text)
+            parsed = Decimal(text)
         except InvalidOperation as error:
             raise ValueError(f"not a decimal value: {text!r}") from error
+        if not parsed.is_finite():
+            raise ValueError(f"not a finite decimal value: {text!r}")
         return text
     raise ValueError(f"a {type(value).__name__} is not a decimal value")
 

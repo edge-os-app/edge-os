@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Any, Mapping, Sequence
 
 from edge_os_api.nansen_research import (
+    HolderQuery,
     NansenLimits,
     NansenRequest,
     NansenResponse,
@@ -40,6 +41,12 @@ def limits(**overrides: Any) -> NansenLimits:
 
 def window(start: str = WINDOW_START, end: str = WINDOW_END) -> ObservationWindow:
     return ObservationWindow(start_utc=start, end_utc=end)
+
+
+def holder_query(**overrides: Any) -> HolderQuery:
+    base: dict[str, Any] = {"label_type": "all_holders"}
+    base.update(overrides)
+    return HolderQuery(**base)
 
 
 def request(**overrides: Any) -> NansenRequest:
