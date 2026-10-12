@@ -165,6 +165,10 @@ record_refs[] = { kind, table, id, time_field, time }
 `time_field` names the row's real timestamp column. A position has no timestamp column, so its
 `time_field` is `derived` and its time is the latest intent or receipt of the position.
 
+`record_refs` names exact source rows by their own ids. The aggregate projection identity is a separate
+field (`projection_ref`, `record_id = health:{owner_id}:{agent_id}:{wallet_id}:{network_id}`), so a
+grouped projection reference is never confused with a source-row identity.
+
 The conversation and direct view quote the same `record_refs` identity. One canonical projection
 reference is enough; the agreement must not repeat the same saved value in several places.
 
