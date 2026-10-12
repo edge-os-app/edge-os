@@ -238,7 +238,7 @@ def _is_native_footer(line: str) -> bool:
         or re.fullmatch(r"🔧\d+ ⚡\d+", line)
         or re.match(r"^\[OMC#[^]]+\] -> \d+\.\d+\.\d+ omc update$", line)
         or re.match(
-            r"^\d+h:\d+%\* wk:\d+%\*\([^()]+\) extra:\d+%\*"
+            r"^\d+h:\d+%\*(?:\([^()]+\))? wk:\d+%\*(?:\([^()]+\))? extra:\d+%\*"
             r"\(\$[\d,.]+/\$[\d,.]+\) \| session:\d+m$",
             line,
         )
@@ -247,6 +247,8 @@ def _is_native_footer(line: str) -> bool:
             "? for shortcuts", "+ Show details", "⏸ manual mode on",
             "⏸ manual mode on · ← for agents",
         }
+        # ponytail: auto-mode footer row (Claude 2.1.296); other modes stay blocked until observed.
+        or re.match(r"^⏵⏵ auto mode on \([^()]+\)(?: · ← for agents)?$", line)
         or re.match(r"^⚠ .+ · f\d+ to view$", line)
     )
 
