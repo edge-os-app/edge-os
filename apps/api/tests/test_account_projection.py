@@ -43,6 +43,13 @@ def test_projection_matches_saved_financial_rows_and_writes_nothing(journey, own
     assert position["quantity"]["raw"] == ff.ENTRY_BASE_OUTPUT and position["position_state"] == "OPEN"
     assert position["estimated_unrealized_result"] == {"state": "UNKNOWN", "amount": None}
     assert position["mark"] == {"state": "UNKNOWN", "amount": None}
+    # The position time is the saved action's receipt time, stable across reads (Review A N1), not the read time.
+    again = next(record["content"] for record in projection(journey, owner_a, "proj-a")["records"]
+                 if record["content"]["record_kind"] == "POSITION")
+    assert again["updated_at"] == position["updated_at"]
+    action_time = next(record["content"]["updated_at"] for record in body["records"]
+                       if record["content"]["record_kind"] == "ACTION")
+    assert position["updated_at"] == action_time
     action = next(record["content"] for record in body["records"] if record["content"]["record_kind"] == "ACTION")
     assert action["action_id"] == job["action_id"] and action["status"] == "CONFIRMED"
     flows = [record["content"] for record in body["records"] if record["content"]["record_kind"] == "CAPITAL_FLOW"]

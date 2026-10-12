@@ -38,5 +38,5 @@ Status: proposal. The facts below describe the current code. The policy choices 
 - 429 `rate_limited` means too many changes in one minute; the reply says how long to wait.
 - 409 `too_many_active_jobs` means the owner has the maximum number of waiting or running research jobs.
 - `BUDGET_EXHAUSTED` means the owner or the shared total allowance is used. Unknown usage stays counted until it is settled, and nothing resets automatically.
-- 503 with `quota_cap_mismatch` is an operator problem: a configured cap differs from the frozen cap.
+- 503 with `quota_cap_mismatch` is an operator problem: a configured cap differs from the frozen cap of the shared total or of that owner. Work already started still finishes and settles.
 - No support channel, contact address or response time exists yet. That is a builder decision.

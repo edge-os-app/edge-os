@@ -118,8 +118,9 @@ def second_process_checks(env: dict[str, str], evidence: Path, signer: Any, proc
     checks = {
         "readiness_reports_cap_mismatch": ready_status == 503 and ready.get("reason") == "quota_cap_mismatch"
         and "compute_seconds" in json.dumps(ready),
-        "third_write_in_a_minute_is_rate_limited": statuses[:2] != [429, 429] and statuses[2] == 429
-        and bool(retry_after) and int(retry_after) >= 1,
+        # Two writes inside the limit reach validation (422 for the empty body); the third is refused first.
+        "third_write_in_a_minute_is_rate_limited": statuses == [422, 422, 429]
+        and bool(retry_after) and 1 <= int(retry_after) <= 61,
         "reads_are_not_rate_limited": budget_status in {200, 503},
     }
     return {"checks": checks, "readyz": ready, "write_statuses": statuses, "retry_after": retry_after,

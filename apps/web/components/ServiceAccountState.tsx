@@ -53,6 +53,10 @@ export function ServiceAccountState({ agentId }: { agentId: string }) {
         <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Try again</button></div>}
       {page && !loading && <>
         <p className="muted">{page.notice} {page.ports === "FIXTURE" ? "Ports: authored local fixtures." : "Ports: unavailable."}</p>
+        <div className="btn-row">
+          <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Refresh saved state</button>
+          <span className="muted">This panel reads the saved state when it opens. Refresh it after a change above.</span>
+        </div>
         {page.records.length === 0 ? <p>No connected-service state is saved for this agent.</p> : (
           <ul className="stack" aria-label="Projected records">
             {page.records.map((record) => (

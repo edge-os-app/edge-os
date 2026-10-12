@@ -52,4 +52,15 @@ describe("saved connected state (F1)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("No connected-service state is saved for this agent.")).toBeInTheDocument();
   });
+
+  it("reads the saved state again on Refresh (Review A N2)", async () => {
+    const empty = { schema_version: "account-view-projection/1", source: "SERVICE_PROJECTION", ports: "FIXTURE", notice: "n", records: [] };
+    mocks.load.mockResolvedValueOnce(empty).mockResolvedValueOnce({ ...empty, records: [
+      record("AGENT", { status: "CONFIRMED", permission_state: "NO_REMOVAL_REQUESTED" })] });
+    render(<ServiceAccountState agentId="agent-a" />);
+    expect(await screen.findByText("No connected-service state is saved for this agent.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Refresh saved state" }));
+    expect(await screen.findByRole("list", { name: "Projected records" })).toHaveTextContent("Agent: CONFIRMED");
+    expect(mocks.load).toHaveBeenCalledTimes(2);
+  });
 });

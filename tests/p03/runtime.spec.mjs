@@ -124,7 +124,7 @@ test("F5: keyboard-only pass over the connected-agent and funding controls", asy
     await page.keyboard.press("Tab");
   }
   const names = stops.map((stop) => stop.name);
-  for (const expected of ["Open agent", "Check deposits"]) expect(names).toContain(expected);
+  for (const expected of ["Open agent", "Check deposits", "Refresh saved state"]) expect(names).toContain(expected);
   expect(stops.some((stop) => stop.tag === "select")).toBe(true);
   expect(stops.filter((stop) => !stop.indicator)).toEqual([]);
 

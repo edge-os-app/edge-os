@@ -152,7 +152,10 @@ def test_caps_are_frozen_and_change_only_by_an_explicit_recorded_operator_action
         quota.reserve(session, owner, "test_subject", "raise", {"provider_requests": 1, "compute_seconds": 1},
                       caps(50, 100, key))
     with factory() as session:
-        assert quota.cap_mismatches(session, caps(2, 999, key))[0]["resource"] == "provider_requests"
+        row = allocation(factory, "OWNER", owner)
+        assert not quota._mismatched(row, 2) and quota._mismatched(row, 50)
+        assert any(item["scope"] == "OWNER" and item["resource"] == "provider_requests"
+                   for item in quota.cap_mismatches(session, caps(50, 100, key)))
         quota.set_cap(session, "OWNER", owner, "provider_requests", 50, "support ticket 1")
         session.commit()
         assert isinstance(quota.reserve(session, owner, "test_subject", "raised",
@@ -180,3 +183,53 @@ def test_a_changed_configured_global_cap_pauses_research_and_shows_in_readiness(
                                                              "resources": ["provider_requests"]}
         refused = start(client, owner_a, intake_id, declaration_id)
         assert refused.status_code == 503 and refused.json()["code"] == "quota_cap_mismatch"
+
+
+def test_a_reservation_taken_before_a_cap_change_still_settles_and_operator_caps_are_authoritative(factory):
+    """Review A B1: settlement never compares caps; an operator-recorded OWNER cap is not a mismatch."""
+    key, owner = uuid.uuid4(), uuid.uuid4()
+    amounts = {"provider_requests": 2, "compute_seconds": 5}
+    with factory() as session:
+        grant = quota.reserve(session, owner, "test_subject", "before-change", amounts, caps(4, 100, key))
+        session.commit()
+        reservation_id = grant.reservation.reservation_id
+    changed = caps(9, 100, key)  # configuration changed after the reservation
+    with factory() as session:
+        reservation = session.get(quota.ReservationRow, reservation_id)
+        assert quota.settle(session, reservation, "provider_requests", "KNOWN", 1, changed)["released"] == 1
+        assert quota.settle(session, reservation, "compute_seconds", "UNKNOWN", 0, changed)["unknown"] == 5
+        session.commit()
+    row = allocation(factory, "OWNER", owner)
+    assert (row.reserved, row.consumed, row.cap) == (0, 1, 4)  # settled; the frozen cap did not move
+    with factory() as session:
+        assert any(item["scope"] == "OWNER" for item in quota.cap_mismatches(session, changed))
+        with pytest.raises(quota.CapMismatch):
+            quota.reserve(session, owner, "test_subject", "after-change", amounts, changed)
+        session.rollback()
+        quota.set_cap(session, "OWNER", owner, "provider_requests", 6, "operator override differs from config")
+        session.commit()
+        # The operator value (6) differs from configuration (9) and is authoritative: no mismatch, reservations work.
+        assert not quota._mismatched(allocation(factory, "OWNER", owner), changed.owner["provider_requests"])
+        granted = quota.reserve(session, owner, "test_subject", "after-override",
+                                {"provider_requests": 2, "compute_seconds": 0}, caps(9, 100, key, compute=1000))
+        assert isinstance(granted, quota.Grant)
+        session.rollback()
+
+
+def test_an_owner_cap_mismatch_keeps_readiness_and_other_owners_but_pauses_that_owners_starts(env, migrated,
+                                                                                               owner_a, owner_b):
+    from research_flows import declare, start
+
+    base = {**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded"}
+    with TestClient(create_app(load_settings(base))) as client:
+        intake_id, declaration_id, _ = declare(client, owner_a)
+        assert start(client, owner_a, intake_id, declaration_id).status_code == 201  # freezes owner A's caps
+    changed = {**base, "EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS": "15"}
+    with TestClient(create_app(load_settings(changed))) as client:
+        ready = client.get("/readyz")
+        assert ready.status_code == 200 and ready.json()["attention"]["owner_quota_cap_mismatch"]["provider_requests"] >= 1
+        assert "owner" not in json.dumps(ready.json()["attention"]).replace("owner_quota_cap_mismatch", "")
+        refused = start(client, owner_a, intake_id, declaration_id)
+        assert refused.status_code == 503 and refused.json()["code"] == "quota_cap_mismatch"
+        other_intake, other_declaration, _ = declare(client, owner_b)
+        assert start(client, owner_b, other_intake, other_declaration).status_code == 201  # new owner: no mismatch

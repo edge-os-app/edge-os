@@ -37,6 +37,7 @@ ACTION_STATUS = {"CONFIRMED": "CONFIRMED", "REVERTED": "REVERTED", "SUBMISSION_U
                  "SUBMITTED_UNKNOWN": "SUBMISSION_UNKNOWN", "QUEUED": "QUEUED", "CLAIMED": "SUBMITTED",
                  "DENIED_UNSENT": "DENIED", "ADMISSION_DENIED": "DENIED", "REVALIDATION_DENIED": "DENIED",
                  "BREACHED": "DENIED", "SUBMISSION_NOT_OWNED": "DENIED", "RECONCILE_MISMATCH": "SUBMISSION_UNKNOWN"}
+PROJECTION_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)  # a position without any saved action (none expected)
 FLOW_STATUS = {"REQUESTED": "REQUESTED", "PENDING": "PENDING", "UNKNOWN": "UNKNOWN", "FAILED": "FAILED"}
 
 
@@ -98,6 +99,19 @@ def project(session: Session, owner_id: uuid.UUID, agent_id: str | None = None) 
             "quantity": quantity, "included_in_realized_result": False,
             "reason": None if credited else "Declared amount; no credit has been observed for this flow."}))
 
+    receipts: dict[str, ReceiptRow] = {}
+    for receipt in sorted(rows(ReceiptRow), key=lambda item: item.created_at):
+        receipts[receipt.action_id] = receipt
+    intents = rows(IntentRow)
+    # Positions have no timestamp of their own: use the latest saved receipt or intent of the position, so a
+    # re-read returns the same value (never the read time).
+    position_times: dict[str, dt.datetime] = {}
+    for intent in intents:
+        receipt = receipts.get(intent.action_id)
+        moment = receipt.created_at if receipt is not None else intent.created_at
+        if intent.position_id and (intent.position_id not in position_times or moment > position_times[intent.position_id]):
+            position_times[intent.position_id] = moment
+
     positions = rows(PositionRow)
     position_assets = {row.position_id: row.asset_id for row in positions}
     for position in positions:
@@ -109,7 +123,7 @@ def project(session: Session, owner_id: uuid.UUID, agent_id: str | None = None) 
             "asset_id": position.asset_id, "position_id": position.position_id,
             "strategy_revision": position.strategy_revision, "mandate_id": position.mandate_id,
             "status": "OPEN" if open_ else "CLOSED", "position_state": "OPEN" if open_ else "CLOSED",
-            "updated_at": utc_string(dt.datetime.now(dt.timezone.utc)),
+            "updated_at": utc_string(position_times.get(position.position_id, PROJECTION_EPOCH)),
             "quantity": _amount(position.asset_id, position.inventory, position.decimals),
             "basis": {"state": "KNOWN", "amount": _amount(position.quote_asset_id, position.cost_basis,
                                                           position.quote_decimals)},
@@ -117,12 +131,9 @@ def project(session: Session, owner_id: uuid.UUID, agent_id: str | None = None) 
                                                                     position.quote_decimals)},
             "estimated_unrealized_result": {"state": "UNKNOWN"}, "mark": {"state": "UNKNOWN"}}))
 
-    receipts: dict[str, ReceiptRow] = {}
-    for receipt in sorted(rows(ReceiptRow), key=lambda item: item.created_at):
-        receipts[receipt.action_id] = receipt
     queues = {row.action_id: row for row in rows(QueueRow)}
     open_cases = {row.action_id for row in rows(RecoveryCaseRow) if row.state in {"OPEN", "UNKNOWN"}}
-    for intent in rows(IntentRow):
+    for intent in intents:
         receipt = receipts.get(intent.action_id)
         queue = queues.get(intent.action_id)
         raw_status = receipt.outcome if receipt is not None else (queue.state if queue is not None else "PROPOSED")

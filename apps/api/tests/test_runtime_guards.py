@@ -25,19 +25,19 @@ def test_writes_over_the_owner_window_get_429_and_reads_continue(env, migrated, 
     with app(env, EDGE_OS_WRITE_RATE_PER_MINUTE="3") as client:
         body = {"original_request": "x", "restrictions": [], "requested_job": "COMPARE", "input_class": "LOOSE_INTUITION"}
         statuses = [client.post("/v1/research/requests", headers=owner_a, json=body).status_code for _ in range(4)]
-        assert statuses[:3] != [429, 429, 429] and statuses[3] == 429
+        assert statuses == [201, 201, 201, 429]
         refused = client.post("/v1/research/requests", headers=owner_a, json=body)
         assert refused.status_code == 429 and refused.json()["code"] == "rate_limited"
         assert 1 <= int(refused.headers["Retry-After"]) <= 61
         assert client.get("/v1/research/requests", headers=owner_a).status_code == 200  # reads are not limited
-        assert client.post("/v1/research/requests", headers=owner_b, json=body).status_code != 429  # other owner
+        assert client.post("/v1/research/requests", headers=owner_b, json=body).status_code == 201  # other owner
 
 
 def test_write_window_is_shared_by_separate_application_processes(env, migrated, owner_a):
     body = {"original_request": "x", "restrictions": [], "requested_job": "COMPARE", "input_class": "LOOSE_INTUITION"}
     with app(env, EDGE_OS_WRITE_RATE_PER_MINUTE="2") as first, app(env, EDGE_OS_WRITE_RATE_PER_MINUTE="2") as second:
-        assert first.post("/v1/research/requests", headers=owner_a, json=body).status_code != 429
-        assert second.post("/v1/research/requests", headers=owner_a, json=body).status_code != 429
+        assert first.post("/v1/research/requests", headers=owner_a, json=body).status_code == 201
+        assert second.post("/v1/research/requests", headers=owner_a, json=body).status_code == 201
         assert first.post("/v1/research/requests", headers=owner_a, json=body).status_code == 429
 
 

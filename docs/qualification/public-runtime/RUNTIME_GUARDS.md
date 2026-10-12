@@ -13,8 +13,11 @@ All guards use the existing FastAPI/SQLAlchemy/PostgreSQL stack. No new dependen
   - Known usage consumes all measured use, releases only the unused part and records any excess as overrun.
   - Missing or invalid usage, a timeout, a killed process, a lost result or an interrupted calculation keeps the whole open amount as unknown liability.
 - **Caps:** each cap is frozen when its allocation is first used.
-  - A different configured value is never applied silently. Reservations return 503 `quota_cap_mismatch`, and `/readyz` reports `quota_cap_mismatch` with the affected resources.
-  - An operator changes a cap only through `python -m edge_os_api.usage.quota set-cap --scope … --resource … --cap N --reason …`, which appends a `CAP_CHANGED` event.
+  - A different configured value is never applied silently. New reservations against that allocation return 503 `quota_cap_mismatch`.
+  - A GLOBAL mismatch affects every owner: `/readyz` returns 503 `quota_cap_mismatch` with the affected resources.
+  - An OWNER mismatch affects only that owner: `/readyz` stays ready and adds `attention.owner_quota_cap_mismatch` with a count per resource (no owner id or value). Only that owner's new research starts pause.
+  - Settlement never compares caps. A reservation taken before a cap change settles normally, so a running job never stays open because of a cap change.
+  - An operator changes a cap only through `python -m edge_os_api.usage.quota set-cap --scope … --resource … --cap N --reason …`, which appends a `CAP_CHANGED` event. A cap recorded this way is authoritative: it is not compared with configuration again.
 - **No resets:** nothing resets, renews or credits capacity. A request body, a new process or a new request key cannot change an allocation.
 - **Allocation meaning:** owner caps (`EDGE_OS_RESEARCH_BUDGET_*`) and the global caps (`EDGE_OS_USAGE_GLOBAL_*`) are total lifetime allowances for this deployment, not paid plans or periods. Values for a public deployment belong to the later configuration packet.
 - **Compute measurement:** tools record milliseconds, and a job settles `ceil(total_ms / 1000)` seconds.
@@ -40,7 +43,7 @@ All guards use the existing FastAPI/SQLAlchemy/PostgreSQL stack. No new dependen
   - a loopback database;
   - a database URL without `sslmode=require` or stricter.
 - **Open decision:** the deterministic fixture interpreter (`EDGE_OS_INTERPRETER=fixture`, records labelled `p03-fixture-interpreter/1`) stays the only interpreter production accepts, under the earlier accepted rule. Stage 2 does not change it. Refusing it too would stop every production start until a qualified interpreter exists; that is a controller decision.
-- **`/readyz`** returns 503 with one reason: `database_unavailable`, `schema_drift`, `verification_keys_missing` or `quota_cap_mismatch`.
+- **`/readyz`** returns 503 with one reason: `database_unavailable`, `schema_drift`, `verification_keys_missing` or `quota_cap_mismatch` (GLOBAL caps only). OWNER cap mismatches appear under `attention` in a ready reply.
 - **Workers** (`edge_os_api.execution.worker`, `edge_os_api.research.investigation_jobs`) check the schema head before every pass.
   - On drift they stop before any effect (exit code 3). An unreachable database skips the pass.
   - Saved jobs, attempts and original actions stay, and a restart after migration recovers them.

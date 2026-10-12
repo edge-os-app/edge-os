@@ -7,8 +7,10 @@ use, releases only the unused part and records any excess as overrun; an unknown
 as unknown liability. Nothing here resets, credits or renews capacity.
 
 Caps are frozen when an allocation is first created. A different configured value later is never applied silently:
-reservations are refused with `quota_cap_mismatch` and readiness reports it, until an operator records an explicit
-cap change with `python -m edge_os_api.usage.quota set-cap`.
+new reservations against that allocation are refused with `quota_cap_mismatch`, and readiness reports it (a GLOBAL
+mismatch makes the service not ready; OWNER mismatches are counted under `attention`), until an operator records an explicit cap change with `python -m edge_os_api.usage.quota set-cap`. A cap
+recorded by an operator is authoritative and is not compared with configuration again. Settlement never compares caps:
+an existing reservation always settles against its frozen allocations.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from sqlalchemy import (
     MetaData,
     Text,
     UniqueConstraint,
+    func,
     select,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -36,6 +39,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 RESOURCES = ("provider_requests", "compute_seconds")
 GLOBAL_OWNER = uuid.UUID(int=0)  # the GLOBAL scope's owner key; never a real owner id
+OPERATOR_SOURCE = "operator:"  # cap_source prefix of a cap recorded by `set-cap`
 
 NAMING_CONVENTION = {
     "ix": "%(column_0_label)s_idx",
@@ -137,8 +141,13 @@ def _available(row: AllocationRow) -> int:
     return row.cap - row.reserved - row.consumed - row.unknown
 
 
+def _mismatched(row: AllocationRow, configured: int) -> bool:
+    """A configuration-derived cap that differs from configuration. Operator-recorded caps are authoritative."""
+    return not row.cap_source.startswith(OPERATOR_SOURCE) and row.cap != configured
+
+
 def _allocation(session: Session, scope: str, owner_key: uuid.UUID, resource: str, configured: int,
-                *, lock: bool) -> AllocationRow:
+                *, lock: bool, check: bool = True) -> AllocationRow:
     now = utcnow()
     session.execute(pg_insert(AllocationRow).values(
         allocation_id=uuid.uuid4(), scope=scope, owner_key=owner_key, resource=resource, cap=configured,
@@ -149,16 +158,16 @@ def _allocation(session: Session, scope: str, owner_key: uuid.UUID, resource: st
     if lock:
         statement = statement.with_for_update().execution_options(populate_existing=True)
     row = session.execute(statement).scalar_one()
-    if row.cap != configured:
+    if check and _mismatched(row, configured):
         raise CapMismatch(scope, resource, row.cap, configured)
     return row
 
 
-def _locked_rows(session: Session, owner_id: uuid.UUID, caps: Caps) -> list[AllocationRow]:
+def _locked_rows(session: Session, owner_id: uuid.UUID, caps: Caps, *, check: bool = True) -> list[AllocationRow]:
     """GLOBAL rows first, then OWNER rows, each in resource order: one lock order for every process."""
-    rows = [_allocation(session, "GLOBAL", caps.global_key, resource, caps.global_[resource], lock=True)
+    rows = [_allocation(session, "GLOBAL", caps.global_key, resource, caps.global_[resource], lock=True, check=check)
             for resource in RESOURCES]
-    rows += [_allocation(session, "OWNER", owner_id, resource, caps.owner[resource], lock=True)
+    rows += [_allocation(session, "OWNER", owner_id, resource, caps.owner[resource], lock=True, check=check)
              for resource in RESOURCES]
     return rows
 
@@ -214,7 +223,8 @@ def settle(session: Session, reservation: ReservationRow, resource: str, kind: s
     None when that resource was already settled (a duplicate settlement changes nothing)."""
     if kind not in {"KNOWN", "UNKNOWN"} or resource not in RESOURCES:
         raise ValueError("settle needs KNOWN or UNKNOWN and a known resource")
-    rows = [row for row in _locked_rows(session, reservation.owner_id, caps) if row.resource == resource]
+    # No cap comparison: a reservation taken before a cap change must still settle (and never stay open).
+    rows = [row for row in _locked_rows(session, reservation.owner_id, caps, check=False) if row.resource == resource]
     current = session.execute(select(ReservationRow).where(
         ReservationRow.reservation_id == reservation.reservation_id).with_for_update()
         .execution_options(populate_existing=True)).scalar_one()
@@ -266,11 +276,21 @@ def view(session: Session, owner_id: uuid.UUID, caps: Caps) -> dict[str, Any]:
 
 
 def cap_mismatches(session: Session, caps: Caps) -> list[dict[str, Any]]:
-    """Stored GLOBAL caps that differ from configuration (readiness evidence; no write)."""
-    rows = session.execute(select(AllocationRow).where(AllocationRow.scope == "GLOBAL",
-                                                       AllocationRow.owner_key == caps.global_key)).scalars().all()
-    return [{"scope": "GLOBAL", "resource": row.resource, "stored": row.cap, "configured": caps.global_[row.resource]}
-            for row in rows if row.resource in caps.global_ and row.cap != caps.global_[row.resource]]
+    """Scopes and resources whose configuration-derived cap differs from configuration (readiness; no write).
+
+    One entry per scope and resource, with the number of affected allocations; no owner id or cap value.
+    """
+    found: list[dict[str, Any]] = []
+    for scope, configured, key_filter in (("GLOBAL", caps.global_, AllocationRow.owner_key == caps.global_key),
+                                          ("OWNER", caps.owner, AllocationRow.scope == "OWNER")):
+        for resource in RESOURCES:
+            count = session.execute(select(func.count()).select_from(AllocationRow).where(
+                AllocationRow.scope == scope, key_filter, AllocationRow.resource == resource,
+                AllocationRow.cap != configured[resource],
+                AllocationRow.cap_source.notlike(OPERATOR_SOURCE + "%"))).scalar_one()
+            if count:
+                found.append({"scope": scope, "resource": resource, "allocations": count})
+    return found
 
 
 def set_cap(session: Session, scope: str, owner_key: uuid.UUID, resource: str, cap: int, reason: str) -> None:
@@ -284,7 +304,7 @@ def set_cap(session: Session, scope: str, owner_key: uuid.UUID, resource: str, c
         raise ValueError("no allocation exists for that scope and resource")
     _event(session, "CAP_CHANGED", None if scope == "GLOBAL" else owner_key, None,
            {"scope": scope, "resource": resource, "from": row.cap, "to": cap, "reason": reason})
-    row.cap, row.cap_source, row.updated_at = cap, f"operator:{reason}", utcnow()
+    row.cap, row.cap_source, row.updated_at = cap, f"{OPERATOR_SOURCE}{reason}", utcnow()
 
 
 def main() -> None:

@@ -7,7 +7,7 @@ Status: rehearsed locally on an owned, run-labelled PostgreSQL 18 container by `
 1. Stop the workers: `edge_os_api.execution.worker` and `edge_os_api.research.investigation_jobs`. A worker that sees a schema head it does not know stops itself (exit code 3) before any effect, so a missed worker is safe but noisy.
 2. Take a backup: `pg_dump -Fc -f <file> <database>`.
 3. Migrate forward: `cd apps/api && uv run --frozen alembic upgrade head`, then `uv run --frozen alembic check`. The check must report no difference.
-4. Start the API. `/readyz` must return `{"status": "ready"}`. A 503 names one reason: `database_unavailable`, `schema_drift`, `verification_keys_missing` or `quota_cap_mismatch`.
+4. Start the API. `/readyz` must return `{"status": "ready"}`. A 503 names one reason: `database_unavailable`, `schema_drift`, `verification_keys_missing` or `quota_cap_mismatch` (a GLOBAL cap). A ready reply with `attention.owner_quota_cap_mismatch` means some owners' caps differ from configuration; see below.
 5. Start the workers. Saved jobs, attempts and original actions continue from saved state; interrupted work is reconciled, never repeated.
 
 ## Restore (preferred rollback)
@@ -37,7 +37,7 @@ Use a restore instead of a downgrade when the backup is recent enough.
 
 ## Caps after a restart or restore
 
-Caps are frozen in the database. A changed `EDGE_OS_RESEARCH_BUDGET_*` or `EDGE_OS_USAGE_GLOBAL_*` value does not change them. Readiness then reports `quota_cap_mismatch` and research starts are refused with 503. Either restore the previous setting or record an operator change:
+Caps are frozen in the database. A changed `EDGE_OS_RESEARCH_BUDGET_*` or `EDGE_OS_USAGE_GLOBAL_*` value does not change them. New research starts against a mismatched allocation are refused with 503 `quota_cap_mismatch`; reservations taken earlier still settle. A changed GLOBAL value makes readiness 503 `quota_cap_mismatch`; a changed owner value shows as `attention.owner_quota_cap_mismatch` (a count per resource) in a ready reply. New owners get the new owner value. Either restore the previous setting or record an operator change per allocation; a cap recorded by `set-cap` is authoritative and is not compared with configuration again:
 
 ```
 cd apps/api && uv run --frozen python -m edge_os_api.usage.quota set-cap \

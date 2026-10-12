@@ -173,10 +173,15 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
             return JSONResponse({"status": "unavailable", "reason": "schema_drift"}, status_code=503)
         if not verifier.keys:
             return JSONResponse({"status": "unavailable", "reason": "verification_keys_missing"}, status_code=503)
-        if mismatches:
+        shared = [item for item in mismatches if item["scope"] == "GLOBAL"]
+        if shared:  # the shared cap affects every owner
             return JSONResponse({"status": "unavailable", "reason": "quota_cap_mismatch",
-                                 "resources": sorted(item["resource"] for item in mismatches)}, status_code=503)
-        return JSONResponse({"status": "ready", "schema_revision": revision})
+                                 "resources": sorted(item["resource"] for item in shared)}, status_code=503)
+        ready: dict[str, Any] = {"status": "ready", "schema_revision": revision}
+        owners = {item["resource"]: item["allocations"] for item in mismatches if item["scope"] == "OWNER"}
+        if owners:  # only those owners' new research starts pause; counts only, no owner id or value
+            ready["attention"] = {"owner_quota_cap_mismatch": owners}
+        return JSONResponse(ready)
 
     def limit_writes(request: Request, principal: Principal = Depends(require_principal)) -> None:
         """Count every authenticated write in the owner's shared PostgreSQL window; reads are not limited."""
