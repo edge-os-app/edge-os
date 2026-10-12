@@ -143,11 +143,14 @@ def test_links_hidden_folders_read_only_files_odd_names_and_huge_files_are_all_s
             stream.truncate(80 * 1024 * 1024)
     monkeypatch.setattr(StubProcess, "__init__", init)
 
-    credential = run_with(tmp_path, monkeypatch)
+    credential = run_with(tmp_path, monkeypatch, expect_raise=EvidenceNotSealed)  # the huge file is held aside unscanned
 
-    assert [name for name in leaks(tmp_path, credential) if name != "outside-file.txt"] == []  # the outside file is the bait
     assert outside.read_text() == f"not evidence {SENTINEL}", "a link must never lead the redaction outside the evidence folder"
-    assert not any("huge.bin" in str(path) for path in tmp_path.glob("evidence/**/*"))
+    assert not any("huge.bin" in str(path) for path in tmp_path.glob("evidence/turn-*/**/*"))
+    assert all(held.stat().st_mode & 0o077 == 0 for held in tmp_path.glob("evidence/quarantine-*"))
+    GuardedDockerTurnRunner(image="unused", run_id="redact-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                            script_for=lambda turn: {}).purge_quarantine()
+    assert [name for name in leaks(tmp_path, credential) if name != "outside-file.txt"] == []  # the outside file is the bait
 
 
 # --- Repairs after gate verdict 3/3: one captured plan per turn, no blocking on odd entries, a time bound ----------------
@@ -1552,9 +1555,11 @@ def test_cutting_the_stdout_never_keeps_a_part_of_the_credential(tmp_path: Path,
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Loud(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
     runner, _, _ = build(tmp_path, credential)
 
-    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    with pytest.raises(EvidenceNotSealed, match="quarantine-"):  # an over-limit stdout is held aside unscanned
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
-    kept = b"".join(p.read_bytes() for p in (tmp_path / "evidence").rglob("*stdout*") if p.is_file())
+    kept = b"".join(p.read_bytes() for p in (tmp_path / "evidence").glob("turn-*/**/*stdout*") if p.is_file())
+    assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
     assert OLD.encode()[:12] not in kept, "the cut kept the first part of the credential"
 
 
@@ -1645,9 +1650,11 @@ def test_an_over_limit_stdout_keeps_no_part_of_the_credential_wherever_it_sits(t
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Loud(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
     runner, _, _ = build(tmp_path, credential)
 
-    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    with pytest.raises(EvidenceNotSealed, match="quarantine-"):  # an over-limit stdout is held aside unscanned
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
-    kept = b"".join(p.read_bytes() for p in (tmp_path / "evidence").rglob("*stdout*") if p.is_file())
+    kept = b"".join(p.read_bytes() for p in (tmp_path / "evidence").glob("turn-*/**/*stdout*") if p.is_file())
+    assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
     assert OLD.encode()[:back] not in kept or back < 8, "a part of the credential stayed"
     assert OLD.encode()[:8] not in kept
 
@@ -2040,7 +2047,8 @@ def test_a_huge_job_written_file_is_moved_aside_in_one_step_and_freed_only_by_th
     status, _elapsed = _timed_run(guarded)
 
     assert large == [], f"the turn freed a job-sized file on the clock: {large}"
-    assert status == "UNKNOWN" and spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+    assert status == "EvidenceNotSealed"  # held aside unscanned: never a success
+    assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
     held = list((tmp_path / "evidence").glob("quarantine-*"))
     assert held and all(folder.stat().st_mode & 0o077 == 0 for folder in held)
     for folder in (tmp_path / "evidence").glob("turn-*/output"):  # what stays as output is small and sealed
@@ -2142,10 +2150,12 @@ def _returned_result(evidence: list) -> bytes:
 def test_refusal_reasons_chosen_by_the_job_cannot_make_the_summary_quadratic(tmp_path: Path, monkeypatch, reasons: str) -> None:
     credential = tmp_path / "credential"
     credential.write_text(OLD)
-    count = 30_000 if reasons == "colliding-integers" else 3
+    count = 4_000 if reasons == "colliding-integers" else 3  # fits under MAX_RESULT_BYTES, so the result is read
     evidence = [{"admitted": False, "reason": index * (2**61 - 1) if reasons == "colliding-integers" else "too-large"}
                 for index in range(1, count + 1)]
     body = _returned_result(evidence)
+    import guarded_docker_runner as module
+    assert len(body) <= module.MAX_RESULT_BYTES
     install_process(monkeypatch, lambda output: (output / "container-result.json").write_bytes(body), returncode=0)
     runner, _, _ = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=0.3)
     outcome: list = []
@@ -2168,3 +2178,82 @@ def test_refusal_reasons_chosen_by_the_job_cannot_make_the_summary_quadratic(tmp
         assert result.status == "UNKNOWN" and result.error_class == "ContainerResultUnreadable", result
     else:
         assert result.status == "RETURNED" and result.observed["guard_refusal_reasons"] == ["too-large"], result
+
+
+# --- Repair after round-23 review B1 and B2: held evidence is never a success, and a nested result fits its budget --
+
+def test_a_returned_turn_whose_stdout_was_held_aside_unscanned_fails_closed_and_names_the_folder(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    body = _returned_result([])
+
+    def behaviour(output: Path) -> None:  # an honest result, and a stdout one byte over the limit that holds the credential
+        (output / "container-result.json").write_bytes(body)
+        stdout = (b"Bearer " + OLD.encode() + b"\n").ljust(module.MAX_STDOUT_BYTES + 1, b"x")
+        (output / "host-captured-stdout.log").write_bytes(stdout)
+
+    install_process(monkeypatch, behaviour, returncode=0)
+    runner, spend, guarded = build(tmp_path, credential)
+
+    with pytest.raises(EvidenceNotSealed, match="quarantine-"):
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+    assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
+
+
+@pytest.mark.parametrize("exit_at", [0.955, 0.965, 0.975, 0.985])
+def test_a_deeply_nested_result_at_the_size_limit_is_read_inside_the_deadline_or_not_at_all(
+        tmp_path: Path, monkeypatch, exit_at: float) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    unit = b"[" * 12 + b"]" * 12 + b","
+    filler = (unit * (module.MAX_RESULT_BYTES // len(unit)))[: module.MAX_RESULT_BYTES - 200].rstrip(b",")
+    result = b'{"x":[' + filler + b"]}"
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=0.3)
+    plans, _removals = _spy_plan_and_removal(monkeypatch, runner)
+
+    def behaviour(output: Path) -> None:
+        (output / "container-result.json").write_bytes(result)
+        time.sleep(max(0.0, plans[0].job_deadline - 1.0 + exit_at - time.monotonic()))
+
+    install_process(monkeypatch, behaviour, returncode=0)
+
+    status, _elapsed = _timed_run(guarded)
+    ended = time.monotonic()
+
+    assert ended <= plans[0].deadline + 0.01, (status, ended - plans[0].deadline)  # the ledger's settle is the 0.01 s
+    assert status in {"UNKNOWN", "EvidenceNotSealed"} and spend.committed_usd() == Decimal("0.054848")
+
+
+def test_the_result_budget_covers_parsing_and_freeing_at_the_worst_measured_rate() -> None:
+    """Round 23 measured up to 0.06 s per MiB to parse deeply nested lists under load, and freeing them costs about as
+    much. Both happen in the turn, so the time that admits a result of the largest size must cover both."""
+    import guarded_docker_runner as module
+    worst_seconds = 2 * 0.06 * module.MAX_RESULT_BYTES / (1024 * 1024)
+    admitted = module.RESULT_MIN_SECONDS + module.MAX_RESULT_BYTES * module.RESULT_SECONDS_PER_BYTE
+    assert admitted >= 2 * worst_seconds, (admitted, worst_seconds)  # twice the worst, as the constant's comment says
+
+
+def test_a_result_whose_freeing_runs_past_the_deadline_is_never_reported_as_returned(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    real_loads = module.json.loads
+
+    class SlowToFree(dict):
+        def __del__(self) -> None:
+            time.sleep(0.6)  # freeing the parsed result outlasts the whole grace
+
+    monkeypatch.setattr(module.json, "loads", lambda text, *a, **k: SlowToFree(real_loads(text, *a, **k)))
+    body = _returned_result([])
+    install_process(monkeypatch, lambda output: (output / "container-result.json").write_bytes(body), returncode=0)
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.5, seal_grace_seconds=0.3)
+    plans, _removals = _spy_plan_and_removal(monkeypatch, runner)
+
+    result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert time.monotonic() > plans[0].deadline  # the free did run past the deadline
+    assert result.status == "UNKNOWN", result  # so the turn may not claim a returned, exactly charged result

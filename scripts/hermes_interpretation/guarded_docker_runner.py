@@ -52,11 +52,11 @@ MAX_SCANNED_BYTES = 8 * 1024 * 1024  # evidence files are small; a larger file i
 MAX_ESCAPES = 65_536  # more JSON escapes than this in one file: too costly to undo in time, so it is treated as holding
 MAX_STDOUT_BYTES = 1024 * 1024  # the host keeps at most this much of the job's own output
 MAX_CREDENTIAL_BYTES = 64 * 1024
-MAX_RESULT_BYTES = 4 * 1024 * 1024  # a result file larger than this is not read: the turn ends as UNKNOWN
-# Parsing, checking and mapping a result cannot be stopped part way, so it starts only when the time left covers its
-# worst case: measured at most 0.014 s per MiB on hostile shapes (nested lists, dense escapes); this allows about 4 times
-# that. With less time left the result is not read and the turn ends as UNKNOWN.
-RESULT_SECONDS_PER_BYTE = 0.05 / (1024 * 1024)
+MAX_RESULT_BYTES = 256 * 1024  # a result file larger than this is not read: the turn ends as UNKNOWN (real ones: ~6 KiB)
+# Parsing, checking, mapping and freeing a result cannot be stopped part way, so it starts only when the time left
+# covers its worst case: deeply nested lists measured up to 0.06 s per MiB to parse under load, and about as much to
+# free; this allows about twice that sum. With less time left the result is not read and the turn ends as UNKNOWN.
+RESULT_SECONDS_PER_BYTE = 0.25 / (1024 * 1024)
 RESULT_MIN_SECONDS = 0.005
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
@@ -455,13 +455,17 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         cls._walk(root, until, visit, TimeoutError, remove_dirs=True)
 
     @staticmethod
+    def _held_folder(output: Path) -> Path:
+        return output.parent.parent / f"quarantine-{output.parent.name}-held"
+
+    @staticmethod
     def _hold(output: Path, dir_fd: int, name: str) -> None:
         """Move one entry out of `output` in one step, into the turn's private holding folder (mode 700).
 
         Freeing a large file takes time that grows with its size, and the job decides the size, so it is never done
         while the turn's clock runs. `purge_quarantine` frees the folder between turns.
         """
-        held = output.parent.parent / f"quarantine-{output.parent.name}-held"
+        held = GuardedDockerTurnRunner._held_folder(output)
         held.mkdir(mode=0o700, exist_ok=True)
         held_fd = os.open(held, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -656,6 +660,9 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             if isinstance(error, EvidenceNotSealed):
                 raise EvidenceNotSealed(str(error)) from None
             raise EvidenceNotSealed(f"the evidence could not be sealed ({type(error).__name__})") from None
+        held = self._held_folder(output)
+        if held.exists():  # something was moved aside unscanned: it may hold the credential, so this is no success
+            raise EvidenceNotSealed(f"evidence too large to scan was moved, unscanned, to the private folder {held.name}")
         return result
 
     def _run_container(self, turn: HermesTurn, task_dir: Path, plan: _TurnPlan, private: Path, launch: _Launch) -> HermesTurnResult:
@@ -713,6 +720,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         if proc.returncode != 0:
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerExit")
+        mapped = self._interpret_result(output, plan, echoed)  # its parsed result is freed when it returns
+        if time.monotonic() > plan.deadline:  # the result was budgeted to fit, freeing included; the deadline still decides
+            return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
+                                    error_class="ContainerResultUnreadable")
+        return mapped
+
+    def _interpret_result(self, output: Path, plan: _TurnPlan, echoed: bool) -> HermesTurnResult:
+        """Read, check and map the job's result. Everything parsed lives in this frame only, so it is freed on return."""
         read = self._read_result(output, plan)
         if read is None:  # sealing removes a result that held the credential, so say why it is gone
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
@@ -741,9 +756,6 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerResultUnreadable")
         mapped = replace(mapped, observed=observed)
-        if time.monotonic() > plan.deadline:  # the result was budgeted to fit; if it did not, the deadline still decides
-            return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
-                                    error_class="ContainerResultUnreadable")
         if echoed:
             return replace(mapped, status="UNKNOWN", text=None, error_class="CredentialEchoed")
         return mapped
