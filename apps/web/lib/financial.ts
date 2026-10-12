@@ -9,12 +9,28 @@ export interface FundingFlow {
   reference: string; transaction_reference: string | null; reason: string | null; created_at: string; updated_at: string;
 }
 
+/** One identity-bound holdings observation, kept apart from deposit history and reservations. */
+export interface CurrentHoldings {
+  state: "OBSERVED" | "UNAVAILABLE"; reason?: string | null; evidence_class: string | null; assets: Amount[];
+  source?: string; finality?: string; observed_at?: string | null; wallet_address?: string | null;
+  chain_id?: number | null; block_number?: number | null; missing?: string[];
+}
+
+/** The owner's view of the original transaction: identities and stages, never signed bytes. */
+export interface OriginalTransaction {
+  stage: string; reason?: string; reasons?: string[]; evidence_class: string; chain_id: number;
+  wallet_address: string; candidate_hash?: string; transaction_hash?: string; nonce?: number;
+  fee_envelope?: { gas_limit: number; max_fee_per_gas: number; max_priority_fee_per_gas: number };
+  signing_request_id?: string; signed_bytes_sha256?: string; signed_bytes_length?: number;
+  broadcast_returned?: string | null; stages: { stage: string; at: string }[];
+}
+
 export interface FundingView {
   agent_id: string; wallet_id: string; network_id: number; provider_mode: "fixture" | "unavailable";
   declaration: { trading_asset: Amount; gas_asset: Amount } | null;
   flows: FundingFlow[];
   deposit_balances: { asset_class: string; asset_id: string; credited_deposits: Amount; pending_deposits: Amount }[];
-  current_holdings: { state: "OBSERVED" | "UNAVAILABLE"; evidence_class: string | null; assets: Amount[] };
+  current_holdings: CurrentHoldings;
   allowances: { asset_id: string; decimals: number; approved_raw: string; consumed_raw: string; reserved_raw: string; remaining_raw: string }[];
 }
 
@@ -75,7 +91,7 @@ export interface ActionDetail {
   reservations: { scope: string; asset_id: string; decimals: number; raw: string; state: string }[];
   receipts: { outcome: string; breach: boolean; created_at: string; content: Record<string, unknown> }[];
   attempts: { attempt_id: string; state: string; outcome: string | null; detail: string | null;
-    content: { original_references?: Record<string, string | null> } }[];
+    content: { original_references?: Record<string, string | null>; original_transaction?: OriginalTransaction | null } }[];
   recovery: { state: string; blocking_reason: string | null } | null;
 }
 

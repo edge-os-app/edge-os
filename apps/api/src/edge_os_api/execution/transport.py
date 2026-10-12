@@ -13,6 +13,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from edge_os_api.admission.types import ActionIntent, AllowanceCap, ApprovalSnapshot
 from edge_os_api.execution.types import AssetAmount
 
 
@@ -40,6 +41,7 @@ class PreparedSubmission:
     network_id: str
     operation: str
     payload_hash: str
+    attempt_id: str | None = None  # the saved IN_FLIGHT attempt; set by the submission step
 
 
 class SubmissionTransport(Protocol):
@@ -65,6 +67,24 @@ class LocalFixtureTransport:
     """A labelled local fixture transport with authored, per-action outcomes."""
 
     transport_id = "local-fixture/1"
+
+    @staticmethod
+    def authored_actuals(outcome: TransportOutcome, intent: ActionIntent, approval: ApprovalSnapshot) -> TransportOutcome:
+        """Authored fixture amounts for a plan that names none: the intent's planned input/output and the approved
+        per-action gas. Fixture input only; the generic settlement never substitutes planned values itself."""
+        def cap(value: AllowanceCap) -> AssetAmount:
+            return AssetAmount(asset_id=value.asset_id, raw=value.approved_raw, decimals=value.decimals)
+
+        if intent.operation == "ENTRY":
+            planned = (intent.input.quote_input, intent.quantity, cap(approval.per_action_gas))
+        else:
+            planned = (intent.quantity, intent.input.expected_quote, cap(approval.per_exit_gas))
+        actual_input, actual_output, actual_gas = planned
+        if outcome.outcome == "REVERTED":
+            return outcome.model_copy(update={"actual_gas": outcome.actual_gas or actual_gas})
+        return outcome.model_copy(update={"actual_input": outcome.actual_input or actual_input,
+                                          "actual_output": outcome.actual_output or actual_output,
+                                          "actual_gas": outcome.actual_gas or actual_gas})
 
     def __init__(self, plans: dict[str, FixturePlan], default: FixturePlan) -> None:
         self._plans = dict(plans)

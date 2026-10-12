@@ -39,9 +39,15 @@ from edge_os_api.core.provider_ports import (MarketObservationRequest, PlannedFi
                                              QuoteRequest)
 from edge_os_api.execution.connected_identity import (AdoptedConsent, ConnectedAgent, adopted_consent,
                                                       derive_approval, resolve_agent)
-from edge_os_api.execution.models import DecisionRow, EvaluationJobRow, IntentRow, QueueRow
+from edge_os_api.execution.current_holdings import HoldingsUnavailable
+from edge_os_api.execution.models import DecisionRow, EvaluationJobRow, IntentRow, QueueRow, SubmissionAttemptRow
+from edge_os_api.execution.original_transaction import (TRANSPORT_ID as ORIGINAL_TRANSPORT_ID,
+                                                        Leg, OriginalClients, OriginalContext,
+                                                        OriginalTransactionTransport, RouteProfile,
+                                                        read_original_receipt, token_of, wallet_address)
 from edge_os_api.execution.types import ActionQuote, IntentTerms, utc_iso
 from edge_os_api.recovery.types import OutcomeEvidence
+from edge_os_api.revocation.enforcement import SubmissionControls
 
 log = logging.getLogger("edge_os.worker")
 
@@ -166,7 +172,8 @@ class ConnectedExecution:
                 result = self.run_job(job_id)
             except Exception as error:  # noqa: BLE001 - one failing job must not stop other owners' jobs
                 # Saved stage state stays as it was; the failure is recorded on this job only and retried later.
-                log.exception("worker job %s failed: %s", job_id, type(error).__name__)
+                # The error class only: an injected client's message or traceback could carry private bytes.
+                log.error("worker job %s failed: %s", job_id, type(error).__name__)
                 self._update(job_id, reason=f"WORKER_ERROR:{type(error).__name__}")
                 continue
             if result is not None:
@@ -295,12 +302,20 @@ class ConnectedExecution:
         self._update(job.job_id, state="DECIDED", decision_id=decision_id, provenance=provenance)
 
     def _holdings(self, agent: ConnectedAgent, now: dt.datetime) -> AdmissionContext:
+        """Current holdings as observed. `checked_at` is the observation time, so stale readings stay stale."""
         assets = [(agent.quote.asset_id, agent.quote.decimals), (agent.base.asset_id, agent.base.decimals),
                   (agent.gas.asset_id, agent.gas.decimals)]
         observed = self._ports.holdings.observe(owner_id=agent.owner_id, agent_id=agent.agent_id,
                                                 wallet_id=agent.wallet_id, network_id=agent.network_id, assets=assets)
+        address = None
+        if observed.wallet_address is not None:
+            with self._factory() as session:
+                address = wallet_address(session, agent.owner_id, agent.agent_id, agent.wallet_id)
+        refusal = observed.refusal(wallet_address=address, chain_id=agent.network_number, now=self._clock())
+        if refusal is not None:
+            raise HoldingsUnavailable(refusal)
         balances = {asset_id: Holding(asset_id=asset_id, decimals=amount.decimals, raw=amount.raw)
-                    for asset_id, amount in observed.items()}
+                    for asset_id, amount in observed.assets.items()}
         # Attributed inventory comes from the durable admission position, never from a caller.
         positions = {}
         position = self._position(agent)
@@ -311,7 +326,9 @@ class ConnectedExecution:
                                         network_id=position.network_id, strategy_revision=position.strategy_revision,
                                         mandate_id=position.mandate_id),
                 asset_id=position.asset_id, decimals=int(position.decimals), inventory_raw=str(int(position.inventory)))
-        return AdmissionContext(checked_at=utc_iso(now), holdings=HoldingsSnapshot(
+        # The observation time, never later than this step's own time; an authored account without one is this step's.
+        checked = now if observed.observed_at is None else min(observed.observed_at, now)
+        return AdmissionContext(checked_at=utc_iso(checked), holdings=HoldingsSnapshot(
             agent_id=agent.agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id, balances=balances,
             positions=positions))
 
@@ -381,6 +398,9 @@ class ConnectedExecution:
             self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE",
                          reason=f"{str(error).upper() or 'PROVIDER'}_UNAVAILABLE")
             return
+        except HoldingsUnavailable as refused:
+            self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason=refused.reason)
+            return
         except JobRefused as refused:
             self._update(job.job_id, state="COMPLETED", outcome="DENIED", reason=refused.code)
             return
@@ -425,6 +445,9 @@ class ConnectedExecution:
             # A submission-stage outage keeps the saved action queued; a later pass ticks the same action.
             self._update(job.job_id, reason=f"WAITING:{str(error).upper() or 'PROVIDER'}_UNAVAILABLE")
             return
+        except HoldingsUnavailable as refused:
+            self._update(job.job_id, reason=f"WAITING:{refused.reason}")
+            return
         if intent.operation == "ENTRY":
             # The quote cost of the saved quantity at the fresh price. Unchanged prices reproduce the saved input;
             # a moved price yields a different amount, which revalidation denies as QUOTE_CHANGED.
@@ -439,9 +462,13 @@ class ConnectedExecution:
             revision_content_hash=agent.revision.content_hash, market_binding_id=agent.revision.market_binding_id,
             quote_asset_id=agent.quote.asset_id, amount=quote_amount, observed_at=utc_iso(terms_quote.observed_at),
             expires_at=utc_iso(terms_quote.expires_at), source_ref=terms_quote.source_ref)
-        plan = self._planned_effect(payload, approval)
+        original = self._ports.original_clients(agent.agent_id)
         try:
-            transport = self._ports.transport(agent_id=agent.agent_id, plan=plan, operation=intent.operation)
+            if original is not None:
+                transport = self._original_transport(job, agent, approval, intent, *original)
+            else:
+                plan = self._planned_effect(payload, approval)
+                transport = self._ports.transport(agent_id=agent.agent_id, plan=plan, operation=intent.operation)
         except ProviderUnavailable:
             self._update(job.job_id, reason="WAITING:TRANSPORT_UNAVAILABLE")
             return
@@ -462,6 +489,52 @@ class ConnectedExecution:
         queue = self._queue(job.owner_id, job.action_id)
         assert queue is not None
         self._settle_from_queue(job, queue)
+
+    def _original_transport(self, job: EvaluationJobRow, agent: ConnectedAgent, approval: ApprovalSnapshot,
+                            intent: IntentRow, clients: OriginalClients,
+                            profile: RouteProfile) -> OriginalTransactionTransport:
+        """The original-transaction transport for the saved intent, bound to the verified wallet address."""
+        with self._factory() as session:
+            address = wallet_address(session, agent.owner_id, agent.agent_id, agent.wallet_id)
+        if address is None:
+            raise ProviderUnavailable("transport")
+        payload = intent.payload
+        entry = intent.operation == "ENTRY"
+        if entry:
+            sell_amount = payload["input"]["quote_input"]
+            buy_amount = payload["quantity"]
+            sell_asset, buy_asset = agent.quote, agent.base
+            gas_cap, allowance = approval.per_action_gas.as_int(), approval.quote_allowance.as_int()
+        else:
+            sell_amount, buy_amount = payload["quantity"], payload["input"]["expected_quote"]
+            sell_asset, buy_asset = agent.base, agent.quote
+            gas_cap, allowance = approval.per_exit_gas.as_int(), approval.base_allowance.as_int()
+
+        def leg(asset: Any, amount: dict[str, Any]) -> Leg:
+            return Leg(asset_id=asset.asset_id, token=token_of(asset.asset_id) or "", decimals=asset.decimals,
+                       raw=int(amount["raw"]))
+
+        context = OriginalContext(
+            owner_id=str(agent.owner_id), agent_id=agent.agent_id, wallet_id=agent.wallet_id,
+            wallet_address=address, network_id=agent.network_id, chain_id=agent.network_number,
+            identity={"strategy_id": job.strategy_id, "publication_revision_id": str(job.publication_revision_id),
+                      "execution_revision_id": job.execution_revision_id, "content_hash": job.content_hash,
+                      "consent_adoption_id": str(job.consent_adoption_id), "consent_hash": job.consent_hash,
+                      "policy_binding": intent.policy_binding, "job_id": str(job.job_id)},
+            action_id=intent.action_id, payload_hash=intent.payload_hash, operation=intent.operation,
+            sell=leg(sell_asset, sell_amount), buy=leg(buy_asset, buy_amount), gas_asset_id=agent.gas.asset_id,
+            gas_cap_raw=gas_cap, allowance_raw=allowance, decision_slot=job.decision_slot,
+            intent_expires_at=job.decision_slot + INTENT_VALIDITY, mandate_expires_at=approval.expires_at)
+        controls = SubmissionControls(self._services.stops, self._services.removals)
+
+        def current_controls() -> list[str]:
+            with self._factory() as session:
+                return controls.denial_reasons(session, agent.owner_id, agent_id=agent.agent_id,
+                                               wallet_id=agent.wallet_id, network_id=agent.network_id,
+                                               position_id=intent.position_id, operation=intent.operation)
+
+        return OriginalTransactionTransport(context, clients, profile, controls=current_controls,
+                                            clock=lambda: self._clock())  # follows the worker's current clock
 
     def _release_unsent(self, job: EvaluationJobRow, outcome: str, reason: str | None) -> None:
         """End a job whose admitted action was never submitted, releasing it through the accepted cancellation.
@@ -518,6 +591,9 @@ class ConnectedExecution:
                 IntentRow.owner_id == owner_id, IntentRow.action_id == action_id)).scalar_one_or_none()
         if intent is None:
             raise JobRefused("action_not_found")
+        envelope = self._original_envelope(owner_id, action_id)
+        if envelope is not None:
+            return self._reconcile_original(owner_id, intent, envelope)
         try:
             receipt = self._ports.receipts.observe(action_id=action_id, wallet_id=intent.wallet_id,
                                                    network_id=intent.network_id)
@@ -531,6 +607,10 @@ class ConnectedExecution:
             actual_output=receipt.actual_output if receipt.outcome == "CONFIRMED" else None,
             actual_gas=receipt.actual_gas if receipt.outcome in ("CONFIRMED", "REVERTED") else None,
             observed_at=utc_iso(receipt.observed_at), source_ref=receipt.source_ref)
+        return self._apply(owner_id, action_id, evidence, receipt.outcome)
+
+    def _apply(self, owner_id: uuid.UUID, action_id: str, evidence: OutcomeEvidence,
+               receipt_outcome: str) -> ReconcileView:
         result = self._services.recovery.reconcile(owner_id, action_id, evidence)
         queue = self._queue(owner_id, action_id)
         with self._factory() as session:
@@ -538,9 +618,55 @@ class ConnectedExecution:
                 EvaluationJobRow.owner_id == owner_id, EvaluationJobRow.action_id == action_id)).scalar_one_or_none()
         if job is not None and queue is not None and job.state in ("SUBMITTED", "ENQUEUED"):
             self._settle_from_queue(job, queue)
-        return ReconcileView(action_id=action_id, receipt_outcome=receipt.outcome, case_state=result.case.state,
+        return ReconcileView(action_id=action_id, receipt_outcome=receipt_outcome, case_state=result.case.state,
                              decision_status=result.decision_status, applied=result.applied,
                              duplicate=result.duplicate, detail=result.detail)
+
+    def _original_envelope(self, owner_id: uuid.UUID, action_id: str) -> dict[str, Any] | None:
+        with self._factory() as session:
+            attempt = session.execute(select(SubmissionAttemptRow).where(
+                SubmissionAttemptRow.owner_id == owner_id, SubmissionAttemptRow.action_id == action_id)
+                .order_by(SubmissionAttemptRow.started_at.desc()).limit(1)).scalar_one_or_none()
+        if attempt is None or attempt.transport_id != ORIGINAL_TRANSPORT_ID:
+            return None
+        return {**(attempt.content.get("original_transaction") or {}), "in_flight": attempt.state == "IN_FLIGHT"}
+
+    def _reconcile_original(self, owner_id: uuid.UUID, intent: IntentRow,
+                            envelope: dict[str, Any]) -> ReconcileView:
+        """Settle an original transaction only from an independent receipt bound to its saved identity."""
+        clients = self._ports.original_clients(intent.agent_id)
+        if clients is None:
+            raise JobRefused("receipt_unavailable")
+        if envelope.get("stage") == "REFUSED_UNSENT" or (envelope.get("in_flight") and not envelope.get(
+                "transaction_hash")):
+            # A proved refusal is already settled, and an attempt still in flight has no identity to observe yet:
+            # neither gets new evidence, so nothing interrupts or rewrites the original.
+            case = self._services.recovery.status(owner_id, intent.action_id)
+            return ReconcileView(action_id=intent.action_id, receipt_outcome="NOT_OBSERVED", case_state=case.state,
+                                 decision_status=case.decision_status, applied=False, duplicate=False,
+                                 detail="ORIGINAL_IN_FLIGHT" if envelope.get("in_flight") else "ORIGINAL_REFUSED_UNSENT")
+        base = dict(action_id=intent.action_id, binding=IdentityBinding.model_validate(intent.payload["binding"]),
+                    operation=intent.operation, revision_id=intent.revision_id, policy_binding=intent.policy_binding,
+                    payload_hash=intent.payload_hash, observed_at=utc_iso(self._clock()))
+        if not envelope.get("transaction_hash"):
+            # No saved transaction identity (e.g. the signer reply was lost): nothing can be observed or released.
+            evidence = OutcomeEvidence(**base, outcome="SUBMISSION_UNKNOWN", detail="original:no-transaction-hash",
+                                       source_ref="original-receipt:none")
+            return self._apply(owner_id, intent.action_id, evidence, "SUBMISSION_UNKNOWN")
+        reading = read_original_receipt(envelope, clients[0].observer)
+        verdict, outcome = reading.verdict, reading.outcome
+        if outcome == "REJECTED":
+            case = self._services.recovery.status(owner_id, intent.action_id)
+            return ReconcileView(action_id=intent.action_id, receipt_outcome="REJECTED", case_state=case.state,
+                                 decision_status=case.decision_status, applied=False, duplicate=False,
+                                 detail=";".join(verdict.reasons))
+        known = outcome in ("CONFIRMED", "REVERTED")
+        evidence = OutcomeEvidence(
+            **base, outcome=outcome, detail=f"receipt:{verdict.state.value}:{','.join(verdict.reasons) or 'BOUND'}"[:200],
+            actual_input=verdict.actual_input if outcome == "CONFIRMED" else None,
+            actual_output=verdict.actual_output if outcome == "CONFIRMED" else None,
+            actual_gas=verdict.actual_gas if known else None, source_ref=reading.source_ref[:200])
+        return self._apply(owner_id, intent.action_id, evidence, outcome)
 
 
 def main() -> None:

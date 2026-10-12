@@ -124,6 +124,27 @@ where d.content->>'evidence_class' = 'RECORDED_NATIVE_RESPONSE';
 
 Native fault cases (malformed page, wrong chain echo, provider failure, receipt mismatch, RPC failure, RPC on another chain, sampled corroboration, too few requests, cancellation, deadline, killed worker, other owner) are proved by `apps/api/tests/test_native_source_journey.py`, not by the mapped run.
 
+## Original transaction, receipts and current holdings (#58 ORIGINAL-LOCAL)
+
+The verifier copies the AUTHORED recordings `apps/api/tests/fixtures/original_transaction/original_transaction_v1.json` into `<evidence>/original-recordings/` and sets `EDGE_OS_ORIGINAL_RECORDINGS_DIR` (local fixture mode only; production refuses it). Agents whose id contains `fx-original` get the fixture wallet's authored public test-signer address `0x2c7536E3605D9C16a7a3D7b1898e529396a65c23` and use offline recorded clients (route quote, `eth_signTransaction` reply, JSON-RPC). The clients append every call to `calls.jsonl` and every accepted send to `broadcasts.jsonl` in that folder. Nothing signs with a real key, sends a transaction or reads a chain.
+
+| Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
+|---|---|---|---|---|---|---|
+| Recorded current holdings | Wallet setup on "Monad mainnet (143)" → Funds | `GET /v1/agents/{id}/funding` | none (read) | `current_holdings` OBSERVED: block, observation time, `FINALIZED`, wallet address, `recorded-holdings/1`, apart from credited deposits | — | `*-orig-*-holdings.png` |
+| Original transaction saved before each effect | Positions → Run one bounded evaluation → Open action | `POST …/actions`, `GET /v1/actions/{action}` | `execution_submission_attempts.content.original_transaction` (private signed bytes, Keccak hash, nonce, fee envelope, signing request) | job `SUBMITTED_UNKNOWN`; stage `BROADCAST_RETURNED`; one signer call, one send; signed bytes never in the response | reopens; no second sign or send | `*-orig-unknown.png`, `financial-inspection.json` `originals` |
+| Reconcile from its own receipt | Reconcile original action | `POST /v1/actions/{action}/reconcile` | `admission_receipts`, `recovery_local.*` | `SUBMISSION_UNKNOWN → CONFIRMED`; the hash unchanged | reopens with the same hash | `*-orig-confirmed.png` |
+| Lost signer reply | agent id with `fx-original-fx-lost-sign` → Run → Open → Reconcile | same | attempt stage `SIGNING_UNKNOWN`, reservations `RESERVED` | unknown kept; no hash; never sent | — | `*-orig-lost-sign.png`, `original-lost-*` checks |
+| Other owner | Owner B reads or reconciles the action | `GET`/`POST` → 404 | none | no call | — | `ui-financial-original.log` |
+| Raw signed bytes | none | — | — | absent from logs and browser results | — | verifier step "no raw signed transaction bytes" |
+
+```sql
+select action_id, state, outcome, content->'original_transaction'->>'stage', content->'original_transaction'->>'transaction_hash',
+       content->'original_transaction'->>'nonce' from execution_local.execution_submission_attempts
+where transport_id = 'original-transaction/1';
+```
+
+Signer refusal, rejected bytes (type, field, nonce, sender, size, tamper), save failures before signing and before sending, lost or mismatched send replies, a stop after signing, a crash before sending, wrong receipt hash/wallet/chain, receipts without every actual (P22 `BREACHED`), changed evidence, stale or incomplete holdings and the exit's next nonce are proved by `apps/api/tests/test_original_transaction_journey.py` and `apps/api/tests/execution/test_original_signed_bytes.py`, not by the mapped run.
+
 ## Public-runtime preparation (#58 Stage 2, local)
 
 `scripts/p03/runtime_phase.py` runs after every restart comparison, so its writes cannot change them. It needs the financial phase's saved agents.

@@ -2,14 +2,17 @@
 
 Runs inside `verify_run.py` on the same isolated instance. The API already runs with
 `EDGE_OS_EXECUTION_MODE=fixture` and a run-owned `EDGE_OS_FIXTURE_EFFECTS_PATH`. This module starts the bounded
-worker, drives `financial-journey.spec.mjs`, compares saved rows with direct SQL and the independent fixture
-effect record, and after the shared API restart restarts the worker and reopens the journey. Fixture only: it
-proves no wallet, deposit, quote, transaction, receipt or removal at any provider.
+worker, drives `financial-journey.spec.mjs` and `financial-original-action.spec.mjs`, compares saved rows with
+direct SQL, the independent fixture effect record and the AUTHORED original recordings' call and broadcast logs,
+and after the shared API restart restarts the worker and reopens the journey. Fixture and authored recordings only:
+it proves no wallet, deposit, quote, signature, transaction, receipt or removal at any provider.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import subprocess
 import urllib.error
 import urllib.request
@@ -22,12 +25,62 @@ import harness
 EFFECTS_NAME = "fixture-effects.jsonl"
 
 
+ORIGINAL_DIR = "original-recordings"
+ORIGINAL_SOURCE = harness.API_DIR / "tests" / "fixtures" / "original_transaction" / "original_transaction_v1.json"
+
+
 def configure(env: dict[str, str], evidence: Path) -> Path:
-    """Fixture execution for this isolated run only. Production refuses both settings."""
+    """Fixture execution for this isolated run only. Production refuses these settings.
+
+    The AUTHORED original-transaction recordings are copied into the run's evidence, so the run's own call and
+    broadcast logs live beside them and the source fixture is never written.
+    """
     effects = evidence / EFFECTS_NAME
     env["EDGE_OS_EXECUTION_MODE"] = "fixture"
     env["EDGE_OS_FIXTURE_EFFECTS_PATH"] = str(effects)
+    original = evidence / ORIGINAL_DIR
+    original.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ORIGINAL_SOURCE, original / ORIGINAL_SOURCE.name)
+    env["EDGE_OS_ORIGINAL_RECORDINGS_DIR"] = str(original)
     return effects
+
+
+def authored_signed_bytes(evidence: Path) -> list[str]:
+    """Every authored signed transaction (hex, no prefix) in this run's recordings, for the leak scan."""
+    path = evidence / ORIGINAL_DIR / ORIGINAL_SOURCE.name
+    if not path.exists():
+        return []
+    return [item["response"]["data"]["signed_transaction"][2:] for item in json.loads(path.read_text())["signatures"]]
+
+
+def _original_checks(pg: harness.Postgres, evidence: Path, key: str, saved: dict[str, Any]) -> dict[str, Any]:
+    """Direct SQL over the saved original transaction, compared with the recordings and the recorded chain log."""
+    directory = evidence / ORIGINAL_DIR
+    recordings = json.loads((directory / ORIGINAL_SOURCE.name).read_text())
+    broadcasts = _effects(directory / "broadcasts.jsonl")
+    calls = _effects(directory / "calls.jsonl")
+    attempt = _rows(pg, "select state, outcome, content->'original_transaction' original "
+                        "from execution_local.execution_submission_attempts "
+                        f"where action_id = '{saved['actionId']}'")
+    reservations = _rows(pg, "select state from admission_local.admission_reservations "
+                             f"where action_id = '{saved['actionId']}'")
+    receipts = _rows(pg, "select outcome from admission_local.admission_receipts "
+                         f"where action_id = '{saved['actionId']}' order by created_at")
+    original = attempt[0]["original"] if len(attempt) == 1 else {}
+    signed = original.get("signed_bytes")
+    tx_hash = original.get("transaction_hash")
+    return {
+        "attempts": len(attempt), "stage": original.get("stage"), "transaction_hash": tx_hash,
+        # Only a digest of the private bytes leaves the database in this evidence.
+        "signed_bytes_sha256": "sha256:" + hashlib.sha256(bytes.fromhex(signed[2:])).hexdigest() if signed else None,
+        "signed_bytes_map_to_hash": bool(signed) and recordings["transaction_hashes"].get(signed) == tx_hash,
+        "broadcasts_of_hash": sum(1 for entry in broadcasts if entry["hash"] == tx_hash) if tx_hash else 0,
+        "signer_calls": sum(1 for entry in calls if entry["call"] == "signer.rpc"
+                            and entry.get("wallet_id", "").endswith(f":{saved['agentId']}")),
+        "reservation_states": sorted({row["state"] for row in reservations}),
+        "receipts": [row["outcome"] for row in receipts],
+        "ui_hash_matches_sql": saved.get("transactionHash") in (None, tx_hash),
+    }
 
 
 def start_worker(env: dict[str, str], log_dir: Path, name: str = "worker") -> harness.Process:
@@ -50,6 +103,8 @@ def _effects(path: Path) -> list[dict[str, Any]]:
 def inspect(pg: harness.Postgres, effects_path: Path, results: dict[str, Any], owner_b_id: str | None) -> dict[str, Any]:
     """Direct SQL over the financial schemas plus the independent effect record."""
     checks: dict[str, Any] = {}
+    originals = {key: _original_checks(pg, effects_path.parent, key, value) for key, value in results.items()
+                 if key.startswith("original")}
     effects = _effects(effects_path)
     agents = {key: value["agentId"] for key, value in results.items()}
     for key, agent in agents.items():
@@ -101,13 +156,24 @@ def inspect(pg: harness.Postgres, effects_path: Path, results: dict[str, Any], o
                 [s["mode"] for s in value["stops"]] == ["HALT_ALL_SWAPS"]
                 and [j["outcome"] for j in value["jobs"]] == ["ADMISSION_DENIED"]
                 and sum(value["effects_per_action"].values()) == 0)
+    for key, value in originals.items():
+        if key.startswith("original-lost-"):
+            expectations[f"{key}: lost signer reply keeps the reservations, no hash, never sent"] = (
+                value["attempts"] == 1 and value["stage"] == "SIGNING_UNKNOWN" and value["transaction_hash"] is None
+                and value["signer_calls"] == 1 and "RESERVED" in value["reservation_states"]
+                and "CONFIRMED" not in value["receipts"])
+        else:
+            expectations[f"{key}: one original saved before its one broadcast, then settled"] = (
+                value["attempts"] == 1 and value["stage"] == "BROADCAST_RETURNED" and value["signed_bytes_map_to_hash"]
+                and value["broadcasts_of_hash"] == 1 and value["signer_calls"] == 1 and value["ui_hash_matches_sql"]
+                and value["receipts"] == ["SUBMISSION_UNKNOWN", "CONFIRMED"])
     if owner_b_id:
         foreign = _rows(pg, "select count(*) c from execution_local.execution_evaluation_jobs "
                             f"where owner_id = '{owner_b_id}'")[0]["c"]
         expectations["owner B created no financial jobs"] = foreign == 0
     expectations["every effect belongs to a saved action"] = all(
         any(e["action_id"] in value["effects_per_action"] for value in checks.values()) for e in effects)
-    return {"checks": checks, "expectations": expectations, "effects_lines": len(effects),
+    return {"checks": checks, "originals": originals, "expectations": expectations, "effects_lines": len(effects),
             "all_checks_pass": all(expectations.values())}
 
 
@@ -172,6 +238,9 @@ def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, u
     code = run_playwright(["financial-journey.spec.mjs"], ui_env, evidence / "ui-financial.log")
     ok &= rec.step("financial journey drive: wallet, funding, exact terms, action, receipt, recovery, stop, removal "
                    "(desktop and 390px)", code == 0, {"exit": code})
+    code = run_playwright(["financial-original-action.spec.mjs"], ui_env, evidence / "ui-financial-original.log")
+    ok &= rec.step("original transaction drive: recorded holdings, saved identity, one send, unknown then reconciled; "
+                   "lost signer reply kept unknown; other owner refused (desktop and 390px)", code == 0, {"exit": code})
     results_path = evidence / "ui" / "financial-results.json"
     results = json.loads(results_path.read_text()) if results_path.exists() else {}
     inspection = inspect(pg, effects, results, owner_b_id)
@@ -202,6 +271,9 @@ def after_restart(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence:
     ok &= rec.step("financial rows and effects unchanged by the restart (no second economic action)",
                    after["checks"] == before["checks"] and after["effects_lines"] == before["effects_lines"],
                    {"effects_before": before["effects_lines"], "effects_after": after["effects_lines"]})
+    ok &= rec.step("original transactions unchanged by the restart (no second sign or send)",
+                   bool(before.get("originals")) and after["originals"] == before["originals"],
+                   {"originals": sorted(after["originals"])})
     ok &= rec.step("IC04 browser-completed wallet reopens bound after the restart",
                    "ic04" in before and browser_completion_after_restart(ui_env, before["ic04"]))
     worker.stop()

@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     # application database, so a restarted process reconciles the original action and a verifier counts effects
     # independently. Without it the fixture keeps effects in process memory.
     fixture_effects_path: str | None = None
+    # Local and test only: a directory with the AUTHORED original-transaction recordings. Fixture agents carrying
+    # the reserved `fx-original` marker then use the recorded original-transaction clients. Production refuses it.
+    original_recordings_dir: str | None = None
     # `recorded` serves the authored SYNTHETIC recorded-response history bundle to owner investigation jobs. Production
     # refuses it. `unavailable` refuses every history collection. No setting selects an actual provider source.
     research_history_mode: Literal["recorded", "unavailable"] = "unavailable"
@@ -157,6 +160,8 @@ class Settings(BaseSettings):
             problems.append("research_history_mode: recorded synthetic history is refused in production")
         if self.fixture_effects_path is not None and self.execution_mode != "fixture":
             problems.append("fixture_effects_path: only the fixture execution mode records fixture effects")
+        if self.original_recordings_dir is not None and (self.env == "production" or self.execution_mode != "fixture"):
+            problems.append("original_recordings_dir: authored original recordings are local fixture mode only")
         if self.env == "production" and self.privy_app_id == TEST_APP_ID:
             problems.append("privy_app_id: the test app id is refused in production")
         if problems:

@@ -7,6 +7,8 @@ make no network or provider call; every wallet here is authored local fixture da
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -115,3 +117,42 @@ def test_production_refuses_the_local_fixture(env):
     with pytest.raises(ConfigError, match="wallet_provider"):
         load_settings(production)
     assert load_settings({**production, "EDGE_OS_WALLET_PROVIDER": "unavailable"}).wallet_provider == "unavailable"
+
+
+def test_marked_original_agent_reports_the_authored_test_signer_after_restart(wallet_client, settings, owner_a, pg):
+    """ORIGINAL-LOCAL amendment A1: only the reserved `fx-original` marker selects the authored test signer."""
+    published_sender = "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23"  # eth-account docs example key's address
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    with _app_client(settings, FixtureWalletProvider()) as client:
+        for agent in ("agent-fx-original", "agent-plain"):
+            client.post(f"/v1/wallet-setup/agents/{agent}/prepare",
+                        json=_prepare_body(strategy_id, revision_id, f"{agent}-key"), headers=owner_a)
+            assert client.post(f"/v1/wallet-setup/agents/{agent}/dispatch", headers=owner_a).json()[
+                "state"] == "CONFIRMED"
+        marked = client.get("/v1/wallet-setup/agents/agent-fx-original", headers=owner_a).json()["wallet_id"]
+        plain = client.get("/v1/wallet-setup/agents/agent-plain", headers=owner_a).json()["wallet_id"]
+
+    restarted = FixtureWalletProvider()  # a fresh instance models a restarted process
+    assert restarted.lookup_wallet(marked).address == published_sender
+    assert restarted.lookup_wallet(marked).owner_id == restarted.lookup_wallet(plain).owner_id
+    # The ordinary placeholder stays the documented SHA-256 derivation of its wallet id.
+    assert restarted.lookup_wallet(plain).address == "0x" + hashlib.sha256(plain.encode("utf-8")).hexdigest()[:40]
+    # The marker in the owner part of an id never selects the test signer; a foreign-format id finds nothing.
+    assert restarted.lookup_wallet("fixture:not-a-uuid:agent-fx-original") is None
+    bound = pg.psql("select count(*) from wallet_setup_events where content->>'address' = "
+                    f"'{published_sender}'")
+    assert bound == "1"  # bound once, through the existing create/lookup path
+
+
+def test_a_foreign_completion_of_a_marked_agent_binds_nothing(wallet_client, settings, owner_a, owner_b, pg):
+    """A1: the marker selects authored data only; another owner's marked wallet id never binds."""
+    strategy_id, revision_id = helpers.publish_revision(wallet_client, owner_a)
+    with _app_client(settings, FixtureWalletProvider()) as client:
+        other = client.get("/v1/me", headers=owner_b).json()["user_id"]
+        client.post("/v1/wallet-setup/agents/foreign-fx-original/prepare",
+                    json=_prepare_body(strategy_id, revision_id, "foreign-marked-key"), headers=owner_a)
+        completed = client.post("/v1/wallet-setup/agents/foreign-fx-original/complete", headers=owner_a,
+                                json={"wallet_id": f"fixture:{other}:foreign-fx-original"}).json()
+        assert completed["state"] == "UNKNOWN" and completed["wallet_id"] is None
+    assert pg.psql("select count(*) from wallet_setups where agent_id = 'foreign-fx-original' "
+                   "and wallet_id is not null") == "0"
