@@ -320,6 +320,7 @@ Byte-identical resend is disabled in this milestone. A restart finds the IN_FLIG
 | Nansen missing credit header | credits UNKNOWN, whole credit reservation (12) kept | `test_a_missing_credit_charge_keeps_the_whole_credit_reservation_unknown` |
 | Nansen lost reply | requests and credits UNKNOWN, whole reservations kept | `test_a_lost_nansen_reply_keeps_requests_and_credits_unknown` |
 | Nansen cancel / deadline between operations | stop before the next request; partial report; one request KNOWN | `test_a_cancel_between_operations_stops_before_the_next_request`, `test_a_nansen_deadline_between_operations_stops_before_the_next_request` |
+| Nansen report save fails after the calls | job stays COLLECTING; next pass OUTCOME_UNKNOWN; no second call; requests 4 and credits 12 unknown | `test_a_failed_report_save_keeps_liability_and_is_never_run_again` |
 | Nansen worker killed in the attempt | OUTCOME_UNKNOWN; no second run; reservations unknown | `test_a_worker_killed_during_the_run_is_never_run_again` |
 | Nansen invalid request (window order, duplicate operation, bad token, owner field, limits) | 422 before any reservation | `test_an_invalid_nansen_request_is_refused_before_any_reservation` |
 | Nansen budget refusal | BUDGET_EXHAUSTED; zero transport calls | `test_a_nansen_job_over_the_credit_budget_is_refused_and_calls_nothing` |

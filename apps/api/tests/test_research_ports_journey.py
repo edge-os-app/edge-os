@@ -437,6 +437,29 @@ class Crash(BaseException):
     """An authored worker death inside the run (not an application exception)."""
 
 
+def test_a_failed_report_save_keeps_liability_and_is_never_run_again(ports, owner_a, monkeypatch):
+    from edge_os_api.research import nansen_reports
+
+    intake_id = request_id(ports, owner_a)
+    job_id = start_nansen(ports, owner_a, intake_id).json()["job_id"]
+
+    def failing_save(**kwargs):
+        raise RuntimeError("authored: the report row could not be built")
+
+    monkeypatch.setattr(nansen_reports, "report_content", failing_save)
+    first = CountingNansen()
+    with pytest.raises(RuntimeError):
+        nansen_worker(ports, first).run_job(uuid.UUID(job_id))
+    monkeypatch.undo()
+    again = CountingNansen()
+    nansen_worker(ports, again).run_job(uuid.UUID(job_id))
+    job = view(ports, owner_a, job_id)
+    assert (first.calls, again.calls) == (2, 0)  # the provider calls were made once and never repeated
+    assert (job["state"], job["terminal_reason"], job["nansen_report"]) == ("UNAVAILABLE", "nansen_outcome_unknown", None)
+    assert (job["budget"]["unknown_liability"]["provider_requests"],
+            job["budget"]["unknown_liability"]["nansen_credits"]) == (4, 12)
+
+
 def test_a_worker_killed_during_the_run_is_never_run_again(ports, owner_a):
     intake_id = request_id(ports, owner_a)
     job_id = start_nansen(ports, owner_a, intake_id).json()["job_id"]
