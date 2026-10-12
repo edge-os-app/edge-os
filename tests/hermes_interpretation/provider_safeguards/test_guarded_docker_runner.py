@@ -3646,11 +3646,42 @@ def test_a_job_entry_set_during_a_turn_does_not_change_that_turn(tmp_path: Path,
 ])
 def test_a_job_entry_that_could_reach_beyond_its_own_read_only_folder_is_refused_before_anything_starts(
         tmp_path: Path, script, files, settings) -> None:
-    entry = JobEntry(script, tuple((tmp_path / source, target) for source, target in files), settings)
-
-    with pytest.raises(ValueError):
-        build(tmp_path, None, job_entry=entry)
+    with pytest.raises(ValueError):  # at construction of the entry or of the runner, before anything starts
+        build(tmp_path, None, job_entry=JobEntry(script, tuple((tmp_path / source, target) for source, target in files), settings))
     assert not (tmp_path / "evidence").exists()
 
 
 HERE_OF_RUNNER = Path(guarded_docker_runner.__file__).resolve().parent
+
+
+def test_a_job_file_whose_real_path_holds_a_comma_is_refused_when_the_turn_starts_and_nothing_is_launched(
+        tmp_path: Path, monkeypatch) -> None:
+    folder = tmp_path / "x,bind-propagation=rshared"
+    folder.mkdir()
+    (folder / "a.py").write_text("# job")
+    link = tmp_path / "a.py"
+    link.symlink_to(folder / "a.py")  # the name has no comma; the path the mount would use has one
+    launched = install_process(monkeypatch, lambda output: None)
+    runner, _, _ = build(tmp_path, None, job_entry=JobEntry("/opt/p05job/a.py", ((link, "/opt/p05job/a.py"),)))
+
+    with pytest.raises(ValueError):
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched == [] and not list((tmp_path / "evidence").glob("turn-*"))
+
+
+def test_a_job_entry_keeps_its_own_copy_of_the_files_and_settings_it_was_given(tmp_path: Path, monkeypatch) -> None:
+    script = tmp_path / "a.py"
+    script.write_text("# job")
+    files, settings = [(script, "/opt/p05job/a.py")], {"route": {"id": "a"}}
+    launched = install_process(monkeypatch, lambda output: None)
+    runner, _, _ = build(tmp_path, None, job_entry=JobEntry("/opt/p05job/a.py", files, settings))
+    files.append((tmp_path / "credential", "/opt/p05job/b.py"))  # the caller's own list and dict change afterwards
+    settings["route"]["id"] = "b"
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    [argv] = launched
+    assert not any("/opt/p05job/b.py" in part for part in argv)
+    [job_input] = (tmp_path / "evidence").glob("turn-01-*/input.json")
+    assert _json.loads(job_input.read_text())["job_settings"] == {"route": {"id": "a"}}

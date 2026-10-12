@@ -39,6 +39,7 @@ None of this exists. Each item is a separate reviewed change.
 3. The guard policy carrying the routing fields above as `required_extra`, with tests.
 4. The spend ledger on durable shared storage with the same reserve, settle, release and reconcile rules (accepted hosting assessment).
 5. A recorded decision path that resolves an UNKNOWN reservation without late evidence (accepted proposal 9a).
+6. A release that does not trust the job alone. Locally, a reservation is released when the job reports zero requests and the guard's own count is 0; both are written inside the Hermes process. For an ACTUAL route, a release must also need a host-side egress count of zero (section 6) or the provider's own record.
 
 ## 4. Secure credential handoff (PENDING)
 

@@ -2,7 +2,7 @@
  "accepted_files_sha256": {
   "Dockerfile": "f1d0b5ee429cb2c66911645a5d1034dce9ec0e6c2ab82b72304cb0a2491e37b3",
   "docker_turn_runner.py": "03cde6e8f9e37c67b67239647b5129bd3ec01b0ecbbe9f24eb1b756e041da7bb",
-  "guarded_docker_runner.py": "a65665398f8d0fe110399aed2406de2206b5c86507abb54c3a59211471effdbc",
+  "guarded_docker_runner.py": "4b4a7e0f9642cb2bf39513e612e749228dff5d24c11276693d12fe7ce31fae71",
   "guarded_turn_runner.py": "281d3c2e57f87247abfeac792c54da1df0478dcc6eea3ca8fa107e910e270a73",
   "hermes_turn_job.py": "3186380733669cb5f7c2d48198ec67117415aa41b90ef1f475033373ee03870d",
   "provider_guard.py": "d8a1c89cad28c029d4d4dd95c3e34e2d8721f1c0fe641d81eb15cbe61f1a1327",

@@ -222,7 +222,7 @@ def test_two_independent_tasks_at_the_same_time_keep_their_own_identities_and_ch
 
 
 def test_after_the_host_dies_mid_turn_recovery_stops_its_own_container_and_the_unknown_spend_stays_and_blocks(
-        pinned_hermes_image, run_id, evidence_root) -> None:
+        pinned_hermes_image, run_id, evidence_root, request) -> None:
     import os
     import signal
     import subprocess
@@ -237,6 +237,14 @@ def test_after_the_host_dies_mid_turn_recovery_stops_its_own_container_and_the_u
     credential, evidence, spend_path = root / "private-credential", root / "evidence", root / "spend.sqlite"
     credential.write_text(SENTINEL)
     dead_run = f"{run_id}-dead"
+
+    def remove_own_leftover() -> None:  # only if the test fails early: the dead run's container, by name AND label
+        names = docker("ps", "-aq", "--filter", f"name=^p05-{dead_run}-", "--filter",
+                       f"label=edge-os.test.run={dead_run}", check=False).stdout.split()
+        for name in names:
+            docker("rm", "-f", name, check=False)
+
+    request.addfinalizer(remove_own_leftover)
     here = Path(__file__).resolve().parent
     paths = [str(here.parents[1] / "apps" / "api" / "src"), str(here.parents[1] / "scripts" / "hermes_interpretation"),
              str(here.parents[1] / "scripts" / "hermes_job_support")]

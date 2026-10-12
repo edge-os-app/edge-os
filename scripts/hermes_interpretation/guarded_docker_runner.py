@@ -223,11 +223,22 @@ class JobEntry:
     The default is the accepted guarded job. Another entry runs in the same container, under the same lifecycle, with
     the same input, output, guard and credential mounts; its own files go read-only into JOB_FILES_FOLDER only, and its
     settings reach the job as `job_settings` in the input. Nothing here is read until a turn starts.
+
+    The entry keeps its own copies of the files and settings it is given, so a caller's list or dict that changes later
+    cannot change it.
     """
 
     script: str = "/opt/p05guard/guarded_turn_job.py"
     files: tuple[tuple[Path, str], ...] = ()
     settings: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "files", tuple((Path(source), target) for source, target in self.files))
+        try:
+            settings = json.loads(json.dumps(self.settings, allow_nan=False))
+        except (TypeError, ValueError):
+            raise ValueError("job settings must be plain JSON values") from None
+        object.__setattr__(self, "settings", settings)
 
     def check(self) -> None:
         """Refuse an entry that could run or mount anything outside its own read-only folder. No I/O.
@@ -249,6 +260,17 @@ class JobEntry:
             json.dumps(self.settings, allow_nan=False)
         except (TypeError, ValueError):
             raise ValueError("job settings must be plain JSON values") from None
+
+    def resolved(self) -> JobEntry:
+        """The entry with each file at the real path the mount will use, refused if that path holds a comma.
+
+        `check` sees the names it was given; a link among them can lead to a path whose comma would split the mount
+        option. This reads the file system, so it runs when a turn starts, never at construction.
+        """
+        files = tuple((source.resolve(), target) for source, target in self.files)
+        if any("," in str(source) for source, _target in files):
+            raise ValueError("a job file's real path may not hold a comma")  # it would split the mount option
+        return replace(self, files=files)
 
 
 class EvidenceNotSealed(RuntimeError):
@@ -334,6 +356,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             grace, entry = self.seal_grace_seconds, self.job_entry
             self._check_deadline_settings(timeout, grace)  # before a turn number is used or anything starts
             entry.check()
+            entry = entry.resolved()  # before a turn number is used: a refused entry starts nothing
             self.turn_count += 1
             sequence = self.turn_count
         started = time.monotonic()  # the one deadline counts from here: everything the turn does is inside it
