@@ -1515,3 +1515,89 @@ def test_a_credential_file_that_is_a_named_pipe_is_refused_without_blocking(tmp_
     status, elapsed = _timed_run(runner, limit=5)
 
     assert status == "CredentialUnavailable" and elapsed < 1.0 and launched == []
+
+
+# --- Repairs after round-13 reviews: every host read of a file the job controls is bounded, and the cut is safe --------
+
+def test_cutting_the_stdout_never_keeps_a_part_of_the_credential(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    real_popen = subprocess.Popen
+
+    class Loud:
+        returncode = 0
+
+        def __init__(self, argv, **kw) -> None:
+            self.sink = kw.get("stdout")
+
+        def communicate(self, timeout=None):  # the credential sits right across the 1 MiB cut
+            self.sink.write(b"x" * (module.MAX_STDOUT_BYTES - 25) + OLD.encode() + b"y" * 4096)
+            self.sink.flush()
+            return None, None
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Loud(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    kept = b"".join(p.read_bytes() for p in (tmp_path / "evidence").rglob("*stdout*") if p.is_file())
+    assert OLD.encode()[:12] not in kept, "the cut kept the first part of the credential"
+
+
+@pytest.mark.parametrize("shape", ["fifo", "link-to-zero"])
+def test_a_hostile_result_file_cannot_block_or_flood_the_host_even_without_a_credential(tmp_path: Path, monkeypatch, shape: str) -> None:
+    def behaviour(output: Path) -> None:
+        if shape == "fifo":
+            os.mkfifo(output / "container-result.json")
+        else:
+            (output / "container-result.json").symlink_to("/dev/zero")
+
+    install_process(monkeypatch, behaviour, returncode=0)
+    runner, _, _ = build(tmp_path, None, timeout_seconds=1.0, seal_grace_seconds=1.0)
+
+    status, elapsed = _timed_run(runner, limit=8)
+
+    assert status in ("UNKNOWN", "EvidenceNotSealed") and elapsed <= 1.0 + 1.0 + 0.25, (status, elapsed)
+    assert not [p for p in (tmp_path / "evidence").rglob("*") if p.is_symlink() or stat_is_fifo(p)], "a special file was kept"
+
+
+def stat_is_fifo(path: Path) -> bool:
+    import stat as stat_module
+    return stat_module.S_ISFIFO(path.lstat().st_mode)
+
+
+def test_no_job_is_launched_once_the_budget_is_spent_during_setup(tmp_path: Path, monkeypatch) -> None:
+    launched = install_process(monkeypatch, lambda output: None, returncode=0)
+
+    def slow_setup(turn):
+        time.sleep(1.3)
+        return {}
+
+    runner, spend, guarded = build(tmp_path, None, script_for=slow_setup, timeout_seconds=1.0, seal_grace_seconds=0.2)
+
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched == [], "a job was started after its budget was spent"
+    assert result.request_count == 0
+
+
+def test_a_result_file_larger_than_the_limit_is_not_read(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    monkeypatch.setattr(module, "MAX_RESULT_BYTES", 1024)
+    reads: list[int] = []
+    real_read = os.read
+
+    def counting_read(fd, n):
+        reads.append(n)
+        return real_read(fd, n)
+
+    install_process(monkeypatch, lambda output: (output / "container-result.json").write_text(
+        '{"guard": {}, "hermes": {}, "pad": "' + "x" * 4096 + '"}'), returncode=0)
+    runner = build(tmp_path, None)[0]
+    monkeypatch.setattr(os, "read", counting_read)
+
+    result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert (result.status, result.error_class) == ("UNKNOWN", "ContainerResultUnreadable")
+    assert all(n <= 1024 + 1 for n in reads), "the host read more of the result than the limit allows"

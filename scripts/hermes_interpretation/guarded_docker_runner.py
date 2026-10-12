@@ -47,6 +47,7 @@ REDACTED = "[REDACTED]"
 MAX_SCANNED_BYTES = 64 * 1024 * 1024
 MAX_STDOUT_BYTES = 1024 * 1024  # the host keeps at most this much of the job's own output
 MAX_CREDENTIAL_BYTES = 64 * 1024
+MAX_RESULT_BYTES = 4 * 1024 * 1024  # a result file larger than this is not read: the turn ends as UNKNOWN
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
 
@@ -210,13 +211,16 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             os.close(parent_fd)
 
     @classmethod
-    def _redact(cls, folder: Path, secret: str, deadline: float) -> bool:
+    def _redact(cls, folder: Path, secret: str | None, deadline: float) -> bool:
         """Remove the credential from every file and name under `folder`. True when something held it.
+
+        With no credential, the walk still runs: links, pipes, sockets and devices are removed, so nothing the host reads
+        later can block it or lead it outside `folder`.
 
         Works on directory descriptors and never follows a link, so a container that is still writing cannot lead it
         outside `folder`. Links, pipes, sockets and devices are removed without being opened. Any error propagates.
         """
-        forms, found, seen = encodings(secret), [False], [0]
+        forms, found, seen = (encodings(secret) if secret else []), [False], [0]
 
         def visit(dir_fd: int, name: str, mode: int) -> str | None:
             seen[0] += 1
@@ -233,7 +237,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             if not stat.S_ISREG(mode):
                 os.unlink(name, dir_fd=dir_fd)
                 return None
-            found[0] |= cls._seal_file(dir_fd, name, forms)
+            if forms:
+                found[0] |= cls._seal_file(dir_fd, name, forms)
             return None
 
         cls._walk(folder, deadline, visit, EvidenceNotSealed, remove_dirs=False)
@@ -336,8 +341,6 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     def _seal(self, output: Path, plan: _TurnPlan) -> bool:
         """Seal the output. Any failure at all removes it and raises `EvidenceNotSealed`."""
-        if plan.secret is None:
-            return False
         try:
             return self._redact(output, plan.secret, plan.deadline)
         except BaseException as error:
@@ -412,14 +415,19 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         launch.stopped = True
 
     @staticmethod
-    def _cap_stdout(sink: Any, returned: bytes | None) -> None:
-        """Keep at most MAX_STDOUT_BYTES of the job's output. Cutting a file is one step, whatever its size."""
+    def _cap_stdout(sink: Any, returned: bytes | None, secret: str | None) -> None:
+        """Keep at most MAX_STDOUT_BYTES of the job's output. Cutting a file is one step, whatever its size.
+
+        The cut backs off by the length of the longest form of the credential, less one byte, so an occurrence that
+        crosses the limit is dropped whole and no part of it stays. Whole occurrences before the cut are sealed later.
+        """
         if returned:  # a process that handed its output back instead of writing it to the file
             sink.write(returned[:MAX_STDOUT_BYTES])
         sink.flush()
         size = os.fstat(sink.fileno()).st_size
         if size > MAX_STDOUT_BYTES:
-            os.ftruncate(sink.fileno(), MAX_STDOUT_BYTES)
+            longest = max((len(form) for form in encodings(secret)), default=1) if secret else 1
+            os.ftruncate(sink.fileno(), max(0, MAX_STDOUT_BYTES - (longest - 1)))
 
     # --- One turn -------------------------------------------------------------------------------------------------
 
@@ -435,7 +443,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         except BaseException as failure:
             try:  # the same two steps as on success
                 self._confirm_stopped(plan, launch)
-                self._seal(output, plan)
+                if launch.proc is not None:  # with no job launched, the output holds nothing the job could write
+                    self._seal(output, plan)
             except BaseException as cleanup_error:  # an interrupt here counts too: the evidence goes
                 self._quarantine(output, plan)  # raises EvidenceNotSealed unless the folder was removed
                 if isinstance(failure, Exception) and not isinstance(failure, EvidenceNotSealed):  # say it, with the cause
@@ -444,7 +453,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             raise  # an interrupt, a failure already reported as EvidenceNotSealed, or one after which all was secured
         try:
             self._confirm_stopped(plan, launch)
-            self._seal(output, plan)
+            if launch.proc is not None:  # with no job launched, the output holds nothing the job could write
+                self._seal(output, plan)
         except BaseException as error:
             self._quarantine(output, plan)
             if isinstance(error, EvidenceNotSealed):
@@ -481,36 +491,78 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                  "--env", "PYTHONDONTWRITEBYTECODE=1", plan.image, "-B", "/opt/p05guard/guarded_turn_job.py"]
         # The job's own output goes to a file inside the output folder, never into host memory. After the container is
         # gone the file is cut to MAX_STDOUT_BYTES, and the lifecycle seals it with the rest of the output.
+        if time.monotonic() >= plan.job_deadline:  # setup used the whole job budget: start nothing, so nothing was sent
+            return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
+                                    observed={"guard_admitted": 0}, error_class="DeadlinePassedBeforeLaunch")
         sink_fd = os.open(output / "host-captured-stdout.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(sink_fd, "wb") as sink:
-            launch.proc = proc = subprocess.Popen(argv, stdout=sink, stderr=subprocess.STDOUT)
-            try:  # setup time since the plan was made comes out of the wait, never on top of it
-                returned, _ = proc.communicate(timeout=max(0.0, plan.job_deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                self._confirm_stopped(plan, launch)  # raises if the container is still there after the kill
-                self._cap_stdout(sink, None)
-                (task_dir / "container-lifecycle.json").write_text(json.dumps(launch.stopping, indent=1) + "\n")
-                return HermesTurnResult(status="TIMED_OUT", text=None, usage=Usage(), request_count=None, observed={},
-                                        error_class="TimeoutExpired")
-            # Whatever the client's exit code, the container may still run (a client that lost its daemon exits with an
-            # error while the container goes on). Verify it is gone before any evidence is touched.
-            self._confirm_stopped(plan, launch)
-            self._cap_stdout(sink, returned)
+            returned = None
+            try:
+                launch.proc = proc = subprocess.Popen(argv, stdout=sink, stderr=subprocess.STDOUT)
+                try:  # setup time since the plan was made comes out of the wait, never on top of it
+                    returned, _ = proc.communicate(timeout=max(0.0, plan.job_deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    self._confirm_stopped(plan, launch)  # raises if the container is still there after the kill
+                    (task_dir / "container-lifecycle.json").write_text(json.dumps(launch.stopping, indent=1) + "\n")
+                    return HermesTurnResult(status="TIMED_OUT", text=None, usage=Usage(), request_count=None, observed={},
+                                            error_class="TimeoutExpired")
+                # Whatever the client's exit code, the container may still run (a client that lost its daemon exits with
+                # an error while the container goes on). Verify it is gone before any evidence is touched.
+                self._confirm_stopped(plan, launch)
+            finally:  # on every path, the host keeps at most MAX_STDOUT_BYTES of the job's output
+                self._cap_stdout(sink, returned, plan.secret)
         echoed = self._seal(output, plan)  # sealed here for the result check; the lifecycle seals again on every path
-        result_path = output / "container-result.json"
-        if proc.returncode != 0 or not result_path.exists():
+        if proc.returncode != 0:
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerExit")
+        raw = self._read_result(output, plan)
+        if raw is None:
+            return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
+                                    error_class="ContainerResultUnreadable")
         try:
-            raw = json.loads(result_path.read_text(encoding="utf-8"))
             mapped = self._map(raw)
             guard = raw["guard"]
             observed = {**mapped.observed, "guard_admitted": guard["admitted_count"], "guard_seen": guard["seen_count"],
                         "guard_refusal_reasons": sorted({r["reason"] for r in guard["evidence"] if not r["admitted"]})}
-        except (ValueError, RecursionError, KeyError, TypeError, OSError):  # a result the job wrote but the host cannot read
+        except (ValueError, RecursionError, KeyError, TypeError, AttributeError):  # a result the host cannot use
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerResultUnreadable")
         mapped = replace(mapped, observed=observed)
         if echoed:
             return replace(mapped, status="UNKNOWN", text=None, error_class="CredentialEchoed")
         return mapped
+
+    @classmethod
+    def _read_result(cls, output: Path, plan: _TurnPlan) -> dict[str, Any] | None:
+        """Read the job's result file within the deadline: no link followed, no blocking, a plain file of bounded size.
+
+        Returns None when the file is missing, is not a plain file, is too large, cannot be parsed, or the deadline passed.
+        """
+        if time.monotonic() > plan.deadline:
+            return None
+        try:
+            folder = os.open(output, cls._DIR_FLAGS)
+        except OSError:
+            return None
+        try:
+            fd = os.open("container-result.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder)
+        except OSError:
+            os.close(folder)
+            return None
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RESULT_BYTES:
+                return None
+            data = os.read(fd, MAX_RESULT_BYTES + 1)
+        except OSError:
+            return None
+        finally:
+            os.close(fd)
+            os.close(folder)
+        if len(data) > MAX_RESULT_BYTES or time.monotonic() > plan.deadline:
+            return None
+        try:
+            parsed = json.loads(data.decode("utf-8"))
+        except (ValueError, RecursionError, UnicodeDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
