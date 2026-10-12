@@ -44,9 +44,10 @@ def declared_rule(session: Session, principal: Principal, declaration_id: str,
         InvestigationDeclaration.owner_id == principal.user_id,
         InvestigationDeclaration.declaration_id == uuid.UUID(declaration_id))).scalar_one_or_none()
     rule = None
+    wanted = str(uuid.UUID(evaluation_id))  # identities compare in canonical lowercase form
     if declaration is not None and declaration.content["schema_version"] == HISTORY_SCHEMA_VERSION:
         rule = next((item for item in declaration.content["rule_map"]["rules"]
-                     if item["evaluation_id"] == evaluation_id and item["rule_source"] == "USER_ADOPTED"), None)
+                     if str(uuid.UUID(item["evaluation_id"])) == wanted and item["rule_source"] == "USER_ADOPTED"), None)
     if declaration is None or rule is None:
         raise invalid("/evaluation_id", "Choose one rule that you declared for this dataset's investigation.",
                       "declared_rule_not_found")

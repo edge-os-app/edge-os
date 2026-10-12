@@ -207,3 +207,12 @@ def test_another_declarations_rule_cannot_be_borrowed(research, owner_a):
     response = research.post(path(bundle), headers=owner_a,
                              json=adoption_body(bundle, second, evaluation_id=DECLARED_RULES[first]))
     assert response.status_code == 422 and finding(response) == "declared_rule_not_found"
+
+
+def test_declared_rule_identity_is_case_insensitive(research, owner_a):
+    from research_flows import DECLARED_RULES
+
+    dataset_id = reported_dataset(research, owner_a)
+    bundle = compiled_thesis(research, owner_a)
+    body = adoption_body(bundle, dataset_id, evaluation_id=DECLARED_RULES[dataset_id].upper())
+    assert research.post(path(bundle), headers=owner_a, json=body).status_code == 201

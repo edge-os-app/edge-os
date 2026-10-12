@@ -371,7 +371,8 @@ describe("recorded-history investigation", () => {
     mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
     mocks.historySave.mockResolvedValue(DECLARATION);
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.selectOptions(await screen.findByLabelText("Recorded source"), SOURCE.source_id);
+    await screen.findByRole("option", { name: SOURCE.title }); // the catalog loads after the label renders
+    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
     const save = screen.getByRole("button", { name: "Save history declaration" });
     expect(save).toBeDisabled();
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
@@ -458,7 +459,8 @@ describe("recorded-history declaration lost reply", () => {
     mocks.historySave.mockRejectedValueOnce(Object.assign(new mocks.ApiError("net"), { status: 0, code: "timeout", detail: "x" }))
       .mockResolvedValueOnce(DECLARATION);
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.selectOptions(await screen.findByLabelText("Recorded source"), SOURCE.source_id);
+    await screen.findByRole("option", { name: SOURCE.title }); // the catalog loads after the label renders
+    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
     await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
     await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
@@ -468,6 +470,28 @@ describe("recorded-history declaration lost reply", () => {
     expect(await screen.findByText(/could not confirm the save/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save history declaration" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Retry the same declaration" }));
+    await screen.findByText(/Declaration saved before any collection/);
+    expect(mocks.historySave.mock.calls[1][1]).toEqual(mocks.historySave.mock.calls[0][1]);
+  });
+
+  it("keeps the unconfirmed body across a reload of the page", async () => {
+    const user = userEvent.setup();
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
+    mocks.historySave.mockRejectedValueOnce(Object.assign(new mocks.ApiError("net"), { status: 0, code: "timeout", detail: "x" }))
+      .mockResolvedValueOnce(DECLARATION);
+    const first = render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: SOURCE.title });
+    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
+    await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
+    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
+    await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
+    await user.type(screen.getByLabelText("Rule 1 volume threshold"), "100");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
+    await screen.findByText(/could not confirm the save/);
+    first.unmount();
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await user.click(await screen.findByRole("button", { name: "Retry the same declaration" }));
     await screen.findByText(/Declaration saved before any collection/);
     expect(mocks.historySave.mock.calls[1][1]).toEqual(mocks.historySave.mock.calls[0][1]);
   });

@@ -363,7 +363,8 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
     render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "50", unit: "QUOTE:0xbb" }, warmup_buckets: 3,
       cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
       strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
-    await user.selectOptions(await screen.findByLabelText("Price data"), dataset.dataset_id);
+    await screen.findByRole("option", { name: /recorded-syn-qualified/ }); // datasets load after the select renders
+    await user.selectOptions(screen.getByLabelText("Price data"), dataset.dataset_id);
     expect(screen.getByTestId("spot-replay-history-source")).toHaveTextContent("Simulated fills");
     expect(screen.getByLabelText("Window start (UTC)")).toHaveValue("2026-09-25T10:20:00Z");
     expect(screen.getByLabelText("Window end (UTC, exclusive)")).toHaveValue("2026-09-25T11:20:00Z");

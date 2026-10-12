@@ -556,7 +556,19 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
   const [loadError, setLoadError] = useState("");
   const [uncertainStart, setUncertainStart] = useState(false);
   // A save with no answer keeps its exact body; a retry resends it unchanged so the server can return the original.
-  const [pendingDeclaration, setPendingDeclaration] = useState<Record<string, unknown> | null>(null);
+  const pendingName = `edge-os:history-declaration-pending:${intakeId}`;
+  const [pendingDeclaration, setPendingState] = useState<Record<string, unknown> | null>(() => {
+    try { const saved = window.sessionStorage.getItem(pendingName); return saved ? JSON.parse(saved) : null; }
+    catch { return null; }
+  });
+  // The unconfirmed body also survives a reload in this tab, so a retry after a reload resends the same request.
+  const setPendingDeclaration = (body: Record<string, unknown> | null) => {
+    setPendingState(body);
+    try {
+      if (body) window.sessionStorage.setItem(pendingName, JSON.stringify(body));
+      else window.sessionStorage.removeItem(pendingName);
+    } catch { /* storage may be blocked; the in-page retry still works */ }
+  };
 
   const refreshBudget = async () => { try { setBudget(await api.researchBudget()); } catch { setBudget(null); } };
   // Every call goes through a try: a missing or failing read shows a retry instead of breaking the plan above.
