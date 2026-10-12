@@ -99,6 +99,30 @@ Interpretation limits: #3/#4 show deployed code at the documented mainnet Flow a
 
 Limit: P1 shows ABI-argument matching. It does not show equality or bound checks on opaque `bytes` arguments such as the Flow `program`. Whether the policy can enforce any bound on the opaque route stays `UNKNOWN`.
 
+### Privy policy conditions (checked 2026-10-12, new for the policy binding)
+
+Context7 resolved Privy as `/llmstxt/privy_io_llms_txt` and `/llmstxt/privy_io_llms-full_txt`. Exa fetched the pages. These pages are rolling and publish no version for a pin.
+
+| ID | URL | Supports | Type |
+|---|---|---|---|
+| P3 | https://docs.privy.io/controls/policies/overview | Field sources; `ethereum_calldata` `function_name` and `function_name.param_name`; the `abi` requirement; the operator list. | `VERIFIED FACT` (documentation) |
+| P4 | https://docs.privy.io/controls/policies/example-policies/ethereum | `address` and `uint256` calldata argument examples; a `function_name` example. No `bytes` argument example. | `VERIFIED FACT` (documentation) |
+| P5 | https://docs.privy.io/controls/policies/condition-sets | `in_condition_set`; case-insensitive addresses and hex byte strings; every other comparison exact. | `VERIFIED FACT` (documentation) |
+| P6 | https://docs.privy.io/api-reference/policies/create | `EthereumCalldataCondition`; the `ConditionOperator` enum; `ConditionValue` as a string or string array. | `VERIFIED FACT` (documentation) |
+| P7 | https://docs.privy.io/wallets/wallets/update-a-wallet | `PATCH /v1/wallets/{wallet_id}`; `policy_ids` (one policy per wallet); `additional_signers`; `override_policy_ids`. | `VERIFIED FACT` (documentation) |
+| P8 | https://docs.privy.io/controls/policies/create-a-policy | Policy `owner_id` is the authorization signature required to modify the policy. Policy owners are **optional**: without a policy owner, the application secret alone can update the policy. | `VERIFIED FACT` (documentation) |
+| P9 | https://docs.privy.io/recipes/wallets/conditional-signer-policies and the stateful-policies recipe | Restrictive and permissive override policies; default denial; `DENY` precedence; a calldata decode or typed-data mismatch evaluates false. | `VERIFIED FACT` (documentation) |
+| P10 | https://docs.privy.io/controls/authorization-keys/owners/configuration/user/server-updates | A **satisfying** member of a 1-of-k owner key quorum can unilaterally update the wallet policies and additional signers while the user is offline. | `VERIFIED FACT` (documentation) |
+
+Policy-binding limits (new, dated 2026-10-12):
+
+- Documentation only. No provider call ran. The exact `program` `bytes` equality, the tuple-component calldata path and the deployed ABI stay `UNKNOWN`.
+- One `get` schema snippet merged `ethereum_transaction` fields into `EthereumCalldataCondition`. The overview and the examples are treated as authoritative; that merged list is unreliable.
+- The overview prose lists `neq` but the condition-sets API enum omits it. Both are retained.
+- The stateful-policies recipe warns that an aggregation ABI mismatch defaults to `0` and passes, and that a non-decoding `DENY` condition does not fire. This favors a default-deny `ALLOW` design.
+- Source-mapping correction (2026-10-12, gate finding B2): the "satisfying key-quorum member" statement belongs to the server-updates page P10, not the update-wallet page P7. P7 supports wallet `policy_ids` and the update authorization only. Do not generalize P10 to every member of every quorum.
+- Ownerless-policy gap (2026-10-12, gate finding B2): P8 states policy ownership is optional. A user-owned wallet with the application key as an additional signer does not by itself separate policy administration, because an ownerless policy is updatable with the application secret. An explicitly bound policy-resource owner outside executor control is required before any future attachment or signing release.
+
 ## 6. Retained prior evidence
 
 | ID | Path | Status | Use and limit |
