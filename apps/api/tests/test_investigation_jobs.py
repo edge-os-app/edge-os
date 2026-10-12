@@ -349,3 +349,24 @@ def test_changed_source_is_refused_before_any_attempt(research, owner_a, monkeyp
     assert view["state"] == "UNAVAILABLE" and view["terminal_reason"] == "declared_source_changed"
     assert "ATTEMPT_STARTED" not in kinds(view) and "SOURCE_REFUSED" in kinds(view)
     assert view["budget"]["released"] == {"provider_requests": 2, "compute_seconds": 30}
+
+
+def test_measured_compute_beyond_a_small_bound_is_consumed_and_recorded_as_overrun(env, migrated, owner_a):
+    bounds = {"provider_requests": 2, "compute_seconds": 1, "max_pages": 2, "max_rows": 200,
+              "max_bytes": 1_048_576, "deadline_seconds": 600}
+    with _app(env, EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS="10", EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS="10") as client:
+        intake_id, declaration_id, _ = declare(client, owner_a, bounds=bounds)
+        job_id = start(client, owner_a, intake_id, declaration_id).json()["job_id"]
+        view = worker(client).run_job(uuid.UUID(job_id))
+        measured = sum(event["content"]["usage"]["compute_seconds"] for event in view["events"]
+                       if event["kind"] == "ATTEMPT_FINISHED")
+        assert view["state"] == "REPORTED" and measured >= 2
+        assert view["budget"]["consumed"]["compute_seconds"] == measured
+        assert view["budget"]["overrun"]["compute_seconds"] == measured - 1
+        assert view["budget"]["released"]["compute_seconds"] == 0
+        budget = client.get("/v1/research/budget", headers=owner_a).json()
+    with _app(env, EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS="10", EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS="10") as restarted:
+        after = restarted.get("/v1/research/budget", headers=owner_a).json()
+    assert budget == after
+    assert after["consumed"]["compute_seconds"] == measured and after["reserved"]["compute_seconds"] == 0
+    assert after["available"]["compute_seconds"] == 10 - measured

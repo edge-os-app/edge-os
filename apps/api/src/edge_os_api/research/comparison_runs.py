@@ -582,7 +582,9 @@ def compare_history(declaration: dict[str, Any], dataset: dict[str, Any]) -> dic
         value = parse_utc(moment)
         return any(start <= value <= end if closed_end else start <= value < end for start, end in readable)
 
-    features = [row for row in feature_rows(dataset) if inside(row["bucket_end"], closed_end=True)]
+    # Select readable buckets by their end time alone; protected buckets' values are never projected or read.
+    readable_buckets = [bucket for bucket in dataset["buckets"] if inside(bucket["bucket_end"], closed_end=True)]
+    features = feature_rows({"buckets": readable_buckets})
     trades = [trade for trade in dataset["trades"] if inside(trade["event_time"], closed_end=False)]
     schedule = dict(config["schedule"])
     last_end = max(end for _, end in readable)

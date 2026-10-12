@@ -218,10 +218,12 @@ def _settle(session: Session, job: InvestigationJobRow, settings: Settings, *, p
             ledger.unknown_compute_seconds += open_cs
             totals["unknown_liability"]["compute_seconds"] += open_cs
         else:
+            # Measured compute is consumed in full, like provider requests; use beyond the reservation is overrun.
             used = min(compute_consumed, open_cs)
-            ledger.consumed_compute_seconds += used
-            totals["consumed"]["compute_seconds"] += used
+            ledger.consumed_compute_seconds += compute_consumed
+            totals["consumed"]["compute_seconds"] += compute_consumed
             totals["released"]["compute_seconds"] += open_cs - used
+            totals["overrun"]["compute_seconds"] += max(compute_consumed - open_cs, 0)
         totals["settled"]["compute_seconds"] += open_cs
     ledger.updated_at = utcnow()
     job.budget = {**budget, **totals}

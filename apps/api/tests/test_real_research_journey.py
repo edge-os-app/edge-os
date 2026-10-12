@@ -326,3 +326,30 @@ def test_contrary_findings_are_kept_for_the_declared_direction(research, owner_a
                                 headers=owner_a).json()
         assert reopened["content"]["contrary_findings"] == content["contrary_findings"]
     assert seen > 0  # one of the two directions contradicts the recorded prices
+
+
+class _ProtectedBucket(dict):
+    """A bucket whose outcome values must never be read."""
+
+    def __getitem__(self, key):
+        if key in {"close", "quote_volume", "available_at", "status", "reasons"}:
+            raise AssertionError(f"protected outcome value read: {key}")
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
+
+
+def test_protected_partition_values_are_never_read(research, owner_a):
+    from edge_os_api.research.comparison_runs import compare_history
+
+    intake_id, declaration_id, _ = declare(research, owner_a)  # TRAINING evaluations; validation and holdout protected
+    job = run_to_end(research, owner_a, intake_id, declaration_id)
+    declaration = research.get(f"/v1/research/requests/{intake_id}/history-investigations/{declaration_id}",
+                               headers=owner_a).json()["declaration"]["content"]
+    dataset = research.get(f"/v1/research/history-datasets/{job['dataset']['dataset_id']}",
+                           headers=owner_a).json()["content"]
+    guarded = copy.deepcopy(dataset)
+    guarded["buckets"] = [_ProtectedBucket(bucket) if bucket["bucket_end"] > "2026-09-25T11:00:00Z" else bucket
+                          for bucket in dataset["buckets"]]
+    assert compare_history(declaration, guarded) == compare_history(declaration, dataset)

@@ -154,7 +154,7 @@ def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
     revision_id = uuid.uuid4()
     source_ref = f"history-dataset:{dataset.dataset_id}"
     confirmed = f"market-adoption:{revision_id}"
-    rule_ref = f"history-rule:{declaration.declaration_id}:{body.evaluation_id}"
+    rule_ref = f"history-rule:{declaration.declaration_id}:{rule['evaluation_id']}"  # the stored canonical identity
     inputs = sorted(expression_inputs(entry) | expression_inputs(body.exit_rule))
     for name, value, ref in (("entry", entry, rule_ref), ("exit", copy.deepcopy(body.exit_rule), confirmed)):
         restated = {key: item for key, item in evidence[name].items() if key != "adoption"}
@@ -182,7 +182,7 @@ def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
                                   f"({dataset.content['source_id']}, {dataset.content['evidence_class']}, "
                                   f"{dataset.content['content_label']}) with trade size {body.sizing_amount} and "
                                   f"limit {body.max_quote_notional} in {market['quote_unit']}, entering on declared rule "
-                                  f"{body.evaluation_id} and exiting on the restated exit rule?"),
+                                  f"{rule['evaluation_id']} and exiting on the restated exit rule?"),
                      "answer_ref": f"choice:{QUESTION_ID}:adopt", "changed_fields": changed,
                      "preserved_restrictions": list(head.content["preserved_restrictions"]),
                      "resulting_revision_id": str(revision_id)}
@@ -214,7 +214,7 @@ def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
                 "dataset_id": str(dataset.dataset_id), "dataset_content_sha256": dataset.content_sha256,
                 "declaration_id": dataset.content["declaration_id"], "job_id": dataset.content["job_id"],
                 "market_binding_id": dataset.content["market_binding_id"], "quote_unit": market["quote_unit"],
-                "evaluation_id": body.evaluation_id, "rule_map_sha256": declaration.content["frozen"]["rule_map_sha256"],
+                "evaluation_id": rule["evaluation_id"], "rule_map_sha256": declaration.content["frozen"]["rule_map_sha256"],
                 "base_revision_id": draft["base_revision_id"]}
     inserted = session.execute(pg_insert(IdempotencyRecord).values(
         owner_id=principal.user_id, method="POST", path=path, idempotency_key=body.idempotency_key,

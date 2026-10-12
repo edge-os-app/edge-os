@@ -216,3 +216,15 @@ def test_declared_rule_identity_is_case_insensitive(research, owner_a):
     bundle = compiled_thesis(research, owner_a)
     body = adoption_body(bundle, dataset_id, evaluation_id=DECLARED_RULES[dataset_id].upper())
     assert research.post(path(bundle), headers=owner_a, json=body).status_code == 201
+
+
+def test_uppercase_rule_id_is_saved_in_its_canonical_form(research, owner_a):
+    from research_flows import DECLARED_RULES
+
+    dataset_id = reported_dataset(research, owner_a)
+    bundle = compiled_thesis(research, owner_a)
+    stored = DECLARED_RULES[dataset_id]
+    adopted = research.post(path(bundle), headers=owner_a,
+                            json=adoption_body(bundle, dataset_id, evaluation_id=stored.upper())).json()
+    assert adopted["adoption"]["evaluation_id"] == stored
+    assert evidence_of(adopted["bundle"], "entry")["source_ref"].endswith(f":{stored}")
