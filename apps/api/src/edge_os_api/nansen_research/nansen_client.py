@@ -49,6 +49,35 @@ ALLOWED_BODY_FIELDS: dict[str, frozenset[str]] = {
 RETAINED_HEADERS = ("x-request-id", "x-nansen-credits-cost", "x-nansen-credits-used",
                     "x-nansen-credits-remaining", "retry-after")
 
+# The pinned provider error envelope codes. A body code outside this set is not a
+# trusted provider code and never reaches an error, a source record or a report.
+PROVIDER_ERROR_CODES = frozenset({
+    "missing_field", "unknown_field", "invalid_field_value", "invalid_address_format",
+    "invalid_date_format", "invalid_date_range", "mutually_exclusive_fields", "value_out_of_range",
+    "too_many_items", "unauthenticated", "forbidden", "insufficient_scope", "geo_blocked",
+    "plan_upgrade_required", "insufficient_credits", "rate_limit_exceeded", "not_found",
+    "method_not_allowed", "conflict", "payload_too_large", "query_timeout", "query_too_large",
+    "upstream_unavailable", "internal_error",
+})
+
+
+def _effective_charge(reservation: Decimal, quoted: str | None, deducted: str | None) -> Decimal:
+    """The settled credits for one call: the charged amount when known, else the reservation.
+
+    A known deduction or quote replaces the conservative reservation. An unknown
+    settlement keeps the reservation, so the cap stays conservative.
+    """
+    for value in (deducted, quoted):
+        if value is None:
+            continue
+        try:
+            amount = Decimal(value)
+        except InvalidOperation:
+            continue
+        if amount.is_finite() and amount >= 0:
+            return amount
+    return reservation
+
 
 @dataclass(frozen=True)
 class NansenFetch:
@@ -80,14 +109,30 @@ def _credit(text: str | None) -> str | None:
     return text
 
 
+def _safe_credit(text: str | None) -> str | None:
+    if text is None:
+        return None
+    try:
+        Decimal(text.strip())
+    except (InvalidOperation, AttributeError):
+        return None
+    return text
+
+
 def _provider_code(body: bytes) -> str | None:
-    """The stable provider error code only. Never returns message or detail text."""
+    """A bounded, documented provider error code only.
+
+    Any message, detail or instruction-like string is refused, so provider text
+    never reaches an error, a source record or a report control field.
+    """
     try:
         payload = load_provider_json(body)
     except (UnicodeDecodeError, ValueError):
         return None
     if isinstance(payload, Mapping) and isinstance(payload.get("code"), str):
-        return payload["code"]
+        code = payload["code"]
+        if code in PROVIDER_ERROR_CODES:
+            return code
     return None
 
 
@@ -164,23 +209,43 @@ class NansenClient:
         if self.reserved_credits + reservation > self._limits.max_credits:
             raise NansenBudgetExhausted("CREDIT_LIMIT", "the credit cap is reached")
 
-    def _raise_for_status(self, status: int, body: bytes, headers: Mapping[str, str]) -> None:
+    def _received(self, error, status, retained, response_sha256, retry_after=None):
+        """Attach the sanitized allowlisted facts of a received response to an error."""
+        error.status = status
+        error.request_id = retained.get("x-request-id")
+        error.quoted_credits = _safe_credit(retained.get("x-nansen-credits-cost"))
+        error.deducted_credits = _safe_credit(retained.get("x-nansen-credits-used"))
+        error.remaining_credits = _safe_credit(retained.get("x-nansen-credits-remaining"))
+        error.response_sha256 = response_sha256
+        error.retry_after = retry_after
+        return error
+
+    def _raise_for_status(self, status: int, body: bytes, retained: Mapping[str, str],
+                          response_sha256: str) -> None:
         if 200 <= status < 300:
             return
         if status == 401:
-            raise NansenAuthError("UNAUTHENTICATED", "the provider refused the request as unauthenticated")
+            raise self._received(
+                NansenAuthError("UNAUTHENTICATED", "the provider refused the request as unauthenticated"),
+                status, retained, response_sha256)
         if status == 402:
-            raise NansenPaymentRequired("PAYMENT_REQUIRED", "the provider requires payment; no payment path is taken")
+            raise self._received(
+                NansenPaymentRequired("PAYMENT_REQUIRED", "the provider requires payment; no payment path is taken"),
+                status, retained, response_sha256)
         if status == 429:
-            retry_after = headers.get("retry-after")
+            retry_after = retained.get("retry-after")
             if retry_after is not None:
                 try:
                     int(retry_after.strip())
                 except ValueError:
                     retry_after = None
-            raise NansenRateLimited("the provider rate limit rejected the request", retry_after)
+            raise self._received(
+                NansenRateLimited("the provider rate limit rejected the request", retry_after),
+                status, retained, response_sha256, retry_after)
         code = _provider_code(body)
-        raise NansenProviderError(code or f"HTTP_{status}", f"the provider returned status {status}")
+        raise self._received(
+            NansenProviderError(code or f"HTTP_{status}", f"the provider returned status {status}"),
+            status, retained, response_sha256)
 
     def _decode(self, body: bytes) -> dict:
         try:
@@ -206,12 +271,18 @@ class NansenClient:
         if not isinstance(response, NansenResponse):
             raise NansenProtocolError("TRANSPORT_NOT_A_RESPONSE", "the transport returned a non-response value")
         self._bytes += len(response.body)
-        if self._bytes > self._limits.max_bytes:
-            raise NansenContractError("OVERSIZED_RESPONSE", "the response body passes the byte cap")
         headers = {str(name).lower(): str(value) for name, value in response.headers.items()}
         retained = {name: headers[name] for name in RETAINED_HEADERS if name in headers}
-        self._raise_for_status(response.status, response.body, retained)
-        payload = self._decode(response.body)
+        response_hash = hashlib.sha256(response.body).hexdigest()
+        if self._bytes > self._limits.max_bytes:
+            raise self._received(
+                NansenContractError("OVERSIZED_RESPONSE", "the response body passes the byte cap"),
+                response.status, retained, response_hash)
+        self._raise_for_status(response.status, response.body, retained, response_hash)
+        try:
+            payload = self._decode(response.body)
+        except NansenContractError as error:
+            raise self._received(error, response.status, retained, response_hash)
         self._pages += 1
         fetch = NansenFetch(
             operation=operation,
@@ -225,9 +296,10 @@ class NansenClient:
             deducted_credits=_credit(retained.get("x-nansen-credits-used")),
             remaining_credits=_credit(retained.get("x-nansen-credits-remaining")),
             retry_after=retained.get("retry-after"),
-            response_sha256=hashlib.sha256(response.body).hexdigest(),
+            response_sha256=response_hash,
             collected_at=self._clock(),
             payload=payload,
         )
+        self._reservations[-1] = _effective_charge(reservation, fetch.quoted_credits, fetch.deducted_credits)
         self._fetches.append(fetch)
         return fetch

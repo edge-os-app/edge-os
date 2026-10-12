@@ -171,25 +171,46 @@ def extract_flow_evidence(fetches: Sequence[NansenFetch], window: ObservationWin
     expected = expected_bucket_starts(window)
     returned = {parse_instant(bucket.date) for bucket in buckets}
     expected_set = {parse_instant(item) for item in expected}
+    window_end = parse_instant(window.end_utc)
     missing = [item for item in expected if parse_instant(item) not in returned]
 
     incomplete: list[str] = []
-    complete_seconds = 0
+    intervals: dict[datetime, tuple[datetime, datetime]] = {}
+    conflict = False
     for bucket in buckets:
         if bucket.is_complete is False:
             incomplete.append(bucket.date)
-        elif bucket.is_complete is True:
-            if bucket.bucket_end is None:
-                warnings.append("a complete bucket has no bucket_end; its seconds are not counted")
-                continue
-            try:
-                span = (parse_instant(bucket.bucket_end) - parse_instant(bucket.date)).total_seconds()
-            except ValueError as error:
-                raise NansenContractError("MALFORMED_PROVIDER_RESPONSE",
-                                          "a bucket_end is not an instant") from error
-            complete_seconds += int(span)
-        else:
+            continue
+        if bucket.is_complete is None:
             warnings.append("a bucket has unknown completeness; it is not counted as complete")
+            continue
+        if bucket.bucket_end is None:
+            warnings.append("a complete bucket has no bucket_end; its seconds are not counted")
+            continue
+        try:
+            start = parse_instant(bucket.date)
+            end = parse_instant(bucket.bucket_end)
+        except ValueError as error:
+            raise NansenContractError("MALFORMED_PROVIDER_RESPONSE",
+                                      "a bucket_end is not an instant") from error
+        if start not in expected_set:
+            warnings.append("a complete bucket start is outside the expected window; it is not counted")
+            continue
+        if end > window_end:
+            warnings.append("a complete bucket end passes the window; it is not counted")
+            continue
+        if end <= start:
+            conflict = True
+            continue
+        if start in intervals:
+            warnings.append("a duplicate complete start is not counted twice")
+            continue
+        intervals[start] = (start, end)
+
+    ordered = sorted(intervals.values())
+    if any(prev_end > nxt_start for (_, prev_end), (nxt_start, _) in zip(ordered, ordered[1:])):
+        conflict = True
+    complete_seconds = None if conflict else int(sum((end - start).total_seconds() for start, end in ordered))
 
     duplicate_starts = [item for item in expected if counts.get(parse_instant(item), 0) > 1]
     extra_duplicates = sorted(

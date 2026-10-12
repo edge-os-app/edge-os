@@ -53,8 +53,28 @@ class NansenTransportError(NansenError):
 
     The collector records the attempted call and a partial result. A programmer
     defect must raise a different error type so it is not mistaken for a provider
-    failure.
+    failure. When the provider returned a response, the client attaches the
+    sanitized allowlisted facts (status, request id, credits, response hash,
+    retry-after). An error raised before dispatch keeps every fact ``None``.
     """
+
+    status: int | None
+    request_id: str | None
+    quoted_credits: str | None
+    deducted_credits: str | None
+    remaining_credits: str | None
+    response_sha256: str | None
+    retry_after: str | None
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(code, detail)
+        self.status = None
+        self.request_id = None
+        self.quoted_credits = None
+        self.deducted_credits = None
+        self.remaining_credits = None
+        self.response_sha256 = None
+        self.retry_after = None
 
 
 class NansenContractError(NansenTransportError):
@@ -76,7 +96,6 @@ class NansenRateLimited(NansenTransportError):
     def __init__(self, detail: str, retry_after: str | None = None) -> None:
         super().__init__("RATE_LIMITED", detail)
         self.retry_after = retry_after
-
 
 class NansenPaymentRequired(NansenTransportError):
     """The provider asked for payment. No payment path is taken."""

@@ -156,6 +156,8 @@ class NansenRequest(Model):
         self.limits.validate()
         if not self.operations:
             raise NansenRequestError("OPERATIONS_EMPTY", "at least one operation is required")
+        if len(set(self.operations)) != len(self.operations):
+            raise NansenRequestError("OPERATIONS_DUPLICATE", "operations must be unique")
         for operation in self.operations:
             if operation not in OPERATION_NAMES:
                 raise NansenRequestError("OPERATION_NOT_ALLOWED", f"unknown operation {operation!r}")
@@ -247,7 +249,7 @@ class FlowEvidence(Model):
     missing_starts: tuple[str, ...]
     duplicate_starts: tuple[str, ...]
     incomplete_starts: tuple[str, ...]
-    complete_seconds: int
+    complete_seconds: int | None
     warnings: tuple[str, ...]
 
 
@@ -290,8 +292,14 @@ class Finding(Model):
 
 
 @dataclass(frozen=True)
-class UnsupportedQuestion(Model):
-    question: str
+class Limitation(Model):
+    """A computed claim this local package cannot support for the returned data.
+
+    It names the claim and its missing dependency. It is not a restatement of the
+    user's question.
+    """
+
+    claim: str
     missing_dependency: str
 
 
@@ -304,7 +312,7 @@ class Coverage(Model):
     expected_buckets: int
     missing_buckets: int
     incomplete_buckets: int
-    complete_seconds: int
+    complete_seconds: int | None
     pagination_is_last_page: bool | None
     stop_reason: str | None
 
@@ -320,8 +328,9 @@ class NansenReport(Model):
     chain_id: int
     window: ObservationWindow
     request_sha256: str
+    answer_state: str
     findings: tuple[Finding, ...]
-    unsupported_questions: tuple[UnsupportedQuestion, ...]
+    limitations: tuple[Limitation, ...]
     coverage: Coverage
     unknowns: tuple[str, ...]
     source_hashes: tuple[str, ...]

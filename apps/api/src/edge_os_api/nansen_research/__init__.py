@@ -54,6 +54,7 @@ from edge_os_api.nansen_research.models import (
     HolderEvidence,
     HolderQuery,
     HolderRow,
+    Limitation,
     NansenContext,
     NansenEvidence,
     NansenLimits,
@@ -61,7 +62,6 @@ from edge_os_api.nansen_research.models import (
     NansenRequest,
     ObservationWindow,
     SourceRecord,
-    UnsupportedQuestion,
 )
 from edge_os_api.nansen_research.nansen_client import NansenClient, NansenFetch
 from edge_os_api.nansen_research.report_builder import build_report
@@ -86,6 +86,7 @@ __all__ = [
     "HolderEvidence",
     "HolderQuery",
     "HolderRow",
+    "Limitation",
     "NETWORK",
     "NansenAuthError",
     "NansenBudgetExhausted",
@@ -119,7 +120,6 @@ __all__ = [
     "REQUEST_SCHEMA",
     "RecordedNansenTransport",
     "SourceRecord",
-    "UnsupportedQuestion",
     "build_report",
     "canonical_sha256",
     "classify_availability",

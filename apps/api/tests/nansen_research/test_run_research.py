@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 import nansen_fixtures as support
 from edge_os_api.nansen_research import NansenProviderError
 
@@ -110,3 +112,36 @@ def test_request_and_evidence_round_trip_exactly() -> None:
     run = support.run(support.request(), [support.response(200, _holders()), support.response(200, _flows())])
     assert NansenRequest.from_dict(support.request().to_dict()) == support.request()
     assert NansenEvidence.from_dict(run.evidence.to_dict()) == run.evidence
+
+
+def test_a_terminal_failure_stops_the_run_before_the_next_operation() -> None:
+    run = support.run(support.request(), [
+        support.raw_response(401, b'{"code": "unauthenticated"}'),
+        support.response(200, _flows()),
+    ])
+    assert run.evidence.holder is None
+    assert run.evidence.flows is None
+    assert run.evidence.stop_reason == "UNAUTHENTICATED"
+    assert run.evidence.attempts == 1
+
+
+def test_a_run_records_failure_accounting_and_source_identity() -> None:
+    headers = {"X-Request-Id": "rid-429", "X-Nansen-Credits-Cost": "5",
+               "X-Nansen-Credits-Used": "0", "Retry-After": "12"}
+    run = support.run(support.request(operations=("holders",)),
+                      [support.raw_response(429, b'{"code": "rate_limit_exceeded"}', headers)])
+    source = run.evidence.sources[0]
+    assert source.status == 429
+    assert source.request_id == "rid-429"
+    assert source.quoted_credits == "5"
+    assert source.deducted_credits == "0"
+    assert source.response_sha256
+    assert source.retry_after == "12"
+
+
+def test_duplicate_operations_are_refused_at_the_run_seam() -> None:
+    from edge_os_api.nansen_research import NansenRequestError
+
+    with pytest.raises(NansenRequestError) as info:
+        support.run(support.request(operations=("holders", "holders")), [])
+    assert info.value.code == "OPERATIONS_DUPLICATE"

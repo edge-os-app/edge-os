@@ -48,13 +48,24 @@ def test_every_finding_is_source_linked() -> None:
         assert set(finding.source_refs) <= set(report.source_hashes)
 
 
-def test_unsupported_questions_preserve_the_original_question() -> None:
+def test_limitations_name_the_claim_not_the_question() -> None:
     report = _complete_run().report
     assert report.question == support.QUESTION
-    assert report.unsupported_questions
-    assert all(item.question == support.QUESTION for item in report.unsupported_questions)
-    dependencies = " ".join(item.missing_dependency for item in report.unsupported_questions)
-    assert "total supply" in dependencies
+    claims = {item.claim for item in report.limitations}
+    assert claims == {"concentration", "whole_token_flows"}
+    assert all(item.missing_dependency for item in report.limitations)
+    assert report.answer_state == "SUPPORTED_OBSERVATIONS"
+
+
+def test_a_supported_question_is_not_relabelled_unresolved() -> None:
+    question = "How many holder addresses did the provider return?"
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    run = support.run(support.request(question=question, operations=("holders",)),
+                      [support.response(200, holders)])
+    assert run.report.question == question
+    assert run.report.answer_state == "SUPPORTED_OBSERVATIONS"
+    claims = {item.claim for item in run.report.limitations}
+    assert claims == {"concentration", "whole_token_flows"}
 
 
 def test_report_never_claims_buying_or_alpha() -> None:

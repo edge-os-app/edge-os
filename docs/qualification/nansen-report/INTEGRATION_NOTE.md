@@ -18,7 +18,7 @@ For lane 2. This note describes how the authenticated investigation path mounts 
 | `NansenTransport` | protocol | The injected provider path |
 | `run_research` | function | Collect and build; returns `NansenRun` |
 | `NansenRun` | value | `evidence`, `report`, `outcomes` |
-| `NansenReport` | output | Deterministic, source-linked findings and coverage |
+| `NansenReport` | output | Deterministic findings, `answer_state`, `limitations` and coverage |
 | `NansenEvidence` | output | The immutable evidence package |
 
 Schemas: `nansen-research-request/1`, `nansen-research-evidence/1`, `nansen-research-report/1`.
@@ -33,7 +33,7 @@ Schemas: `nansen-research-request/1`, `nansen-research-evidence/1`, `nansen-rese
 | `WINDOW_INVALID` | Window start not before end |
 | `HOLDER_LABEL_INVALID`, `HOLDER_ORDER_INVALID`, `HOLDER_FILTER_INVALID` | Bad holder query |
 | `FLOW_LABEL_INVALID` | Bad flow label |
-| `OPERATIONS_EMPTY`, `OPERATION_NOT_ALLOWED` | No operation or an unknown operation |
+| `OPERATIONS_EMPTY`, `OPERATIONS_DUPLICATE`, `OPERATION_NOT_ALLOWED` | No operation, a repeated operation, or an unknown operation |
 | `BODY_NOT_ALLOWED`, `PREMIUM_NOT_ALLOWED`, `BODY_INVALID` | A body the allowlist does not permit |
 | `REQUEST_LIMIT`, `CREDIT_LIMIT` (`NansenBudgetExhausted`) | A finite cap is reached |
 | `DEADLINE` (`NansenTimeout`) | The local deadline passed |
@@ -51,15 +51,17 @@ These are expected provider or transport failures. The run records the attempted
 | a 403 | The provider `code` (for example `insufficient_credits`, `forbidden`, `plan_upgrade_required`) or `HTTP_403` |
 | `MALFORMED_PROVIDER_RESPONSE`, `OVERSIZED_RESPONSE` | The response violates the contract; no row is retained |
 | `WRONG_NETWORK`, `WRONG_TOKEN`, `WRONG_OPERATION`, `NO_RECORDED_RESPONSE` | The response contradicts the request or the transport is exhausted |
-| any other provider `code`, or `HTTP_<status>` | Any other provider error |
+| any other provider `code`, or `HTTP_<status>` | Any other provider error. Only a bounded documented provider code is used; instruction-like text is not reflected. |
 
 Error text is sanitized. A caller sees a stable code; no response body, header or credential is exposed.
 
 ## Owner and run accounting
 
 - Set `owner_id` from authenticated identity, never from the request.
-- Record the run id, the attempt count, the reserved, quoted and deducted credits, and the request/response hashes.
-- A caps breach stops dispatch and keeps the partial result. It never increases the cap or retries.
+- Record the run id, the attempt count, the committed, quoted and deducted credits, and the request/response hashes. The committed total uses the settled charge when the provider reported one, else the conservative reservation.
+- A caps breach, a terminal provider failure, a cancellation or a deadline stops the run before the next operation and keeps the partial result. It never increases the cap or retries.
+- A received provider failure keeps its status, allowlisted headers and response hash on the failure record. A pre-dispatch denial keeps those fields null.
+- `answer_state` states how far the evidence answers the adopted question. `limitations` names the computed claims this package cannot support; it does not relabel the question.
 
 ## Actual versus fixture labels
 

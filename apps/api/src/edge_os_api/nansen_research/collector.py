@@ -93,8 +93,8 @@ def _source_from_fetch(fetch: NansenFetch) -> SourceRecord:
     )
 
 
-def _failure_source(operation: str, body: Mapping[str, Any], code: str, collected_at: str,
-                    retry_after: str | None = None) -> SourceRecord:
+def _failure_source(operation: str, body: Mapping[str, Any], error: NansenTransportError,
+                    collected_at: str) -> SourceRecord:
     method, path, _reservation = OPERATIONS[operation]
     return SourceRecord(
         operation=operation,
@@ -102,15 +102,15 @@ def _failure_source(operation: str, body: Mapping[str, Any], code: str, collecte
         path=path,
         request_body=dict(body),
         request_sha256=canonical_sha256(body),
-        status=None,
-        request_id=None,
-        quoted_credits=None,
-        deducted_credits=None,
-        remaining_credits=None,
-        response_sha256=None,
+        status=getattr(error, "status", None),
+        request_id=getattr(error, "request_id", None),
+        quoted_credits=getattr(error, "quoted_credits", None),
+        deducted_credits=getattr(error, "deducted_credits", None),
+        remaining_credits=getattr(error, "remaining_credits", None),
+        response_sha256=getattr(error, "response_sha256", None),
         collected_at=collected_at,
-        failure=code,
-        retry_after=retry_after,
+        failure=error.code,
+        retry_after=getattr(error, "retry_after", None),
     )
 
 
@@ -139,14 +139,12 @@ def _collect_operation(client: NansenClient, request: NansenRequest, operation: 
         try:
             fetch = client.call(operation, body)
         except (NansenBudgetExhausted, NansenTimeout) as error:
-            sources.append(_failure_source(operation, body, error.code, client.now(),
-                                           getattr(error, "retry_after", None)))
+            sources.append(_failure_source(operation, body, error, client.now()))
             status = "STOPPED"
             stop_reason = error.code
             break
         except NansenTransportError as error:
-            sources.append(_failure_source(operation, body, error.code, client.now(),
-                                           getattr(error, "retry_after", None)))
+            sources.append(_failure_source(operation, body, error, client.now()))
             status = "FAILED"
             stop_reason = error.code
             break
@@ -208,6 +206,10 @@ def run_research(request: NansenRequest, transport: NansenTransport, *,
             holder = extracted
         elif operation == "flows":
             flows = extracted
+        if outcome.status in ("FAILED", "STOPPED"):
+            # A terminal provider failure, cancellation or deadline stops the run.
+            # A prior stopped or unsettled attempt blocks further dispatch.
+            break
 
     sources = tuple(source for outcome in outcomes for source in outcome.sources)
     stop_reason = next((outcome.stop_reason for outcome in outcomes

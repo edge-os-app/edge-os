@@ -66,7 +66,7 @@ The reservation values are the D01 captured basic-label costs. A quoted cost fro
 | `max_requests` | Positive integer. Counted before each transport call. |
 | `max_pages` | Positive integer. Counted per collected page. |
 | `max_bytes` | Positive integer. Counted across every retained response body, before framing. |
-| `max_credits` | Positive decimal. Conservative reservations plus quoted costs. |
+| `max_credits` | Positive decimal. The cap check uses, for each attempt, the settled charge when the provider reported one, else the conservative reservation. |
 | `deadline_utc` | ISO-8601 UTC string or `None`. Checked before each call. |
 | `per_page` | Integer in 1..1000. |
 
@@ -90,7 +90,7 @@ Raw numeric text: the client parses response JSON with `parse_float=str` and kee
 
 ## Frozen report interface
 
-`NansenReport` contains: `report_schema`, `request_sha256`, `question` (preserved), `findings[]`, `unsupported_questions[]`, `coverage`, `unknowns[]`, `source_records[]`, `engine` identities.
+`NansenReport` contains: `report_schema`, `request_sha256`, `question` (preserved), `answer_state`, `findings[]`, `limitations[]`, `coverage`, `unknowns[]`, `source_hashes[]`, `engine` identities.
 
 Each `Finding` carries: `code`, `verdict`, `statement`, `source_refs[]`, `limitations[]`.
 
@@ -107,13 +107,13 @@ Finding codes and permitted verdicts:
 | `HOLDER_TOKEN_AMOUNT_UNITS` | `UNRESOLVED` | Raw text retained; no scaling applied. |
 | `HOLDER_VALUE_USD` | `UNAVAILABLE` or `LIMITED` | `UNAVAILABLE` when every value is null. Preserve null. |
 | `FLOW_CATEGORY` | `LIMITED` | Selected provider category, not all holders. |
-| `FLOW_BUCKET_COVERAGE` | `LIMITED` | Expected starts, returned starts, missing and incomplete lists, complete seconds. |
+| `FLOW_BUCKET_COVERAGE` | `LIMITED` | Expected starts, returned starts, missing and incomplete lists, and complete seconds. Complete seconds only count unique valid intervals inside the window; conflicting intervals make the total unavailable (`null`). |
 | `FLOW_COUNTS` | `UNRESOLVED` | Fractional or negative values present; not event or amount counts. |
 | `FLOW_DEX_CEX` | `UNAVAILABLE` | Every field null for a non-exchange label. Never zero. |
 | `FLOW_PRICE` | `UNRESOLVED` | Daily median or current-day spot; not an hourly price. |
 | `CONCENTRATION` | `UNRESOLVED` | Needs a documented supply and qualified units. |
 
-`unsupported_questions` preserves the original concentration or whole-token-flow question with its missing dependency. A narrower supported report never replaces the asked question.
+`answer_state` is one of `SUPPORTED_OBSERVATIONS`, `PARTIAL` or `UNAVAILABLE`. It states how far the returned evidence answers the adopted question. `limitations[]` names the computed claims this package cannot support for the returned data (`concentration`, `whole_token_flows`) with their missing dependency. It never relabels the user's own question. This supersedes the initial draft `unsupported_questions` field, which mislabelled an unrelated supported question.
 
 ## Local resource/fault matrix (frozen)
 
@@ -125,20 +125,24 @@ Finding codes and permitted verdicts:
 | Auth | The client sets no `apikey`. The injected transport owns any credential. |
 | Request budget reached | Raise `NansenBudgetExhausted` before the call. |
 | Byte budget exceeded by one response | Refuse before framing; record the attempted call. |
-| Credit cap reached by reservation | Raise `NansenBudgetExhausted` before the call. |
+| Credit cap reached by committed cost | Raise `NansenBudgetExhausted` before the call. A settled charge replaces its reservation; an unknown settlement keeps the reservation. A quote above the reservation constrains the next call. |
+| Terminal failure or stop | A failed or stopped operation stops the run before the next operation. |
 | Deadline passed | Raise `NansenTimeout` before the call. |
 | Injected timeout | Record a partial result; no retry. |
 | Injected cancellation | Record a partial result; no retry. |
 | HTTP 401 | `NansenAuthError`, sanitized, no body or headers leaked. |
 | HTTP 429 | `NansenRateLimited`, sanitized, `retry_after` retained only as a number. |
 | HTTP 402 | `NansenPaymentRequired`, sanitized, no payment path taken. |
-| HTTP 4xx/5xx other | `NansenProviderError` with the stable provider `code` only. |
+| HTTP 4xx/5xx other | `NansenProviderError` with a bounded documented provider `code` only; otherwise a local `HTTP_<status>` code. Instruction-like text is never reflected. |
+| Received provider failure | The failure record keeps the received status, the allowlisted headers (request id, quoted/deducted/remaining credits, retry-after) and the response hash. A pre-dispatch denial keeps them `null`. |
 | Oversized or malformed reply | `NansenContractError`; no row retained. |
 | Wrong token or network echo | `NansenContractError`; refuse the response. |
 | Fractional or negative count field | Keep the raw text; mark `FLOW_COUNTS` unresolved; never sum. |
 | Null amount or value field | Keep null; never zero. |
 | Partial page (`is_last_page=false`) | Record limited pagination; uncollected rows unknown. |
-| Duplicate bucket or row | Record a duplicate; never double count. |
+| Duplicate bucket or row | Record a duplicate; never double count. Complete seconds count each unique interval once. |
+| Duplicate operation | Refuse at input validation; do not attach a discarded response to a finding. |
+| Overlapping or reversed intervals | Complete seconds become unavailable (`null`) rather than a wrong total. |
 | Missing expected bucket | Record the missing start; coverage stays limited. |
 | Incomplete bucket | Keep visible; exclude from complete totals. |
 | Stale or future evidence | Classify with the D01 awareness rule; never silently fresh. |

@@ -17,13 +17,22 @@ from edge_os_api.nansen_research.models import (
     REPORT_SCHEMA,
     Coverage,
     Finding,
+    Limitation,
     NansenEvidence,
     NansenReport,
     NansenRequest,
-    UnsupportedQuestion,
 )
 
 _PACKAGE = "edge_os_api.nansen_research"
+
+
+def _answer_state(evidence: NansenEvidence) -> str:
+    """A truthful state for the adopted question under the returned evidence."""
+    if evidence.holder is None and evidence.flows is None:
+        return "UNAVAILABLE"
+    if evidence.stop_reason is not None:
+        return "PARTIAL"
+    return "SUPPORTED_OBSERVATIONS"
 
 
 def _values(items: list[str | None]) -> list[Decimal]:
@@ -147,11 +156,13 @@ def _flow_findings(evidence: NansenEvidence, label: str) -> list[Finding]:
         statement=(f"flows cover the selected provider category {label!r}; this is not an all-holder flow "
                    "output."),
         source_refs=refs, limitations=()))
+    seconds = ("complete coverage is unavailable because intervals conflict"
+               if flows.complete_seconds is None else f"{flows.complete_seconds} complete seconds")
     findings.append(Finding(
         code="FLOW_BUCKET_COVERAGE", verdict="LIMITED",
         statement=(f"{len(flows.buckets)} buckets returned for {len(flows.expected_starts)} expected starts; "
                    f"{len(flows.missing_starts)} missing and {len(flows.incomplete_starts)} incomplete; "
-                   f"{flows.complete_seconds} complete seconds."),
+                   f"{seconds}."),
         source_refs=refs, limitations=tuple(flows.missing_starts)))
 
     counts = _values([bucket.total_inflows_count for bucket in flows.buckets]
@@ -220,16 +231,16 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
         limitations=()))
 
     unsupported = (
-        UnsupportedQuestion(
-            question=request.question,
-            missing_dependency="concentration needs a documented total supply and qualified matching units",
+        Limitation(
+            claim="concentration",
+            missing_dependency="a documented total supply and qualified matching balance units",
         ),
-        UnsupportedQuestion(
-            question=request.question,
-            missing_dependency="a whole-token flow summary needs an all-holder flow output; the selected "
-                               "category is not all holders",
+        Limitation(
+            claim="whole_token_flows",
+            missing_dependency="an all-holder flow output; the selected category is not all holders",
         ),
     )
+    answer_state = _answer_state(evidence)
 
     holder_rows = len(evidence.holder.rows) if evidence.holder is not None else 0
     flow_buckets = len(evidence.flows.buckets) if evidence.flows is not None else 0
@@ -269,8 +280,9 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
         chain_id=request.chain_id,
         window=request.window,
         request_sha256=request.sha256(),
+        answer_state=answer_state,
         findings=tuple(findings),
-        unsupported_questions=unsupported,
+        limitations=unsupported,
         coverage=coverage,
         unknowns=evidence.unknowns,
         source_hashes=tuple(source.response_sha256 for source in evidence.sources if source.response_sha256),

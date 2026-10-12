@@ -125,3 +125,26 @@ def test_malformed_bucket_end_is_a_contract_error_not_a_crash() -> None:
     with pytest.raises(NansenContractError) as info:
         extract_flow_evidence([_fetch("flows", support.flow_payload([bucket]))], support.window())
     assert info.value.code == "MALFORMED_PROVIDER_RESPONSE"
+
+
+def test_complete_seconds_ignore_duplicates_and_out_of_window_buckets() -> None:
+    bucket = support.flow_bucket("2026-10-06T09:00:00Z", bucket_end="2026-10-06T10:00:00Z")
+    evidence = extract_flow_evidence([_fetch("flows", support.flow_payload([bucket, dict(bucket)]))], support.window())
+    assert evidence.complete_seconds == 3600
+
+    outside = support.flow_bucket("2026-10-01T00:00:00Z", bucket_end="2026-10-01T01:00:00Z")
+    evidence = extract_flow_evidence([_fetch("flows", support.flow_payload([outside]))], support.window())
+    assert evidence.complete_seconds == 0
+
+
+def test_conflicting_intervals_make_complete_seconds_unavailable() -> None:
+    reversed_bucket = support.flow_bucket("2026-10-06T10:00:00Z", bucket_end="2026-10-06T09:00:00Z")
+    evidence = extract_flow_evidence([_fetch("flows", support.flow_payload([reversed_bucket]))], support.window())
+    assert evidence.complete_seconds is None
+
+    overlapping = [
+        support.flow_bucket("2026-10-06T09:00:00Z", bucket_end="2026-10-06T11:00:00Z"),
+        support.flow_bucket("2026-10-06T10:00:00Z", bucket_end="2026-10-06T12:00:00Z"),
+    ]
+    evidence = extract_flow_evidence([_fetch("flows", support.flow_payload(overlapping))], support.window())
+    assert evidence.complete_seconds is None
