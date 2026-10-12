@@ -332,7 +332,9 @@ def protected_from(session: Session, row: HistoryDatasetRow) -> str | None:
 
     declaration = session.execute(select(InvestigationDeclaration).where(
         InvestigationDeclaration.owner_id == row.owner_id,
-        InvestigationDeclaration.declaration_id == row.declaration_id)).scalar_one()
+        InvestigationDeclaration.declaration_id == row.declaration_id)).scalar_one_or_none()
+    if declaration is None:  # cannot prove which partitions are readable: protect the whole window
+        return row.content["window_start"]
     starts = [_utc_text(item["start"]) for item in declaration.content["configuration"]["partitions"]
               if item["role"] in PROTECTED_ROLES]
     return min(starts) if starts else None

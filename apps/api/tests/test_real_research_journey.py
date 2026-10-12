@@ -353,3 +353,39 @@ def test_protected_partition_values_are_never_read(research, owner_a):
     guarded["buckets"] = [_ProtectedBucket(bucket) if bucket["bucket_end"] > "2026-09-25T11:00:00Z" else bucket
                           for bucket in dataset["buckets"]]
     assert compare_history(declaration, guarded) == compare_history(declaration, dataset)
+
+
+
+def test_protected_partition_before_the_readable_one_is_never_read(research, owner_a):
+    from edge_os_api.research.comparison_runs import compare_history
+
+    bundle = investigation_request(research, owner_a)
+    body = history_body(research, owner_a, bundle)
+    config = body["configuration"]
+    config["partitions"] = [
+        {"partition_id": "holdout", "role": "HOLDOUT", "start": "2026-09-25T10:00:00Z", "end": "2026-09-25T10:30:00Z"},
+        {"partition_id": "validate", "role": "VALIDATION", "start": "2026-09-25T10:30:00Z", "end": "2026-09-25T11:00:00Z"},
+        {"partition_id": "train", "role": "TRAINING", "start": "2026-09-25T11:00:00Z", "end": "2026-09-25T12:00:00Z"}]
+    for item in config["evaluation_plan"]:
+        item["partition_ids"] = ["train"]
+    saved = research.post(f"/v1/research/requests/{bundle['intake']['record_id']}/history-investigations",
+                          headers=owner_a, json=body)
+    assert saved.status_code == 201, saved.text
+    intake_id, declaration_id = bundle["intake"]["record_id"], saved.json()["declaration"]["record_id"]
+    job = run_to_end(research, owner_a, intake_id, declaration_id)
+    declaration = saved.json()["declaration"]["content"]
+    dataset = research.get(f"/v1/research/history-datasets/{job['dataset']['dataset_id']}",
+                           headers=owner_a).json()["content"]
+    guarded = copy.deepcopy(dataset)
+    guarded["buckets"] = [_ProtectedBucket(bucket) if bucket["bucket_end"] <= "2026-09-25T11:00:00Z" else bucket
+                          for bucket in dataset["buckets"]]
+    assert compare_history(declaration, guarded) == compare_history(declaration, dataset)
+    # The bucket ending at 11:00 lies in VALIDATION: changing it must not change the report.
+    changed = copy.deepcopy(dataset)
+    for bucket in changed["buckets"]:
+        if bucket["bucket_end"] == "2026-09-25T11:00:00Z":
+            bucket["close"] = "1"
+    assert compare_history(declaration, changed) == compare_history(declaration, dataset)
+    replay_limit = research.get("/v1/research/history-datasets", headers=owner_a).json()["datasets"]
+    assert next(item for item in replay_limit
+                if item["dataset_id"] == job["dataset"]["dataset_id"])["readable_until"] == "2026-09-25T10:00:00Z"

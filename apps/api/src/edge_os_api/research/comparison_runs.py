@@ -579,14 +579,15 @@ def compare_history(declaration: dict[str, Any], dataset: dict[str, Any]) -> dic
     # Only data inside the readable partitions reaches the engine; protected-partition buckets and trades stay unread.
     readable = [(parse_utc(partition["start"]), parse_utc(partition["end"])) for _, partition in evaluable]
 
-    def inside(moment: str, *, closed_end: bool) -> bool:
+    def inside(moment: str, *, bucket: bool) -> bool:
+        """A bucket ending at t covers (t - 5 min, t]; a trade at t is a point. Both must lie inside the partition."""
         value = parse_utc(moment)
-        return any(start <= value <= end if closed_end else start <= value < end for start, end in readable)
+        return any(start < value <= end if bucket else start <= value < end for start, end in readable)
 
     # Select readable buckets by their end time alone; protected buckets' values are never projected or read.
-    readable_buckets = [bucket for bucket in dataset["buckets"] if inside(bucket["bucket_end"], closed_end=True)]
+    readable_buckets = [bucket for bucket in dataset["buckets"] if inside(bucket["bucket_end"], bucket=True)]
     features = feature_rows({"buckets": readable_buckets})
-    trades = [trade for trade in dataset["trades"] if inside(trade["event_time"], closed_end=False)]
+    trades = [trade for trade in dataset["trades"] if inside(trade["event_time"], bucket=False)]
     schedule = dict(config["schedule"])
     last_end = max(end for _, end in readable)
     if parse_utc(schedule["end"]) > last_end:
