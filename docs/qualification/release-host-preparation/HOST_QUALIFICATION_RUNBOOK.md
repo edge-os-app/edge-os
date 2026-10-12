@@ -105,7 +105,7 @@ uv run --frozen python -m edge_os_api.research.investigation_jobs
 | 3.4 | Readiness failure codes | A wrong schema gives 503 `schema_drift`; a missing key gives 503 `verification_keys_missing`; a changed GLOBAL cap gives 503 `quota_cap_mismatch`; an unreachable database gives 503 `database_unavailable`. | check |
 | 3.5 | Workers start | Both worker processes run a bounded loop; neither binds a port. | check |
 | 3.6 | Worker schema-drift stop | On a database at revision `0009`, each worker stops with **exit code 3** and writes no row. | check |
-| 3.7 | Repository root | The API starts with the repository root as its working tree (the import reads `docs/contracts/p02` and `docs/contracts/p06`). | check |
+| 3.7 | Repository on disk | The deployed tree contains `docs/contracts/p02` and `docs/contracts/p06`. The API derives its repository root from its own module file path (`Path(__file__).resolve().parents[5]`), not from the process working directory, so the files must be on disk; the working directory itself is not the constraint. | check |
 
 Stop trigger: any 503 other than the expected test condition stops the stage. Record the exact reason code.
 

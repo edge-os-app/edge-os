@@ -6,8 +6,8 @@ Status: **traceability only.** This map ties every release criterion to its owne
 
 Sources of the criterion IDs:
 
-- `docs/planning/EDGE_OS_USER_RELEASE_TICKET_2026-10-12.md` (RC01–RC20, PU01–PU08, RG01–RG06, IC01–IC08, AUT01–AUT08).
-- `docs/planning/EDGE_OS_RELEASE_ACCEPTANCE_CHECKLIST_2026-10-12.md` (RC/PU detail).
+- `docs/planning/EDGE_OS_USER_RELEASE_TICKET_2026-10-12.md` (RG01–RG06, IC01–IC08, AUT01–AUT08).
+- `docs/planning/EDGE_OS_RELEASE_ACCEPTANCE_CHECKLIST_2026-10-12.md` (RC01–RC20 and PU01–PU08, with detail).
 - `.scratch/release-host-prep/ISSUE47.json` and `ISSUE48.json` (P40/P41 retained criteria).
 - `docs/research/METROPOLIS_BOUNTY_REQUIREMENTS_RECHECK_2026-10-07.md` and `docs/research/NANSEN_BOUNTY_PICKUP_RECHECK_2026-10-12.md` (selected sponsor criteria).
 
@@ -50,10 +50,10 @@ Sources of the criterion IDs:
 | RC02 | Owner-linked wallet creation; lost-response/restart; two owners | L2/L3 | P16 #14; ticket | Sign-only one-owner testnet evidence, COMPONENT | Selected creation route, tuple isolation, owner access on the actual backend | Real Privy app; P20/P21 | Two-owner tuple-change tests; distinct local vs provider denial | Auth + provider packet |
 | RC03 | Connect qualified actual creation and exact identity lookup | L2 | P17 #22; `wallet_setup/` | Local fixture setup, LOCAL | Actual creation, cancellation, lost reply, restart readback, cross-owner refusal | Real provider | Browser + API + SQL cross-owner/restart checks | Provider packet |
 | RC04 | Migrated owner-scoped funding API + Funds controls; reconcile observations once | L2 | P18 #26; `funding/` | Funding module LOCAL; routes mounted at base | Actual deposit observation; amount credited once; allowance/expiry/stop | Real provider; migration already at `0008` | Confirmed/pending/failed/unknown/duplicate reconciliation checks | Provider packet |
-| RC05 | Prove selected restrictions, raw units, capacity, exposure | L3 | P21 #20; `route-restrictions/` | Authored restriction package, COMPONENT | Opaque-program independent control; token/asset/raw units; residual exposure | P20/P21 enforcement | Control-to-enforcer evidence; independent denial | Design decision + live packet |
+| RC05 | Prove selected restrictions, raw units, capacity, exposure | L3 | P21 #20; `route-restrictions/`; `docs/qualification/independent-enforcement/` | Authored restriction package, COMPONENT; independent-enforcement prep accepted LOCAL and integrated `f84ef415` (boundary-only feasibility) | Opaque-program `program` byte equality, tuple-calldata paths, deployed `143` bytecode identity, native MON treatment; independent control; residual exposure | P20/P21 enforcement | Control-to-enforcer evidence; independent denial | Design decision + live packet |
 | RC06 | Migrate and connect admission to saved identity; atomic reservation under contention | L2 | P22 #24; `admission/` | Durable admission/reservations, LOCAL | Contention durability on host; unknown required cost denies | Host + qualified controls | Concurrent reservation test; unavailable-control denial | Host packet |
 | RC07 | Bounded background evaluation; save decisions before intent; exclusive claims | L2 | P23 #29; `execution/worker.py` | Worker + decision flow LOCAL | Real forward observation; waiting/blocking UI; revalidate before submit | IC02 observation port | Signal/no-signal/ineligible; restart creates no second intent | Provider packet |
-| RC08 | Connect receipt/status/recovery to original intent/attempt/reference | L2 | P24 #33; `execution/service.py`, `recovery/` | Local recovery LOCAL | Actual receipts/fees/gas; confirmed/reverted/denied/unknown | Real chain | Interruption before/after broadcast; byte-identical resend check | Live packet |
+| RC08 | Connect receipt/status/recovery to original intent/attempt/reference | L2 | P24 #33; `execution/service.py`, `recovery/`; ORIGINAL-LOCAL `8a1d65dd` → `795682bf` | Local recovery LOCAL; ORIGINAL-LOCAL accepted/integrated `795682bf` and safely released (LOCAL authored recovery, not actual signing/provider/chain) | Actual receipts/fees/gas; confirmed/reverted/denied/unknown | Real chain | Interruption before/after broadcast; byte-identical resend check | Live packet |
 | RC09 | Durable scoped-stop API/UI; denial at admission and submission | L2 | P25 #35; `stops/` | `SubmissionControls` LOCAL; REQUESTED denies | Hosted/restart-sticky stop history; unaffected B; residual holdings | Host | Stop vs claim; restart-sticky stop | Host packet |
 | RC10 | Exact grouped INACTIVE consent review and idempotent adoption; deny drift | L2 | P26 #38; `consent/` | Grouped review + adoption LOCAL | Real approval/policy/deployment identities; saved INACTIVE stays inactive | P20/P21 qualification | Drift/unknown/stale/wrong-wallet denial; idempotent adopt | Live packet |
 | RC11 | Integrated Probe B: one approved Kuru action while owner offline | L2/L3 | P20 #19; ticket; `kuru-flow-adapter/` | Offline adapter COMPONENT | Frozen live packet; actual action, receipt/effects, independent denial, removal | Builder live packet; P21 | One approved action end-to-end; helper transaction does not count | Live packet |
@@ -102,7 +102,7 @@ Sources of the criterion IDs:
 | IC05 | Server-owned activation; fixture activation isolated | L2 | IC05; `execution/worker.py` | Fixture qualification LOCAL | Real activation from P20/P21 qualification | P20/P21 | Activation drift/unsupported-terms denial | Live packet |
 | IC06 | Persist original signing/nonce/bytes/hash/reference before/after effect | L2 | IC06; `execution/service.py`; `execution/transport.py` | Fixture records references only when named, LOCAL | Every non-fixture transport must name them | P20/P21 | Uncertain-broadcast reconciliation; no replacement | Live packet |
 | IC07 | Independently observed receipts/effects; missing actuals stay unknown | L2 | IC07; `recovery/` | Fixture receipts LOCAL | Real receipt/effect observation; wrong-tuple/revert/unknown | Real chain | Missing actuals/gas; wrong tuple; restart convergence | Live packet |
-| IC08 | Independent opaque-program limits; acquired/residual exposure; MON treatment | L3 | IC08; route-restrictions; ticket | NOT IMPLEMENTED | Full independent enforcement + exposure; MON trading/gas profile | P21 design decision | Control-to-enforcer evidence; exposure proof | Design decision + live packet |
+| IC08 | Independent opaque-program limits; acquired/residual exposure; MON treatment | L3 | IC08; route-restrictions; `docs/qualification/independent-enforcement/` | NOT IMPLEMENTED; independent-enforcement prep accepted LOCAL and integrated `f84ef415` (boundary-only feasibility; actual enforcement NOT_RUN) | Full independent enforcement + exposure; MON trading/gas profile | P21 design decision | Control-to-enforcer evidence; exposure proof | Design decision + live packet |
 
 ## 5. AUT01–AUT08
 
@@ -119,23 +119,23 @@ Sources of the criterion IDs:
 
 ## 6. P40/P41 retained criteria (issue snapshots)
 
-| Criterion | Owner | Accepted source | Existing evidence / class | Missing proof | Proposed test | Approval |
-|---|---|---|---|---|---|---|
-| P40 journey runtime verification | L2/L4 | `ISSUE47.json`; `release-journey/` | Preparation accepted; runtime UNRUN | Fresh runtime run of the chosen revision | Journey drive on the release candidate | Participant/host availability |
-| P40 participant evidence | BUILDER/L4 | `ISSUE47.json`; `TRADER_TASK_GUIDE.md` | NOT_RUN | Unfamiliar-trader tasks and observation forms | Builder-conducted sessions | Participant availability |
-| P40 accessibility (phone, screen reader, full keyboard) | L2/L4 | `release-journey/` §12 | Keyboard pass partial | Phone, screen-reader, full-traversal limits recorded | Manual checks or exact NOT_RUN limits | Device availability |
-| P41 hosting/access assessment | L4 | `ISSUE48.json`; this package | Preparation accepted | Host selection and hosted checks | Runbook stages | Deployment authority |
-| P41 submission checklist and assets | L4 | `ISSUE48.json`; `SUBMISSION_CHECKLIST.md` | Preparation accepted; assets MISSING | Logo/graphic, videos, public repo, live link | Asset and submission checks | Builder assets + publication authority |
-| P41 final release evidence | L2/L4 | `ISSUE48.json` | NOT_RUN | Combined final evidence on the release candidate | Final combined check | Builder launch authority |
+| Criterion | Owner | Accepted source | Existing evidence / class | Missing proof | Prerequisite | Proposed test | Approval |
+|---|---|---|---|---|---|---|---|
+| P40 journey runtime verification | L2/L4 | `ISSUE47.json`; `release-journey/` | Preparation accepted; runtime UNRUN | Fresh runtime run of the chosen revision | Running release revision | Journey drive on the release candidate | Participant/host availability |
+| P40 participant evidence | BUILDER/L4 | `ISSUE47.json`; `TRADER_TASK_GUIDE.md` | NOT_RUN | Unfamiliar-trader tasks and observation forms | Participant availability | Builder-conducted sessions | Participant availability |
+| P40 accessibility (phone, screen reader, full keyboard) | L2/L4 | `release-journey/` §12 | Keyboard pass partial | Phone, screen-reader, full-traversal limits recorded | Device availability; authorized session setup | Manual checks or exact NOT_RUN limits | Device availability |
+| P41 hosting/access assessment | L4 | `ISSUE48.json`; this package | Preparation accepted | Host selection and hosted checks | Host selection | Runbook stages | Deployment authority |
+| P41 submission checklist and assets | L4 | `ISSUE48.json`; `SUBMISSION_CHECKLIST.md` | Preparation accepted; assets MISSING | Logo/graphic, videos, public repo, live link | Builder assets | Asset and submission checks | Builder assets + publication authority |
+| P41 final release evidence | L2/L4 | `ISSUE48.json` | NOT_RUN | Combined final evidence on the release candidate | All above criteria | Final combined check | Builder launch authority |
 
 ## 7. Selected sponsor criteria (current accepted sources)
 
-| Bounty | Owner | Accepted source | Existing evidence / class | Missing proof | Approval |
-|---|---|---|---|---|---|
-| Nansen, Best use of Nansen | L2 | `NANSEN_BOUNTY_PICKUP_RECHECK_2026-10-12.md` | Local package accepted and integrated `3e7ff8bd`; see `nansen-report/` | Core mount into the Research journey; durable save/reopen; actual endpoint/data/credit/rights qualification; working demo | Actual-data packet + app mount; optional ≤2-min video is optional |
-| Envio, Best Use of Envio | L2 | `METROPOLIS_BOUNTY_REQUIREMENTS_RECHECK_2026-10-07.md` | Recorded-native P07 transport LOCAL | Deployed/working Envio pipeline with real Monad data; consuming product; public code; end-to-end demo | Deploy/access + data packet |
-| Kuru consumer trading | L2/L3 | `METROPOLIS_BOUNTY_REQUIREMENTS_RECHECK_2026-10-07.md` | Adapter COMPONENT | Working spot product through Kuru; target-user/demand/retention answers | Live packet + product decision |
-| Privy | L2 | Same recheck | Login path LOCAL | Visible functionality beyond login | Real-auth + feature packet |
+| Bounty | Owner | Accepted source | Existing evidence / class | Missing proof | Prerequisite | Proposed test | Approval |
+|---|---|---|---|---|---|---|---|
+| Nansen, Best use of Nansen | L2 | `NANSEN_BOUNTY_PICKUP_RECHECK_2026-10-12.md` | Local package accepted and integrated `3e7ff8bd`; see `nansen-report/` | Core mount into the Research journey; durable save/reopen; actual endpoint/data/credit/rights qualification; working demo | Actual-data packet + app mount | Mount + save/reopen an actual report | Actual-data packet; optional ≤2-min video is optional |
+| Envio, Best Use of Envio | L2 | `METROPOLIS_BOUNTY_REQUIREMENTS_RECHECK_2026-10-07.md` | Recorded-native P07 transport LOCAL | Deployed/working Envio pipeline with real Monad data; consuming product; public code; end-to-end demo | Deploy/access + data packet | Working Envio pipeline in the consuming product | Deploy/access + data packet |
+| Kuru consumer trading | L2/L3 | `METROPOLIS_BOUNTY_REQUIREMENTS_RECHECK_2026-10-07.md` | Adapter COMPONENT | Working spot product through Kuru; target-user/demand/retention answers | Live packet + qualified P20/P21 controls | One approved Kuru consumer-trading action | Live packet + product decision |
+| Privy | L2 | Same recheck | Login path LOCAL | Visible functionality beyond login | Real-auth + feature packet | Visible beyond-login functionality | Real-auth + feature packet |
 
 Sponsor selection was confirmed by the builder (five selected bounties). This map does not change selection or claim qualification. A dated public-rule recheck is required before submission.
 
@@ -148,6 +148,8 @@ Sponsor selection was confirmed by the builder (five selected bounties). This ma
 | RG01–RG06 | 6 | 6 local recorded-response | actual-data qualification |
 | IC01–IC08 | 8 | 7 local interfaces; IC08 not implemented | actual-provider qualification |
 | AUT01–AUT08 | 8 | 3 local decision flow | scheduler + hosted/live recurring |
+
+Counts are indicative of criteria that have any accepted local/component portion at this base under the defined evidence classes; they are not a claim that any criterion passes. For example RC16 and RC18 have local portions but their final hosted/rendered checks stay unrun.
 | P40/P41 | 6 | preparation accepted | runtime/host/participant/assets |
 | Sponsor | 4 | Nansen local package | mounts + actual + demo |
 

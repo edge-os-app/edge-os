@@ -29,8 +29,9 @@ Owned new path: `docs/qualification/release-host-preparation/` only. This packag
 ## Current versus dated evidence
 
 - The accepted local integration `3e7ff8bd` is newer than published main `3292bb784cf00a22dd4b9e943c0df585e5ef41e5`. Publication, its reviews and a manual approval are a separate step (RC19).
-- The earlier `HOSTING_AND_ACCESS_ASSESSMENT.md` inspected integration `c119e409` and records several `MISSING_CONNECTION` findings. The accepted base now mounts the financial routers and ships migrations `0008`–`0010`. Those earlier findings are stale for the current base and are reconciled here against accepted code.
+- The earlier `docs/qualification/release-preparation/HOSTING_AND_ACCESS_ASSESSMENT.md` was prepared against base `5689e1d6` and its statuses are `NOT RUN`/`UNTESTED`; it does not itself list `MISSING_CONNECTION` findings. The `c119e409` integration and the `MISSING_CONNECTION` class come from the workspace planning audit (`docs/planning/EDGE_OS_RELEASE_ACCEPTANCE_CHECKLIST_2026-10-12.md` and `docs/planning/EDGE_OS_DEMO_INTEGRATION_GAP_AUDIT_2026-10-12.md`). The accepted base `3e7ff8bd` now mounts the financial routers and ships migrations `0008`–`0010`, so those earlier missing-connection findings are stale for the current base and are reconciled here against accepted code.
 - The public-runtime Stage 2 records remain valid LOCAL evidence; they do not prove hosted or actual operation.
+- Newly accepted milestones (A1 amendment, 2026-10-12) are read-only context and reconciled in `RELEASE_EVIDENCE_MAP.md` and `INTEGRATION_NOTE.md`: the ORIGINAL-LOCAL candidate `8a1d65dd` is controller-accepted and integrated at `795682bf` and safely released (LOCAL authored-signature/holdings/original-action recovery, not actual signing/provider/chain qualification); the independent-enforcement preparation `541afb9a` is accepted LOCAL and integrated at `f84ef415`, with its documents under `docs/qualification/independent-enforcement/`. Neither is merged into this package's base `3e7ff8bd`, and this package does not edit those documents.
 
 ## Remaining required decisions
 

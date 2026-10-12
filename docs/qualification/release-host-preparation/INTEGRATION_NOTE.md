@@ -35,6 +35,7 @@ It changes no application, contract, migration, script or verifier file. The con
 ### Lane 3 (P21/P20 enforcement; then P31)
 
 - Supplies the independent restriction/exposure evidence for RC05 and IC08.
+- Its independent-enforcement preparation is accepted LOCAL and integrated at `f84ef415`, with documents under `docs/qualification/independent-enforcement/` (boundary-only feasibility; actual enforcement `NOT_RUN`). Lane 2 consumes those documents for the #58 and P20 packets.
 - Supplies the P20/P21 qualification that IC05/AUT03 consume.
 - After its enforcement preparation is accepted, integrated and safely released, supplies the P31 matching direct/chat health projection that AUT06 and P27 require.
 
@@ -67,7 +68,7 @@ None of these blocks the documentation integration of this package.
 
 ## Current versus dated limits to preserve
 
-- Keep the earlier preparation documents' history intact. Their `P05 unwired`, `not implemented` and integration-`c119e409` statements are stale for the current base; this package corrects them without rewriting the originals.
+- Keep the earlier preparation documents' history intact. The earlier `HOSTING_AND_ACCESS_ASSESSMENT.md` was prepared against base `5689e1d6` with `NOT RUN`/`UNTESTED` statuses; the `c119e409` integration and the `MISSING_CONNECTION` class come from the workspace planning audit. Their `P05 unwired` and `not implemented` statements are stale for base `3e7ff8bd`; this package corrects them without rewriting the originals.
 - Record which statements are first-party facts (observed 2026-10-12) and which are inspected code at base `3e7ff8bd`.
 - Keep future data-retention and support promises conditional on implemented behavior and provider obligations (PU07).
 

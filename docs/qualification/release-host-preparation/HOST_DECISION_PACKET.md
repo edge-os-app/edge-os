@@ -28,9 +28,9 @@ This packet reconciles the earlier [hosting proposal](../public-runtime/HOSTING_
 | Background worker | `python -m edge_os_api.execution.worker` — bounded loop, no port; `--once`/`--interval`; stops with exit code 3 on schema drift | `apps/api/src/edge_os_api/execution/worker.py` |
 | Research worker | `python -m edge_os_api.research.investigation_jobs` — same bounded-loop contract | `apps/api/src/edge_os_api/research/investigation_jobs.py` |
 | Browser API routing | The web calls `${NEXT_PUBLIC_API_BASE_URL}${path}`; no rewrite or proxy exists in `next.config.ts` | `apps/web/lib/api.ts` |
-| Repository root | The API imports read `docs/contracts/p02` and `docs/contracts/p06` from the repository root at import; the uv lock is `apps/api/uv.lock` (not root) | `main.py`; `apps/api/uv.lock` |
+| Repository root | The API derives its repository root from its module file path and reads `docs/contracts/p02` and `docs/contracts/p06` there at import, so the deployed tree must contain those files; the uv lock is `apps/api/uv.lock` (not root) | `records/contract_adapter.py`; `research_history/qualification_engine.py`; `apps/api/uv.lock` |
 | Production refusals | fixture/recorded/hermes_local interpreter modes; fixture wallet/execution; fixture effects; wildcard or non-HTTPS CORS; test Privy app id; missing build SHA; loopback database; missing `sslmode` | `core/settings.py` |
-| Runtime limits | body cap 256 KiB; write rate default 600/owner/minute; research active-job cap default 10; SQL statement timeout default 30 s; job deadline ≤ 3600 s | `main.py`; `core/settings.py`; `RUNTIME_GUARDS.md` |
+| Runtime limits | body cap 256 KiB; write rate default 600/owner/minute; research active-job cap default 10; SQL statement timeout default 30 s; job deadline ≤ 3600 s | `main.py`; `core/settings.py`; `core/request_schemas.py`; `RUNTIME_GUARDS.md` |
 
 Two structural consequences:
 
@@ -66,7 +66,7 @@ Routing proposal: give the API its own HTTPS origin and set `NEXT_PUBLIC_API_BAS
 
 Database connection proposal: use Render's **internal** URL, rewritten to the `postgresql+psycopg://` form with `?sslmode=require`. Use a **direct** (non-pooled) endpoint for migrations, because the migrations run session-scoped DDL. The API sets `statement_timeout` through the PostgreSQL startup `options`; some transaction-mode poolers refuse startup options, so a pooler needs its own check.
 
-The Fly.io alternative (bounded, only where decisive): a single Fly app with `[processes]` for web/api/workers plus **Fly Managed Postgres**. This is reasonable when the builder wants regional Machines close to users and accepts a higher database baseline ($38/mo) and a separate unmanaged-versus-managed Postgres distinction. It is not cheaper than the Render proposal at this scale. Do not use unmanaged Fly Postgres for a release candidate: Fly's own documentation calls it "not a managed database".
+The Fly.io alternative (bounded, only where decisive): a single Fly app with `[processes]` for web/api/workers plus **Fly Managed Postgres**. This is reasonable when the builder wants regional Machines close to users and accepts a higher database baseline ($38/mo) and a separate unmanaged-versus-managed Postgres distinction. It is not cheaper than the Render proposal at this scale. **Fly Managed Postgres supported PostgreSQL major version is UNKNOWN here:** the fetched first-party Fly docs did not state it, so a PostgreSQL 18 check or an explicit version decision is required before this alternative is used. Do not use unmanaged Fly Postgres for a release candidate: Fly's own documentation calls it "not a managed database".
 
 ## 5. Cost separation (first-party list prices, 2026-10-12)
 
@@ -90,7 +90,7 @@ All figures are **monthly USD, before tax**, and must be re-checked at purchase.
 | Model / data / provider requests | inference, Envio/QuickNode/Nansen | not stated by the application; provider-priced | **UNKNOWN** |
 | Provider money limits | a hard spend cap at each provider | not offered by the host | **UNKNOWN / decision** |
 
-Notes: `0.5c-512mb` gives 0.5 CPU and 512 MB per service. The research/execution workers and the API may need more than 1 GB Postgres RAM or larger compute under load; the correct sizes are a **REQUIRED_DECISION** after a hosted load check. Hobby lacks network-isolated environments and inbound IP rules for services (both need Pro); it also lacks horizontal autoscaling.
+Notes: `0.5c-512mb` gives 0.5 CPU and 512 MB per service. The research/execution workers and the API may need more than 1 GB Postgres RAM or larger compute under load; the correct sizes are a **REQUIRED_DECISION** after a hosted load check. Hobby lacks network-isolated environments (Pro) and service inbound IP rules (Scale); it also lacks horizontal autoscaling.
 
 ### 5b. Minimal Fly alternative (bounded comparison only)
 
@@ -125,7 +125,7 @@ Each gate below is **blocked**, not "solved" by an application allow-list. A pla
 | H6 Startup versions | Host offers Python `3.14.x` in `>=3.14,<3.15` and Node `24.x` in `>=24 <25` | Render default Python `3.14.3` (any released version from 3.7.3 settable); default Node `24.21.0`. The proposal pins `PYTHON_VERSION=3.14.4` and `NODE_VERSION=24.13.1`. | Confirm `3.14.4` and `24.13.1` are offered at creation time, or pin the nearest offered patch in the same minor line and re-run the checks. |
 | H7 Resource and job concurrency | Correct per-service CPU/RAM and worker concurrency for the accepted load | **NOT RUN.** No hosted load check exists. | A hosted load check after the exact sizes are chosen. |
 | H8 Provider money limits | A hard spending cap at each external provider | **NOT provided by the host.** Application quotas cap requests and compute, not money at a provider. | The builder sets provider-side billing limits (for example at the model and data providers) and records them. |
-| H9 Abuse protection in front of the API | Bot/IP limits before authentication | Render Free/paid offer DDoS mitigation; service inbound IP rules need a Scale/Pro workspace. The application rate limit is per signed-in owner only. | Decide whether the public launch needs an inbound IP rule or a WAF, and on which workspace plan. |
+| H9 Abuse protection in front of the API | Bot/IP limits before authentication | Render Free/paid offer DDoS mitigation; service inbound IP rules need a Scale workspace (Hobby/Pro apply inbound IP rules to datastores only). The application rate limit is per signed-in owner only. | Decide whether the public launch needs an inbound IP rule or a WAF, and on which workspace plan. |
 | H10 Backup restore rehearsal on the host | A hosted backup and point-in-time restore rehearsal | **NOT RUN.** Only the local rehearsal exists (`RESTORE_ROLLBACK_RUNBOOK.md`). | Run the restore rehearsal on the chosen host before public use. |
 | H11 Log retention and access | Host log retention matching `RETENTION_DELETION_SUPPORT.md` | Render Hobby retains logs 7 days; Pro 14; Scale 30. | Confirm the retention choice matches the public retention statement. |
 | H12 Dependency advisories | Resolve the wallet-SDK advisories before public exposure | `ADVISORY_ASSESSMENT.md`: 25 advisories, all transitive through the wallet SDK; no lockfile change made. | Controller disposition of the advisory recommendations. |
