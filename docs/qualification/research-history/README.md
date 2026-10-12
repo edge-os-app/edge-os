@@ -20,9 +20,12 @@ Files:
 
 | File | Role |
 |---|---|
-| `apps/api/src/edge_os_api/research_history/` | Bounded collector, normalizer, evidence manifest and P07/P02 loader. |
+| `apps/api/src/edge_os_api/research_history/` | Bounded collector, normalizer, evidence manifest, P07/P02 loader, injected Envio source transport and injected QuickNode corroboration. |
 | `apps/api/tests/research_history/` | Public-seam tests and labelled synthetic fixtures. |
-| `docs/implementation/RESEARCH_HISTORY_ADAPTER_PROFILE.md` | The interface and limit profile. |
+| `docs/implementation/RESEARCH_HISTORY_ADAPTER_PROFILE.md` | The accepted adapter interface and limit profile. |
+| `docs/implementation/RESEARCH_HISTORY_SOURCE_TRANSPORT_PROFILE.md` | The injected source-transport and corroboration profile (task P07-SOURCE). |
+| `docs/qualification/research-history/COLLECTION_PACKET.md` | The finite later-collection proposal. |
+| `docs/qualification/research-history/R58_INTEGRATION_NOTE.md` | The #58 interface and enablement note. |
 
 Fixtures are labelled `SYNTHETIC_FIXTURE`. Addresses, hashes and amounts are invented. Expected amounts,
 prices and counts were written by hand from the decimal-50 half-even rule. They were not produced by the code
@@ -91,6 +94,55 @@ profit. No fresh history is qualified.
 | RH-C52 | Tampered raw records fail verification | `test_evidence_manifest.py::test_tampered_raw_records_fail_verification` |
 | RH-C53 | Programmer defect from the source propagates | `test_history_collector.py::test_programmer_defect_from_the_source_propagates` |
 | RH-C54 | Non-JSON response value refused | `test_history_collector.py::test_non_json_response_value_is_refused` |
+| RH-C55 | Transport satisfies the response-source protocol | `test_source_transport.py::test_transport_satisfies_the_response_source_protocol` |
+| RH-C56 | Injected Envio source frames a complete collection | `test_source_transport.py::test_complete_collection_frames_native_pages` |
+| RH-C57 | Transport composes into normalize | `test_source_transport.py::test_transport_composes_into_normalize` |
+| RH-C58 | Page content hash binds the page | `test_source_transport.py::test_page_content_hash_binds_the_page` |
+| RH-C59 | Query definition is echoed from the request | `test_source_transport.py::test_query_definition_is_echoed_from_the_request` |
+| RH-C60 | Hexadecimal quantities are accepted | `test_source_transport.py::test_hexadecimal_quantities_are_accepted` |
+| RH-C61 | Contradictory guard bounds refused | `test_source_transport.py::test_contradictory_guard_bounds_are_refused` |
+| RH-C62 | Missing logs list refused, not proved empty | `test_source_transport.py::test_missing_logs_list_is_refused_not_proved_empty` |
+| RH-C63 | Duplicate conflicting block fact refused | `test_source_transport.py::test_duplicate_conflicting_block_fact_is_refused` |
+| RH-C64 | Wrong network refused | `test_source_transport.py::test_wrong_network_is_refused` |
+| RH-C65 | Matching network echo recorded | `test_source_transport.py::test_matching_network_echo_is_recorded` |
+| RH-C66 | Malformed native response is a source failure | `test_source_transport.py::test_malformed_native_response_is_a_source_failure` |
+| RH-C67 | Incomplete page facts refused | `test_source_transport.py::test_page_facts_incomplete_is_refused` |
+| RH-C68 | Missing fields counted, not repaired | `test_source_transport.py::test_missing_fields_are_counted_not_repaired` |
+| RH-C69 | Client failure, timeout and cancel are partial | `test_source_transport.py::{test_client_failure_is_a_partial_result,test_client_timeout_and_cancel_are_partial}` |
+| RH-C70 | Rate limit is one attempt, no retry | `test_source_transport.py::test_rate_limit_is_one_attempt_no_retry` |
+| RH-C71 | Programmer defect propagates | `test_source_transport.py::test_programmer_defect_from_the_client_propagates` |
+| RH-C72 | No hidden retry on exhaustion | `test_source_transport.py::test_no_hidden_retry_when_pages_are_exhausted` |
+| RH-C73 | Corroboration parses `eth_chainId` | `test_quicknode_corroboration.py::test_read_chain_id_classifies_monad` |
+| RH-C74 | Full corroboration is complete | `test_quicknode_corroboration.py::test_full_corroboration_is_complete` |
+| RH-C75 | Sampled corroboration is sampled | `test_quicknode_corroboration.py::test_sampled_corroboration_is_sampled` |
+| RH-C76 | Wrong chain is not verified and fetches nothing | `test_quicknode_corroboration.py::test_wrong_chain_is_not_verified_and_fetches_nothing` |
+| RH-C77 | Wrong transaction hash or index is a mismatch | `test_quicknode_corroboration.py::{test_wrong_transaction_hash_is_a_mismatch,test_wrong_transaction_index_is_a_mismatch}` |
+| RH-C78 | Missing receipt fact, removed log and malformed topics are counted, not escaped | `test_quicknode_corroboration.py::{test_missing_receipt_block_hash_is_a_missing_fact,test_removed_log_is_not_a_match,test_malformed_topics_do_not_escape_as_an_exception}` |
+| RH-C79 | Corroboration mismatch is counted, not repaired | `test_quicknode_corroboration.py::{test_corroboration_counts_mismatch_when_log_is_absent,test_corroboration_mismatch_is_not_repaired,test_corroboration_receipt_missing_is_a_mismatch}` |
+| RH-C80 | Corroboration RPC failure is unresolved | `test_quicknode_corroboration.py::test_corroboration_rpc_failure_is_unresolved` |
+| RH-C81 | Empty corroboration is none | `test_quicknode_corroboration.py::test_empty_corroboration_is_none` |
+| RH-C82 | Invalid numeric identity is not identifiable | `test_quicknode_corroboration.py::{test_unidentifiable_record_counts_as_mismatch,test_invalid_numeric_identity_is_not_identifiable}` |
+| RH-C83 | Corroboration makes one call per sample | `test_quicknode_corroboration.py::test_corroboration_makes_one_call_per_identified_sample` |
+| RH-C84 | Out-of-range block fact refused | `test_source_transport.py::test_out_of_range_block_fact_is_refused` |
+| RH-C85 | Absent page-start block fact refused | `test_source_transport.py::test_absent_boundary_block_fact_is_refused` |
+| RH-C86 | Page past the requested end refused | `test_source_transport.py::test_page_past_the_requested_end_is_refused` |
+| RH-C87 | Reversed page refused | `test_source_transport.py::test_reversed_page_is_refused` |
+| RH-C88 | Conflicting guard timestamp refused | `test_source_transport.py::test_conflicting_guard_timestamp_is_refused` |
+| RH-C89 | Conflicting guard hash refused | `test_source_transport.py::test_conflicting_guard_hash_is_refused` |
+| RH-C90 | Absent page-end block fact refused | `test_source_transport.py::test_absent_page_end_fact_is_refused` |
+| RH-C91 | Malformed guard fact refused, not discarded | `test_source_transport.py::test_malformed_guard_fact_is_refused_not_discarded` |
+| RH-C92 | Non-mapping guard refused, not discarded | `test_source_transport.py::test_non_mapping_guard_is_refused_not_discarded` |
+| RH-C93 | Malformed chain echo refused and recorded present | `test_source_transport.py::test_malformed_chain_echo_is_refused_and_recorded_present` |
+| RH-C94 | Malformed block timestamp refused | `test_source_transport.py::test_malformed_block_timestamp_is_refused` |
+| RH-C95 | Nested log transaction identity checked | `test_quicknode_corroboration.py::test_nested_log_transaction_identity_is_checked` |
+| RH-C96 | Nested log block identity checked | `test_quicknode_corroboration.py::test_nested_log_block_identity_is_checked` |
+| RH-C97 | Absent or non-boolean removal is a missing fact | `test_quicknode_corroboration.py::test_absent_or_non_boolean_removal_is_missing_fact` |
+| RH-C98 | Nested log missing identity is a missing fact | `test_quicknode_corroboration.py::test_nested_log_missing_identity_is_missing_fact` |
+| RH-C99 | Malformed guard hash refused | `test_source_transport.py::test_malformed_guard_hash_is_refused` |
+| RH-C100 | Malformed `first_parent_hash` refused | `test_source_transport.py::test_malformed_first_parent_hash_is_refused` |
+| RH-C101 | Malformed page-end block hash refused | `test_source_transport.py::test_malformed_end_block_hash_is_refused` |
+| RH-C102 | Absent optional hashes are allowed | `test_source_transport.py::test_absent_optional_hashes_are_allowed` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
-suite. This adapter adds cases RH-C01 to RH-C54 and changes neither.
+suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C102. Neither changes the
+existing cases.
