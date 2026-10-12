@@ -213,6 +213,16 @@ def install_process(monkeypatch: pytest.MonkeyPatch, behaviour, returncode: int 
     return launched
 
 
+def assert_outputs_clean_and_held_evidence_private(tmp_path: Path, runner) -> None:
+    """No turn folder holds the credential; anything held aside is private (mode 700) and gone after the purge."""
+    evidence = tmp_path / "evidence"
+    for turn_folder in evidence.glob("turn-*"):
+        assert plain_bytes_leak(turn_folder, OLD) == []
+    assert all(held.stat().st_mode & 0o077 == 0 for held in evidence.glob("quarantine-*"))
+    runner.purge_quarantine()
+    assert not list(evidence.glob("quarantine-*")) and plain_bytes_leak(evidence, OLD) == []
+
+
 def build(tmp_path: Path, credential: Path | None, **kwargs):
     runner = GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
                                      credential_file=credential, script_for=kwargs.pop("script_for", lambda turn: {}),
@@ -1504,9 +1514,9 @@ def test_a_flood_of_stdout_is_capped_and_cannot_run_the_turn_past_its_deadline(t
     status, elapsed = _timed_run(runner)
 
     assert elapsed <= 0.1 + 0.5 + 0.25, (status, elapsed)
-    kept = sum(p.stat().st_size for p in (tmp_path / "evidence").rglob("*stdout*") if p.is_file())
+    kept = sum(p.stat().st_size for p in (tmp_path / "evidence").glob("turn-*/**/*stdout*") if p.is_file())
     assert kept <= module.MAX_STDOUT_BYTES
-    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+    assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
 
 
 def test_a_credential_file_that_is_a_named_pipe_is_refused_without_blocking(tmp_path: Path, monkeypatch) -> None:
@@ -1836,7 +1846,7 @@ def test_sealing_a_file_dense_with_escapes_cannot_run_the_turn_past_its_deadline
     status, elapsed = _timed_run(runner, limit=120)
 
     assert elapsed <= 1.0 + 1.0 + 0.4, (status, elapsed)
-    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+    assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
 
 
 # --- Repair after round-19 review: names use the same credential test as contents --------------------------------
@@ -1971,9 +1981,9 @@ def test_an_output_sealed_after_the_container_is_gone_is_not_sealed_a_second_tim
     walks: list[Path] = []
     original = GuardedDockerTurnRunner._redact.__func__
 
-    def counted(cls, folder, secret, deadline):
+    def counted(cls, folder, secret, deadline, *rest):
         walks.append(folder)
-        return original(cls, folder, secret, deadline)
+        return original(cls, folder, secret, deadline, *rest)
 
     monkeypatch.setattr(GuardedDockerTurnRunner, "_redact", classmethod(counted))
 
@@ -1981,3 +1991,109 @@ def test_an_output_sealed_after_the_container_is_gone_is_not_sealed_a_second_tim
 
     assert result.status == "UNKNOWN" and len(walks) == 1, walks  # a second pass would spend the deadline for nothing
     assert plain_bytes_leak(tmp_path / "evidence", OLD) == [] and spend.state("attempt-1") == "UNKNOWN"
+
+
+# --- Repair after round-22 review: a large job-written file is never freed on the clock ------------------------------
+
+def _spy_size_proportional_frees(monkeypatch) -> list[tuple[str, int]]:
+    """Record every truncate or unlink of a plain file larger than the scan limit, while a turn runs."""
+    import guarded_docker_runner as module
+    large: list[tuple[str, int]] = []
+    real_unlink, real_ftruncate = os.unlink, os.ftruncate
+
+    def unlink(path, *, dir_fd=None):
+        info = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+        if stat_module.S_ISREG(info.st_mode) and info.st_size > module.MAX_SCANNED_BYTES:
+            large.append(("unlink", info.st_size))
+        return real_unlink(path, dir_fd=dir_fd)
+
+    def ftruncate(fd, length):
+        size = os.fstat(fd).st_size
+        if size > module.MAX_SCANNED_BYTES and length < size:
+            large.append(("ftruncate", size))
+        return real_ftruncate(fd, length)
+
+    monkeypatch.setattr(module.os, "unlink", unlink)
+    monkeypatch.setattr(module.os, "ftruncate", ftruncate)
+    return large
+
+
+import stat as stat_module  # noqa: E402
+
+
+@pytest.mark.parametrize("where", ["stdout", "output-file"])
+def test_a_huge_job_written_file_is_moved_aside_in_one_step_and_freed_only_by_the_purge(tmp_path: Path, monkeypatch, where: str) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    two_gib = 2 * 1024 * 1024 * 1024  # sparse: as large as a flood, without writing it
+
+    def behaviour(output: Path) -> None:
+        target = output / ("host-captured-stdout.log" if where == "stdout" else "huge.log")
+        with open(target, "ab") as file:
+            file.write(b"Bearer " + OLD.encode())
+            file.truncate(two_gib)
+
+    install_process(monkeypatch, behaviour, returncode=3)
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=5, seal_grace_seconds=0.3)
+    large = _spy_size_proportional_frees(monkeypatch)
+
+    status, _elapsed = _timed_run(guarded)
+
+    assert large == [], f"the turn freed a job-sized file on the clock: {large}"
+    assert status == "UNKNOWN" and spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+    held = list((tmp_path / "evidence").glob("quarantine-*"))
+    assert held and all(folder.stat().st_mode & 0o077 == 0 for folder in held)
+    for folder in (tmp_path / "evidence").glob("turn-*/output"):  # what stays as output is small and sealed
+        assert all(path.stat().st_size <= 1024 * 1024 for path in folder.rglob("*") if path.is_file())
+    runner.purge_quarantine()  # between turns, with no clock: here the large file is freed
+    assert not list((tmp_path / "evidence").glob("quarantine-*")) and plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_removal_on_the_clock_moves_an_output_holding_a_huge_file_instead_of_freeing_it(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present and not ours: never stoppable
+
+    def behaviour(output: Path) -> None:
+        with open(output / "huge.log", "ab") as file:
+            file.write(OLD.encode())
+            file.truncate(2 * 1024 * 1024 * 1024)
+
+    install_process(monkeypatch, behaviour, returncode=-9)
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=0.2, seal_grace_seconds=0.3)
+    large = _spy_size_proportional_frees(monkeypatch)
+
+    status, _elapsed = _timed_run(guarded)
+
+    assert status == "EvidenceNotSealed" and large == [], large
+    assert list((tmp_path / "evidence").glob("turn-*/output")) == []
+    assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+    runner.purge_quarantine()
+    assert not list((tmp_path / "evidence").glob("quarantine-*")) and plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_the_job_client_cannot_put_more_than_the_stdout_limit_on_host_disk(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "docker").write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  run) exec /usr/bin/python3 -I -c 'import os, time\nfor _ in range(64): os.write(1, b\"x\" * (1 << 20))\ntime.sleep(30)' ;;\n"
+        "  inspect) exit 1 ;;\n"
+        "  *) exit 0 ;;\n"
+        "esac\n")
+    (fake_bin / "docker").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.setattr(docker_turn_runner, "docker", module.BASE_DOCKER_CLI)  # the real CLI helpers, the fake docker on PATH
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=0.3)
+
+    status, elapsed = _timed_run(guarded, limit=60)
+
+    written = sum(path.stat().st_size for path in (tmp_path / "evidence").rglob("*") if path.is_file())
+    assert written <= module.MAX_STDOUT_BYTES + 64 * 1024, written  # the flood never reached host disk
+    assert elapsed <= 1.0 + 0.3, (status, elapsed)
+    assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+    assert_outputs_clean_and_held_evidence_private(tmp_path, runner)

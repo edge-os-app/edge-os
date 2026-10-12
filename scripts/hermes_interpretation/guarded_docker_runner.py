@@ -25,6 +25,7 @@ import json
 import math
 import os
 import re
+import resource
 import selectors
 import shutil
 import signal
@@ -153,6 +154,18 @@ def bounded_docker(*args: str, timeout: float) -> subprocess.CompletedProcess[st
     if not ended or size > MAX_CLI_ANSWER_BYTES:
         raise TimeoutError("the docker CLI did not answer within its budget and size")
     return subprocess.CompletedProcess(["docker", *args], proc.returncode, b"".join(chunks).decode("utf-8", "replace"), "")
+
+
+
+def _limit_client_file_size() -> None:
+    """Runs in the job client before it starts: no file it writes, its stdout included, may pass MAX_STDOUT_BYTES + 1.
+
+    Without it the job decides how much reaches host disk while it runs, and writing back gigabytes stalls every later
+    disk step (closing the file, the ledger's commit) past the deadline. A client that writes more gets SIGXFSZ and
+    exits; the stop step then verifies the container is gone, and the over-limit stdout is moved aside whole.
+    It only calls setrlimit: no lock or import that another thread of the parent could hold at the fork.
+    """
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_STDOUT_BYTES + 1, MAX_STDOUT_BYTES + 1))
 
 
 class EvidenceNotSealed(RuntimeError):
@@ -317,7 +330,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             os.close(parent_fd)
 
     @classmethod
-    def _redact(cls, folder: Path, secret: str | None, deadline: float) -> bool:
+    def _redact(cls, folder: Path, secret: str | None, deadline: float,
+                hold: Callable[[int, str], None] | None = None) -> bool:
         """Remove the credential from every file and name under `folder`. True when something held it.
 
         With no credential, the walk still runs: links, pipes, sockets and devices are removed, so nothing the host reads
@@ -344,15 +358,20 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 os.unlink(name, dir_fd=dir_fd)
                 return None
             if forms:
-                found[0] |= cls._seal_file(dir_fd, name, forms, deadline)
+                found[0] |= cls._seal_file(dir_fd, name, forms, deadline, hold)
             return None
 
         cls._walk(folder, deadline, visit, EvidenceNotSealed, remove_dirs=False)
         return found[0]
 
     @staticmethod
-    def _seal_file(dir_fd: int, name: str, forms: list[bytes], deadline: float = float("inf")) -> bool:
-        """Seal one file through a descriptor. A link or a pipe swapped in for it is removed, never followed or read."""
+    def _seal_file(dir_fd: int, name: str, forms: list[bytes], deadline: float = float("inf"),
+                   hold: Callable[[int, str], None] | None = None) -> bool:
+        """Seal one file through a descriptor. A link or a pipe swapped in for it is removed, never followed or read.
+
+        A plain file too large to scan is given to `hold` (moved aside in one step), because freeing it takes time that
+        grows with its size; with no `hold` it is unlinked.
+        """
         def open_nofollow(flags: int) -> int:
             return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
 
@@ -370,8 +389,11 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             return True
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SCANNED_BYTES:  # not a plain file, or too large to scan
+            if not stat.S_ISREG(info.st_mode):  # not a plain file: removed unread
                 os.unlink(name, dir_fd=dir_fd)
+                return True
+            if info.st_size > MAX_SCANNED_BYTES:  # too large to scan: treated as holding the credential
+                (hold or (lambda folder, entry: os.unlink(entry, dir_fd=folder)))(dir_fd, name)
                 return True
             os.fchmod(fd, 0o600)
             chunks = []
@@ -414,9 +436,34 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
         A folder that a still-running container swaps for a link is unlinked as a link and never entered. A very deep
         tree needs more descriptors than the process may hold; that raises, and the caller moves the tree instead.
+        With a finite `until`, a plain file larger than the scan limit is not unlinked: freeing it takes time that grows
+        with its size, which no clock check can cut short. That raises too, and the caller moves the tree.
         """
-        cls._walk(root, until, lambda dir_fd, name, mode: None if stat.S_ISDIR(mode) else os.unlink(name, dir_fd=dir_fd),
-                  TimeoutError, remove_dirs=True)
+        def visit(dir_fd: int, name: str, mode: int) -> None:
+            if stat.S_ISDIR(mode):
+                return
+            if (until != math.inf and stat.S_ISREG(mode)
+                    and os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_size > MAX_SCANNED_BYTES):
+                raise TimeoutError("a file too large to free on the clock")
+            os.unlink(name, dir_fd=dir_fd)
+
+        cls._walk(root, until, visit, TimeoutError, remove_dirs=True)
+
+    @staticmethod
+    def _hold(output: Path, dir_fd: int, name: str) -> None:
+        """Move one entry out of `output` in one step, into the turn's private holding folder (mode 700).
+
+        Freeing a large file takes time that grows with its size, and the job decides the size, so it is never done
+        while the turn's clock runs. `purge_quarantine` frees the folder between turns.
+        """
+        held = output.parent.parent / f"quarantine-{output.parent.name}-held"
+        held.mkdir(mode=0o700, exist_ok=True)
+        held_fd = os.open(held, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fchmod(held_fd, 0o700)
+            os.rename(name, uuid.uuid4().hex, src_dir_fd=dir_fd, dst_dir_fd=held_fd)
+        finally:
+            os.close(held_fd)
 
     def _quarantine(self, output: Path, plan: _TurnPlan) -> None:
         """Take evidence that cannot be proved clean out of reach. It returns when the folder is gone, else raises `EvidenceNotSealed`.
@@ -462,7 +509,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def _seal(self, output: Path, plan: _TurnPlan) -> bool:
         """Seal the output. Any failure at all removes it and raises `EvidenceNotSealed`."""
         try:
-            return self._redact(output, plan.secret, plan.seal_deadline)
+            return self._redact(output, plan.secret, plan.seal_deadline,
+                                lambda dir_fd, name: self._hold(output, dir_fd, name))
         except BaseException as error:
             self._quarantine(output, plan)
             if isinstance(error, EvidenceNotSealed):
@@ -534,12 +582,13 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             raise EvidenceNotSealed(f"container {plan.name} may still write and could not be stopped")
         launch.stopped = True
 
-    @staticmethod
-    def _cap_stdout(sink: Any, returned: bytes | None, secret: str | None) -> None:
-        """Keep the job's output only if it fits in MAX_STDOUT_BYTES; otherwise drop it whole and leave a note.
+    @classmethod
+    def _cap_stdout(cls, sink: Any, returned: bytes | None, output: Path) -> None:
+        """Keep the job's output only if it fits in MAX_STDOUT_BYTES; otherwise move it whole aside and leave a note.
 
-        Dropping, not cutting: a cut at any offset could split the credential, and a split part is not found by sealing.
-        Emptying a file is one step, whatever its size. `secret` is unused and kept for the callers' symmetry.
+        Whole, not cut: a cut at any offset could split the credential, and a split part is not found by sealing. Moved,
+        not emptied: emptying or deleting a file takes time that grows with its size, and the job decides the size, so
+        the file goes to the private holding folder in one step and `purge_quarantine` frees it between turns.
         """
         if returned:  # a process that handed its output back instead of writing it to the file
             if len(returned) <= MAX_STDOUT_BYTES:
@@ -547,9 +596,26 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             else:
                 sink.write(b"x" * (MAX_STDOUT_BYTES + 1))  # marks the file as over the limit, so it is dropped below
         sink.flush()
-        if os.fstat(sink.fileno()).st_size > MAX_STDOUT_BYTES:
-            os.ftruncate(sink.fileno(), 0)
-            os.pwrite(sink.fileno(), b"[the job's output was larger than 1 MiB and was not kept]\n", 0)
+        info = os.fstat(sink.fileno())
+        if info.st_size <= MAX_STDOUT_BYTES:
+            return
+        name = "host-captured-stdout.log"
+        folder = os.open(output, cls._DIR_FLAGS)
+        try:
+            now = os.stat(name, dir_fd=folder, follow_symlinks=False)
+            if (now.st_dev, now.st_ino) != (info.st_dev, info.st_ino):  # the job moved it: sealing deals with what is there
+                return
+            cls._hold(output, folder, name)
+            try:
+                note = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
+            except OSError:  # a job that still runs took the name: the note is only a courtesy
+                return
+            try:
+                os.write(note, b"[the job's output was larger than 1 MiB and was not kept]\n")
+            finally:
+                os.close(note)
+        finally:
+            os.close(folder)
 
     # --- One turn -------------------------------------------------------------------------------------------------
 
@@ -623,7 +689,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         with os.fdopen(sink_fd, "wb") as sink:
             returned = None
             try:
-                launch.proc = proc = subprocess.Popen(argv, stdout=sink, stderr=subprocess.STDOUT)
+                launch.proc = proc = subprocess.Popen(argv, stdout=sink, stderr=subprocess.STDOUT,
+                                                      preexec_fn=_limit_client_file_size)
                 try:  # setup time since the plan was made comes out of the wait, never on top of it
                     returned, _ = proc.communicate(timeout=max(0.0, plan.job_deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
@@ -635,7 +702,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 # an error while the container goes on). Verify it is gone before any evidence is touched.
                 self._confirm_stopped(plan, launch)
             finally:  # on every path, the host keeps at most MAX_STDOUT_BYTES of the job's output
-                self._cap_stdout(sink, returned, plan.secret)
+                self._cap_stdout(sink, returned, output)
         echoed = self._seal(output, plan)  # sealed here for the result check; the lifecycle seals on every other path
         launch.sealed = True
         if proc.returncode != 0:
