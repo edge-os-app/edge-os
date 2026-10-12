@@ -114,9 +114,19 @@ def _identity(record: Any) -> str | None:
 
 
 def _match_receipt(record: Mapping[str, Any], receipt: Any) -> str | None:
-    """Return a mismatch reason, or None when the record's identity is corroborated."""
+    """Return a mismatch reason, or None when the record's identity is corroborated.
+
+    The receipt's top level and the selected log must both prove the transaction and
+    block identity. A removed fact that is absent or not a boolean is missing evidence,
+    never proof that the log is live.
+    """
     want_topics = _record_topics(record)
-    if want_topics is None or not isinstance(record.get("address"), str) or not isinstance(record.get("transaction_hash"), str):
+    if (want_topics is None or not isinstance(record.get("address"), str)
+            or not isinstance(record.get("transaction_hash"), str)
+            or not isinstance(record.get("block_hash"), str)
+            or not (_is_nonneg_int(record.get("block_number"))
+                    and _is_nonneg_int(record.get("transaction_index"))
+                    and _is_nonneg_int(record.get("log_index")))):
         return "RECORD_NOT_IDENTIFIABLE"
     if not isinstance(receipt, Mapping):
         return "RECEIPT_MALFORMED"
@@ -130,26 +140,35 @@ def _match_receipt(record: Mapping[str, Any], receipt: Any) -> str | None:
         return "RECEIPT_MISSING_FACT"
     if tx_hash != record["transaction_hash"] or tx_index != record["transaction_index"]:
         return "TRANSACTION_MISMATCH"
-    if block_number != record["block_number"]:
-        return "BLOCK_MISMATCH"
-    record_block_hash = record.get("block_hash")
-    if not isinstance(record_block_hash, str):
-        return "RECORD_NOT_IDENTIFIABLE"
-    if block_hash != record_block_hash:
+    if block_number != record["block_number"] or block_hash != record["block_hash"]:
         return "BLOCK_MISMATCH"
     for log in logs:
         if not isinstance(log, Mapping):
             return "RECEIPT_MALFORMED"
         if log.get("address") != record["address"]:
             continue
+        log_tx_hash = log.get("transactionHash")
+        log_tx_index = _quantity(log.get("transactionIndex"))
+        log_block_number = _quantity(log.get("blockNumber"))
+        log_block_hash = log.get("blockHash")
+        if (not isinstance(log_tx_hash, str) or log_tx_index is None or log_block_number is None
+                or not isinstance(log_block_hash, str)):
+            return "RECEIPT_MISSING_FACT"
+        if log_tx_hash != record["transaction_hash"] or log_tx_index != record["transaction_index"]:
+            return "TRANSACTION_MISMATCH"
+        if log_block_number != record["block_number"] or log_block_hash != record["block_hash"]:
+            return "BLOCK_MISMATCH"
         topics = log.get("topics")
         if not isinstance(topics, list) or not all(isinstance(topic, str) for topic in topics):
             return "RECEIPT_MALFORMED"
         if topics != want_topics or log.get("data") != record.get("data"):
             continue
-        if _quantity(log.get("logIndex")) != record.get("log_index"):
+        if _quantity(log.get("logIndex")) != record["log_index"]:
             continue
-        return "LOG_REMOVED" if log.get("removed") is True else None
+        removed = log.get("removed")
+        if not isinstance(removed, bool):
+            return "RECEIPT_MISSING_FACT"
+        return "LOG_REMOVED" if removed else None
     return "LOG_NOT_FOUND"
 
 

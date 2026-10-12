@@ -130,7 +130,15 @@ profit. No fresh history is qualified.
 | RH-C88 | Conflicting guard timestamp refused | `test_source_transport.py::test_conflicting_guard_timestamp_is_refused` |
 | RH-C89 | Conflicting guard hash refused | `test_source_transport.py::test_conflicting_guard_hash_is_refused` |
 | RH-C90 | Absent page-end block fact refused | `test_source_transport.py::test_absent_page_end_fact_is_refused` |
+| RH-C91 | Malformed guard fact refused, not discarded | `test_source_transport.py::test_malformed_guard_fact_is_refused_not_discarded` |
+| RH-C92 | Non-mapping guard refused, not discarded | `test_source_transport.py::test_non_mapping_guard_is_refused_not_discarded` |
+| RH-C93 | Malformed chain echo refused and recorded present | `test_source_transport.py::test_malformed_chain_echo_is_refused_and_recorded_present` |
+| RH-C94 | Malformed block timestamp refused | `test_source_transport.py::test_malformed_block_timestamp_is_refused` |
+| RH-C95 | Nested log transaction identity checked | `test_quicknode_corroboration.py::test_nested_log_transaction_identity_is_checked` |
+| RH-C96 | Nested log block identity checked | `test_quicknode_corroboration.py::test_nested_log_block_identity_is_checked` |
+| RH-C97 | Absent or non-boolean removal is a missing fact | `test_quicknode_corroboration.py::test_absent_or_non_boolean_removal_is_missing_fact` |
+| RH-C98 | Nested log missing identity is a missing fact | `test_quicknode_corroboration.py::test_nested_log_missing_identity_is_missing_fact` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
-suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C90. Neither changes the
+suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C98. Neither changes the
 existing cases.

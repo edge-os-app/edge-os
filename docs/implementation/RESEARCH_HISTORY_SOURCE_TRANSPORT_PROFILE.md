@@ -14,7 +14,7 @@ main-branch authority.
 - Preserved: the accepted adapter public semantics (`collect`, `normalize`, `project_binding`, the manifest, the
   `ResponseSource` protocol and `RecordedResponseSource`), the P07 module, the P02 contract, the fixtures and the
   closed allowances. `#58` still owns all application wiring.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (107 tests);
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (115 tests);
   `cd docs/qualification/p07 && python3 -B -m unittest -v test_p07` passes (73 tests);
   `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs are kept under the evidence folder and
   are not part of the commit.
@@ -79,7 +79,9 @@ time field is passed through unchanged and counted; the reused decoder refuses i
 `SourceContractError` subclasses the accepted `SourceFailure`, so the collector records a partial
 `PROVIDER_ERROR` with no retained page, row or byte. Codes: `WRONG_NETWORK` (the response names a different
 network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data`, absent or non-list `logs`,
-non-list `blocks`, a non-object block fact, a non-quantity block number, `next_block` not a positive quantity),
+non-list `blocks`, a non-object block fact, a non-quantity block number or block timestamp, `next_block` not a
+positive quantity, a `rollback_guard` that is not an object, a present guard or chain echo that is not a valid
+quantity, or a present guard hash that is not text),
 `PAGE_BOUNDS_CONTRADICTED` (an empty or reversed page, a page past the requested end, or a guard block number
 that disagrees with the page bounds), `PAGE_FACTS_CONFLICT` (the guard timestamp or hash contradicts the page-end
 block fact), `OUT_OF_RANGE_BLOCK_FACT` (a block fact outside `[from_block,
@@ -104,7 +106,9 @@ compares a deterministic spread of retained records against `eth_getTransactionR
 | `records[]` | Per sample: `index`, `identity`, `matched`, `reason`. |
 
 A record is corroborated only when the receipt's transaction hash, transaction index, block number, block hash
-and the matching log (address, topics, data, log index, not removed) all agree. A mismatch reason is
+and the matching log's own transaction hash, transaction index, block number, block hash, address, topics, data,
+log index and a boolean `removed=false` all agree. A `removed` fact that is absent or not a boolean is missing
+evidence, never proof that the log is live. A mismatch reason is
 `RECORD_NOT_IDENTIFIABLE`, `RECORD_NOT_PRESENT`, `RECEIPT_MISSING`, `RECEIPT_MISSING_FACT`, `RECEIPT_MALFORMED`,
 `TRANSACTION_MISMATCH`, `BLOCK_MISMATCH`, `LOG_NOT_FOUND`, `LOG_REMOVED` or `RPC_FAILED`. Any of them counts
 toward `mismatches`; none is repaired, and a malformed nested receipt/log shape is a counted mismatch rather than

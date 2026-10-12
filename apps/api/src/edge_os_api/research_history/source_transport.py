@@ -91,6 +91,26 @@ class SourceContractError(SourceFailure):
         self.detail = detail
 
 
+def _strict_quantity(value: Any, detail: str) -> int | None:
+    """A quantity that is absent (None) or valid; a present non-quantity is refused."""
+    if value is None:
+        return None
+    parsed = _quantity(value)
+    if parsed is None:
+        raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", detail)
+    return parsed
+
+
+def _strict_hex(container: Mapping[str, Any], key: str) -> str | None:
+    """An optional hex text fact. Absent is None; a present non-text value is refused."""
+    if key not in container or container[key] is None:
+        return None
+    value = container[key]
+    if not isinstance(value, str) or not value:
+        raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", f"{key} is not hex text")
+    return value
+
+
 @dataclass(frozen=True)
 class SourceContext:
     """The served network, chain and provider identity. Owned by the caller."""
@@ -186,14 +206,20 @@ class EnvioHypersyncSource:
 
     def _check_network(self, raw: Mapping[str, Any]) -> None:
         network = raw.get("network")
-        chain_id = _quantity(raw.get("chain_id"))
-        if network is None and chain_id is None:
+        chain_present = raw.get("chain_id") is not None
+        network_present = network is not None
+        if not network_present and not chain_present:
             return
         self._network_echo = "PRESENT"
-        if network is not None and network != self._context.network:
-            raise SourceContractError("WRONG_NETWORK", f"expected {self._context.network}, got {network!r}")
-        if chain_id is not None and chain_id != self._context.chain_id:
-            raise SourceContractError("WRONG_NETWORK", f"expected chain {self._context.chain_id}, got {chain_id!r}")
+        if network_present:
+            if not isinstance(network, str):
+                raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "the network echo is not text")
+            if network != self._context.network:
+                raise SourceContractError("WRONG_NETWORK", f"expected {self._context.network}, got {network!r}")
+        if chain_present:
+            chain_id = _strict_quantity(raw.get("chain_id"), "the chain_id echo is not a quantity")
+            if chain_id != self._context.chain_id:
+                raise SourceContractError("WRONG_NETWORK", f"expected chain {self._context.chain_id}, got {chain_id!r}")
 
     def _block_index(self, data: Mapping[str, Any], from_block: int,
                      next_block: int) -> dict[int, Mapping[str, Any]]:
@@ -249,11 +275,15 @@ class EnvioHypersyncSource:
                                       f"next_block {next_block} passes the requested end {request.to_block_exclusive}")
 
         blocks = self._block_index(data, from_block, next_block)
-        guard = raw.get("rollback_guard")
-        guard = guard if isinstance(guard, Mapping) else {}
+        guard_raw = raw.get("rollback_guard")
+        if guard_raw is not None and not isinstance(guard_raw, Mapping):
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "rollback_guard is not an object")
+        guard = guard_raw if isinstance(guard_raw, Mapping) else {}
 
-        guard_first = _quantity(guard.get("first_block_number"))
-        guard_last = _quantity(guard.get("block_number"))
+        guard_first = (_strict_quantity(guard.get("first_block_number"), "the guard first_block_number is not a quantity")
+                       if "first_block_number" in guard else None)
+        guard_last = (_strict_quantity(guard.get("block_number"), "the guard block_number is not a quantity")
+                      if "block_number" in guard else None)
         if guard_first is not None and guard_first != from_block:
             raise SourceContractError("PAGE_BOUNDS_CONTRADICTED",
                                       f"guard first block {guard_first} is not the page start {from_block}")
@@ -264,12 +294,13 @@ class EnvioHypersyncSource:
         end_block = blocks.get(next_block - 1)
         if not isinstance(end_block, Mapping):
             raise SourceContractError("PAGE_FACTS_INCOMPLETE", "the page-end block fact is absent")
-        end_ts = _quantity(end_block.get("timestamp"))
+        end_ts = _strict_quantity(end_block.get("timestamp"), "the page-end block timestamp is not a quantity")
         if end_ts is None:
             raise SourceContractError("PAGE_FACTS_INCOMPLETE", "the page-end block timestamp is absent")
-        end_hash = _hex_text(end_block.get("hash"))
-        guard_ts = _quantity(guard.get("timestamp"))
-        guard_hash = _hex_text(guard.get("hash"))
+        end_hash = _strict_hex(end_block, "hash")
+        guard_ts = (_strict_quantity(guard.get("timestamp"), "the guard timestamp is not a quantity")
+                    if "timestamp" in guard else None)
+        guard_hash = _strict_hex(guard, "hash")
         if guard_ts is not None and guard_ts != end_ts:
             raise SourceContractError("PAGE_FACTS_CONFLICT",
                                       "the guard timestamp contradicts the page-end block fact")
@@ -286,7 +317,7 @@ class EnvioHypersyncSource:
             raise SourceContractError("PAGE_FACTS_INCOMPLETE", "page edge timestamps fall")
 
         events = self._frame_logs(logs, blocks)
-        first_parent_hash = _hex_text(guard.get("first_parent_hash"))
+        first_parent_hash = _strict_hex(guard, "first_parent_hash")
         last_block_hash = end_hash if end_hash is not None else guard_hash
         content_sha256 = self._content_sha256(from_block, next_block, first_ts, last_ts,
                                               first_parent_hash, last_block_hash, events)
@@ -325,7 +356,9 @@ class EnvioHypersyncSource:
 
     def _first_timestamp(self, from_block: int, blocks: Mapping[int, Mapping[str, Any]]) -> int | None:
         block = blocks.get(from_block)
-        return _quantity(block.get("timestamp")) if isinstance(block, Mapping) else None
+        if not isinstance(block, Mapping):
+            return None
+        return _strict_quantity(block.get("timestamp"), "the page-start block timestamp is not a quantity")
 
     def _frame_logs(self, logs: Sequence[Any], blocks: Mapping[int, Mapping[str, Any]]) -> list[Any]:
         framed: list[Any] = []

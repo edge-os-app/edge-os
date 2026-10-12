@@ -40,6 +40,10 @@ def _receipt_for(event: Mapping[str, Any], *, removed: bool = False) -> dict[str
             "topics": [event["topic0"], event["topic1"], event["topic2"]],
             "data": event["data"],
             "logIndex": hex(event["log_index"]),
+            "transactionHash": event["transaction_hash"],
+            "transactionIndex": hex(event["transaction_index"]),
+            "blockNumber": hex(event["block_number"]),
+            "blockHash": event["block_hash"],
             "removed": removed,
         }],
     }
@@ -202,3 +206,41 @@ def test_corroboration_makes_one_call_per_identified_sample() -> None:
     result = corroborate_records(rpc, _records(), sample_size=8, chain_id=MONAD)
     assert result["attempted_requests"] == 2
     assert rpc.calls == 2
+
+
+def _single(event: Mapping[str, Any], receipt: Mapping[str, Any]) -> dict[str, Any]:
+    return corroborate_records(FakeRpc({event["transaction_hash"]: receipt}), [_record(event)],
+                               sample_size=1, chain_id=MONAD)
+
+
+def test_nested_log_transaction_identity_is_checked() -> None:
+    receipt = _receipt_for(support.EVENT_QUOTE_IN)
+    receipt["logs"][0]["transactionHash"] = "0x" + "de" * 32
+    assert _single(support.EVENT_QUOTE_IN, receipt)["records"][0]["reason"] == "TRANSACTION_MISMATCH"
+    receipt = _receipt_for(support.EVENT_QUOTE_IN)
+    receipt["logs"][0]["transactionIndex"] = hex(9)
+    assert _single(support.EVENT_QUOTE_IN, receipt)["records"][0]["reason"] == "TRANSACTION_MISMATCH"
+
+
+def test_nested_log_block_identity_is_checked() -> None:
+    receipt = _receipt_for(support.EVENT_QUOTE_IN)
+    receipt["logs"][0]["blockNumber"] = "0x2a"
+    assert _single(support.EVENT_QUOTE_IN, receipt)["records"][0]["reason"] == "BLOCK_MISMATCH"
+    receipt = _receipt_for(support.EVENT_QUOTE_IN)
+    receipt["logs"][0]["blockHash"] = "0x" + "ee" * 32
+    assert _single(support.EVENT_QUOTE_IN, receipt)["records"][0]["reason"] == "BLOCK_MISMATCH"
+
+
+def test_absent_or_non_boolean_removal_is_missing_fact() -> None:
+    receipt = _receipt_for(support.EVENT_QUOTE_IN)
+    receipt["logs"][0].pop("removed")
+    assert _single(support.EVENT_QUOTE_IN, receipt)["records"][0]["reason"] == "RECEIPT_MISSING_FACT"
+    receipt = _receipt_for(support.EVENT_QUOTE_IN)
+    receipt["logs"][0]["removed"] = "true"
+    assert _single(support.EVENT_QUOTE_IN, receipt)["records"][0]["reason"] == "RECEIPT_MISSING_FACT"
+
+
+def test_nested_log_missing_identity_is_missing_fact() -> None:
+    receipt = _receipt_for(support.EVENT_QUOTE_IN)
+    receipt["logs"][0].pop("transactionHash")
+    assert _single(support.EVENT_QUOTE_IN, receipt)["records"][0]["reason"] == "RECEIPT_MISSING_FACT"

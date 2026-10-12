@@ -376,3 +376,40 @@ def test_conflicting_guard_hash_is_refused() -> None:
     with pytest.raises(SourceContractError) as raised:
         source.next_response(_request())
     assert raised.value.code == "PAGE_FACTS_CONFLICT"
+
+
+def test_malformed_guard_fact_is_refused_not_discarded() -> None:
+    bad_guard = {"block_number": "not-a-number", "timestamp": support.P1_LAST_TS, "hash": support.HASH_103,
+                 "first_block_number": 100, "first_parent_hash": "0x" + "44" * 32}
+    source = EnvioHypersyncSource(FakeClient([_page1(guard=bad_guard)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+
+
+def test_non_mapping_guard_is_refused_not_discarded() -> None:
+    page = _page1()
+    page["rollback_guard"] = "not-an-object"
+    source = EnvioHypersyncSource(FakeClient([page]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+
+
+def test_malformed_chain_echo_is_refused_and_recorded_present() -> None:
+    page = _page1(chain_id=True)
+    source = EnvioHypersyncSource(FakeClient([page]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+    assert source.transport_record()["network_echo"] == "PRESENT"
+
+
+def test_malformed_block_timestamp_is_refused() -> None:
+    blocks = [{"number": 100, "timestamp": support.P1_FIRST_TS},
+              {"number": support.EVENT_QUOTE_IN["block_number"], "timestamp": support.E1_TS},
+              {"number": 103, "timestamp": "not-a-number"}]
+    source = EnvioHypersyncSource(FakeClient([_page1(blocks=blocks)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
