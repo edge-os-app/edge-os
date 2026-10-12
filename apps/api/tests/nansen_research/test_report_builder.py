@@ -167,3 +167,13 @@ def test_a_budget_stop_reports_the_stop_not_a_missing_request() -> None:
     assert "not requested" not in finding.statement
     assert "REQUEST_LIMIT" in finding.statement
     assert run.report.answer_state == "PARTIAL"
+
+
+def test_a_stopped_flow_run_limitation_names_the_stop_not_a_missing_request() -> None:
+    question = "What do qualified basic flow records show?"
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    run = support.run(support.request(question=question, operations=("holders", "flows")),
+                      [support.response(200, holders), support.raw_response(500, b'{"code": "internal_error"}')])
+    flow_limit = next(item for item in run.report.limitations if item.claim == "flow_records")
+    assert "not requested" not in flow_limit.missing_dependency
+    assert "internal_error" in flow_limit.missing_dependency

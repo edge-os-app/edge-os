@@ -311,9 +311,14 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
         for (name, dependency) in (_CLAIM_LIMITATIONS[claim],)
     )
     if "flows" in claims and evidence.flows is None:
-        limitations = limitations + (
-            Limitation(claim="flow_records", missing_dependency="a flow request; flow records were not requested"),
-        )
+        if "flows" not in requested:
+            flow_missing = "a flow request; flow records were not requested"
+        elif evidence.stop_reason is not None:
+            flow_missing = (f"flow records were requested but the run stopped before usable evidence "
+                            f"({evidence.stop_reason})")
+        else:
+            flow_missing = "flow records were requested but produced no usable evidence"
+        limitations = limitations + (Limitation(claim="flow_records", missing_dependency=flow_missing),)
     answer_state = _answer_state(evidence, claims, findings)
 
     holder_rows = len(evidence.holder.rows) if evidence.holder is not None else 0
