@@ -39,7 +39,7 @@ None of this exists. Each item is a separate reviewed change.
 3. The guard policy carrying the routing fields above as `required_extra`, with tests.
 4. The spend ledger on durable shared storage with the same reserve, settle, release and reconcile rules (accepted hosting assessment).
 5. A recorded decision path that resolves an UNKNOWN reservation without late evidence (accepted proposal 9a).
-6. A release that does not trust the job alone. Locally, a reservation is released when the job reports zero requests and the guard's own count is 0; both are written inside the Hermes process. For an ACTUAL route, a release must also need independent evidence that nothing reached the provider: zero connections to the provider host at the egress control, or the provider's own records showing no request for the attempt (section 6).
+6. A release that does not trust the job alone. Locally, a reservation is released when the job reports zero requests and the guard's own count is 0; both are written inside the Hermes process. For an ACTUAL route, a release must also need independent evidence that nothing reached the provider: zero connections to the provider host at the egress control during that attempt's own window (from its reservation to its settlement, with no other attempt running on the run's key), or the provider's own records showing no request for that attempt (section 6).
 
 ## 4. Secure credential handoff (PENDING)
 
@@ -70,8 +70,8 @@ Run in this order. L1-L4 are a local preflight: they need no network and must gi
 | L3 | ACTUAL route with no release identity | `ActualProviderUnavailable` before anything is built |
 | L4 | Authored lost reply, oversized reply, crash and hang | UNKNOWN, full reservation, nothing published |
 | N1 | One manifest case (`g1-concrete`) | Exactly one HTTP request for the attempt by the independent request count; exact settle from reported usage; reply within bound; identities equal the attempt |
-| N2 | The remaining manifest cases, one request each, only after N1 passes and a person reviews it | As N1, plus the accepted meaning check reported separately |
-| N3 | A provider error case, only if the provider offers a safe way to cause one | Exactly one HTTP request (no retry) by the independent request count; UNKNOWN, full reservation |
+| N2 | The remaining manifest cases, one request each, only after N1 passes with its request count proved (independent HTTP count or provider records) and a person reviews it. With N1's count UNPROVED, N2 does not run unless the builder records an acceptance of guard-only counting for N2 | As N1, plus the accepted meaning check reported separately |
+| N3 | A provider error case, only if the provider offers a safe way to cause one, under the same proved-count condition as N2. It runs last | Exactly one HTTP request (no retry) by the independent request count; UNKNOWN, full reservation. This expected provider error and unknown usage meet the accepted stop rules for a provider error and for unknown usage, so the batch ends after N3 by design; N3 passes only when nothing else in the stop list below occurred |
 
 Two separate controls, both independent of the job:
 
@@ -96,8 +96,9 @@ Two separate controls, both independent of the job:
 1. any transport refusal of a reply (`reply_too_large`, `reply_not_a_json_object`, `reply_status_invalid`);
 2. any `TransportLost` or `TransportIdentityMismatch`;
 3. an independent HTTP request count other than the expected one per attempt, or a connection to any host other than the provider;
-4. any credential form found in evidence by sealing or the leak scan;
-5. a provider 403 for a key limit (the ceiling worked: stop and report).
+4. other than exactly one provider connection for an attempt that sent a request, or any provider connection for an attempt that sent none (a possible hidden retry or stray request, even when the request count is UNPROVED);
+5. any credential form found in evidence by sealing or the leak scan;
+6. a provider 403 for a key limit (the ceiling worked: stop and report).
 
 Stop the whole batch, send nothing more, report to the controller.
 
