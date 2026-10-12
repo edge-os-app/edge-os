@@ -81,6 +81,12 @@ FOREGROUND_REMOVAL_ENTRIES = 256
 MAX_RECOVERY_ATTEMPTS = 5
 RECOVERY_BACKOFF_SECONDS = 1.0  # before attempt n+1: this times 2 ** (n - 1)
 PENDING_FOLDER = "pending-cleanup"
+# The records of turns this process is executing right now. A record counts as a live turn of this process only while it
+# is in here; a turn removes it when it ends, even when writing the record's final state failed (a full disk). A process
+# that restarts with the same pid (exec, PID 1 in a container) starts with an empty set, so its predecessor's records
+# are recognised as left behind.
+_ACTIVE_RECORDS: set[str] = set()
+_ACTIVE_LOCK = threading.Lock()
 
 
 _JSON_ESCAPE = re.compile(rb"\\u([0-9a-fA-F]{4})|\\([\"\\/])")
@@ -505,11 +511,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         with its size, which no clock check can cut short. More than FOREGROUND_REMOVAL_ENTRIES entries are not removed
         either: mass deletion can stall one unlink for most of a second. Both raise, and the caller moves the tree.
         """
-        cls._remove_walk(root, until, FOREGROUND_REMOVAL_ENTRIES if until != math.inf else None)
+        foreground = until != math.inf
+        cls._remove_walk(root, until, FOREGROUND_REMOVAL_ENTRIES if foreground else None, refuse_large=foreground)
 
     @classmethod
-    def _remove_walk(cls, root: Path, until: float, entry_limit: int | None) -> None:
-        """The removal walk itself: at most `entry_limit` entries (None: no limit), and nothing after `until`."""
+    def _remove_walk(cls, root: Path, until: float, entry_limit: int | None, refuse_large: bool) -> None:
+        """The removal walk itself: at most `entry_limit` entries (None: no limit), nothing after `until`, and with
+        `refuse_large` no plain file over the scan limit is unlinked (the foreground's rule). Recovery frees large files
+        within its own budget; a stall inside one unlink is then recorded in the attempt's history."""
         seen = [0]
 
         def visit(dir_fd: int, name: str, mode: int) -> None:
@@ -518,7 +527,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 raise TimeoutError("too many entries to remove on the clock")
             if stat.S_ISDIR(mode):
                 return
-            if (until != math.inf and stat.S_ISREG(mode)
+            if (refuse_large and stat.S_ISREG(mode)
                     and os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_size > MAX_SCANNED_BYTES):
                 raise TimeoutError("a file too large to free on the clock")
             os.unlink(name, dir_fd=dir_fd)
@@ -665,14 +674,40 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 found.append((path, data))
         return found
 
+    @staticmethod
+    def _this_process_running(path: Path, data: dict[str, Any]) -> bool:
+        """A turn that THIS process is executing now: in its active set (a same-pid restart starts with an empty set; a
+        turn whose final record write failed has left it), with this pid and still marked running."""
+        with _ACTIVE_LOCK:
+            active = str(path) in _ACTIVE_RECORDS
+        return active and data.get("state") == "running" and data.get("pid") == os.getpid()
+
+    def _another_process_running(self, data: dict[str, Any]) -> bool:
+        """A running turn of another process that is still alive: recovery must not touch its container."""
+        return data.get("state") == "running" and data.get("pid") != os.getpid() and self._alive(data.get("pid"))
+
     def _blocking_records(self) -> list[Path]:
-        """Records that block new work: everything of this run except a turn still running in a live process."""
-        return [path for path, data in self._own_records()
-                if data is None or not (data.get("state") == "running" and self._alive(data.get("pid")))]
+        """Records that block new work: everything of this run except a turn this very process is running now."""
+        return [path for path, data in self._own_records() if data is None or not self._this_process_running(path, data)]
 
     def pending_cleanup(self) -> list[dict[str, Any]]:
         """The pending-cleanup records of this run, for reporting (they hold no credential and no job output)."""
         return [data if data is not None else {"unreadable": path.name} for path, data in self._own_records()]
+
+    def retry_exhausted(self) -> int:
+        """Intervention: after a person has dealt with the cause, give exhausted records of this run new attempts.
+
+        Nothing is released or deleted here: the records go back to `pending` with their history kept, and only a
+        later `recover_pending` that confirms the container gone and the evidence removed clears them. Returns how many.
+        """
+        count = 0
+        for path, data in self._own_records():
+            if data is not None and data.get("state") == "exhausted":
+                data.update(state="pending", attempts=0, next_attempt_after=0.0,
+                            interventions=int(data.get("interventions") or 0) + 1)
+                self._write_record(path, data)
+                count += 1
+        return count
 
     def recover_pending(self, budget_seconds: float) -> list[dict[str, Any]]:
         """One supervised recovery pass with ONE budget C for every operation in it. Never touches the spend ledger.
@@ -689,8 +724,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 break
             if data is None or data.get("state") == "exhausted":
                 continue
-            if data.get("state") == "running" and self._alive(data.get("pid")):
-                continue
+            if self._this_process_running(path, data) or self._another_process_running(data):
+                continue  # never stop a container that a live turn is using; it still blocks unless it is ours
             if time.time() < float(data.get("next_attempt_after") or 0.0):
                 continue
             self._recover_one(path, data, deadline, budget_seconds)
@@ -712,7 +747,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 if not os.path.lexists(target):
                     continue
                 try:
-                    self._remove_walk(target, deadline - min(0.02, budget / 10), None)
+                    self._remove_walk(target, deadline - min(0.02, budget / 10), None, refuse_large=False)
                 except Exception:  # noqa: BLE001 - out of time or a walk failure: what is left stays recorded
                     pass
                 if os.path.lexists(target):
@@ -846,13 +881,19 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         output = task_dir / "output"
         output.mkdir(parents=True)
         record = self._register(plan, task_dir)
+        with _ACTIVE_LOCK:
+            _ACTIVE_RECORDS.add(str(record))
         try:
-            result = self._run_turn_steps(turn, plan, task_dir, output)
-        except BaseException:
-            self._mark_pending(record, task_dir)
-            raise
-        record.unlink(missing_ok=True)  # ended cleanly: nothing is pending
-        return result
+            try:
+                result = self._run_turn_steps(turn, plan, task_dir, output)
+            except BaseException:
+                self._mark_pending(record, task_dir)
+                raise
+            record.unlink(missing_ok=True)  # ended cleanly: nothing is pending
+            return result
+        finally:
+            with _ACTIVE_LOCK:  # whatever the record says now, this turn no longer runs
+                _ACTIVE_RECORDS.discard(str(record))
 
     def _run_turn_steps(self, turn: HermesTurn, plan: _TurnPlan, task_dir: Path, output: Path) -> HermesTurnResult:
         launch = _Launch()

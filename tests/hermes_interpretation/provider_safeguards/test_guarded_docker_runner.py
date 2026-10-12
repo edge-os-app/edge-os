@@ -2733,6 +2733,8 @@ def test_recovery_never_touches_a_turn_that_is_still_running_in_a_live_process(t
                "turn_folder": "turn-01-live", "held": [], "state": "running", "attempts": 0, "pid": os.getpid(),
                "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}
     (folder / "turn-01-live.json").write_text(_json.dumps(running))
+    import guarded_docker_runner as module
+    monkeypatch.setattr(module, "_ACTIVE_RECORDS", {str(folder / "turn-01-live.json")})  # a turn this process runs now
     calls: list = []
     monkeypatch.setattr(docker_turn_runner, "docker", docker_double(record=calls))
     runner, _, _ = build(tmp_path, credential)
@@ -2740,3 +2742,111 @@ def test_recovery_never_touches_a_turn_that_is_still_running_in_a_live_process(t
     runner.recover_pending(1.0)
 
     assert calls == [] and _json.loads((folder / "turn-01-live.json").read_text()) == running  # a concurrent turn is left alone
+
+
+# --- Repair after round-27 review: held large files are recoverable; a same-pid restart is not taken for a live turn --
+
+def test_recovery_removes_a_held_file_larger_than_the_scan_limit(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def behaviour(output: Path) -> None:
+        with open(output / "huge.log", "ab") as file:
+            file.write(OLD.encode())
+            file.truncate(2 * 1024 * 1024 * 1024)  # sparse: held aside unscanned by sealing
+
+    install_process(monkeypatch, behaviour, returncode=3)
+    runner, spend, guarded = build(tmp_path, credential)
+    with pytest.raises(EvidenceNotSealed):
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    assert _records(tmp_path) and list((tmp_path / "evidence").glob("quarantine-*-held"))
+
+    runner.recover_pending(5.0)
+
+    assert _records(tmp_path) == [] and not list((tmp_path / "evidence").glob("quarantine-*"))
+    assert spend.state("attempt-1") == "UNKNOWN"
+
+
+def test_an_exhausted_record_can_be_given_new_attempts_but_is_cleared_only_by_confirmed_recovery(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_SECONDS", 0.0)
+    runner, _, guarded = _unstoppable_flood_turn(tmp_path, monkeypatch, files=10, timeout_seconds=0.3, seal_grace_seconds=0.3,
+                                                 recovery_budget_seconds=0.3)
+    with pytest.raises(EvidenceNotSealed):
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    for _ in range(module.MAX_RECOVERY_ATTEMPTS):
+        runner.recover_pending(0.3)
+    assert _records(tmp_path)[0]["state"] == "exhausted"
+
+    assert runner.retry_exhausted() == 1
+    record = _records(tmp_path)[0]
+    assert record["state"] == "pending" and record["attempts"] == 0 and len(record["history"]) == module.MAX_RECOVERY_ATTEMPTS
+    assert guarded.run_turn(Turn("attempt-2", "prompt", "task", "m", "route", 4096)).error_class == "CleanupPending"  # still blocked
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))  # the person removed the container
+    runner.recover_pending(5.0)
+    assert _records(tmp_path) == []
+
+
+def test_a_running_record_left_by_an_earlier_process_with_the_same_pid_is_recovered_and_blocks(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    turn = tmp_path / "evidence" / "turn-01-old"
+    (turn / "output").mkdir(parents=True)
+    (turn / "output" / "secret.log").write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    stale = {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-old-01",
+             "turn_folder": "turn-01-old", "held": [], "state": "running", "attempts": 0, "pid": os.getpid(),
+             "created": 0, "last_attempt": None,
+             "next_attempt_after": 0, "history": []}
+    (folder / "turn-01-old.json").write_text(_json.dumps(stale))
+    calls: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=True, record=calls))  # the old container is there
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, guarded = build(tmp_path, credential, recovery_budget_seconds=1.0)
+
+    guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert any(args[0] == "kill" and args[1] == "p05-repair-test-old-01" for args, _ in calls)  # checked and stopped
+    assert not (turn / "output").exists() and plain_bytes_leak(tmp_path / "evidence", OLD) == []
+    assert _records(tmp_path) == [] and launched  # recovered first, then the new job
+
+
+def test_a_running_turn_of_another_live_process_blocks_new_work_and_is_not_touched(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    other = {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-other-01",
+             "turn_folder": "turn-01-other", "held": [], "state": "running", "attempts": 0, "pid": os.getppid(),
+             "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}
+    (folder / "turn-01-other.json").write_text(_json.dumps(other))
+    calls: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(record=calls))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, guarded = build(tmp_path, credential)
+
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert result.error_class == "CleanupPending" and launched == [] and calls == []
+    assert _json.loads((folder / "turn-01-other.json").read_text()) == other
+
+
+def test_a_turn_whose_pending_mark_could_not_be_written_still_blocks_and_is_recovered(tmp_path: Path, monkeypatch) -> None:
+    """If writing the final 'pending' state fails (a full disk the job can cause), the record stays 'running' with this
+    process's pid and token; once the turn has ended it must not pass for a live turn."""
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present and not ours: never stoppable
+    install_process(monkeypatch, lambda output: (output / "secret.log").write_text(OLD), returncode=-9)
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=0.3, seal_grace_seconds=0.3)
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_mark_pending", lambda self, path, task_dir: None)  # the write fails
+    with pytest.raises(EvidenceNotSealed):
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    assert _records(tmp_path)[0]["state"] == "running"
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+
+    result = guarded.run_turn(Turn("attempt-2", "prompt", "task", "m", "route", 4096))
+
+    assert result.error_class == "CleanupPending" and launched == []
+    assert spend.state("attempt-1") == "UNKNOWN"
