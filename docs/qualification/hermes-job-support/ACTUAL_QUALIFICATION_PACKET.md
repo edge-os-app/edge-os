@@ -95,7 +95,7 @@ Two separate controls, both independent of the job:
 
 1. any transport refusal of a reply (`reply_too_large`, `reply_not_a_json_object`, `reply_status_invalid`);
 2. any `TransportLost` or `TransportIdentityMismatch`;
-3. an independent HTTP request count other than the expected one per attempt, or a connection to any host other than the provider;
+3. a request count for an attempt, by the independent HTTP count or by the provider's records, other than the expected one per attempt (whichever source shows it first), or a connection to any host other than the provider;
 4. other than exactly one provider connection for an attempt that sent a request, or any provider connection for an attempt that sent none (a possible hidden retry or stray request, even when the request count is UNPROVED);
 5. any credential form found in evidence by sealing or the leak scan;
 6. a provider 403 for a key limit (the ceiling worked: stop and report).
