@@ -21,7 +21,7 @@ Alternatives (Railway, Fly.io, a container platform with a managed database) wer
 
 All five resources share one region, **`frankfurt`**. Render requires this for private networking, and the region cannot be changed after creation. The choice is a proposal: choose `oregon`, `ohio`, `virginia` or `singapore` instead before creation if most users are elsewhere.
 
-Blueprint sketch (`render.yaml`, for review only; no file is added to the repository and nothing is created):
+Blueprint sketch (`render.yaml` at the repository root, for review only; no file is added to the repository and nothing is created):
 
 ```yaml
 services:
@@ -29,10 +29,10 @@ services:
     name: edge-os-api
     runtime: python
     region: frankfurt
-    rootDir: apps/api                      # contains pyproject.toml and uv.lock, so Render adds uv
-    buildCommand: uv sync --frozen
-    preDeployCommand: uv run --frozen alembic upgrade head    # paid compute plans only
-    startCommand: uv run --frozen uvicorn --factory edge_os_api.main:create_app --host 0.0.0.0 --port $PORT
+    # No rootDir: the API reads repository-root files (docs/contracts/p02, docs/contracts/p06) at import.
+    buildCommand: pip install uv==0.12.16 && cd apps/api && uv sync --frozen
+    preDeployCommand: cd apps/api && uv run --frozen alembic upgrade head    # paid compute plans only
+    startCommand: cd apps/api && EDGE_OS_BUILD_SHA=$RENDER_GIT_COMMIT uv run --frozen uvicorn --factory edge_os_api.main:create_app --host 0.0.0.0 --port $PORT
     healthCheckPath: /readyz
     envVars:
       - key: PYTHON_VERSION
@@ -42,17 +42,15 @@ services:
     name: edge-os-execution-worker
     runtime: python
     region: frankfurt
-    rootDir: apps/api
-    buildCommand: uv sync --frozen
-    startCommand: uv run --frozen python -m edge_os_api.execution.worker
+    buildCommand: pip install uv==0.12.16 && cd apps/api && uv sync --frozen
+    startCommand: cd apps/api && EDGE_OS_BUILD_SHA=$RENDER_GIT_COMMIT uv run --frozen python -m edge_os_api.execution.worker
     envVars: [{ key: PYTHON_VERSION, value: 3.14.4 }, { fromGroup: edge-os-runtime }]
   - type: worker
     name: edge-os-research-worker
     runtime: python
     region: frankfurt
-    rootDir: apps/api
-    buildCommand: uv sync --frozen
-    startCommand: uv run --frozen python -m edge_os_api.research.investigation_jobs
+    buildCommand: pip install uv==0.12.16 && cd apps/api && uv sync --frozen
+    startCommand: cd apps/api && EDGE_OS_BUILD_SHA=$RENDER_GIT_COMMIT uv run --frozen python -m edge_os_api.research.investigation_jobs
     envVars: [{ key: PYTHON_VERSION, value: 3.14.4 }, { fromGroup: edge-os-runtime }]
   - type: web
     name: edge-os-web
@@ -73,11 +71,18 @@ databases:
     region: frankfurt
     postgresMajorVersion: "18"
     ipAllowList: []                        # private network only: no public inbound connections
+# Put these resources in their own project environment with `networking: isolation: enabled`, so other
+# services in the workspace cannot reach them over the private network (the default is disabled).
 ```
 
 Command check against the repository and Render documentation:
 
 - **Binding:** Render requires every web service to bind to `0.0.0.0` and recommends the `PORT` variable (default 10000). Uvicorn's defaults are `127.0.0.1:8000`, so the API command sets `--host 0.0.0.0 --port $PORT`. `next start` binds to `0.0.0.0` by default and reads `PORT`; the command still states both.
+- **Repository root:** the Python services run from the repository root (no `rootDir`) and `cd apps/api` in each command. The API imports read `docs/contracts/p02/check_contract.py` and `docs/contracts/p06` from the root at import time, and Render makes files outside `rootDir` unavailable. The web service may use `rootDir: apps/web`, because it reads nothing outside that folder.
+- **uv:** Render adds uv only when the service root holds a `uv.lock`. The repository root has none (the lock is `apps/api/uv.lock`), so the build installs the locally used version, `uv==0.12.16`.
+- **Build identity:** production refuses to start without `EDGE_OS_BUILD_SHA`. Each command sets it from Render's `RENDER_GIT_COMMIT`, so it never goes stale after a deploy.
+- **Database URL:** Render's internal URL has the form `postgresql://USER:PASSWORD@INTERNAL_HOST:PORT/DATABASE`. The API needs the driver prefix `postgresql+psycopg://` and `?sslmode=require` or stricter, so the value is set by hand, not copied unchanged. Whether Render's internal connections accept TLS is **not confirmed**. If they do not, production refuses to start, and that rule needs a recorded decision.
+- **Deploy order:** during a deploy that adds a migration, running workers stop with exit code 3 when the schema head changes, and the old API answers `/readyz` 503 `schema_drift` until the new version takes over. Render restarts the workers, which then run the new code. Plan deploys with a short pause of research and evaluation work.
 - **App factory:** `edge_os_api.main:create_app` is the factory that the test harness starts (`scripts/p03/harness.py`, `uvicorn … --factory`).
 - **Workers:** both modules accept `--once` and otherwise run a bounded loop. Background workers bind no port.
 - **Migrations:** the pre-deploy command runs migrations before a new API version takes traffic. On a free plan, which has no pre-deploy command, run migrations as a one-off job before the deploy.
