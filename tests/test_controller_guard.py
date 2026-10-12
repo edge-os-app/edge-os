@@ -1022,9 +1022,12 @@ class CheckedSendTests(unittest.TestCase):
         for row in (
             "5h:27%*(~2h44m) wk:3%*(~2d0h) extra:0%*($0.00/$30.00) | session:0m trailing",
             "5h:27%*(~2h44m) wk:3%*(~2d0h) extra:0%*($0.00/$30.00)",
+            "5h:27%*(JUNK) wk:3%*(~2d0h) extra:0%*($0.00/$30.00) | session:0m",
+            "5h:27%*(~2h44m) wk:3%*(token) extra:0%*($0.00/$30.00) | session:0m",
             "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents trailing",
             "⏵⏵ auto mode on",
             "⏵⏵ auto mode on (shift+tab to cycle) (foreign)",
+            "⏵⏵ auto mode on (anything here) · ← for agents",
             "5h:0% wk:19% extra:0%($0.00/$30.00) | session:191m",
         ):
             with self.subTest(row=row):
