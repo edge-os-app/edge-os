@@ -238,3 +238,50 @@ describe("deposit reference recovery", () => {
     expect(mocks.prepareDeposit.mock.calls[1][1].reference).not.toBe(saved);
   });
 });
+
+describe("committed change with a failed read-back (F2)", () => {
+  it("actions: no success notice and every write blocked until a read succeeds", async () => {
+    mocks.actions.mockResolvedValueOnce(actions()).mockRejectedValueOnce(new ApiError(503, "service_unavailable", "down"))
+      .mockResolvedValue(actions());
+    mocks.schedule.mockResolvedValueOnce({ job_id: "j" });
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run one bounded evaluation" }));
+    expect(await screen.findByText(/was saved, but the current actions could not be read/)).toBeInTheDocument();
+    expect(screen.queryByText(/Evaluation saved/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Run one bounded evaluation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Halt all swaps" })).toBeDisabled();
+    expect(mocks.schedule).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Check saved actions" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run one bounded evaluation" })).toBeEnabled());
+    expect(mocks.schedule).toHaveBeenCalledTimes(1); // nothing was repeated automatically
+  });
+
+  it("funding: a saved deposit whose read-back fails keeps changes paused", async () => {
+    mocks.funding.mockResolvedValueOnce(funding()).mockRejectedValueOnce(new ApiError(503, "service_unavailable", "down"))
+      .mockResolvedValue(funding());
+    mocks.reconcileDeposits.mockResolvedValueOnce({});
+    render(<AgentFunding agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Check deposits" }));
+    expect(await screen.findByText(/was saved, but the current funding could not be read/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check deposits" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Check saved funding" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check deposits" })).toBeEnabled());
+    expect(mocks.reconcileDeposits).toHaveBeenCalledTimes(1);
+  });
+
+  it("authority: a saved review whose read-back fails keeps adoption paused", async () => {
+    mocks.consent.mockResolvedValueOnce(consent()).mockRejectedValueOnce(new ApiError(503, "service_unavailable", "down"))
+      .mockResolvedValue(consent());
+    mocks.review.mockResolvedValueOnce({ review_id: "r-2", review_hash: "sha256:" + "b".repeat(64), status: "INACTIVE",
+      content: { terms: { terms_version: "connected-spot/1", operating_purpose: "TRIAL", trial_objective: "x",
+        allocation: [{ ...QUOTE, raw: "500000000" }], allowances: [{ name: "quote_input", amount: { ...QUOTE, raw: "500000000" } }],
+        attempt_budget: 5, gas_budget: { ...GAS, raw: "1" }, expiry: "2030-01-01T00:00:00Z", supported_actions: ["ENTRY", "EXIT"],
+        supported_assets: [], supported_routes: [], route: { adapter: "KURU_FLOW_FIXED_INPUT" },
+        evidence: { status: "HYPOTHESIS", source: "s" }, stop_effects: ["stop"] } } });
+    render(<AgentAuthority agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Review exact terms/ }));
+    expect(await screen.findByText(/was saved, but the current consent could not be read/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Adopt these exact terms (inactive)" })).toBeDisabled();
+    expect(mocks.adopt).not.toHaveBeenCalled();
+  });
+});

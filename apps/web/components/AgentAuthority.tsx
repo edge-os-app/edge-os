@@ -48,11 +48,13 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
     const current = (seq.current += 1);
     try {
       const saved = await financial.consent(agentId);
-      if (current !== seq.current) return;
+      if (current !== seq.current) return false;
       setState(saved); setPhase("loaded"); setUncertain(false); setError("");
+      return true;
     } catch (failure) {
-      if (current !== seq.current) return;
+      if (current !== seq.current) return false;
       setPhase("error"); setError(failure instanceof ApiError ? failure.detail : "Saved consent could not be loaded.");
+      return false;
     }
   }, [agentId]);
 
@@ -84,7 +86,14 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
   const write = async (action: () => Promise<unknown>) => {
     if (busy || uncertain) return;
     setBusy(true); setError("");
-    try { await action(); await load(); }
+    try {
+      await action();
+      if (!(await load())) {
+        // Saved, but not read back: keep every write blocked until a read shows the current saved state.
+        setUncertain(true); setPhase("loaded"); // keep the last saved view on screen, clearly marked unconfirmed
+        setError("The change was saved, but the current consent could not be read. Check the saved consent before you continue.");
+      }
+    }
     catch (failure) {
       if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) setError(failure.detail);
       else { setUncertain(true); setError("The outcome is not confirmed. Check the saved consent before repeating it."); }

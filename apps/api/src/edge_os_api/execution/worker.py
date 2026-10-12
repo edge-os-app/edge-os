@@ -23,7 +23,6 @@ import argparse
 import datetime as dt
 import hashlib
 import logging
-import time
 import uuid
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
@@ -546,7 +545,7 @@ class ConnectedExecution:
 
 def main() -> None:
     """Bounded worker loop. Each pass advances runnable jobs; nothing here schedules new work."""
-    from edge_os_api.core.database import make_engine, make_session_factory, require_head
+    from edge_os_api.core.database import make_engine, make_session_factory
     from edge_os_api.core.financial_services import build_financial_services
     from edge_os_api.core.settings import load_settings
 
@@ -556,20 +555,12 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
-    engine = make_engine(settings.database_url)
-    require_head(engine)
+    engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     services = build_financial_services(make_session_factory(engine), settings)
-    while True:
-        try:
-            advanced = services.connected.run_pending()
-            if advanced:
-                log.info("worker advanced %d job(s)", len(advanced))
-        except Exception as error:  # noqa: BLE001 - one failed pass must not stop the worker; state is durable
-            log.error("worker pass failed: %s", type(error).__name__)
-        if args.once:
-            break
-        time.sleep(args.interval)
+    from edge_os_api.core import worker_loop
 
+    worker_loop.exit_with(worker_loop.run("worker", engine, services.connected.run_pending, once=args.once,
+                                          interval=args.interval, log=log))
 
 if __name__ == "__main__":
     main()
