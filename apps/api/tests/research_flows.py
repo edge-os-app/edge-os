@@ -25,8 +25,8 @@ def rising(lookback: int = 1) -> dict[str, Any]:
                                  {"op": "constant", "value": "0", "unit": "DIMENSIONLESS"}]}
 
 
-def volume_above(value: str) -> dict[str, Any]:
-    return {"op": "gt", "args": [{"op": "quote_volume"}, {"op": "constant", "value": value, "unit": QUOTE_UNIT}]}
+def volume_above(value: str, unit: str = QUOTE_UNIT) -> dict[str, Any]:
+    return {"op": "gt", "args": [{"op": "quote_volume"}, {"op": "constant", "value": value, "unit": unit}]}
 
 
 def source_entry(client, headers, source_id: str = QUALIFIED) -> dict[str, Any]:
@@ -40,7 +40,8 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
     source = source_entry(client, headers, source_id)
     window = source["window"]
     trial = str(uuid.uuid4())
-    rules = rules or [(rising(1), volume_above("101")), (rising(2), volume_above("102"))]
+    unit = f"QUOTE:{source['market']['quote_asset']}"
+    rules = rules or [(rising(1), volume_above("101", unit)), (rising(2), volume_above("102", unit))]
     evaluations = [str(uuid.uuid4()) for _ in rules]
     variants = [f"v{index + 1}" for index in range(len(rules))]
     descriptive = direction == "DESCRIPTIVE"
@@ -72,7 +73,7 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
         "configuration": {
             "question": bundle["intake"]["content"]["original_request"],
             "source": {"source_id": source["source_id"], "profile_sha256": source["profile_sha256"],
-                       "evidence_class": "RECORDED_RESPONSE"},
+                       "evidence_class": source["evidence_class"]},
             "market": copy.deepcopy(source["market"]),
             "window": dict(window),
             "variants": [{"variant_id": name, "hypothesis": f"Adopted rule {name}"} for name in variants],
@@ -90,9 +91,10 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
                                     "price_expression": price, "volume_expression": volume,
                                     "essential_inputs": ["price", "quote_volume"], "rule_source": "USER_ADOPTED"}
                                    for evaluation, variant, (price, volume) in zip(evaluations, variants, rules)]},
-            "resource_bounds": bounds or {"provider_requests": 2, "compute_seconds": 30, "max_pages": 2,
+            "resource_bounds": bounds or {"provider_requests": (source["transport"] or {}).get(
+                                              "provider_requests_needed", 2), "compute_seconds": 30, "max_pages": 2,
                                           "max_rows": 200, "max_bytes": 1_048_576, "deadline_seconds": 600},
-            "permitted_access": ["RECORDED_RESPONSE"],
+            "permitted_access": [source["evidence_class"]],
             "stopping_rule": "Stop after the declared evaluations on the declared window.",
             "budget_version": "edge-os.research-budget/1",
         },
@@ -129,11 +131,12 @@ def start(client, headers, intake_id: str, declaration_id: str, key: str | None 
                              "request_key": key or f"job-{uuid.uuid4()}"})
 
 
-def reported_dataset(client, headers, source_id: str = QUALIFIED, direction: str = "OUTPERFORM") -> str:
+def reported_dataset(client, headers, source_id: str = QUALIFIED, direction: str = "OUTPERFORM",
+                     rules: list[tuple[dict[str, Any], dict[str, Any]]] | None = None) -> str:
     """Declare, run one job to its report with a local worker, and return the saved dataset id."""
     from edge_os_api.research.investigation_jobs import InvestigationWorker
 
-    intake_id, declaration_id, _ = declare(client, headers, source_id=source_id, direction=direction)
+    intake_id, declaration_id, _ = declare(client, headers, source_id=source_id, direction=direction, rules=rules)
     job_id = start(client, headers, intake_id, declaration_id).json()["job_id"]
     InvestigationWorker(client.app.state.session_factory, client.app.state.settings).run_job(uuid.UUID(job_id))
     view = client.get(f"/v1/research/investigation-jobs/{job_id}", headers=headers).json()

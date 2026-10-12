@@ -44,6 +44,10 @@ P07_PROFILE_VERSION = "p07.market_dataset_profile/1"
 BUNDLE_VERSION = "edge-os.recorded-history-bundle/1"
 BUNDLE_PATH = (Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "research_history_recorded"
                / "recorded_history_v1.json")
+NATIVE_BUNDLE_VERSION = "edge-os.recorded-native-bundle/1"
+NATIVE_BUNDLE_PATH = (Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "research_history_native"
+                      / "native_history_v1.json")
+NATIVE_CLASS = "RECORDED_NATIVE_RESPONSE"
 COMPLETE_STATUSES = frozenset({"COMPLETE_OCCUPIED", "COMPLETE_EMPTY"})
 UNAVAILABLE_STATES = ("SOURCE_UNAVAILABLE", "PARTIAL_COVERAGE", "VERDICT_LIMITED", "VERDICT_UNRESOLVED")
 # Partitions whose outcomes no research surface may read: the comparison skips them and replays stop before them.
@@ -117,9 +121,39 @@ def _bundle() -> dict[str, Any]:
     return bundle
 
 
+@functools.lru_cache(maxsize=1)
+def _native_bundle() -> dict[str, Any]:
+    bundle = json.loads(NATIVE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    if bundle.get("schema_version") != NATIVE_BUNDLE_VERSION:
+        raise ValueError("native recorded history bundle has an unsupported version")
+    return bundle
+
+
 def recorded_sources() -> dict[str, dict[str, Any]]:
-    """Every declared recorded source by id. Each one is a SYNTHETIC recording, not observed history."""
-    return {source["source_id"]: source for source in _bundle()["sources"]}
+    """Every declared recorded source by id, from both bundles. Each one is a SYNTHETIC recording, not observed
+    history. `RECORDED_NATIVE_RESPONSE` sources replay native pages through the P07 transport."""
+    return {source["source_id"]: source for source in [*_bundle()["sources"], *_native_bundle()["sources"]]}
+
+
+def page_requests(source: Mapping[str, Any]) -> int:
+    """Recorded history page requests the source needs (including a recorded fault)."""
+    return len(source["envio_pages"] if source["evidence_class"] == NATIVE_CLASS else source["responses"])
+
+
+def requests_needed(source: Mapping[str, Any]) -> int:
+    """Provider requests a full collection needs: pages, plus one chain read and one receipt per sample (native)."""
+    if source["evidence_class"] != NATIVE_CLASS:
+        return page_requests(source)
+    return page_requests(source) + 1 + int(source["corroboration_sample_size"])
+
+
+def transport_view(source: Mapping[str, Any]) -> dict[str, Any] | None:
+    if source["evidence_class"] != NATIVE_CLASS:
+        return None
+    return {"history_provider": "ENVIO_HYPERSYNC", "provider_version": "envio-hypersync/1",
+            "corroboration_provider": "QUICKNODE_JSON_RPC",
+            "corroboration_sample_size": source["corroboration_sample_size"],
+            "provider_requests_needed": requests_needed(source)}
 
 
 def profile_sha256(source: Mapping[str, Any]) -> str:
@@ -140,12 +174,12 @@ def source_window(source: Mapping[str, Any]) -> dict[str, str]:
 
 def catalog() -> dict[str, Any]:
     """The supported recorded sources, as a user reviews them before declaring one."""
-    return {"label": _bundle()["label"], "sources": [
+    return {"label": _bundle()["label"], "native_label": _native_bundle()["label"], "sources": [
         {"source_id": source_id, "title": source["title"], "evidence_class": source["evidence_class"],
          "content_label": source["content_label"], "profile_version": P07_PROFILE_VERSION,
          "profile_sha256": profile_sha256(source), "market": source_market(source), "window": source_window(source),
          "history_provider": source["profile"]["source"]["history_provider"],
-         "page_requests_recorded": len(source["responses"])}
+         "page_requests_recorded": page_requests(source), "transport": transport_view(source)}
         for source_id, source in recorded_sources().items()]}
 
 
@@ -199,13 +233,23 @@ def strategy_market(binding: Mapping[str, Any]) -> dict[str, Any]:
             "quote_unit": f"QUOTE:{binding['quote_asset']}"}
 
 
+def measured_usage(transport: Mapping[str, Any]) -> tuple[str, dict[str, int] | None]:
+    """Native usage: the made client calls, known only while they stay within the job's request reservation."""
+    calls = dict(transport["client_calls"])
+    if sum(calls.values()) <= transport["request_budget"]:
+        return "MEASURED_CLIENT_CALLS", calls
+    return "INVALID", None
+
+
 def dataset_content(*, dataset_id: uuid.UUID, owner_id: uuid.UUID, declaration_id: uuid.UUID, job_id: uuid.UUID,
                     attempt_id: uuid.UUID, source: Mapping[str, Any], collection: Mapping[str, Any],
-                    normalized: Mapping[str, Any]) -> dict[str, Any]:
-    """The `edge-os.history-dataset/1` record. Verdicts, buckets and gaps are copied, never upgraded."""
+                    normalized: Mapping[str, Any], transport: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The `edge-os.history-dataset/1` record. Verdicts, buckets and gaps are copied, never upgraded.
+
+    A native source adds `transport` and `evidence_basis` (additive keys); a bundle source's content is unchanged."""
     qualification = normalized["qualification"]
     overall = qualification["overall"]
-    usage_state, usage = provider_usage(source)
+    usage_state, usage = provider_usage(source) if transport is None else measured_usage(transport)
     binding = None
     if overall == "QUALIFIED" and collection["status"] == "COMPLETE":
         binding = project_binding(normalized["bound_profile"], qualification)
@@ -220,7 +264,7 @@ def dataset_content(*, dataset_id: uuid.UUID, owner_id: uuid.UUID, declaration_i
         unavailable.append("VERDICT_UNRESOLVED")
     profile = source["profile"]
     market = None if binding is None else strategy_market(binding)
-    return {
+    content = {
         "schema_version": DATASET_VERSION, "dataset_id": str(dataset_id), "owner_id": str(owner_id),
         "declaration_id": str(declaration_id), "job_id": str(job_id), "attempt_id": str(attempt_id),
         "source_id": source["source_id"], "evidence_class": source["evidence_class"],
@@ -252,6 +296,14 @@ def dataset_content(*, dataset_id: uuid.UUID, owner_id: uuid.UUID, declaration_i
         "notice": ("Synthetic recorded responses replayed locally. Not provider, chain or market evidence; "
                    "no profitability, execution or statistical claim."),
     }
+    if transport is not None:
+        content["transport"] = {key: value for key, value in transport.items() if key != "evidence_basis"}
+        content["evidence_basis"] = dict(transport["evidence_basis"])
+        content["notice"] = ("Synthetic native-shaped Envio and QuickNode recordings replayed locally through the "
+                             "accepted P07 transport. The chain id and receipts were checked against recorded "
+                             "responses, not a network. Not provider, chain or market evidence; no profitability, "
+                             "execution or statistical claim.")
+    return content
 
 
 def save_dataset(session: Session, content: dict[str, Any], raw_records: list[Any]) -> HistoryDatasetRow:

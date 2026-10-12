@@ -172,6 +172,79 @@ Milestone `RELEASE-E2E-L2-20261012-RUNTIME-LOCAL`, base `6fab6f2`. Local only: n
 | F5 | Keyboard-only pass over the owned connected-agent, funding and projection surfaces at desktop and 390px (`runtime.spec.mjs`). Screen reader: NOT_RUN. | `tests/p03/runtime.spec.mjs`, `KEYBOARD_QA.md` | Partial |
 | F6 | Read-only advisory and reachability record; no lockfile change. | `ADVISORY_ASSESSMENT.md` | Needs controller disposition |
 
+## SOURCE-LOCAL: accepted P07 transport in the application (frozen interfaces)
+
+Milestone `RELEASE-E2E-L2-20261012-SOURCE-LOCAL`, base `a7864a7`. Local only. Every source is a SYNTHETIC recording, no client reaches a network, and RG02/RG05 actual-data evidence stays NOT_RUN.
+
+**Evidence class `RECORDED_NATIVE_RESPONSE` (additive).**
+- What it is: native-shaped Envio HyperSync `QueryResponse` pages and QuickNode JSON-RPC results. Offline recorded clients replay them through the accepted P07 seams, unchanged:
+  - `EnvioHypersyncSource` → `collect`;
+  - `read_chain_id` → `corroborate_records`;
+  - `normalize` → `project_binding`.
+- Labels: `content_label` and the profile `evidence_class` stay `SYNTHETIC_FIXTURE`.
+- Other classes: `RECORDED_RESPONSE` keeps its meaning. `PROVIDER_ACTUAL` is still refused (`actual_data_not_authorized`).
+
+**Catalog.**
+- Source: `tests/fixtures/research_history_native/native_history_v1.json` (`edge-os.recorded-native-bundle/1`). Its only writer is `tests/native_history_recordings.py`.
+- Market: the pool and assets are 0xd1…/0xd2…/0xd3…, so the source has its own market, apart from the sample bundle.
+- Response: `GET /v1/research/history-sources` lists both bundles. Each entry adds `transport` (null for bundle sources): provider, version, corroboration provider, `corroboration_sample_size` and `provider_requests_needed` (pages + 1 chain read + 1 receipt per sample). The response also adds `native_label`.
+
+**Declaration.**
+- `configuration.source.evidence_class` and `permitted_access` accept `RECORDED_NATIVE_RESPONSE`. The class must equal the listed source's class (`history_source_class_mismatch`).
+- `resource_bounds.provider_requests` must cover the pages, the chain read and the receipts (`resource_bounds_too_small` at `/configuration/resource_bounds/provider_requests`).
+- The user's own rules, market unit and adoption rules are unchanged.
+
+**Collection** (`research/native_history_collection.py`). One `RequestBudget` equal to the declared `provider_requests` guards every injected client call:
+- Before each call it checks cancellation, the job deadline and the remaining requests.
+- A refused call is never made or counted. A made call counts even when it fails. Nothing is retried.
+- The guard sits in `GuardedEnvioClient` and `GuardedQuickNodeClient`, which wrap any client. A refused Envio call becomes the accepted P07 stop (`CANCELLED`, `TIMEOUT` or `PROVIDER_ERROR`).
+- A refused RPC call raises the application-owned `Refused`, which P07 does not catch. Corroboration then ends as `NONE`, `STOPPED_CANCELLED`, `STOPPED_DEADLINE` or `STOPPED_REQUEST_BUDGET_EXHAUSTED`, with `receipts_fetched`. No refused call is ever recorded as a mismatch.
+- Corroboration samples min(declared, remaining requests) records. It is skipped as `NONE` when no record was kept (`NO_RECORDS`), fewer than 2 requests remain (`REQUEST_BUDGET_EXHAUSTED`) or the chain read failed (`CHAIN_READ_FAILED`).
+- `chain_id_source` is `PROVIDER_READ` only when the recorded RPC answered 143, else `UNKNOWN`.
+- `provider_facts` (decimals, pool tokens, venue, fee semantics, finality, delivery records, feasibility claim) are recorded declarations, labelled `RECORDED_DECLARATION` in `evidence_basis`.
+
+**Usage.**
+- The tool name stays `collect_recorded_history`.
+- Native usage is `provider_requests_state = MEASURED_CLIENT_CALLS` with `{ENVIO_HYPERSYNC: n, QUICKNODE_JSON_RPC: m}`. It is known only while the total stays within the job's reservation; otherwise it is `INVALID` and stays liability.
+- Settlement consumes the measured calls and releases the rest. A killed collection keeps unknown liability and is never collected again (Stage 2 rules unchanged).
+
+**Dataset** (`edge-os.history-dataset/1`, additive keys on native datasets only).
+- `transport`:
+  - `envio`: P07 `transport_record()`;
+  - `chain_read`;
+  - `corroboration`: full entries with reasons;
+  - `client_calls`;
+  - `request_budget`;
+  - `clients`.
+- `evidence_basis` and a native `notice`: chain id and receipts were checked against recorded responses, not a network.
+- Bundle-source content and saved hashes are unchanged.
+- The job view adds `dataset.transport` (null for bundle sources): pages framed, calls, chain id/network, corroboration counts and reason, recorded declarations.
+
+**Web.**
+- `InvestigationReview` declares with the chosen source's class.
+- Choosing a native source sets the reserved provider requests to its needed count and explains the count.
+- Jobs show the computed transport facts apart from the recorded declarations.
+
+**Unchanged.**
+- The P07 library, P12/P14 numerical replay, P02 contracts and saved-run semantics.
+- A LIMITED/UNRESOLVED native dataset stays unbound (`dataset_not_qualified`).
+- Replay labels stay `SYNTHETIC_FIXTURE` and "simulated fills".
+
+| Fault (native recording) | Result | Test |
+|---|---|---|
+| Page omits its end block fact | PARTIAL `PROVIDER_ERROR`, page 1 kept, report `SOURCE_LOSS` | `test_a_page_without_its_end_block_fact…` |
+| Response echoes another chain | nothing kept, corroboration `NO_RECORDS` | `test_a_response_echoing_another_chain…` |
+| Provider failure on page 2 | failed call counted, no retry | `test_a_provider_failure_counts…` |
+| Receipt names another block / RPC failure | mismatch counted, no binding | `test_a_corroboration_mismatch…` |
+| RPC reports another chain | `CHAIN_NOT_MONAD`, no receipt call | `test_another_chain_from_the_rpc…` |
+| Sampled corroboration | `LIMITED`, unbound | `test_sampled_corroboration…` |
+| Too few requests declared | 422 before any job | `test_a_declaration_without_requests…` |
+| Cancellation after page 1 | later calls refused, 1 consumed, 26 released | `test_cancellation_after_the_first_page…` |
+| Cancellation / deadline during receipts | corroboration `NONE` `STOPPED_*`, 4 receipts fetched, 0 mismatches, 7 consumed | `test_cancellation_during_receipts…`, `test_a_deadline_during_receipts…` |
+| Deadline before / after the pages | no call / chain read refused | `test_a_passed_deadline…`, `test_a_deadline_passing_after…` |
+| Worker killed in collection | unknown liability, never collected again | `test_a_worker_killed_during_collection…` |
+| Other owner | 404, no client call | `test_another_owner_cannot_start…` |
+
 ## Decisions for the builder
 
 0. One open position per agent and revision at a time is enforced by the strategy (`max_open_positions: 1`) and the worker (an exit uses the open position); repeated entry/exit cycles are now possible because each entry has its own position id.

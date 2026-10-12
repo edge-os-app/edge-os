@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from edge_os_api.records import contract_adapter as record_contract
-from edge_os_api.research import comparison_runs, history_dataset
+from edge_os_api.research import comparison_runs, history_dataset, native_history_collection
 
 TOOL_VERSION = "edge-os.investigation-tool/1"
 COLLECT_TOOL = "collect_recorded_history"
@@ -45,11 +45,21 @@ def input_sha256(payload: Mapping[str, Any]) -> str:
 
 def collect_recorded_history(source: Mapping[str, Any], bounds: Mapping[str, Any], deadline_utc: str | None,
                              cancelled: Callable[[], bool], clock: Callable[[], str]) -> tuple[ToolResult, dict[str, Any],
-                                                                                               dict[str, Any]]:
-    """Collect and qualify the one declared recorded source. P07 partial results are outcomes, not errors."""
+                                                                                               dict[str, Any],
+                                                                                               dict[str, Any] | None]:
+    """Collect and qualify the one declared recorded source. P07 partial results are outcomes, not errors.
+
+    A `RECORDED_NATIVE_RESPONSE` source runs through the accepted P07 transport and corroboration with recorded
+    clients and returns its transport facts; a bundle source returns None for them."""
     started = time.monotonic()
-    collection, normalized = history_dataset.collect_recorded(source, bounds, deadline_utc, cancelled, clock)
-    usage_state, usage = history_dataset.provider_usage(source)
+    transport = None
+    if source["evidence_class"] == history_dataset.NATIVE_CLASS:
+        collection, normalized, transport = native_history_collection.collect_native(
+            source, bounds, deadline_utc, cancelled, clock)
+        usage_state, usage = history_dataset.measured_usage(transport)
+    else:
+        collection, normalized = history_dataset.collect_recorded(source, bounds, deadline_utc, cancelled, clock)
+        usage_state, usage = history_dataset.provider_usage(source)
     outcome = "COMPLETE" if collection["status"] == "COMPLETE" else f"PARTIAL_{collection['stop_reason']}"
     result = ToolResult(
         tool=COLLECT_TOOL, outcome=outcome,
@@ -62,7 +72,7 @@ def collect_recorded_history(source: Mapping[str, Any], bounds: Mapping[str, Any
         provenance={"tool_version": TOOL_VERSION, "source_id": source["source_id"],
                     "evidence_class": source["evidence_class"], "content_label": source["content_label"],
                     "query_sha256": collection["query"]["identity_sha256"]})
-    return result, collection, normalized
+    return result, collection, normalized, transport
 
 
 def compare_declared_effects(declaration: Mapping[str, Any], dataset: Mapping[str, Any]) -> ToolResult:

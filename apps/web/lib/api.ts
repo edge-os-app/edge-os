@@ -64,6 +64,13 @@ export interface HistorySource {
   source_id: string; title: string; evidence_class: string; content_label: string; profile_version: string;
   profile_sha256: string; market: HistoryMarket; window: { start: string; end: string }; history_provider: string;
   page_requests_recorded: number;
+  transport: null | { history_provider: string; provider_version: string; corroboration_provider: string;
+    corroboration_sample_size: number; provider_requests_needed: number };
+}
+export interface TransportSummary {
+  envio_pages_framed: number; client_calls: Record<string, number>; chain_id: number | null; chain_network: string | null;
+  corroboration: { class: string; sample_size: number; population_size: number; mismatches: number };
+  corroboration_reason: string | null; recorded_declarations: string[];
 }
 export interface HistoryRule {
   evaluation_id: string; trial_id: string; variant_id: string; price_expression: Record<string, unknown>;
@@ -113,7 +120,8 @@ export interface InvestigationJob {
   dataset: null | { dataset_id: string; content_sha256: string; hashes_verified: Record<string, boolean>;
     summary: { source_id: string; status: string; stop_reason: string; verdict: { overall: string };
       binding_state: string; unavailable_states: string[]; provider_requests: Record<string, number> | null;
-      provider_requests_state: string; evidence_class: string; content_label: string } };
+      provider_requests_state: string; evidence_class: string; content_label: string };
+    transport: TransportSummary | null };
   report: InvestigationReport | null;
 }
 export interface DatasetSummary {
