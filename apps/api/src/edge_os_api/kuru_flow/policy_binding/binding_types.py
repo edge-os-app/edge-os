@@ -34,12 +34,14 @@ R_POLICY_REQUEST_INCOMPLETE = "POLICY_REQUEST_INCOMPLETE"
 R_POLICY_PROVIDER_EXECUTED = "POLICY_PROVIDER_EXECUTED"
 R_POLICY_NO_ALLOW_RULE = "POLICY_NO_ALLOW_RULE"
 R_POLICY_DENY_RULE = "POLICY_DENY_RULE"
+R_POLICY_ADMIN_OWNER_MISSING = "POLICY_ADMIN_OWNER_MISSING"
+R_POLICY_ADMIN_NOT_SEPARATED = "POLICY_ADMIN_NOT_SEPARATED"
 
 MAX_RULES = 32
 MAX_CONDITIONS_PER_RULE = 64
 MAX_CONDITION_VALUE_ITEMS = 256
 
-DOCUMENTED_CONTROLS: tuple[str, ...] = ("chain", "entrypoint_method")
+DOCUMENTED_CONTROLS: tuple[str, ...] = ("chain", "entrypoint_method", "native_value")
 UNPROVEN_CONTROLS: tuple[str, ...] = (
     "input_output_assets",
     "raw_input",
@@ -113,12 +115,17 @@ class PolicyRule(StrictModel):
 
 
 class PolicyRequest(FrozenModel):
-    """A frozen, Privy-shaped policy request. It is data, not a live change."""
+    """A frozen, Privy-shaped policy request. It is data, not a live change.
+
+    ``owner_id`` mirrors the optional Privy policy owner. Absent ownership is a
+    documented ownerless policy; the application secret can then update it.
+    """
 
     version: str = POLICY_SCHEMA_VERSION
     name: str = Field(min_length=1, max_length=200)
     chain_type: str = POLICY_CHAIN_TYPE
     rules: list[PolicyRule] = Field(max_length=MAX_RULES)
+    owner_id: str | None = None
 
     @field_validator("version")
     @classmethod
@@ -139,7 +146,9 @@ class PreparedPolicyRequest(FrozenModel):
     """A policy request plus its coverage split and provider state.
 
     ``provider_executed`` is always ``NOT_RUN``. The coverage classes keep the
-    documented, unproven and unexpressible controls separate.
+    documented, unproven and unexpressible controls separate. The administration
+    fields record the required policy-resource owner. An absent owner is the
+    documented ownerless policy and keeps administration separation unresolved.
     """
 
     wallet_id: str = Field(min_length=1, max_length=200)
@@ -147,6 +156,8 @@ class PreparedPolicyRequest(FrozenModel):
     documented_controls: tuple[str, ...]
     unproven_controls: tuple[str, ...]
     unexpressible_controls: tuple[str, ...]
+    policy_owner_id: str | None = None
+    administration_separated: bool = False
     provider_executed: str = PROVIDER_EXECUTED
 
 
@@ -157,7 +168,7 @@ class PolicyFacts(StrictModel):
     chain_id: str = Field(min_length=1, max_length=40)
     to: str = Field(min_length=1, max_length=200)
     function_name: str = Field(min_length=1, max_length=80)
-    value_raw: str = "0"
+    value_raw: str | None = None
     arguments: dict[str, str] = Field(default_factory=dict)
 
 

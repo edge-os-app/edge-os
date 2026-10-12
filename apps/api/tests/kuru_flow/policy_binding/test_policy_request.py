@@ -5,6 +5,8 @@ import pytest
 from edge_os_api.kuru_flow.policy_binding import (
     DOCUMENTED_CONTROLS,
     PROVIDER_EXECUTED,
+    R_POLICY_ADMIN_NOT_SEPARATED,
+    R_POLICY_ADMIN_OWNER_MISSING,
     R_POLICY_PROVIDER_EXECUTED,
     R_POLICY_REQUEST_INCOMPLETE,
     UNEXPRESSIBLE_CONTROLS,
@@ -156,3 +158,66 @@ def test_declared_bounds_are_positive():
 
     assert MAX_RULES > 0
     assert MAX_CONDITIONS_PER_RULE > 0
+
+
+def _value_conditions(prepared):
+    return [
+        condition.value
+        for condition in prepared.request.rules[0].conditions
+        if condition.field_source is PolicyFieldSource.ETHEREUM_TRANSACTION
+        and condition.field == "value"
+    ]
+
+
+def test_build_binds_the_transaction_value():
+    native = build_policy_request(base_config(), wallet_id=WALLET_ID)
+    assert _value_conditions(native) == [base_config().approved_input_raw]
+
+    erc20 = build_policy_request(
+        base_config(
+            input_token=USDC_MAINNET,
+            input_asset_id="monad:143/usdc",
+            input_decimals=6,
+            allowance_raw="1000000000000000000",
+        ),
+        wallet_id=WALLET_ID,
+    )
+    assert _value_conditions(erc20) == ["0"]
+
+
+def test_validate_reports_a_missing_native_value_condition():
+    prepared = build_policy_request(base_config(), wallet_id=WALLET_ID)
+    rule = prepared.request.rules[0]
+    kept = [
+        condition
+        for condition in rule.conditions
+        if not (
+            condition.field_source is PolicyFieldSource.ETHEREUM_TRANSACTION
+            and condition.field == "value"
+        )
+    ]
+    stripped = prepared.request.model_copy(
+        update={"rules": [rule.model_copy(update={"conditions": kept})]}
+    )
+    reasons = validate_binding(prepared.model_copy(update={"request": stripped}))
+    assert "POLICY_REQUEST_INCOMPLETE:native_value" in reasons
+
+
+def test_validate_requires_a_policy_resource_owner_by_default():
+    prepared = build_policy_request(base_config(), wallet_id=WALLET_ID)
+    reasons = validate_binding(prepared)
+    assert R_POLICY_ADMIN_OWNER_MISSING in reasons
+    assert R_POLICY_ADMIN_NOT_SEPARATED in reasons
+
+
+def test_validate_clears_the_admin_reasons_when_bound():
+    prepared = build_policy_request(
+        base_config(),
+        wallet_id=WALLET_ID,
+        policy_owner_id="ou_policy_owner",
+        administration_separated=True,
+    )
+    reasons = validate_binding(prepared)
+    assert R_POLICY_ADMIN_OWNER_MISSING not in reasons
+    assert R_POLICY_ADMIN_NOT_SEPARATED not in reasons
+    assert prepared.request.owner_id == "ou_policy_owner"

@@ -30,6 +30,7 @@ from .binding_types import (
 from .policy_request import function_name_for_method
 
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
+_HEX_BYTES = re.compile(r"0x(?:[0-9a-fA-F]{2})+")
 
 _TRANSACTION_FIELDS = {
     "chain_id": "chain_id",
@@ -43,9 +44,14 @@ def facts_from_decoded_call(
     chain_id: int,
     entrypoint_address: str,
     rpc_method: str,
+    value_raw: str | None,
     call: DecodedFlowCall,
 ) -> PolicyFacts:
-    """Derive the declared facts from one bounded decoded Flow call."""
+    """Derive the declared facts from one bounded decoded Flow call.
+
+    ``value_raw`` is the actual native transaction value. It is separate from
+    the calldata token notional and is never inferred from the calldata.
+    """
     if not isinstance(call, DecodedFlowCall):
         raise AdapterError("call must be a DecodedFlowCall")
     function_name = function_name_for_method(call.method)
@@ -68,13 +74,16 @@ def facts_from_decoded_call(
         chain_id=str(chain_id),
         to=entrypoint_address,
         function_name=function_name,
+        value_raw=value_raw,
         arguments=arguments,
     )
 
 
 def _field_key(value: str) -> str:
-    """Addresses compare case-insensitively; every other value compares exactly."""
-    return value.lower() if _ADDRESS.fullmatch(value) else value
+    """Addresses and hex byte strings compare case-insensitively; others exactly."""
+    if _ADDRESS.fullmatch(value) or _HEX_BYTES.fullmatch(value):
+        return value.lower()
+    return value
 
 
 def _transaction_fact(field: str, facts: PolicyFacts) -> str | None:

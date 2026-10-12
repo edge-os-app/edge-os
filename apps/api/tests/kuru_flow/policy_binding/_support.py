@@ -14,9 +14,11 @@ from edge_os_api.kuru_flow.policy_binding import (
     PolicyFacts,
     facts_from_decoded_call,
 )
+from edge_os_api.kuru_flow.types import NATIVE_TOKEN_ADDRESS
 
 from kuru_flow._support import (
     MAINNET_ENTRYPOINT,
+    USDC_MAINNET,
     WALLET,
     encode_execute_swap,
     encode_execute_swap_with_receiver,
@@ -37,11 +39,19 @@ def receiver_call() -> Any:
     )
 
 
+def valid_value_raw(call: Any) -> str:
+    """The native value a correct caller sends: the input for native, else zero."""
+    if call.intent.token_user_sells.lower() == NATIVE_TOKEN_ADDRESS:
+        return call.intent.amount_user_sells
+    return "0"
+
+
 def facts_for(call: Any, **overrides: Any) -> PolicyFacts:
     base = facts_from_decoded_call(
         chain_id=143,
         entrypoint_address=MAINNET_ENTRYPOINT,
         rpc_method=RPC_METHOD,
+        value_raw=valid_value_raw(call),
         call=call,
     )
     if not overrides:

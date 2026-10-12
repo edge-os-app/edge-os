@@ -118,10 +118,11 @@ This section extends the packet. Sections 1 to 8 stay intact. The feasibility ch
 | Provider policy method | a Privy policy rule on `eth_signTransaction` | `DOCUMENTED` (P1, P3) |
 | Chain condition | `ethereum_transaction.chain_id` `eq` the selected chain id | `DOCUMENTED` (P3) |
 | Entrypoint condition | `ethereum_transaction.to` `eq` the selected entrypoint | `DOCUMENTED` (P3) |
+| Transaction value condition | `ethereum_transaction.value` `eq` the approved input raw for a native input, or `0` for an ERC-20 input | `DOCUMENTED` (P3) |
 | Function condition | `ethereum_calldata.function_name` `eq` `executeSwap` or `executeSwapWithReceiver`, with the pinned ABI | `DOCUMENTED` (P3, P4) |
 | Argument conditions | `ethereum_calldata` `eq` on the intent, fee and `program` arguments | **`UNKNOWN`** (no `bytes` or tuple-component example) |
-| Policy owner | the user; the application key is an additional signer only | design requirement (P7, R2) |
-| Executor key | an additional signer with a restrictive override policy | design requirement (P7) |
+| Policy owner | an explicitly bound policy-resource owner outside executor control (a Privy policy `owner_id`) | design requirement (P8, P10) |
+| Executor key | an additional signer with a restrictive override policy | design requirement (P7, P9) |
 
 ### 9.2 Positive control
 
@@ -133,7 +134,9 @@ A dedicated, isolated request the provider must deny, separate from any exhauste
 
 ### 9.4 Authority separation
 
-The application authorization key must not be a member of the wallet-owning key quorum. If it is, that key can unilaterally update the wallet policy and signers (P7). Prove the executor cannot loosen the policy before any real action. Missing ownership evidence keeps the action closed.
+The application authorization key must not be a member of the wallet-owning key quorum. If it is, a satisfying member of that quorum can unilaterally update the wallet policy and signers (P10).
+
+Wallet ownership and policy-resource ownership are different. A Privy policy owner is optional; an **ownerless policy is updatable with the application secret alone** (P8). A user-owned wallet with the application key only as an additional signer therefore does **not** by itself separate policy administration. Require an explicitly bound policy-resource owner outside executor control before any future attachment or signing release. Prove the executor cannot loosen the policy before any real action. Missing ownership evidence keeps the action closed.
 
 ### 9.5 Finite request, gas and action limits
 
@@ -150,4 +153,4 @@ The exact request cap, provider-request cap, gas budget and action/attempt ceili
 - Exact `program` byte equality at the provider: `UNKNOWN`.
 - Tuple-component calldata path support: `UNKNOWN`.
 - Deployed mainnet bytecode identity: `UNKNOWN`.
-- Policy administration separation proof: `NOT_RUN`.
+- Policy-resource owner and administration separation: `UNRESOLVED` (the prepared request carries no policy owner; `validate_binding` returns `POLICY_ADMIN_OWNER_MISSING` and `POLICY_ADMIN_NOT_SEPARATED`).

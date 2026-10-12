@@ -21,6 +21,8 @@ from .binding_types import (
     DOCUMENTED_CONTROLS,
     POLICY_SCHEMA_VERSION,
     PROVIDER_EXECUTED,
+    R_POLICY_ADMIN_NOT_SEPARATED,
+    R_POLICY_ADMIN_OWNER_MISSING,
     R_POLICY_PROVIDER_EXECUTED,
     R_POLICY_REQUEST_INCOMPLETE,
     UNEXPRESSIBLE_CONTROLS,
@@ -77,9 +79,9 @@ def _flow_abi(function_name: str, method: str) -> list[dict[str, Any]]:
         {
             "type": "function",
             "name": function_name,
-            "stateMutability": "nonpayable",
+            "stateMutability": "payable",
             "inputs": inputs,
-            "outputs": [],
+            "outputs": [{"name": "", "type": "uint256"}],
         }
     ]
 
@@ -121,9 +123,11 @@ def _build_conditions(
     config: ApprovedAdapterConfiguration, function_name: str
 ) -> list[PolicyCondition]:
     abi = _flow_abi(function_name, config.method)
+    native_value = config.approved_input_raw if config.input_is_native() else "0"
     conditions = [
         _transaction_condition("chain_id", str(config.chain_id)),
         _transaction_condition("to", config.entrypoint_address),
+        _transaction_condition("value", native_value),
         _function_name_condition(function_name, abi),
         _calldata_condition(
             function_name, "intent.tokenUserBuys", config.output_asset.token_address, abi
@@ -166,13 +170,18 @@ def build_policy_request(
     config: ApprovedAdapterConfiguration,
     *,
     wallet_id: str,
+    policy_owner_id: str | None = None,
+    administration_separated: bool = False,
     policy_name: str = DEFAULT_POLICY_NAME,
     rpc_method: str = RPC_METHOD_ETH_SIGN_TRANSACTION,
 ) -> PreparedPolicyRequest:
     """Build the declared policy request and its coverage split.
 
-    Raises ``AdapterError`` for a non-configuration input or a blank wallet
-    identity. It never contacts a provider.
+    ``policy_owner_id`` is the policy-resource owner. When it is absent the
+    policy is ownerless and the application secret can update it, so the
+    administration configuration stays unresolved. Raises ``AdapterError`` for a
+    non-configuration input or a blank wallet identity. It never contacts a
+    provider.
     """
     if not isinstance(config, ApprovedAdapterConfiguration):
         raise AdapterError("config must be an ApprovedAdapterConfiguration")
@@ -185,13 +194,20 @@ def build_policy_request(
         action=PolicyAction.ALLOW,
         conditions=_build_conditions(config, function_name),
     )
-    request = PolicyRequest(version=POLICY_SCHEMA_VERSION, name=policy_name, rules=[rule])
+    request = PolicyRequest(
+        version=POLICY_SCHEMA_VERSION,
+        name=policy_name,
+        rules=[rule],
+        owner_id=policy_owner_id,
+    )
     return PreparedPolicyRequest(
         wallet_id=wallet_id,
         request=request,
         documented_controls=DOCUMENTED_CONTROLS,
         unproven_controls=UNPROVEN_CONTROLS,
         unexpressible_controls=UNEXPRESSIBLE_CONTROLS,
+        policy_owner_id=policy_owner_id,
+        administration_separated=administration_separated,
         provider_executed=PROVIDER_EXECUTED,
     )
 
@@ -218,8 +234,10 @@ def validate_binding(prepared: PreparedPolicyRequest) -> tuple[str, ...]:
     """Return the ordered reasons a prepared request is not a complete binding.
 
     The request is incomplete while any unproven or unexpressible mandatory
-    control remains, or while a documented condition is missing. A claimed
-    provider run is rejected: a local artifact cannot be ``PROVIDER_ACTUAL``.
+    control remains, while a documented condition is missing, or while the
+    policy-resource owner is absent or administration is not separated. A
+    claimed provider run is rejected: a local artifact cannot be
+    ``PROVIDER_ACTUAL``.
     """
     reasons: list[str] = []
     if prepared.provider_executed != PROVIDER_EXECUTED:
@@ -227,10 +245,16 @@ def validate_binding(prepared: PreparedPolicyRequest) -> tuple[str, ...]:
     request = prepared.request
     if not _has_transaction_field(request, "chain_id"):
         reasons.append(f"{R_POLICY_REQUEST_INCOMPLETE}:chain")
+    if not _has_transaction_field(request, "value"):
+        reasons.append(f"{R_POLICY_REQUEST_INCOMPLETE}:native_value")
     if not _has_transaction_field(request, "to") or not _has_function_name_condition(
         request
     ):
         reasons.append(f"{R_POLICY_REQUEST_INCOMPLETE}:entrypoint_method")
+    if not isinstance(prepared.policy_owner_id, str) or not prepared.policy_owner_id.strip():
+        reasons.append(R_POLICY_ADMIN_OWNER_MISSING)
+    if not prepared.administration_separated:
+        reasons.append(R_POLICY_ADMIN_NOT_SEPARATED)
     for control in UNPROVEN_CONTROLS + UNEXPRESSIBLE_CONTROLS:
         reasons.append(f"{R_POLICY_REQUEST_INCOMPLETE}:{control}")
     return tuple(reasons)

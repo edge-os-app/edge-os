@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from edge_os_api.kuru_flow.flow_calldata import decode_flow_call
 from edge_os_api.kuru_flow.policy_binding import (
     POLICY_ACTION_ALLOW,
     POLICY_ACTION_DENY,
@@ -18,7 +19,7 @@ from edge_os_api.kuru_flow.policy_binding import (
     evaluate_authored_policy,
 )
 
-from kuru_flow._support import base_config
+from kuru_flow._support import PROGRAM_HEX, USDC_MAINNET, base_config, encode_execute_swap
 
 from ._support import (
     OTHER_ADDRESS,
@@ -71,6 +72,7 @@ def test_one_field_route_and_identity_mutations_are_blocked():
         "entrypoint": facts_for(approved_call(), to=OTHER_ADDRESS),
         "function": facts_for(approved_call(), function_name="executeSwapWithReceiver"),
         "rpc_method": facts_for(approved_call(), rpc_method="eth_sendTransaction"),
+        "native_value": facts_for(approved_call(), value_raw="0"),
     }
     for label, facts in mutations.items():
         verdict = evaluate_authored_policy(request, facts)
@@ -174,3 +176,40 @@ def test_an_unknown_field_resolves_false():
     )
     verdict = evaluate_authored_policy(_request_with(bogus), facts_for(approved_call()))
     assert verdict.allowed is False
+
+
+def test_native_value_must_equal_the_input_exactly():
+    request = _approved_request().request
+    call = approved_call()
+    amount = call.intent.amount_user_sells
+    assert evaluate_authored_policy(request, facts_for(call)).allowed is True
+    assert evaluate_authored_policy(request, facts_for(call, value_raw="0")).allowed is False
+    assert evaluate_authored_policy(request, facts_for(call, value_raw=str(int(amount) - 1))).allowed is False
+    assert evaluate_authored_policy(request, facts_for(call, value_raw=str(int(amount) + 1))).allowed is False
+    assert evaluate_authored_policy(request, facts_for(call, value_raw=None)).allowed is False
+
+
+def test_erc20_value_must_be_zero():
+    config = base_config(
+        input_token=USDC_MAINNET,
+        input_asset_id="monad:143/usdc",
+        input_decimals=6,
+        allowance_raw="1000000000000000000",
+    )
+    request = build_policy_request(config, wallet_id=WALLET_ID).request
+    call = decode_flow_call(
+        data_hex=encode_execute_swap(token_user_sells=USDC_MAINNET), method="EXECUTE_SWAP"
+    )
+    assert evaluate_authored_policy(request, facts_for(call, value_raw="0")).allowed is True
+    assert evaluate_authored_policy(request, facts_for(call, value_raw="1")).allowed is False
+
+
+def test_receiver_route_binds_the_native_value_too():
+    request = _approved_request(method="EXECUTE_SWAP_WITH_RECEIVER").request
+    assert evaluate_authored_policy(request, facts_for(receiver_call(), value_raw="0")).allowed is False
+
+
+def test_hex_byte_arguments_compare_case_insensitively():
+    mixed_case = "0x" + PROGRAM_HEX[2:].upper()
+    facts = facts_with_argument("program", mixed_case)
+    assert evaluate_authored_policy(_approved_request().request, facts).allowed is True
