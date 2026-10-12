@@ -174,12 +174,12 @@ def test_qualified_dataset_is_saved_verbatim_with_recomputable_hashes(research, 
     assert content["evidence_class"] == "RECORDED_RESPONSE" and content["content_label"] == "SYNTHETIC_FIXTURE"
     assert content["market_binding"]["evidence_class"] == "SYNTHETIC_FIXTURE"
     assert len(content["buckets"]) == 24 and {bucket["status"] for bucket in content["buckets"]} == {"COMPLETE_OCCUPIED"}
-    assert content["buckets"][0]["available_at"] == "2026-09-25T10:05:30Z"
+    assert content["buckets"][0]["available_at"] == "2026-09-25T10:05:00Z"
     assert content["provider_requests"] == {"ENVIO_HYPERSYNC": 2}
     assert content["invocations_measured"] == {"count": 2, "label": "EXACT_LOCAL_COUNT"}
     assert content["query_sha256"] and content["collection_sha256"] and content["normalized_sha256"]
     feature = history_dataset.feature_rows(content)[0]
-    assert feature["price"] == {"value": "100", "qualified": True, "available_at": "2026-09-25T10:05:30Z",
+    assert feature["price"] == {"value": "100", "qualified": True, "available_at": "2026-09-25T10:05:00Z",
                                 "reasons": []}
 
 
@@ -270,3 +270,25 @@ def test_insufficient_and_contradictory_outcomes_are_saved_honestly(research, ow
              if item["outcome"] == "DESCRIBED"}
     assert content["outcome"] == ("CONTRADICTORY" if len(signs) > 1 else content["outcome"])
     assert content["outcome"] == "CONTRADICTORY", content["variants"]
+
+
+def test_late_delivered_inputs_are_excluded_not_read_early(research, owner_a):
+    intake_id, declaration_id, _ = declare(research, owner_a, source_id="recorded-syn-late-delivery/1",
+                                           direction="DESCRIPTIVE")
+    job = run_to_end(research, owner_a, intake_id, declaration_id)
+    content = job["report"]["content"]
+    assert content["outcome"] == "INSUFFICIENT_DATA"
+    rows = [row for variant in content["result"]["variants"] for row in variant["opportunities"]]
+    assert rows and all(row["eligibility_group"] == "EXCLUDED" for row in rows)
+    assert all("SIGNAL_NOT_AVAILABLE_AT_DECISION" in row["reasons"] for row in rows)
+
+
+def test_dataset_list_is_owner_scoped(research, owner_a, owner_b):
+    intake_id, declaration_id, _ = declare(research, owner_a)
+    job = run_to_end(research, owner_a, intake_id, declaration_id)
+    mine = research.get("/v1/research/history-datasets", headers=owner_a).json()["datasets"]
+    assert job["dataset"]["dataset_id"] in {item["dataset_id"] for item in mine}
+    entry = next(item for item in mine if item["dataset_id"] == job["dataset"]["dataset_id"])
+    assert entry["quote_unit"] == "QUOTE:0x" + "bb" * 20 and entry["hashes_verified"]["content_sha256"] is True
+    theirs = research.get("/v1/research/history-datasets", headers=owner_b).json()["datasets"]
+    assert job["dataset"]["dataset_id"] not in {item["dataset_id"] for item in theirs}

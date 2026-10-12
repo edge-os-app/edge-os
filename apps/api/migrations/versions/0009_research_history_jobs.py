@@ -38,7 +38,7 @@ def upgrade() -> None:
     sa.UniqueConstraint('job_id', name=op.f('history_datasets_job_id_key')),
     schema=SCHEMA
     )
-    op.create_index(op.f('history_datasets_owner_id_idx'), 'history_datasets', ['owner_id'], unique=False, schema=SCHEMA)
+    op.create_index(op.f('research_local_history_datasets_owner_id_idx'), 'history_datasets', ['owner_id'], unique=False, schema=SCHEMA)
     op.create_table('investigation_jobs',
     sa.Column('job_id', sa.UUID(), nullable=False),
     sa.Column('owner_id', sa.UUID(), nullable=False),
@@ -75,7 +75,7 @@ def upgrade() -> None:
     sa.UniqueConstraint('job_id', 'attempt_id', 'kind', name='uq_investigation_attempt_kind'),
     schema=SCHEMA
     )
-    op.create_index(op.f('investigation_events_job_id_idx'), 'investigation_events', ['job_id'], unique=False,
+    op.create_index(op.f('research_local_investigation_events_job_id_idx'), 'investigation_events', ['job_id'], unique=False,
                     schema=SCHEMA)
     op.create_table('research_budgets',
     sa.Column('owner_id', sa.UUID(), nullable=False),
@@ -114,9 +114,9 @@ def downgrade() -> None:
         op.execute(f"DROP TRIGGER {table}_immutable ON {SCHEMA}.{table}")
     op.drop_table('investigation_reports', schema=SCHEMA)
     op.drop_table('research_budgets', schema=SCHEMA)
-    op.drop_index(op.f('investigation_events_job_id_idx'), table_name='investigation_events', schema=SCHEMA)
+    op.drop_index(op.f('research_local_investigation_events_job_id_idx'), table_name='investigation_events', schema=SCHEMA)
     op.drop_table('investigation_events', schema=SCHEMA)
     op.drop_table('investigation_jobs', schema=SCHEMA)
-    op.drop_index(op.f('history_datasets_owner_id_idx'), table_name='history_datasets', schema=SCHEMA)
+    op.drop_index(op.f('research_local_history_datasets_owner_id_idx'), table_name='history_datasets', schema=SCHEMA)
     op.drop_table('history_datasets', schema=SCHEMA)
     op.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} RESTRICT")

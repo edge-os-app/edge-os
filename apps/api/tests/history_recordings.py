@@ -29,9 +29,10 @@ WINDOW_END = "2026-09-25T12:00:00Z"
 COLLECTED_AT = "2026-09-25T12:30:00Z"
 ARCHIVE_HEIGHT = 1_000_000
 FIRST_BLOCK = 100
-# Each swap lands 90 seconds into its bucket. A bucket is delivered 30 seconds after it ends, so a one-minute decision
-# clock can read the newest delivered bucket and still find a reference trade in the minute after its decision.
-SWAP_OFFSET = 90
+# Each swap lands 30 seconds into its bucket, so a decision at a bucket end finds its reference trade in the next
+# minute. The standard recording delivers each bucket at its end; the late-delivery recording delivers it 30 seconds
+# later, which a decision at the bucket end must not read.
+SWAP_OFFSET = 30
 # Close price per five-minute bucket, quote per base, at most six decimals (the quote token's decimals).
 CLOSES = ("100", "100.5", "101", "102.5", "102", "101", "100", "99", "99.5", "101", "102.5", "104",
           "103", "102", "101.5", "101", "102", "103.5", "105", "104", "103", "102.5", "102", "101")
@@ -46,7 +47,7 @@ def _data(*words: int) -> str:
 
 
 def _swap(index: int, close: str) -> dict[str, Any]:
-    """One swap 90 seconds into bucket `index`. Even buckets buy base with quote; odd buckets sell base."""
+    """One swap 30 seconds into bucket `index`. Even buckets buy base with quote; odd buckets sell base."""
     quote_raw = int(round(float(close) * 1_000_000))
     base_raw = 10 ** 18
     data = _data(quote_raw, 0, 0, base_raw) if index % 2 == 0 else _data(0, base_raw, quote_raw, 0)
@@ -128,7 +129,7 @@ def _responses() -> list[dict[str, Any]]:
     ]
 
 
-def _evidence(corroboration_class: str = "COMPLETE") -> dict[str, Any]:
+def _evidence(corroboration_class: str = "COMPLETE", delivery_delay: int = 0) -> dict[str, Any]:
     start = epoch(WINDOW_START)
     return {
         "collected_at_utc": COLLECTED_AT,
@@ -142,7 +143,7 @@ def _evidence(corroboration_class: str = "COMPLETE") -> dict[str, Any]:
         "corroboration": {"class": corroboration_class, "provider": "QUICKNODE_JSON_RPC",
                           "sample_size": len(CLOSES), "population_size": len(CLOSES), "mismatches": 0},
         "finality_at_collection": "OBSERVED_FINAL",
-        "delivery_records": {iso_utc(start + 300 * step): iso_utc(start + 300 * step + 330)
+        "delivery_records": {iso_utc(start + 300 * step): iso_utc(start + 300 * step + 300 + delivery_delay)
                              for step in range(len(CLOSES))},
         "feasibility_claim": {
             "schedule": {"anchor_utc": WINDOW_START, "period_seconds": 300, "feature_end_offset_seconds": 0},
@@ -176,6 +177,8 @@ def build_bundle() -> dict[str, Any]:
                     responses=[copy.deepcopy(responses[0]), {"fault": "SOURCE_FAILURE"}]),
             _source("recorded-syn-uncorroborated/1", "Synthetic recorded history (corroboration incomplete)",
                     evidence=_evidence("PARTIAL")),
+            _source("recorded-syn-late-delivery/1", "Synthetic recorded history (each bucket delivered 30 s late)",
+                    evidence=_evidence(delivery_delay=30)),
             _source("recorded-syn-usage-unknown/1", "Synthetic recorded history (provider usage not reported)",
                     provider_requests=None),
             _source("recorded-syn-usage-invalid/1", "Synthetic recorded history (provider usage malformed)",

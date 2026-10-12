@@ -100,7 +100,9 @@ class SpotReplayBody(StrictModel):
     idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     strategy_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     strategy_revision_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F-]{36}$")]
-    dataset_fixture_id: Literal["p13.wc01/1"]
+    # Exactly one input: the authored P13 fixture, or one of the owner's saved recorded-history datasets.
+    dataset_fixture_id: Literal["p13.wc01/1"] | None = None
+    history_dataset_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")] | None = None
     run_configuration_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     window_start: datetime
     window_end: datetime
@@ -108,6 +110,13 @@ class SpotReplayBody(StrictModel):
     initial_base_amount: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
     initial_basis_quote: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
     essential_fields: SpotReplayEssentialFields
+
+    @model_validator(mode="after")
+    def one_dataset(self) -> "SpotReplayBody":
+        if (self.dataset_fixture_id is None) == (self.history_dataset_id is None):
+            raise PydanticCustomError("one_dataset_required",
+                                      "Choose either the synthetic fixture or one saved history dataset.")
+        return self
 
 
 class EdgeClaim(StrictModel):
@@ -594,3 +603,23 @@ class InvestigationJobBody(StrictModel):
 
     operation_id: Uuid4Text
     request_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+
+
+DecimalText = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$")]
+
+
+class MarketAdoptionBody(StrictModel):
+    """Adopt one owner's QUALIFIED recorded-history market for a compiled strategy request, before publication.
+
+    The client names the dataset and restates the amounts for the new quote unit. It never supplies a binding or a
+    qualification; the server derives both from the saved dataset.
+    """
+
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+    expected_interpretation_revision_id: Uuid4Text
+    expected_parent_revision_id: Uuid4Text | None
+    dataset_id: Uuid4Text
+    adoption: Literal["ADOPT_DATASET_MARKET"]
+    quote_unit: Annotated[str, StringConstraints(pattern=r"^QUOTE:0x[0-9a-fA-F]{40}$")]
+    sizing_amount: DecimalText
+    max_quote_notional: DecimalText

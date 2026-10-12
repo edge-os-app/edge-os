@@ -82,8 +82,8 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
             "evaluation_plan": [{"evaluation_id": evaluation, "trial_id": trial, "variant_id": variant,
                                  "horizon": {"value": 5, "unit": "MINUTES"}, "partition_ids": [first_partition]}
                                 for evaluation, variant in zip(evaluations, variants)],
-            "schedule": {"version": "p09.decision-clock/1", "start": "2026-09-25T10:16:00Z",
-                         "end": "2026-09-25T11:51:00Z", "interval_seconds": 60},
+            "schedule": {"version": "p09.decision-clock/1", "start": "2026-09-25T10:15:00Z",
+                         "end": "2026-09-25T11:50:00Z", "interval_seconds": 300},
             "rule_map": {"schema_version": "edge-os.hypothesis-rule-map/1", "control": "UNTRIGGERED_DECISIONS",
                          "incremental_volume_declared": True,
                          "rules": [{"evaluation_id": evaluation, "trial_id": trial, "variant_id": variant,
@@ -127,3 +127,36 @@ def start(client, headers, intake_id: str, declaration_id: str, key: str | None 
     return client.post(jobs_path(intake_id, declaration_id), headers=headers,
                        json={"operation_id": operation_id or str(uuid.uuid4()),
                              "request_key": key or f"job-{uuid.uuid4()}"})
+
+
+def reported_dataset(client, headers, source_id: str = QUALIFIED) -> str:
+    """Declare, run one job to its report with a local worker, and return the saved dataset id."""
+    from edge_os_api.research.investigation_jobs import InvestigationWorker
+
+    intake_id, declaration_id, _ = declare(client, headers, source_id=source_id)
+    job_id = start(client, headers, intake_id, declaration_id).json()["job_id"]
+    InvestigationWorker(client.app.state.session_factory, client.app.state.settings).run_job(uuid.UUID(job_id))
+    view = client.get(f"/v1/research/investigation-jobs/{job_id}", headers=headers).json()
+    assert view["state"] == "REPORTED", view["state"]
+    return view["dataset"]["dataset_id"]
+
+
+def adoption_body(bundle, dataset_id: str, *, parent: str | None = None, key: str | None = None,
+                  quote_unit: str = QUOTE_UNIT, amount: str = "50", notional: str = "50") -> dict[str, Any]:
+    return {"idempotency_key": key or f"market-{uuid.uuid4()}",
+            "expected_interpretation_revision_id": bundle["head"]["interpretation_revision_id"],
+            "expected_parent_revision_id": parent, "dataset_id": dataset_id, "adoption": "ADOPT_DATASET_MARKET",
+            "quote_unit": quote_unit, "sizing_amount": amount, "max_quote_notional": notional}
+
+
+def history_replay_body(strategy_id: str, revision_id: str, dataset_id: str, *, start: str = "2026-09-25T10:20:00Z",
+                        end: str = "2026-09-25T11:20:00Z", key: str | None = None) -> dict[str, Any]:
+    return {"idempotency_key": key or f"replay-{uuid.uuid4()}", "strategy_id": strategy_id,
+            "strategy_revision_id": revision_id, "history_dataset_id": dataset_id,
+            "run_configuration_id": f"history-{uuid.uuid4()}", "window_start": start, "window_end": end,
+            "initial_cash_quote": "1000", "initial_base_amount": "0", "initial_basis_quote": "0",
+            "essential_fields": {
+                "entry": {"state": "BOUND", "essential_dependencies": [{"series": "price", "offset_buckets": 0},
+                                                                      {"series": "price", "offset_buckets": -3}]},
+                "exit": {"state": "BOUND", "essential_dependencies": [{"series": "price", "offset_buckets": 0},
+                                                                     {"series": "price", "offset_buckets": -1}]}}}

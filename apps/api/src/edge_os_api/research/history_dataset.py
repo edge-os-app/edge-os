@@ -223,7 +223,8 @@ def dataset_content(*, dataset_id: uuid.UUID, owner_id: uuid.UUID, declaration_i
         "schema_version": DATASET_VERSION, "dataset_id": str(dataset_id), "owner_id": str(owner_id),
         "declaration_id": str(declaration_id), "job_id": str(job_id), "attempt_id": str(attempt_id),
         "source_id": source["source_id"], "evidence_class": source["evidence_class"],
-        "content_label": source["content_label"], "profile": P07_PROFILE_VERSION,
+        "content_label": source["content_label"], "profile_evidence_class": profile["evidence_class"],
+        "profile": P07_PROFILE_VERSION,
         "profile_sha256": profile_sha256(source), "input_profile_sha256": normalized["input_profile_sha256"],
         "bound_profile_sha256": normalized["bound_profile_sha256"],
         "collection_sha256": collection["collection_sha256"], "normalized_sha256": normalized["normalized_sha256"],
@@ -295,3 +296,17 @@ def feature_rows(content: Mapping[str, Any]) -> list[dict[str, Any]]:
         rows.append({"bucket_end": bucket["bucket_end"], "price": {"value": bucket["close"], **common},
                      "quote_volume": {"value": bucket["quote_volume"], **common}})
     return rows
+
+
+def list_datasets(session: Session, principal: Principal) -> dict[str, Any]:
+    """The owner's saved datasets, newest first, with the facts a user reviews before adopting a market."""
+    rows = session.execute(select(HistoryDatasetRow).where(HistoryDatasetRow.owner_id == principal.user_id)
+                           .order_by(HistoryDatasetRow.created_at.desc()).limit(50)).scalars().all()
+    keys = ("source_id", "evidence_class", "content_label", "profile_evidence_class", "status", "stop_reason",
+            "verdict", "binding_state", "unavailable_states", "market_binding", "market_binding_id", "window_start",
+            "window_end", "declaration_id", "job_id")
+    return {"datasets": [{"dataset_id": str(row.dataset_id), "created_at": record_contract.utc_string(row.created_at),
+                          "content_sha256": row.content_sha256, "hashes_verified": verify_hashes(row),
+                          "quote_unit": None if row.content["strategy_market"] is None
+                          else row.content["strategy_market"]["quote_unit"],
+                          **{key: row.content[key] for key in keys}} for row in rows]}

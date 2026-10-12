@@ -20,7 +20,7 @@ from edge_os_api.accounts import views as account_views
 from edge_os_api.agent_context import controls as agent_context
 from edge_os_api.research import comparison_runs as effect_run
 from edge_os_api.research import investigation_adoption as investigation_adoption
-from edge_os_api.research import history_dataset, investigation_jobs
+from edge_os_api.research import history_dataset, investigation_jobs, market_adoption
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service as service
 from edge_os_api.research.attempt_store import AdvisoryLockGuard
@@ -31,7 +31,7 @@ from edge_os_api.core.authentication import Principal, Verifier, require_princip
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
 from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
 from edge_os_api.research.fixture_interpreter import samples
-from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, PublicationBody, RetryBody, SpotReplayBody
+from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
 from edge_os_api.wallet_setup import router as wallet_setup
 from edge_os_api.wallet_setup.adapter import build_wallet_provider
@@ -302,11 +302,24 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
                                  session: Session = Depends(get_session)) -> Any:
         return run(session, lambda: investigation_jobs.get_report(session, principal, report_id))
 
+    @private.get("/research/history-datasets")
+    def list_history_datasets(principal: Principal = Depends(require_principal),
+                              session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: history_dataset.list_datasets(session, principal))
+
     @private.get("/research/history-datasets/{dataset_id}")
     def get_history_dataset(dataset_id: str, principal: Principal = Depends(require_principal),
                             session: Session = Depends(get_session)) -> Any:
         return run(session, lambda: history_dataset.dataset_view(
             history_dataset.owned_dataset(session, principal, dataset_id)))
+
+    @private.post("/research/requests/{intake_id}/market-adoptions")
+    def adopt_market(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
+                     session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(MarketAdoptionBody, data)
+        status, result = run(session, lambda: market_adoption.adopt_dataset_market(session, principal, intake_id, body),
+                             retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
 
     @private.get("/research/budget")
     def research_budget(principal: Principal = Depends(require_principal),
