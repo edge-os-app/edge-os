@@ -93,6 +93,7 @@ no-signal evaluation is never reported as a completed trade attempt.
 | `pending_reconciliation` | `recovery_local.recovery_cases.state IN ('OPEN','UNKNOWN')` for the action, and `outcome = 'SUBMITTED_UNKNOWN'` | PRESENT (f84) |
 | `stop_state` | `stops_local.scoped_stops` (P25); read today by admission, not yet projected | PRESENT (f84) / projection PROPOSED |
 | `removal_state` | `revocation_local.removal_states.state` (P30) | PRESENT (f84) |
+| `control_state_basis` | names the source of `stop_state` and `removal_state`: the listed stop/removal rows, or the empty P25/P30 reader result when no row exists (`revocation/enforcement.py:80-86`) | PROPOSED |
 | `residual_inventory` | `admission_local.admission_positions.inventory` | PRESENT (f84) |
 | `dataset_qualification` | `research_local.history_datasets` verdict (QUALIFIED/LIMITED/UNRESOLVED) | MISSING as a health field (producer obligation) |
 
@@ -100,6 +101,11 @@ Invariant: a process label, heartbeat or liveness signal alone cannot fill worke
 requires the saved evaluation attempt, completion, next-work or wait reason and the pending
 reconciliation. A settled agent with no scheduler row is `UNKNOWN`, not `RUNNING`, exactly as
 `accounts/service_projection.py` already reports it.
+
+A consequential status or boolean (`stop_state`, `removal_state`, `pending_reconciliation`,
+`future_entries_active`) is `KNOWN` only with a named source. Without a source it is an explicit
+`UNKNOWN` with a reason, never `false` or `NONE`. `control_state_basis` names the source of the
+stop and removal state.
 
 `ExecutionService.status` (`execution/service.py:828-870`) already computes `HealthView`
 (`execution/types.py:321-332`) over owner-scoped rows: the two submission timestamps from

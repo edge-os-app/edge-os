@@ -38,6 +38,12 @@ Every claimed value recomputes from the listed rows:
   `cost_basis_raw`; `realized_result` copies its `realized_raw`; `native_gas` equals a listed receipt's
   `gas_used × effective_gas_price`; `deposits` copy a listed `funding_local.funding_flows` amount.
 
+Every row that supplies a known projected value appears in `record_refs` by its own id. A reference
+that merely resolves to a listed row is not enough: the contributing row must be the source of the
+value it is cited for. A consequential status or boolean (`stop_state`, `removal_state`,
+`pending_reconciliation`, `future_entries_active`) is `KNOWN` only with a named source; without one it
+is an explicit `UNKNOWN` with a reason (`control_state_basis` names the stop/removal source).
+
 The expected **direct projection** is the canonical object. The expected **conversation summary**
 renders from it and must agree on exact values, sources and unknowns.
 
@@ -60,7 +66,7 @@ renders from it and must agree on exact values, sources and unknowns.
 | `stop_sticky_after_restart` | stop/removal sticky after restart | `HALT_ALL_SWAPS` + `CONFIRMED` removal deny; residual = confirmed entry; realized 0; gas recomputed |
 | `owner_b_navigation_retarget_denied` | owner B / target navigation | `404`, no provider call, no retarget, `as_of: null` |
 | `context_corrected_disabled_cleared` | stale vs corrected/disabled/cleared context | versions 1-4 with record ids; no financial record changes |
-| `repeated_preview_same_action` | repeated preview and job/action identity | a QUEUED action gives an `ENQUEUED` job; the repeated call returns the same job; the PROPOSED preview binds the saved queued action |
+| `repeated_preview_same_action` | repeated preview and job/action identity | a QUEUED action gives an `ENQUEUED` job; the repeated call returns the same job; the PROPOSED preview binds the saved queued action; `future_entries_active` is `UNKNOWN` (no control record) |
 
 ## Independently calculated values
 
@@ -80,6 +86,8 @@ renders from it and must agree on exact values, sources and unknowns.
   `0`. The saved `dec-0002` decision is listed and summarized.
 - `repeated_preview_same_action`: a QUEUED action gives an `ENQUEUED` job (`execution/worker.py:410-414`).
   `job-0009` is `ENQUEUED` at `21:44:10`; `act-0009` is `QUEUED` (intent `21:44:05`, queue `21:44:10`).
+  No stop, removal or deployment row exists, so `future_entries_active` is
+  `{ "state": "UNKNOWN", "reason": "NO_CONTROL_RECORD" }`, never `false`.
 
 ## Event ordering and expired scope
 

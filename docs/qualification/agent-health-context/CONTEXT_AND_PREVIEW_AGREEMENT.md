@@ -84,7 +84,9 @@ For a consequential request, both channels use one preview shape (spec line 1421
 - the applicable permissions, reservations and limits;
 - the costs, and any unknown value as `UNKNOWN`, never zero;
 - the remaining exposure;
-- whether future entries stay active.
+- whether future entries stay active. This is `KNOWN` only from a named control record (a stop, a
+  removal or a deployment state). Without one it is `{ "state": "UNKNOWN", "reason": "NO_CONTROL_RECORD" }`,
+  never `false`.
 
 A read-only action preview is PROPOSED. It binds one `action_id` only when a saved action exists
 (`execution_local.execution_intents`, `execution_queue`). Before an action exists, the safe retained
