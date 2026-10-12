@@ -73,7 +73,7 @@ An unknown limit is not zero and does not release the action.
 1. One offline permitted preparation with **no signature**: persist decision, input, revision, mandate, intent, reservations, transaction/request references. The accepted adapter's candidate identity anchors the original action.
 2. Attach the approved policy to the agent wallet and the executor as an additional signer with the restrictive override policy. Confirm content hash equals `POLICY_CONTENT_HASH`.
 3. One provider-signed **positive control** the policy must allow.
-4. One isolated **independent denial** per [WORKED_CASES.md](WORKED_CASES.md), separate from any exhausted local counter.
+4. One isolated **independent denial** per [WORKED_CASES.md](WORKED_CASES.md), separate from any exhausted local counter. Each denial changes one guarded fact under a declared baseline so it is diagnostic; the `native_nonzero_fee` and `erc20_zero_value` baselines need their own approved policy content and signature budget (`REQUIRED_DECISION`).
 5. One **controlled action**: sign and broadcast one swap; capture receipt, decoded events and asset/accounting deltas.
 6. Interruption after possible submission, before completion recording: recover and reconcile the original action with **no second economic action and no replacement route**. Retain unknown capacity.
 7. Owner removal: remove the executor signer; record an independent post-removal denial not masked by an exhausted local counter.

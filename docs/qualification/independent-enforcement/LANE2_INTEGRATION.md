@@ -33,7 +33,7 @@ This note maps how lane 2 (#58 application composition) and the future P20 integ
 
 - **Original action identity.** The adapter candidate identity anchors the original action. Recovery and restart preserve it; no duplicate and no replacement route.
 - **Current-holdings reconciliation.** Record the input balance, output balance and native gas before the action. Different asset IDs are never summed. A confirmation consumes actual entry gas and keeps the retained exit hold.
-- **Expiry policy.** The Flow intent has no on-chain deadline. Local intent and mandate expiry live at `HOST`; they cannot revoke a broadcast. No calldata time condition is documented.
+- **Expiry policy.** The Flow intent has no on-chain deadline. Quote/input age and local intent and mandate expiry stay at `HOST`. Privy also documents the chain-agnostic `system.current_unix_timestamp` field, so a signing-time window is expressible; a fixed upper cutoff for `eth_signTransaction` is an inference, not a proved control, and a signing-time cutoff cannot revoke already signed or broadcast bytes.
 - **Residual exposure.** Unknown liability is never zero. Record remaining holdings or resting exposure and its separate cancellation authority.
 
 ## 5. Remaining financial and integration gates (separate authority)

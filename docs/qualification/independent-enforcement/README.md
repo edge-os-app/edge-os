@@ -9,7 +9,7 @@ It runs no provider request, creates no wallet, claims no faucet, signs nothing,
 ## Verdict
 
 - **DOCUMENTATION / PREPARATION: PASS within this scope.** The capability matrix maps each mandatory control to a source-backed independent-layer class. The administration analysis pins the owner/signer separation requirement. The worked vectors cover the positive and adversarial cases. The qualification packet is a concrete `NOT_RUN` proposal.
-- **Independent enforcement: `NOT_RUN`.** No provider call ran. The opaque `program` byte equality, the tuple-component calldata paths and the deployed `143` bytecode identity stay `UNKNOWN`. Position inventory stays `UNSUPPORTED` at the independent layer.
+- **Independent enforcement: `NOT_RUN`.** No provider call ran. The opaque `program` byte equality, the tuple-component calldata paths and the deployed `143` bytecode identity stay `UNKNOWN`. The chain-agnostic `system.current_unix_timestamp` time field is documented, but a fixed signing-time cutoff for this method is an inference; quote/input age and local mandate expiry stay `HOST`. Position inventory stays `UNSUPPORTED` at the independent layer.
 - **Boundary-only feasibility `PASS` may be accepted while actual enforcement is `NOT_RUN`.** A local `AUTHORED_POLICY_ALLOW` is never `PROVIDER_ACTUAL`.
 
 ## Documents
