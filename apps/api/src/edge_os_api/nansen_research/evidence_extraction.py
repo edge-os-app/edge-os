@@ -203,7 +203,10 @@ def extract_flow_evidence(fetches: Sequence[NansenFetch], window: ObservationWin
             conflict = True
             continue
         if start in intervals:
-            warnings.append("a duplicate complete start is not counted twice")
+            if intervals[start][1] != end:
+                conflict = True
+            else:
+                warnings.append("a duplicate complete start is not counted twice")
             continue
         intervals[start] = (start, end)
 

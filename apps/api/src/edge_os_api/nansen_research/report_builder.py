@@ -25,12 +25,53 @@ from edge_os_api.nansen_research.models import (
 
 _PACKAGE = "edge_os_api.nansen_research"
 
+# A small documented keyword map, not a language model. It reads the requested
+# claims from the question so the report can state truthfully what it answers.
+_CLAIM_KEYWORDS = (
+    ("inventory", ("holder", "address", "wallet", "hold", "held")),
+    ("concentration", ("concentrat", "distribut", "share of supply", "percentage of supply")),
+    ("flows", ("flow", "inflow", "outflow", "netflow", "net flow")),
+    ("buying", ("bought", "buy", "purchase", "accumulat", "sold", "sell", "pnl", "profit")),
+)
 
-def _answer_state(evidence: NansenEvidence) -> str:
+_CLAIM_FINDING_CODES = {
+    "inventory": ("HOLDER_INVENTORY", "HOLDER_PAGINATION", "HOLDER_LABELS"),
+    "concentration": ("CONCENTRATION",),
+    "flows": ("FLOW_CATEGORY", "FLOW_BUCKET_COVERAGE", "FLOW_COUNTS", "FLOW_DEX_CEX", "FLOW_PRICE", "FLOW_RECORDS"),
+    "buying": ("BUYING",),
+}
+
+_CLAIM_LIMITATIONS = {
+    "concentration": ("concentration", "a documented total supply and qualified matching balance units"),
+    "flows": ("whole_token_flows", "an all-holder flow output; the selected category is not all holders"),
+    "buying": ("buying", "trade or transfer records that evidence purchases"),
+}
+
+
+def classify_question(question: str) -> tuple[str, ...]:
+    """The requested claims the question names, by a documented keyword map."""
+    text = question.lower()
+    return tuple(claim for claim, words in _CLAIM_KEYWORDS if any(word in text for word in words))
+
+
+def _answer_state(evidence: NansenEvidence, claims: tuple[str, ...], findings: list[Finding]) -> str:
     """A truthful state for the adopted question under the returned evidence."""
-    if evidence.holder is None and evidence.flows is None:
+    verdict_by_code = {finding.code: finding.verdict for finding in findings}
+    if not claims:
+        if evidence.holder is None and evidence.flows is None:
+            return "UNAVAILABLE"
+        return "PARTIAL" if evidence.stop_reason is not None else "SUPPORTED_OBSERVATIONS"
+    answered = False
+    unresolved = False
+    for claim in claims:
+        verdicts = [verdict_by_code[code] for code in _CLAIM_FINDING_CODES[claim] if code in verdict_by_code]
+        if set(verdicts) & {"SUPPORTED", "LIMITED"}:
+            answered = True
+        if set(verdicts) & {"UNRESOLVED", "UNAVAILABLE"}:
+            unresolved = True
+    if not answered:
         return "UNAVAILABLE"
-    if evidence.stop_reason is not None:
+    if unresolved or evidence.stop_reason is not None:
         return "PARTIAL"
     return "SUPPORTED_OBSERVATIONS"
 
@@ -216,6 +257,7 @@ def _flow_findings(evidence: NansenEvidence, label: str) -> list[Finding]:
 
 def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenReport:
     """Build the deterministic report bound to the exact evidence package."""
+    claims = classify_question(request.question)
     findings: list[Finding] = []
     if evidence.holder is not None:
         findings.extend(_holder_findings(evidence))
@@ -223,24 +265,41 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
         findings.extend(_flow_findings(evidence, request.flow_query.label))
 
     all_refs = tuple(source.response_sha256 for source in evidence.sources if source.response_sha256)
-    findings.append(Finding(
-        code="CONCENTRATION", verdict="UNRESOLVED",
-        statement=("concentration percentages are unresolved; they need a documented total supply and "
-                   "qualified matching balance units."),
-        source_refs=all_refs,
-        limitations=()))
 
-    unsupported = (
-        Limitation(
-            claim="concentration",
-            missing_dependency="a documented total supply and qualified matching balance units",
-        ),
-        Limitation(
-            claim="whole_token_flows",
-            missing_dependency="an all-holder flow output; the selected category is not all holders",
-        ),
+    if "concentration" in claims:
+        findings.append(Finding(
+            code="CONCENTRATION", verdict="UNRESOLVED",
+            statement=("concentration percentages are unresolved; they need a documented total supply and "
+                       "qualified matching balance units."),
+            source_refs=all_refs, limitations=()))
+    if "buying" in claims:
+        findings.append(Finding(
+            code="BUYING", verdict="UNRESOLVED",
+            statement=("the returned holder and flow observations do not evidence buying; a purchase or "
+                       "accumulation claim needs trade or transfer records."),
+            source_refs=all_refs, limitations=()))
+    if "flows" in claims and evidence.flows is None:
+        findings.append(Finding(
+            code="FLOW_RECORDS", verdict="UNAVAILABLE",
+            statement="flow records were not requested for this run, so the flow question cannot be answered.",
+            source_refs=all_refs, limitations=()))
+    if "inventory" in claims and evidence.holder is None:
+        findings.append(Finding(
+            code="HOLDER_INVENTORY", verdict="UNAVAILABLE",
+            statement="holder records were not requested for this run, so the holder question cannot be answered.",
+            source_refs=all_refs, limitations=()))
+
+    limitations: tuple[Limitation, ...] = tuple(
+        Limitation(claim=name, missing_dependency=dependency)
+        for claim in ("concentration", "flows", "buying")
+        if claim in claims
+        for (name, dependency) in (_CLAIM_LIMITATIONS[claim],)
     )
-    answer_state = _answer_state(evidence)
+    if "flows" in claims and evidence.flows is None:
+        limitations = limitations + (
+            Limitation(claim="flow_records", missing_dependency="a flow request; flow records were not requested"),
+        )
+    answer_state = _answer_state(evidence, claims, findings)
 
     holder_rows = len(evidence.holder.rows) if evidence.holder is not None else 0
     flow_buckets = len(evidence.flows.buckets) if evidence.flows is not None else 0
@@ -282,7 +341,7 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
         request_sha256=request.sha256(),
         answer_state=answer_state,
         findings=tuple(findings),
-        limitations=unsupported,
+        limitations=limitations,
         coverage=coverage,
         unknowns=evidence.unknowns,
         source_hashes=tuple(source.response_sha256 for source in evidence.sources if source.response_sha256),

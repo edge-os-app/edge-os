@@ -148,3 +148,11 @@ def test_conflicting_intervals_make_complete_seconds_unavailable() -> None:
     ]
     evidence = extract_flow_evidence([_fetch("flows", support.flow_payload(overlapping))], support.window())
     assert evidence.complete_seconds is None
+
+
+def test_same_start_conflicting_intervals_are_unavailable_in_both_orders() -> None:
+    first = support.flow_bucket("2026-10-06T10:00:00Z", bucket_end="2026-10-06T11:00:00Z")
+    second = support.flow_bucket("2026-10-06T10:00:00Z", bucket_end="2026-10-06T12:00:00Z")
+    for order in ([first, second], [second, first]):
+        evidence = extract_flow_evidence([_fetch("flows", support.flow_payload(order))], support.window())
+        assert evidence.complete_seconds is None

@@ -111,9 +111,11 @@ Finding codes and permitted verdicts:
 | `FLOW_COUNTS` | `UNRESOLVED` | Fractional or negative values present; not event or amount counts. |
 | `FLOW_DEX_CEX` | `UNAVAILABLE` | Every field null for a non-exchange label. Never zero. |
 | `FLOW_PRICE` | `UNRESOLVED` | Daily median or current-day spot; not an hourly price. |
+| `FLOW_RECORDS` | `UNAVAILABLE` | The question asks for flow records but the run did not request them. |
+| `BUYING` | `UNRESOLVED` | The question asks about buying; flows and transfers do not evidence a purchase. |
 | `CONCENTRATION` | `UNRESOLVED` | Needs a documented supply and qualified units. |
 
-`answer_state` is one of `SUPPORTED_OBSERVATIONS`, `PARTIAL` or `UNAVAILABLE`. It states how far the returned evidence answers the adopted question. `limitations[]` names the computed claims this package cannot support for the returned data (`concentration`, `whole_token_flows`) with their missing dependency. It never relabels the user's own question. This supersedes the initial draft `unsupported_questions` field, which mislabelled an unrelated supported question.
+`answer_state` is computed from the claims the question names, by a small documented keyword map (`inventory`, `concentration`, `flows`, `buying`). `SUPPORTED_OBSERVATIONS` means every named claim has a supported or limited finding and no stop; `PARTIAL` means a claim is unresolved or unavailable or a stop occurred; `UNAVAILABLE` means no named claim is supported. A claim with no collected evidence gets its own explicit finding (`FLOW_RECORDS`, `HOLDER_INVENTORY`, `BUYING`). `limitations[]` names each unresolved named claim (`concentration`, `whole_token_flows`, `buying`) with its missing dependency. The question text is preserved exactly and is never used as a claim label. This supersedes the initial draft, which mislabelled an unrelated supported question.
 
 ## Local resource/fault matrix (frozen)
 
@@ -142,7 +144,8 @@ Finding codes and permitted verdicts:
 | Partial page (`is_last_page=false`) | Record limited pagination; uncollected rows unknown. |
 | Duplicate bucket or row | Record a duplicate; never double count. Complete seconds count each unique interval once. |
 | Duplicate operation | Refuse at input validation; do not attach a discarded response to a finding. |
-| Overlapping or reversed intervals | Complete seconds become unavailable (`null`) rather than a wrong total. |
+| Overlapping or reversed intervals | Complete seconds become unavailable (`null`) rather than a wrong total. This covers two complete buckets that share a start but have different ends. |
+| Malformed credit header | Never trust the malformed text. Keep the other valid header facts and the response hash; the malformed value stays `null`. |
 | Missing expected bucket | Record the missing start; coverage stays limited. |
 | Incomplete bucket | Keep visible; exclude from complete totals. |
 | Stale or future evidence | Classify with the D01 awareness rule; never silently fresh. |

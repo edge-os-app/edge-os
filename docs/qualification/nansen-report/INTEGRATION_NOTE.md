@@ -61,7 +61,7 @@ Error text is sanitized. A caller sees a stable code; no response body, header o
 - Record the run id, the attempt count, the committed, quoted and deducted credits, and the request/response hashes. The committed total uses the settled charge when the provider reported one, else the conservative reservation.
 - A caps breach, a terminal provider failure, a cancellation or a deadline stops the run before the next operation and keeps the partial result. It never increases the cap or retries.
 - A received provider failure keeps its status, allowlisted headers and response hash on the failure record. A pre-dispatch denial keeps those fields null.
-- `answer_state` states how far the evidence answers the adopted question. `limitations` names the computed claims this package cannot support; it does not relabel the question.
+- `answer_state` reads the claims the question names (inventory, concentration, flows, buying) and reports `SUPPORTED_OBSERVATIONS`, `PARTIAL` or `UNAVAILABLE`. `limitations` names each unresolved named claim. A claim with no collected evidence gets an explicit finding (`FLOW_RECORDS` when flows were not requested, `BUYING` for a buying question). The question text is preserved and never relabelled.
 
 ## Actual versus fixture labels
 

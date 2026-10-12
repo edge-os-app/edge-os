@@ -145,3 +145,16 @@ def test_duplicate_operations_are_refused_at_the_run_seam() -> None:
     with pytest.raises(NansenRequestError) as info:
         support.run(support.request(operations=("holders", "holders")), [])
     assert info.value.code == "OPERATIONS_DUPLICATE"
+
+
+def test_a_malformed_credit_header_keeps_valid_provenance_and_is_not_trusted() -> None:
+    headers = {"X-Request-Id": "req-123", "X-Nansen-Credits-Cost": "nonsense", "X-Nansen-Credits-Used": "1"}
+    run = support.run(support.request(operations=("holders",)),
+                      [support.response(200, _holders(), headers)])
+    source = run.evidence.sources[0]
+    assert run.evidence.holder is not None
+    assert source.status == 200
+    assert source.request_id == "req-123"
+    assert source.quoted_credits is None
+    assert source.deducted_credits == "1"
+    assert source.response_sha256

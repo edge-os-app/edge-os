@@ -54,7 +54,7 @@ def test_limitations_name_the_claim_not_the_question() -> None:
     claims = {item.claim for item in report.limitations}
     assert claims == {"concentration", "whole_token_flows"}
     assert all(item.missing_dependency for item in report.limitations)
-    assert report.answer_state == "SUPPORTED_OBSERVATIONS"
+    assert report.answer_state == "PARTIAL"
 
 
 def test_a_supported_question_is_not_relabelled_unresolved() -> None:
@@ -64,8 +64,40 @@ def test_a_supported_question_is_not_relabelled_unresolved() -> None:
                       [support.response(200, holders)])
     assert run.report.question == question
     assert run.report.answer_state == "SUPPORTED_OBSERVATIONS"
-    claims = {item.claim for item in run.report.limitations}
-    assert claims == {"concentration", "whole_token_flows"}
+    assert run.report.limitations == ()
+
+
+def test_a_buying_question_is_unresolved_and_explicit() -> None:
+    question = "Which wallets bought MOE?"
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    run = support.run(support.request(question=question, operations=("holders",)),
+                      [support.response(200, holders)])
+    verdicts = {finding.code: finding.verdict for finding in run.report.findings}
+    assert verdicts["BUYING"] == "UNRESOLVED"
+    assert run.report.answer_state == "PARTIAL"
+    assert run.report.question == question
+    assert "buying" in {item.claim for item in run.report.limitations}
+
+
+def test_a_flow_question_without_flow_records_is_unavailable() -> None:
+    question = "What do qualified basic flow records show?"
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    run = support.run(support.request(question=question, operations=("holders",)),
+                      [support.response(200, holders)])
+    verdicts = {finding.code: finding.verdict for finding in run.report.findings}
+    assert verdicts["FLOW_RECORDS"] == "UNAVAILABLE"
+    assert run.report.answer_state == "UNAVAILABLE"
+    assert run.report.question == question
+
+
+def test_a_concentration_question_is_unresolved_not_answered() -> None:
+    question = "How concentrated are MOE current holdings?"
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    run = support.run(support.request(question=question, operations=("holders",)),
+                      [support.response(200, holders)])
+    verdicts = {finding.code: finding.verdict for finding in run.report.findings}
+    assert verdicts["CONCENTRATION"] == "UNRESOLVED"
+    assert run.report.answer_state == "PARTIAL"
 
 
 def test_report_never_claims_buying_or_alpha() -> None:

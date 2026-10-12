@@ -99,16 +99,6 @@ class NansenFetch:
     payload: dict
 
 
-def _credit(text: str | None) -> str | None:
-    if text is None:
-        return None
-    try:
-        Decimal(text.strip())
-    except (InvalidOperation, AttributeError) as error:
-        raise NansenContractError("MALFORMED_PROVIDER_RESPONSE", "a credit header is not numeric") from error
-    return text
-
-
 def _safe_credit(text: str | None) -> str | None:
     if text is None:
         return None
@@ -292,9 +282,9 @@ class NansenClient:
             request_sha256=request_sha,
             status=response.status,
             request_id=retained.get("x-request-id"),
-            quoted_credits=_credit(retained.get("x-nansen-credits-cost")),
-            deducted_credits=_credit(retained.get("x-nansen-credits-used")),
-            remaining_credits=_credit(retained.get("x-nansen-credits-remaining")),
+            quoted_credits=_safe_credit(retained.get("x-nansen-credits-cost")),
+            deducted_credits=_safe_credit(retained.get("x-nansen-credits-used")),
+            remaining_credits=_safe_credit(retained.get("x-nansen-credits-remaining")),
             retry_after=retained.get("retry-after"),
             response_sha256=response_hash,
             collected_at=self._clock(),
