@@ -1601,3 +1601,88 @@ def test_a_result_file_larger_than_the_limit_is_not_read(tmp_path: Path, monkeyp
 
     assert (result.status, result.error_class) == ("UNKNOWN", "ContainerResultUnreadable")
     assert all(n <= 1024 + 1 for n in reads), "the host read more of the result than the limit allows"
+
+
+# --- Repairs after round-14 reviews: an over-limit stdout is dropped whole; errors carry no names -------------------
+
+@pytest.mark.parametrize("back", [1, 25, 49])
+def test_an_over_limit_stdout_keeps_no_part_of_the_credential_wherever_it_sits(tmp_path: Path, monkeypatch, back: int) -> None:
+    import guarded_docker_runner as module
+    from leak_scan import encodings
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    longest = max(len(form) for form in encodings(OLD))
+    real_popen = subprocess.Popen
+
+    class Loud:
+        returncode = 0
+
+        def __init__(self, argv, **kw) -> None:
+            self.sink = kw.get("stdout")
+
+        def communicate(self, timeout=None):  # the credential starts just before any cut point the host might choose
+            for cut in (module.MAX_STDOUT_BYTES, module.MAX_STDOUT_BYTES - (longest - 1)):
+                self.sink.seek(cut - back)
+                self.sink.write(OLD.encode())
+            self.sink.seek(module.MAX_STDOUT_BYTES + 4096)
+            self.sink.write(b"end")
+            self.sink.flush()
+            return None, None
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Loud(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    kept = b"".join(p.read_bytes() for p in (tmp_path / "evidence").rglob("*stdout*") if p.is_file())
+    assert OLD.encode()[:back] not in kept or back < 8, "a part of the credential stayed"
+    assert OLD.encode()[:8] not in kept
+
+
+def test_a_job_that_makes_a_rename_fail_cannot_put_the_credential_into_a_raised_error(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+    import traceback
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def behaviour(output: Path) -> None:
+        named = output / f"dir-{OLD}"
+        named.mkdir()
+        (named / "inner.log").write_text("x")
+        blocker = output / f"redacted-name-{hashlib.sha256(named.name.encode()).hexdigest()[:8]}"
+        blocker.mkdir()  # a non-empty folder where the old code would rename to: the rename fails
+        (blocker / "keep").write_text("x")
+
+    install_process(monkeypatch, behaviour)
+    runner, _, _ = build(tmp_path, credential)
+
+    try:
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+        printed = ""
+    except BaseException as error:  # noqa: BLE001
+        printed = "".join(traceback.format_exception(error))
+
+    assert OLD not in printed, "the credential reached a raised error"
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+    assert not [p for p in (tmp_path / "evidence").rglob("*") if OLD in p.name]
+
+
+def test_an_os_error_that_names_the_credential_never_reaches_a_raised_error(tmp_path: Path, monkeypatch) -> None:
+    import traceback
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    install_process(monkeypatch, lambda output: (output / f"dir-{OLD}").mkdir())
+    real_rename = os.rename
+
+    def failing_rename(src, dst, *args, **kwargs):
+        if OLD in str(src):
+            raise OSError(66, "Directory not empty", str(src))  # an OS error carries the file name in its message
+        return real_rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rename", failing_rename)
+    runner, _, _ = build(tmp_path, credential)
+
+    with pytest.raises(EvidenceNotSealed) as failure:
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert OLD not in "".join(traceback.format_exception(failure.value)), "the credential reached a raised error"

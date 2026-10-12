@@ -229,7 +229,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             raw = os.fsencode(name)  # a name that is not valid text is still bytes
             if any(form in raw for form in forms):  # rename BEFORE descending, so the folder's files are still sealed
                 found[0] = True
-                renamed = f"redacted-name-{hashlib.sha256(raw).hexdigest()[:8]}"
+                renamed = f"redacted-name-{hashlib.sha256(raw).hexdigest()[:8]}-{uuid.uuid4().hex[:8]}"  # unique: no collision
                 os.rename(name, renamed, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
                 name = renamed
             if stat.S_ISDIR(mode):
@@ -321,7 +321,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             output.rename(held)
             held.chmod(0o700)
         except OSError as error:
-            raise EvidenceNotSealed("evidence that may hold the credential could not be removed or moved") from error
+            raise EvidenceNotSealed(f"evidence that may hold the credential could not be removed or moved ({type(error).__name__})") from None
         if interrupt is not None:
             raise interrupt
         raise EvidenceNotSealed(f"evidence that may hold the credential was not removed in time; it is in the private folder {held.name}")
@@ -346,8 +346,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         except BaseException as error:
             self._quarantine(output, plan)
             if isinstance(error, EvidenceNotSealed):
-                raise
-            raise EvidenceNotSealed("the evidence could not be sealed") from error
+                raise EvidenceNotSealed(str(error)) from None  # its cause may name a file that holds the credential
+            raise EvidenceNotSealed(f"the evidence could not be sealed ({type(error).__name__})") from None
 
     # --- Stopping the container ------------------------------------------------------------------------------------
 
@@ -416,18 +416,20 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     @staticmethod
     def _cap_stdout(sink: Any, returned: bytes | None, secret: str | None) -> None:
-        """Keep at most MAX_STDOUT_BYTES of the job's output. Cutting a file is one step, whatever its size.
+        """Keep the job's output only if it fits in MAX_STDOUT_BYTES; otherwise drop it whole and leave a note.
 
-        The cut backs off by the length of the longest form of the credential, less one byte, so an occurrence that
-        crosses the limit is dropped whole and no part of it stays. Whole occurrences before the cut are sealed later.
+        Dropping, not cutting: a cut at any offset could split the credential, and a split part is not found by sealing.
+        Emptying a file is one step, whatever its size. `secret` is unused and kept for the callers' symmetry.
         """
         if returned:  # a process that handed its output back instead of writing it to the file
-            sink.write(returned[:MAX_STDOUT_BYTES])
+            if len(returned) <= MAX_STDOUT_BYTES:
+                sink.write(returned)
+            else:
+                sink.write(b"x" * (MAX_STDOUT_BYTES + 1))  # marks the file as over the limit, so it is dropped below
         sink.flush()
-        size = os.fstat(sink.fileno()).st_size
-        if size > MAX_STDOUT_BYTES:
-            longest = max((len(form) for form in encodings(secret)), default=1) if secret else 1
-            os.ftruncate(sink.fileno(), max(0, MAX_STDOUT_BYTES - (longest - 1)))
+        if os.fstat(sink.fileno()).st_size > MAX_STDOUT_BYTES:
+            os.ftruncate(sink.fileno(), 0)
+            os.pwrite(sink.fileno(), b"[the job's output was larger than 1 MiB and was not kept]\n", 0)
 
     # --- One turn -------------------------------------------------------------------------------------------------
 
@@ -449,7 +451,10 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 self._quarantine(output, plan)  # raises EvidenceNotSealed unless the folder was removed
                 if isinstance(failure, Exception) and not isinstance(failure, EvidenceNotSealed):  # say it, with the cause
                     detail = str(cleanup_error) if isinstance(cleanup_error, EvidenceNotSealed) else type(cleanup_error).__name__
-                    raise EvidenceNotSealed(f"the turn failed and its container or evidence could not be secured ({detail})") from failure
+                    secured = EvidenceNotSealed(f"the turn failed and its container or evidence could not be secured ({detail})")
+                    if isinstance(failure, OSError):  # an OS error may name a file that holds the credential
+                        raise secured from None
+                    raise secured from failure
             raise  # an interrupt, a failure already reported as EvidenceNotSealed, or one after which all was secured
         try:
             self._confirm_stopped(plan, launch)
@@ -458,8 +463,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         except BaseException as error:
             self._quarantine(output, plan)
             if isinstance(error, EvidenceNotSealed):
-                raise
-            raise EvidenceNotSealed("the evidence could not be sealed") from error
+                raise EvidenceNotSealed(str(error)) from None
+            raise EvidenceNotSealed(f"the evidence could not be sealed ({type(error).__name__})") from None
         return result
 
     def _run_container(self, turn: HermesTurn, task_dir: Path, plan: _TurnPlan, private: Path, launch: _Launch) -> HermesTurnResult:
