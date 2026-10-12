@@ -44,13 +44,13 @@ test("HTTP-client dataset and reopened Nansen report; owner B denied", async ({ 
   await expect(view.getByTestId("nansen-question")).toHaveText(`Question: ${question}`);
   await expect(view.getByTestId("nansen-findings")).toContainText("Unresolved");
   await expect(view.getByTestId("nansen-coverage")).toContainText("3 holder address records (not people, not amounts)");
-  await expect(view.getByTestId("nansen-coverage")).toContainText("24 of 24 flow periods");
+  await expect(view.getByTestId("nansen-coverage")).toContainText("24 of 25 flow periods · 1 missing");
   await expect(view.getByTestId("nansen-hashes")).toContainText("Saved hashes recomputed and matched. Evidence class AUTHORED_FIXTURE.");
   const jobView = (await apiGet(page, token, `/v1/research/investigation-jobs/${run.nansenJobId}`)).body;
   const reportId = jobView.nansen_report.report_id;
-  const saved = (await apiGet(page, token, `/v1/research/nansen-reports/${reportId}`)).body;
-  expect(saved.content.report.question).toBe(question);
-  expect(Object.values(saved.hashes_verified).every(Boolean)).toBe(true);
+  const reopened = (await apiGet(page, token, `/v1/research/nansen-reports/${reportId}`)).body;
+  expect(reopened.content.report.question).toBe(question);
+  expect(Object.values(reopened.hashes_verified).every(Boolean)).toBe(true);
   expect(jobView.budget.consumed.nansen_credits).toBe(6);
   expect(jobView.budget.unknown_liability.nansen_credits).toBe(0);
   await shot(page, project, "p4-nansen-report");
@@ -62,5 +62,5 @@ test("HTTP-client dataset and reopened Nansen report; owner B denied", async ({ 
     `/v1/research/requests/${run.intakeId}/nansen-reports`, `/v1/research/history-datasets/${datasetId}`]) {
     expect((await apiGet(page, tokens.b, route)).status, route).toBe(404);
   }
-  record(`ports-${project}`, { datasetId, reportId, reportSha256: saved.content_sha256, question });
+  record(`ports-${project}`, { datasetId, reportId, reportSha256: reopened.content_sha256, question });
 });
