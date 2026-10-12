@@ -2880,8 +2880,9 @@ def test_a_concurrent_recovery_right_after_registration_never_takes_the_new_turn
 
     runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
-    records, output_kept = seen[0]
-    assert len(records) == 1 and records[0]["state"] == "running" and output_kept and launched
+    records, _output_not_made_yet = seen[0]  # the output folder is made only after registration
+    assert len(records) == 1 and records[0]["state"] == "running" and launched  # not taken for one left behind
+    assert next((tmp_path / "evidence").glob("turn-*/output")).exists()
 
 
 # --- Repair after round-28 review A3: recovery decides on each record's current content, never on a stale listing ---
@@ -3209,3 +3210,78 @@ def test_repeated_failed_writes_in_a_folder_that_refuses_rename_and_removal_leav
     assert len(leftovers) <= 1, leftovers  # one per record at most, never one per failure
     assert stops == [] and _json.loads(path.read_text())["attempts"] == 0
     assert result.error_class == "CleanupPending"
+
+
+
+def test_repeated_new_requests_in_a_folder_that_refuses_rename_and_removal_leave_at_most_one_leftover(
+        tmp_path: Path, monkeypatch) -> None:
+    """Round-31 review A1: each NEW turn has a new record name; a failed registration must not leave one more file per
+    request, and must not hold a never-sent reservation as UNKNOWN."""
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    real_unlink = module.os.unlink
+
+    def refuse_temporaries(target, *args, **kwargs):
+        name = Path(target).name
+        if Path(target).parent == folder and name.startswith(".") and not name.endswith(".lock"):
+            raise PermissionError("removal refused")
+        return real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "replace", lambda source, dest: (_ for _ in ()).throw(PermissionError("rename refused")))
+    monkeypatch.setattr(module.os, "unlink", refuse_temporaries)
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, spend, guarded = build(tmp_path, credential)
+
+    results = [guarded.run_turn(Turn(f"attempt-{index}", "prompt", "task", "m", "route", 4096)) for index in range(10)]
+
+    leftovers = [p.name for p in folder.iterdir() if not p.name.endswith(".lock")]
+    assert len(leftovers) <= 1, leftovers
+    assert launched == [] and all(result.request_count == 0 for result in results)
+    assert results[0].error_class == "CleanupStorageUnwritable"
+    assert all(result.error_class == "CleanupPending" for result in results[1:])  # the leftover blocks the rest
+    assert spend.committed_usd() == Decimal("0")  # nothing was sent, so nothing is held as unknown
+
+
+def test_a_hard_link_at_the_temporary_name_is_never_written_through(tmp_path: Path) -> None:
+    folder = tmp_path / "pending-cleanup"
+    folder.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not a record")
+    os.link(outside, folder / ".turn-01-old.json.tmp")
+
+    with pytest.raises(PermissionError):
+        GuardedDockerTurnRunner._write_record(folder / "turn-01-old.json", {"state": "pending"})
+
+    assert outside.read_text() == "not a record" and not (folder / "turn-01-old.json").exists()
+
+
+def test_repeated_new_requests_in_a_folder_that_refuses_every_new_file_leave_nothing_and_hold_nothing(
+        tmp_path: Path, monkeypatch) -> None:
+    """A pending folder that refuses to create any file: no lock, no record, no turn folder, per request."""
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    real_open = module.os.open
+
+    def refuse_new_files(target, flags, *args, **kwargs):
+        if Path(target).parent == folder and flags & os.O_CREAT:
+            raise PermissionError("no new files here")
+        return real_open(target, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", refuse_new_files)
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, spend, guarded = build(tmp_path, credential)
+
+    results = [guarded.run_turn(Turn(f"attempt-{index}", "prompt", "task", "m", "route", 4096)) for index in range(10)]
+
+    assert launched == [] and all(result.request_count == 0 for result in results)
+    assert results[0].error_class == "CleanupStorageUnwritable"
+    assert all(result.error_class == "CleanupPending" for result in results[1:])
+    assert list(folder.iterdir()) == [] and list((tmp_path / "evidence").glob("turn-*")) == []
+    assert spend.committed_usd() == Decimal("0")
+    monkeypatch.setattr(module.os, "open", real_open)  # the folder works again: a probe write clears the block
+    assert guarded.run_turn(Turn("attempt-again", "prompt", "task", "m", "route", 4096)).error_class != "CleanupPending"

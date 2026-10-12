@@ -270,6 +270,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         self.policy, self.credential_file, self.seal_grace_seconds = policy, credential_file, seal_grace_seconds
         self.recovery_budget_seconds = recovery_budget_seconds
         self._admission_failures: dict[str, str] = {}  # record name -> error class of its last failed admission
+        self._storage_failed = False  # a registration could not be written: no new turn until a probe write works
         self._turn_lock = threading.Lock()
         self._token = uuid.uuid4().hex[:6]  # two runner objects with one run_id must not share container names
 
@@ -628,8 +629,11 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         """
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.tmp")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)  # no O_TRUNC before the link check
         try:
+            if os.fstat(fd).st_nlink != 1:  # another name points at this file: never write through it
+                raise PermissionError("the temporary record file has another link")
+            os.ftruncate(fd, 0)
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 json.dump(data, stream, sort_keys=True)
             os.replace(temporary, path)
@@ -695,6 +699,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         try:
             if not os.path.lexists(record):
                 cls._lock_path(record).unlink(missing_ok=True)
+        except OSError:
+            pass  # a folder that refuses removal keeps the lock file; a leftover temporary file then blocks new turns
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
@@ -711,6 +717,44 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             if data is None or data.get("run_id") == self.run_id:  # an unreadable record is treated as ours: it blocks
                 found.append((path, data))
         return found
+
+    def _storage_writable(self) -> bool:
+        """After a failed registration, new turns wait until one write to a FIXED probe name works and is removed, so a
+        folder that refuses writes or removal collects nothing more than that one probe (or nothing at all)."""
+        if not self._storage_failed:
+            return True
+        probe = self._pending_folder() / ".storage-probe"  # never matches the record listing (*.json)
+        try:
+            self._write_record(probe, {"probe": True})
+            os.unlink(probe)
+        except OSError:
+            return False
+        self._storage_failed = False
+        return True
+
+    def _unremovable_temporaries(self) -> list[str]:
+        """Temporary record files left by failed writes that still cannot be removed. They block new work, so a folder
+        that refuses removal (append-only, a full disk) never collects more than this one leftover; each is removed
+        under its record's lock when the folder allows it."""
+        folder = self._pending_folder()
+        if not folder.is_dir():
+            return []
+        left = []
+        for temporary in sorted(folder.glob(".*.json.tmp")):
+            record = temporary.with_name(temporary.name[1:-len(".tmp")])
+            fd = self._try_lock(record)
+            if fd is None:
+                continue  # its record's writer holds the lock now: not a leftover
+            try:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    left.append(temporary.name)
+            finally:
+                self._release(record, fd)
+        return left
 
     def _blocking_records(self) -> list[Path]:
         """Records that block new work: everything of this run except the turns this very process is executing now.
@@ -961,23 +1005,29 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         new work starts (CleanupPending, nothing sent). The turn is registered as pending cleanup before the job starts,
         and the record is removed only when the turn ends cleanly."""
         self.recover_pending(self.recovery_budget_seconds)
-        if self._blocking_records():
+        if self._blocking_records() or self._unremovable_temporaries() or not self._storage_writable():
             return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
                                     observed={"guard_admitted": 0}, error_class="CleanupPending")
         plan = self._plan()
         task_dir = self.evidence_dir / f"turn-{plan.sequence:02d}-{turn.attempt_id}"
         output = task_dir / "output"
-        output.mkdir(parents=True)
         record = self._pending_folder() / f"{task_dir.name}.json"
         with _ACTIVE_LOCK:  # this process's own live turn: it does not block its own runner
             _ACTIVE_RECORDS.add(str(record))
         lock = None
         try:
-            lock = self._try_lock(record)  # held for the whole turn, BEFORE the record exists: a live owner
+            try:
+                lock = self._try_lock(record)  # held for the whole turn, BEFORE the record exists: a live owner
+                if lock is not None:
+                    self._register(plan, task_dir)
+            except OSError:  # no durable record, so no job and nothing sent; later turns wait for a working write
+                self._storage_failed = True
+                return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
+                                        observed={"guard_admitted": 0}, error_class="CleanupStorageUnwritable")
             if lock is None:
                 raise EvidenceNotSealed(f"the pending-cleanup lock of {record.name} is held by someone else")
+            output.mkdir(parents=True)  # only once the turn is durably registered
             try:
-                self._register(plan, task_dir)
                 result = self._run_turn_steps(turn, plan, task_dir, output)
             except BaseException:
                 self._mark_pending(record, task_dir)
