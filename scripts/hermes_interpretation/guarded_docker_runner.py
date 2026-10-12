@@ -24,6 +24,7 @@ import itertools
 import json
 import math
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -50,6 +51,27 @@ MAX_CREDENTIAL_BYTES = 64 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024  # a result file larger than this is not read: the turn ends as UNKNOWN
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
+
+
+_JSON_ESCAPE = re.compile(rb"\\u([0-9a-fA-F]{4})|\\([\"\\/])")
+
+
+def _json_unescaped(data: bytes) -> bytes:
+    """`data` with JSON string escapes undone (\\uXXXX, \\", \\\\, \\/), in one linear pass. Not a JSON parser."""
+    def undo(match: re.Match[bytes]) -> bytes:
+        if match.group(1) is not None:
+            return chr(int(match.group(1), 16)).encode("utf-8", "surrogatepass")
+        return match.group(2)
+    return _JSON_ESCAPE.sub(undo, data)
+
+
+def holds_credential(data: bytes, forms: list[bytes]) -> bool:
+    """The one test for "these bytes hold the credential": any form, any case, raw or with JSON escapes undone."""
+    if not forms:
+        return False
+    lowered = [form.lower() for form in forms]
+    raw, unescaped = data.lower(), _json_unescaped(data).lower()
+    return any(form in raw or form in unescaped for form in lowered)
 
 
 class EvidenceNotSealed(RuntimeError):
@@ -270,10 +292,13 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             data = b"".join(chunks)
         finally:
             os.close(fd)
-        if not any(form in data for form in forms):
+        if not holds_credential(data, forms):
             return False
         for form in forms:
             data = data.replace(form, REDACTED.encode())
+        if holds_credential(data, forms):  # a copy that replacing cannot reach (case, JSON escapes): the file goes whole
+            os.unlink(name, dir_fd=dir_fd)
+            return True
         out = open_nofollow(os.O_WRONLY)
         try:
             after = os.fstat(out)
@@ -520,13 +545,18 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         if proc.returncode != 0:
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerExit")
-        raw = self._read_result(output, plan)
-        if raw is None:
+        read = self._read_result(output, plan)
+        if read is None:  # sealing removes a result that held the credential, so say why it is gone
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
-                                    error_class="ContainerResultUnreadable")
-        if plan.secret and self._holds_secret(raw, plan.secret):  # JSON escapes can hide it from the byte-level scan
+                                    error_class="CredentialEchoed" if echoed else "ContainerResultUnreadable")
+        raw, data = read
+        # The same test as sealing, on the same bytes: decoding can undo escapes that hid a form from a plain byte scan.
+        if plan.secret and holds_credential(data, encodings(plan.secret)):
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="CredentialEchoed")
+        if time.monotonic() > plan.deadline:  # the checks above are linear, but the deadline still decides
+            return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
+                                    error_class="ContainerResultUnreadable")
         try:
             mapped = self._map(raw)
             guard = raw["guard"]
@@ -540,30 +570,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             return replace(mapped, status="UNKNOWN", text=None, error_class="CredentialEchoed")
         return mapped
 
-    @staticmethod
-    def _holds_secret(value: Any, secret: str) -> bool:
-        """True when any decoded string of the result, key or value, at any depth, holds the credential in any form.
-
-        It uses the same forms as sealing (`leak_scan.encodings`), compared without regard to case, so the two checks
-        agree on what "holds the credential" means. Decoding can undo escapes that hid a form from the byte scan.
-        """
-        forms = [form.lower() for form in encodings(secret)]
-        pending = [value]
-        while pending:
-            item = pending.pop()
-            if isinstance(item, str):
-                data = item.encode("utf-8", "surrogatepass").lower()
-                if any(form in data for form in forms):
-                    return True
-            elif isinstance(item, dict):
-                pending.extend(item.keys())
-                pending.extend(item.values())
-            elif isinstance(item, list):
-                pending.extend(item)
-        return False
-
     @classmethod
-    def _read_result(cls, output: Path, plan: _TurnPlan) -> dict[str, Any] | None:
+    def _read_result(cls, output: Path, plan: _TurnPlan) -> tuple[dict[str, Any], bytes] | None:
         """Read the job's result file within the deadline: no link followed, no blocking, a plain file of bounded size.
 
         Returns None when the file is missing, is not a plain file, is too large, cannot be parsed, or the deadline passed.
@@ -595,4 +603,4 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             parsed = json.loads(data.decode("utf-8"))
         except (ValueError, RecursionError, UnicodeDecodeError):
             return None
-        return parsed if isinstance(parsed, dict) else None
+        return (parsed, data) if isinstance(parsed, dict) else None

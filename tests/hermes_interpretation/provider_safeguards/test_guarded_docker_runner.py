@@ -1728,3 +1728,79 @@ def test_an_encoded_credential_hidden_by_one_json_escape_is_caught_after_decodin
     result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
     assert (result.status, result.error_class, result.text) == ("UNKNOWN", "CredentialEchoed", None)
+
+
+# --- Repairs after round-17 reviews: escaped copies leave the saved evidence too; the decoded check is fast ----------
+
+def decoded_json_holds(root: Path, secret: str) -> list[str]:
+    """Independent oracle: every saved file that parses as JSON, decoded, must not contain the credential."""
+    import json as json_module
+    found = []
+    for path in root.rglob("*"):
+        if not path.is_file() or path.is_symlink() or path.name in {"input.json", "credential"}:
+            continue
+        try:
+            pending = [json_module.loads(path.read_text())]
+        except (ValueError, UnicodeDecodeError):
+            continue
+        while pending:  # walk the decoded strings themselves: re-encoding would escape quotes again
+            item = pending.pop()
+            if isinstance(item, str) and secret in item:
+                found.append(str(path.relative_to(root)))
+                break
+            if isinstance(item, dict):
+                pending.extend(list(item.keys()) + list(item.values()))
+            elif isinstance(item, list):
+                pending.extend(item)
+    return found
+
+
+QUOTED = 'sk-test-DUMMY"QUOTE\\0a1b2c3d4e5f60718293a4b5'  # a credential with a quote and a backslash
+
+
+@pytest.mark.parametrize("case", ["one-escape", "json-dumps-of-a-quoted-credential"])
+def test_a_credential_that_only_decoding_reveals_does_not_stay_in_the_saved_result(tmp_path: Path, monkeypatch, case: str) -> None:
+    import json as json_module
+    secret = OLD if case == "one-escape" else QUOTED
+    credential = tmp_path / "credential"
+    credential.write_text(secret)
+    if case == "one-escape":
+        body = '{"hermes": {"text": "' + OLD[:5] + "\\u%04x" % ord(OLD[5]) + OLD[6:] + '"}, "guard": {}}'
+    else:
+        body = json_module.dumps({"hermes": {"text": secret}, "guard": {}})  # the job's own trusted encoder
+
+    install_process(monkeypatch, lambda output: (output / "container-result.json").write_text(body), returncode=0)
+    runner, _, _ = build(tmp_path, credential)
+
+    result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert result.error_class == "CredentialEchoed"
+    assert decoded_json_holds(tmp_path / "evidence", secret) == [], "a saved file still decodes to the credential"
+
+
+def test_checking_a_result_of_a_million_tiny_strings_cannot_run_the_turn_past_its_deadline(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    count = (module.MAX_RESULT_BYTES - 64) // 3
+    body = '{"hermes": {}, "guard": {}, "x": [' + ",".join(['""'] * count) + "]}"
+    real_popen = subprocess.Popen
+
+    class Late:  # the job writes its result and finishes right at the end of its timeout
+        returncode = 0
+
+        def __init__(self, argv, **_kw) -> None:
+            self.output = output_folder(argv)
+
+        def communicate(self, timeout=None):
+            if not getattr(self, "done", False):  # only the job wait; later reaping returns at once
+                self.done = True
+                (self.output / "container-result.json").write_text(body)
+                time.sleep(max(0.0, (timeout or 0) - 0.3))
+            return None, None
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Late(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=1.0)
+
+    status, elapsed = _timed_run(runner)
+    assert elapsed <= 1.0 + 1.0 + 0.25, (status, elapsed)
