@@ -60,18 +60,34 @@ RESULT_SECONDS_PER_BYTE = 0.25 / (1024 * 1024)
 RESULT_MIN_SECONDS = 0.005
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
+# The longest step of sealing or removal that cannot be stopped part way (one form replaced in at most 1 MiB, one 1 MiB
+# read or write, one search of 8 MiB, one batch of 1,024 undone escapes) measured at most about 0.002 s idle; sealing
+# stops at least this long before the deadline, whatever the grace, so a step that started just before it still ends
+# inside the deadline even when host load makes it many times slower.
+STEP_RESERVE_SECONDS = 0.05
+REWRITE_LIMIT_BYTES = 1024 * 1024  # a larger file that holds the credential is deleted whole, never rewritten
+MOVE_RESERVE_SECONDS = 0.01  # removal stops this long before the deadline, so the one-step move into quarantine fits
 
 
 _JSON_ESCAPE = re.compile(rb"\\u([0-9a-fA-F]{4})|\\([\"\\/])")
 
 
-def _json_unescaped(data: bytes) -> bytes:
-    """`data` with JSON string escapes undone (\\uXXXX, \\", \\\\, \\/), in one linear pass. Not a JSON parser."""
-    def undo(match: re.Match[bytes]) -> bytes:
-        if match.group(1) is not None:
-            return chr(int(match.group(1), 16)).encode("utf-8", "surrogatepass")
-        return match.group(2)
-    return _JSON_ESCAPE.sub(undo, data)
+def _json_unescaped(data: bytes, tick: Callable[[], None] = lambda: None) -> bytes:
+    """`data` with JSON string escapes undone (\\uXXXX, \\", \\\\, \\/), in one linear pass. Not a JSON parser.
+
+    The same left-to-right scan as `re.sub`, with `tick()` every 1,024 escapes, so the clock can stop it part way.
+    """
+    parts: list[bytes] = []
+    end = 0
+    for count, match in enumerate(_JSON_ESCAPE.finditer(data)):
+        if count % 1024 == 0:
+            tick()
+        parts.append(data[end:match.start()])
+        parts.append(chr(int(match.group(1), 16)).encode("utf-8", "surrogatepass") if match.group(1) is not None
+                     else match.group(2))
+        end = match.end()
+    parts.append(data[end:])
+    return b"".join(parts)
 
 
 def holds_credential(data: bytes, forms: list[bytes], until: float = math.inf) -> bool:
@@ -100,8 +116,9 @@ def holds_credential(data: bytes, forms: list[bytes], until: float = math.inf) -
         return False
     if data.count(b"\\") > MAX_ESCAPES:  # bounded cost: rather than spend the deadline undoing them, assume the worst
         return True
+    unescaped = _json_unescaped(data, tick)
     tick()
-    return found_in(_json_unescaped(data).lower())
+    return found_in(unescaped.lower())
 
 
 
@@ -237,9 +254,10 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         secret = self._read_credential(source) if source is not None else None
         job_deadline = started + timeout
         deadline = job_deadline + grace
+        seal_deadline = deadline - max(STEP_RESERVE_SECONDS, min(0.25, grace / 20))
+        stop_deadline = deadline - max(0.0, min(0.5, grace / 10))
         return _TurnPlan(sequence, f"p05-{run_id}-{self._token}-{sequence:02d}", run_id, image, policy, secret, timeout,
-                         budget, forbidden, job_deadline, deadline, deadline - max(0.0, min(0.5, grace / 10)),
-                         deadline - max(0.0, min(0.25, grace / 20)))
+                         budget, forbidden, job_deadline, deadline, min(stop_deadline, seal_deadline), seal_deadline)
 
     @staticmethod
     def _read_credential(source: Path) -> str:
@@ -413,6 +431,10 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             os.close(fd)
         if not holds_credential(data, forms, deadline):
             return False
+        if len(data) > REWRITE_LIMIT_BYTES:  # replacing in a large file is a long step; deleting it is short and safer
+            tick()
+            os.unlink(name, dir_fd=dir_fd)
+            return True
         for form in forms:
             tick()
             data = data.replace(form, REDACTED.encode())
@@ -477,13 +499,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def _quarantine(self, output: Path, plan: _TurnPlan) -> None:
         """Take evidence that cannot be proved clean out of reach. It returns when the folder is gone, else raises `EvidenceNotSealed`.
 
-        Removal has what is left of the turn's one deadline and never more: once it has passed, removal does not start.
+        Removal has what is left of the turn's one deadline, less the time for the move, and never more: once that has
+        passed, removal does not start.
         Whatever is not removed by then is MOVED, in one step, to a private `quarantine-*` folder beside the turn folders,
         and the turn says so. `purge_quarantine` removes those folders between turns, when no clock runs.
         """
         interrupt = None
         try:
-            self._remove_tree(output, plan.deadline)
+            self._remove_tree(output, plan.deadline - MOVE_RESERVE_SECONDS)
         except Exception:  # noqa: BLE001 - out of time, or the walk cannot go on: never an unbounded removal; move it
             pass
         except BaseException as stopped:  # an interrupt: still move the folder first, then let the interrupt through
