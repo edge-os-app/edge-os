@@ -336,7 +336,7 @@ const SOURCE = {
   content_label: "SYNTHETIC_FIXTURE", profile_version: "p07.market_dataset_profile/1", profile_sha256: "f".repeat(64),
   market: { network: "MONAD", pool_address: "0xaaaa", base_asset: "0xcccc", quote_asset: "0xbbbb" },
   window: { start: "2026-09-25T10:00:00Z", end: "2026-09-25T12:00:00Z" }, history_provider: "ENVIO_HYPERSYNC",
-  page_requests_recorded: 2,
+  page_requests_recorded: 2, transport: null,
 };
 const DECLARATION = {
   declaration: { record_id: "hist-decl-1", schema_version: "p08.investigation-declaration/3", created_at: "2026-10-12T00:00:00Z",
@@ -448,6 +448,57 @@ describe("recorded-history investigation", () => {
     expect(screen.getByText(/significance NOT_CLAIMED/)).toBeInTheDocument();
     expect(screen.getByText(/Not read: HOLDOUT partition/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry as a new job" })).toBeNull();
+  });
+});
+
+
+describe("native recorded source (SOURCE-LOCAL)", () => {
+  const NATIVE = { ...SOURCE, source_id: "native-syn-qualified/1", title: "Native recording, full corroboration (qualifies)",
+    evidence_class: "RECORDED_NATIVE_RESPONSE", market: { network: "MONAD", pool_address: "0xd1d1", base_asset: "0xd3d3", quote_asset: "0xd2d2" },
+    transport: { history_provider: "ENVIO_HYPERSYNC", provider_version: "envio-hypersync/1", corroboration_provider: "QUICKNODE_JSON_RPC",
+      corroboration_sample_size: 24, provider_requests_needed: 27 } };
+
+  it("declares with the source's own class and reserves its pages, chain read and receipts", async () => {
+    const user = userEvent.setup();
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE, NATIVE] });
+    mocks.historySave.mockResolvedValue(DECLARATION);
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: NATIVE.title });
+    await user.selectOptions(screen.getByLabelText("Recorded source"), NATIVE.source_id);
+    expect(screen.getByTestId("history-source-transport")).toHaveTextContent("It needs 27 provider requests: 2 pages, one chain read and 24 receipts.");
+    expect(screen.getByTestId("history-source-transport")).toHaveTextContent("against recorded responses only");
+    await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
+    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
+    await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
+    await user.type(screen.getByLabelText("Rule 1 volume threshold"), "100");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
+    await screen.findByText(/Declaration saved before any collection/);
+    const body = mocks.historySave.mock.calls[0][1];
+    expect(body.configuration.source.evidence_class).toBe("RECORDED_NATIVE_RESPONSE");
+    expect(body.configuration.permitted_access).toEqual(["RECORDED_NATIVE_RESPONSE"]);
+    expect(body.configuration.resource_bounds.provider_requests).toBe(27);
+    expect(body.configuration.market.pool_address).toBe("0xd1d1");
+  });
+
+  it("shows computed transport facts apart from recorded declarations", async () => {
+    const user = userEvent.setup();
+    const dataset = { dataset_id: "ds-n", content_sha256: "s", hashes_verified: {}, summary: { source_id: NATIVE.source_id,
+      status: "COMPLETE", stop_reason: "COMPLETE", verdict: { overall: "LIMITED" }, binding_state: "UNAVAILABLE_LIMITED_DATA",
+      unavailable_states: ["VERDICT_LIMITED"], provider_requests: { ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 9 },
+      provider_requests_state: "MEASURED_CLIENT_CALLS", evidence_class: "RECORDED_NATIVE_RESPONSE", content_label: "SYNTHETIC_FIXTURE" },
+      transport: { envio_pages_framed: 2, client_calls: { ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 9 }, chain_id: 143, chain_network: "MONAD",
+        corroboration: { class: "SAMPLED", sample_size: 8, population_size: 24, mismatches: 0 }, corroboration_reason: null,
+        recorded_declarations: ["decimals", "pool_tokens"] } };
+    mocks.jobs.mockResolvedValue({ jobs: [job("REPORTED", { dataset })] });
+    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    const facts = await screen.findByTestId("history-transport");
+    expect(facts).toHaveTextContent("chain id checked against recorded responses: 143 (MONAD)");
+    expect(facts).toHaveTextContent("receipt corroboration SAMPLED, 8 of 24 checked, 0 mismatches");
+    expect(facts).toHaveTextContent("Recorded declarations, not read by the application: decimals, pool tokens.");
+    expect(screen.getByText(/LIMITED, UNAVAILABLE_LIMITED_DATA/)).toBeInTheDocument();
   });
 });
 

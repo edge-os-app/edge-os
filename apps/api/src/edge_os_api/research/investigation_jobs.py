@@ -350,12 +350,29 @@ def job_view(session: Session, job: InvestigationJobRow) -> dict[str, Any]:
             "summary": {key: dataset.content[key] for key in (
                 "source_id", "evidence_class", "content_label", "status", "stop_reason", "verdict", "binding_state",
                 "unavailable_states", "provider_requests", "provider_requests_state", "invocations_measured",
-                "window_start", "window_end", "gaps", "normalized_sha256", "collection_sha256", "market_binding_id")}},
+                "window_start", "window_end", "gaps", "normalized_sha256", "collection_sha256", "market_binding_id")},
+            "transport": _transport_summary(dataset.content)},
         "report": None if report is None else _report_view(report),
     }
 
 
 # ------------------------------------------------------------------------------------------------- worker
+
+def _transport_summary(content: dict[str, Any]) -> dict[str, Any] | None:
+    """What a native source's P07 transport computed, and what the recording only declared. None for a bundle."""
+    transport = content.get("transport")
+    if transport is None:
+        return None
+    corroboration = transport["corroboration"]
+    chain = transport["chain_read"] or {}
+    return {"envio_pages_framed": transport["envio"]["pages_framed"], "client_calls": transport["client_calls"],
+            "chain_id": chain.get("chain_id"), "chain_network": chain.get("network"),
+            "corroboration": {key: corroboration[key] for key in ("class", "sample_size", "population_size",
+                                                                 "mismatches")},
+            "corroboration_reason": corroboration.get("reason"),
+            "recorded_declarations": sorted(key for key, value in content["evidence_basis"].items()
+                                            if value == "RECORDED_DECLARATION")}
+
 
 def _lock_key(job_id: uuid.UUID) -> tuple[int, int]:
     digest = hashlib.sha256(f"investigation-job:{job_id}".encode()).digest()
