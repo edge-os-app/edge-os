@@ -1804,3 +1804,33 @@ def test_checking_a_result_of_a_million_tiny_strings_cannot_run_the_turn_past_it
 
     status, elapsed = _timed_run(runner)
     assert elapsed <= 1.0 + 1.0 + 0.25, (status, elapsed)
+
+
+# --- Repair after round-18 reviews: sealing one file has a bounded cost and sees the clock -------------------------
+
+@pytest.mark.parametrize("filler", [b'\\"', b"\\\\", b"\\u0041", b"A"])
+def test_sealing_a_file_dense_with_escapes_cannot_run_the_turn_past_its_deadline(tmp_path: Path, monkeypatch, filler: bytes) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    real_popen = subprocess.Popen
+    size = 60 * 1024 * 1024
+
+    class Late:
+        returncode = 0
+
+        def __init__(self, argv, **_kw) -> None:
+            self.output = output_folder(argv)
+
+        def communicate(self, timeout=None):
+            if not getattr(self, "done", False):
+                self.done = True
+                (self.output / "dense.log").write_bytes(OLD.encode() + filler * (size // len(filler)))
+            return None, None
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Late(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=1.0)
+
+    status, elapsed = _timed_run(runner, limit=120)
+
+    assert elapsed <= 1.0 + 1.0 + 0.4, (status, elapsed)
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []

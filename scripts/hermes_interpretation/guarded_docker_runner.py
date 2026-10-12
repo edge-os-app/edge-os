@@ -45,7 +45,8 @@ from edge_os_api.research.interpretation_attempts import Usage
 from provider_guard import GuardPolicy
 
 REDACTED = "[REDACTED]"
-MAX_SCANNED_BYTES = 64 * 1024 * 1024
+MAX_SCANNED_BYTES = 8 * 1024 * 1024  # evidence files are small; a larger file is removed whole, unread
+MAX_ESCAPES = 65_536  # more JSON escapes than this in one file: too costly to undo in time, so it is treated as holding
 MAX_STDOUT_BYTES = 1024 * 1024  # the host keeps at most this much of the job's own output
 MAX_CREDENTIAL_BYTES = 64 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024  # a result file larger than this is not read: the turn ends as UNKNOWN
@@ -70,8 +71,15 @@ def holds_credential(data: bytes, forms: list[bytes]) -> bool:
     if not forms:
         return False
     lowered = [form.lower() for form in forms]
-    raw, unescaped = data.lower(), _json_unescaped(data).lower()
-    return any(form in raw or form in unescaped for form in lowered)
+    raw = data.lower()
+    if any(form in raw for form in lowered):
+        return True
+    if b"\\" not in data:  # nothing escaped: the raw check was the whole check
+        return False
+    if data.count(b"\\") > MAX_ESCAPES:  # bounded cost: rather than spend the deadline undoing them, assume the worst
+        return True
+    unescaped = _json_unescaped(data).lower()
+    return any(form in unescaped for form in lowered)
 
 
 class EvidenceNotSealed(RuntimeError):
@@ -260,14 +268,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 os.unlink(name, dir_fd=dir_fd)
                 return None
             if forms:
-                found[0] |= cls._seal_file(dir_fd, name, forms)
+                found[0] |= cls._seal_file(dir_fd, name, forms, deadline)
             return None
 
         cls._walk(folder, deadline, visit, EvidenceNotSealed, remove_dirs=False)
         return found[0]
 
     @staticmethod
-    def _seal_file(dir_fd: int, name: str, forms: list[bytes]) -> bool:
+    def _seal_file(dir_fd: int, name: str, forms: list[bytes], deadline: float = float("inf")) -> bool:
         """Seal one file through a descriptor. A link or a pipe swapped in for it is removed, never followed or read."""
         def open_nofollow(flags: int) -> int:
             return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
@@ -286,6 +294,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 os.unlink(name, dir_fd=dir_fd)
                 return True
             os.fchmod(fd, 0o600)
+            if time.monotonic() > deadline:
+                raise EvidenceNotSealed("sealing passed its time limit")
             chunks = []
             while chunk := os.read(fd, 1 << 20):
                 chunks.append(chunk)
@@ -294,6 +304,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             os.close(fd)
         if not holds_credential(data, forms):
             return False
+        if time.monotonic() > deadline:
+            raise EvidenceNotSealed("sealing passed its time limit")
         for form in forms:
             data = data.replace(form, REDACTED.encode())
         if holds_credential(data, forms):  # a copy that replacing cannot reach (case, JSON escapes): the file goes whole
