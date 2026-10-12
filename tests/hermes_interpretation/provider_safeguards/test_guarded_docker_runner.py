@@ -868,7 +868,7 @@ def test_when_the_wait_fails_the_container_is_stopped_before_the_evidence_is_sea
 # --- Repairs after gate verdict 4/4: ONE remaining budget for stop, reap, pauses and sealing -----------------------
 
 def timed_turn(tmp_path: Path, monkeypatch, *, docker, communicate_after_timeout=None, fail_wait=False, grace=1.0,
-               secret: bool = True, ledger: bool = True, stop_budget_spent: bool = False):
+               secret: bool = True, ledger: bool = True, stop_budget_spent: bool = False, timeout: float = 0.1):
     """Runs one guarded turn with a slow docker CLI. Returns (late, outcome, spend, evidence, calls, plan).
 
     `late` is the runner's own return minus the plan's one deadline D (no tolerance: it must be <= 0); `calls` holds
@@ -910,7 +910,7 @@ def timed_turn(tmp_path: Path, monkeypatch, *, docker, communicate_after_timeout
             pass
 
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
-    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=grace)
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=timeout, seal_grace_seconds=grace)
     if stop_budget_spent:
         from dataclasses import replace as replace_plan
         original_plan = runner._plan
@@ -953,7 +953,7 @@ def test_a_stop_command_that_hangs_cannot_run_the_turn_past_the_job_timeout_plus
 
 def test_no_command_starts_once_the_budget_is_spent(tmp_path: Path, monkeypatch) -> None:
     late, outcome, _, evidence, calls, _plan = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=0.0,
-                                                         stop_budget_spent=True)
+                                                         stop_budget_spent=True, timeout=0.3)  # 0.1 s would leave only 0.02 s to launch
 
     assert outcome == "EvidenceNotSealed" and calls == [] and late <= 0.0, (calls, late)
     assert not list(evidence.glob("turn-*/output"))
@@ -2013,7 +2013,8 @@ def test_an_exhausted_turn_gives_evidence_removal_no_time_past_the_original_dead
     (prepared / "secret.log").write_text(OLD)
     monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present and not ours: never stoppable
     install_process(monkeypatch, lambda output: prepared.rename(output / "many"), returncode=-9)
-    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=0.0)
+    # 0.3 s: a budget of 0.1 s with no grace would leave only 0.02 s to launch after the post-job reserve
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=0.3, seal_grace_seconds=0.0)
     plans, removals = _spy_plan_and_removal(monkeypatch, runner)
 
     status, elapsed = _timed_run(guarded)

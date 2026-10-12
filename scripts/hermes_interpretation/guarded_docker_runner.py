@@ -65,11 +65,13 @@ ENTRYPOINT = "/opt/hermes/.venv/bin/python"
 # read or write, one search of 8 MiB, one batch of 1,024 undone escapes, one scan for escapes that finds none) measured
 # about 0.002 s to 0.016 s idle and up to about 0.02 s under heavy load; sealing stops at least this long before
 # the deadline, whatever the grace, so a step that started just before it still ends inside the deadline.
-STEP_RESERVE_SECONDS = 0.05
+STEP_RESERVE_SECONDS = 0.04
 REWRITE_LIMIT_BYTES = 1024 * 1024  # a larger file that holds the credential is deleted whole, never rewritten
 # Removal stops this long before the deadline, so the one-step move into quarantine and the failure handling after it
-# fit: under a host load of about 15 on 10 cores they once took 0.012 s (runs/green-round25-01.txt).
-MOVE_RESERVE_SECONDS = 0.03
+# fit: under host load they once took 0.012 s (load about 15, runs/green-round25-01.txt) and once 0.031 s (load about
+# 10, runs/candidate-full-chain-r25.txt). A longer host stall can still pass D; such a run is kept as a measured overrun.
+# The sum (POST_JOB_RESERVE_SECONDS) stays below 0.1 s, so a 0.1 s job timeout with no grace can still launch a job.
+MOVE_RESERVE_SECONDS = 0.04
 POST_JOB_RESERVE_SECONDS = STEP_RESERVE_SECONDS + MOVE_RESERVE_SECONDS  # left after the job wait: 0.08 s
 
 
@@ -264,7 +266,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         # changes; with less, the job gets up to that much less than its timeout (controller job-budget disposition,
         # 2026-10-12). A budget too small for it starts no job at all (DeadlinePassedBeforeLaunch).
         job_deadline = min(started + timeout, deadline - POST_JOB_RESERVE_SECONDS)
-        seal_deadline = deadline - max(STEP_RESERVE_SECONDS, min(0.25, grace / 20))
+        # Sealing stops early enough for its last unstoppable step (STEP) and then removal and the move (MOVE) to fit.
+        seal_deadline = deadline - max(POST_JOB_RESERVE_SECONDS, min(0.25, grace / 20))
         stop_deadline = deadline - max(0.0, min(0.5, grace / 10))
         return _TurnPlan(sequence, f"p05-{run_id}-{self._token}-{sequence:02d}", run_id, image, policy, secret, timeout,
                          budget, forbidden, job_deadline, deadline, min(stop_deadline, seal_deadline), seal_deadline)
