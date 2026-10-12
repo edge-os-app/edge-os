@@ -120,3 +120,7 @@ Review and adoption behavior here is local application behavior under authored
 synthetic terms, approvals and fixtures. It is not provider enforcement, live
 wallet state, a real transport result or a signed approval. Direct SQL inspection
 of saved rows is part of the evidence. See `docs/qualification/inactive-consent/`.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate the `consent_local` schema ships in migration 0008 and `consent/routes.py` mounts review, adopt and read. Consent rows stay INACTIVE; the read reports a separate server `activation` verdict, which only the fixture qualification profile can make available. See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.

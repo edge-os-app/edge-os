@@ -1333,7 +1333,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
 
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Positions" }).click();
   await page.getByRole("button", { name: "Load more records" }).click();
-  await page.getByLabel("Agent").selectOption("agent-a");
+  await page.getByLabel("Agent", { exact: true }).selectOption("agent-a");
   await page.getByLabel("Wallet").selectOption("wallet-a");
   await expect(page.locator("summary")).toHaveCount(2);
   await expect(page.getByText("position-a-1", { exact: false })).toBeVisible();

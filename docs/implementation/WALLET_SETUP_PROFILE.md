@@ -131,3 +131,7 @@ This profile does not qualify a wallet provider, a React SDK creation or recover
 deployment, signer or policy enforcement, funding, positions, removal or recovery, or any live
 owner access. A browser or live PASS is not claimed. Position accounting, live owner access and
 removal remain future qualification under P16, P20 and P21.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate `POST /v1/wallet-setup/agents/{agent_id}/complete` adds the IC04 owner-linked browser completion: the browser's wallet id is retained as an untrusted claim and binds only after an independent lookup names the verified owner. Existing prepare/dispatch/resume/cancel behavior is unchanged. See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.

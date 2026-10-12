@@ -210,3 +210,7 @@ Admission and reservation behavior here is application accounting under
 authored synthetic approvals and holdings. It is not provider enforcement and
 not live wallet inventory. Direct SQL inspection of saved rows is part of the
 evidence. See `docs/qualification/admission/`.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate the `admission_local` schema ships in migration 0008. The connected worker admits server-derived intents with a server-derived approval and holdings, and `AdmissionService` reads durable stops plus removal through `SubmissionControls`. No accounting rule changed. See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.

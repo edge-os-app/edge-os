@@ -164,3 +164,7 @@ has no real signed bytes or transaction hash, so this stage makes no WAL-Q17
 resend qualification claim, implements no automatic resend, and proves no
 exactly-once network guarantee. A replacement economic action is never created.
 Broader WAL-Q18 additions, partial exits and valuation remain deferred.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate the `recovery_local` schema ships in migration 0008. `POST /v1/actions/{action_id}/reconcile` builds `OutcomeEvidence` from the server receipt port for the exact original action and calls `RecoveryService.reconcile`; a body never supplies an outcome. See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.
