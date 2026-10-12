@@ -273,3 +273,38 @@ def test_an_instruction_like_provider_code_is_not_reflected() -> None:
         client.call("holders", support.holder_body())
     assert info.value.code == "HTTP_500"
     assert "IGNORE" not in info.value.code
+
+
+@pytest.mark.parametrize("value", ["NaN", "sNaN", "Infinity", "-Infinity", "-1", "nonsense"])
+def test_nonfinite_or_negative_credit_headers_are_not_exposed(value: str) -> None:
+    headers = {"X-Request-Id": "rid", "X-Nansen-Credits-Cost": value,
+               "X-Nansen-Credits-Used": value, "X-Nansen-Credits-Remaining": value}
+    payload = support.holder_payload([support.holder_row("0xaaa")])
+    client = NansenClient(support.RecordingTransport([support.response(200, payload, headers)]),
+                          support.limits())
+    fetch = client.call("holders", support.holder_body())
+    assert fetch.quoted_credits is None
+    assert fetch.deducted_credits is None
+    assert fetch.remaining_credits is None
+    assert fetch.request_id == "rid"
+    assert fetch.response_sha256
+
+
+def test_a_valid_zero_credit_is_preserved() -> None:
+    headers = {"X-Nansen-Credits-Cost": "0", "X-Nansen-Credits-Used": "0.0"}
+    payload = support.holder_payload([support.holder_row("0xaaa")])
+    client = NansenClient(support.RecordingTransport([support.response(200, payload, headers)]),
+                          support.limits())
+    fetch = client.call("holders", support.holder_body())
+    assert fetch.quoted_credits == "0"
+    assert fetch.deducted_credits == "0.0"
+
+
+def test_an_invalid_deduction_keeps_the_conservative_reservation() -> None:
+    headers = {"X-Nansen-Credits-Used": "NaN"}
+    payload = support.holder_payload([support.holder_row("0xaaa")])
+    client = NansenClient(support.RecordingTransport([support.response(200, payload, headers)]),
+                          support.limits())
+    fetch = client.call("holders", support.holder_body())
+    assert fetch.deducted_credits is None
+    assert client.reserved_credits == Decimal("5")

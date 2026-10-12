@@ -158,3 +158,17 @@ def test_a_malformed_credit_header_keeps_valid_provenance_and_is_not_trusted() -
     assert source.quoted_credits is None
     assert source.deducted_credits == "1"
     assert source.response_sha256
+
+
+def test_an_invalid_credit_on_a_received_failure_is_not_exposed() -> None:
+    headers = {"X-Request-Id": "rid-429", "X-Nansen-Credits-Cost": "NaN",
+               "X-Nansen-Credits-Used": "-Infinity", "Retry-After": "12"}
+    run = support.run(support.request(operations=("holders",)),
+                      [support.raw_response(429, b'{"code": "rate_limit_exceeded"}', headers)])
+    source = run.evidence.sources[0]
+    assert source.status == 429
+    assert source.request_id == "rid-429"
+    assert source.quoted_credits is None
+    assert source.deducted_credits is None
+    assert source.response_sha256
+    assert source.retry_after == "12"

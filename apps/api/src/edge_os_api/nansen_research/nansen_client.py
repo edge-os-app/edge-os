@@ -100,11 +100,19 @@ class NansenFetch:
 
 
 def _safe_credit(text: str | None) -> str | None:
+    """A received credit amount as its exact text, or ``None``.
+
+    Only a finite, nonnegative decimal is a credit amount. ``NaN``, a signaling
+    NaN, a positive or negative infinity, a negative finite value or malformed
+    text returns ``None`` so the invalid text is never exposed as a charge.
+    """
     if text is None:
         return None
     try:
-        Decimal(text.strip())
+        amount = Decimal(text.strip())
     except (InvalidOperation, AttributeError):
+        return None
+    if not amount.is_finite() or amount < 0:
         return None
     return text
 

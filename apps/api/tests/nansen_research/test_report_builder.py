@@ -177,3 +177,30 @@ def test_a_stopped_flow_run_limitation_names_the_stop_not_a_missing_request() ->
     flow_limit = next(item for item in run.report.limitations if item.claim == "flow_records")
     assert "not requested" not in flow_limit.missing_dependency
     assert "internal_error" in flow_limit.missing_dependency
+
+
+def test_an_unmatched_question_is_not_marked_supported() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    for question in ("What is MOE's market capitalization?",
+                     "Did holder addresses commit fraud?"):
+        run = support.run(support.request(question=question, operations=("holders",)),
+                          [support.response(200, holders)])
+        assert run.report.question == question
+        assert run.report.answer_state != "SUPPORTED_OBSERVATIONS"
+        assert "question_coverage" in {item.claim for item in run.report.limitations}
+
+
+def test_a_mixed_question_is_partial_and_preserves_the_supported_count() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    for question in (
+        "How many holder addresses did the provider return, and which exchanges listed MOE?",
+        "Which exchanges listed MOE, and how many holder addresses did the provider return?",
+        "Which exchanges listed MOE; how many holder addresses did the provider return?",
+    ):
+        run = support.run(support.request(question=question, operations=("holders",)),
+                          [support.response(200, holders)])
+        assert run.report.answer_state == "PARTIAL"
+        assert "question_coverage" in {item.claim for item in run.report.limitations}
+        inventory = next(item for item in run.report.findings if item.code == "HOLDER_INVENTORY")
+        assert inventory.verdict == "SUPPORTED"
+        assert run.report.coverage.holder_rows == 1

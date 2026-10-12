@@ -8,6 +8,7 @@ The same evidence always yields the same report and the same report hash.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 
 from edge_os_api.nansen_research.models import (
@@ -47,11 +48,52 @@ _CLAIM_LIMITATIONS = {
     "buying": ("buying", "trade or transfer records that evidence purchases"),
 }
 
+_ALL_KEYWORDS = tuple(word for _claim, words in _CLAIM_KEYWORDS for word in words)
 
-def classify_question(question: str) -> tuple[str, ...]:
-    """The requested claims the question names, by a documented keyword map."""
-    text = question.lower()
-    return tuple(claim for claim, words in _CLAIM_KEYWORDS if any(word in text for word in words))
+# Function words and domain-neutral descriptors. A question token that is neither
+# neutral nor part of a recognized claim marks the question as not fully covered.
+_NEUTRAL_TOKENS = frozenset({
+    "a", "an", "the", "and", "or", "but", "nor", "so", "yet", "of", "in", "on", "at", "to", "for",
+    "with", "by", "from", "into", "over", "under", "about", "as", "than", "then", "that", "this",
+    "these", "those", "it", "its", "they", "them", "their", "we", "our", "you", "your", "i", "my",
+    "me", "he", "she", "his", "her", "him", "us", "is", "are", "was", "were", "be", "been", "being",
+    "am", "do", "does", "did", "done", "has", "have", "had", "will", "would", "can", "could", "should",
+    "may", "might", "must", "return", "returns", "returned", "provide", "provided", "provides", "provider",
+    "providers", "show",
+    "shows", "shown", "mean", "means", "give", "gives", "tell", "tells", "list", "lists", "what", "which",
+    "who", "whom", "whose", "when", "where", "why", "how", "many", "much", "all", "any", "some", "both",
+    "each", "few", "more", "most", "other", "such", "no", "not", "only", "own", "same", "just", "also",
+    "very", "please", "current", "currently", "now", "top", "basic", "qualified", "record", "records",
+    "data", "report", "reports", "number", "count", "counts", "amount", "total", "exact", "token", "tokens",
+    "coin", "asset",
+})
+
+_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def question_coverage(question: str, token_symbol: str = "") -> tuple[tuple[str, ...], bool]:
+    """The named claims and whether the whole question is covered.
+
+    ``uncovered`` is True when the question holds a word that is neither neutral
+    nor part of a recognized claim, so the package cannot claim complete coverage.
+    """
+    tokens = _TOKEN.findall(question.lower())
+    claims = tuple(claim for claim, words in _CLAIM_KEYWORDS
+                   if any(word in token for token in tokens for word in words))
+    neutral = set(_NEUTRAL_TOKENS)
+    if token_symbol:
+        neutral.add(token_symbol.lower())
+    uncovered = any(
+        len(token) >= 2 and not token.isdigit() and token not in neutral
+        and not any(word in token for word in _ALL_KEYWORDS)
+        for token in tokens
+    )
+    return claims, uncovered
+
+
+def classify_question(question: str, token_symbol: str = "") -> tuple[str, ...]:
+    """The named claims only, for a caller that does not need the coverage flag."""
+    return question_coverage(question, token_symbol)[0]
 
 
 def _missing_claim_finding(code: str, noun: str, requested: bool, stop_reason: str | None,
@@ -72,13 +114,10 @@ def _missing_claim_finding(code: str, noun: str, requested: bool, stop_reason: s
                    source_refs=refs, limitations=())
 
 
-def _answer_state(evidence: NansenEvidence, claims: tuple[str, ...], findings: list[Finding]) -> str:
+def _answer_state(evidence: NansenEvidence, claims: tuple[str, ...], findings: list[Finding],
+                  uncovered: bool) -> str:
     """A truthful state for the adopted question under the returned evidence."""
     verdict_by_code = {finding.code: finding.verdict for finding in findings}
-    if not claims:
-        if evidence.holder is None and evidence.flows is None:
-            return "PARTIAL" if evidence.attempts > 0 else "UNAVAILABLE"
-        return "PARTIAL" if evidence.stop_reason is not None else "SUPPORTED_OBSERVATIONS"
     answered = False
     unresolved = False
     for claim in claims:
@@ -87,6 +126,13 @@ def _answer_state(evidence: NansenEvidence, claims: tuple[str, ...], findings: l
             answered = True
         if set(verdicts) & {"UNRESOLVED", "UNAVAILABLE"}:
             unresolved = True
+    if uncovered:
+        # The complete question is not covered, so it is never fully supported.
+        return "PARTIAL" if answered else "UNAVAILABLE"
+    if not claims:
+        if evidence.holder is None and evidence.flows is None:
+            return "PARTIAL" if evidence.attempts > 0 else "UNAVAILABLE"
+        return "PARTIAL" if evidence.stop_reason is not None else "SUPPORTED_OBSERVATIONS"
     if not answered:
         return "PARTIAL" if evidence.stop_reason is not None else "UNAVAILABLE"
     if unresolved or evidence.stop_reason is not None:
@@ -275,7 +321,7 @@ def _flow_findings(evidence: NansenEvidence, label: str) -> list[Finding]:
 
 def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenReport:
     """Build the deterministic report bound to the exact evidence package."""
-    claims = classify_question(request.question)
+    claims, uncovered = question_coverage(request.question, request.token_symbol)
     findings: list[Finding] = []
     if evidence.holder is not None:
         findings.extend(_holder_findings(evidence))
@@ -319,7 +365,12 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
         else:
             flow_missing = "flow records were requested but produced no usable evidence"
         limitations = limitations + (Limitation(claim="flow_records", missing_dependency=flow_missing),)
-    answer_state = _answer_state(evidence, claims, findings)
+    if uncovered:
+        limitations = limitations + (Limitation(
+            claim="question_coverage",
+            missing_dependency="the question contains a request this package cannot map to a qualified observation",
+        ),)
+    answer_state = _answer_state(evidence, claims, findings, uncovered)
 
     holder_rows = len(evidence.holder.rows) if evidence.holder is not None else 0
     flow_buckets = len(evidence.flows.buckets) if evidence.flows is not None else 0
