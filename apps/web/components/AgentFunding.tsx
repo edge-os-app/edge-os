@@ -64,7 +64,7 @@ export function AgentFunding({ agentId }: { agentId: string }) {
   const validRaw = /^(0|[1-9][0-9]*)$/.test(raw) && raw.length <= 78;
 
   return (
-    <section className="panel" aria-label="Agent funding">
+    <section className="panel" aria-label="Agent funding" style={{ overflowWrap: "anywhere" }}>
       <h2>Funding</h2>
       {phase === "loading" && <p role="status" className="muted">Loading saved funding…</p>}
       {phase === "missing" && <p>No confirmed wallet is saved for this agent. Set up the agent wallet first.</p>}

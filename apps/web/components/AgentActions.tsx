@@ -70,7 +70,7 @@ export function AgentActions({ agentId }: { agentId: string }) {
   const latestRemoval = removals[removals.length - 1];
   const blocked = busy || uncertain;
   return (
-    <section className="panel" aria-label="Agent actions">
+    <section className="panel" aria-label="Agent actions" style={{ overflowWrap: "anywhere" }}>
       <h2>Bounded actions</h2>
       {phase === "loading" && <p role="status" className="muted">Loading saved actions…</p>}
       {phase === "missing" && <p>No confirmed wallet is saved for this agent. Set up the agent wallet first.</p>}

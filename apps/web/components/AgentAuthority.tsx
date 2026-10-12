@@ -94,7 +94,7 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
   const activation = state?.activation;
   const shown = review ?? state?.reviews[0] ?? null;
   return (
-    <section className="panel" aria-label="Agent authority">
+    <section className="panel" aria-label="Agent authority" style={{ overflowWrap: "anywhere" }}>
       <h2>Bounded authority</h2>
       {phase === "loading" && <p role="status" className="muted">Loading saved consent…</p>}
       {phase === "error" && <div role="alert"><p>{error}</p>

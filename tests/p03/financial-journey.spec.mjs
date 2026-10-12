@@ -33,6 +33,11 @@ async function open(page, token) {
   await expect(page.getByTestId("fixture-banner")).toContainText("TEST AUTH FIXTURE");
 }
 
+async function noSidewaysScroll(page) {
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+}
+
 async function noSeriousAxe(page) {
   const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
   const serious = result.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
@@ -71,6 +76,7 @@ async function readyAgent(page, thesisUrl, agentId, project) {
   await expect(authority.getByTestId("consent-adopted")).toContainText("status INACTIVE");
   await expect(authority.getByTestId("activation-state")).toContainText("SYNTHETIC_FIXTURE_QUALIFICATION");
   await shot(page, project, `${agentId}-authority`);
+  await noSidewaysScroll(page);
 }
 
 async function runOnce(page, agentId) {
@@ -109,6 +115,7 @@ test("bounded fixture action: wallet, funding, exact terms, decision, receipt an
   const actionId = (await lineage.getByRole("heading", { level: 3 }).innerText()).replace("Action ", "").trim();
   await shot(page, project, "action-confirmed");
   await noSeriousAxe(page);
+  await noSidewaysScroll(page);
 
   // Removal: requested denies at once; the residual position and owner access stay.
   await actions.getByRole("button", { name: "Request removal" }).click();
@@ -140,6 +147,7 @@ test("interrupted acknowledgement reconciles the original action, never a replac
   await expect(lineage.getByTestId("action-receipts")).toHaveText("SUBMISSION_UNKNOWN");
   await expect(lineage).not.toContainText("CONFIRMED");
   await shot(page, project, "action-unknown");
+  await noSidewaysScroll(page);
   await lineage.getByRole("button", { name: "Reconcile original action" }).click();
   await expect(lineage.getByTestId("action-receipts")).toHaveText("SUBMISSION_UNKNOWN → CONFIRMED");
   await expect(lineage.getByTestId("action-queue-state")).toHaveText("SUBMITTED_CONFIRMED");
