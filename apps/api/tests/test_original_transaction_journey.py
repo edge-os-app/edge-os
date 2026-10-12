@@ -1,0 +1,423 @@
+"""The original transaction through mounted routes, the bounded worker and public reconciliation (ORIGINAL-LOCAL).
+
+Seam: authenticated route → saved job → worker → injected recorded clients → saved/reopened action. Expected values
+are independent literals: the published eth-account example key's sender, the transaction hashes frozen in the
+authored recording, the revision sizing (100 quote units) and the authored receipt amounts. SQL is read only as
+independent evidence that the private bytes were saved; assertions go through the public routes.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import datetime as dt
+import json
+import shutil
+import uuid
+from pathlib import Path
+from typing import Any
+
+import pytest
+from sqlalchemy import text
+
+import financial_flows as ff
+from edge_os_api.execution.original_transaction import JournalError, ReplyLost
+
+RECORDINGS = Path(__file__).parent / "fixtures" / "original_transaction" / "original_transaction_v1.json"
+PUBLISHED_SENDER = "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23"  # eth-account docs example key's address
+ENTRY_NONCE0_HASH = "0x7067b4c886f172b32b1c2839bcd70a45186817e3ade5648bb34fc0d6ea7aa28d"
+EXIT_NONCE1_HASH = "0x55b5277b4b8fcd0c3f23b2f05b23f78bc0c37934a7bcbf509e1805872045dcc7"
+RECEIPT_GAS = "300000000000000"  # authored gasUsed 150000 × effectiveGasPrice 2 gwei
+
+
+@pytest.fixture
+def recordings(tmp_path) -> Path:
+    directory = tmp_path / "original"
+    directory.mkdir()
+    shutil.copy(RECORDINGS, directory / RECORDINGS.name)
+    return directory
+
+
+@pytest.fixture
+def original(settings, tmp_path, recordings):
+    configured = ff.fixture_settings(settings, tmp_path / "effects.jsonl").model_copy(
+        update={"original_recordings_dir": str(recordings)})
+    from fastapi.testclient import TestClient
+    from edge_os_api.main import create_app
+
+    with TestClient(create_app(configured)) as client:
+        yield client
+
+
+def calls(recordings: Path) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    path = recordings / "calls.jsonl"
+    for line in path.read_text().splitlines() if path.exists() else []:
+        name = json.loads(line)["call"]
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def ready(client, headers, agent_id: str) -> dict[str, Any]:
+    agent = ff.confirmed_agent(client, headers, agent_id, network_id=143)
+    declaration = ff.funded(client, headers, agent_id)
+    consent = ff.adopted(client, headers, agent_id, declaration)
+    return {**agent, "declaration": declaration, "consent": consent}
+
+
+def submitted(client, headers, agent_id: str) -> dict[str, Any]:
+    ready(client, headers, agent_id)
+    return ff.run_job(client, ff.schedule(client, headers, agent_id).json())
+
+
+def original_of(action: dict[str, Any]) -> dict[str, Any]:
+    return action["attempts"][-1]["content"]["original_transaction"]
+
+
+@pytest.fixture
+def engine(settings):
+    from edge_os_api.core.database import make_engine
+
+    created = make_engine(settings.database_url, settings.database_statement_timeout_ms)
+    yield created
+    created.dispose()
+
+
+def test_the_original_transaction_is_saved_before_each_effect_and_settles_once(original, owner_a, recordings,
+                                                                               engine):
+    job = submitted(original, owner_a, "orig-fx-original")
+    assert (job["state"], job["outcome"]) == ("SUBMITTED", "SUBMITTED_UNKNOWN"), job["reason"]
+
+    response = original.get(f"/v1/actions/{job['action_id']}", headers=owner_a)
+    assert response.status_code == 200
+    body = original_of(response.json())
+    assert body["stage"] == "BROADCAST_RETURNED"
+    assert [item["stage"] for item in body["stages"]] == [
+        "PREPARED", "SIGN_REQUESTED", "SIGNED", "BROADCAST_REQUESTED", "BROADCAST_RETURNED"]
+    assert body["transaction_hash"] == ENTRY_NONCE0_HASH
+    assert body["wallet_address"] == PUBLISHED_SENDER and body["chain_id"] == 143 and body["nonce"] == 0
+    assert body["candidate_hash"].startswith("sha256:") and body["candidate_hash"] != body["transaction_hash"]
+    assert body["fee_envelope"] == {"gas_limit": 300000, "max_fee_per_gas": 3000000000,
+                                    "max_priority_fee_per_gas": 1000000000}
+    assert body["signing_request_id"] == response.json()["attempts"][-1]["attempt_id"]
+    assert "signed_bytes" not in body and "signing_request" not in body and "unsigned" not in body
+    signed = next(item["response"]["data"]["signed_transaction"] for item in json.loads(RECORDINGS.read_text())[
+        "signatures"] if item["operation"] == "ENTRY" and item["nonce"] == 0)
+    assert signed[2:] not in response.text  # raw signed bytes never reach the owner response
+    assert calls(recordings) == {"route.quote": 1, "broadcast.eth_getTransactionCount": 1, "signer.rpc": 1,
+                                 "broadcast.eth_sendRawTransaction": 1, "observer.eth_chainId": 2,
+                                 "observer.eth_getBlockByNumber": 2, "observer.eth_getBalance": 2,
+                                 "observer.eth_call": 8}
+    with engine.connect() as connection:  # independent evidence: the private bytes were saved before broadcast
+        saved = connection.execute(text(
+            "SELECT content->'original_transaction' FROM execution_local.execution_submission_attempts "
+            "WHERE action_id = :a"), {"a": job["action_id"]}).scalar_one()
+    assert saved["signed_bytes"] == signed and saved["transaction_hash"] == ENTRY_NONCE0_HASH
+
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a)
+    assert settled.status_code == 200, settled.text
+    assert (settled.json()["receipt_outcome"], settled.json()["case_state"]) == ("CONFIRMED", "CONFIRMED")
+    action = original.get(f"/v1/actions/{job['action_id']}", headers=owner_a).json()
+    receipt = action["receipts"][-1]
+    assert receipt["outcome"] == "CONFIRMED"
+    assert (receipt["content"]["actual_input"]["raw"], receipt["content"]["actual_output"]["raw"],
+            receipt["content"]["actual_gas"]["raw"]) == (ff.ENTRY_QUOTE_INPUT, ff.ENTRY_BASE_OUTPUT, RECEIPT_GAS)
+    again = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert (again["applied"], again["duplicate"]) == (False, True)
+    assert calls(recordings)["broadcast.eth_sendRawTransaction"] == 1 and calls(recordings)["signer.rpc"] == 1
+
+
+# ------------------------------------------------------------------------------------------- fault matrix
+
+class Inject:
+    """Replace one injected original client for `fx-original` agents with an authored fault wrapper."""
+
+    def __init__(self, client, **wrappers):
+        ports = client.app.state.financial.ports
+        clients, profile = ports.original.clients(ports.clock), ports.original.profile
+        clients = dataclasses.replace(clients, **{name: wrap(getattr(clients, name)) for name, wrap in wrappers.items()})
+        ports.original_clients = lambda agent_id: (clients, profile) if "fx-original" in agent_id else None
+
+
+class Delegate:
+    def __init__(self, inner, *, before=None, after=None):
+        self._inner, self._before, self._after = inner, before, after
+
+    def _run(self, method, *args):
+        if self._before is not None:
+            replaced = self._before(*args)
+            if replaced is not None:
+                return replaced
+        result = getattr(self._inner, method)(*args)
+        return result if self._after is None else self._after(result, *args)
+
+    def rpc(self, wallet_id, body):
+        return self._run("rpc", wallet_id, body)
+
+    def call(self, method, params):
+        return self._run("call", method, params)
+
+
+def lost(*_):
+    raise ReplyLost("authored: reply lost")
+
+
+def action(client, headers, action_id):
+    response = client.get(f"/v1/actions/{action_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def reservation_states(body) -> set[str]:
+    return {row["state"] for row in body["reservations"]}
+
+
+def test_a_signer_refusal_sends_nothing_and_releases_the_reservations(original, owner_a, recordings):
+    Inject(original, signer=lambda inner: Delegate(inner, before=lambda *_: {"error": {"code": "policy_violation"}}))
+    job = submitted(original, owner_a, "refuse-fx-original")
+    assert (job["state"], job["outcome"]) == ("COMPLETED", "DENIED_UNSENT"), job["reason"]
+    body = action(original, owner_a, job["action_id"])
+    assert original_of(body)["stage"] == "REFUSED_UNSENT" and original_of(body)["reason"] == "SIGNER_REFUSED"
+    assert "RESERVED" not in reservation_states(body)
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+def test_a_lost_signer_reply_keeps_the_liability_and_a_restart_makes_no_second_call(original, owner_a, recordings):
+    job = submitted(original, owner_a, "sign-fx-original-fx-lost-sign")
+    assert (job["state"], job["outcome"]) == ("SUBMITTED", "SUBMITTED_UNKNOWN"), job["reason"]
+    body = action(original, owner_a, job["action_id"])
+    assert original_of(body)["stage"] == "SIGNING_UNKNOWN" and "transaction_hash" not in original_of(body)
+    assert "RESERVED" in reservation_states(body)
+    before = calls(recordings)
+    rerun = ff.run_job(original, job)
+    assert rerun["state"] == "SUBMITTED" and calls(recordings) == before
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert (settled["receipt_outcome"], settled["case_state"]) == ("SUBMISSION_UNKNOWN", "UNKNOWN")
+    assert "RESERVED" in reservation_states(action(original, owner_a, job["action_id"]))
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+@pytest.mark.parametrize("reply,reason", [
+    ({"method": "eth_signTransaction", "data": {"signed_transaction": "0x00", "encoding": "rlp"}},
+     "TRANSACTION_TYPE_UNSUPPORTED"),
+    ({"method": "eth_signTransaction", "data": {"signed_transaction": "0x02zz", "encoding": "rlp"}},
+     "SIGNED_BYTES_MALFORMED"),
+    ({"method": "eth_signTransaction", "data": {"signed_transaction": "0x02" + "00" * 9000, "encoding": "rlp"}},
+     "SIGNED_BYTES_OVERSIZE")])
+def test_rejected_signed_bytes_are_never_broadcast_and_keep_the_liability(original, owner_a, recordings, reply,
+                                                                         reason):
+    Inject(original, signer=lambda inner: Delegate(inner, after=lambda *_: reply))
+    job = submitted(original, owner_a, f"bytes-{reason.lower()[:12]}-fx-original")
+    assert (job["state"], job["outcome"]) == ("SUBMITTED", "SUBMITTED_UNKNOWN"), job["reason"]
+    body = original_of(action(original, owner_a, job["action_id"]))
+    assert body["stage"] == "SIGNED_RESPONSE_REJECTED" and body["reasons"] == [reason]
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+def test_signed_bytes_for_another_nonce_are_rejected(original, owner_a, recordings):
+    other = next(item["response"] for item in json.loads(RECORDINGS.read_text())["signatures"]
+                 if item["operation"] == "ENTRY" and item["nonce"] == 3)
+    Inject(original, signer=lambda inner: Delegate(inner, after=lambda *_: other))
+    job = submitted(original, owner_a, "nonce-fx-original")
+    body = original_of(action(original, owner_a, job["action_id"]))
+    assert body["stage"] == "SIGNED_RESPONSE_REJECTED" and body["reasons"] == ["SIGNED_NONCE_MISMATCH"]
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+@pytest.mark.parametrize("failing_stage,signs,outcome", [("PREPARED", 0, "DENIED_UNSENT"),
+                                                          ("SIGNED", 1, "SUBMITTED_UNKNOWN")])
+def test_a_failed_save_stops_before_the_next_effect(original, owner_a, recordings, failing_stage, signs, outcome):
+    execution = original.app.state.financial.execution
+    journal = execution._journal
+
+    def failing(owner, attempt_id):
+        save = journal(owner, attempt_id)
+
+        def guarded(stage, values):
+            if stage == failing_stage:
+                raise JournalError("authored: database unavailable")
+            save(stage, values)
+        return guarded
+
+    execution._journal = failing
+    try:
+        job = submitted(original, owner_a, f"save-{failing_stage.lower()}-fx-original")
+    finally:
+        execution._journal = journal
+    assert job["outcome"] == outcome, job["reason"]
+    assert calls(recordings).get("signer.rpc", 0) == signs
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+def test_a_lost_broadcast_reply_reconciles_the_original_from_its_receipt(original, owner_a, recordings):
+    Inject(original, broadcast=lambda inner: Delegate(
+        inner, after=lambda result, method, params: lost() if method == "eth_sendRawTransaction" else result))
+    job = submitted(original, owner_a, "ack-fx-original")
+    assert job["outcome"] == "SUBMITTED_UNKNOWN"
+    assert original_of(action(original, owner_a, job["action_id"]))["stage"] == "BROADCAST_UNKNOWN"
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert (settled["receipt_outcome"], settled["case_state"]) == ("CONFIRMED", "CONFIRMED")
+    assert calls(recordings)["broadcast.eth_sendRawTransaction"] == 1
+
+
+def test_a_broadcast_reply_with_another_hash_is_kept_unknown(original, owner_a, recordings):
+    Inject(original, broadcast=lambda inner: Delegate(
+        inner, after=lambda result, method, params: "0x" + "ab" * 32 if method == "eth_sendRawTransaction"
+        else result))
+    job = submitted(original, owner_a, "hash-fx-original")
+    body = original_of(action(original, owner_a, job["action_id"]))
+    assert (job["outcome"], body["stage"]) == ("SUBMITTED_UNKNOWN", "BROADCAST_HASH_MISMATCH")
+
+
+def test_a_stop_recorded_after_signing_prevents_the_broadcast(original, owner_a, recordings):
+    def stop_then_return(result, *_):
+        stopped = original.post("/v1/agents/stop-fx-original/stops", headers=owner_a,
+                                json={"mode": "HALT_ALL_SWAPS", "scope": "AGENT_WALLET_NETWORK"})
+        assert stopped.status_code in (200, 201), stopped.text
+        return result
+
+    Inject(original, signer=lambda inner: Delegate(inner, after=stop_then_return))
+    job = submitted(original, owner_a, "stop-fx-original")
+    body = original_of(action(original, owner_a, job["action_id"]))
+    assert job["outcome"] == "SUBMITTED_UNKNOWN" and body["stage"] == "STOPPED_AFTER_SIGNING"
+    assert body["transaction_hash"] == ENTRY_NONCE0_HASH  # saved before the stop was seen
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+class Crash(BaseException):
+    """An authored process death inside the injected boundary (not an application exception)."""
+
+
+def test_a_crash_after_signing_leaves_one_original_that_a_restart_never_resends(original, owner_a, recordings):
+    Inject(original, broadcast=lambda inner: Delegate(
+        inner, before=lambda method, params: (_ for _ in ()).throw(Crash()) if method == "eth_sendRawTransaction"
+        else None))
+    ready(original, owner_a, "crash-fx-original")
+    scheduled = ff.schedule(original, owner_a, "crash-fx-original").json()
+    with pytest.raises(Crash):
+        original.app.state.financial.connected.run_job(uuid.UUID(scheduled["job_id"]))
+    before = calls(recordings)
+    Inject(original)  # the restarted process uses ordinary recorded clients
+    rerun = ff.run_job(original, scheduled)
+    assert rerun["state"] == "SUBMITTED" and calls(recordings) == before
+    body = action(original, owner_a, rerun["action_id"])
+    assert body["attempts"][-1]["state"] == "IN_FLIGHT" and len(body["attempts"]) == 1
+    assert original_of(body)["stage"] == "BROADCAST_REQUESTED"
+    settled = original.post(f"/v1/actions/{rerun['action_id']}/reconcile", headers=owner_a).json()
+    assert settled["receipt_outcome"] == "SUBMISSION_UNKNOWN"  # nothing was accepted by the recorded chain
+    assert "RESERVED" in reservation_states(action(original, owner_a, rerun["action_id"]))
+
+
+def receipt_edit(edit):
+    def after(result, method, params):
+        if method == "eth_getTransactionReceipt" and result is not None:
+            return edit(json.loads(json.dumps(result)))
+        return result
+    return lambda inner: Delegate(inner, after=after)
+
+
+@pytest.mark.parametrize("edit,reason", [
+    (lambda r: {**r, "transactionHash": "0x" + "cd" * 32}, "OBS_BINDING_MISSING"),
+    (lambda r: {**r, "from": "0x" + "ef" * 20}, "OBS_WALLET_MISMATCH")])
+def test_a_receipt_for_another_transaction_or_wallet_applies_nothing(original, owner_a, edit, reason):
+    job = submitted(original, owner_a, f"tuple-{reason[4:10].lower()}-fx-original")
+    Inject(original, observer=receipt_edit(edit))
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert (settled["receipt_outcome"], settled["applied"], settled["detail"]) == ("REJECTED", False, reason)
+    assert "RESERVED" in reservation_states(action(original, owner_a, job["action_id"]))
+
+
+def test_a_receipt_on_another_chain_applies_nothing(original, owner_a):
+    job = submitted(original, owner_a, "chain-fx-original")
+    Inject(original, observer=lambda inner: Delegate(
+        inner, after=lambda result, method, params: "0x1" if method == "eth_chainId" else result))
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert (settled["receipt_outcome"], settled["detail"]) == ("REJECTED", "OBS_NETWORK_MISMATCH")
+
+
+@pytest.mark.parametrize("edit,breach", [
+    (lambda r: {**r, "logs": r["logs"][:1]}, "MISSING_RECONCILED"),
+    (lambda r: {**r, "logs": r["logs"][1:]}, "MISSING_RECONCILED_INPUT"),
+    (lambda r: {**r, "status": "0x0", "gasUsed": None}, "MISSING_RECONCILED_GAS")])
+def test_a_receipt_without_every_actual_never_releases_the_liability(original, owner_a, edit, breach):
+    job = submitted(original, owner_a, f"partial-{breach[-5:].lower()}-fx-original")
+    Inject(original, observer=receipt_edit(edit))
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    body = action(original, owner_a, job["action_id"])
+    assert settled["decision_status"] == "BREACHED", settled
+    assert body["admission"][0]["reason"].startswith(breach)
+    assert "RESERVED" in reservation_states(body)
+
+
+def test_changed_evidence_after_settlement_cannot_rewrite_the_original_outcome(original, owner_a):
+    job = submitted(original, owner_a, "changed-fx-original")
+    first = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert first["case_state"] == "CONFIRMED"
+
+    def more_output(receipt):
+        receipt["logs"][1]["data"] = hex(int(receipt["logs"][1]["data"], 16) + 1)
+        return receipt
+
+    Inject(original, observer=receipt_edit(more_output))
+    changed = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert (changed["applied"], changed["case_state"]) == (False, "DISCREPANCY")
+    receipts = action(original, owner_a, job["action_id"])["receipts"]
+    assert [item["content"]["actual_output"]["raw"] for item in receipts if item["outcome"] == "CONFIRMED"] == [
+        ff.ENTRY_BASE_OUTPUT]
+
+
+@pytest.mark.parametrize("change,reason", [
+    (lambda h: {**h, "age_seconds": 600}, "HOLDINGS_STALE"),
+    (lambda h: {**h, "decimals": {**h["decimals"], "0x2222222222222222222222222222222222222222": 18}},
+     "HOLDINGS_INCOMPLETE"),
+    (lambda h: {**h, "tokens": {"0x1111111111111111111111111111111111111111": h["tokens"][
+        "0x1111111111111111111111111111111111111111"]}}, "HOLDINGS_INCOMPLETE")])
+def test_unusable_holdings_admit_nothing_and_show_unavailable(original, owner_a, recordings, change, reason):
+    data = original.app.state.financial.ports.original.data
+    saved = data["holdings"]
+    data["holdings"] = change(saved)
+    try:
+        job = submitted(original, owner_a, f"hold-{abs(hash(reason)) % 997}-{len(str(change))}-fx-original")
+        funding = original.get(f"/v1/agents/{job['agent_id']}/funding", headers=owner_a).json()
+    finally:
+        data["holdings"] = saved
+    assert (job["state"], job["reason"], job["action_id"]) == ("UNAVAILABLE", reason, None)
+    assert funding["current_holdings"]["state"] == "UNAVAILABLE" and funding["current_holdings"]["reason"] == reason
+    assert calls(recordings).get("signer.rpc", 0) == 0
+
+
+def test_recorded_holdings_carry_their_observation_identity_apart_from_deposits(original, owner_a):
+    ready(original, owner_a, "view-fx-original")
+    funding = original.get("/v1/agents/view-fx-original/funding", headers=owner_a).json()
+    holdings = funding["current_holdings"]
+    assert (holdings["state"], holdings["source"], holdings["finality"], holdings["wallet_address"],
+            holdings["chain_id"], holdings["block_number"]) == (
+        "OBSERVED", "recorded-holdings/1", "FINALIZED", PUBLISHED_SENDER, 143, 2000000)
+    assert {item["asset_id"].rsplit("/", 1)[1]: item["raw"] for item in holdings["assets"]} == {
+        "0x2222222222222222222222222222222222222222": "1000000000",
+        "0x1111111111111111111111111111111111111111": "50000000000000000000", "native": "1000000000000000000"}
+    credited = {b["asset_id"]: b["credited_deposits"]["raw"] for b in funding["deposit_balances"]}
+    assert set(credited.values()) == {ff.TRADING_DEPOSIT, ff.GAS_DEPOSIT}  # deposit history stays separate
+
+
+def test_another_owner_cannot_read_or_reconcile_and_makes_no_call(original, owner_a, owner_b, recordings):
+    job = submitted(original, owner_a, "owner-fx-original")
+    before = calls(recordings)
+    assert original.get(f"/v1/actions/{job['action_id']}", headers=owner_b).status_code == 404
+    assert original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_b).status_code == 404
+    assert calls(recordings) == before
+
+
+def test_the_exit_is_one_more_original_transaction_with_the_next_nonce(original, owner_a, recordings):
+    entry = submitted(original, owner_a, "exit-fx-original")
+    original.post(f"/v1/actions/{entry['action_id']}/reconcile", headers=owner_a)
+    connected, ports = original.app.state.financial.connected, original.app.state.financial.ports
+    clock, ports_clock = connected._clock, ports.clock
+    connected._clock = ports.clock = lambda: clock() + dt.timedelta(minutes=5)
+    try:
+        exit_job = ff.run_job(original, ff.schedule(original, owner_a, "exit-fx-original", "exit-slot").json())
+    finally:
+        connected._clock, ports.clock = clock, ports_clock
+    body = action(original, owner_a, exit_job["action_id"])
+    assert body["operation"] == "EXIT"
+    assert (original_of(body)["nonce"], original_of(body)["transaction_hash"]) == (1, EXIT_NONCE1_HASH)
+    assert calls(recordings)["broadcast.eth_sendRawTransaction"] == 2

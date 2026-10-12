@@ -15,6 +15,8 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import uuid
+from collections.abc import Callable
+from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -41,6 +43,7 @@ from edge_os_api.execution.models import (
     QueueRow,
     SubmissionAttemptRow,
 )
+from edge_os_api.execution.original_transaction import JournalError
 from edge_os_api.execution.transport import (
     FixtureAcknowledgementLost,
     PreparedSubmission,
@@ -136,10 +139,6 @@ def _wallet_lock(session: Session, owner: uuid.UUID, agent_id: str, wallet_id: s
         return value - 2**32 if value >= 2**31 else value
 
     session.execute(text("SELECT pg_advisory_xact_lock(:a, :b)"), {"a": int4(0), "b": int4(4)})
-
-
-def _cap_amount(cap: AllowanceCap) -> AssetAmount:
-    return AssetAmount(asset_id=cap.asset_id, raw=cap.approved_raw, decimals=cap.decimals)
 
 
 def _cap_for(approval: ApprovalSnapshot, asset_id: str) -> int | None:
@@ -340,16 +339,46 @@ class ExecutionService:
                 verified_owner_id, agent_id, wallet_id, network_id, queue_id, attempt_id,
                 ownership, now)
 
+        # An original-transaction transport saves each stage through this journal before its next effect.
+        submit_original = getattr(transport, "submit_original", None)
         try:
-            outcome = transport.submit(prepared)
+            if submit_original is not None:
+                outcome = submit_original(prepared, self._journal(verified_owner_id, attempt_id))
+            else:
+                outcome = transport.submit(prepared)
         except FixtureAcknowledgementLost:
             outcome = TransportOutcome(
                 outcome="SUBMISSION_POSSIBLE",
                 detail="fixture lost the acknowledgement after a possible send")
+        authored = getattr(transport, "authored_actuals", None)
+        if authored is not None and outcome.outcome in ("CONFIRMED", "REVERTED"):
+            outcome = authored(outcome, intention, approval)  # labelled fixture adapter only
 
         return self._finish_submission(
             verified_owner_id, agent_id, wallet_id, network_id, queue_id, attempt_id,
             intention, approval, outcome, now)
+
+    def _journal(self, owner: uuid.UUID, attempt_id: uuid.UUID) -> Callable[[str, dict[str, Any]], None]:
+        """Save one original-transaction stage into the IN_FLIGHT attempt, in its own short transaction."""
+
+        def save(stage: str, values: dict[str, Any]) -> None:
+            try:
+                with self._factory() as session:
+                    attempt = session.execute(select(SubmissionAttemptRow).where(
+                        SubmissionAttemptRow.owner_id == owner, SubmissionAttemptRow.attempt_id == attempt_id,
+                    ).with_for_update().execution_options(populate_existing=True)).scalar_one()
+                    if attempt.state != "IN_FLIGHT":
+                        raise JournalError("the attempt is no longer in flight")
+                    original = dict(attempt.content.get("original_transaction") or {})
+                    original.update(values)
+                    original["stage"] = stage
+                    original["stages"] = [*original.get("stages", []), {"stage": stage, "at": _iso(self._clock())}]
+                    attempt.content = {**attempt.content, "original_transaction": original}
+                    session.commit()
+            except SQLAlchemyError as error:
+                raise JournalError(type(error).__name__) from error
+
+        return save
 
     def _abort_submission(
         self, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
@@ -430,9 +459,11 @@ class ExecutionService:
                 session.add(claim)
                 entry.state = "CLAIMED"
                 entry.updated_at = now
+                attempt_id = uuid.uuid4()
                 prepared = PreparedSubmission(
                     action_id=entry.action_id, owner_id=str(owner), wallet_id=wallet_id,
-                    network_id=network_id, operation=entry.operation, payload_hash=intent_row.payload_hash)
+                    network_id=network_id, operation=entry.operation, payload_hash=intent_row.payload_hash,
+                    attempt_id=str(attempt_id))
                 content = {"transport": transport.transport_id, "payload_hash": intent_row.payload_hash}
                 # IC06: a transport that names its original transaction references records them here, in the
                 # same transaction as the IN_FLIGHT attempt, before any possible effect.
@@ -440,7 +471,7 @@ class ExecutionService:
                 if references is not None:
                     content["original_references"] = references(prepared)
                 attempt = SubmissionAttemptRow(
-                    attempt_id=uuid.uuid4(), owner_id=owner, queue_id=entry.queue_id,
+                    attempt_id=attempt_id, owner_id=owner, queue_id=entry.queue_id,
                     action_id=entry.action_id, agent_id=agent_id, wallet_id=wallet_id,
                     network_id=network_id, transport_id=transport.transport_id,
                     payload_hash=intent_row.payload_hash, state="IN_FLIGHT",
@@ -761,22 +792,15 @@ class ExecutionService:
             return ActionReceipt(action_id=action_intent.action_id, binding=binding, outcome="PREBROADCAST_DENIED")
         if outcome.outcome == "SUBMISSION_POSSIBLE":
             return ActionReceipt(action_id=action_intent.action_id, binding=binding, outcome="SUBMISSION_UNKNOWN")
-        default_input, default_output, default_gas = self._planned_actuals(action_intent, approval)
+        # Only the transport's own actuals settle. A missing value stays missing, and the accepted P22
+        # settlement keeps the reservations as a MISSING_RECONCILED_* breach; planned values are never used.
         if outcome.outcome == "CONFIRMED":
             return ActionReceipt(
                 action_id=action_intent.action_id, binding=binding, outcome="CONFIRMED",
-                actual_input=outcome.actual_input or default_input,
-                actual_output=outcome.actual_output or default_output,
-                actual_gas=outcome.actual_gas or default_gas)
+                actual_input=outcome.actual_input, actual_output=outcome.actual_output,
+                actual_gas=outcome.actual_gas)
         return ActionReceipt(
-            action_id=action_intent.action_id, binding=binding, outcome="REVERTED",
-            actual_gas=outcome.actual_gas or default_gas)
-
-    @staticmethod
-    def _planned_actuals(action_intent: ActionIntent, approval: ApprovalSnapshot):
-        if action_intent.operation == "ENTRY":
-            return action_intent.input.quote_input, action_intent.quantity, _cap_amount(approval.per_action_gas)
-        return action_intent.quantity, action_intent.input.expected_quote, _cap_amount(approval.per_exit_gas)
+            action_id=action_intent.action_id, binding=binding, outcome="REVERTED", actual_gas=outcome.actual_gas)
 
     # -------------------------------------------------------------------- queries
 

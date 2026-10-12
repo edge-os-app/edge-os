@@ -39,7 +39,8 @@ class FinancialServices:
 
 def build_financial_services(factory: sessionmaker[Session], settings: Settings,
                              ports: ProviderPorts | None = None) -> FinancialServices:
-    ports = ports or build_provider_ports(settings.execution_mode, factory, settings.fixture_effects_path)
+    ports = ports or build_provider_ports(settings.execution_mode, factory, settings.fixture_effects_path,
+                                          settings.original_recordings_dir)
     stops = StopService(factory)
     removals = RemovalService(factory)
     # Stops, removal and the one-position-per-wallet limit share the single StopReader seam.

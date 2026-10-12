@@ -245,6 +245,76 @@ Milestone `RELEASE-E2E-L2-20261012-SOURCE-LOCAL`, base `a7864a7`. Local only. Ev
 | Worker killed in collection | unknown liability, never collected again | `test_a_worker_killed_during_collection…` |
 | Other owner | 404, no client call | `test_another_owner_cannot_start…` |
 
+## ORIGINAL-LOCAL: original transaction identity, receipts and current holdings (frozen interfaces)
+
+Milestone `RELEASE-E2E-L2-20261012-ORIGINAL-LOCAL-v1`, base `70ca3bd`. Local only. Every provider response is an AUTHORED native-shaped recording replayed by an offline client; nothing here signs with a real key, broadcasts, reads a balance or reaches a network. Production keeps `execution_mode=unavailable`.
+
+**Selection.** The original-transaction path is used only when the server is in `fixture` mode with a local `original_recordings_path` (refused in production) and the agent id carries the reserved marker `fx-original`. Every other fixture agent keeps the `FixtureChain` transport unchanged. No caller field selects it.
+
+**Authored test signer (amendment A1).** The fixture wallet provider (`wallet_setup/adapter.py`, refused in production) returns the AUTHORED public test-signer address `0x2c7536E3605D9C16a7a3D7b1898e529396a65c23` for a fixture wallet whose agent id contains the reserved marker `fx-original`; every other fixture wallet keeps its SHA-256 placeholder address. The address is the eth-account documentation example key's sender. The application holds the address only, never a key; the signed bytes are frozen AUTHORED fixtures from the single offline writer `tests/original_transaction_recordings.py`. One public test address is not evidence of separate user wallets (PU06).
+
+**Original envelope** (`edge-os.original-transaction/1`), saved privately in the attempt `content.original_transaction` and advanced only forward:
+
+| Field | Source |
+|---|---|
+| `owner_id`, `agent_id`, `wallet_id`, `wallet_address`, `network_id`, `chain_id` | Verified owner, confirmed wallet setup and its provider evidence address, `NETWORK_NAMES`. |
+| `strategy_id`, `publication_revision_id`, `execution_revision_id`, `content_hash`, `consent_adoption_id`, `consent_hash`, `policy_binding` | The saved evaluation job and intent. |
+| `action_id`, `payload_hash`, `operation`, `attempt_id`, `claim` (the existing ACTIVE claim), reservations | The saved intent, queue claim and P22 decision. |
+| `candidate` (`candidate_hash`, to, value, data, selector, intent, fees, program) | P20 `prepare_unsigned_transaction` over the recorded route response and a server-built `ApprovedAdapterConfiguration` (input = the saved intent input, minimum output from the saved expected output). |
+| `nonce` | One recorded `eth_getTransactionCount(wallet_address, "pending")`. |
+| `fee_envelope` (`gas_limit`, `max_fee_per_gas`, `max_priority_fee_per_gas`) | The recorded route profile. `gas_limit × max_fee_per_gas` must not exceed the reserved per-action (entry) or per-exit gas cap. |
+| `unsigned` (EIP-1559 type 2 fields) | Built from the candidate, nonce, fee envelope and `chain_id`. |
+| `signing_request` (`request_id`, Privy `POST /v1/wallets/{wallet_id}/rpc`, `eth_signTransaction` body) | Built by the server; `request_id` = attempt id. |
+| `signed_bytes` (private), `transaction_hash` | `data.signed_transaction` of the signer reply; hash = Keccak-256 of the entire signed serialization (`eth_utils.keccak`). Never `TypedTransaction.hash()` (signing preimage), never SHA-256. |
+| `broadcast` | One `eth_sendRawTransaction`; the returned hash must equal `transaction_hash`. |
+| `stage` | `PREPARED` → `SIGN_REQUESTED` → `SIGNED` → `BROADCAST_REQUESTED` → `BROADCAST_RETURNED`, or a terminal refusal stage. |
+
+Three identities stay distinct: `candidate_hash` (application SHA-256), `transaction_hash` (Keccak of the signed bytes) and `provider_reference` (the signer request id and broadcast reply).
+
+**Order.** IN_FLIGHT attempt commit → P22 `acquire_submission` → route quote + nonce read (no SQL lock held) → `PREPARED` saved → durable stop/removal recheck → signer call → signed bytes validated → `SIGNED` saved with bytes and hash → stop/removal and deadline recheck → `BROADCAST_REQUESTED` saved → one broadcast → `BROADCAST_RETURNED` saved. A save that fails stops the sequence: no later call is made.
+
+**Signed-byte validation.** Only type 2 (EIP-1559) is supported; any other type is refused. The decoded `chainId`, `nonce`, `to`, `value`, `data`, `gas`, `maxFeePerGas`, `maxPriorityFeePerGas` and an empty access list must equal the frozen unsigned transaction, and the recovered sender must equal `wallet_address`. Size limit 8 KiB.
+
+**Outcomes** (transport vocabulary reused; nothing is retried, re-quoted, re-nonced, re-fee'd or re-signed, and no second action exists):
+
+| Event | Outcome | Liability |
+|---|---|---|
+| Unsupported network/route/asset, quote blocked or unknown, fee over the gas reservation, stop/removal or deadline before signing, persistence failure before signing | `DEFINITELY_UNSENT` | Released by the accepted P22 path. |
+| Signer refusal (reply without `signed_transaction`) | `DEFINITELY_UNSENT` | Released. |
+| Signer reply lost or timed out | `SUBMISSION_POSSIBLE` (`SIGNING_UNKNOWN`) | Kept. |
+| Signed bytes malformed, wrong type, field or sender mismatch | `SUBMISSION_POSSIBLE` (`SIGNED_RESPONSE_REJECTED`); never broadcast | Kept: a signature may exist outside the application. |
+| Stop/removal, deadline or persistence failure after signing | `SUBMISSION_POSSIBLE`; never broadcast | Kept. |
+| Broadcast reply lost, error or hash mismatch | `SUBMISSION_POSSIBLE` | Kept. |
+| Broadcast returned the same hash | `SUBMISSION_POSSIBLE` (`BROADCAST_RETURNED`) | Kept until an independent receipt reconciles. |
+
+Byte-identical resend is disabled in this milestone. A restart finds the IN_FLIGHT attempt or the retained claim and makes no second call.
+
+**Receipts.** `POST /v1/actions/{id}/reconcile` reads one recorded `eth_getTransactionReceipt(transaction_hash)` from an observation client separate from the broadcast client, and passes it through P20 `normalize_observation` with the saved `candidate_hash`, `chain_id`, `wallet_address` and `transaction_hash`. The candidate identity is supplied only when the receipt's `transactionHash`, `from` and `to` equal the saved values. Actual input and output come only from ERC-20 `Transfer` logs of the saved sell and buy tokens to or from the wallet; gas is `gasUsed × effectiveGasPrice` in native MON. A missing value stays `null`. Mapping: proven `CONFIRMED` → `CONFIRMED` with all actuals; `CONFIRMED` without all actuals → `CONFIRMED` with the missing values `null`, which the accepted P22 settlement records as a `BREACHED` `MISSING_RECONCILED_*` case keeping every reservation; `REVERTED` → `REVERTED` (missing gas: same breach); `PENDING`, `TIMEOUT`, `SUBMISSION_UNKNOWN`, `ACKNOWLEDGEMENT_LOST` → `SUBMISSION_UNKNOWN`; `REJECTED` (wrong hash, wallet, chain or binding) → nothing applied, reasons returned. Recovery fingerprints keep a repeat a no-op and changed evidence a discrepancy. Planned amounts are never substituted: the generic settlement no longer falls back to them; the labelled `FixtureChain`/`LocalFixtureTransport` adapters supply their authored amounts explicitly.
+
+**Current holdings** (`edge-os.current-holdings/1`). The holdings port returns, per requested asset, `raw`, `decimals`, and for the observation `wallet_address`, `chain_id`, `block_number`, `observed_at` (the block time), `finality`, `source`, `evidence_class` and `missing` assets. Admission and revalidation use `observed_at` as `checked_at`, so a stale observation is refused by the existing freshness check (`STALE_CONTEXT`); the current clock is never stamped onto supplied holdings. A wrong wallet or chain, an unknown or mismatched decimals value, a missing asset or a future/stale time is `HOLDINGS_UNAVAILABLE` with the reason, and no action is admitted. Native MON is gas only; a native trading asset is refused. Funding shows these fields apart from deposit history, attributed positions and reservations. The fixture holdings adapter stays authored (`observed_at` = its read time, `AUTHORED`).
+
+**Owner projection.** `GET /v1/actions/{id}` shows `original_transaction` without `signed_bytes`, unsigned bytes or the signing request body: stage, `candidate_hash`, `transaction_hash`, `nonce`, fee envelope, `signing_request_id`, `signed_bytes_sha256`, `signed_bytes_length`, broadcast result and `evidence_class`. Another owner gets `404` and no client call.
+
+**Fault matrix** (each row is a test; SQL is independent evidence, the public route is the assertion):
+
+| Case | Expected |
+|---|---|
+| Happy path, then reconcile a proven receipt | 1 quote, 1 nonce, 1 sign, 1 broadcast; hash equals the published-key vector literal; CONFIRMED once; repeat is a no-op |
+| Signer refusal | 0 broadcast; DEFINITELY_UNSENT; reservations released |
+| Signer reply lost | 0 broadcast; unknown kept; restart makes no call |
+| Signed bytes: wrong type, chain, nonce, to, value, data, fee, sender; malformed; oversize | 0 broadcast; `SIGNED_RESPONSE_REJECTED`; unknown kept |
+| Persistence failure before signing / before broadcast | 0 sign / 0 broadcast |
+| Broadcast reply lost; hash mismatch | unknown kept; 1 broadcast |
+| Stop or removal after signing | 0 broadcast; unknown kept |
+| Restart with IN_FLIGHT attempt | no second quote, sign or broadcast |
+| Receipt wrong hash, wallet or chain | nothing applied |
+| CONFIRMED missing output/input/gas | BREACHED with `MISSING_RECONCILED_*`; reservations kept |
+| REVERTED missing gas | BREACHED; reservations kept |
+| Changed evidence after settlement | discrepancy; original truth unchanged |
+| Holdings stale, wrong wallet, wrong decimals, missing asset | admission denied; funding shows unavailable with reason |
+| Two owners | 404; 0 injected calls |
+| Fixture-wallet agent with `fx-original` | `SIGNED_RESPONSE_REJECTED` (sender mismatch): the placeholder fixture address has no key |
+
 ## Decisions for the builder
 
 0. One open position per agent and revision at a time is enforced by the strategy (`max_open_positions: 1`) and the worker (an exit uses the open position); repeated entry/exit cycles are now possible because each entry has its own position id.

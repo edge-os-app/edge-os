@@ -22,6 +22,7 @@ from edge_os_api.core.authentication import Principal, require_principal
 from edge_os_api.core.errors import AppError, finding, not_found
 from edge_os_api.core.request_schemas import StrictModel
 from edge_os_api.execution.connected_identity import resolve_agent
+from edge_os_api.execution.original_transaction import owner_projection
 from edge_os_api.execution.models import DecisionRow, IntentRow, QueueRow, SubmissionAttemptRow
 from edge_os_api.execution.worker import JobRefused
 from edge_os_api.recovery.models import RecoveryCaseRow
@@ -141,7 +142,11 @@ def read_action(action_id: str, request: Request, principal: Principal = Depends
             "receipts": [item.model_dump(mode="json") for item in admission.retrieve_receipts(
                 owner, action_id=action_id)],
             "attempts": [{"attempt_id": str(row.attempt_id), "state": row.state, "outcome": row.outcome,
-                          "detail": row.detail, "transport_id": row.transport_id, "content": row.content,
+                          "detail": row.detail, "transport_id": row.transport_id,
+                          # Signed bytes and the signing request body stay private; the owner sees identities.
+                          "content": {**{k: v for k, v in row.content.items() if k != "original_transaction"},
+                                      "original_transaction": owner_projection(row.content.get(
+                                          "original_transaction"))},
                           "started_at": _iso(row.started_at), "completed_at": _iso(row.completed_at)}
                          for row in attempts],
             "recovery": recovery}
