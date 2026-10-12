@@ -75,3 +75,38 @@ def test_provider_warning_text_is_data_never_an_instruction() -> None:
     run = support.run(support.request(operations=("holders",)), [support.response(200, payload)])
     assert injection in run.evidence.warnings
     assert injection in run.evidence.holder.warnings
+
+
+def test_a_wrong_network_or_token_echo_is_refused() -> None:
+    foreign_network = support.holder_payload([support.holder_row("0xaaa")])
+    foreign_network["network"] = "ethereum"
+    run = support.run(support.request(operations=("holders",)), [support.response(200, foreign_network)])
+    assert run.evidence.holder is None
+    assert run.evidence.stop_reason == "WRONG_NETWORK"
+
+    foreign_token = support.holder_payload([support.holder_row("0xaaa")])
+    foreign_token["token_address"] = "0xdeadbeef"
+    run = support.run(support.request(operations=("holders",)), [support.response(200, foreign_token)])
+    assert run.evidence.holder is None
+    assert run.evidence.stop_reason == "WRONG_TOKEN"
+
+
+def test_injected_timeout_and_cancel_keep_a_partial_result() -> None:
+    from edge_os_api.nansen_research import NansenCancelled, NansenTimeout
+
+    script = [support.response(200, _holders()), NansenTimeout("TIMEOUT", "boom")]
+    run = support.run(support.request(), script)
+    assert run.evidence.holder is not None
+    assert run.evidence.flows is None
+    assert run.evidence.stop_reason == "TIMEOUT"
+
+    run = support.run(support.request(), [support.response(200, _holders()), NansenCancelled("CANCELLED", "stop")])
+    assert run.evidence.stop_reason == "CANCELLED"
+
+
+def test_request_and_evidence_round_trip_exactly() -> None:
+    from edge_os_api.nansen_research import NansenEvidence, NansenRequest
+
+    run = support.run(support.request(), [support.response(200, _holders()), support.response(200, _flows())])
+    assert NansenRequest.from_dict(support.request().to_dict()) == support.request()
+    assert NansenEvidence.from_dict(run.evidence.to_dict()) == run.evidence

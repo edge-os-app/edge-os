@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from edge_os_api.nansen_research.errors import NansenContractError
 from edge_os_api.nansen_research.models import (
@@ -181,7 +182,11 @@ def extract_flow_evidence(fetches: Sequence[NansenFetch], window: ObservationWin
             if bucket.bucket_end is None:
                 warnings.append("a complete bucket has no bucket_end; its seconds are not counted")
                 continue
-            span = (parse_instant(bucket.bucket_end) - parse_instant(bucket.date)).total_seconds()
+            try:
+                span = (parse_instant(bucket.bucket_end) - parse_instant(bucket.date)).total_seconds()
+            except ValueError as error:
+                raise NansenContractError("MALFORMED_PROVIDER_RESPONSE",
+                                          "a bucket_end is not an instant") from error
             complete_seconds += int(span)
         else:
             warnings.append("a bucket has unknown completeness; it is not counted as complete")
@@ -232,7 +237,7 @@ def _unknowns(request: NansenRequest, holder: HolderEvidence | None,
 
 
 def build_evidence(request: NansenRequest, context: NansenContext, *, sources: Sequence[SourceRecord],
-                   attempts: int, pages: int, reserved_credits: object, holder: HolderEvidence | None,
+                   attempts: int, pages: int, reserved_credits: Decimal, holder: HolderEvidence | None,
                    flows: FlowEvidence | None, stop_reason: str | None) -> NansenEvidence:
     """Assemble the immutable evidence package from the collected sources."""
     warnings: list[str] = []
@@ -265,3 +270,24 @@ def build_evidence(request: NansenRequest, context: NansenContext, *, sources: S
         unknowns=_unknowns(request, holder, flows),
         warnings=tuple(warnings),
     )
+
+
+def refuse_foreign_echo(request: NansenRequest, payload: Mapping) -> str | None:
+    """Refuse a response whose token or network echo contradicts the request.
+
+    The pinned TGM responses carry no such echo today, so this is a defensive
+    check. When an echo is present and wrong, the caller records a contract
+    failure and keeps no row. Returns a stable code, or ``None`` when the echo is
+    absent or matches.
+    """
+    chain = payload.get("chain")
+    if chain is None:
+        chain = payload.get("network")
+    if isinstance(chain, str) and chain.strip() and chain.strip().lower() != request.network.lower():
+        return "WRONG_NETWORK"
+    token = payload.get("token_address")
+    if token is None:
+        token = payload.get("token")
+    if isinstance(token, str) and token.strip() and token.strip().lower() != request.token_address.lower():
+        return "WRONG_TOKEN"
+    return None

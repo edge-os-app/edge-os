@@ -148,6 +148,10 @@ def from_plain(declared: Any, value: Any) -> Any:
     """Rebuild a frozen dataclass tree from a plain JSON object."""
     if not is_dataclass(declared):
         raise TypeError(f"not a dataclass: {declared!r}")
+    names = {field.name for field in fields(declared)}
+    extra = set(value) - names
+    if extra:
+        raise ValueError(f"unexpected fields for {declared.__name__}: {sorted(extra)}")
     hints = get_type_hints(declared)
     kwargs: dict[str, Any] = {}
     for field in fields(declared):

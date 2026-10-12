@@ -228,6 +228,7 @@ class SourceRecord(Model):
     response_sha256: str | None
     collected_at: str
     failure: str | None
+    retry_after: str | None = None
 
 
 @dataclass(frozen=True)
@@ -275,6 +276,7 @@ class NansenEvidence(Model):
     stop_reason: str | None
     unknowns: tuple[str, ...]
     warnings: tuple[str, ...]
+    availability: str = "unknown"
     evidence_schema: str = EVIDENCE_SCHEMA
 
 

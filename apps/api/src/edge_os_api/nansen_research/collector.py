@@ -11,7 +11,7 @@ opens no socket and reads no credential or environment value.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from edge_os_api.nansen_research.errors import (
@@ -23,8 +23,15 @@ from edge_os_api.nansen_research.evidence_extraction import (
     build_evidence,
     extract_flow_evidence,
     extract_holder_evidence,
+    refuse_foreign_echo,
 )
-from edge_os_api.nansen_research.models import NansenContext, NansenRequest, SourceRecord
+from edge_os_api.nansen_research.models import (
+    NansenContext,
+    NansenEvidence,
+    NansenReport,
+    NansenRequest,
+    SourceRecord,
+)
 from edge_os_api.nansen_research.nansen_client import OPERATIONS, NansenClient, NansenFetch
 from edge_os_api.nansen_research.report_builder import build_report
 from edge_os_api.nansen_research.serialization import canonical_sha256, utc_now
@@ -86,7 +93,8 @@ def _source_from_fetch(fetch: NansenFetch) -> SourceRecord:
     )
 
 
-def _failure_source(operation: str, body: Mapping[str, Any], code: str, collected_at: str) -> SourceRecord:
+def _failure_source(operation: str, body: Mapping[str, Any], code: str, collected_at: str,
+                    retry_after: str | None = None) -> SourceRecord:
     method, path, _reservation = OPERATIONS[operation]
     return SourceRecord(
         operation=operation,
@@ -102,6 +110,7 @@ def _failure_source(operation: str, body: Mapping[str, Any], code: str, collecte
         response_sha256=None,
         collected_at=collected_at,
         failure=code,
+        retry_after=retry_after,
     )
 
 
@@ -130,14 +139,22 @@ def _collect_operation(client: NansenClient, request: NansenRequest, operation: 
         try:
             fetch = client.call(operation, body)
         except (NansenBudgetExhausted, NansenTimeout) as error:
-            sources.append(_failure_source(operation, body, error.code, client.now()))
+            sources.append(_failure_source(operation, body, error.code, client.now(),
+                                           getattr(error, "retry_after", None)))
             status = "STOPPED"
             stop_reason = error.code
             break
         except NansenTransportError as error:
-            sources.append(_failure_source(operation, body, error.code, client.now()))
+            sources.append(_failure_source(operation, body, error.code, client.now(),
+                                           getattr(error, "retry_after", None)))
             status = "FAILED"
             stop_reason = error.code
+            break
+        echo = refuse_foreign_echo(request, fetch.payload)
+        if echo is not None:
+            sources.append(_source_from_fetch(fetch))
+            status = "FAILED"
+            stop_reason = echo
             break
         fetches.append(fetch)
         sources.append(_source_from_fetch(fetch))
@@ -166,9 +183,9 @@ def _collect_operation(client: NansenClient, request: NansenRequest, operation: 
 class NansenRun:
     """The evidence package and the report from one local run."""
 
-    evidence: Any = field()
-    report: Any = field()
-    outcomes: tuple[OperationOutcome, ...] = field(default=())
+    evidence: NansenEvidence
+    report: NansenReport
+    outcomes: tuple[OperationOutcome, ...] = ()
 
 
 def run_research(request: NansenRequest, transport: NansenTransport, *,

@@ -47,8 +47,8 @@ The reservation values are the D01 captured basic-label costs. A quoted cost fro
 | `token_symbol` | Display symbol |
 | `network`, `chain_id` | `monad`, `143` |
 | `window` | `ObservationWindow(start_utc, end_utc)`; `end_utc` is the inclusive flow cutoff |
-| `holder_query` | `HolderQuery(label_type, aggregate_by_entity, per_page, order_field, value_usd_min)` |
-| `flow_query` | `FlowQuery(label, per_page)` |
+| `holder_query` | `HolderQuery(label_type, aggregate_by_entity, order_field, value_usd_min)` |
+| `flow_query` | `FlowQuery(label)` |
 | `operations` | Ordered subset of `holders`, `flows` |
 | `profile_version`, `conventions_version` | Accepted profile identities |
 | `limits` | `NansenLimits` (see below) |
@@ -65,7 +65,7 @@ The reservation values are the D01 captured basic-label costs. A quoted cost fro
 |---|---|
 | `max_requests` | Positive integer. Counted before each transport call. |
 | `max_pages` | Positive integer. Counted per collected page. |
-| `max_bytes` | Positive integer. Counted per response body, before framing. |
+| `max_bytes` | Positive integer. Counted across every retained response body, before framing. |
 | `max_credits` | Positive decimal. Conservative reservations plus quoted costs. |
 | `deadline_utc` | ISO-8601 UTC string or `None`. Checked before each call. |
 | `per_page` | Integer in 1..1000. |
@@ -83,7 +83,7 @@ No retry, no upgrade, no alternate paid route, no x402 payment path exists.
 | Costs | attempted requests, reserved credits, quoted credits, deducted credits, remaining credits (when sent), cap state |
 | Holder rows | `address`, raw `token_amount` text, raw `ownership_percentage` text, raw `value_usd` text or null, `address_label`, pagination `is_last_page` |
 | Flow buckets | `date`, `bucket_end`, `is_complete`, raw `price_usd`, `token_amount`, `value_usd`, `holders_count`, `total_inflows_count`, `total_outflows_count`, raw DEX/CEX fields |
-| Timing/quality | requested window, bucket start/end, completeness, missing and duplicate starts, warnings, returned and uncollected coverage |
+| Timing/quality | requested window, bucket start/end, completeness, missing and duplicate starts, warnings, returned and uncollected coverage, availability (recorded as `unknown` when the provider sends none) |
 | Field meaning | unit verdict per field, null meaning, label tier, classification limits |
 
 Raw numeric text: the client parses response JSON with `parse_float=str` and keeps the exact decimal text. It never divides by `10^18`, never converts a null to zero and never sums fractional or negative count fields.

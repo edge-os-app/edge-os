@@ -27,7 +27,12 @@ from edge_os_api.nansen_research.errors import (
     NansenTimeout,
 )
 from edge_os_api.nansen_research.models import NansenContext, NansenLimits
-from edge_os_api.nansen_research.serialization import canonical_sha256, load_provider_json, utc_now
+from edge_os_api.nansen_research.serialization import (
+    canonical_sha256,
+    load_provider_json,
+    parse_instant,
+    utc_now,
+)
 from edge_os_api.nansen_research.transport import NansenResponse, NansenTransport
 
 OPERATIONS: dict[str, tuple[str, str, Decimal]] = {
@@ -97,6 +102,7 @@ class NansenClient:
         self._transport = transport
         self._limits = limits
         self._clock = clock
+        self._deadline = parse_instant(limits.deadline_utc) if limits.deadline_utc is not None else None
         self._attempts = 0
         self._pages = 0
         self._bytes = 0
@@ -151,14 +157,14 @@ class NansenClient:
         return pinned
 
     def _enforce_budget(self, reservation: Decimal) -> None:
-        if self._limits.deadline_utc is not None and self._clock() > self._limits.deadline_utc:
+        if self._deadline is not None and parse_instant(self._clock()) > self._deadline:
             raise NansenTimeout("DEADLINE", "the local deadline passed before dispatch")
         if self._attempts >= self._limits.max_requests:
             raise NansenBudgetExhausted("REQUEST_LIMIT", "the request cap is reached")
         if self.reserved_credits + reservation > self._limits.max_credits:
             raise NansenBudgetExhausted("CREDIT_LIMIT", "the credit cap is reached")
 
-    def _raise_for_status(self, status: int, body: bytes) -> None:
+    def _raise_for_status(self, status: int, body: bytes, headers: Mapping[str, str]) -> None:
         if 200 <= status < 300:
             return
         if status == 401:
@@ -166,7 +172,13 @@ class NansenClient:
         if status == 402:
             raise NansenPaymentRequired("PAYMENT_REQUIRED", "the provider requires payment; no payment path is taken")
         if status == 429:
-            raise NansenRateLimited("RATE_LIMITED", "the provider rate limit rejected the request")
+            retry_after = headers.get("retry-after")
+            if retry_after is not None:
+                try:
+                    int(retry_after.strip())
+                except ValueError:
+                    retry_after = None
+            raise NansenRateLimited("the provider rate limit rejected the request", retry_after)
         code = _provider_code(body)
         raise NansenProviderError(code or f"HTTP_{status}", f"the provider returned status {status}")
 
@@ -198,7 +210,7 @@ class NansenClient:
             raise NansenContractError("OVERSIZED_RESPONSE", "the response body passes the byte cap")
         headers = {str(name).lower(): str(value) for name, value in response.headers.items()}
         retained = {name: headers[name] for name in RETAINED_HEADERS if name in headers}
-        self._raise_for_status(response.status, response.body)
+        self._raise_for_status(response.status, response.body, retained)
         payload = self._decode(response.body)
         self._pages += 1
         fetch = NansenFetch(

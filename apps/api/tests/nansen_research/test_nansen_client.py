@@ -21,6 +21,7 @@ from edge_os_api.nansen_research import (
     NansenProviderError,
     NansenRateLimited,
     NansenRequestError,
+    NansenLimitError,
     NansenResponse,
     NansenTimeout,
     NansenTransportError,
@@ -189,3 +190,41 @@ def test_credits_are_recorded_and_unallowlisted_headers_are_dropped() -> None:
 def test_context_rejects_a_wrong_network() -> None:
     with pytest.raises(NansenRequestError):
         NansenContext(network="ethereum").validate()
+
+
+@pytest.mark.parametrize("overrides", [
+    {"max_requests": 0}, {"max_pages": -1}, {"max_bytes": True}, {"per_page": 0},
+    {"per_page": 1001}, {"max_credits": Decimal("0")}, {"max_credits": Decimal("NaN")},
+    {"deadline_utc": 12345},
+])
+def test_invalid_limits_raise_the_documented_limit_error(overrides: dict) -> None:
+    with pytest.raises(NansenLimitError) as info:
+        NansenClient(support.RecordingTransport([]), support.limits(**overrides))
+    assert info.value.code == "INVALID_LIMIT"
+
+
+def test_offset_deadline_is_parsed_not_compared_as_text() -> None:
+    transport = support.RecordingTransport([_holder_ok()])
+    client = NansenClient(transport, support.limits(deadline_utc="2026-10-07T11:00:00+02:00"),
+                          clock=lambda: "2026-10-07T09:50:00Z")
+    with pytest.raises(NansenTimeout) as info:
+        client.call("holders", support.holder_body())
+    assert info.value.code == "DEADLINE"
+    assert transport.calls == []
+
+
+def test_rate_limit_retains_only_a_numeric_retry_after() -> None:
+    for header, expected in (({"Retry-After": "12"}, "12"), ({"Retry-After": "soon"}, None)):
+        transport = support.RecordingTransport([support.raw_response(429, b'{"code": "rate_limit_exceeded"}', header)])
+        client = NansenClient(transport, support.limits())
+        with pytest.raises(NansenRateLimited) as info:
+            client.call("holders", support.holder_body())
+        assert info.value.retry_after == expected
+
+
+def test_from_dict_refuses_an_unexpected_field() -> None:
+    model = support.request()
+    poisoned = model.to_dict()
+    poisoned["per_page"] = 50
+    with pytest.raises(ValueError):
+        type(model).from_dict(poisoned)

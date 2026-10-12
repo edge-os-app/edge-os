@@ -25,6 +25,9 @@ class NansenInputError(NansenError):
 class NansenLimitError(NansenInputError):
     """A finite limit is missing, negative or not an integer."""
 
+    def __init__(self, detail: str) -> None:
+        super().__init__("INVALID_LIMIT", detail)
+
 
 class NansenRequestError(NansenInputError):
     """A local rule refuses a request before dispatch.
@@ -40,6 +43,9 @@ class NansenProtocolError(NansenInputError):
 
 class NansenBudgetExhausted(NansenLimitError):
     """A caller-configured request or credit cap stops further dispatch."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        NansenError.__init__(self, code, detail)
 
 
 class NansenTransportError(NansenError):
@@ -66,6 +72,10 @@ class NansenAuthError(NansenTransportError):
 
 class NansenRateLimited(NansenTransportError):
     """The provider rate limit rejected the request."""
+
+    def __init__(self, detail: str, retry_after: str | None = None) -> None:
+        super().__init__("RATE_LIMITED", detail)
+        self.retry_after = retry_after
 
 
 class NansenPaymentRequired(NansenTransportError):

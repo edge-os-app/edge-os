@@ -45,12 +45,13 @@ These are expected provider or transport failures. The run records the attempted
 
 | Code | Meaning |
 |---|---|
-| `UNAUTHENTICATED` / `FORBIDDEN` | The provider refused access |
-| `PAYMENT_REQUIRED` | The provider asked for payment; no payment path is taken |
-| `RATE_LIMITED` | The provider rate limit rejected the request |
+| `UNAUTHENTICATED` (401) | The provider refused access |
+| `PAYMENT_REQUIRED` (402) | The provider asked for payment; no payment path is taken |
+| `RATE_LIMITED` (429) | The provider rate limit rejected the request; `retry_after` is kept only when it is a number |
+| a 403 | The provider `code` (for example `insufficient_credits`, `forbidden`, `plan_upgrade_required`) or `HTTP_403` |
 | `MALFORMED_PROVIDER_RESPONSE`, `OVERSIZED_RESPONSE` | The response violates the contract; no row is retained |
-| `WRONG_NETWORK`, `WRONG_OPERATION`, `NO_RECORDED_RESPONSE` | The response contradicts the request or the transport is exhausted |
-| `PROVIDER_ERROR` with the provider `code` | Any other provider error |
+| `WRONG_NETWORK`, `WRONG_TOKEN`, `WRONG_OPERATION`, `NO_RECORDED_RESPONSE` | The response contradicts the request or the transport is exhausted |
+| any other provider `code`, or `HTTP_<status>` | Any other provider error |
 
 Error text is sanitized. A caller sees a stable code; no response body, header or credential is exposed.
 

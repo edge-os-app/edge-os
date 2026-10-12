@@ -116,3 +116,12 @@ def test_wrong_token_or_network_request_is_refused() -> None:
         support.request(chain_id=1).validate()
     with pytest.raises(NansenRequestError):
         support.request(question=" ").validate()
+
+
+def test_malformed_bucket_end_is_a_contract_error_not_a_crash() -> None:
+    from edge_os_api.nansen_research import NansenContractError
+
+    bucket = support.flow_bucket("2026-10-06T09:00:00Z", bucket_end="garbage", is_complete=True)
+    with pytest.raises(NansenContractError) as info:
+        extract_flow_evidence([_fetch("flows", support.flow_payload([bucket]))], support.window())
+    assert info.value.code == "MALFORMED_PROVIDER_RESPONSE"
