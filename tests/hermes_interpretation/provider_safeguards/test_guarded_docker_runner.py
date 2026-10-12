@@ -2561,8 +2561,11 @@ import json as _json  # noqa: E402
 
 
 def _records(tmp_path: Path) -> list[dict]:
+    """Every record: a run's own folder (pending-cleanup/run-<key>/) and the shared top level of earlier versions."""
     folder = tmp_path / "evidence" / "pending-cleanup"
-    return [_json.loads(path.read_text()) for path in sorted(folder.glob("*.json"))] if folder.exists() else []
+    if not folder.exists():
+        return []
+    return [_json.loads(path.read_text()) for path in sorted(folder.rglob("*.json")) if not path.name.startswith(".")]
 
 
 def _unstoppable_flood_turn(tmp_path: Path, monkeypatch, *, files: int = 40_000, **build_kwargs):
@@ -2682,7 +2685,7 @@ def test_a_new_runner_after_a_restart_recovers_what_an_interrupted_turn_left(tmp
         runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
     monkeypatch.undo()
     assert len(_records(tmp_path)) == 1  # the identity survived the interrupted turn
-    path = next((tmp_path / "evidence" / "pending-cleanup").glob("*.json"))
+    path = next(p for p in (tmp_path / "evidence" / "pending-cleanup").rglob("*.json") if not p.name.startswith("."))
     data = _json.loads(path.read_text())
     data["pid"] = 999_999  # a process that no longer runs
     path.write_text(_json.dumps(data))
@@ -3225,7 +3228,7 @@ def test_repeated_new_requests_in_a_folder_that_refuses_rename_and_removal_leave
 
     def refuse_temporaries(target, *args, **kwargs):
         name = Path(target).name
-        if Path(target).parent == folder and name.startswith(".") and not name.endswith(".lock"):
+        if folder in Path(target).parents and name.startswith(".") and not name.endswith(".lock"):
             raise PermissionError("removal refused")
         return real_unlink(target, *args, **kwargs)
 
@@ -3236,7 +3239,7 @@ def test_repeated_new_requests_in_a_folder_that_refuses_rename_and_removal_leave
 
     results = [guarded.run_turn(Turn(f"attempt-{index}", "prompt", "task", "m", "route", 4096)) for index in range(10)]
 
-    leftovers = [p.name for p in folder.iterdir() if not p.name.endswith(".lock")]
+    leftovers = [p.name for p in folder.rglob("*") if p.is_file() and not p.name.endswith(".lock")]
     assert len(leftovers) <= 1, leftovers
     assert launched == [] and all(result.request_count == 0 for result in results)
     assert results[0].error_class == "CleanupStorageUnwritable"
@@ -3270,7 +3273,7 @@ def test_repeated_new_requests_in_a_folder_that_refuses_every_new_file_leave_not
     real_open = module.os.open
 
     def refuse_new_files(target, flags, *args, **kwargs):
-        if Path(target).parent == folder and flags & os.O_CREAT:
+        if folder in Path(target).parents and flags & os.O_CREAT:
             raise PermissionError("no new files here")
         return real_open(target, flags, *args, **kwargs)
 
@@ -3283,7 +3286,182 @@ def test_repeated_new_requests_in_a_folder_that_refuses_every_new_file_leave_not
     assert launched == [] and all(result.request_count == 0 for result in results)
     assert results[0].error_class == "CleanupStorageUnwritable"
     assert all(result.error_class == "CleanupPending" for result in results[1:])
-    assert list(folder.iterdir()) == [] and list((tmp_path / "evidence").glob("turn-*")) == []
+    assert [p for p in folder.rglob("*") if p.is_file()] == [] and list((tmp_path / "evidence").glob("turn-*")) == []
     assert spend.committed_usd() == Decimal("0")
     monkeypatch.setattr(module.os, "open", real_open)  # the folder works again: a probe write clears the block
     assert guarded.run_turn(Turn("attempt-again", "prompt", "task", "m", "route", 4096)).error_class != "CleanupPending"
+
+
+# --- Repair after gate verdict 8/8 (disposition 9): cleanup storage is owned per run; foreign files are never touched --
+
+def _foreign_root_files(tmp_path: Path, *, record: bool = True, temporary: bytes | None = b'{"run_id": "foreign"}') -> dict:
+    """Files another run left directly in the shared pending folder (the layout of earlier versions)."""
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True, exist_ok=True)
+    made = {}
+    if record:
+        data = {"version": 1, "run_id": "foreign", "label": "foreign", "container": "p05-foreign-x-01",
+                "turn_folder": "turn-09-foreign", "held": [], "state": "pending", "attempts": 0, "pid": 999_999,
+                "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}
+        (folder / "turn-09-foreign.json").write_text(_json.dumps(data))
+        made["turn-09-foreign.json"] = (folder / "turn-09-foreign.json").read_bytes()
+    if temporary is not None:
+        (folder / ".turn-09-foreign.json.tmp").write_bytes(temporary)
+        made[".turn-09-foreign.json.tmp"] = temporary
+    return made
+
+
+def _unchanged(tmp_path: Path, made: dict) -> bool:
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    return all((folder / name).exists() and (folder / name).read_bytes() == data for name, data in made.items())
+
+
+@pytest.mark.parametrize("removable", [True, False])
+def test_another_runs_leftover_temporary_is_neither_touched_nor_allowed_to_block_this_run(tmp_path: Path, monkeypatch, removable: bool) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    made = _foreign_root_files(tmp_path)
+    if not removable:
+        real_unlink = module.os.unlink
+
+        def refuse_foreign(target, *args, **kwargs):
+            if Path(target).name == ".turn-09-foreign.json.tmp":
+                raise PermissionError("removal refused")
+            return real_unlink(target, *args, **kwargs)
+
+        monkeypatch.setattr(module.os, "unlink", refuse_foreign)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, guarded = build(tmp_path, credential)
+
+    reported = runner.pending_cleanup()
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched and result.error_class != "CleanupPending"  # the foreign file never denies this run's work
+    assert _unchanged(tmp_path, made)  # never removed, rewritten or claimed
+    assert not any("turn-09-foreign" in _json.dumps(item) and "unattributable" not in item for item in reported)
+
+
+def test_a_live_writer_of_another_run_is_never_locked_by_this_run(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    made = _foreign_root_files(tmp_path)
+    locked: list[str] = []
+    real_try_lock = GuardedDockerTurnRunner._try_lock.__func__
+
+    def spy(cls, record):
+        locked.append(Path(record).name)
+        return real_try_lock(cls, record)
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_try_lock", classmethod(spy))
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, guarded = build(tmp_path, credential)
+
+    guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    runner.recover_pending(1.0)
+    runner.pending_cleanup()
+
+    assert launched and "turn-09-foreign.json" not in locked and _unchanged(tmp_path, made)
+
+
+@pytest.mark.parametrize("content", [b"", b"{not json", b'{"run_id": "repair-test"', b"\x00\xff" * 40])
+def test_a_malformed_or_partial_temporary_without_a_record_is_never_taken_as_this_runs(tmp_path: Path, monkeypatch, content: bytes) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    made = _foreign_root_files(tmp_path, record=False, temporary=content)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, guarded = build(tmp_path, credential)
+
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched and result.error_class != "CleanupPending" and _unchanged(tmp_path, made)
+
+
+def test_two_runs_with_the_same_turn_name_never_share_a_record_or_a_turn_folder(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def crash(output: Path) -> None:
+        (output / "secret.log").write_text(OLD)
+        raise SystemExit("run A's host process died")
+
+    install_process(monkeypatch, crash, returncode=3)
+    run_a = GuardedDockerTurnRunner(image="unused", run_id="run-a", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                    credential_file=credential, script_for=lambda turn: {}, timeout_seconds=60)
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_quarantine", lambda self, output, plan: None)
+    with pytest.raises(SystemExit):
+        run_a.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    monkeypatch.undo()
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in (tmp_path / "evidence").rglob("*") if p.is_file()}
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    run_b = GuardedDockerTurnRunner(image="unused", run_id="run-b", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                    credential_file=credential, script_for=lambda turn: {}, timeout_seconds=60)
+
+    result = run_b.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))  # same sequence 01, same attempt
+
+    assert launched == [] and result.request_count == 0 and result.error_class == "TurnFolderInUse"
+    after = {p.relative_to(tmp_path): p.read_bytes() for p in (tmp_path / "evidence").rglob("*") if p.is_file()}
+    assert all(after.get(path) == data for path, data in before.items())  # nothing of run A changed or vanished
+
+
+def test_this_runs_orphan_after_a_failed_registration_blocks_across_a_restart_and_is_recovered_when_safe(
+        tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    real_replace, real_unlink = module.os.replace, module.os.unlink
+
+    def refuse_in_pending(target, *args, **kwargs):
+        if "pending-cleanup" in str(target) and Path(target).name.startswith("."):
+            raise PermissionError("removal refused")
+        return real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "replace", lambda source, dest: (_ for _ in ()).throw(PermissionError("rename refused")))
+    monkeypatch.setattr(module.os, "unlink", refuse_in_pending)
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    first, _, _ = build(tmp_path, credential)
+    assert first.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096)).error_class == "CleanupStorageUnwritable"
+
+    restarted = GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=tmp_path / "evidence",
+                                        policy=POLICY, credential_file=credential, script_for=lambda turn: {}, timeout_seconds=60)
+    blocked = restarted.run_turn(Turn("attempt-2", "prompt", "task", "m", "route", 4096))
+    assert blocked.error_class == "CleanupPending" and launched == []
+    assert any("unremovable_temporary" in item for item in restarted.pending_cleanup())  # visible after the restart
+
+    monkeypatch.setattr(module.os, "replace", real_replace)  # the folder works again
+    monkeypatch.setattr(module.os, "unlink", real_unlink)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    resumed = restarted.run_turn(Turn("attempt-3", "prompt", "task", "m", "route", 4096))
+    assert resumed.error_class not in {"CleanupPending", "CleanupStorageUnwritable"} and launched
+    leftovers = [p for p in (tmp_path / "evidence" / "pending-cleanup").rglob(".*.tmp")]
+    assert leftovers == []
+
+
+@pytest.mark.parametrize("shape", ["garbage", "link"])
+def test_an_unreadable_record_at_the_shared_top_level_never_blocks_this_run_and_is_never_touched(
+        tmp_path: Path, monkeypatch, shape: str) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"run_id": "repair-test"}')  # a link must never make a foreign file count as this run's
+    if shape == "garbage":
+        (folder / "turn-07-unknown.json").write_bytes(b"\x00not a record")
+    else:
+        (folder / "turn-07-unknown.json").symlink_to(outside)
+    before = (folder / "turn-07-unknown.json").lstat()
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, guarded = build(tmp_path, credential)
+
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched and result.error_class != "CleanupPending"
+    after = (folder / "turn-07-unknown.json").lstat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert outside.read_text() == '{"run_id": "repair-test"}'

@@ -618,6 +618,30 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def _pending_folder(self) -> Path:
         return self.evidence_dir / PENDING_FOLDER
 
+    def _run_folder(self) -> Path:
+        """This run's own pending-cleanup folder: everything in it is this run's by construction, so nothing another run
+        on the same evidence folder writes (records, temporary files, locks, the storage probe) is ever touched here."""
+        key = hashlib.sha256(str(self.run_id).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+        return self._pending_folder() / f"run-{key}"
+
+    def _legacy_proves_ours(self, path: Path) -> bool:
+        """A file at the top of the shared folder (the layout of earlier versions) counts as this run's ONLY when its
+        content says so: a plain, small file whose JSON has this run_id. Anything else is never claimed."""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
+            return False
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CREDENTIAL_BYTES:
+                return False
+            data = json.loads(os.read(fd, MAX_CREDENTIAL_BYTES + 1).decode("utf-8"))
+        except (OSError, ValueError):
+            return False
+        finally:
+            os.close(fd)
+        return isinstance(data, dict) and data.get("run_id") == self.run_id
+
     @staticmethod
     def _write_record(path: Path, data: dict[str, Any]) -> None:
         """Write a record whole or not at all (temporary file, then rename); private to the host user.
@@ -646,15 +670,26 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     @staticmethod
     def _read_record(path: Path) -> dict[str, Any] | None:
+        """A record's content, or None. Never through a link, never anything but a plain file, never more than
+        MAX_RESULT_BYTES: a link or special file put in place of a record is not read and never counts as anyone's."""
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
             return None
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RESULT_BYTES:
+                return None
+            data = json.loads(os.read(fd, MAX_RESULT_BYTES + 1).decode("utf-8"))
+        except (OSError, ValueError, RecursionError):
+            return None
+        finally:
+            os.close(fd)
         return data if isinstance(data, dict) else None
 
     def _register(self, plan: _TurnPlan, task_dir: Path) -> Path:
         """Record the turn's container and folders as pending cleanup BEFORE the job starts (no credential, no output)."""
-        path = self._pending_folder() / f"{task_dir.name}.json"
+        path = self._run_folder() / f"{task_dir.name}.json"
         self._write_record(path, {"version": 1, "run_id": self.run_id, "label": plan.run_id, "container": plan.name,
                                   "turn_folder": task_dir.name, "held": [], "state": "running", "pid": os.getpid(),
                                   "attempts": 0, "created": time.time(), "last_attempt": None,
@@ -706,15 +741,19 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             os.close(fd)
 
     def _own_records(self) -> list[tuple[Path, dict[str, Any] | None]]:
-        folder = self._pending_folder()
-        if not folder.is_dir():
-            return []
+        """This run's records: everything in its own folder (an unreadable one there is treated as ours and blocks), and
+        records of earlier versions at the top of the shared folder only when their content says this run."""
         found = []
-        for path in sorted(folder.glob("*.json")):
+        own = self._run_folder()
+        for path in sorted(own.glob("*.json")) if own.is_dir() else []:
             data = self._read_record(path)
             if data is None and not os.path.lexists(path):
                 continue  # deleted since it was listed (a turn ended cleanly, or recovery finished): nothing pending
-            if data is None or data.get("run_id") == self.run_id:  # an unreadable record is treated as ours: it blocks
+            found.append((path, data))
+        shared = self._pending_folder()
+        for path in sorted(shared.glob("*.json")) if shared.is_dir() else []:
+            data = self._read_record(path)
+            if data is not None and data.get("run_id") == self.run_id:  # never guess: only proven records count
                 found.append((path, data))
         return found
 
@@ -723,7 +762,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         folder that refuses writes or removal collects nothing more than that one probe (or nothing at all)."""
         if not self._storage_failed:
             return True
-        probe = self._pending_folder() / ".storage-probe"  # never matches the record listing (*.json)
+        probe = self._run_folder() / ".storage-probe"  # this run's own; never matches the record listing (*.json)
         try:
             self._write_record(probe, {"probe": True})
             os.unlink(probe)
@@ -736,11 +775,15 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         """Temporary record files left by failed writes that still cannot be removed. They block new work, so a folder
         that refuses removal (append-only, a full disk) never collects more than this one leftover; each is removed
         under its record's lock when the folder allows it."""
-        folder = self._pending_folder()
-        if not folder.is_dir():
-            return []
+        own, shared = self._run_folder(), self._pending_folder()
+        candidates = sorted(own.glob(".*.json.tmp")) if own.is_dir() else []  # this run's by construction
+        for temporary in sorted(shared.glob(".*.json.tmp")) if shared.is_dir() else []:
+            record = temporary.with_name(temporary.name[1:-len(".tmp")])  # an earlier version's layout: prove it first
+            proof = record if os.path.lexists(record) else temporary
+            if self._legacy_proves_ours(proof):
+                candidates.append(temporary)
         left = []
-        for temporary in sorted(folder.glob(".*.json.tmp")):
+        for temporary in candidates:
             record = temporary.with_name(temporary.name[1:-len(".tmp")])
             fd = self._try_lock(record)
             if fd is None:
@@ -1015,7 +1058,13 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         plan = self._plan()
         task_dir = self.evidence_dir / f"turn-{plan.sequence:02d}-{turn.attempt_id}"
         output = task_dir / "output"
-        record = self._pending_folder() / f"{task_dir.name}.json"
+        record = self._run_folder() / f"{task_dir.name}.json"
+        self.evidence_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            task_dir.mkdir()  # exclusively: a turn folder that already exists belongs to someone else, never to this turn
+        except FileExistsError:
+            return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
+                                    observed={"guard_admitted": 0}, error_class="TurnFolderInUse")
         with _ACTIVE_LOCK:  # this process's own live turn: it does not block its own runner
             _ACTIVE_RECORDS.add(str(record))
         lock = None
@@ -1026,11 +1075,15 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                     self._register(plan, task_dir)
             except OSError:  # no durable record, so no job and nothing sent; later turns wait for a working write
                 self._storage_failed = True
+                try:
+                    task_dir.rmdir()  # the empty folder this turn just made; if the folder refuses, the flag bounds it
+                except OSError:
+                    pass
                 return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
                                         observed={"guard_admitted": 0}, error_class="CleanupStorageUnwritable")
             if lock is None:
                 raise EvidenceNotSealed(f"the pending-cleanup lock of {record.name} is held by someone else")
-            output.mkdir(parents=True)  # only once the turn is durably registered
+            output.mkdir()  # only once the turn is durably registered
             try:
                 result = self._run_turn_steps(turn, plan, task_dir, output)
             except BaseException:
