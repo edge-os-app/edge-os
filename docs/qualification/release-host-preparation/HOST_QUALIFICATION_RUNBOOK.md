@@ -65,14 +65,18 @@ Fail closed: a production-rule failure stops startup by design. Do not relax the
 
 Run a single explicit **serialized** migration step before the API takes traffic (not auto-migrate on each API start).
 
-The lock file is an **override**, not a complete Compose file: `--lock-image-digests` writes image entries only. Always pass the base production file first, then the lock override, for `up`, `run` and every related check, and inspect the merged config for the intended ports, networks, volumes, secrets, healthchecks and commands before deploying.
+The lock file is an **override**, not a complete Compose file: `--lock-image-digests` writes image entries only. Always pass the base production file first, then the lock override, for `up`, `run` and every related check.
+
+Validate the merged model **without writing resolved secrets to disk or a terminal**. `docker compose config` resolves variables, so its normal output contains the database credential and the Privy verification key; never redirect that output to a file or print it. Use `config --quiet` to validate, and a `--no-interpolate --no-env-resolution` view that shows the structure (ports, networks, volumes, healthchecks, commands) while keeping `${VAR}` expressions unexpanded and skipping service env-file resolution. A non-interpolated view is not a universal secret scrubber: keep literal credentials and sensitive defaults out of the source, and verify secret ownership by variable names and the host secret store's protected provisioning/access metadata, not by printing values.
 
 ```bash
 # Build the web bundle with the public API origin baked in, then deploy by digest.
 docker compose -f compose.production.yml config --lock-image-digests > compose.locked.yml
-# Inspect the MERGED model (base first, then the override) before deploying.
-docker compose -f compose.production.yml -f compose.locked.yml config > /tmp/edge-os-merged.yml
-# Confirm ports, networks, volumes, secret env, healthchecks and commands, then:
+# Validate the merged model WITHOUT printing resolved values.
+docker compose -f compose.production.yml -f compose.locked.yml config --quiet
+# Structural view only: keep ${VAR} expressions and skip service env-file resolution.
+docker compose -f compose.production.yml -f compose.locked.yml config --no-interpolate --no-env-resolution
+# Confirm the intended ports, networks, volumes, healthchecks and commands from that structural view, then:
 docker compose -f compose.production.yml -f compose.locked.yml up -d postgres
 # One explicit migration step against the direct (non-pooled) database:
 docker compose -f compose.production.yml -f compose.locked.yml run --rm api uv run --frozen alembic upgrade head
@@ -80,10 +84,11 @@ docker compose -f compose.production.yml -f compose.locked.yml run --rm api uv r
 docker compose -f compose.production.yml -f compose.locked.yml up -d api web execution-worker research-worker
 ```
 
-Do not commit a resolved config that contains secret values. A single `-f compose.locked.yml` would drop the base service model; do not use it.
+Never redirect a resolved `config` output to a file or a terminal. A single `-f compose.locked.yml` would drop the base service model; do not use it.
 
 | # | Check | Expected observation | Class |
 |---|---|---|---|
+| 3.0 | No resolved secret output | The merged model is validated with `config --quiet` and inspected with `config --no-interpolate --no-env-resolution`; no resolved `config` output is written to a file or printed. Secret ownership is checked by variable names and the host secret store's protected provisioning/access metadata, not by printing values. | check |
 | 3.1 | Fresh migration | `upgrade head` succeeds from empty; head is `0010`; `alembic check` reports no difference. | check |
 | 3.2 | Migration is serialized | No container auto-migrates on start; exactly one migration step ran. | check |
 | 3.3 | `/healthz` | `{"status":"ok","build_sha":<candidate>,"started_at":…}` via the proxy origin. | check |
@@ -109,17 +114,17 @@ Fail closed: browser test injection must never supply production authorization. 
 
 ## Stage 5 — Jobs, runtime isolation and private output (external effects need their packets)
 
-The Hermes runtime is **not available** at this base (gate H2). Until lane-1 output is accepted, run only the parts that need no real model or provider.
+The Hermes runtime is **not available** at this base (gate H2). An accepted LOCAL helper (`dbd95668`, candidate `fa8d52f2`) provides the job transport and runner, but it is **not mounted**, its actual provider route is refused, its spend ledger is LOCAL-only, and it makes no hosted isolation claim. Read `docs/qualification/hermes-job-support/` (`README.md`, `ACTUAL_QUALIFICATION_PACKET.md`, `JOB_IDENTITIES.json`) as read-only context. Until the mount and actual route exist, run only the parts that need no real model or provider.
 
 | # | Check | Expected observation | Class |
 |---|---|---|---|
 | 5.1 | Research job | A declared investigation starts a job; a reservation is saved before any adapter effect; the job reaches `REPORTED` or an honest terminal state. | external (recorded mode) / check |
 | 5.2 | Provider-only network check | The deployment cannot reach a host outside the approved provider set. Verify externally; **cannot pass until H1 is decided**. | blocked (H1) |
 | 5.3 | Private output directory | Each job writes only its own approved private directory; no cross-job or cross-owner file is readable. | check |
-| 5.4 | Hermes whole-process isolation | One fresh isolated process per bounded Hermes job; no shared mutable memory; no signing credential, host workspace or Docker socket inside the job. **The public API/model process must not mount the host Docker socket.** | blocked (H2) |
+| 5.4 | Hermes whole-process isolation | Accepted LOCAL helper `dbd95668` runs pinned Hermes in a no-network, read-only job container (512 MB, 1 CPU, 64 processes, no capabilities, no socket, no host workspace) and refuses the actual route. The credential file is mounted read-only, but the job, transport and Hermes share one process, so the credential copy is readable by Hermes code; credential isolation needs a separately decided host-held relay. **The public API/model process must not mount the host Docker socket.** | blocked (H2); helper accepted LOCAL, not mounted |
 | 5.5 | Cleanup after a job | A completed, cancelled or timed-out job cleans up its process and temporary files. | check |
 | 5.6 | Secrets isolation | No credential appears in the browser bundle, prompts, logs or evidence. | check |
-| 5.7 | Trusted runner boundary | The job-container runner is separately qualified; a helper present in a plan is not an accepted runner. | blocked (H2) |
+| 5.7 | Trusted runner boundary | Accepted LOCAL helper `dbd95668` provides the runner (`build_transport_job`, `TransportJob.runner`, `recover_pending(C)`), but it is not mounted and the durable shared ledger and host supervisor remain proposals. A helper present in a plan is not an accepted runner. | blocked (H2) |
 
 Fail closed: a missing isolation control keeps real-model/research capability unavailable. Do not run a real Hermes job without the accepted isolation and a recorded inference budget.
 

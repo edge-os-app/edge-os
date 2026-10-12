@@ -42,8 +42,8 @@ It changes no application, contract, migration, script or verifier file. The con
 
 ### Lane 1 (Hermes job support and P05 safeguards)
 
-- Supplies the qualified isolated Hermes job runtime for gate H2 and RC01/PU04.
-- Until it is accepted, this package records real-model/research capability as unavailable.
+- Its transport helper is accepted LOCAL and integrated at `dbd95668` (candidate `fa8d52f2`), safely released. It is **available but not mounted**.
+- Supplies the qualified isolated Hermes job runtime for gate H2 and RC01/PU04 once mounted; the actual provider route, durable shared ledger, host-held credential relay and hosted isolation proof remain pending. Do not label H2/H3 hosted qualification PASS.
 
 ### Lane 4 (this task)
 
