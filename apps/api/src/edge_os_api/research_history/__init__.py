@@ -29,6 +29,7 @@ from edge_os_api.research_history.provider_transport import (
     RecordedResponseSource,
     ResponseSource,
     SourceCancelled,
+    SourceFailure,
     SourceTimeout,
 )
 
@@ -41,6 +42,7 @@ __all__ = [
     "RecordedResponseSource",
     "ResponseSource",
     "SourceCancelled",
+    "SourceFailure",
     "SourceTimeout",
     "build_manifest",
     "collect",

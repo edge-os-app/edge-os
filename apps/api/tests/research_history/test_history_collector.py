@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Mapping
 
 import pytest
@@ -66,7 +67,7 @@ def test_source_exhausted_without_complete_flag_is_partial() -> None:
     [
         ({"max_pages": 1}, "LIMIT_PAGES", 1),
         ({"max_rows": 1}, "LIMIT_ROWS", 1),
-        ({"max_bytes": 1}, "LIMIT_BYTES", 1),
+        ({"max_bytes": 1}, "LIMIT_BYTES", 0),
     ],
 )
 def test_finite_limits_stop_the_loop(overrides: dict[str, Any], reason: str, page_count: int) -> None:
@@ -158,19 +159,32 @@ def test_malformed_page_identity_is_refused_as_provider_evidence() -> None:
 
 
 @pytest.mark.parametrize(
-    ("overrides", "reason", "row_count"),
-    [
-        ({"max_rows": 1}, "LIMIT_ROWS", 2),
-        ({"max_bytes": 1}, "LIMIT_BYTES", 2),
-    ],
+    ("overrides", "reason"),
+    [({"max_rows": 1}, "LIMIT_ROWS"), ({"max_bytes": 1}, "LIMIT_BYTES")],
 )
-def test_caps_are_enforced_before_a_complete_claim(overrides: dict[str, Any], reason: str,
-                                                   row_count: int) -> None:
-    events = [support.EVENT_QUOTE_IN, support.EVENT_BASE_IN]
+def test_oversized_response_is_refused_without_retaining(overrides: dict[str, Any], reason: str) -> None:
+    events = [support.EVENT_QUOTE_IN, support.EVENT_BASE_IN] * 25
     result = _collect(support.single_page(events), **overrides)
     assert result["status"] == "PARTIAL"
     assert result["stop_reason"] == reason
-    assert result["row_count"] == row_count
+    assert result["row_count"] == 0 and result["page_count"] == 0 and result["bytes"] == 0
+    assert result["source_invocations"]["measured_local_attempts"] == 1
+    assert any(gap["code"] == reason for gap in result["gaps"])
+
+
+def test_programmer_defect_from_the_source_propagates() -> None:
+    with pytest.raises(ZeroDivisionError):
+        collect(support.profile(), _RaisingSource(ZeroDivisionError("programmer defect")), support.SCAN,
+                _limits(), None)
+
+
+def test_non_json_response_value_is_refused() -> None:
+    first = support.standard_responses()[0]
+    bad_event = {**first["events"][0], "transaction_index": Decimal("0")}
+    result = _collect([{**first, "events": [bad_event]}])
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+    assert result["row_count"] == 0
+    assert any(gap["code"] == "PROVIDER_NON_JSON_VALUE" for gap in result["gaps"])
 
 
 def test_invalid_deadline_is_refused_before_any_invocation() -> None:

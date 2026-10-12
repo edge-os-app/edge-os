@@ -14,7 +14,7 @@ authority. The whole of P07 is not complete and no fresh history is qualified.
   results, the holdout and closed allowances are unchanged. Numeric and qualification logic is reused, not
   copied. P03's verifier, `main.py`, `core/`, existing `research/`, `replay/`, migrations and lockfiles are
   untouched. #58 owns database, API, schema, client, UI, verifier and job composition.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (62 tests);
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (64 tests);
   `cd docs/qualification/p07 && python3 -B -m unittest -v test_p07` passes (73 tests);
   `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs are kept under the assigned
   evidence folder and are not part of the commit.
@@ -141,9 +141,11 @@ segments, gaps and coverage flag are the evidence. A `complete` flag with pages 
 gives `stop_reason` `COVERAGE_INCOMPLETE` and `PARTIAL`. A response must echo the requested query; a missing
 query echo is refused as `QUERY_MISMATCH`. A page whose identity fields are not a non-negative integer range
 with a non-empty id and a 64-hex digest is refused as `PROVIDER_MALFORMED_PAGE`. A cursor whose `after` is not
-a non-negative integer or null is refused as `PROVIDER_MALFORMED_CURSOR`. Any source exception other than the
-two declared ones becomes a `SOURCE_ERROR` gap and a `PROVIDER_ERROR` `PARTIAL` result, with the attempted
-count kept and no retry.
+a non-negative integer or null is refused as `PROVIDER_MALFORMED_CURSOR`. A response that holds a value which
+is not JSON data (a `Decimal`, a custom object) is refused as `PROVIDER_NON_JSON_VALUE` and no row or byte is
+retained. An expected source failure (`SourceFailure`, `OSError`, `SourceTimeout`, `SourceCancelled`) becomes
+a `SOURCE_ERROR`, `TIMEOUT` or `CANCELLED` `PARTIAL` result, with the attempted count kept and no retry. Any
+other exception, such as a programmer defect, propagates.
 
 ### 3. `normalized_sha256` and raw evidence
 
@@ -155,9 +157,10 @@ are retained beside it. The payload has no JSON floating-point value. Retained m
 text; a clock reading is never a data or financial value.
 
 `NormalizedHistory["raw_records"]` keeps the exact supplied records, and `raw_evidence` holds
-`{sha256, record_count}` of them. The raw records may hold a value the canonical encoder refuses, so they are
-kept out of the hashed payload and written by `save_raw_artifact(records, path)` to a run-owned file with a
-lenient deterministic form. `load_raw_artifact(path)` reads them back. A consumer can replay normalization
+`{sha256, record_count}` of them. The raw records may hold a JSON float the canonical encoder refuses, so they
+are kept out of the hashed payload and written by `save_raw_artifact(records, path)` to a run-owned file with a
+deterministic JSON form that preserves every value. A non-JSON value is refused at collection, so it never
+reaches the artifact. `load_raw_artifact(path)` reads the records back. A consumer can replay normalization
 from the saved artifact: the same records, profile and evidence reproduce the same `normalized_sha256`, the
 same ingest counts and the same `collection_sha256`.
 
@@ -165,22 +168,24 @@ same ingest counts and the same `collection_sha256`.
 
 A malformed caller profile or limit raises the accepted `InvalidInput` before any source invocation. The
 adapter error classes subclass it. `deadline_utc` must be a real UTC instant; a non-instant string is refused
-before any fetch and the deadline is compared as instants, not text. An ordinary source or provider failure
+before any fetch and the deadline is compared as instants, not text. An expected source or provider failure
 returns a `PARTIAL` `CollectionResult` with an existing `stop_reason`; it is never `COMPLETE` and never retries
-implicitly. Malformed provider input is recorded as refusal or partial evidence; it is never repaired or
-dropped as successful coverage. Programmer defects in the adapter and `BaseException` are not swallowed; only
-the source call catches an ordinary `Exception`. The finite limits and the qualifier
-`InvalidInput`/`Unsupported` meanings are unchanged. Cancellation uses the injected source (a `SourceCancelled`
-exception) and the injected clock; the clock is a determinism seam, not a live elapsed-time guarantee. Only an
-overall `QUALIFIED` result projects to P02; `LIMITED` stays saved beside the declaration.
+implicitly. The source call catches only `SourceCancelled`, `SourceTimeout`, `SourceFailure` and `OSError`.
+Any other exception, including a programmer defect, propagates. Malformed provider input is recorded as
+refusal or partial evidence; it is never repaired or dropped as successful coverage. The finite limits and the
+qualifier `InvalidInput`/`Unsupported` meanings are unchanged. Cancellation uses the injected source (a
+`SourceCancelled` exception) and the injected clock; the clock is a determinism seam, not a live elapsed-time
+guarantee. Only an overall `QUALIFIED` result projects to P02; `LIMITED` stays saved beside the declaration.
 
 ## Finite limits
 
-`max_pages`, `max_rows` and `max_bytes` must be positive integers. `deadline_utc` is optional. A limit stop
-gives `PARTIAL`, never `COMPLETE`. The caps are checked before each fetch and again after each accepted page,
-before any completion claim. A page that alone pushes a counter past its cap ends the run `PARTIAL` with the
-matching `LIMIT_*` reason, and the fetched evidence is kept. These are caller-defined local test parameters,
-not paid or live allowances. The collector grants no quota.
+`max_pages`, `max_rows` and `max_bytes` must be positive integers. `deadline_utc` is optional and must be a
+real UTC instant. A limit stop gives `PARTIAL`, never `COMPLETE`. The caps bound what the collector keeps: a
+response that alone would pass a cap is refused before any of its rows or bytes are retained, with the
+matching `LIMIT_*` gap naming the response size, the attempted invocation count kept and the uncertain
+remainder recorded. So the retained `page_count`, `row_count` and `bytes` never exceed their caps. The
+response source may still allocate a response in memory before it returns; that seam cannot be bounded here.
+These are caller-defined local test parameters, not paid or live allowances. The collector grants no quota.
 
 ## Reuse mapping
 
@@ -228,9 +233,11 @@ result is carried beside the profile; `to_p02_binding` still refuses it.
 | Malformed profile refused before invocation (amendment 4) | `test_malformed_profile_is_refused_before_any_invocation` |
 | Response without a query echo refused | `test_response_without_a_query_echo_is_refused` |
 | Malformed page identity refused as provider evidence | `test_malformed_page_identity_is_refused_as_provider_evidence` |
-| Caps enforced before a complete claim (gate) | `test_caps_are_enforced_before_a_complete_claim` |
+| Oversized response refused without retaining rows or bytes (gate 2) | `test_oversized_response_is_refused_without_retaining` |
 | Invalid deadline refused before invocation (gate) | `test_invalid_deadline_is_refused_before_any_invocation` |
 | Ordinary source error becomes a partial result (gate) | `test_ordinary_source_error_becomes_a_partial_result` |
+| Programmer defect from the source propagates (gate 2) | `test_programmer_defect_from_the_source_propagates` |
+| Non-JSON response value refused (gate 2) | `test_non_json_response_value_is_refused` |
 | Malformed cursor refused (gate) | `test_malformed_cursor_is_refused` |
 | Raw evidence retained and replay (gate) | `test_manifest_retains_raw_evidence_and_replays` |
 | Tampered raw records fail verification (gate) | `test_tampered_raw_records_fail_verification` |

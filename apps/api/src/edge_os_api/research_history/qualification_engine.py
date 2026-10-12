@@ -42,13 +42,14 @@ def module_sha256(path: Path) -> str:
 
 
 def raw_bytes(value: Any) -> bytes:
-    """Deterministic bytes for raw provider data that may hold a non-canonical value.
+    """Deterministic bytes for raw provider data.
 
-    A supplied response or record can carry a float or other value the P02 canonical
-    encoder refuses. Such a value must reach the decoder as a refusal, not stop work.
+    JSON floats are allowed so the reused decoder can refuse them, but any value
+    that is not JSON data (a Decimal, a custom object) raises instead of being
+    coerced. That keeps a malformed provider record a refusal, not an accepted
+    trade after a lossy readback.
     """
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-                      default=str).encode("utf-8")
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 def raw_sha256(value: Any) -> str:

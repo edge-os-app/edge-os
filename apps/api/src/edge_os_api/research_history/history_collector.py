@@ -9,6 +9,11 @@ is never reported as complete.
 A provider ``complete`` flag is not proof of the requested scan. A complete claim
 also needs the retained pages to tile the requested scan with no gap.
 
+The finite caps bound what the collector keeps. A response that alone would pass a
+cap is refused before any of its rows or bytes are retained, and the attempted
+invocation and the uncertain remainder are recorded. The response source may still
+allocate a response in memory before it returns it; that seam cannot be bounded here.
+
 No live transport exists here. The collector never reads an environment variable
 or a credential file and never opens a socket.
 """
@@ -26,6 +31,7 @@ from edge_os_api.research_history.provider_transport import (
     HistoryRequest,
     ResponseSource,
     SourceCancelled,
+    SourceFailure,
     SourceTimeout,
 )
 from edge_os_api.research_history.qualification_engine import (
@@ -229,7 +235,9 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
         except SourceTimeout:
             stop_reason = "TIMEOUT"
             break
-        except Exception as error:  # an ordinary source failure, never a programmer defect swallow
+        except (SourceFailure, OSError) as error:
+            # Expected provider or transport failures stay a partial result. Other
+            # exception types are programmer defects and propagate.
             gaps.append(_gap("SOURCE_ERROR", type(error).__name__))
             stop_reason = "PROVIDER_ERROR"
             break
@@ -241,7 +249,12 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
             stop_reason = "PROVIDER_ERROR"
             break
 
-        bytes_used += len(raw_bytes(response))
+        try:
+            response_bytes = len(raw_bytes(response))
+        except (TypeError, ValueError):
+            gaps.append(_gap("PROVIDER_NON_JSON_VALUE", "response holds a value that is not JSON data"))
+            stop_reason = "PROVIDER_ERROR"
+            break
         if response.get("provider") != provider_name:
             gaps.append(_gap("PROVIDER_MISMATCH", f"expected {provider_name}"))
             stop_reason = "PROVIDER_ERROR"
@@ -298,9 +311,26 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
             gaps.append(_gap("BLOCK_DISCONTINUITY",
                              f"page starts at {page.get('from_block')} after {pages[-1].get('next_block')}"))
 
+        # Bounded retention: refuse an oversized response before any of its rows or bytes are kept.
+        if len(pages) + 1 > limits.max_pages:
+            gaps.append(_gap("LIMIT_PAGES", f"response would exceed max_pages ({limits.max_pages}); not retained"))
+            stop_reason = "LIMIT_PAGES"
+            break
+        if len(records) + len(events) > limits.max_rows:
+            gaps.append(_gap("LIMIT_ROWS",
+                             f"response has {len(events)} rows, past max_rows ({limits.max_rows}); not retained"))
+            stop_reason = "LIMIT_ROWS"
+            break
+        if bytes_used + response_bytes > limits.max_bytes:
+            gaps.append(_gap("LIMIT_BYTES",
+                             f"response has {response_bytes} bytes, past max_bytes ({limits.max_bytes}); not retained"))
+            stop_reason = "LIMIT_BYTES"
+            break
+
         pages.append(_page_record(page))
         page_signatures.add(signature)
         records.extend(events)
+        bytes_used += response_bytes
         if after is not None:
             seen_cursors.add(after)
         served = response.get("served_utc")
@@ -314,19 +344,9 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
             "cursor_after": after,
             "complete": response.get("complete") is True,
             "rows": len(events),
-            "bytes": len(raw_bytes(response)),
+            "bytes": response_bytes,
         })
 
-        # The declared caps end the run before a completion claim, and the fetched evidence is kept.
-        if len(pages) > limits.max_pages:
-            stop_reason = "LIMIT_PAGES"
-            break
-        if len(records) > limits.max_rows:
-            stop_reason = "LIMIT_ROWS"
-            break
-        if bytes_used > limits.max_bytes:
-            stop_reason = "LIMIT_BYTES"
-            break
         if response.get("complete") is True:
             stop_reason = "COMPLETE"
             break

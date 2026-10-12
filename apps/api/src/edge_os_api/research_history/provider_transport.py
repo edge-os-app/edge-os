@@ -20,6 +20,16 @@ class SourceTimeout(Exception):
     """The supplied source hit its own time bound. Part of the result is retained."""
 
 
+class SourceFailure(Exception):
+    """An expected provider or transport failure.
+
+    A source raises this for a known provider failure. The collector records a
+    partial result with the attempted invocation and no retry. A programmer defect
+    must raise its own error type instead, so it is not mistaken for a provider
+    failure.
+    """
+
+
 @dataclass(frozen=True)
 class HistoryRequest:
     """One bounded page request sent to the response source."""
