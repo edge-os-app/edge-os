@@ -68,20 +68,34 @@ def _json_unescaped(data: bytes) -> bytes:
     return _JSON_ESCAPE.sub(undo, data)
 
 
-def holds_credential(data: bytes, forms: list[bytes]) -> bool:
-    """The one test for "these bytes hold the credential": any form, any case, raw or with JSON escapes undone."""
+def holds_credential(data: bytes, forms: list[bytes], until: float = math.inf) -> bool:
+    """The one test for "these bytes hold the credential": any form, any case, raw or with JSON escapes undone.
+
+    The clock is checked between steps (each one linear in `data`); past `until` it raises `TimeoutError`.
+    """
+    def tick() -> None:
+        if time.monotonic() > until:
+            raise TimeoutError("the credential check passed its time limit")
+
+    def found_in(text: bytes) -> bool:
+        for form in lowered:
+            tick()
+            if form in text:
+                return True
+        return False
+
     if not forms:
         return False
     lowered = [form.lower() for form in forms]
-    raw = data.lower()
-    if any(form in raw for form in lowered):
+    tick()
+    if found_in(data.lower()):
         return True
     if b"\\" not in data:  # nothing escaped: the raw check was the whole check
         return False
     if data.count(b"\\") > MAX_ESCAPES:  # bounded cost: rather than spend the deadline undoing them, assume the worst
         return True
-    unescaped = _json_unescaped(data).lower()
-    return any(form in unescaped for form in lowered)
+    tick()
+    return found_in(_json_unescaped(data).lower())
 
 
 
@@ -163,8 +177,9 @@ class _TurnPlan:
     run_budget: int
     forbidden: tuple[str, ...]
     job_deadline: float  # the job must be done by this time; all setup before the launch comes out of it
-    deadline: float  # monotonic time by which the process wait, the stop step and the sealing must be done
-    stop_deadline: float  # the stop step must be done by this time; the rest of the budget is kept for removing evidence
+    deadline: float  # monotonic time by which everything the turn does must be done, cleanup included; never renewed
+    stop_deadline: float  # the stop step must be done by this time; the rest is kept for sealing and removal
+    seal_deadline: float  # sealing stops by this time; the rest is kept for removing evidence that could not be sealed
 
 
 @dataclass
@@ -174,6 +189,7 @@ class _Launch:
     proc: Any = None
     stopped: bool = False  # the client exited by itself, or the container was verified gone
     stopping: dict[str, Any] = field(default_factory=dict)
+    sealed: bool = False  # sealed after the container was verified gone; nothing can change it, so it is not sealed again
 
 
 class GuardedDockerTurnRunner(DockerHermesTurnRunner):
@@ -204,7 +220,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         job_deadline = started + timeout
         deadline = job_deadline + grace
         return _TurnPlan(sequence, f"p05-{run_id}-{self._token}-{sequence:02d}", run_id, image, policy, secret, timeout,
-                         budget, forbidden, job_deadline, deadline, deadline - max(0.0, min(0.5, grace / 10)))
+                         budget, forbidden, job_deadline, deadline, deadline - max(0.0, min(0.5, grace / 10)),
+                         deadline - max(0.0, min(0.25, grace / 20)))
 
     @staticmethod
     def _read_credential(source: Path) -> str:
@@ -339,6 +356,10 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         def open_nofollow(flags: int) -> int:
             return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
 
+        def tick() -> None:  # between every step that is linear in the file's size
+            if time.monotonic() > deadline:
+                raise EvidenceNotSealed("sealing passed its time limit")
+
         try:
             fd = open_nofollow(os.O_RDONLY)
         except PermissionError:  # a locked file: change its own mode, never a link's target
@@ -353,23 +374,25 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 os.unlink(name, dir_fd=dir_fd)
                 return True
             os.fchmod(fd, 0o600)
-            if time.monotonic() > deadline:
-                raise EvidenceNotSealed("sealing passed its time limit")
             chunks = []
-            while chunk := os.read(fd, 1 << 20):
+            while True:
+                tick()
+                chunk = os.read(fd, 1 << 20)
+                if not chunk:
+                    break
                 chunks.append(chunk)
             data = b"".join(chunks)
         finally:
             os.close(fd)
-        if not holds_credential(data, forms):
+        if not holds_credential(data, forms, deadline):
             return False
-        if time.monotonic() > deadline:
-            raise EvidenceNotSealed("sealing passed its time limit")
         for form in forms:
+            tick()
             data = data.replace(form, REDACTED.encode())
-        if holds_credential(data, forms):  # a copy that replacing cannot reach (case, JSON escapes): the file goes whole
+        if holds_credential(data, forms, deadline):  # a copy that replacing cannot reach (case, JSON escapes): the file goes whole
             os.unlink(name, dir_fd=dir_fd)
             return True
+        tick()
         out = open_nofollow(os.O_WRONLY)
         try:
             after = os.fstat(out)
@@ -379,7 +402,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             os.ftruncate(out, 0)
             view = memoryview(data)
             while view:
-                view = view[os.write(out, view):]
+                tick()
+                view = view[os.write(out, view[: 1 << 20]):]
         finally:
             os.close(out)
         return True
@@ -397,13 +421,13 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def _quarantine(self, output: Path, plan: _TurnPlan) -> None:
         """Take evidence that cannot be proved clean out of reach. It returns when the folder is gone, else raises `EvidenceNotSealed`.
 
-        Removal has the rest of the turn's budget (a tenth of a second at least, so a small output is always removed).
-        If it is not finished by then, the rest is MOVED, in one step, to a private `quarantine-*` folder beside the turn
-        folders and the turn says so. `purge_quarantine` removes those folders when no clock runs.
+        Removal has what is left of the turn's one deadline and never more: once it has passed, removal does not start.
+        Whatever is not removed by then is MOVED, in one step, to a private `quarantine-*` folder beside the turn folders,
+        and the turn says so. `purge_quarantine` removes those folders between turns, when no clock runs.
         """
         interrupt = None
         try:
-            self._remove_tree(output, max(plan.deadline, time.monotonic() + 0.1))
+            self._remove_tree(output, plan.deadline)
         except Exception:  # noqa: BLE001 - out of time, or the walk cannot go on: never an unbounded removal; move it
             pass
         except BaseException as stopped:  # an interrupt: still move the folder first, then let the interrupt through
@@ -438,7 +462,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def _seal(self, output: Path, plan: _TurnPlan) -> bool:
         """Seal the output. Any failure at all removes it and raises `EvidenceNotSealed`."""
         try:
-            return self._redact(output, plan.secret, plan.deadline)
+            return self._redact(output, plan.secret, plan.seal_deadline)
         except BaseException as error:
             self._quarantine(output, plan)
             if isinstance(error, EvidenceNotSealed):
@@ -541,7 +565,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         except BaseException as failure:
             try:  # the same two steps as on success
                 self._confirm_stopped(plan, launch)
-                if launch.proc is not None:  # with no job launched, the output holds nothing the job could write
+                if launch.proc is not None and not launch.sealed:  # with no job launched, the output holds nothing the job could write
                     self._seal(output, plan)
             except BaseException as cleanup_error:  # an interrupt here counts too: the evidence goes
                 self._quarantine(output, plan)  # raises EvidenceNotSealed unless the folder was removed
@@ -554,7 +578,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             raise  # an interrupt, a failure already reported as EvidenceNotSealed, or one after which all was secured
         try:
             self._confirm_stopped(plan, launch)
-            if launch.proc is not None:  # with no job launched, the output holds nothing the job could write
+            if launch.proc is not None and not launch.sealed:  # with no job launched, the output holds nothing the job could write
                 self._seal(output, plan)
         except BaseException as error:
             self._quarantine(output, plan)
@@ -612,7 +636,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 self._confirm_stopped(plan, launch)
             finally:  # on every path, the host keeps at most MAX_STDOUT_BYTES of the job's output
                 self._cap_stdout(sink, returned, plan.secret)
-        echoed = self._seal(output, plan)  # sealed here for the result check; the lifecycle seals again on every path
+        echoed = self._seal(output, plan)  # sealed here for the result check; the lifecycle seals on every other path
+        launch.sealed = True
         if proc.returncode != 0:
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerExit")

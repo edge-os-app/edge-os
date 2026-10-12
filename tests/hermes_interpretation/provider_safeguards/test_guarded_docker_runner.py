@@ -308,15 +308,18 @@ def test_a_named_pipe_in_the_output_cannot_block_the_runner_and_the_log_beside_i
     assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
 
 
-def test_evidence_that_cannot_be_sealed_in_time_stops_the_turn_and_is_not_left_behind(tmp_path: Path, monkeypatch) -> None:
+def test_evidence_that_cannot_be_sealed_in_time_stops_the_turn_and_is_not_left_as_output(tmp_path: Path, monkeypatch) -> None:
     credential = tmp_path / "credential"
     credential.write_text(OLD)
     install_process(monkeypatch, lambda output: (output / "provider-error.log").write_text(OLD))
     runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=-1.0)  # no time at all to seal
 
-    with pytest.raises(EvidenceNotSealed):
+    with pytest.raises(EvidenceNotSealed, match="quarantine-"):  # no time is left to remove it either: it is moved, and said so
         runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
+    assert list((tmp_path / "evidence").glob("turn-*/output")) == []
+    assert all(held.stat().st_mode & 0o077 == 0 for held in (tmp_path / "evidence").glob("quarantine-*"))
+    runner.purge_quarantine()  # between turns, with no clock
     assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
 
 
@@ -1872,3 +1875,109 @@ def test_a_docker_cli_that_streams_without_end_cannot_run_the_turn_past_its_dead
     status, elapsed = _timed_run(runner, limit=120)
 
     assert status == "EvidenceNotSealed" and elapsed <= 0.1 + 5.0 + 0.5, (status, elapsed)
+
+
+# --- Repair after gate 6/6: cleanup never renews the one deadline, and sealing stops in time to remove ---------------
+
+from guarded_docker_runner import holds_credential  # noqa: E402
+from leak_scan import encodings  # noqa: E402
+
+def _spy_plan_and_removal(monkeypatch, runner) -> tuple[list, list]:
+    """Record the turn's plan and every removal deadline that the runner asks for."""
+    plans: list = []
+    removals: list[float] = []
+    original_plan, original_remove = runner._plan, GuardedDockerTurnRunner._remove_tree
+
+    def plan():
+        plans.append(original_plan())
+        return plans[-1]
+
+    def remove(folder, until):
+        removals.append(until)
+        return original_remove(folder, until)
+
+    monkeypatch.setattr(runner, "_plan", plan)
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_remove_tree", staticmethod(remove))
+    return plans, removals
+
+
+def test_an_exhausted_turn_gives_evidence_removal_no_time_past_the_original_deadline(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    prepared = tmp_path / "prepared"  # made before the turn: only the cleanup is on the clock
+    prepared.mkdir()
+    for index in range(4000):
+        (prepared / f"f{index}.log").write_text("x")
+    (prepared / "secret.log").write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present and not ours: never stoppable
+    install_process(monkeypatch, lambda output: prepared.rename(output / "many"), returncode=-9)
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=0.0)
+    plans, removals = _spy_plan_and_removal(monkeypatch, runner)
+
+    status, elapsed = _timed_run(guarded)
+
+    assert status == "EvidenceNotSealed"
+    assert removals and all(until <= plans[0].deadline for until in removals), "cleanup was given renewed time"
+    assert elapsed <= 0.1 + 0.0 + 0.03, elapsed  # past the deadline only by the one-step move into quarantine
+    assert list((tmp_path / "evidence").glob("turn-*/output")) == []
+    held = list((tmp_path / "evidence").glob("quarantine-*"))
+    assert all(folder.stat().st_mode & 0o077 == 0 for folder in held)  # unread by others, never published as output
+    assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+    runner.purge_quarantine()  # between turns, with no clock: separate from the timed turn
+    assert not list((tmp_path / "evidence").glob("quarantine-*")) and plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+@pytest.mark.parametrize("shape", ["every-form", "dense-escapes"])
+def test_sealing_a_supported_8_mib_file_ends_the_turn_inside_timeout_plus_grace(tmp_path: Path, monkeypatch, shape: str) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    pattern = b"|".join(encodings(OLD)) + b"|" if shape == "every-form" else b"\\u0061" * 100_000 + b"|"
+    prepared = tmp_path / "large.log"
+    prepared.write_bytes((pattern * (8 * 1024 * 1024 // len(pattern) + 1))[: 8 * 1024 * 1024])
+
+    def behaviour(output: Path) -> None:
+        prepared.rename(output / "large.log")
+        time.sleep(0.98)  # the client runs almost the whole job timeout
+
+    install_process(monkeypatch, behaviour, returncode=3)
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=0.3)
+    plans, removals = _spy_plan_and_removal(monkeypatch, runner)
+
+    status, elapsed = _timed_run(guarded)
+
+    assert elapsed <= 1.0 + 0.3, (status, elapsed)  # strict: no tolerance on the accepted bound
+    assert all(until <= plans[0].deadline for until in removals)
+    assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+    assert not list((tmp_path / "evidence").rglob("large.log")) or not holds_credential(
+        next((tmp_path / "evidence").rglob("large.log")).read_bytes(), encodings(OLD))
+
+
+def test_the_turn_plan_orders_its_deadlines_and_keeps_part_of_the_grace_for_removal() -> None:
+    import guarded_docker_runner as module
+    runner = GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=Path("/nonexistent"), policy=POLICY,
+                                     script_for=lambda turn: {}, timeout_seconds=1.0, seal_grace_seconds=0.3)
+    plan = runner._plan()
+    assert plan.job_deadline <= plan.stop_deadline <= plan.seal_deadline < plan.deadline
+    assert plan.deadline - plan.job_deadline == pytest.approx(0.3)
+    assert isinstance(module.holds_credential(b"x", [b"y"], until=time.monotonic() + 1), bool)
+
+
+def test_an_output_sealed_after_the_container_is_gone_is_not_sealed_a_second_time(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    install_process(monkeypatch, lambda output: (output / "provider-error.log").write_text("Bearer " + OLD), returncode=3)
+    runner, spend, guarded = build(tmp_path, credential)
+    walks: list[Path] = []
+    original = GuardedDockerTurnRunner._redact.__func__
+
+    def counted(cls, folder, secret, deadline):
+        walks.append(folder)
+        return original(cls, folder, secret, deadline)
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_redact", classmethod(counted))
+
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert result.status == "UNKNOWN" and len(walks) == 1, walks  # a second pass would spend the deadline for nothing
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == [] and spend.state("attempt-1") == "UNKNOWN"
