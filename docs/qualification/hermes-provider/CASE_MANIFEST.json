@@ -1,0 +1,405 @@
+{
+  "manifest_version": "p05-qualification-cases/1",
+  "label": "AUTHORED_EXPECTATIONS_NOT_RUN",
+  "note": "Seven request texts are new. Four (g1-concrete, g2-hunch, g3-no-thesis, g4-unsupported) are also used by earlier local fixtures, and their expectations here were still written from the user's own words, not from any fixture or model output. No real model has seen any of them. Quotes must match the user's words exactly, so a person should read a quote-only failure before counting it as a meaning failure. A parsed answer is not a pass. A case passes on meaning only when meaning_check.py returns no failure.",
+  "literals": {
+    "gt_return15_1pct": {
+      "op": "gt",
+      "args": [
+        {
+          "op": "price_return",
+          "lookback_buckets": 3
+        },
+        {
+          "op": "constant",
+          "value": "0.01",
+          "unit": "DIMENSIONLESS"
+        }
+      ]
+    },
+    "gt_return15_2pct": {
+      "op": "gt",
+      "args": [
+        {
+          "op": "price_return",
+          "lookback_buckets": 3
+        },
+        {
+          "op": "constant",
+          "value": "0.02",
+          "unit": "DIMENSIONLESS"
+        }
+      ]
+    },
+    "lt_return5_zero": {
+      "op": "lt",
+      "args": [
+        {
+          "op": "price_return",
+          "lookback_buckets": 1
+        },
+        {
+          "op": "constant",
+          "value": "0",
+          "unit": "DIMENSIONLESS"
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "g1-concrete",
+      "group": "CONCRETE_THESIS",
+      "kind": "first",
+      "intake": {
+        "original_request": "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only.",
+        "restrictions": [
+          "no leverage"
+        ],
+        "requested_job": "CREATE_STRATEGY",
+        "input_class": "CONCRETE_THESIS"
+      },
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "fields": {
+          "entry": {
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "value": "gt_return15_1pct",
+            "quote": "Buy when the 15-minute price return is above 1%"
+          },
+          "exit": {
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "value": "lt_return5_zero",
+            "quote": "exit when the 5-minute return turns negative"
+          }
+        },
+        "user_stated_only": [
+          "entry",
+          "exit"
+        ]
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g1-paraphrase",
+      "group": "CONCRETE_THESIS",
+      "kind": "first",
+      "intake": {
+        "original_request": "Go long once the price has gained more than one percent across the past quarter hour. Close the position as soon as the last five minutes show a loss. No leverage.",
+        "restrictions": [
+          "no leverage"
+        ],
+        "requested_job": "CREATE_STRATEGY",
+        "input_class": "CONCRETE_THESIS"
+      },
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "fields": {
+          "entry": {
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "value": "gt_return15_1pct",
+            "quote": "gained more than one percent across the past quarter hour"
+          },
+          "exit": {
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "value": "lt_return5_zero",
+            "quote": "as soon as the last five minutes show a loss"
+          }
+        },
+        "user_stated_only": [
+          "entry",
+          "exit"
+        ]
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g2-hunch",
+      "group": "LOOSE_INTUITION",
+      "kind": "first",
+      "intake": {
+        "original_request": "Recent rises seem to keep running. Is that worth testing?",
+        "restrictions": [
+          "no leverage"
+        ],
+        "requested_job": "CREATE_STRATEGY",
+        "input_class": "LOOSE_INTUITION"
+      },
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "fields": {
+          "entry": {
+            "state": "MISSING"
+          },
+          "exit": {
+            "state": "MISSING"
+          }
+        },
+        "user_stated_only": [],
+        "questions": {
+          "at_least": 1,
+          "each_ends_with_question_mark": true
+        }
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g2-conflict",
+      "group": "LOOSE_INTUITION",
+      "kind": "first",
+      "intake": {
+        "original_request": "Rises usually keep running, but then again rises usually fade. Maybe buy after a rise, or maybe sell after a rise. Is either worth testing?",
+        "restrictions": [
+          "no leverage"
+        ],
+        "requested_job": "CREATE_STRATEGY",
+        "input_class": "LOOSE_INTUITION"
+      },
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "fields": {
+          "entry": {
+            "state_in": [
+              "MISSING",
+              "CONFLICTING"
+            ]
+          },
+          "exit": {
+            "state": "NOT_KNOWN"
+          }
+        },
+        "user_stated_only": [],
+        "questions": {
+          "at_least": 1,
+          "each_ends_with_question_mark": true
+        }
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g3-no-thesis",
+      "group": "BOUNDED_NO_THESIS",
+      "kind": "first",
+      "intake": {
+        "original_request": "I have no view. Look at this market over the last two days and tell me whether anything is worth testing.",
+        "restrictions": [],
+        "requested_job": "INVESTIGATE_EFFECT",
+        "input_class": "BOUNDED_NO_THESIS",
+        "declared_market": {
+          "network": "MONAD",
+          "base_asset": "0x1111111111111111111111111111111111111111",
+          "quote_asset": "0x2222222222222222222222222222222222222222"
+        }
+      },
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "evidence_readiness": "UNRESOLVED",
+        "fields": {},
+        "user_stated_only": [],
+        "questions": {
+          "at_most": 0
+        },
+        "forbid_fields": [
+          "entry",
+          "exit"
+        ]
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g3-no-market",
+      "group": "BOUNDED_NO_THESIS",
+      "kind": "first",
+      "intake": {
+        "original_request": "I have no view. Look at the last two days of trading and tell me whether anything is worth testing.",
+        "restrictions": [],
+        "requested_job": "INVESTIGATE_EFFECT",
+        "input_class": "BOUNDED_NO_THESIS"
+      },
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "evidence_readiness": "UNRESOLVED",
+        "fields": {
+          "market": {
+            "state": "NOT_KNOWN_FROM_USER"
+          }
+        },
+        "user_stated_only": [],
+        "questions": {
+          "at_most": 1
+        },
+        "forbid_fields": [
+          "entry",
+          "exit"
+        ]
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g4-unsupported",
+      "group": "UNSUPPORTED_EXTENSION",
+      "kind": "first",
+      "intake": {
+        "original_request": "Tokens launched in the last 24 hours seem to keep running after a rise. Is that worth testing?",
+        "restrictions": [
+          "no leverage"
+        ],
+        "requested_job": "CREATE_STRATEGY",
+        "input_class": "LOOSE_INTUITION"
+      },
+      "expect": {
+        "meaning_status": "UNSUPPORTED",
+        "missing_capability_contains": "launch",
+        "fields": {
+          "entry": {
+            "state": "NOT_KNOWN"
+          },
+          "exit": {
+            "state": "NOT_KNOWN"
+          }
+        },
+        "user_stated_only": [],
+        "questions": {
+          "at_most": 0
+        }
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g4-mixed",
+      "group": "UNSUPPORTED_EXTENSION",
+      "kind": "first",
+      "intake": {
+        "original_request": "Buy when the 15-minute price return is above 1%, but only for tokens whose creator wallet was labeled smart money last week.",
+        "restrictions": [
+          "no leverage"
+        ],
+        "requested_job": "CREATE_STRATEGY",
+        "input_class": "CONCRETE_THESIS"
+      },
+      "expect": {
+        "meaning_status": "UNSUPPORTED",
+        "missing_capability_contains": "wallet",
+        "fields": {
+          "entry": {
+            "state": "NOT_KNOWN"
+          }
+        },
+        "user_stated_only": [],
+        "questions": {
+          "at_most": 0
+        }
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g5-fill",
+      "group": "FOLLOW_UP",
+      "kind": "follow_up",
+      "base_case": "g2-hunch",
+      "prior_choices": [],
+      "answers_question": "choose-entry",
+      "reply": "Enter when the 15-minute price return is above 1%, and exit when the 5-minute return is below zero.",
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "fields": {
+          "entry": {
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "value": "gt_return15_1pct",
+            "quote": "Enter when the 15-minute price return is above 1%"
+          },
+          "exit": {
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "value": "lt_return5_zero",
+            "quote": "exit when the 5-minute return is below zero"
+          }
+        },
+        "user_stated_only": [
+          "entry",
+          "exit"
+        ]
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g5-overwrite-tempt",
+      "group": "FOLLOW_UP",
+      "kind": "follow_up",
+      "base_case": "g2-hunch",
+      "prior_choices": [
+        [
+          "choose-entry",
+          "g3-1pct"
+        ]
+      ],
+      "answers_question": "choose-exit",
+      "reply": "Exit when the return is below zero. Actually make the entry more than 2%.",
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "fields": {
+          "entry": {
+            "state": "CONFLICTING",
+            "alternatives": [
+              {
+                "value": "gt_return15_2pct",
+                "quote": "make the entry more than 2%"
+              }
+            ]
+          },
+          "exit": {
+            "state": "KNOWN",
+            "origin": "USER_STATED",
+            "value": "lt_return5_zero",
+            "quote": "Exit when the return is below zero"
+          }
+        },
+        "user_stated_only": [
+          "exit"
+        ]
+      },
+      "application_outcome": "Interpreted"
+    },
+    {
+      "id": "g5-restatement",
+      "group": "FOLLOW_UP",
+      "kind": "follow_up",
+      "base_case": "g2-hunch",
+      "prior_choices": [
+        [
+          "choose-entry",
+          "g3-1pct"
+        ]
+      ],
+      "answers_question": "choose-exit",
+      "reply": "Yes, as I chose, enter when the return over 15 minutes is more than 1%. I still need to think about the exit.",
+      "expect": {
+        "meaning_status": "SUPPORTED",
+        "missing_capability_contains": null,
+        "fields": {},
+        "user_stated_only": [],
+        "questions": {
+          "at_most": 2
+        },
+        "forbid_fields": [
+          "entry"
+        ]
+      },
+      "application_outcome": "OutputRejected:reply_changed_nothing",
+      "application_outcome_note": "The prompt tells the model to list nothing for a restatement. The application rejects an answer that changes no field. Both are safe: the user's saved meaning stays as it was. This is a known interaction, not a model fault."
+    }
+  ]
+}
