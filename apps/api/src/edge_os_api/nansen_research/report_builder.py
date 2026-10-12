@@ -33,6 +33,8 @@ _CLAIM_KEYWORDS = (
     ("concentration", ("concentrat", "distribut", "share of supply", "percentage of supply")),
     ("flows", ("flow", "inflow", "outflow", "netflow", "net flow")),
     ("buying", ("bought", "buy", "purchase", "accumulat", "sold", "sell", "pnl", "profit")),
+    ("amount", ("amount", "total", "sum", "aggregate", "value", "worth", "capitalization", "marketcap",
+                "supply", "count", "number")),
 )
 
 _CLAIM_FINDING_CODES = {
@@ -40,33 +42,44 @@ _CLAIM_FINDING_CODES = {
     "concentration": ("CONCENTRATION",),
     "flows": ("FLOW_CATEGORY", "FLOW_BUCKET_COVERAGE", "FLOW_COUNTS", "FLOW_DEX_CEX", "FLOW_PRICE", "FLOW_RECORDS"),
     "buying": ("BUYING",),
+    "amount": ("AMOUNT",),
 }
 
 _CLAIM_LIMITATIONS = {
     "concentration": ("concentration", "a documented total supply and qualified matching balance units"),
     "flows": ("whole_token_flows", "an all-holder flow output; the selected category is not all holders"),
     "buying": ("buying", "trade or transfer records that evidence purchases"),
+    "amount": ("amount", "documented balance units and a supply denominator; raw provider text is unqualified"),
 }
 
 _ALL_KEYWORDS = tuple(word for _claim, words in _CLAIM_KEYWORDS for word in words)
 
-# Function words and domain-neutral descriptors. A question token that is neither
-# neutral nor part of a recognized claim marks the question as not fully covered.
-_NEUTRAL_TOKENS = frozenset({
+# The shared vocabulary model. Only these three closed sets are neutral. Every
+# word in them is either grammatical (it carries no observation) or restates the
+# supported retrieval (a provider returns address records). Any other content word
+# is NOT neutral, so it marks the question uncovered and the answer stays
+# conservative. Observation nouns such as "amount", "value", "supply", "exchange",
+# "market" and "fraud" are deliberately absent: they are a claim anchor or an
+# uncovered word, never a license to claim full coverage.
+_FUNCTION_WORDS = frozenset({
     "a", "an", "the", "and", "or", "but", "nor", "so", "yet", "of", "in", "on", "at", "to", "for",
     "with", "by", "from", "into", "over", "under", "about", "as", "than", "then", "that", "this",
     "these", "those", "it", "its", "they", "them", "their", "we", "our", "you", "your", "i", "my",
     "me", "he", "she", "his", "her", "him", "us", "is", "are", "was", "were", "be", "been", "being",
     "am", "do", "does", "did", "done", "has", "have", "had", "will", "would", "can", "could", "should",
-    "may", "might", "must", "return", "returns", "returned", "provide", "provided", "provides", "provider",
-    "providers", "show",
-    "shows", "shown", "mean", "means", "give", "gives", "tell", "tells", "list", "lists", "what", "which",
-    "who", "whom", "whose", "when", "where", "why", "how", "many", "much", "all", "any", "some", "both",
-    "each", "few", "more", "most", "other", "such", "no", "not", "only", "own", "same", "just", "also",
-    "very", "please", "current", "currently", "now", "top", "basic", "qualified", "record", "records",
-    "data", "report", "reports", "number", "count", "counts", "amount", "total", "exact", "token", "tokens",
-    "coin", "asset",
+    "may", "might", "must", "not", "no", "only", "own", "same", "just", "also", "very", "please",
+    "what", "which", "who", "whom", "whose", "when", "where", "why", "how", "many", "much", "all",
+    "any", "some", "both", "each", "few", "more", "most", "other", "such",
 })
+_MODIFIER_WORDS = frozenset({
+    "current", "currently", "now", "top", "basic", "qualified", "exact", "main", "major", "overall",
+})
+_RETRIEVAL_WORDS = frozenset({
+    "provider", "providers", "provide", "provided", "provides", "return", "returns", "returned",
+    "show", "shows", "shown", "give", "gives", "tell", "tells", "list", "lists", "mean", "means",
+    "report", "reports", "data", "record", "records", "token", "tokens", "coin", "asset",
+})
+_NEUTRAL_WORDS = _FUNCTION_WORDS | _MODIFIER_WORDS | _RETRIEVAL_WORDS
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -74,13 +87,15 @@ _TOKEN = re.compile(r"[a-z0-9]+")
 def question_coverage(question: str, token_symbol: str = "") -> tuple[tuple[str, ...], bool]:
     """The named claims and whether the whole question is covered.
 
-    ``uncovered`` is True when the question holds a word that is neither neutral
-    nor part of a recognized claim, so the package cannot claim complete coverage.
+    A token is neutral only when it is in the closed neutral vocabulary or the
+    request token symbol, or when it anchors a recognized claim. Any other content
+    word makes ``uncovered`` True, so a fragment match can never prove complete
+    coverage and the answer state stays conservative.
     """
     tokens = _TOKEN.findall(question.lower())
     claims = tuple(claim for claim, words in _CLAIM_KEYWORDS
                    if any(word in token for token in tokens for word in words))
-    neutral = set(_NEUTRAL_TOKENS)
+    neutral = set(_NEUTRAL_WORDS)
     if token_symbol:
         neutral.add(token_symbol.lower())
     uncovered = any(
@@ -130,9 +145,8 @@ def _answer_state(evidence: NansenEvidence, claims: tuple[str, ...], findings: l
         # The complete question is not covered, so it is never fully supported.
         return "PARTIAL" if answered else "UNAVAILABLE"
     if not claims:
-        if evidence.holder is None and evidence.flows is None:
-            return "PARTIAL" if evidence.attempts > 0 else "UNAVAILABLE"
-        return "PARTIAL" if evidence.stop_reason is not None else "SUPPORTED_OBSERVATIONS"
+        # No recognized claim cannot prove the question is answered.
+        return "PARTIAL" if evidence.attempts > 0 else "UNAVAILABLE"
     if not answered:
         return "PARTIAL" if evidence.stop_reason is not None else "UNAVAILABLE"
     if unresolved or evidence.stop_reason is not None:
@@ -342,6 +356,12 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
             statement=("the returned holder and flow observations do not evidence buying; a purchase or "
                        "accumulation claim needs trade or transfer records."),
             source_refs=all_refs, limitations=()))
+    if "amount" in claims:
+        findings.append(Finding(
+            code="AMOUNT", verdict="UNRESOLVED",
+            statement=("a qualified total or amount needs documented balance units and a supply denominator; "
+                       "the raw provider balance text is unqualified and is not a total."),
+            source_refs=all_refs, limitations=()))
     requested = set(request.operations)
     if "flows" in claims and evidence.flows is None:
         findings.append(_missing_claim_finding("FLOW_RECORDS", "flow", "flows" in requested,
@@ -352,7 +372,7 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
 
     limitations: tuple[Limitation, ...] = tuple(
         Limitation(claim=name, missing_dependency=dependency)
-        for claim in ("concentration", "flows", "buying")
+        for claim in ("concentration", "flows", "buying", "amount")
         if claim in claims
         for (name, dependency) in (_CLAIM_LIMITATIONS[claim],)
     )

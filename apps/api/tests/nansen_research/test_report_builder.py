@@ -204,3 +204,27 @@ def test_a_mixed_question_is_partial_and_preserves_the_supported_count() -> None
         inventory = next(item for item in run.report.findings if item.code == "HOLDER_INVENTORY")
         assert inventory.verdict == "SUPPORTED"
         assert run.report.coverage.holder_rows == 1
+
+
+def test_an_amount_question_is_never_fully_supported() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa", token_amount="123")], is_last_page=True)
+    for question in ("What is the total MOE amount?", "What is the total holder amount?"):
+        run = support.run(support.request(question=question, operations=("holders",)),
+                          [support.response(200, holders)])
+        assert run.report.question == question
+        assert run.report.answer_state != "SUPPORTED_OBSERVATIONS"
+        codes = {item.code: item.verdict for item in run.report.findings}
+        assert codes.get("AMOUNT") == "UNRESOLVED"
+        assert "amount" in {item.claim for item in run.report.limitations}
+
+
+def test_a_mixed_count_and_amount_question_is_partial() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa", token_amount="123")], is_last_page=True)
+    question = "How many holder addresses and what is the total amount?"
+    run = support.run(support.request(question=question, operations=("holders",)),
+                      [support.response(200, holders)])
+    assert run.report.answer_state == "PARTIAL"
+    codes = {item.code: item.verdict for item in run.report.findings}
+    assert codes["HOLDER_INVENTORY"] == "SUPPORTED"
+    assert codes["AMOUNT"] == "UNRESOLVED"
+    assert "amount" in {item.claim for item in run.report.limitations}
