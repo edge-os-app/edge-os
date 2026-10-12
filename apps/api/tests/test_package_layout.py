@@ -39,7 +39,7 @@ def test_resource_paths_are_independent_of_working_directory(tmp_path: Path, mon
     comparisons = import_module("edge_os_api.research.comparison_runs")
     replays = import_module("edge_os_api.replay.saved_runs")
     assert database.API_ROOT == api_root
-    assert database.script_head() == "0009"
+    assert database.script_head() == "0010"
     assert records.REPO_ROOT == repository
     records.verify_frozen_files()
     assert compiler.CONTRACT_PATH == repository / "docs/contracts/p06/contract.json"

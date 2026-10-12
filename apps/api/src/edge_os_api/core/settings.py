@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # its whole reservation as liability.
     research_budget_provider_requests: int = Field(default=16, ge=0, le=10000)
     research_budget_compute_seconds: int = Field(default=900, ge=0, le=86400)
+    # Global capacity shared by every owner. Owner and global caps are frozen in `usage_local` at first use; a
+    # different value here later pauses reservations (`quota_cap_mismatch`) until an operator records a change.
+    usage_global_provider_requests: int = Field(default=100000, ge=0, le=10_000_000)
+    usage_global_compute_seconds: int = Field(default=10_000_000, ge=0, le=1_000_000_000)
 
     @field_validator("privy_app_id")
     @classmethod

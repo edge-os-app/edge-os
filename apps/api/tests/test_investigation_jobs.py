@@ -7,6 +7,7 @@ worker exactly like a killed process: nothing after it commits.
 from __future__ import annotations
 
 import ast
+import math
 import datetime as dt
 import uuid
 from pathlib import Path
@@ -44,6 +45,12 @@ def worker(client, **kwargs) -> InvestigationWorker:
 
 def job(client, headers, job_id):
     return client.get(f"/v1/research/investigation-jobs/{job_id}", headers=headers).json()
+
+
+def measured_seconds(view) -> int:
+    """The ceiling of the finished attempts' measured milliseconds, as the job settles it."""
+    return math.ceil(sum(event["content"]["usage"]["compute_ms"] for event in view["events"]
+                         if event["kind"] == "ATTEMPT_FINISHED") / 1000)
 
 
 def kinds(view):
@@ -321,18 +328,17 @@ def test_cancel_after_collection_keeps_the_dataset_and_reports_nothing(research,
     assert view["state"] == "CANCELLED" and view["terminal_reason"] == "cancelled_after_collection"
     assert view["dataset"] is not None and view["report"] is None
     assert view["budget"]["consumed"]["provider_requests"] == 2
-    measured = next(event for event in view["events"] if event["kind"] == "ATTEMPT_FINISHED")["content"]["usage"]
-    assert view["budget"]["consumed"]["compute_seconds"] == measured["compute_seconds"] >= 1
-    assert view["budget"]["released"]["compute_seconds"] == 30 - measured["compute_seconds"]
+    measured = measured_seconds(view)
+    assert view["budget"]["consumed"]["compute_seconds"] == measured >= 1
+    assert view["budget"]["released"]["compute_seconds"] == 30 - measured
 
 
 def test_reported_job_consumes_its_measured_compute(research, owner_a):
     intake_id, declaration_id, _ = declare(research, owner_a)
     job_id = start(research, owner_a, intake_id, declaration_id).json()["job_id"]
     view = worker(research).run_job(uuid.UUID(job_id))
-    measured = sum(event["content"]["usage"]["compute_seconds"] for event in view["events"]
-                   if event["kind"] == "ATTEMPT_FINISHED")
-    assert view["state"] == "REPORTED" and measured >= 2
+    measured = measured_seconds(view)
+    assert view["state"] == "REPORTED" and measured >= 1
     assert view["budget"]["consumed"]["compute_seconds"] == measured
     assert view["budget"]["released"]["compute_seconds"] == 30 - measured
 
@@ -351,22 +357,54 @@ def test_changed_source_is_refused_before_any_attempt(research, owner_a, monkeyp
     assert view["budget"]["released"] == {"provider_requests": 2, "compute_seconds": 30}
 
 
-def test_measured_compute_beyond_a_small_bound_is_consumed_and_recorded_as_overrun(env, migrated, owner_a):
+def test_measured_compute_beyond_a_small_bound_is_consumed_and_recorded_as_overrun(env, migrated, owner_a,
+                                                                                  monkeypatch):
+    monkeypatch.setattr(investigation_tools, "_elapsed_ms", lambda started: 2500)  # each tool measures 2.5 s
     bounds = {"provider_requests": 2, "compute_seconds": 1, "max_pages": 2, "max_rows": 200,
               "max_bytes": 1_048_576, "deadline_seconds": 600}
     with _app(env, EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS="10", EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS="10") as client:
         intake_id, declaration_id, _ = declare(client, owner_a, bounds=bounds)
         job_id = start(client, owner_a, intake_id, declaration_id).json()["job_id"]
         view = worker(client).run_job(uuid.UUID(job_id))
-        measured = sum(event["content"]["usage"]["compute_seconds"] for event in view["events"]
-                       if event["kind"] == "ATTEMPT_FINISHED")
-        assert view["state"] == "REPORTED" and measured >= 2
-        assert view["budget"]["consumed"]["compute_seconds"] == measured
-        assert view["budget"]["overrun"]["compute_seconds"] == measured - 1
+        assert view["state"] == "REPORTED" and measured_seconds(view) == 5  # ceil(2 x 2500 ms)
+        assert view["budget"]["consumed"]["compute_seconds"] == 5
+        assert view["budget"]["overrun"]["compute_seconds"] == 4
         assert view["budget"]["released"]["compute_seconds"] == 0
         budget = client.get("/v1/research/budget", headers=owner_a).json()
     with _app(env, EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS="10", EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS="10") as restarted:
         after = restarted.get("/v1/research/budget", headers=owner_a).json()
     assert budget == after
-    assert after["consumed"]["compute_seconds"] == measured and after["reserved"]["compute_seconds"] == 0
-    assert after["available"]["compute_seconds"] == 10 - measured
+    assert after["consumed"]["compute_seconds"] == 5 and after["overrun"]["compute_seconds"] == 4
+    assert after["reserved"]["compute_seconds"] == 0 and after["available"]["compute_seconds"] == 5
+
+
+def test_a_one_second_bound_does_not_overrun_a_fast_job(env, migrated, owner_a):
+    bounds = {"provider_requests": 2, "compute_seconds": 1, "max_pages": 2, "max_rows": 200,
+              "max_bytes": 1_048_576, "deadline_seconds": 600}
+    with _app(env) as client:
+        intake_id, declaration_id, _ = declare(client, owner_a, bounds=bounds)
+        job_id = start(client, owner_a, intake_id, declaration_id).json()["job_id"]
+        view = worker(client).run_job(uuid.UUID(job_id))
+    assert view["state"] == "REPORTED" and measured_seconds(view) == 1
+    assert view["budget"]["overrun"]["compute_seconds"] == 0 and view["budget"]["consumed"]["compute_seconds"] == 1
+
+
+def test_interrupted_comparison_keeps_its_compute_as_unknown_liability(research, owner_a, monkeypatch):
+    intake_id, declaration_id, _ = declare(research, owner_a)
+    job_id = start(research, owner_a, intake_id, declaration_id).json()["job_id"]
+
+    def killed(*args, **kwargs):
+        raise Killed()
+
+    monkeypatch.setattr(investigation_tools, "compare_declared_effects", killed)
+    with pytest.raises(Killed):
+        worker(research).run_job(uuid.UUID(job_id))
+    assert job(research, owner_a, job_id)["state"] == "EVALUATING"
+    monkeypatch.undo()
+    with _restarted(research) as restarted:
+        view = worker(restarted).run_job(uuid.UUID(job_id))
+    assert view["state"] == "REPORTED"
+    assert "ATTEMPT_RECONCILED" in kinds(view)
+    assert view["budget"]["unknown_liability"]["compute_seconds"] == 30
+    assert view["budget"]["released"]["compute_seconds"] == 0
+    assert view["budget"]["consumed"]["provider_requests"] == 2  # provider usage was known before the stop

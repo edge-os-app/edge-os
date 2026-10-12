@@ -8,6 +8,7 @@ waits for the released P05 safeguards and an approved inference budget; this mod
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ COMPARE_TOOL = "compare_declared_effects"
 
 @dataclass(frozen=True)
 class ToolResult:
-    """One finished tool call. `usage` keeps unknown provider usage as None, never zero."""
+    """One finished tool call. `usage` keeps unknown provider usage as None, never zero; `compute_ms` is measured."""
 
     tool: str
     outcome: str
@@ -31,6 +32,11 @@ class ToolResult:
     usage: dict[str, Any]
     contrary_findings: list[dict[str, Any]] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
+
+
+def _elapsed_ms(started: float) -> int:
+    """Measured wall time of one tool call in whole milliseconds (at least 1)."""
+    return max(1, math.ceil((time.monotonic() - started) * 1000))
 
 
 def input_sha256(payload: Mapping[str, Any]) -> str:
@@ -52,7 +58,7 @@ def collect_recorded_history(source: Mapping[str, Any], bounds: Mapping[str, Any
                 "normalized_sha256": normalized["normalized_sha256"]},
         usage={"provider_requests_state": usage_state, "provider_requests": usage,
                "measured_local_attempts": collection["source_invocations"]["measured_local_attempts"],
-               "compute_seconds": max(1, int(time.monotonic() - started + 0.999))},
+               "compute_ms": _elapsed_ms(started)},
         provenance={"tool_version": TOOL_VERSION, "source_id": source["source_id"],
                     "evidence_class": source["evidence_class"], "content_label": source["content_label"],
                     "query_sha256": collection["query"]["identity_sha256"]})
@@ -66,7 +72,7 @@ def compare_declared_effects(declaration: Mapping[str, Any], dataset: Mapping[st
     return ToolResult(
         tool=COMPARE_TOOL, outcome=report["outcome"], output=report,
         usage={"provider_requests_state": "NONE", "provider_requests": {},
-               "compute_seconds": max(1, int(time.monotonic() - started + 0.999))},
+               "compute_ms": _elapsed_ms(started)},
         contrary_findings=list(report["contrary_findings"]),
         provenance={"tool_version": TOOL_VERSION, "engine": "p09.effect-comparison",
                     "dataset_id": dataset["dataset_id"], "normalized_sha256": dataset["normalized_sha256"]})

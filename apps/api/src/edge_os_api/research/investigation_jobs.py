@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import hashlib
 import logging
+import math
 import time
 import uuid
 from collections.abc import Callable
@@ -23,14 +24,12 @@ from sqlalchemy import (
     BigInteger,
     DateTime,
     Identity,
-    Integer,
     Text,
     UniqueConstraint,
     select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 
@@ -43,6 +42,7 @@ from edge_os_api.research import history_dataset, investigation_tools
 from edge_os_api.research.history_dataset import HistoryDatasetRow, ResearchBase
 from edge_os_api.research.investigation_adoption import owned_history_declaration
 from edge_os_api.research.service import parse_uuid
+from edge_os_api.usage import quota
 
 log = logging.getLogger(__name__)
 
@@ -90,22 +90,6 @@ class InvestigationEventRow(ResearchBase):
     __table_args__ = (UniqueConstraint("job_id", "attempt_id", "kind", name="uq_investigation_attempt_kind"),)
 
 
-class ResearchBudgetRow(ResearchBase):
-    """One owner's research capacity. Limits come only from server settings."""
-
-    __tablename__ = "research_budgets"
-    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    provider_requests_limit: Mapped[int] = mapped_column(Integer, nullable=False)
-    compute_seconds_limit: Mapped[int] = mapped_column(Integer, nullable=False)
-    reserved_provider_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    reserved_compute_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    consumed_provider_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    consumed_compute_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    unknown_provider_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    unknown_compute_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class InvestigationReportRow(ResearchBase):
     __tablename__ = "investigation_reports"
     report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -144,49 +128,25 @@ def _events(session: Session, job_id: uuid.UUID) -> list[InvestigationEventRow]:
 
 # ------------------------------------------------------------------------------------------------- budget
 
-def _lock_budget(session: Session, owner_id: uuid.UUID, settings: Settings) -> ResearchBudgetRow:
-    session.execute(pg_insert(ResearchBudgetRow).values(
-        owner_id=owner_id, provider_requests_limit=settings.research_budget_provider_requests,
-        compute_seconds_limit=settings.research_budget_compute_seconds, reserved_provider_requests=0,
-        reserved_compute_seconds=0, consumed_provider_requests=0, consumed_compute_seconds=0,
-        unknown_provider_requests=0, unknown_compute_seconds=0, updated_at=utcnow()).on_conflict_do_nothing())
-    row = session.execute(select(ResearchBudgetRow).where(ResearchBudgetRow.owner_id == owner_id)
-                          .with_for_update().execution_options(populate_existing=True)).scalar_one()
-    row.provider_requests_limit = settings.research_budget_provider_requests
-    row.compute_seconds_limit = settings.research_budget_compute_seconds
-    return row
+QUOTA_SUBJECT = "investigation_job"
 
 
-def _available(row: ResearchBudgetRow) -> dict[str, int]:
-    return {"provider_requests": row.provider_requests_limit - row.reserved_provider_requests
-            - row.consumed_provider_requests - row.unknown_provider_requests,
-            "compute_seconds": row.compute_seconds_limit - row.reserved_compute_seconds
-            - row.consumed_compute_seconds - row.unknown_compute_seconds}
+def caps(settings: Settings) -> quota.Caps:
+    """Owner and global research caps from configuration. Stored caps are frozen; see `usage.quota`."""
+    return quota.Caps(owner={"provider_requests": settings.research_budget_provider_requests,
+                             "compute_seconds": settings.research_budget_compute_seconds},
+                      global_={"provider_requests": settings.usage_global_provider_requests,
+                               "compute_seconds": settings.usage_global_compute_seconds})
 
 
-def budget_view(row: ResearchBudgetRow | None, settings: Settings) -> dict[str, Any]:
-    if row is None:
-        return {"limits": {"provider_requests": settings.research_budget_provider_requests,
-                           "compute_seconds": settings.research_budget_compute_seconds},
-                "reserved": {"provider_requests": 0, "compute_seconds": 0},
-                "consumed": {"provider_requests": 0, "compute_seconds": 0},
-                "unknown_liability": {"provider_requests": 0, "compute_seconds": 0},
-                "available": {"provider_requests": settings.research_budget_provider_requests,
-                              "compute_seconds": settings.research_budget_compute_seconds}}
-    return {"limits": {"provider_requests": row.provider_requests_limit, "compute_seconds": row.compute_seconds_limit},
-            "reserved": {"provider_requests": row.reserved_provider_requests,
-                         "compute_seconds": row.reserved_compute_seconds},
-            "consumed": {"provider_requests": row.consumed_provider_requests,
-                         "compute_seconds": row.consumed_compute_seconds},
-            "unknown_liability": {"provider_requests": row.unknown_provider_requests,
-                                  "compute_seconds": row.unknown_compute_seconds},
-            "available": _available(row)}
+def _cap_mismatch(error: quota.CapMismatch) -> AppError:
+    return AppError(503, "INVESTIGATION_JOB", "UNAVAILABLE", "quota_cap_mismatch", [finding(
+        "quota_cap_mismatch", "/", "Research capacity is paused: a configured cap differs from the recorded cap. "
+        "Nothing was reserved.")])
 
 
 def get_budget(session: Session, principal: Principal, settings: Settings) -> dict[str, Any]:
-    row = session.execute(select(ResearchBudgetRow).where(
-        ResearchBudgetRow.owner_id == principal.user_id)).scalar_one_or_none()
-    return budget_view(row, settings)
+    return quota.view(session, principal.user_id, caps(settings))
 
 
 def _settle(session: Session, job: InvestigationJobRow, settings: Settings, *, provider: str, compute: str,
@@ -197,35 +157,22 @@ def _settle(session: Session, job: InvestigationJobRow, settings: Settings, *, p
     open_cs = 0 if compute == "SKIP" else budget["reserved"]["compute_seconds"] - budget["settled"]["compute_seconds"]
     if open_pr <= 0 and open_cs <= 0:
         return
-    ledger = _lock_budget(session, job.owner_id, settings)
+    reservation = quota.existing(session, QUOTA_SUBJECT, str(job.job_id))
+    if reservation is None:  # an original reservation must exist for every reserved job
+        raise RuntimeError(f"investigation job {job.job_id} has no usage reservation")
     totals = {key: dict(value) for key, value in budget.items() if isinstance(value, dict)}
-    if open_pr > 0:
-        ledger.reserved_provider_requests -= open_pr
-        if provider == "UNKNOWN":
-            ledger.unknown_provider_requests += open_pr
-            totals["unknown_liability"]["provider_requests"] += open_pr
-        else:
-            used = min(provider_consumed, open_pr)
-            overrun = max(provider_consumed - open_pr, 0)
-            ledger.consumed_provider_requests += provider_consumed
-            totals["consumed"]["provider_requests"] += provider_consumed
-            totals["released"]["provider_requests"] += open_pr - used
-            totals["overrun"]["provider_requests"] += overrun
-        totals["settled"]["provider_requests"] += open_pr
-    if open_cs > 0:
-        ledger.reserved_compute_seconds -= open_cs
-        if compute == "UNKNOWN":
-            ledger.unknown_compute_seconds += open_cs
-            totals["unknown_liability"]["compute_seconds"] += open_cs
-        else:
-            # Measured compute is consumed in full, like provider requests; use beyond the reservation is overrun.
-            used = min(compute_consumed, open_cs)
-            ledger.consumed_compute_seconds += compute_consumed
-            totals["consumed"]["compute_seconds"] += compute_consumed
-            totals["released"]["compute_seconds"] += open_cs - used
-            totals["overrun"]["compute_seconds"] += max(compute_consumed - open_cs, 0)
-        totals["settled"]["compute_seconds"] += open_cs
-    ledger.updated_at = utcnow()
+    for resource, kind, measured, open_amount in (("provider_requests", provider, provider_consumed, open_pr),
+                                                  ("compute_seconds", compute, compute_consumed, open_cs)):
+        if open_amount <= 0:
+            continue
+        # The shared ledger books the job's whole reservation for this resource once; a repeat books nothing.
+        booked = quota.settle(session, reservation, resource, kind, measured, caps(settings))
+        if booked is not None:
+            totals["consumed"][resource] += booked["consumed"]
+            totals["unknown_liability"][resource] += booked["unknown"]
+            totals["released"][resource] += booked["released"]
+            totals["overrun"][resource] += booked["overrun"]
+        totals["settled"][resource] += open_amount
     job.budget = {**budget, **totals}
     _event(session, job, "BUDGET_SETTLED", {"budget": job.budget, "provider": provider, "compute": compute})
 
@@ -273,21 +220,27 @@ def start_job(session: Session, principal: Principal, settings: Settings, intake
     bounds = declaration.content["configuration"]["resource_bounds"]
     requested = {"provider_requests": bounds["provider_requests"], "compute_seconds": bounds["compute_seconds"]}
     now = utcnow()
-    ledger = _lock_budget(session, principal.user_id, settings)
+    job_id = uuid.uuid4()
+    try:
+        outcome = quota.reserve(session, principal.user_id, QUOTA_SUBJECT, str(job_id), requested, caps(settings))
+    except quota.CapMismatch as error:
+        session.rollback()
+        raise _cap_mismatch(error) from None
     existing = _existing_job(session, principal.user_id, declaration.declaration_id, body.request_key)
-    if existing is not None:
+    if existing is not None:  # a concurrent start with this key won; the locks above serialized us behind it
         session.rollback()
         return _replay(session, existing, fingerprint)
-    available = _available(ledger)
-    granted = all(available[name] >= amount for name, amount in requested.items())
+    granted = isinstance(outcome, quota.Grant)
     zero = {"provider_requests": 0, "compute_seconds": 0}
+    refused = None if granted else {"scope": outcome.scope, "resource": outcome.resource,
+                                    "requested": outcome.requested, "available": outcome.available}
     job = InvestigationJobRow(
-        job_id=uuid.uuid4(), owner_id=principal.user_id, intake_record_id=declaration.intake_record_id,
+        job_id=job_id, owner_id=principal.user_id, intake_record_id=declaration.intake_record_id,
         declaration_id=declaration.declaration_id, request_key=body.request_key,
         operation_id=uuid.UUID(body.operation_id), fingerprint=fingerprint, state="QUEUED",
         budget={"requested": requested, "reserved": dict(requested) if granted else dict(zero),
                 "settled": dict(zero), "consumed": dict(zero), "unknown_liability": dict(zero),
-                "released": dict(zero), "overrun": dict(zero), "available_at_start": available},
+                "released": dict(zero), "overrun": dict(zero)},
         deadline_at=now + dt.timedelta(seconds=bounds["deadline_seconds"]), created_at=now, updated_at=now)
     session.add(job)
     try:
@@ -303,14 +256,12 @@ def start_job(session: Session, principal: Principal, settings: Settings, intake
                                         "declaration_sha256": declaration.content["frozen"]["configuration_sha256"]})
     if not granted:
         job.state, job.terminal_reason = "BUDGET_EXHAUSTED", "research_budget_exhausted"
-        _event(session, job, "BUDGET_REFUSED", {"requested": requested, "available": available})
+        _event(session, job, "BUDGET_REFUSED", {"requested": requested, "refused": refused})
         session.commit()
         raise _budget_refusal(job)
-    ledger.reserved_provider_requests += requested["provider_requests"]
-    ledger.reserved_compute_seconds += requested["compute_seconds"]
-    ledger.updated_at = now
     job.state = "RESERVED"
-    _event(session, job, "BUDGET_RESERVED", {"reserved": requested, "available_before": available})
+    _event(session, job, "BUDGET_RESERVED", {"reserved": requested,
+                                             "reservation_id": str(outcome.reservation.reservation_id)})
     session.commit()
     return 201, job_view(session, job)
 
@@ -403,15 +354,34 @@ def _lock_key(job_id: uuid.UUID) -> tuple[int, int]:
 
 
 def _measured_compute(session: Session, job_id: uuid.UUID) -> int:
-    """Compute seconds the job's finished tool attempts measured. Pending changes are flushed first."""
+    """Compute seconds the job's finished tool attempts measured: the ceiling of their summed milliseconds.
+
+    Events saved before milliseconds were recorded carry `compute_seconds`; those count as whole seconds.
+    Pending changes are flushed first.
+    """
     session.flush()
-    return sum(event.content.get("usage", {}).get("compute_seconds", 0)
-               for event in _events(session, job_id) if event.kind == "ATTEMPT_FINISHED")
+    total_ms = 0
+    for event in _events(session, job_id):
+        if event.kind != "ATTEMPT_FINISHED":
+            continue
+        usage = event.content.get("usage", {})
+        total_ms += usage["compute_ms"] if "compute_ms" in usage else usage.get("compute_seconds", 0) * 1000
+    return math.ceil(total_ms / 1000)
+
+
+def _interrupted(session: Session, job_id: uuid.UUID) -> bool:
+    """A tool attempt that stopped without a saved result: its compute was spent but never measured."""
+    return any(event.kind == "ATTEMPT_RECONCILED"
+               and event.content.get("outcome") in {"INTERRUPTED_LOCAL_CALCULATION", "OUTCOME_UNKNOWN"}
+               for event in _events(session, job_id))
 
 
 def _finish(session: Session, job: InvestigationJobRow, settings: Settings, state: str, reason: str, *,
             provider: str, compute: str, provider_consumed: int = 0) -> None:
-    """End a job. Known compute settles at what its finished attempts measured; the rest is released."""
+    """End a job. Known compute settles at what its finished attempts measured, the rest is released. A job with an
+    interrupted attempt has unmeasured compute, so its open compute stays as unknown liability (G-N2)."""
+    if compute == "KNOWN" and _interrupted(session, job.job_id):
+        compute = "UNKNOWN"
     _settle(session, job, settings, provider=provider, compute=compute, provider_consumed=provider_consumed,
             compute_consumed=_measured_compute(session, job.job_id) if compute == "KNOWN" else 0)
     job.state, job.terminal_reason, job.updated_at = state, reason, utcnow()
