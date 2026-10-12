@@ -269,6 +269,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         self._check_recovery_budget(recovery_budget_seconds)
         self.policy, self.credential_file, self.seal_grace_seconds = policy, credential_file, seal_grace_seconds
         self.recovery_budget_seconds = recovery_budget_seconds
+        self._admission_failures: dict[str, str] = {}  # record name -> error class of its last failed admission
         self._turn_lock = threading.Lock()
         self._token = uuid.uuid4().hex[:6]  # two runner objects with one run_id must not share container names
 
@@ -618,13 +619,24 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     @staticmethod
     def _write_record(path: Path, data: dict[str, Any]) -> None:
-        """Write a record whole or not at all (temporary file, then rename); private to the host user."""
+        """Write a record whole or not at all (temporary file, then rename); private to the host user.
+
+        On any failure the record is left as it was and this operation's own temporary file is removed, so repeated
+        failures (a full disk, a refused rename) never pile up orphan files. The error is raised to the caller.
+        """
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}")
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, sort_keys=True)
-        os.replace(temporary, path)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(data, stream, sort_keys=True)
+            os.replace(temporary, path)
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
 
     @staticmethod
     def _read_record(path: Path) -> dict[str, Any] | None:
@@ -710,7 +722,13 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     def pending_cleanup(self) -> list[dict[str, Any]]:
         """The pending-cleanup records of this run, for reporting (they hold no credential and no job output)."""
-        return [data if data is not None else {"unreadable": path.name} for path, data in self._own_records()]
+        reports = []
+        for path, data in self._own_records():
+            report = dict(data) if data is not None else {"unreadable": path.name}
+            if path.name in self._admission_failures:  # its last attempt could not be recorded, so it was not made
+                report["admission_failed"] = self._admission_failures[path.name]
+            reports.append(report)
+        return reports
 
     def retry_exhausted(self) -> int:
         """Intervention: after a person has dealt with the cause, give exhausted records of this run new attempts.
@@ -725,7 +743,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 continue  # a live turn or a recovery pass holds it
             try:
                 data = self._read_record(path)
-                if data is not None and data.get("run_id") == self.run_id and data.get("state") == "exhausted":
+                if data is not None and data.get("run_id") == self.run_id and self._exhausted(data):
                     data.update(state="pending", attempts=0, next_attempt_after=0.0,
                                 interventions=int(data.get("interventions") or 0) + 1)
                     self._write_record(path, data)
@@ -757,6 +775,11 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 self._release(path, fd)
         return self.pending_cleanup()
 
+    @staticmethod
+    def _exhausted(data: dict[str, Any]) -> bool:
+        """Exhausted by its state or by its durable attempt count, which survives a failed final write."""
+        return data.get("state") == "exhausted" or int(data.get("attempts") or 0) >= MAX_RECOVERY_ATTEMPTS
+
     def _claim(self, path: Path) -> tuple[dict[str, Any], int] | None:
         """Take a record for one recovery attempt by its lock, deciding on its CURRENT content. None: leave it alone.
 
@@ -767,13 +790,30 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         if fd is None:
             return None
         data = self._read_record(path)
-        if (data is None or data.get("run_id") != self.run_id or data.get("state") == "exhausted"
+        if (data is None or data.get("run_id") != self.run_id or self._exhausted(data)
                 or time.time() < float(data.get("next_attempt_after") or 0.0)):
             self._release(path, fd)
             return None
         return data, fd
 
     def _recover_one(self, path: Path, data: dict[str, Any], deadline: float, budget: float) -> None:
+        """One attempt. It is recorded durably (count, backoff, an in-progress mark) BEFORE any stop or removal; if that
+        record cannot be written, nothing risky is done. A crash after it leaves the attempt consumed and marked."""
+        attempt, now = int(data.get("attempts") or 0) + 1, time.time()
+        history = list(data.get("history") or [])
+        if data.get("attempt_in_progress"):  # an earlier attempt was recorded but never finished: its outcome is unknown
+            history.append({**dict(data["attempt_in_progress"]), "result": "unknown: the attempt did not finish"})
+        admitted = {**data, "attempts": attempt, "last_attempt": now, "state": "pending", "history": history[-MAX_RECOVERY_ATTEMPTS:],
+                    "next_attempt_after": now + RECOVERY_BACKOFF_SECONDS * 2 ** (attempt - 1),
+                    "attempt_in_progress": {"at": now, "budget": budget, "attempt": attempt}}
+        if not os.path.lexists(path):
+            return
+        try:
+            self._write_record(path, admitted)
+        except OSError as error:
+            self._admission_failures[path.name] = type(error).__name__
+            return  # not recorded, so not made: the record stays as it was, and it keeps blocking
+        self._admission_failures.pop(path.name, None)
         start = time.monotonic()
         stop_until = deadline - min(0.05, budget / 4)  # the rest of C is kept for removal and the record
         identity = types.SimpleNamespace(name=str(data.get("container")), run_id=str(data.get("label")), stop_deadline=stop_until)
@@ -797,17 +837,20 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         else:
             left.append(str(data.get("container")))
         entry = {"start": start, "end": time.monotonic(), "budget": budget, "container_absent": stopping["container_absent"],
-                 "ownership_verified": stopping["ownership_verified"], "left": left, "at": time.time()}
+                 "ownership_verified": stopping["ownership_verified"], "left": left, "at": time.time(), "attempt": attempt}
         if not left:
-            path.unlink(missing_ok=True)  # recovered: the container is gone and nothing is held
+            try:
+                path.unlink(missing_ok=True)  # recovered: the container is gone and nothing is held
+            except OSError:
+                pass  # the record stays (attempt counted) and keeps blocking; a later pass confirms and clears it
             return
-        data["attempts"] = int(data.get("attempts") or 0) + 1
-        data["history"] = [*(data.get("history") or []), entry][-MAX_RECOVERY_ATTEMPTS:]
-        data["last_attempt"] = entry["at"]
-        data["next_attempt_after"] = entry["at"] + RECOVERY_BACKOFF_SECONDS * 2 ** (data["attempts"] - 1)
-        data["state"] = "exhausted" if data["attempts"] >= MAX_RECOVERY_ATTEMPTS else "pending"
+        closed = {**admitted, "attempt_in_progress": None, "history": [*admitted["history"], entry][-MAX_RECOVERY_ATTEMPTS:],
+                  "state": "exhausted" if attempt >= MAX_RECOVERY_ATTEMPTS else "pending"}
         if os.path.lexists(path):  # claimed, so no other pass changes it; never bring back a record that is gone
-            self._write_record(path, data)
+            try:
+                self._write_record(path, closed)
+            except OSError:
+                pass  # the count and backoff were recorded before the attempt, so the attempts stay finite
 
     # --- Stopping the container ------------------------------------------------------------------------------------
 

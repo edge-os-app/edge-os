@@ -3036,3 +3036,141 @@ def test_an_attempt_never_brings_back_a_record_that_vanished_during_it(tmp_path:
     runner.recover_pending(0.5)
 
     assert not (folder / "turn-01-a.json").exists()
+
+
+# --- Repair after gate verdict 7/7 (disposition 8): a recovery attempt is recorded durably before any risky step -----
+
+def _pending_record(folder: Path, **overrides) -> Path:
+    data = {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-old-01",
+            "turn_folder": "turn-01-old", "held": [], "state": "pending", "attempts": 0, "pid": 999_999, "created": 0,
+            "last_attempt": None, "next_attempt_after": 0, "history": [], **overrides}
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "turn-01-old.json"
+    path.write_text(_json.dumps(data))
+    return path
+
+
+def _orphans(folder: Path) -> list[str]:
+    return [p.name for p in folder.glob(".turn-01-old.json.*") if not p.name.endswith(".lock")]
+
+
+def test_a_recovery_attempt_that_cannot_be_recorded_takes_no_risky_step_and_leaves_no_orphan(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    path = _pending_record(folder)
+    stops: list[str] = []
+    runner, spend, guarded = build(tmp_path, credential, recovery_budget_seconds=0.1)
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_stop_owned",
+                        lambda self, plan, proc: (stops.append(plan.name) or {"container_absent": False, "ownership_verified": False}))
+    monkeypatch.setattr(module.os, "replace", lambda source, dest: (_ for _ in ()).throw(OSError("persistent record-write failure")))
+
+    for _ in range(8):  # the gate's probe: on the old candidate, 8 unrecorded stops and 8 orphan files
+        runner.recover_pending(0.1)
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert stops == [] and _orphans(folder) == []
+    record = _json.loads(path.read_text())
+    assert record["attempts"] == 0 and record["state"] == "pending"  # the original identity is kept, unchanged
+    assert result.error_class == "CleanupPending" and launched == []  # and it still blocks new work
+
+
+def test_attempts_stay_finite_when_only_the_write_after_the_risky_step_fails(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_SECONDS", 0.0)
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    path = _pending_record(folder)
+    stops: list[str] = []
+    runner, _, _ = build(tmp_path, credential)
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_stop_owned",
+                        lambda self, plan, proc: (stops.append(plan.name) or {"container_absent": False, "ownership_verified": False}))
+    real_write = GuardedDockerTurnRunner._write_record
+
+    def fail_after_the_step(path, data):
+        if not data.get("attempt_in_progress"):  # the write that would close the attempt
+            raise OSError("persistent failure after the risky step")
+        return real_write(path, data)
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_write_record", staticmethod(fail_after_the_step))
+
+    for _ in range(module.MAX_RECOVERY_ATTEMPTS + 4):
+        runner.recover_pending(0.5)
+
+    record = _json.loads(path.read_text())
+    assert len(stops) == module.MAX_RECOVERY_ATTEMPTS and record["attempts"] == module.MAX_RECOVERY_ATTEMPTS
+    assert _orphans(folder) == []
+
+
+def test_a_crash_after_an_attempt_is_recorded_keeps_the_attempt_and_its_uncertainty(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    path = _pending_record(folder)
+    runner, _, _ = build(tmp_path, credential)
+
+    def crash(self, plan, proc):
+        raise SystemExit("the host process died during the stop")
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_stop_owned", crash)
+    with pytest.raises(SystemExit):
+        runner.recover_pending(1.0)
+
+    record = _json.loads(path.read_text())
+    assert record["attempts"] == 1 and record["attempt_in_progress"]  # consumed, outcome unknown, visible
+    assert record["next_attempt_after"] > 0
+    monkeypatch.undo()
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    import guarded_docker_runner as module
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_SECONDS", 0.0)
+    record["next_attempt_after"] = 0
+    path.write_text(_json.dumps(record))
+
+    GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                            credential_file=credential, script_for=lambda turn: {}, timeout_seconds=60).recover_pending(1.0)
+
+    assert not path.exists()  # a later pass confirms and clears it
+
+
+def test_a_confirmed_recovery_whose_record_cannot_be_deleted_keeps_blocking_without_raising(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    path = _pending_record(folder)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    runner, _, _ = build(tmp_path, credential)
+    real_unlink = Path.unlink
+
+    def refuse(self, missing_ok=False):
+        if self == path:
+            raise OSError("cannot delete the record")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    runner.recover_pending(1.0)  # must not raise
+
+    assert path.exists() and runner.pending_cleanup()  # still pending, still blocking
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    import guarded_docker_runner as module
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_SECONDS", 0.0)
+    data = _json.loads(path.read_text())
+    data["next_attempt_after"] = 0
+    path.write_text(_json.dumps(data))
+    runner.recover_pending(1.0)
+    assert not path.exists()
+
+
+def test_a_failed_atomic_write_removes_only_its_own_temporary_file(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    folder = tmp_path / "pending-cleanup"
+    folder.mkdir()
+    (folder / ".turn-01-old.json.someone-elses").write_text("x")  # not this operation's file: must stay
+    monkeypatch.setattr(module.os, "replace", lambda source, dest: (_ for _ in ()).throw(OSError("full disk")))
+
+    with pytest.raises(OSError):
+        GuardedDockerTurnRunner._write_record(folder / "turn-01-old.json", {"state": "pending"})
+
+    assert sorted(p.name for p in folder.iterdir()) == [".turn-01-old.json.someone-elses"]
