@@ -25,7 +25,9 @@ import json
 import math
 import os
 import re
+import selectors
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -80,6 +82,63 @@ def holds_credential(data: bytes, forms: list[bytes]) -> bool:
         return True
     unescaped = _json_unescaped(data).lower()
     return any(form in unescaped for form in lowered)
+
+
+
+BASE_DOCKER_CLI = docker_turn_runner.docker  # the base helper as shipped; a test may install a stand-in in its place
+MAX_CLI_ANSWER_BYTES = 64 * 1024  # an inspect or ps answer is a few lines; anything larger is not a real answer
+
+
+def bounded_docker(*args: str, timeout: float) -> subprocess.CompletedProcess[str]:
+    """Run one docker CLI command that cannot outlast `timeout` or fill host memory, whatever the CLI prints.
+
+    The base helper keeps the whole answer in memory and does work after its timeout that grows with the answer, so a
+    CLI that streams output can hold the call long past its budget. Here at most `MAX_CLI_ANSWER_BYTES` are read, only
+    until the deadline; then the command's whole process group is killed and reaped. A larger answer is a failure.
+    A stand-in installed on the base helper (tests) is used as it is.
+    """
+    if docker_turn_runner.docker is not BASE_DOCKER_CLI:
+        return docker_turn_runner.docker(*args, timeout=timeout, check=False)
+    deadline = time.monotonic() + timeout
+    proc = subprocess.Popen(
+        ["docker", *args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    chunks: list[bytes] = []
+    size, ended = 0, False
+    try:
+        fd = proc.stdout.fileno()
+        os.set_blocking(fd, False)
+        with selectors.DefaultSelector() as selector:
+            selector.register(fd, selectors.EVENT_READ)
+            while size <= MAX_CLI_ANSWER_BYTES and (left := deadline - time.monotonic()) > 0:
+                if not selector.select(left):
+                    continue
+                try:
+                    chunk = os.read(fd, MAX_CLI_ANSWER_BYTES + 1 - size)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    ended = True
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+    finally:
+        proc.stdout.close()
+        if ended:
+            try:
+                proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                ended = False
+        if not ended or proc.returncode is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()  # SIGKILL cannot be ignored, so this returns at once
+    if not ended or size > MAX_CLI_ANSWER_BYTES:
+        raise TimeoutError("the docker CLI did not answer within its budget and size")
+    return subprocess.CompletedProcess(["docker", *args], proc.returncode, b"".join(chunks).decode("utf-8", "replace"), "")
 
 
 class EvidenceNotSealed(RuntimeError):
@@ -403,7 +462,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         def cli(*args: str) -> subprocess.CompletedProcess[str]:
             if left() <= 0:
                 raise TimeoutError("the stop budget is spent")
-            return docker_turn_runner.docker(*args, timeout=min(60.0, left()), check=False)
+            return bounded_docker(*args, timeout=min(60.0, left()))
 
         def failed() -> dict[str, Any]:
             return {"container": name, "ownership_verified": owned, "container_absent": False}

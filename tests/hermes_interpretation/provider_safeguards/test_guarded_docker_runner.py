@@ -1852,3 +1852,23 @@ def test_a_name_that_encodes_the_credential_is_renamed_and_the_turn_says_so(tmp_
     runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
     assert not [p for p in (tmp_path / "evidence").rglob("*") if p.name == name], "the name was kept"
+
+
+# --- Repair after round-20 review: a docker CLI that streams without end cannot stretch the stop step ---------------
+
+def test_a_docker_cli_that_streams_without_end_cannot_run_the_turn_past_its_deadline(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "docker").write_text("#!/bin/sh\nexec yes xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+    (fake_bin / "docker").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.setattr(docker_turn_runner, "docker", module.BASE_DOCKER_CLI)  # the real helpers, the fake docker on PATH
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    install_process(monkeypatch, lambda output: None, returncode=-9)  # a client killed by a signal: the stop step runs
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=5.0)
+
+    status, elapsed = _timed_run(runner, limit=120)
+
+    assert status == "EvidenceNotSealed" and elapsed <= 0.1 + 5.0 + 0.5, (status, elapsed)
