@@ -32,7 +32,12 @@ from edge_os_api.research_history.http_clients.client_config import (
     safe_endpoint,
     validate_endpoint,
 )
-from edge_os_api.research_history.http_clients.http_transport import HttpResponse, HttpTransport
+from edge_os_api.research_history.http_clients.http_transport import (
+    HttpResponse,
+    HttpTransport,
+    decode_json_reply,
+    refuse_provider_status,
+)
 from edge_os_api.research_history.provider_transport import SourceCancelled
 
 # The documented read-only methods the accepted corroboration and the collection
@@ -155,35 +160,10 @@ class HttpQuickNodeRpcClient:
         return result
 
     def _raise_for_status(self, response: HttpResponse) -> None:
-        status = response.status
-        if 200 <= status < 300:
-            return
-        where = f"the JSON-RPC call to {safe_endpoint(self._endpoint)}"
-        if 300 <= status < 400:
-            raise HttpProviderError("REDIRECT_REFUSED", f"{where} returned redirect status {status}")
-        if status in (401, 403):
-            raise HttpProviderError("AUTH_DENIED", f"{where} was denied (status {status})")
-        if status == 402:
-            raise HttpProviderError("PAYMENT_REQUIRED", f"{where} requires payment (status 402)")
-        if status == 429:
-            raise HttpProviderError("RATE_LIMITED", f"{where} was rate limited (status 429)")
-        raise HttpProviderError("HTTP_STATUS", f"{where} returned status {status}")
+        refuse_provider_status(response.status, f"the JSON-RPC call to {safe_endpoint(self._endpoint)}")
 
     def _parse(self, response: HttpResponse, call_id: int) -> Any:
-        encoding = response.headers.get("content-encoding")
-        if encoding is not None and encoding.lower() != "identity":
-            raise HttpProviderError("UNSUPPORTED_CONTENT_ENCODING",
-                                    f"reply used content-encoding {encoding!r}")
-        try:
-            text = response.body.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply is not valid UTF-8") from error
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as error:
-            raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply is not valid JSON") from error
-        if not isinstance(parsed, Mapping):
-            raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply is not a JSON object")
+        parsed = decode_json_reply(response)
         if parsed.get("jsonrpc") != _JSONRPC_VERSION:
             raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply is not JSON-RPC 2.0")
         if parsed.get("id") != call_id:

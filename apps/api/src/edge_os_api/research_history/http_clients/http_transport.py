@@ -6,23 +6,30 @@ with an explicit endpoint. It performs no I/O at import or construction, reads n
 credential and holds no default endpoint.
 
 Every request is bounded three ways: a per-socket timeout, an absolute deadline
-checked between reads (so a slow dribbling stream still stops), and a maximum
-retained body size checked while streaming (so an unbounded reply is refused
-before it is fully buffered). Redirects are never followed. The connection is
-always closed. A caller cancellation flag is checked before the socket opens and
-between reads.
+checked before the socket opens and between body reads (so a slow dribbling body
+still stops), and a maximum retained body size checked while streaming (so an
+unbounded reply is refused before it is fully buffered). The response-header phase
+is bounded by the per-socket timeout. Redirects are never followed. The connection
+is always closed. A caller cancellation flag is checked before the socket opens and
+between body reads. A malformed HTTP framing reply is refused as a provider error
+rather than escaping as an undocumented exception.
 """
 
 from __future__ import annotations
 
 import http.client
+import json
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
-from edge_os_api.research_history.http_clients.client_config import ClientConfigError, HttpProviderError
+from edge_os_api.research_history.http_clients.client_config import (
+    ClientConfigError,
+    HttpProviderError,
+    safe_endpoint,
+)
 from edge_os_api.research_history.provider_transport import SourceCancelled, SourceTimeout
 
 _CHUNK_BYTES = 65_536
@@ -99,6 +106,47 @@ class StdlibHttpTransport:
             return HttpResponse(status=response.status, headers=header_map, body=b"".join(chunks))
         except TimeoutError as error:
             raise SourceTimeout("the HTTP request exceeded its socket time bound") from error
+        except http.client.HTTPException as error:
+            # Malformed HTTP framing (a bad status line, oversized headers, a short
+            # body against Content-Length) is a refused provider reply, not an
+            # undocumented escape that would crash the accepted consumers.
+            raise HttpProviderError(
+                "MALFORMED_PROVIDER_RESPONSE",
+                f"the HTTP reply from {safe_endpoint(url)} is malformed: {type(error).__name__}") from error
         finally:
             if connection is not None:
                 connection.close()
+
+
+def refuse_provider_status(status: int, where: str) -> None:
+    """Raise ``HttpProviderError`` for a non-2xx status. Shared by both clients."""
+    if 200 <= status < 300:
+        return
+    if 300 <= status < 400:
+        raise HttpProviderError("REDIRECT_REFUSED", f"{where} returned redirect status {status}")
+    if status in (401, 403):
+        raise HttpProviderError("AUTH_DENIED", f"{where} was denied (status {status})")
+    if status == 402:
+        raise HttpProviderError("PAYMENT_REQUIRED", f"{where} requires payment (status 402)")
+    if status == 429:
+        raise HttpProviderError("RATE_LIMITED", f"{where} was rate limited (status 429)")
+    raise HttpProviderError("HTTP_STATUS", f"{where} returned status {status}")
+
+
+def decode_json_reply(response: HttpResponse) -> Mapping[str, Any]:
+    """Decode a bounded JSON-object reply. Shared by both clients."""
+    encoding = response.headers.get("content-encoding")
+    if encoding is not None and encoding.lower() != "identity":
+        raise HttpProviderError("UNSUPPORTED_CONTENT_ENCODING",
+                                f"reply used content-encoding {encoding!r}")
+    try:
+        text = response.body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply is not valid UTF-8") from error
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply is not valid JSON") from error
+    if not isinstance(parsed, Mapping):
+        raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply is not a JSON object")
+    return parsed

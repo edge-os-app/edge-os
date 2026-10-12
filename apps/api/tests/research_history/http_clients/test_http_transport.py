@@ -116,3 +116,37 @@ def test_transport_refuses_an_unsafe_url_and_scheme() -> None:
     transport = StdlibHttpTransport()
     with pytest.raises(ClientConfigError):
         _request(transport, "ftp://example.test/query")
+
+
+def test_transport_refuses_malformed_http_framing() -> None:
+    from http.client import BadStatusLine, IncompleteRead
+
+    class BadStatus:
+        def __init__(self) -> None:
+            self.closed = 0
+
+        def request(self, *_args, **_kwargs) -> None:
+            return
+
+        def getresponse(self):
+            raise BadStatusLine("garbage")
+
+        def close(self) -> None:
+            self.closed += 1
+
+    bad_status = BadStatus()
+    transport = StdlibHttpTransport(connect=lambda *_args: bad_status, clock=lambda: 0.0)
+    with pytest.raises(HttpProviderError) as raised:
+        _request(transport, "http://127.0.0.1:1/query")
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+    assert bad_status.closed == 1
+
+    def incomplete(_response: http.FakeResponse) -> None:
+        raise IncompleteRead(b"partial")
+
+    short = http.FakeConnection(http.FakeResponse(body=b"x", read_hook=incomplete))
+    transport = StdlibHttpTransport(connect=lambda *_args: short, clock=lambda: 0.0)
+    with pytest.raises(HttpProviderError) as raised:
+        _request(transport, "http://127.0.0.1:1/query")
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+    assert short.closed == 1

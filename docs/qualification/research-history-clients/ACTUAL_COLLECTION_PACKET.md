@@ -108,7 +108,7 @@ source = EnvioHypersyncSource(envio, context=SourceContext())
 chain = read_chain_id(quicknode)
 collection = collect(profile, source, scan, CollectionLimits(max_pages=16, max_rows=10_000,
                                                              max_bytes=4_194_304, deadline_utc=deadline),
-                     provenance={"provider_requests": {"ENVIO_HYPERSYNC": envio.count}})
+                     provenance={"provider_requests": {"ENVIO_HYPERSYNC": envio.accounting()["attempted_requests"]}})
 corroboration = corroborate_records(quicknode, collection["records"],
                                     population_size=collection["row_count"], sample_size=8,
                                     chain_id=chain["chain_id"])

@@ -80,7 +80,9 @@ qualified.
 | RH-HTTP-C36 | The path key never leaks into a safe endpoint or error | `test_quicknode_rpc_client.py::test_the_path_key_never_leaks_into_a_safe_endpoint_or_error` |
 | RH-HTTP-C37 | Unsafe endpoints are refused | `test_quicknode_rpc_client.py::test_unsafe_endpoints_are_refused` |
 | RH-HTTP-C38 | A loopback corroboration completes through the accepted consumer | `test_quicknode_rpc_client.py::test_loopback_corroboration_completes_through_the_accepted_consumer` |
+| RH-HTTP-C39 | Malformed HTTP framing is refused, not escaped | `test_http_transport.py::test_transport_refuses_malformed_http_framing` |
+| RH-HTTP-C40 | Empty and encoded replies are refused at the QuickNode boundary | `test_quicknode_rpc_client.py::test_empty_and_encoded_replies_are_refused_at_the_client_boundary` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
 suite. The accepted adapter adds RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C102; this task adds
-RH-HTTP-C01 to RH-HTTP-C38 and changes no existing case.
+RH-HTTP-C01 to RH-HTTP-C40 and changes no existing case.

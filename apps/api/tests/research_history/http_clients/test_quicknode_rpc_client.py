@@ -142,6 +142,14 @@ def test_malformed_envelopes_are_refused() -> None:
         assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
 
 
+def test_empty_and_encoded_replies_are_refused_at_the_client_boundary() -> None:
+    for body, headers, code in ((b"", None, "MALFORMED_PROVIDER_RESPONSE"),
+                                (b"\x1f\x8b", {"Content-Encoding": "gzip"}, "UNSUPPORTED_CONTENT_ENCODING")):
+        with pytest.raises(HttpProviderError) as raised:
+            _client(http.FakeTransport([http.response(body=body, headers=headers)])).call("eth_chainId", [])
+        assert raised.value.code == code
+
+
 def test_provider_error_becomes_a_refused_reply() -> None:
     frame = _envelope(1, error={"code": -32000, "message": "boom"})
     with pytest.raises(HttpProviderError) as raised:
