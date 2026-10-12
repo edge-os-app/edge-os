@@ -1415,3 +1415,103 @@ def test_a_file_that_becomes_a_named_pipe_before_sealing_opens_it_cannot_block_t
 
     assert state["done"], "the swap did not happen, so this test proved nothing"
     assert not hung, "sealing blocked on a named pipe"
+
+
+# --- Repairs after the round-12 tracing addenda: the job wait and the stdout are inside the one deadline ------------
+
+def _timed_run(runner, turn_id: str = "attempt-1", limit: float = 30.0):
+    outcome: list = []
+
+    def go() -> None:
+        started = time.monotonic()
+        try:
+            outcome.append(runner.run_turn(Turn(turn_id, "prompt", "task", "m", "route", 4096)).status)
+        except BaseException as error:  # noqa: BLE001
+            outcome.append(type(error).__name__)
+        outcome.append(time.monotonic() - started)
+
+    worker = threading.Thread(target=go, daemon=True)
+    worker.start()
+    worker.join(timeout=limit)
+    assert not worker.is_alive(), "the turn did not finish"
+    return outcome
+
+
+def test_time_spent_before_the_job_starts_comes_out_of_the_job_wait_not_on_top_of_it(tmp_path: Path, monkeypatch) -> None:
+    real_popen = subprocess.Popen
+
+    class Hanging:  # a job that never finishes by itself; each wait lasts exactly the time it is given
+        returncode = None
+
+        def __init__(self, argv, **_kw) -> None:
+            pass
+
+        def communicate(self, timeout=None):
+            time.sleep(max(0.0, timeout or 0.0))
+            raise subprocess.TimeoutExpired("docker", timeout)
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Hanging(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+
+    def slow_setup(turn):  # the caller's script, the file writes and the launch all happen after the deadline is set
+        time.sleep(1.5)
+        return {}
+
+    runner, _, _ = build(tmp_path, None, script_for=slow_setup, timeout_seconds=1.0, seal_grace_seconds=1.0)
+
+    status, elapsed = _timed_run(runner)
+
+    assert elapsed <= 1.0 + 1.0 + 0.25, (status, elapsed)
+
+
+@pytest.mark.parametrize("size", [10 * 1024 * 1024, 300 * 1024 * 1024])  # below and above the size that sealing will scan
+def test_a_flood_of_stdout_is_capped_and_cannot_run_the_turn_past_its_deadline(tmp_path: Path, monkeypatch, size: int) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    flood = (OLD.encode() + b"x" * 1000) * 300_000  # about 300 MiB, with the credential all through it
+    real_popen = subprocess.Popen
+
+    class Loud:
+        returncode = 0
+
+        size = 0
+
+        def __init__(self, argv, **kw) -> None:
+            self.sink = kw.get("stdout")
+
+        def communicate(self, timeout=None):
+            if hasattr(self.sink, "write"):  # the host gave the job a file: the job wrote this much there while it ran
+                self.sink.write(OLD.encode())
+                self.sink.seek(int(self.size))
+                self.sink.write(OLD.encode())
+                self.sink.flush()
+                return None, None
+            return flood, None
+
+        def kill(self) -> None:
+            pass
+
+    Loud.size = size
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Loud(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=0.5)
+
+    status, elapsed = _timed_run(runner)
+
+    assert elapsed <= 0.1 + 0.5 + 0.25, (status, elapsed)
+    kept = sum(p.stat().st_size for p in (tmp_path / "evidence").rglob("*stdout*") if p.is_file())
+    assert kept <= module.MAX_STDOUT_BYTES
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_a_credential_file_that_is_a_named_pipe_is_refused_without_blocking(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    os.mkfifo(credential)
+    launched = install_process(monkeypatch, lambda output: None)
+    runner, _, _ = build(tmp_path, credential)
+
+    status, elapsed = _timed_run(runner, limit=5)
+
+    assert status == "CredentialUnavailable" and elapsed < 1.0 and launched == []

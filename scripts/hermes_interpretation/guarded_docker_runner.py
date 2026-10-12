@@ -45,6 +45,8 @@ from provider_guard import GuardPolicy
 
 REDACTED = "[REDACTED]"
 MAX_SCANNED_BYTES = 64 * 1024 * 1024
+MAX_STDOUT_BYTES = 1024 * 1024  # the host keeps at most this much of the job's own output
+MAX_CREDENTIAL_BYTES = 64 * 1024
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
 
@@ -70,6 +72,7 @@ class _TurnPlan:
     timeout: float
     run_budget: int
     forbidden: tuple[str, ...]
+    job_deadline: float  # the job must be done by this time; all setup before the launch comes out of it
     deadline: float  # monotonic time by which the process wait, the stop step and the sealing must be done
     stop_deadline: float  # the stop step must be done by this time; the rest of the budget is kept for removing evidence
 
@@ -106,17 +109,37 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             self._check_deadline_settings(timeout, grace)  # before a turn number is used or anything starts
             self.turn_count += 1
             sequence = self.turn_count
-        secret = None
-        if source is not None:
-            try:
-                secret = source.read_text(encoding="utf-8").strip()  # an editor or secret store adds a newline
-            except (OSError, UnicodeDecodeError):
-                raise CredentialUnavailable("the credential file could not be read") from None
-            if not secret:
-                raise CredentialUnavailable("the credential file is empty")
-        deadline = time.monotonic() + timeout + grace
+        started = time.monotonic()  # the one deadline counts from here: everything the turn does is inside it
+        secret = self._read_credential(source) if source is not None else None
+        job_deadline = started + timeout
+        deadline = job_deadline + grace
         return _TurnPlan(sequence, f"p05-{run_id}-{self._token}-{sequence:02d}", run_id, image, policy, secret, timeout,
-                         budget, forbidden, deadline, deadline - max(0.0, min(0.5, grace / 10)))
+                         budget, forbidden, job_deadline, deadline, deadline - max(0.0, min(0.5, grace / 10)))
+
+    @staticmethod
+    def _read_credential(source: Path) -> str:
+        """Read the credential without blocking. A pipe, a device or a folder is refused; a link to a file is followed."""
+        try:
+            fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            raise CredentialUnavailable("the credential file could not be read") from None
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise CredentialUnavailable("the credential path is not a plain file")
+            raw = os.read(fd, MAX_CREDENTIAL_BYTES + 1)
+        except OSError:
+            raise CredentialUnavailable("the credential file could not be read") from None
+        finally:
+            os.close(fd)
+        if len(raw) > MAX_CREDENTIAL_BYTES:
+            raise CredentialUnavailable("the credential file is too large")
+        try:
+            secret = raw.decode("utf-8").strip()  # an editor or secret store adds a newline
+        except UnicodeDecodeError:
+            raise CredentialUnavailable("the credential file could not be read") from None
+        if not secret:
+            raise CredentialUnavailable("the credential file is empty")
+        return secret
 
     # --- Sealing evidence -----------------------------------------------------------------------------------------
 
@@ -388,6 +411,16 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             raise EvidenceNotSealed(f"container {plan.name} may still write and could not be stopped")
         launch.stopped = True
 
+    @staticmethod
+    def _cap_stdout(sink: Any, returned: bytes | None) -> None:
+        """Keep at most MAX_STDOUT_BYTES of the job's output. Cutting a file is one step, whatever its size."""
+        if returned:  # a process that handed its output back instead of writing it to the file
+            sink.write(returned[:MAX_STDOUT_BYTES])
+        sink.flush()
+        size = os.fstat(sink.fileno()).st_size
+        if size > MAX_STDOUT_BYTES:
+            os.ftruncate(sink.fileno(), MAX_STDOUT_BYTES)
+
     # --- One turn -------------------------------------------------------------------------------------------------
 
     def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
@@ -446,21 +479,23 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                  "--env", f"HOME=/tmp/p05-{name}/home", "--env", f"HERMES_HOME=/tmp/p05-{name}/hermes-home",
                  "--env", f"XDG_CONFIG_HOME=/tmp/p05-{name}/config", "--env", f"XDG_CACHE_HOME=/tmp/p05-{name}/cache",
                  "--env", "PYTHONDONTWRITEBYTECODE=1", plan.image, "-B", "/opt/p05guard/guarded_turn_job.py"]
-        launch.proc = proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)  # bytes: not always text
-        try:
-            stdout, _ = proc.communicate(timeout=plan.timeout)
-        except subprocess.TimeoutExpired:
-            self._confirm_stopped(plan, launch)  # raises if the container is still there after the kill
-            (task_dir / "container-lifecycle.json").write_text(json.dumps(launch.stopping, indent=1) + "\n")
-            return HermesTurnResult(status="TIMED_OUT", text=None, usage=Usage(), request_count=None, observed={},
-                                    error_class="TimeoutExpired")
-        # Whatever the client's exit code, the container may still run (a client that lost its daemon exits with an
-        # error while the container goes on). Verify it is gone before any evidence is touched.
-        self._confirm_stopped(plan, launch)
-        scrubbed = stdout
-        for form in (encodings(plan.secret) if plan.secret else []):
-            scrubbed = scrubbed.replace(form, REDACTED.encode())
-        (task_dir / "container-stdout.txt").write_bytes(scrubbed)  # stdout is evidence too
+        # The job's own output goes to a file inside the output folder, never into host memory. After the container is
+        # gone the file is cut to MAX_STDOUT_BYTES, and the lifecycle seals it with the rest of the output.
+        sink_fd = os.open(output / "host-captured-stdout.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(sink_fd, "wb") as sink:
+            launch.proc = proc = subprocess.Popen(argv, stdout=sink, stderr=subprocess.STDOUT)
+            try:  # setup time since the plan was made comes out of the wait, never on top of it
+                returned, _ = proc.communicate(timeout=max(0.0, plan.job_deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                self._confirm_stopped(plan, launch)  # raises if the container is still there after the kill
+                self._cap_stdout(sink, None)
+                (task_dir / "container-lifecycle.json").write_text(json.dumps(launch.stopping, indent=1) + "\n")
+                return HermesTurnResult(status="TIMED_OUT", text=None, usage=Usage(), request_count=None, observed={},
+                                        error_class="TimeoutExpired")
+            # Whatever the client's exit code, the container may still run (a client that lost its daemon exits with an
+            # error while the container goes on). Verify it is gone before any evidence is touched.
+            self._confirm_stopped(plan, launch)
+            self._cap_stdout(sink, returned)
         echoed = self._seal(output, plan)  # sealed here for the result check; the lifecycle seals again on every path
         result_path = output / "container-result.json"
         if proc.returncode != 0 or not result_path.exists():
