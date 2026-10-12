@@ -71,6 +71,41 @@ def test_transport_applies_the_deadline_to_the_header_phase() -> None:
         assert time.monotonic() - start < 0.25
 
 
+def test_transport_bounds_a_paced_header_drip_by_the_deadline() -> None:
+    raw = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0,
+                     deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_deadline_race_is_a_timeout_not_a_value_error() -> None:
+    values = iter([0.0, 2.0])
+    transport = StdlibHttpTransport(clock=lambda: next(values))
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", deadline=1.0)
+
+
+def test_transport_refuses_a_pre_expired_deadline() -> None:
+    transport = StdlibHttpTransport(clock=lambda: 5.0)
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", deadline=1.0)
+
+
+def test_transport_bounds_a_paced_fixed_length_body_by_the_deadline() -> None:
+    raw = b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n" + b"x" * 40
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0,
+                     deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
 def test_transport_cancels_before_opening_a_socket() -> None:
     called = {"connect": False}
 

@@ -18,8 +18,8 @@ bounds. All actual statuses remain `NOT_RUN`.
   P07 module, the P02 contract and the package `__init__.py` are unchanged. The clients plug into the
   accepted protocols; they are imported explicitly and are not added to the top-level package
   namespace.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history/http_clients -v` passes (47
-  tests); the affected `tests/research_history` suite passes (166 tests); `python3 -B -m unittest -v
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history/http_clients -v` passes (53
+  tests); the affected `tests/research_history` suite passes (172 tests); `python3 -B -m unittest -v
   test_p07` passes (73 tests); `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs
   are kept under the assigned evidence folder and are not part of the commit.
 
@@ -76,8 +76,14 @@ second durable counter: request limits and local usage feed lane2's existing own
 
 ## Cancellation and bounds
 
-- `deadline_seconds` bounds the whole call: the socket wait (connect and response-header phase) is set
-  to the remaining deadline and the deadline is re-checked between body reads;
+- `deadline_seconds` bounds the whole admitted call under one absolute monotonic deadline: connection
+  (name resolution, TCP and TLS where used), request transmission, the status/header phase, body/framing
+  reads and bounded decoding. A paced peer that keeps every individual receive under a socket timeout
+  cannot renew the budget: a per-call daemon timer shuts the socket down at the deadline, and a
+  remaining-time check before the connect (with no non-positive socket timeout) makes a just-crossed
+  deadline a `SourceTimeout`; a call never returns success from expired work. The containment is frozen:
+  one timer per admitted call, cancelled in `finally`; the callback performs one `shutdown` only, with no
+  join, DNS, read or close; the connection is closed in `finally` and is never reused.
   `connect_timeout_seconds` caps each socket wait below the deadline; `max_response_bytes` bounds the
   retained reply body while streaming; `max_request_bytes` bounds the request body;
   `max_blocks_per_page` bounds one HyperSync page's block span.

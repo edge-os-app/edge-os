@@ -89,7 +89,13 @@ qualified.
 | RH-HTTP-C45 | The Envio client targets the `/query` route | `test_envio_query_client.py::test_envio_targets_the_query_route` |
 | RH-HTTP-C46 | A content-encoding value never leaks into an error | `test_envio_query_client.py::test_content_encoding_value_never_leaks` |
 | RH-HTTP-C47 | A JSON-RPC provider error never copies provider text | `test_quicknode_rpc_client.py::test_provider_error_never_copies_provider_text` |
+| RH-HTTP-C48 | A paced header drip is bounded by the whole-call deadline | `test_http_transport.py::test_transport_bounds_a_paced_header_drip_by_the_deadline` |
+| RH-HTTP-C49 | A deadline-crossing race is a timeout, not a ValueError | `test_http_transport.py::test_transport_deadline_race_is_a_timeout_not_a_value_error` |
+| RH-HTTP-C50 | A pre-expired deadline is refused | `test_http_transport.py::test_transport_refuses_a_pre_expired_deadline` |
+| RH-HTTP-C51 | A paced fixed-length body is bounded by the deadline | `test_http_transport.py::test_transport_bounds_a_paced_fixed_length_body_by_the_deadline` |
+| RH-HTTP-C52 | A paced body drip respects the deadline at the client boundary | `test_envio_query_client.py::test_paced_body_drip_respects_the_whole_call_deadline` |
+| RH-HTTP-C53 | A paced drip is a collector TIMEOUT with one attempt and no retry | `test_envio_query_client.py::test_paced_drip_is_a_timeout_through_the_accepted_collector` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
 suite. The accepted adapter adds RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C102; this task adds
-RH-HTTP-C01 to RH-HTTP-C47 and changes no existing case.
+RH-HTTP-C01 to RH-HTTP-C53 and changes no existing case.

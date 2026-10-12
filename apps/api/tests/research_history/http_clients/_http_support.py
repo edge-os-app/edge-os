@@ -87,6 +87,7 @@ class Reply:
     delay_before_headers: float = 0.0
     chunks: list[bytes] | None = None
     pause_between_chunks: float = 0.0
+    raw_http: bytes | None = None
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -101,10 +102,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         reply = self.server.responder(self.command, self.path, dict(self.headers), body)
         if reply.delay_before_headers:
             time.sleep(reply.delay_before_headers)
-        self.send_response(reply.status)
-        for name, value in reply.headers.items():
-            self.send_header(name, value)
         try:
+            if reply.raw_http is not None:
+                # A fully authored HTTP response written one byte at a time, to model a
+                # paced provider that keeps every receive under the socket timeout.
+                for byte in reply.raw_http:
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                    if reply.pause_between_chunks:
+                        time.sleep(reply.pause_between_chunks)
+                return
+            self.send_response(reply.status)
+            for name, value in reply.headers.items():
+                self.send_header(name, value)
             if reply.chunks is not None:
                 self.send_header("transfer-encoding", "chunked")
                 self.end_headers()

@@ -260,3 +260,35 @@ def test_content_encoding_value_never_leaks() -> None:
         client.query(_request())
     assert raised.value.code == "UNSUPPORTED_CONTENT_ENCODING"
     assert TOKEN not in str(raised.value)
+
+
+def test_paced_body_drip_respects_the_whole_call_deadline() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(chunks=[b"a"] * 100, pause_between_chunks=0.01)) as server:
+        client = HttpEnvioQueryClient(endpoint=server.base_url, bearer_token=TOKEN,
+                                      transport=StdlibHttpTransport(),
+                                      bounds=_bounds(deadline_seconds=0.05, connect_timeout_seconds=1.0))
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            client.query(_request())
+        assert time.monotonic() - start < 0.4
+
+
+def test_paced_drip_is_a_timeout_through_the_accepted_collector() -> None:
+    raw = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+    seen = {"requests": 0}
+
+    def responder(*_args: object) -> http.Reply:
+        seen["requests"] += 1
+        return http.Reply(raw_http=raw, pause_between_chunks=0.01)
+
+    with http.LoopbackServer(responder) as server:
+        client = HttpEnvioQueryClient(endpoint=server.base_url, bearer_token=TOKEN,
+                                      transport=StdlibHttpTransport(),
+                                      bounds=_bounds(deadline_seconds=0.05, connect_timeout_seconds=1.0))
+        source = EnvioHypersyncSource(client, context=SourceContext(endpoint=server.base_url),
+                                      clock=lambda: support.COLLECTED_AT)
+        result = collect(support.profile(), source, support.SCAN, CollectionLimits(**support.limits()))
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "TIMEOUT"
+    assert client.accounting() == {"attempted_requests": 1, "completed_requests": 0, "unknown_liability": 1}
+    assert seen["requests"] == 1  # one physical attempt, no hidden retry

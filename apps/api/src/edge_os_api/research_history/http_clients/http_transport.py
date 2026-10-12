@@ -5,22 +5,27 @@ through ``http.client`` and is used only when a caller injects it into a client
 with an explicit endpoint. It performs no I/O at import or construction, reads no
 credential and holds no default endpoint.
 
-Every request is bounded three ways: an absolute deadline applied to the socket
-for the connect and response-header phase and checked between body reads (so a
-stalled header or a slow dribbling body still stops within the deadline), a
-per-socket cap that never exceeds the remaining deadline, and a maximum retained
-body size checked while streaming (so an unbounded reply is refused before it is
-fully buffered). Redirects are never followed. The connection is always closed. A
-caller cancellation flag is checked before the socket opens and between body reads.
-A malformed HTTP framing reply is refused as a provider error rather than escaping
-as an undocumented exception. Provider-controlled text (a content-encoding value)
-is never copied into an error message.
+Every request is bounded by one absolute monotonic deadline that covers connect,
+request transmission, the response-header phase and the body. A paced peer that
+keeps every individual receive under a socket timeout must not hold the call: a
+per-call daemon ``threading.Timer`` shuts the socket down at the deadline. Its
+containment is frozen: one timer per admitted call, cancelled in ``finally``; the
+callback performs one ``shutdown`` only, with no join, DNS, read or close; the
+connection is closed by the caller's ``finally`` and is never reused. A
+remaining-time check before the connect avoids the negative-timeout race. The
+retained body is capped while streaming. Redirects are never followed. A caller
+cancellation flag is checked before the socket opens and between body reads. A
+malformed HTTP framing reply is refused as a provider error rather than escaping as
+an undocumented exception. Provider-controlled text is never copied into an error
+message.
 """
 
 from __future__ import annotations
 
 import http.client
 import json
+import socket
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -87,12 +92,31 @@ class StdlibHttpTransport:
         if parts.query:
             path = f"{path}?{parts.query}"
         connection = None
+        watchdog: threading.Timer | None = None
+        expired = False
+
+        def _expire() -> None:
+            nonlocal expired
+            expired = True
+            sock = getattr(connection, "sock", None)
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
         try:
             self._check(cancel, deadline)
-            # The socket wait never exceeds the remaining whole-call deadline, so a
-            # stalled connect or response-header phase cannot hold the call past it.
-            socket_timeout = min(timeout, deadline - self._clock())
-            connection = self._connect(parts.scheme, parts.hostname, parts.port, socket_timeout)
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise SourceTimeout("the HTTP request exceeded its time bound")
+            connection = self._connect(parts.scheme, parts.hostname, parts.port, min(timeout, remaining))
+            # A socket timeout bounds one wait, not the whole call: a paced reply
+            # resets it on every receive. A deadline watchdog closes the socket at the
+            # absolute deadline, so paced headers or a paced body cannot hold the call.
+            watchdog = threading.Timer(remaining, _expire)
+            watchdog.daemon = True
+            watchdog.start()
             connection.request(method, path, body=body, headers=dict(headers))
             response = connection.getresponse()
             chunks: list[bytes] = []
@@ -107,18 +131,26 @@ class StdlibHttpTransport:
                     raise HttpProviderError(
                         "OVERSIZED_RESPONSE", f"reply exceeds max_response_bytes ({max_response_bytes})")
                 chunks.append(chunk)
+            if expired:
+                raise SourceTimeout("the HTTP request exceeded its time bound")
             header_map = {name.lower(): value for name, value in response.getheaders()}
             return HttpResponse(status=response.status, headers=header_map, body=b"".join(chunks))
         except TimeoutError as error:
             raise SourceTimeout("the HTTP request exceeded its socket time bound") from error
-        except http.client.HTTPException as error:
-            # Malformed HTTP framing (a bad status line, oversized headers, a short
-            # body against Content-Length) is a refused provider reply, not an
-            # undocumented escape that would crash the accepted consumers.
-            raise HttpProviderError(
-                "MALFORMED_PROVIDER_RESPONSE",
-                f"the HTTP reply from {safe_endpoint(url)} is malformed: {type(error).__name__}") from error
+        except (http.client.HTTPException, OSError) as error:
+            if expired:
+                raise SourceTimeout("the HTTP request exceeded its time bound") from error
+            if isinstance(error, http.client.HTTPException):
+                # Malformed HTTP framing (a bad status line, oversized headers, a short
+                # body against Content-Length) is a refused provider reply, not an
+                # undocumented escape that would crash the accepted consumers.
+                raise HttpProviderError(
+                    "MALFORMED_PROVIDER_RESPONSE",
+                    f"the HTTP reply from {safe_endpoint(url)} is malformed: {type(error).__name__}") from error
+            raise
         finally:
+            if watchdog is not None:
+                watchdog.cancel()
             if connection is not None:
                 connection.close()
 
