@@ -194,6 +194,37 @@ def no_real_docker_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(docker_turn_runner, "docker", absent)
 
 
+TURN_RECORDS: list[dict] = []  # every turn of the current test: its plan and the moment the runner itself returned
+
+
+@pytest.fixture(autouse=True)
+def record_each_turn_against_its_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Record each turn's plan and the runner's own return, so deadline checks compare with D and need no tolerance."""
+    TURN_RECORDS.clear()
+    original_plan, original_run_turn = GuardedDockerTurnRunner._plan, GuardedDockerTurnRunner.run_turn
+
+    def plan(self):
+        made = original_plan(self)
+        TURN_RECORDS.append({"plan": made, "returned": None})
+        return made
+
+    def run_turn(self, turn):
+        try:
+            return original_run_turn(self, turn)
+        finally:
+            if TURN_RECORDS:
+                TURN_RECORDS[-1]["returned"] = time.monotonic()
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_plan", plan)
+    monkeypatch.setattr(GuardedDockerTurnRunner, "run_turn", run_turn)
+
+
+def latest_late() -> float:
+    """The last turn's runner return minus its one deadline D: a strict check asserts it is <= 0."""
+    record = TURN_RECORDS[-1]
+    return record["returned"] - record["plan"].deadline
+
+
 def install_process(monkeypatch: pytest.MonkeyPatch, behaviour, returncode: int = 3) -> list[list[str]]:
     """Stands in for the `docker run` process only. `behaviour(output_folder)` runs while the process is alive."""
     launched: list[list[str]] = []
@@ -326,9 +357,13 @@ def test_evidence_that_cannot_be_sealed_in_time_stops_the_turn_and_is_not_left_a
     credential = tmp_path / "credential"
     credential.write_text(OLD)
     install_process(monkeypatch, lambda output: (output / "provider-error.log").write_text(OLD))
-    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=-1.0)  # no time at all to seal
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=0.3)
+    from dataclasses import replace as replace_plan
+    original_plan = runner._plan
+    monkeypatch.setattr(runner, "_plan", lambda: replace_plan(original_plan(), seal_deadline=time.monotonic() - 1.0))
+    # no time at all to seal: the seal share is already spent, while the job itself is still inside its budget
 
-    with pytest.raises(EvidenceNotSealed, match="quarantine-"):  # no time is left to remove it either: it is moved, and said so
+    with pytest.raises(EvidenceNotSealed):  # removed while removal has time, else moved to quarantine and named
         runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
     assert list((tmp_path / "evidence").glob("turn-*/output")) == []
@@ -833,15 +868,20 @@ def test_when_the_wait_fails_the_container_is_stopped_before_the_evidence_is_sea
 # --- Repairs after gate verdict 4/4: ONE remaining budget for stop, reap, pauses and sealing -----------------------
 
 def timed_turn(tmp_path: Path, monkeypatch, *, docker, communicate_after_timeout=None, fail_wait=False, grace=1.0,
-               secret: bool = True, ledger: bool = True):
-    """Runs one guarded turn with a slow docker CLI. Returns (elapsed, outcome, spend, evidence, calls)."""
+               secret: bool = True, ledger: bool = True, stop_budget_spent: bool = False):
+    """Runs one guarded turn with a slow docker CLI. Returns (late, outcome, spend, evidence, calls, plan).
+
+    `late` is the runner's own return minus the plan's one deadline D (no tolerance: it must be <= 0); `calls` holds
+    (monotonic start, args, timeout) of each docker CLI call. With `stop_budget_spent` the stop share ends when the job
+    wait ends, so the stop step finds its budget already spent.
+    """
     credential = tmp_path / "credential"
     credential.write_text(OLD)
     calls: list[tuple[float, tuple, float | None]] = []
     started = time.monotonic()
 
     def cli(*args, timeout=None, **_kw):
-        calls.append((time.monotonic() - started, args, timeout))
+        calls.append((time.monotonic(), args, timeout))
         return docker(*args, timeout=timeout)
 
     monkeypatch.setattr(docker_turn_runner, "docker", cli)
@@ -871,6 +911,12 @@ def timed_turn(tmp_path: Path, monkeypatch, *, docker, communicate_after_timeout
 
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Process(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
     runner, spend, guarded = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=grace)
+    if stop_budget_spent:
+        from dataclasses import replace as replace_plan
+        original_plan = runner._plan
+        monkeypatch.setattr(runner, "_plan", lambda: (lambda plan: replace_plan(plan, stop_deadline=plan.job_deadline))(original_plan()))
+    plans, _removals = _spy_plan_and_removal(monkeypatch, runner)
+    runner_returned = _record_runner_return(monkeypatch, runner)
     outcome: list = []
 
     def go() -> None:
@@ -886,7 +932,9 @@ def timed_turn(tmp_path: Path, monkeypatch, *, docker, communicate_after_timeout
     worker.start()
     worker.join(timeout=grace + 12)  # a watchdog: the old behaviour needed up to six seconds more than its grace
     assert not worker.is_alive(), "the turn did not finish"
-    return outcome[1], outcome[0], spend, tmp_path / "evidence", calls
+    late = runner_returned[0] - plans[0].deadline
+    print(f"grace {grace}: runner return minus D {late:+.4f} s")  # kept as a measured value in the receipt
+    return late, outcome[0], spend, tmp_path / "evidence", calls, plans[0]
 
 
 def sleeps_exactly_its_timeout(*args, timeout=None, **_kw):
@@ -895,26 +943,46 @@ def sleeps_exactly_its_timeout(*args, timeout=None, **_kw):
 
 
 def test_a_stop_command_that_hangs_cannot_run_the_turn_past_the_job_timeout_plus_grace(tmp_path: Path, monkeypatch) -> None:
-    elapsed, outcome, spend, evidence, calls = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=1.0)
+    late, outcome, spend, evidence, calls, _plan = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=1.0)
 
-    assert outcome == "EvidenceNotSealed" and elapsed <= 0.1 + 1.0 + 0.25, elapsed
+    assert outcome == "EvidenceNotSealed" and late <= 0.0, late
     assert (spend.state("attempt-1"), spend.committed_usd()) == ("UNKNOWN", RESERVATION)
     assert not list(evidence.glob("turn-*/output")) and plain_bytes_leak(evidence, OLD) == []
     assert len(calls) == 1, "a second command was started after the first had used the budget"
 
 
 def test_no_command_starts_once_the_budget_is_spent(tmp_path: Path, monkeypatch) -> None:
-    elapsed, outcome, _, evidence, calls = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=0.0)
+    late, outcome, _, evidence, calls, _plan = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=0.0,
+                                                         stop_budget_spent=True)
 
-    assert outcome == "EvidenceNotSealed" and calls == [] and elapsed <= 0.1 + 0.25
+    assert outcome == "EvidenceNotSealed" and calls == [] and late <= 0.0, (calls, late)
     assert not list(evidence.glob("turn-*/output"))
 
 
 def test_every_docker_command_fits_inside_the_remaining_budget(tmp_path: Path, monkeypatch) -> None:
-    elapsed, _, _, _, calls = timed_turn(tmp_path, monkeypatch, docker=sleeps_exactly_its_timeout, grace=0.8)
+    import guarded_docker_runner as module
 
-    assert calls and all(started + timeout <= 0.1 + 0.8 + 0.05 for started, _, timeout in calls)
-    assert elapsed <= 0.1 + 0.8 + 0.25
+    class RunnerClock:  # the runner's own clock: remembers the last reading, which is the one a timeout came from
+        last = 0.0
+
+        def monotonic(self) -> float:
+            RunnerClock.last = time.monotonic()
+            return RunnerClock.last
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    monkeypatch.setattr(module, "time", RunnerClock())
+    command_ends: list[float] = []
+
+    def recorded(*args, timeout=None, **kwargs):
+        command_ends.append(RunnerClock.last + timeout)  # when the runner read its clock, plus the time it allowed
+        return sleeps_exactly_its_timeout(*args, timeout=timeout, **kwargs)
+
+    late, _, _, _, calls, plan = timed_turn(tmp_path, monkeypatch, docker=recorded, grace=0.8)
+
+    assert calls and all(end <= plan.stop_deadline for end in command_ends), [e - plan.stop_deadline for e in command_ends]
+    assert late <= 0.0, late
 
 
 def healthy_docker(*args, timeout=None, **_kw):
@@ -924,9 +992,9 @@ def healthy_docker(*args, timeout=None, **_kw):
 
 
 def test_the_wait_for_the_stopped_client_is_part_of_the_same_budget(tmp_path: Path, monkeypatch) -> None:
-    elapsed, outcome, _, evidence, _ = timed_turn(tmp_path, monkeypatch, docker=healthy_docker, communicate_after_timeout=5.0, grace=1.0)
+    late, outcome, _, evidence, _, _plan = timed_turn(tmp_path, monkeypatch, docker=healthy_docker, communicate_after_timeout=5.0, grace=1.0)
 
-    assert elapsed <= 0.1 + 1.0 + 0.25, elapsed  # a fresh five-second wait would have taken five seconds
+    assert late <= 0.0, late  # a fresh five-second wait would have taken five seconds
     assert outcome in ("returned", "EvidenceNotSealed") and plain_bytes_leak(evidence, OLD) == []
 
 
@@ -935,7 +1003,7 @@ def test_a_failed_stop_is_not_repeated_by_the_cleanup_of_the_failure(tmp_path: P
     def failing(*args, timeout=None, **_kw):
         raise subprocess.TimeoutExpired("controlled-owned-stop", 0.01)
 
-    _, outcome, spend, evidence, calls = timed_turn(tmp_path, monkeypatch, docker=failing, fail_wait=fail_wait, grace=1.0)
+    _, outcome, spend, evidence, calls, _plan = timed_turn(tmp_path, monkeypatch, docker=failing, fail_wait=fail_wait, grace=1.0)
 
     assert outcome == "EvidenceNotSealed"  # the failed stop is reported, not hidden behind the original failure
     assert len([call for call in calls if call[1][0] == "inspect"]) == 1
@@ -949,9 +1017,9 @@ def test_the_pauses_between_listings_are_part_of_the_same_budget(tmp_path: Path,
             return subprocess.CompletedProcess(args, 0, "abc\n", "")
         return subprocess.CompletedProcess(args, 0, f"/{args[1]} repair-test\n" if args[0] == "inspect" else "", "")
 
-    elapsed, outcome, _, evidence, _ = timed_turn(tmp_path, monkeypatch, docker=present_forever, grace=1.0)
+    late, outcome, _, evidence, _, _plan = timed_turn(tmp_path, monkeypatch, docker=present_forever, grace=1.0)
 
-    assert outcome == "EvidenceNotSealed" and elapsed <= 0.1 + 1.0 + 0.25, elapsed
+    assert outcome == "EvidenceNotSealed" and late <= 0.0, late
     assert not list(evidence.glob("turn-*/output"))
 
 
@@ -965,16 +1033,14 @@ def test_removing_a_huge_output_after_a_missed_bound_cannot_run_the_turn_past_th
     monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present and not ours: never stoppable
     monkeypatch.setattr(time, "sleep", lambda _s: None)
 
-    job_seconds: list[float] = []
+    crowd = tmp_path / "crowd"  # made before the turn and moved in by the job in one step: only cleanup is on the clock
+    crowd.mkdir()
+    for index in range(40_000):
+        (crowd / f"f{index}.log").write_text("x")
+    (crowd / "secret.log").write_text(OLD)
 
-    def behaviour(output: Path) -> None:  # the job itself takes a while to write this much; that time is not the runner's
-        began = time.monotonic()
-        crowd = output / "crowd"
-        crowd.mkdir()
-        for index in range(40_000):
-            (crowd / f"f{index}.log").write_text("x")
-        (crowd / "secret.log").write_text(OLD)
-        job_seconds.append(time.monotonic() - began)
+    def behaviour(output: Path) -> None:
+        os.rename(crowd, output / "crowd")
 
     install_process(monkeypatch, behaviour, returncode=-9)
     runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=0.1)
@@ -994,7 +1060,7 @@ def test_removing_a_huge_output_after_a_missed_bound_cannot_run_the_turn_past_th
     worker.join(timeout=60)
 
     assert not worker.is_alive(), "the turn did not finish"
-    assert outcome[1] - job_seconds[0] <= 0.1 + 0.1 + 0.4, outcome  # deleting 40,000 files takes seconds; the turn must not wait for it
+    assert latest_late() <= 0.0, (outcome, latest_late())  # deleting 40,000 files takes seconds; the turn must not wait for it
     folders = list((tmp_path / "evidence").glob("turn-*/output"))
     assert folders == [], "evidence was left where a reader would find it as the turn's output"
     held = list((tmp_path / "evidence").glob("quarantine-*"))
@@ -1064,14 +1130,17 @@ def run_removal_turn(tmp_path: Path, monkeypatch, behaviour, *, grace: float = 0
     monkeypatch.setattr(module, "MAX_ENTRIES", 10_000_000)  # the count limit is not what is being tested
     monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # present and not ours: never stoppable
     monkeypatch.setattr(time, "sleep", lambda _s: None)
-    job_seconds: list[float] = []
+    # The job's files are made before the turn and moved into the output in one step while the job runs, so the time
+    # checked against D is the runner's own work, not the stand-in's (a real wait would time the job out).
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    behaviour(staged)
 
-    def timed(output: Path) -> None:
-        began = time.monotonic()
-        behaviour(output)
-        job_seconds.append(time.monotonic() - began)
+    def move_in(output: Path) -> None:
+        for entry in list(staged.iterdir()):
+            os.rename(entry, output / entry.name)
 
-    install_process(monkeypatch, timed, returncode=-9)
+    install_process(monkeypatch, move_in, returncode=-9)
     runner, _, _ = build(tmp_path, credential, timeout_seconds=0.1, seal_grace_seconds=grace)
     outcome: list = []
 
@@ -1082,7 +1151,7 @@ def run_removal_turn(tmp_path: Path, monkeypatch, behaviour, *, grace: float = 0
             outcome.append("returned")
         except EvidenceNotSealed as error:
             outcome.append(str(error))
-        outcome.append(time.monotonic() - started - job_seconds[0])
+        outcome.append(time.monotonic() - started)
 
     worker = threading.Thread(target=go, daemon=True)
     worker.start()
@@ -1100,7 +1169,7 @@ def test_a_flood_of_empty_directories_cannot_run_the_turn_past_its_bound(tmp_pat
 
     runner, outcome = run_removal_turn(tmp_path, monkeypatch, flood)
 
-    assert outcome[1] <= 0.1 + 0.2 + 0.4, outcome
+    assert latest_late() <= 0.0, (outcome, latest_late())
     assert not list((tmp_path / "evidence").glob("turn-*/output"))
     runner.purge_quarantine()
     assert not list((tmp_path / "evidence").glob("quarantine-*"))
@@ -1112,7 +1181,7 @@ def test_a_path_too_long_for_the_plain_walk_is_moved_not_removed_without_a_clock
 
     runner, outcome = run_removal_turn(tmp_path, monkeypatch, chain_and_files)
 
-    assert outcome[1] <= 0.1 + 0.2 + 0.4, outcome
+    assert latest_late() <= 0.0, (outcome, latest_late())
     assert not list((tmp_path / "evidence").glob("turn-*/output"))
     assert "quarantine-" in outcome[0], "the error must name the folder that holds the evidence"
     runner.purge_quarantine()  # has no clock, and must cope with a chain longer than the path limit
@@ -1171,7 +1240,7 @@ def test_when_the_plain_walk_fails_for_any_reason_the_output_is_moved_and_never_
     monkeypatch.setattr(GuardedDockerTurnRunner, "_remove_tree", staticmethod(fails_at_once))
     runner, outcome = run_removal_turn(tmp_path, monkeypatch, many_files)
 
-    assert outcome[1] <= 0.1 + 0.2 + 0.4, outcome  # an unbounded removal of 40,000 files would take seconds
+    assert latest_late() <= 0.0, (outcome, latest_late())  # an unbounded removal of 40,000 files would take seconds
     assert "quarantine-" in outcome[0] and not list((tmp_path / "evidence").glob("turn-*/output"))
     monkeypatch.undo()
     GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path / "evidence", policy=POLICY,
@@ -1480,7 +1549,7 @@ def test_time_spent_before_the_job_starts_comes_out_of_the_job_wait_not_on_top_o
 
     status, elapsed = _timed_run(runner)
 
-    assert elapsed <= 1.0 + 1.0 + 0.25, (status, elapsed)
+    assert latest_late() <= 0.0, (status, latest_late())
 
 
 @pytest.mark.parametrize("size", [10 * 1024 * 1024, 300 * 1024 * 1024])  # below and above the size that sealing will scan
@@ -1517,7 +1586,7 @@ def test_a_flood_of_stdout_is_capped_and_cannot_run_the_turn_past_its_deadline(t
 
     status, elapsed = _timed_run(runner)
 
-    assert elapsed <= 0.1 + 0.5 + 0.25, (status, elapsed)
+    assert latest_late() <= 0.0, (status, latest_late())
     kept = sum(p.stat().st_size for p in (tmp_path / "evidence").glob("turn-*/**/*stdout*") if p.is_file())
     assert kept <= module.MAX_STDOUT_BYTES
     assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
@@ -1577,7 +1646,7 @@ def test_a_hostile_result_file_cannot_block_or_flood_the_host_even_without_a_cre
 
     status, elapsed = _timed_run(runner, limit=8)
 
-    assert status in ("UNKNOWN", "EvidenceNotSealed") and elapsed <= 1.0 + 1.0 + 0.25, (status, elapsed)
+    assert status in ("UNKNOWN", "EvidenceNotSealed") and latest_late() <= 0.0, (status, latest_late())
     assert not [p for p in (tmp_path / "evidence").rglob("*") if p.is_symlink() or stat_is_fifo(p)], "a special file was kept"
 
 
@@ -1824,7 +1893,7 @@ def test_checking_a_result_of_a_million_tiny_strings_cannot_run_the_turn_past_it
     runner, _, _ = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=1.0)
 
     status, elapsed = _timed_run(runner)
-    assert elapsed <= 1.0 + 1.0 + 0.25, (status, elapsed)
+    assert latest_late() <= 0.0, (status, latest_late())
 
 
 # --- Repair after round-18 reviews: sealing one file has a bounded cost and sees the clock -------------------------
@@ -1853,7 +1922,7 @@ def test_sealing_a_file_dense_with_escapes_cannot_run_the_turn_past_its_deadline
 
     status, elapsed = _timed_run(runner, limit=120)
 
-    assert elapsed <= 1.0 + 1.0 + 0.4, (status, elapsed)
+    assert latest_late() <= 0.0, (status, latest_late())
     assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
 
 
@@ -1892,13 +1961,28 @@ def test_a_docker_cli_that_streams_without_end_cannot_run_the_turn_past_its_dead
 
     status, elapsed = _timed_run(runner, limit=120)
 
-    assert status == "EvidenceNotSealed" and elapsed <= 0.1 + 5.0 + 0.5, (status, elapsed)
+    assert status == "EvidenceNotSealed" and latest_late() <= 0.0, (status, latest_late())
 
 
 # --- Repair after gate 6/6: cleanup never renews the one deadline, and sealing stops in time to remove ---------------
 
 from guarded_docker_runner import holds_credential  # noqa: E402
 from leak_scan import encodings  # noqa: E402
+
+def _record_runner_return(monkeypatch, runner) -> list[float]:
+    """Record the moment the guarded Docker runner itself returns or raises, before the ledger commits."""
+    returned: list[float] = []
+    original = runner.run_turn
+
+    def timed(turn):
+        try:
+            return original(turn)
+        finally:
+            returned.append(time.monotonic())
+
+    monkeypatch.setattr(runner, "run_turn", timed)
+    return returned
+
 
 def _spy_plan_and_removal(monkeypatch, runner) -> tuple[list, list]:
     """Record the turn's plan and every removal deadline that the runner asks for."""
@@ -1936,7 +2020,7 @@ def test_an_exhausted_turn_gives_evidence_removal_no_time_past_the_original_dead
 
     assert status == "EvidenceNotSealed"
     assert removals and all(until <= plans[0].deadline for until in removals), "cleanup was given renewed time"
-    assert elapsed <= 0.1 + 0.0 + 0.03, elapsed  # past the deadline only by the one-step move into quarantine
+    assert latest_late() <= 0.0, latest_late()  # the move into quarantine fits inside D as well
     assert list((tmp_path / "evidence").glob("turn-*/output")) == []
     held = list((tmp_path / "evidence").glob("quarantine-*"))
     assert all(folder.stat().st_mode & 0o077 == 0 for folder in held)  # unread by others, never published as output
@@ -2126,10 +2210,15 @@ def test_reading_a_hostile_4_mib_result_after_sealing_ends_inside_the_deadline(t
 
     install_process(monkeypatch, behaviour, returncode=0)
 
+    runner_returned = _record_runner_return(monkeypatch, runner)
+
     status, _elapsed = _timed_run(guarded)
     ended = time.monotonic()
 
-    assert ended <= plans[0].deadline + 0.01, (status, ended - plans[0].deadline)  # the ledger's settle is the 0.01 s
+    # The runner's own return is held to D with no tolerance; the ledger's commit after it is measured and kept apart.
+    print("runner return minus D:", round(runner_returned[0] - plans[0].deadline, 4),
+          "ledger commit after it:", round(ended - runner_returned[0], 4))
+    assert runner_returned[0] <= plans[0].deadline, (status, runner_returned[0] - plans[0].deadline)
     # a late exit leaves sealing no time, and that fails closed too; either way the full reservation stays
     assert status in {"UNKNOWN", "EvidenceNotSealed"} and spend.state("attempt-1") == "UNKNOWN"
     assert spend.committed_usd() == Decimal("0.054848")
@@ -2222,10 +2311,15 @@ def test_a_deeply_nested_result_at_the_size_limit_is_read_inside_the_deadline_or
 
     install_process(monkeypatch, behaviour, returncode=0)
 
+    runner_returned = _record_runner_return(monkeypatch, runner)
+
     status, _elapsed = _timed_run(guarded)
     ended = time.monotonic()
 
-    assert ended <= plans[0].deadline + 0.01, (status, ended - plans[0].deadline)  # the ledger's settle is the 0.01 s
+    # The runner's own return is held to D with no tolerance; the ledger's commit after it is measured and kept apart.
+    print("runner return minus D:", round(runner_returned[0] - plans[0].deadline, 4),
+          "ledger commit after it:", round(ended - runner_returned[0], 4))
+    assert runner_returned[0] <= plans[0].deadline, (status, runner_returned[0] - plans[0].deadline)
     assert status in {"UNKNOWN", "EvidenceNotSealed"} and spend.committed_usd() == Decimal("0.054848")
 
 
@@ -2384,3 +2478,77 @@ def test_undoing_escapes_stops_part_way_when_the_clock_runs_out() -> None:
     with pytest.raises(TimeoutError):
         module.holds_credential(data, encodings(OLD), until=started + 0.003)
     assert time.monotonic() - started < 0.012  # stopped within a batch, not after the whole undo
+
+
+# --- Controller job-budget disposition (2026-10-12): the job wait leaves the post-job reserve inside D -------------
+
+def _job_that_runs_to_its_timeout(monkeypatch) -> None:
+    """A stand-in `docker run` client that never ends by itself: it honours the wait's timeout, like the real one."""
+    real_popen = subprocess.Popen
+
+    class Endless:
+        returncode = None
+
+        def __init__(self, argv, **_kw) -> None:
+            self.argv = argv
+
+        def communicate(self, timeout=None):
+            if timeout is None:
+                return b"", None
+            time.sleep(timeout)
+            raise subprocess.TimeoutExpired("docker run", timeout)
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: Endless(argv, **kw) if argv[:2] == ["docker", "run"] else real_popen(argv, **kw))
+
+
+@pytest.mark.parametrize("timeout, grace", [(0.5, 0.0), (0.5, 0.02), (0.5, 0.3), (0.5, 5.0)])
+def test_a_job_that_runs_to_its_timeout_still_ends_the_turn_by_the_deadline(tmp_path: Path, monkeypatch, timeout: float, grace: float) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    _job_that_runs_to_its_timeout(monkeypatch)
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=timeout, seal_grace_seconds=grace)
+    plans, removals = _spy_plan_and_removal(monkeypatch, runner)
+    runner_returned = _record_runner_return(monkeypatch, runner)
+
+    status, _elapsed = _timed_run(guarded)
+    settled = time.monotonic()
+
+    plan = plans[0]
+    print(f"timeout {timeout} grace {grace}: runner return minus D {runner_returned[0] - plan.deadline:+.4f} s,"
+          f" spend settlement after it {settled - runner_returned[0]:.4f} s")
+    assert plan.job_deadline <= plan.deadline - module.POST_JOB_RESERVE_SECONDS  # the wait leaves the reserve
+    assert runner_returned[0] <= plan.deadline, (status, runner_returned[0] - plan.deadline)
+    assert all(until <= plan.deadline for until in removals)
+    assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+
+
+def test_a_budget_too_small_for_the_post_job_reserve_starts_no_job(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    launched = install_process(monkeypatch, lambda output: None)
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=0.05, seal_grace_seconds=0.0)
+
+    result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched == [] and result.status == "PROVIDER_FAILED" and result.request_count == 0
+    assert result.error_class == "DeadlinePassedBeforeLaunch"
+
+
+def test_a_negative_grace_is_refused_when_built_and_before_any_turn_effect(tmp_path: Path, monkeypatch) -> None:
+    with pytest.raises(ValueError, match="negative"):
+        GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                script_for=lambda turn: {}, timeout_seconds=1.0, seal_grace_seconds=-0.2)
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    launched = install_process(monkeypatch, lambda output: None)
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=0.3)
+    runner.seal_grace_seconds = -0.2  # changed after construction
+
+    with pytest.raises(ValueError, match="negative"):
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert launched == [] and runner.turn_count == 0 and not (tmp_path / "evidence").exists()

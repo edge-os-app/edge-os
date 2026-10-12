@@ -14,7 +14,8 @@ in this order: a container that may still run is stopped and verified gone, then
 step fails, for any reason, the output folder is removed and `EvidenceNotSealed` is raised: evidence that may hold the
 credential is never reported as clean. Removal is itself bounded: what cannot be removed in time is moved in one step to
 a private quarantine folder, which the error names, and `purge_quarantine` removes it later. Sealing works on bytes, removes links and special files without
-opening them, deletes files too large to scan, and has to finish by the job timeout plus `seal_grace_seconds`.
+opening them, moves files too large to scan aside unread (the turn then fails closed), checks the clock between its
+steps, and has to finish by the job timeout plus `seal_grace_seconds`.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from edge_os_api.research.interpretation_attempts import Usage
 from provider_guard import GuardPolicy
 
 REDACTED = "[REDACTED]"
-MAX_SCANNED_BYTES = 8 * 1024 * 1024  # evidence files are small; a larger file is removed whole, unread
+MAX_SCANNED_BYTES = 8 * 1024 * 1024  # evidence files are small; a larger one is moved aside unread and the turn fails
 MAX_ESCAPES = 65_536  # more JSON escapes than this in one file: too costly to undo in time, so it is treated as holding
 MAX_STDOUT_BYTES = 1024 * 1024  # the host keeps at most this much of the job's own output
 MAX_CREDENTIAL_BYTES = 64 * 1024
@@ -61,12 +62,15 @@ RESULT_MIN_SECONDS = 0.005
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
 # The longest step of sealing or removal that cannot be stopped part way (one form replaced in at most 1 MiB, one 1 MiB
-# read or write, one search of 8 MiB, one batch of 1,024 undone escapes) measured at most about 0.002 s idle; sealing
-# stops at least this long before the deadline, whatever the grace, so a step that started just before it still ends
-# inside the deadline even when host load makes it many times slower.
+# read or write, one search of 8 MiB, one batch of 1,024 undone escapes, one scan for escapes that finds none) measured
+# about 0.002 s to 0.016 s idle and up to about 0.02 s under heavy load; sealing stops at least this long before
+# the deadline, whatever the grace, so a step that started just before it still ends inside the deadline.
 STEP_RESERVE_SECONDS = 0.05
 REWRITE_LIMIT_BYTES = 1024 * 1024  # a larger file that holds the credential is deleted whole, never rewritten
-MOVE_RESERVE_SECONDS = 0.01  # removal stops this long before the deadline, so the one-step move into quarantine fits
+# Removal stops this long before the deadline, so the one-step move into quarantine and the failure handling after it
+# fit: under a host load of about 15 on 10 cores they once took 0.012 s (runs/green-round25-01.txt).
+MOVE_RESERVE_SECONDS = 0.03
+POST_JOB_RESERVE_SECONDS = STEP_RESERVE_SECONDS + MOVE_RESERVE_SECONDS  # left after the job wait: 0.08 s
 
 
 _JSON_ESCAPE = re.compile(rb"\\u([0-9a-fA-F]{4})|\\([\"\\/])")
@@ -241,6 +245,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         for label, value in (("timeout_seconds", timeout), ("seal_grace_seconds", grace)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(f"{label} must be a finite number")  # a NaN would switch every deadline off
+        if grace < 0:
+            raise ValueError("seal_grace_seconds must not be negative")  # D would come before the job's own end
 
     def _plan(self) -> _TurnPlan:
         with self._turn_lock:
@@ -252,8 +258,12 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             sequence = self.turn_count
         started = time.monotonic()  # the one deadline counts from here: everything the turn does is inside it
         secret = self._read_credential(source) if source is not None else None
-        job_deadline = started + timeout
-        deadline = job_deadline + grace
+        deadline = started + timeout + grace  # D: the one absolute deadline, made first and never renewed
+        # The timeout is a maximum, not an entitlement: the job wait ends early enough for the work after it (stop,
+        # sealing, the move into quarantine) to fit inside D. With a grace of at least POST_JOB_RESERVE_SECONDS nothing
+        # changes; with less, the job gets up to that much less than its timeout (controller job-budget disposition,
+        # 2026-10-12). A budget too small for it starts no job at all (DeadlinePassedBeforeLaunch).
+        job_deadline = min(started + timeout, deadline - POST_JOB_RESERVE_SECONDS)
         seal_deadline = deadline - max(STEP_RESERVE_SECONDS, min(0.25, grace / 20))
         stop_deadline = deadline - max(0.0, min(0.5, grace / 10))
         return _TurnPlan(sequence, f"p05-{run_id}-{self._token}-{sequence:02d}", run_id, image, policy, secret, timeout,
