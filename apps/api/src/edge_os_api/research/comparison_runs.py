@@ -551,7 +551,7 @@ def compare_history(declaration: dict[str, Any], dataset: dict[str, Any]) -> dic
     partitions = {item["partition_id"]: item for item in config["partitions"]}
     base = {"schema_version": HISTORY_REPORT_VERSION, "statistical_status": "UNRESOLVED",
             "claims": {"significance": "NOT_CLAIMED", "capital_authority": "NONE", "execution_authority": "NONE"},
-            "direction": config["direction"], "protected_evaluations": [], "variants": [],
+            "direction": config["direction"], "protected_evaluations": [], "protected_partitions": [], "variants": [],
             "contrary_findings": [], "result": None}
     if dataset["unavailable_states"] or dataset["verdict"]["overall"] != "QUALIFIED":
         lost = {"SOURCE_UNAVAILABLE", "PARTIAL_COVERAGE"} & set(dataset["unavailable_states"])
@@ -564,6 +564,9 @@ def compare_history(declaration: dict[str, Any], dataset: dict[str, Any]) -> dic
         (evaluable if partition["role"] in EVALUABLE_ROLES else protected).append((plan, partition))
     base["protected_evaluations"] = [{"evaluation_id": plan["evaluation_id"], "partition_id": partition["partition_id"],
                                       "role": partition["role"], "state": "NOT_READ"} for plan, partition in protected]
+    base["protected_partitions"] = [{"partition_id": item["partition_id"], "role": item["role"], "start": item["start"],
+                                     "end": item["end"], "state": "NOT_READ"}
+                                    for item in config["partitions"] if item["role"] not in EVALUABLE_ROLES]
     if not evaluable:
         return {**base, "outcome": "UNSUPPORTED", "outcome_reasons": ["protected_partition_not_authorized"],
                 "outcome_accessed": False}
@@ -572,10 +575,23 @@ def compare_history(declaration: dict[str, Any], dataset: dict[str, Any]) -> dic
                  ("evaluation_id", "trial_id", "variant_id", "price_expression", "volume_expression", "essential_inputs")}
                 for item in plan]
     bounds = {item["evaluation_id"]: {"start": partition["start"], "end": partition["end"]} for item, partition in evaluable}
-    decisions = evaluate_p06_bindings(schedule=config["schedule"], evaluation_plan=plan, bindings=bindings,
-                                      feature_rows=feature_rows(dataset), market=dataset["strategy_market"])
-    result = compare_effects(schedule=config["schedule"], evaluation_plan=plan, decisions=decisions,
-                             trades=dataset["trades"],
+    # Only data inside the readable partitions reaches the engine; protected-partition buckets and trades stay unread.
+    readable = [(parse_utc(partition["start"]), parse_utc(partition["end"])) for _, partition in evaluable]
+
+    def inside(moment: str, *, closed_end: bool) -> bool:
+        value = parse_utc(moment)
+        return any(start <= value <= end if closed_end else start <= value < end for start, end in readable)
+
+    features = [row for row in feature_rows(dataset) if inside(row["bucket_end"], closed_end=True)]
+    trades = [trade for trade in dataset["trades"] if inside(trade["event_time"], closed_end=False)]
+    schedule = dict(config["schedule"])
+    last_end = max(end for _, end in readable)
+    if parse_utc(schedule["end"]) > last_end:
+        schedule["end"] = last_end.isoformat().replace("+00:00", "Z")
+    decisions = evaluate_p06_bindings(schedule=schedule, evaluation_plan=plan, bindings=bindings,
+                                      feature_rows=features, market=dataset["strategy_market"])
+    result = compare_effects(schedule=schedule, evaluation_plan=plan, decisions=decisions,
+                             trades=trades,
                              incremental_volume_declared=declaration["rule_map"]["incremental_volume_declared"],
                              partition_bounds_by_evaluation=bounds)
     variants = []

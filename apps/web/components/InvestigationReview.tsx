@@ -531,7 +531,7 @@ function JobReport({ report }: { report: InvestigationReport }) {
         </table>
       ) : null}
       {content.contrary_findings.length ? <p className="status stop">Contrary findings kept: {content.contrary_findings.map((item) => `${item.variant_id} ${item.finding}`).join("; ")}</p> : null}
-      {content.protected_evaluations.length ? <p className="muted">Not read: {content.protected_evaluations.map((item) => `${item.role} partition`).join(", ")}.</p> : null}
+      {content.protected_partitions?.length ? <p className="muted">Not read: {content.protected_partitions.map((item) => `${item.role} partition`).join(", ")}.</p> : null}
     </div>
   );
 }
@@ -671,7 +671,8 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
   };
 
   return (
-    <section className="stack" aria-labelledby="history-title" data-testid="history-investigation">
+    <section className="stack" aria-labelledby="history-title" data-testid="history-investigation"
+      style={{ overflowWrap: "anywhere" }}>
       <h3 id="history-title">Recorded-history investigation</h3>
       <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p><button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>Retry</button></div> : null}
@@ -714,7 +715,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               <strong>Job {job.job_id.slice(0, 8)}: {job.state}</strong>
               <p role="status">{STATE_COPY[job.state] ?? job.state}{job.terminal_reason ? ` (${job.terminal_reason})` : ""}</p>
               <p className="muted">Attempts and events: {job.events.map((event) => event.kind).join(" → ")}</p>
-              <p className="muted">Budget: reserved {job.budget.reserved?.provider_requests ?? 0}, consumed {job.budget.consumed?.provider_requests ?? 0}, unknown {job.budget.unknown_liability?.provider_requests ?? 0} provider requests.</p>
+              <p className="muted">Provider requests: reserved {job.budget.reserved?.provider_requests ?? 0}, consumed {job.budget.consumed?.provider_requests ?? 0}, released {job.budget.released?.provider_requests ?? 0}, unknown liability {job.budget.unknown_liability?.provider_requests ?? 0}.</p>
               {job.dataset ? <p>Dataset <span className="mono">{job.dataset.dataset_id}</span>: {job.dataset.summary.status}, {job.dataset.summary.verdict.overall}, {job.dataset.summary.binding_state}{job.dataset.summary.unavailable_states.length ? `; ${job.dataset.summary.unavailable_states.join(", ")}` : ""}; provider usage {job.dataset.summary.provider_requests_state}.</p> : null}
               {RUNNING.has(job.state) && !job.cancel_requested_at ? <button className="btn btn-secondary" type="button" onClick={() => void cancel(job)} disabled={busy}>Cancel this job</button> : null}
               {!RUNNING.has(job.state) && job.state !== "REPORTED" ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(true)} disabled={busy}>Retry as a new job</button> : null}

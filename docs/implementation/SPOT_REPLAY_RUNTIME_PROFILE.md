@@ -22,3 +22,7 @@ From the repository root, the relevant local commands are:
 ```
 
 The assigned implementation report records the exact candidate and any mapped P03 command/evidence. A passing local test suite is not real-data qualification, fill qualification, cost qualification, financial approval or deployment authority.
+
+## #58 Task 6 caller: saved recorded-history datasets
+
+`POST /v1/spot-replays` accepts exactly one of `dataset_fixture_id` and `history_dataset_id`. `replay/history_inputs.py` passes the owner's hash-verified dataset buckets (only those ending before the exclusive window end) to the unchanged runtime, with the P07 profile's own evidence class. The runtime's checks decide warm-up, coverage, truncation, lookahead and market identity. Fixture request fingerprints are unchanged. Actual-provider history stays refused by `EVIDENCE_CLASS_UNSUPPORTED` until a reviewed runtime change.

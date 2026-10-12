@@ -99,7 +99,8 @@ export interface InvestigationReport {
   content: {
     outcome: string; outcome_reasons: string[]; outcome_accessed: boolean; statistical_status: string;
     claims: Record<string, string>; variants: ReportVariant[]; contrary_findings: Record<string, string>[];
-    protected_evaluations: { evaluation_id: string; role: string; state: string }[]; dataset_id: string;
+    protected_evaluations: { evaluation_id: string; role: string; state: string }[];
+    protected_partitions: { partition_id: string; role: string; state: string }[]; dataset_id: string;
     source_id: string; evidence_class: string; content_label: string; dataset_verdict: { overall: string };
     rule_map_sha256: string; hypothesis: string; notice: string;
   };

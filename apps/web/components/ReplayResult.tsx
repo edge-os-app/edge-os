@@ -58,7 +58,8 @@ export function ReplayResult({ replay }: Props) {
         <dt>Repeatability</dt><dd className="mono">{result.repeatability_id ?? "Unavailable before replay"}</dd>
       </dl>
       {history ? (
-        <section aria-labelledby="spot-replay-lineage-title" data-testid="spot-replay-history-lineage">
+        <section aria-labelledby="spot-replay-lineage-title" data-testid="spot-replay-history-lineage"
+          style={{ overflowWrap: "anywhere" }}>
           <h4 id="spot-replay-lineage-title">Recorded-history lineage ({history.fill_label})</h4>
           <dl className="kv">
             <dt>Dataset</dt><dd className="mono">{history.dataset_id}</dd>

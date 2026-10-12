@@ -76,7 +76,8 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
   };
 
   return (
-    <section className="panel stack" aria-labelledby="market-adoption-title" data-testid="market-adoption">
+    <section className="panel stack" aria-labelledby="market-adoption-title" data-testid="market-adoption"
+      style={{ overflowWrap: "anywhere" }}>
       <h2 id="market-adoption-title">Use a recorded market (optional)</h2>
       <p className="muted">This makes a NEW draft on a saved, qualified recorded-history market. Earlier drafts and saved revisions stay unchanged. Recorded responses are synthetic, not observed market history. The execution route stays unqualified and no trading permission is granted.</p>
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p>

@@ -30,6 +30,7 @@ import harness  # noqa: E402
 from tokens import OWNER_A, OWNER_B, OWNER_C, TestSigner  # noqa: E402
 from p05_phase import run_p05_phase  # noqa: E402
 import financial_phase  # noqa: E402
+import research_phase  # noqa: E402
 
 THESIS = ("Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
           "Spot only.")
@@ -284,11 +285,17 @@ def main() -> int:
                         help="run only the pinned-Hermes phase after the build (a development shortcut, not a full pass)")
     parser.add_argument("--skip-p05", action="store_true",
                         help="skip the pinned-Hermes phase (not a full pass; it needs Docker and the pinned Hermes checkout)")
+    parser.add_argument("--actual-data", metavar="PACKET", default=None,
+                        help="opt in to actual-data collection with an approved packet (refused: none is approved)")
     parser.add_argument("--hold-seconds", type=int, default=0,
                         help="keep the instance up this long after the drive so an inspector can run SQL, then clean up")
     args = parser.parse_args()
     if args.only_p05 and args.skip_p05:
         parser.error("--only-p05 and --skip-p05 together would run nothing")
+    refusal = research_phase.actual_data_refusal(args.actual_data)
+    if refusal is not None:
+        print(f"REFUSED: {refusal}")
+        return 2
     try:
         run_id = harness.check_run_id(args.run_id)
     except ValueError as error:
@@ -344,6 +351,8 @@ def main() -> int:
         env["EDGE_OS_WALLET_PROVIDER"] = "fixture"
         # The #58 financial phase uses the authored fixture execution ports; production refuses them too.
         financial_phase.configure(env, evidence)
+        # The #58 research phase serves the authored SYNTHETIC recorded-history bundle; production refuses it.
+        research_phase.configure(env)
 
         migration = harness.migrate(env)
         rec.write("migrate.log", migration.stdout + migration.stderr)
@@ -412,7 +421,7 @@ def main() -> int:
                 rec.write("sql-inspection.json", inspection)
                 ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
                 storage_before_restart = p13_storage_snapshot(pg)
-                rec.write("p13-storage-before-restart.json", storage_before_restart)
+                rec.write("p13-storage-after-research.json", storage_before_restart)
                 p17_before_restart = p17_inspection(pg, results)
                 rec.write("p17-inspection.json", p17_before_restart)
                 ok &= rec.step("P17 wallet-setup rows match the UI run (direct SQL and event counts)",
@@ -427,6 +436,13 @@ def main() -> int:
                 financial_ok, financial_before = financial_phase.drive(rec, pg, env, evidence, ui_env, run_playwright,
                                                                        processes, owner_b_id)
                 ok &= financial_ok
+                research_ok, research_before = research_phase.drive(rec, pg, env, evidence, ui_env, run_playwright)
+                ok &= research_ok
+                # The research phase adds requests, revisions and replays; the restart comparisons start from here.
+                inspection = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
+                rec.write("sql-inspection-before-restart.json", inspection)
+                storage_before_restart = p13_storage_snapshot(pg)
+                rec.write("p13-storage-after-research.json", storage_before_restart)
 
                 # cross-owner denial against the real saved rows
                 denial = ownership_drive(pg, api_url, token_a, token_b)
@@ -458,6 +474,7 @@ def main() -> int:
                                and p17_calls_after["body"].get("lookup_calls") == 0, p17_calls_after)
                 ok &= financial_phase.after_restart(rec, pg, env, evidence, ui_env, run_playwright, processes,
                                                     financial_before, owner_b_id)
+                ok &= research_phase.after_restart(rec, pg, env, evidence, ui_env, run_playwright, research_before)
                 storage_after_restart = p13_storage_snapshot(pg)
                 rec.write("p13-storage-after-restart.json", storage_after_restart)
                 ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",

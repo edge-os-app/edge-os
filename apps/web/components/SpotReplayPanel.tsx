@@ -134,7 +134,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
         </select>
       </div>
       {dataset ? (
-        <div className="stack" data-testid="spot-replay-history-source">
+        <div className="stack" data-testid="spot-replay-history-source" style={{ overflowWrap: "anywhere" }}>
           <p className="status stop">Simulated fills on saved recorded-history dataset {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. These prices are synthetic recorded responses, not observed market history. The replay runs only if this revision uses the same market.</p>
           <div className="field">
             <label htmlFor="spot-replay-window-start">Window start (UTC)</label>

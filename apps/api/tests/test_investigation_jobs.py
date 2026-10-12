@@ -304,3 +304,20 @@ class _restarted:
 
     def __exit__(self, *exc):
         return self._client.__exit__(*exc)
+
+
+def test_cancel_after_collection_keeps_the_dataset_and_reports_nothing(research, owner_a):
+    intake_id, declaration_id, _ = declare(research, owner_a)
+    job_id = start(research, owner_a, intake_id, declaration_id).json()["job_id"]
+
+    def lost(_job_id):
+        raise Killed()
+
+    with pytest.raises(Killed):
+        worker(research, after_collection_saved=lost).run_job(uuid.UUID(job_id))
+    research.post(f"/v1/research/investigation-jobs/{job_id}/cancel", headers=owner_a)
+    worker(research).run_job(uuid.UUID(job_id))
+    view = job(research, owner_a, job_id)
+    assert view["state"] == "CANCELLED" and view["terminal_reason"] == "cancelled_after_collection"
+    assert view["dataset"] is not None and view["report"] is None
+    assert view["budget"]["consumed"]["provider_requests"] == 2

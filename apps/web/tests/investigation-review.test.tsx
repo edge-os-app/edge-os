@@ -437,7 +437,8 @@ describe("recorded-history investigation", () => {
         statistical_status: "UNRESOLVED", claims: { significance: "NOT_CLAIMED", capital_authority: "NONE" },
         variants: [{ evaluation_id: "e1", variant_id: "rule-1", outcome: "DESCRIBED", triggered_minus_control_mean: "0.01",
           triggered_observed: 4, control_observed: 5 }], contrary_findings: [],
-        protected_evaluations: [{ evaluation_id: "e2", role: "HOLDOUT", state: "NOT_READ" }], dataset_id: "ds-1",
+        protected_evaluations: [], protected_partitions: [{ partition_id: "holdout", role: "HOLDOUT", state: "NOT_READ" }],
+        dataset_id: "ds-1",
         source_id: SOURCE.source_id, evidence_class: "RECORDED_RESPONSE", content_label: "SYNTHETIC_FIXTURE",
         dataset_verdict: { overall: "QUALIFIED" }, rule_map_sha256: "r", hypothesis: "h", notice: "Descriptive only." } };
     mocks.jobs.mockResolvedValue({ jobs: [job("REPORTED", { report })] });

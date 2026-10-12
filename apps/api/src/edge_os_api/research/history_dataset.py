@@ -29,6 +29,7 @@ from edge_os_api.research_history import (
     CollectionLimits,
     HistoryRequest,
     RecordedResponseSource,
+    SourceCancelled,
     SourceFailure,
     SourceTimeout,
     collect,
@@ -90,8 +91,6 @@ class FaultingRecordedSource:
         self._index = 0
 
     def next_response(self, request: HistoryRequest) -> Mapping[str, Any] | None:
-        from edge_os_api.research_history import SourceCancelled
-
         if self._cancelled():
             raise SourceCancelled("cancellation requested before the next page")
         if self._index >= len(self._responses):

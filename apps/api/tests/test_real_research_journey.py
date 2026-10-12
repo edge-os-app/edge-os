@@ -246,6 +246,11 @@ def test_report_reopens_exactly_and_protected_partitions_stay_unread(research, o
                                  "execution_authority": "NONE"}
     assert content["statistical_status"] == "UNRESOLVED"
     assert {item["role"] for item in content["protected_evaluations"]} <= {"VALIDATION", "HOLDOUT"}
+    assert [item["role"] for item in content["protected_partitions"]] == ["VALIDATION", "HOLDOUT"]
+    assert all(item["state"] == "NOT_READ" for item in content["protected_partitions"])
+    rows = [row for variant in content["result"]["variants"] for row in variant["opportunities"]]
+    used = [trade["event_time"] for row in rows for trade in (row["start_trade"], row["end_trade"]) if trade]
+    assert used and max(used) < "2026-09-25T11:00:00Z"  # nothing from validation or holdout was read
     assert content["rule_map"]["rules"] == body["configuration"]["rule_map"]["rules"]
     assert content["access_order"].index("ATTEMPT_STARTED") < content["access_order"].index("REPORT_SAVED")
     assert content["outcome"] in {"DESCRIBED", "CONTRADICTORY", "INSUFFICIENT_DATA"}
@@ -266,10 +271,10 @@ def test_insufficient_and_contradictory_outcomes_are_saved_honestly(research, ow
                                            rules=[(rising(1), volume_above("0")), (falling, volume_above("0"))])
     job = run_to_end(research, owner_a, intake_id, declaration_id)
     content = job["report"]["content"]
-    signs = {item["triggered_minus_control_mean"][0] == "-" for item in content["variants"]
+    signs = {item["triggered_minus_control_mean"].startswith("-") for item in content["variants"]
              if item["outcome"] == "DESCRIBED"}
-    assert content["outcome"] == ("CONTRADICTORY" if len(signs) > 1 else content["outcome"])
-    assert content["outcome"] == "CONTRADICTORY", content["variants"]
+    assert signs == {True, False}, content["variants"]
+    assert content["outcome"] == "CONTRADICTORY"
 
 
 def test_late_delivered_inputs_are_excluded_not_read_early(research, owner_a):
