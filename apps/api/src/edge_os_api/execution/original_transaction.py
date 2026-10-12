@@ -35,7 +35,7 @@ from hexbytes import HexBytes
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from edge_os_api.admission.types import AssetAmount
+from edge_os_api.admission.types import AssetAmount, parse_utc
 from edge_os_api.execution.transport import PreparedSubmission, TransportOutcome
 from edge_os_api.kuru_flow import (
     AdapterError,
@@ -61,6 +61,8 @@ DECIMALS_SELECTOR = "0x" + keccak(b"decimals()")[:4].hex()
 NATIVE_SUFFIX = "/native"
 _HEX = re.compile(r"0x(?:[0-9a-fA-F]{2})+")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
+_TX_HASH = re.compile(r"0x[0-9a-fA-F]{64}")
+_INDEXED_ADDRESS = re.compile(r"0x0{24}[0-9a-f]{40}")
 
 
 class JournalError(Exception):
@@ -333,11 +335,13 @@ class OriginalTransactionTransport:
             returned = self._clients.broadcast.call("eth_sendRawTransaction", [signed_hex])
         except (ReplyLost, TimeoutError, OSError):
             return self._possible(journal, "BROADCAST_UNKNOWN")
-        except RpcError as error:
-            return self._possible(journal, "BROADCAST_ERROR", {"broadcast_error": str(error)[:200]})
+        except RpcError:
+            # Provider error text is never saved or shown: it can echo the request, including the signed bytes.
+            return self._possible(journal, "BROADCAST_ERROR")
         if not isinstance(returned, str) or returned.lower() != transaction_hash:
+            # Only a hash-shaped reply is kept; any other reply text could carry the signed bytes.
             return self._possible(journal, "BROADCAST_HASH_MISMATCH",
-                                  {"broadcast_returned": returned if isinstance(returned, str) else None})
+                                  {"broadcast_returned": returned.lower() if is_hash(returned) else None})
         return self._possible(journal, "BROADCAST_RETURNED", {"broadcast_returned": returned.lower()})
 
     # ------------------------------------------------------------------------------- stages
@@ -431,8 +435,11 @@ class OriginalTransactionTransport:
         reasons = self._controls()
         if reasons:
             return ";".join(reasons)
-        if self._clock() >= self._context.intent_expires_at:
+        now = self._clock()
+        if now >= self._context.intent_expires_at:
             return "INTENT_EXPIRED"
+        if now >= parse_utc(self._context.mandate_expires_at):  # the saved mandate, never renewed or replaced
+            return "MANDATE_EXPIRED"
         return None
 
     @staticmethod
@@ -527,8 +534,11 @@ def _transfers(receipt: Mapping[str, Any], token: str, *, source: str | None = N
         if not isinstance(log, Mapping) or str(log.get("address", "")).lower() != token.lower():
             continue
         topics = [str(item).lower() for item in log.get("topics") or []]
-        if len(topics) != 3 or topics[0] != TRANSFER_TOPIC:
+        if not topics or topics[0] != TRANSFER_TOPIC:
             continue
+        # A Transfer of this token whose indexed addresses are not exact padded 32-byte words proves nothing.
+        if len(topics) != 3 or not all(_INDEXED_ADDRESS.fullmatch(item) for item in topics[1:]):
+            return None
         sender, recipient = "0x" + topics[1][-40:], "0x" + topics[2][-40:]
         if (source is not None and sender != source) or (target is not None and recipient != target):
             continue
@@ -546,12 +556,27 @@ RECEIPT_OUTCOMES = {ObservationState.CONFIRMED: "CONFIRMED", ObservationState.RE
                     ObservationState.TIMEOUT: "SUBMISSION_UNKNOWN"}
 
 
+# The only saved fields the owner sees: identities, codes, digests and stages. Anything else (signed bytes, request
+# bodies, provider replies) stays private, including fields a future stage might add.
+OWNER_FIELDS = frozenset({
+    "schema", "evidence_class", "transport_id", "strategy_id", "publication_revision_id", "execution_revision_id",
+    "content_hash", "consent_adoption_id", "consent_hash", "policy_binding", "job_id", "owner_id", "agent_id",
+    "wallet_id", "wallet_address", "network_id", "chain_id", "action_id", "payload_hash", "operation", "attempt_id",
+    "sell", "buy", "gas_asset_id", "candidate_hash", "nonce", "fee_envelope", "transaction_hash",
+    "signed_bytes_sha256", "signed_bytes_length", "stage", "stages", "reason", "reasons", "route_reasons"})
+
+
+def is_hash(value: Any) -> bool:
+    return isinstance(value, str) and _TX_HASH.fullmatch(value) is not None
+
+
 def owner_projection(envelope: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """The owner-visible original transaction: identities and stages, never signed bytes or the request body."""
     if not envelope:
         return None
-    hidden = {"signed_bytes", "unsigned", "signing_request", "candidate"}
-    view = {key: value for key, value in envelope.items() if key not in hidden}
+    view = {key: value for key, value in envelope.items() if key in OWNER_FIELDS}
+    returned = envelope.get("broadcast_returned")
+    view["broadcast_returned"] = returned if is_hash(returned) else None
     request = envelope.get("signing_request")
     if isinstance(request, Mapping):
         view["signing_request_id"] = request.get("request_id")

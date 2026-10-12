@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import text
 
 import financial_flows as ff
-from edge_os_api.execution.original_transaction import JournalError, ReplyLost
+from edge_os_api.execution.original_transaction import JournalError, ReplyLost, RpcError
 
 RECORDINGS = Path(__file__).parent / "fixtures" / "original_transaction" / "original_transaction_v1.json"
 PUBLISHED_SENDER = "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23"  # eth-account docs example key's address
@@ -557,3 +557,96 @@ def test_holdings_whose_chain_cannot_be_read_admit_nothing(original, owner_a, re
     finally:
         ports.holdings._recordings.clients = saved
     assert (job["state"], job["reason"], job["action_id"]) == ("UNAVAILABLE", "HOLDINGS_UNAVAILABLE", None)
+
+
+# ------------------------------------------------------------------- gate review 1 (e5496ec) repairs
+
+def signed_entry_nonce0() -> str:
+    return next(item["response"]["data"]["signed_transaction"] for item in json.loads(RECORDINGS.read_text())[
+        "signatures"] if item["operation"] == "ENTRY" and item["nonce"] == 0)
+
+
+@pytest.mark.parametrize("case", ["returned-raw", "error-raw", "error-credential"])
+def test_a_broadcast_reply_that_echoes_bytes_or_secrets_is_never_saved_or_shown(original, owner_a, case, engine,
+                                                                               caplog):
+    signed = signed_entry_nonce0()
+
+    def echo(result, method, params):
+        if method != "eth_sendRawTransaction":
+            return result
+        if case == "returned-raw":
+            return params[0]
+        raise RpcError("request rejected: " + (params[0] if case == "error-raw" else "Authorization: Bearer sk-test-xyz"))
+
+    Inject(original, broadcast=lambda inner: Delegate(inner, after=echo))
+    job = submitted(original, owner_a, f"echo-{case}-fx-original")
+    response = original.get(f"/v1/actions/{job['action_id']}", headers=owner_a)
+    body = original_of(response.json())
+    assert job["outcome"] == "SUBMITTED_UNKNOWN" and body["broadcast_returned"] is None
+    assert body["stage"] in ("BROADCAST_HASH_MISMATCH", "BROADCAST_ERROR")
+    for leak in (signed[2:42], "sk-test-xyz", "Bearer"):
+        assert leak not in response.text and leak not in caplog.text
+    with engine.connect() as connection:  # nor in the saved envelope beyond the private signed bytes themselves
+        saved = connection.execute(text(
+            "SELECT content->'original_transaction' FROM execution_local.execution_submission_attempts "
+            "WHERE action_id = :a"), {"a": job["action_id"]}).scalar_one()
+    rest = json.dumps({key: value for key, value in saved.items() if key not in ("signed_bytes", "unsigned",
+                                                                                 "signing_request", "candidate")})
+    assert signed[2:42] not in rest and "sk-test-xyz" not in rest
+    assert "RESERVED" in reservation_states(action(original, owner_a, job["action_id"]))
+
+
+@pytest.mark.parametrize("case,topic", [
+    ("short-word", lambda address: address),
+    ("wrong-prefix", lambda address: "zz" + "0" * 24 + address[2:]),
+    ("dirty-padding", lambda address: "0x" + "1" * 24 + address[2:])])
+def test_malformed_indexed_transfer_addresses_prove_no_amount(original, owner_a, case, topic):
+    job = submitted(original, owner_a, f"topic-{case}-fx-original")
+
+    def bend(receipt):
+        for log in receipt["logs"]:
+            log["topics"] = [log["topics"][0]] + [topic("0x" + item[-40:]) for item in log["topics"][1:]]
+        return receipt
+
+    Inject(original, observer=receipt_edit(bend))
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    body = action(original, owner_a, job["action_id"])
+    assert settled["decision_status"] == "BREACHED" and body["admission"][0]["reason"].startswith("MISSING_RECONCILED")
+    assert "RESERVED" in reservation_states(body)
+
+
+@pytest.mark.parametrize("delay,expected", [
+    ("route", ("DENIED_UNSENT", "REFUSED_UNSENT", 0)),
+    ("nonce", ("DENIED_UNSENT", "REFUSED_UNSENT", 0)),
+    ("signer", ("SUBMITTED_UNKNOWN", "STOPPED_AFTER_SIGNING", 1))])
+def test_a_mandate_that_expires_during_the_lifecycle_allows_no_next_effect(original, owner_a, recordings, delay,
+                                                                           expected):
+    from edge_os_api.execution.worker import decision_slot
+
+    connected, ports = original.app.state.financial.connected, original.app.state.financial.ports
+    start = decision_slot(dt.datetime.now(dt.timezone.utc)) + dt.timedelta(minutes=5, seconds=30)
+    moment = {"now": start}
+    connected._clock = ports.clock = lambda: moment["now"]
+    expiry = (start + dt.timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def expire(result, *_):
+        moment["now"] = start + dt.timedelta(seconds=11)  # the mandate expires; the intent is still valid
+        return result
+
+    def expire_after_nonce(result, method, params):
+        return expire(result) if method == "eth_getTransactionCount" else result
+
+    wrappers = {"route": {"route": lambda inner: Delegate(inner, after=expire)},
+                "nonce": {"broadcast": lambda inner: Delegate(inner, after=expire_after_nonce)},
+                "signer": {"signer": lambda inner: Delegate(inner, after=expire)}}[delay]
+    Inject(original, **wrappers)
+    agent = f"expiry-{delay}-fx-original"
+    ff.confirmed_agent(original, owner_a, agent, network_id=143)
+    ff.adopted(original, owner_a, agent, ff.funded(original, owner_a, agent), expiry=expiry)
+    job = ff.run_job(original, ff.schedule(original, owner_a, agent).json())
+    body = action(original, owner_a, job["action_id"])
+    outcome, stage, signs = expected
+    assert (job["outcome"], original_of(body)["stage"]) == (outcome, stage), job["reason"]
+    assert "MANDATE_EXPIRED" in original_of(body)["reason"]
+    assert calls(recordings).get("signer.rpc", 0) == signs
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0

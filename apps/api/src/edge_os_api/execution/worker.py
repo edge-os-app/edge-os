@@ -532,7 +532,8 @@ class ConnectedExecution:
                                                wallet_id=agent.wallet_id, network_id=agent.network_id,
                                                position_id=intent.position_id, operation=intent.operation)
 
-        return OriginalTransactionTransport(context, clients, profile, controls=current_controls, clock=self._clock)
+        return OriginalTransactionTransport(context, clients, profile, controls=current_controls,
+                                            clock=lambda: self._clock())  # follows the worker's current clock
 
     def _release_unsent(self, job: EvaluationJobRow, outcome: str, reason: str | None) -> None:
         """End a job whose admitted action was never submitted, releasing it through the accepted cancellation.
