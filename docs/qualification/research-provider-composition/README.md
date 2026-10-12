@@ -21,9 +21,10 @@ Both are selected only by explicit local settings (`EDGE_OS_RESEARCH_SOURCE_CLIE
 
 ## Accounting
 
-- Owner and global quotas reserve `provider_requests`, `compute_seconds` and, for Nansen, `nansen_credits` before any effect.
+- Owner and global quotas reserve `provider_requests`, `compute_seconds` and, for Nansen jobs only, `nansen_credits` before any effect. History jobs never create Nansen credit rows.
 - HTTP usage is `MEASURED_CLIENT_CALLS` only when every client call completed; any client `unknown_liability` keeps the whole request reservation unknown.
-- Nansen credits settle KNOWN only when every made call reported a valid deducted-credit header; otherwise the whole credit reservation stays unknown liability (never zero). A lost reply keeps requests and credits unknown. A killed worker reconciles to `OUTCOME_UNKNOWN` and never runs again.
+- Nansen settlement counts the requests actually handed to the transport. A refusal before sending (the package's request, credit or deadline limit, or the job's cancel/deadline guard) is not a made call and leaves nothing unknown. Credits settle KNOWN only when nothing was lost and every reply reported a valid deducted-credit header; otherwise the whole credit reservation stays unknown liability (never zero). A lost reply keeps requests and credits unknown. A killed worker or a failed report save reconciles to `OUTCOME_UNKNOWN` and never runs again.
+- Migration 0011 refuses to downgrade while any Nansen job or nonzero credit liability exists, so a rollback cannot erase a saved report or credit liability.
 
 ## Proof in this candidate
 

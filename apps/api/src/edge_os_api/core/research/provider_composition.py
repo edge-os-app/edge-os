@@ -175,16 +175,21 @@ class AuthoredNansenTransport:
 
 
 class GuardedNansenTransport:
-    """Refuses the next request after cancellation or the job deadline, before the wrapped transport is called."""
+    """Refuses the next request after cancellation or the job deadline, before the wrapped transport is called.
+
+    `sent` counts the requests handed to the wrapped transport. Settlement uses it, not error codes, to tell a made
+    call (sent) from a refusal before sending (the package's own limits and this guard)."""
 
     def __init__(self, inner: Any, cancelled: Callable[[], bool], deadline_passed: Callable[[], bool]) -> None:
         self._inner, self._cancelled, self._deadline_passed = inner, cancelled, deadline_passed
+        self.sent = 0
 
     def request(self, operation: str, path: str, body: Mapping[str, Any]) -> NansenResponse:
         if self._cancelled():
             raise NansenCancelled("CANCELLED", "the owner cancelled the job before the next request")
         if self._deadline_passed():
             raise NansenTimeout("DEADLINE", "the job deadline passed before the next request")
+        self.sent += 1  # counted before the call: a request that raises after this point may have left
         return self._inner.request(operation, path, body)
 
 

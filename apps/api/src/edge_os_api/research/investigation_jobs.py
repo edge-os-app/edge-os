@@ -138,14 +138,23 @@ def _events(session: Session, job_id: uuid.UUID) -> list[InvestigationEventRow]:
 QUOTA_SUBJECT = "investigation_job"
 
 
-def caps(settings: Settings) -> quota.Caps:
-    """Owner and global research caps from configuration. Stored caps are frozen; see `usage.quota`."""
-    return quota.Caps(owner={"provider_requests": settings.research_budget_provider_requests,
-                             "compute_seconds": settings.research_budget_compute_seconds,
-                             "nansen_credits": settings.research_budget_nansen_credits},
-                      global_={"provider_requests": settings.usage_global_provider_requests,
-                               "compute_seconds": settings.usage_global_compute_seconds,
-                               "nansen_credits": settings.usage_global_nansen_credits})
+def caps(settings: Settings, *, nansen: bool = True) -> quota.Caps:
+    """Owner and global research caps from configuration. Stored caps are frozen; see `usage.quota`.
+
+    A history job reserves and settles only requests and compute (`nansen=False`), so it never creates or locks
+    Nansen credit rows. Reads (budget view, readiness) use every resource."""
+    owner = {"provider_requests": settings.research_budget_provider_requests,
+             "compute_seconds": settings.research_budget_compute_seconds}
+    global_ = {"provider_requests": settings.usage_global_provider_requests,
+               "compute_seconds": settings.usage_global_compute_seconds}
+    if nansen:
+        owner["nansen_credits"] = settings.research_budget_nansen_credits
+        global_["nansen_credits"] = settings.usage_global_nansen_credits
+    return quota.Caps(owner=owner, global_=global_)
+
+
+def _job_caps(settings: Settings, job: InvestigationJobRow) -> quota.Caps:
+    return caps(settings, nansen=job.kind == nansen_reports.NANSEN_KIND)
 
 
 def _cap_mismatch(error: quota.CapMismatch) -> AppError:
@@ -183,7 +192,7 @@ def _settle(session: Session, job: InvestigationJobRow, settings: Settings, *, p
         if open_amount_ <= 0:
             continue
         # The shared ledger books the job's whole reservation for this resource once; a repeat books nothing.
-        booked = quota.settle(session, reservation, resource, kind, measured, caps(settings))
+        booked = quota.settle(session, reservation, resource, kind, measured, _job_caps(settings, job))
         if booked is not None:
             totals["consumed"][resource] += booked["consumed"]
             totals["unknown_liability"][resource] += booked["unknown"]
@@ -244,7 +253,8 @@ def start_job(session: Session, principal: Principal, settings: Settings, intake
     now = utcnow()
     job_id = uuid.uuid4()
     try:
-        outcome = quota.reserve(session, principal.user_id, QUOTA_SUBJECT, str(job_id), requested, caps(settings))
+        outcome = quota.reserve(session, principal.user_id, QUOTA_SUBJECT, str(job_id), requested,
+                                caps(settings, nansen=False))
     except quota.CapMismatch as error:
         session.rollback()
         raise _cap_mismatch(error) from None
@@ -396,13 +406,15 @@ def _nansen_job(session: Session, request: nansen_reports.NansenRequestRow) -> I
         InvestigationJobRow.declaration_id == request.request_id)).scalar_one()
 
 
-def list_nansen_jobs(session: Session, principal: Principal, intake_id: str) -> dict[str, Any]:
+def list_nansen_jobs(session: Session, principal: Principal, settings: Settings, intake_id: str) -> dict[str, Any]:
     intake = get_owned(session, principal, intake_id, "IntakeRequest")
     rows = session.execute(select(InvestigationJobRow).where(
         InvestigationJobRow.owner_id == principal.user_id, InvestigationJobRow.intake_record_id == intake.record_id,
         InvestigationJobRow.kind == nansen_reports.NANSEN_KIND)
         .order_by(InvestigationJobRow.created_at, InvestigationJobRow.job_id)).scalars().all()
-    return {"jobs": [job_view(session, row) for row in rows]}
+    # `available` says whether this server composes the Nansen transport; saved reports reopen either way.
+    return {"available": settings.nansen_research_mode == "authored_fixture",
+            "jobs": [job_view(session, row) for row in rows]}
 
 
 def get_nansen_report(session: Session, principal: Principal, report_id: str) -> dict[str, Any]:
@@ -873,6 +885,17 @@ class InvestigationWorker:
         request_row = session.get(nansen_reports.NansenRequestRow, job.declaration_id)
         assert request_row is not None and request_row.owner_id == job.owner_id
         request = nansen_reports.saved_request(request_row)
+        try:
+            inner = self._nansen_transport(request.token_address)
+        except Exception as error:  # noqa: BLE001 - nothing was sent: the composition failed before any attempt
+            session.rollback()
+            job = session.get(InvestigationJobRow, job.job_id, with_for_update=True)
+            _event(session, job, "SOURCE_REFUSED", {"tool": nansen_reports.TOOL, "reason": "nansen_composition_failed",
+                                                    "error_type": type(error).__name__})
+            _finish(session, job, self._settings, "FAILED", "nansen_composition_failed", provider="KNOWN",
+                    compute="KNOWN")
+            session.commit()
+            return
         attempt_id = uuid.uuid4()
         _event(session, job, "ATTEMPT_STARTED", {"tool": nansen_reports.TOOL,
                                                  "tool_version": investigation_tools.TOOL_VERSION,
@@ -880,7 +903,6 @@ class InvestigationWorker:
         job.state, job.updated_at = "COLLECTING", utcnow()
         session.commit()  # the original attempt is durable before any provider effect
         started = time.monotonic()
-        inner = self._nansen_transport(request.token_address)
         transport = provider_composition.GuardedNansenTransport(
             inner, lambda: self._cancelled(job.job_id), lambda: self._clock() >= job.deadline_at)
         try:
@@ -894,7 +916,11 @@ class InvestigationWorker:
                     compute="UNKNOWN", credits="UNKNOWN")
             session.commit()
             return
-        settled = nansen_reports.settlement(run.evidence)
+        session.rollback()  # end the read transaction held across the transport calls, then lock the job row
+        job = session.get(InvestigationJobRow, job.job_id, with_for_update=True)
+        request_row = session.get(nansen_reports.NansenRequestRow, job.declaration_id)
+        assert request_row is not None
+        settled = nansen_reports.settlement(run.evidence, transport.sent)
         report_id = uuid.uuid4()
         content = nansen_reports.report_content(
             report_id=report_id, owner_id=job.owner_id, job_id=job.job_id, request_row=request_row, run=run,

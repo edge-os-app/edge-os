@@ -50,6 +50,15 @@ beforeEach(() => {
 });
 
 describe("Nansen token report", () => {
+  it("says when the server cannot run reports and shows a released refusal honestly", async () => {
+    mocks.list.mockResolvedValue({ available: false, jobs: [job({ state: "UNAVAILABLE", terminal_reason: "nansen_research_unavailable", nansen_report: null })] });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    expect(await screen.findByTestId("nansen-unavailable")).toHaveTextContent("This server cannot run Nansen reports.");
+    expect(screen.getByTestId("nansen-job")).toHaveTextContent("Nothing was sent; the reserved amounts were released.");
+    expect(screen.getByTestId("nansen-job")).not.toHaveTextContent("stay held");
+    expect(screen.getByRole("button", { name: "Save and reserve this report" })).toBeDisabled();
+  });
+
   it("reopens the saved report with the exact question, findings, gaps and an authored label", async () => {
     mocks.list.mockResolvedValue({ jobs: [job()] });
     mocks.open.mockResolvedValue(record);

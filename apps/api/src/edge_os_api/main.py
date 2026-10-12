@@ -340,7 +340,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/research/requests/{intake_id}/nansen-reports")
     def list_nansen_reports(intake_id: str, principal: Principal = Depends(require_principal),
                             session: Session = Depends(get_session)) -> Any:
-        return run(session, lambda: investigation_jobs.list_nansen_jobs(session, principal, intake_id))
+        return run(session, lambda: investigation_jobs.list_nansen_jobs(session, principal, settings,
+                                                                                 intake_id))
 
     @private.get("/research/nansen-reports/{report_id}")
     def get_nansen_report(report_id: str, principal: Principal = Depends(require_principal),

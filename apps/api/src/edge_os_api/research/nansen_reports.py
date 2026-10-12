@@ -44,8 +44,6 @@ NANSEN_KIND = "NANSEN_REPORT"
 TOOL = "run_nansen_research"
 REQUEST_RECORD_VERSION = "edge-os.nansen-request/1"
 REPORT_RECORD_VERSION = "edge-os.nansen-report-record/1"
-# A refusal raised by the application's guard before the request left: never a made provider call.
-REFUSED_BEFORE_SEND = frozenset({"CANCELLED", "DEADLINE"})
 NOTICE = ("Authored Nansen-shaped responses replayed locally. Not provider data, not a market fact and not "
           "bounty evidence. Address counts are returned records; amounts keep their raw text and unresolved units.")
 
@@ -125,23 +123,26 @@ def _credit(value: str | None) -> Decimal | None:
     return amount if amount.is_finite() and amount >= 0 else None
 
 
-def settlement(evidence: NansenEvidence) -> dict[str, Any]:
-    """Provider-request and credit settlement from the saved evidence only.
+def settlement(evidence: NansenEvidence, sent: int) -> dict[str, Any]:
+    """Provider-request and credit settlement from the saved evidence and the count of requests handed to the
+    transport (`GuardedNansenTransport.sent`).
 
-    A record with a received status is a made call. A record refused by the application's own guard before sending
-    is not. Any other record without a status is a lost reply: the request count becomes UNKNOWN. Credits are KNOWN
-    only when every made call reported a valid deducted charge and nothing was lost; otherwise the whole credit
-    reservation stays unknown liability. Neither is ever zero by default.
+    A record with a received status is a made call with a reply. A sent request without a recorded reply is a lost
+    reply: the request count becomes UNKNOWN. A refusal before sending (the package's request, credit or deadline
+    limit, or the application's cancel/deadline guard) was never sent and is not counted. Credits are KNOWN only when
+    every made call reported a valid deducted charge and nothing was lost; otherwise the whole credit reservation stays
+    unknown liability. Neither is ever zero by default.
     """
     made = [record for record in evidence.sources if record.status is not None]
-    lost = [record for record in evidence.sources
-            if record.status is None and record.failure not in REFUSED_BEFORE_SEND]
+    lost = sent - len(made)
+    if lost < 0:  # more replies than sent requests: the evidence and the count disagree, so nothing is known
+        lost = len(made)
     deducted = [_credit(record.deducted_credits) for record in made]
-    requests_known = not lost
+    requests_known = lost == 0
     credits_known = requests_known and all(amount is not None for amount in deducted)
     total = sum((amount for amount in deducted if amount is not None), Decimal(0))
     return {"provider_requests": {"state": "KNOWN" if requests_known else "UNKNOWN", "measured": len(made),
-                                  "lost": len(lost)},
+                                  "lost": lost},
             "nansen_credits": {"state": "KNOWN" if credits_known else "UNKNOWN",
                                "measured": math.ceil(total) if credits_known else 0,
                                "deducted": str(total) if credits_known else None,

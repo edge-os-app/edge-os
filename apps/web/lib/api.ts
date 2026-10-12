@@ -222,7 +222,7 @@ export const api = {
   cancelInvestigationJob: (jobId: string) =>
     request<InvestigationJob>(`/v1/research/investigation-jobs/${jobId}/cancel`, { method: "POST" }).then((r) => r.body),
   nansenReports: (id: string) =>
-    request<{ jobs: InvestigationJob[] }>(`/v1/research/requests/${id}/nansen-reports`).then((r) => r.body),
+    request<{ available?: boolean; jobs: InvestigationJob[] }>(`/v1/research/requests/${id}/nansen-reports`).then((r) => r.body),
   startNansenReport: (id: string, body: NansenReportBody) =>
     request<InvestigationJob>(`/v1/research/requests/${id}/nansen-reports`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   nansenReport: (reportId: string) => request<NansenReportRecord>(`/v1/research/nansen-reports/${reportId}`).then((r) => r.body),

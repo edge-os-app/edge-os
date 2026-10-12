@@ -15,6 +15,11 @@ const STATE_COPY: Record<string, string> = {
   UNAVAILABLE: "The outcome is unknown. It is never run again; the reserved amounts stay held.",
   FAILED: "Failed. The reserved amounts stay held.",
 };
+// Ends where nothing was sent: everything was released, so no amount is held.
+const REASON_COPY: Record<string, string> = {
+  nansen_research_unavailable: "Not run: this server no longer composes the Nansen transport. Nothing was sent; the reserved amounts were released.",
+  nansen_composition_failed: "Not run: the transport could not be prepared. Nothing was sent; the reserved amounts were released.",
+};
 const VERDICT_COPY: Record<string, string> = {
   SUPPORTED: "Supported by the returned records", LIMITED: "Limited", UNRESOLVED: "Unresolved",
   UNAVAILABLE: "Unavailable", UNKNOWN: "Unknown",
@@ -37,6 +42,7 @@ function keysFor(intakeId: string, body: Omit<NansenReportBody, "operation_id" |
 /** Nansen token report for this request: the exact question, derived findings, gaps and the saved report. */
 export function ResearchNansenReport({ intakeId }: { intakeId: string }) {
   const [jobs, setJobs] = useState<InvestigationJob[] | null>(null);
+  const [available, setAvailable] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [token, setToken] = useState("");
@@ -53,7 +59,7 @@ export function ResearchNansenReport({ intakeId }: { intakeId: string }) {
     const current = (seq.current += 1);
     try {
       const result = await api.nansenReports(intakeId);
-      if (current === seq.current) { setJobs(result.jobs); setError(""); }
+      if (current === seq.current) { setJobs(result.jobs); setAvailable(result.available !== false); setError(""); }
     } catch (failure) {
       if (current === seq.current) {
         setError(failure instanceof ApiError ? failure.detail : "The saved Nansen reports could not be read.");
@@ -93,6 +99,7 @@ export function ResearchNansenReport({ intakeId }: { intakeId: string }) {
       <h2 id="nansen-title" style={{ fontSize: 18 }}>Token holder and flow report</h2>
       <p className="muted" data-testid="nansen-label">Authored Nansen-shaped responses replayed on this server. Not provider data, not market evidence
         and not a trading signal. The question is your request text, unchanged.</p>
+      {!available ? <p className="status stop" data-testid="nansen-unavailable">This server cannot run Nansen reports. Saved reports still open below; a new request is refused before anything is reserved.</p> : null}
       <div className="field">
         <label htmlFor="nansen-token">Token contract address</label>
         <input id="nansen-token" className="input" value={token} onChange={(event) => setToken(event.target.value)} placeholder="0x…" />
@@ -119,14 +126,14 @@ export function ResearchNansenReport({ intakeId }: { intakeId: string }) {
         <input id="nansen-credits" className="input" inputMode="decimal" value={credits} onChange={(event) => setCredits(event.target.value)} />
       </div>
       <div className="btn-row">
-        <button className="btn btn-primary" type="button" style={{ minHeight: 44 }} disabled={busy || !token.trim() || !symbol.trim() || (!holders && !flows)}
+        <button className="btn btn-primary" type="button" style={{ minHeight: 44 }} disabled={busy || !available || !token.trim() || !symbol.trim() || (!holders && !flows)}
           onClick={() => void startReport()}>{busy ? "Saving report request…" : "Save and reserve this report"}</button>
         <button className="btn btn-secondary" type="button" style={{ minHeight: 44 }} onClick={() => void load()}>Refresh reports</button>
       </div>
       {error ? <p role="alert" className="status stop">{error}</p> : null}
       <ul data-testid="nansen-jobs">{(jobs ?? []).map((job) => (
         <li key={job.job_id} data-testid="nansen-job" data-state={job.state}>
-          <p><strong>{job.state}</strong> · {STATE_COPY[job.state] ?? job.state}{job.terminal_reason ? ` (${job.terminal_reason})` : ""}</p>
+          <p><strong>{job.state}</strong> · {(job.terminal_reason && REASON_COPY[job.terminal_reason]) || STATE_COPY[job.state] || job.state}{job.terminal_reason ? ` (${job.terminal_reason})` : ""}</p>
           {job.nansen_report ? <>
             <p data-testid="nansen-job-answer">Answer: {job.nansen_report.answer_state} · requests {job.nansen_report.settlement.provider_requests.state}
               {" "}{job.nansen_report.settlement.provider_requests.measured} · credits {job.nansen_report.settlement.nansen_credits.state}

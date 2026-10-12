@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import subprocess
+import sys
 import uuid
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.engine import make_url
 
+import harness
 from edge_os_api.core.research import provider_composition
 from edge_os_api.core.settings import ConfigError, load_settings
 from edge_os_api.main import create_app
@@ -40,6 +44,27 @@ def app(env: dict[str, str], **extra: str) -> TestClient:
     values = {**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded", "EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS": "400",
               "EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS": "3600", **extra}
     return TestClient(create_app(load_settings(values)))
+
+
+@pytest.fixture(scope="module")
+def env(pg, signer):
+    """This module's own database in the session container. Nansen jobs and credit rows never enter the shared
+    database, whose restore and rollback rehearsal (`test_restore_rehearsal.py`) needs a database without them."""
+    name = f"{pg.database}_ports_{uuid.uuid4().hex[:6]}"
+    pg.psql(f"create database {name}", db="postgres")
+    url = make_url(pg.url).set(database=name).render_as_string(hide_password=False)
+    try:
+        yield harness.api_env(database_url=url, public_pem=signer.public_pem, previous_pem=None,
+                              cors=["http://127.0.0.1:3999"])
+    finally:
+        pg.psql(f"drop database if exists {name} with (force)", db="postgres")
+
+
+@pytest.fixture(scope="module")
+def migrated(env):
+    result = harness.migrate(env)
+    assert result.returncode == 0, result.stderr
+    return env
 
 
 @pytest.fixture(scope="module")
@@ -178,7 +203,8 @@ def test_the_http_dataset_feeds_adoption_and_a_replay_with_simulated_fills(ports
     assert lineage["content_label"] == "SYNTHETIC_FIXTURE" and "Simulated fills" in content["notice"]
 
 
-@pytest.mark.parametrize("status,code", [(401, "PROVIDER_ERROR"), (402, "PROVIDER_ERROR"), (429, "PROVIDER_ERROR")])
+@pytest.mark.parametrize("status,code", [(401, "PROVIDER_ERROR"), (402, "PROVIDER_ERROR"), (403, "PROVIDER_ERROR"),
+                                         (429, "PROVIDER_ERROR")])
 def test_a_refused_http_page_stops_with_a_stable_code_and_no_provider_text(ports, owner_a, status, code):
     build, seen = faulting_clients(at=2, status=status, body=json.dumps({"error": PROVIDER_TEXT}).encode())
     job_id = start_http(ports, owner_a)
@@ -200,6 +226,40 @@ def test_a_lost_http_reply_keeps_the_whole_reservation_unknown(ports, owner_a):
     assert content["provider_requests_state"] == "UNKNOWN"
     assert (job["budget"]["unknown_liability"]["provider_requests"], job["budget"]["consumed"]["provider_requests"]) \
         == (27, 0)
+
+
+class ReceiptTamper:
+    """Wraps the authored HTTP transport: the first receipt names another block (an authored mismatch)."""
+
+    def __init__(self, inner):
+        self._inner, self.tampered = inner, 0
+        self.response_sha256 = inner.response_sha256
+
+    def request(self, **kwargs) -> HttpResponse:
+        reply = self._inner.request(**kwargs)
+        payload = json.loads(reply.body)
+        if not self.tampered and isinstance(payload, dict) and isinstance(payload.get("result"), dict) \
+                and "blockNumber" in payload["result"]:
+            payload["result"]["blockNumber"] = hex(int(payload["result"]["blockNumber"], 16) + 1)
+            self.tampered += 1
+            return HttpResponse(status=reply.status, headers=reply.headers, body=json.dumps(payload).encode())
+        return reply
+
+
+def test_an_http_receipt_mismatch_is_counted_and_blocks_qualification(ports, owner_a):
+    def build(source, bounds, cancelled):
+        envio, quicknode, transport = provider_composition.http_source_clients(source, bounds, cancelled)
+        tamper = ReceiptTamper(transport)
+        envio._transport = quicknode._transport = tamper
+        return envio, quicknode, tamper
+
+    job_id = start_http(ports, owner_a)
+    worker(ports, http_clients=build).run_job(uuid.UUID(job_id))
+    content = dataset(ports, owner_a, view(ports, owner_a, job_id))
+    corroboration = content["transport"]["corroboration"]
+    assert (corroboration["class"], corroboration["mismatches"]) == ("COMPLETE", 1)
+    assert [entry["reason"] for entry in corroboration["records"] if not entry["matched"]] == ["BLOCK_MISMATCH"]
+    assert content["verdict"]["overall"] != "QUALIFIED" and content["market_binding"] is None
 
 
 def test_an_oversized_http_page_is_refused_within_the_declared_byte_bound(ports, owner_a):
@@ -314,6 +374,7 @@ def test_a_nansen_report_job_saves_and_reopens_the_same_report(env, ports, owner
     assert started.status_code == 201, started.text
     job_id = started.json()["job_id"]
     assert started.json()["kind"] == "NANSEN_REPORT" and started.json()["state"] == "RESERVED"
+    assert ports.get(f"/v1/research/requests/{intake_id}/nansen-reports", headers=owner_a).json()["available"] is True
     transport = CountingNansen()
     nansen_worker(ports, transport).run_job(uuid.UUID(job_id))
     job = view(ports, owner_a, job_id)
@@ -354,8 +415,12 @@ def test_a_refused_nansen_call_keeps_a_partial_report_with_a_stable_code(ports, 
     nansen_worker(ports, transport).run_job(uuid.UUID(job_id))
     job = view(ports, owner_a, job_id)
     assert transport.calls == 1  # no retry and no next operation after a terminal failure
+    # A refused reply is a made call; with no deducted-credit header its charge is unknown, so credits stay held.
+    assert job["nansen_report"]["settlement"]["provider_requests"] == {"state": "KNOWN", "measured": 1, "lost": 0}
+    assert job["nansen_report"]["settlement"]["nansen_credits"]["state"] == "UNKNOWN"
+    assert job["budget"]["unknown_liability"]["nansen_credits"] == 12
     assert job["nansen_report"]["outcomes"][0] == {"operation": "holders", "status": "FAILED", "stop_reason": stop}
-    assert job["nansen_report"]["answer_state"] in ("PARTIAL", "UNAVAILABLE")
+    assert job["nansen_report"]["answer_state"] == "PARTIAL"
     assert PROVIDER_TEXT not in json.dumps(job) + json.dumps(ports.get(
         f"/v1/research/nansen-reports/{job['nansen_report']['report_id']}", headers=owner_a).json())
 
@@ -409,7 +474,7 @@ def test_a_malformed_nansen_reply_keeps_a_partial_report_and_stops(ports, owner_
     nansen_worker(ports, transport).run_job(uuid.UUID(job_id))
     job = view(ports, owner_a, job_id)
     assert transport.calls == 1 and job["nansen_report"]["outcomes"][0]["status"] == "FAILED"
-    assert job["nansen_report"]["answer_state"] in ("PARTIAL", "UNAVAILABLE")
+    assert job["nansen_report"]["answer_state"] == "PARTIAL"
 
 
 def test_a_nansen_deadline_between_operations_stops_before_the_next_request(ports, owner_a):
@@ -431,6 +496,69 @@ def test_a_nansen_deadline_between_operations_stops_before_the_next_request(port
     assert (job["state"], transport.calls) == ("DEADLINE_EXCEEDED", 1)
     assert job["nansen_report"]["outcomes"][-1]["stop_reason"] == "DEADLINE"
     assert job["nansen_report"]["settlement"]["provider_requests"] == {"state": "KNOWN", "measured": 1, "lost": 0}
+
+
+@pytest.mark.parametrize("operations,limits,calls,requests,credits", [
+    # Refused by the package before dispatch: no request left, so nothing is unknown and nothing is charged.
+    (["holders"], {"max_requests": 4, "max_pages": 2, "max_bytes": 200000, "max_credits": "1", "per_page": 100},
+     0, {"state": "KNOWN", "measured": 0, "lost": 0}, {"state": "KNOWN", "measured": 0, "deducted": "0"}),
+    # The second operation is refused at the request cap: one known request and its known 5-credit charge.
+    (["holders", "flows"], {"max_requests": 1, "max_pages": 2, "max_bytes": 200000, "max_credits": "20",
+                            "per_page": 100},
+     1, {"state": "KNOWN", "measured": 1, "lost": 0}, {"state": "KNOWN", "measured": 5, "deducted": "5"}),
+    # The second operation is refused at the credit cap after a known 5-credit holders call.
+    (["holders", "flows"], {"max_requests": 4, "max_pages": 2, "max_bytes": 200000, "max_credits": "5",
+                            "per_page": 100},
+     1, {"state": "KNOWN", "measured": 1, "lost": 0}, {"state": "KNOWN", "measured": 5, "deducted": "5"})])
+def test_a_package_limit_refusal_is_not_a_made_call(ports, owner_a, operations, limits, calls, requests, credits):
+    intake_id = request_id(ports, owner_a)
+    started = start_nansen(ports, owner_a, intake_id, operations=operations, limits=limits)
+    assert started.status_code == 201, started.text
+    job_id = started.json()["job_id"]
+    transport = CountingNansen()
+    nansen_worker(ports, transport).run_job(uuid.UUID(job_id))
+    job = view(ports, owner_a, job_id)
+    settled = job["nansen_report"]["settlement"]
+    assert transport.calls == calls
+    assert settled["provider_requests"] == requests
+    assert {key: settled["nansen_credits"][key] for key in ("state", "measured", "deducted")} == credits
+    assert sum(job["budget"]["unknown_liability"].values()) == 0
+    assert job["budget"]["consumed"]["provider_requests"] == calls
+    assert job["budget"]["consumed"]["nansen_credits"] == credits["measured"]
+
+
+def test_a_wrong_token_echo_keeps_no_row_and_stops(ports, owner_a):
+    intake_id = request_id(ports, owner_a)
+    job_id = start_nansen(ports, owner_a, intake_id).json()["job_id"]
+
+    def foreign_token(operation, path, body):
+        reply = provider_composition.AuthoredNansenTransport(TOKEN).request(operation, path, body)
+        payload = json.loads(reply.body)
+        payload["token_address"] = "0x" + "ee" * 20
+        return NansenResponse(status=reply.status, headers=reply.headers, body=json.dumps(payload).encode())
+
+    transport = CountingNansen([foreign_token])
+    nansen_worker(ports, transport).run_job(uuid.UUID(job_id))
+    job = view(ports, owner_a, job_id)
+    assert transport.calls == 1
+    assert job["nansen_report"]["outcomes"][0] == {"operation": "holders", "status": "FAILED",
+                                                   "stop_reason": "WRONG_TOKEN"}
+    assert job["nansen_report"]["settlement"]["provider_requests"] == {"state": "KNOWN", "measured": 1, "lost": 0}
+
+
+def test_a_composition_fault_fails_before_any_attempt_and_releases_everything(ports, owner_a):
+    intake_id = request_id(ports, owner_a)
+    job_id = start_nansen(ports, owner_a, intake_id).json()["job_id"]
+
+    def broken(token):
+        raise OSError("authored: the fixture could not be read")
+
+    worker(ports, nansen_transport=broken).run_job(uuid.UUID(job_id))
+    job = view(ports, owner_a, job_id)
+    assert (job["state"], job["terminal_reason"]) == ("FAILED", "nansen_composition_failed")
+    assert "ATTEMPT_STARTED" not in [event["kind"] for event in job["events"]]
+    assert sum(job["budget"]["unknown_liability"].values()) == 0
+    assert sum(job["budget"]["consumed"].values()) == 0
 
 
 class Crash(BaseException):
@@ -526,6 +654,8 @@ def test_without_the_nansen_composition_nothing_starts(plain, owner_a):
     intake_id = request_id(plain, owner_a)
     response = start_nansen(plain, owner_a, intake_id)
     assert (response.status_code, response.json()["code"]) == (409, "nansen_research_unavailable")
+    listed = plain.get(f"/v1/research/requests/{intake_id}/nansen-reports", headers=owner_a).json()
+    assert listed == {"available": False, "jobs": []}
 
 
 def test_a_saved_job_is_refused_before_effect_when_the_composition_is_removed(ports, plain, owner_a):
@@ -554,3 +684,14 @@ def test_a_saved_job_is_refused_before_effect_when_the_composition_is_removed(po
 def test_no_current_source_is_a_forward_observation(evidence_class, reason):
     observation = forward_observation_from({"evidence_class": evidence_class})
     assert (observation.availability, observation.reason, observation.observed_at) == ("UNAVAILABLE", reason, None)
+
+
+def test_a_rollback_below_0011_is_refused_while_nansen_liability_exists(ports, migrated, owner_a):
+    """Revision 0010 cannot hold a Nansen job, report or credit liability, so the downgrade refuses and keeps them."""
+    intake_id = request_id(ports, owner_a)
+    job_id = start_nansen(ports, owner_a, intake_id).json()["job_id"]
+    down = subprocess.run([sys.executable, "-m", "alembic", "downgrade", "0010"], cwd=harness.API_DIR, env=migrated,
+                          capture_output=True, text=True, timeout=180)
+    assert down.returncode != 0 and "downgrade below 0011 refused" in down.stdout + down.stderr
+    assert view(ports, owner_a, job_id)["budget"]["reserved"]["nansen_credits"] == 12  # nothing was removed
+    assert ports.get("/readyz").json()["status"] == "ready"

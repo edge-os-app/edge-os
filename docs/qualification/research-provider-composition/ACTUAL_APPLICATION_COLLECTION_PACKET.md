@@ -32,11 +32,11 @@ Status: **PROPOSED; every actual step is NOT_RUN.** Prepared 2026-10-12 for #58 
 | Pool, assets, orientation, units | MOE/WMON pool per the P07 packet; orientation | `REQUIRED_DECISION` |
 | Window | per the P07 packet (outside the sealed holdout) | `REQUIRED_DECISION` |
 | Corroboration sample | 8 receipts, deterministic positions | from the P07 packet |
-| Client bounds | per the P07 packet section 4 | `REQUIRED_DECISION` |
+| Client bounds | per the P07 packet section 4; the per-call `deadline_seconds` must be at most the time left before the job deadline (today it is the whole declared deadline) | `REQUIRED_DECISION` |
 | Application declaration bound `provider_requests` | ≤ the packet's total (proposed 36) | `REQUIRED_DECISION` |
-| Owner and global caps for the run | `REQUIRED_DECISION` |
-| Freshness and availability model | `REQUIRED_DECISION` |
-| Data rights and retention | `REQUIRED_DECISION` |
+| Owner and global caps for the run | none proposed | `REQUIRED_DECISION` |
+| Freshness and availability model | none proposed | `REQUIRED_DECISION` |
+| Data rights and retention | none proposed | `REQUIRED_DECISION` |
 
 ## 4. Nansen report through the application
 
@@ -45,10 +45,10 @@ Status: **PROPOSED; every actual step is NOT_RUN.** Prepared 2026-10-12 for #58 
 | Operations | `tgm/holders`, `tgm/flows`, at most one page each | from the Nansen packet |
 | Token and window | MOE `0xd8e004acba279417c04c0633cb5a21ceca207777`; window per the Nansen packet | `REQUIRED_DECISION` to confirm |
 | Question | the user's saved request text, unchanged | fixed by the application |
-| Request limit per report | `REQUIRED_DECISION` |
-| Credit ceiling per report (`max_credits`) and owner/global `nansen_credits` caps | `REQUIRED_DECISION` |
-| Account plan, per-call cost and rights | `REQUIRED_DECISION` |
-| Premium labels, x402, MPP or any payment path | refused |
+| Request limit per report | at most 2 (one page per operation) | `REQUIRED_DECISION` |
+| Credit ceiling per report (`max_credits`) and owner/global `nansen_credits` caps | none proposed | `REQUIRED_DECISION` |
+| Account plan, per-call cost and rights | none proposed | `REQUIRED_DECISION` |
+| Premium labels, x402, MPP or any payment path | refused | fixed |
 
 ## 5. Proof the actual run must produce (observed under the approved packet, not inferred)
 

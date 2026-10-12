@@ -143,7 +143,7 @@ from research_local.investigation_jobs j join research_local.nansen_reports r on
 select scope, reserved, consumed, unknown from usage_local.usage_allocations where resource = 'nansen_credits';
 ```
 
-Fault cases (401/402/403/429, malformed and oversized replies, lost replies, missing credit header, cancel and deadline, killed worker, invalid request, budget refusal, repeated key, other owner, removed composition, production refusal, HTTP dataset adoption and replay) are proved by `apps/api/tests/test_research_ports_journey.py`, not by the mapped run.
+Fault cases (401/402/403/429, malformed and oversized replies, wrong-token echo, HTTP receipt mismatch, lost replies, missing credit header, package request/credit limit refusals, cancel and deadline, killed worker, failed report save, composition fault, invalid request, budget refusal, repeated key, other owner, removed composition, production refusal, rollback refusal below 0011, HTTP dataset adoption and replay) are proved by `apps/api/tests/test_research_ports_journey.py` on its own database, not by the mapped run.
 
 ## Original transaction, receipts and current holdings (#58 ORIGINAL-LOCAL)
 
