@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InvestigationReview } from "../components/InvestigationReview";
 
 const mocks = vi.hoisted(() => ({ proposal: vi.fn(), list: vi.fn(), save: vi.fn(), get: vi.fn(),
+  historySources: vi.fn(), historyList: vi.fn(), historySave: vi.fn(), jobs: vi.fn(), startJob: vi.fn(),
+  cancelJob: vi.fn(), budget: vi.fn(),
   effectRuns: vi.fn(), adoptEffectRun: vi.fn(), executeEffectRun: vi.fn(), getEffectRun: vi.fn(),
   ApiError: class extends Error { status = 503; detail = "Unavailable"; code = "service_unavailable"; } }));
 vi.mock("../lib/api", () => ({
@@ -17,6 +19,15 @@ vi.mock("../lib/api", () => ({
     adoptEffectRun: (...args: unknown[]) => mocks.adoptEffectRun(...args),
     executeEffectRun: (...args: unknown[]) => mocks.executeEffectRun(...args),
     effectRun: (...args: unknown[]) => mocks.getEffectRun(...args),
+    // The recorded-history section below the plan. Its default state is empty.
+    historySources: (...args: unknown[]) => mocks.historySources(...args),
+    historyInvestigations: (...args: unknown[]) => mocks.historyList(...args),
+    saveHistoryInvestigation: (...args: unknown[]) => mocks.historySave(...args),
+    investigationJobs: (...args: unknown[]) => mocks.jobs(...args),
+    startInvestigationJob: (...args: unknown[]) => mocks.startJob(...args),
+    cancelInvestigationJob: (...args: unknown[]) => mocks.cancelJob(...args),
+    get: async () => ({ intake: { content: { original_request: "test request" } } }),
+    researchBudget: (...args: unknown[]) => mocks.budget(...args),
   },
 }));
 
@@ -85,6 +96,11 @@ const saved = {
 };
 
 beforeEach(() => {
+  mocks.historySources.mockReset().mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [] });
+  mocks.historyList.mockReset().mockResolvedValue({ declarations: [] });
+  mocks.historySave.mockReset(); mocks.startJob.mockReset(); mocks.cancelJob.mockReset();
+  mocks.jobs.mockReset().mockResolvedValue({ jobs: [] });
+  mocks.budget.mockReset().mockResolvedValue(null);
   window.sessionStorage.clear();
   vi.clearAllMocks();
   mocks.proposal.mockResolvedValue(proposal);
@@ -103,7 +119,7 @@ describe("investigation declaration adoption", () => {
     expect(await screen.findByLabelText("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.")).toBeInTheDocument();
     const save = screen.getByRole("button", { name: "Adopt and save declaration" });
     expect(save).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
     fireEvent.click(save);
     await screen.findByText("Declaration saved");
     expect(mocks.save).toHaveBeenCalledOnce();
@@ -173,7 +189,7 @@ describe("investigation declaration adoption", () => {
     mocks.save.mockRejectedValueOnce(new Error("temporary network failure")).mockResolvedValue(saved);
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await screen.findByLabelText("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.");
-    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
     const saveButton = screen.getByRole("button", { name: "Adopt and save declaration" });
     saveButton.focus();
     await user.keyboard("{Enter}");
@@ -213,7 +229,7 @@ describe("investigation declaration adoption", () => {
     mocks.save.mockReset().mockResolvedValueOnce(saved).mockResolvedValueOnce(replacementSaved);
 
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.click(await screen.findByRole("checkbox"));
+    await user.click(await screen.findByRole("checkbox", { name: /fixture-only declaration/ }));
     await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
     await screen.findByRole("heading", { name: "Declaration saved" });
     await user.click(screen.getByRole("button", { name: "Review another hypothesis" }));
@@ -229,7 +245,7 @@ describe("investigation declaration adoption", () => {
     expect(await screen.findByLabelText("Hypothesis or descriptive question")).toHaveValue(
       "A separately reviewed descriptive question.");
     expect(screen.queryByText(/request interpretation changed/)).toBeNull();
-    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
     await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
     await screen.findByRole("heading", { name: "Declaration saved" });
 
@@ -274,10 +290,10 @@ describe("investigation declaration adoption", () => {
       await user.type(stopping, "Keep my reviewed edits across each current review.");
 
       if (refreshPath === "stale save") {
-        await user.click(screen.getByRole("checkbox"));
+        await user.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
         await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
         await screen.findByText(/unsaved edits remain in place/);
-        expect(screen.getByRole("checkbox")).not.toBeChecked();
+        expect(screen.getByRole("checkbox", { name: /fixture-only declaration/ })).not.toBeChecked();
         expect(stopping).toHaveValue("Keep my reviewed edits across each current review.");
       } else if (refreshPath === "proposal retry") {
         rerender(<InvestigationReview intakeId="intake-1" interpretationRevisionId="revision-2" />);
@@ -293,8 +309,8 @@ describe("investigation declaration adoption", () => {
         expect(stopping).toHaveValue("Keep my reviewed edits across each current review.");
       }
 
-      expect(screen.getByRole("checkbox")).not.toBeChecked();
-      await user.click(screen.getByRole("checkbox"));
+      expect(screen.getByRole("checkbox", { name: /fixture-only declaration/ })).not.toBeChecked();
+      await user.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
       await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
       await screen.findByRole("heading", { name: "Declaration saved" });
       expect(screen.queryByText(/unsaved edits remain in place/)).toBeNull();
@@ -312,4 +328,123 @@ describe("investigation declaration adoption", () => {
     },
   );
 
+});
+
+
+const SOURCE = {
+  source_id: "recorded-syn-qualified/1", title: "Synthetic recorded history (qualifies)", evidence_class: "RECORDED_RESPONSE",
+  content_label: "SYNTHETIC_FIXTURE", profile_version: "p07.market_dataset_profile/1", profile_sha256: "f".repeat(64),
+  market: { network: "MONAD", pool_address: "0xaaaa", base_asset: "0xcccc", quote_asset: "0xbbbb" },
+  window: { start: "2026-09-25T10:00:00Z", end: "2026-09-25T12:00:00Z" }, history_provider: "ENVIO_HYPERSYNC",
+  page_requests_recorded: 2,
+};
+const DECLARATION = {
+  declaration: { record_id: "hist-decl-1", schema_version: "p08.investigation-declaration/3", created_at: "2026-10-12T00:00:00Z",
+    content: { schema_version: "p08.investigation-declaration/3", original_request: "test request",
+      declaration_state: "PRE_OUTCOME_DECLARED", outcome_labels_read: false,
+      edge_spec: { hypothesis: "Rises continue", claim: { status: "DESCRIPTIVE_ONLY", text: "Describe only." } },
+      configuration: { source: { source_id: SOURCE.source_id, profile_sha256: SOURCE.profile_sha256, evidence_class: "RECORDED_RESPONSE" },
+        market: SOURCE.market, window: SOURCE.window, direction: "DESCRIPTIVE",
+        resource_bounds: { provider_requests: 2, compute_seconds: 30 }, evaluation_plan: [], partitions: [] },
+      rule_map: { rules: [], binding_state: "PENDING_DATASET_QUALIFICATION", control: "UNTRIGGERED_DECISIONS" },
+      frozen: { configuration_sha256: "c".repeat(64), rule_map_sha256: "r".repeat(64), source_profile_sha256: "f".repeat(64),
+        frozen_at: "2026-10-12T00:00:00Z" } } },
+  access_history: [{ event: "DECLARATION_SAVED", provider_queries: 0, outcome_labels_read: false }],
+};
+function job(state: string, extra: Record<string, unknown> = {}) {
+  return { job_id: `job-${state}`, declaration_id: "hist-decl-1", request_key: "k", operation_id: "o", state,
+    terminal_reason: null, budget: { reserved: { provider_requests: 2, compute_seconds: 30 } }, deadline_at: "",
+    cancel_requested_at: null, created_at: "", events: [{ kind: "JOB_QUEUED", attempt_id: null, created_at: "", content: {} }],
+    dataset: null, report: null, ...extra };
+}
+
+describe("recorded-history investigation", () => {
+  async function openSaved(user: ReturnType<typeof userEvent.setup>) {
+    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    await screen.findByTestId("history-declaration");
+  }
+
+  it("requires the user's own hypothesis, rules and adoption, then saves a user-adopted rule map", async () => {
+    const user = userEvent.setup();
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
+    mocks.historySave.mockResolvedValue(DECLARATION);
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await user.selectOptions(await screen.findByLabelText("Recorded source"), SOURCE.source_id);
+    const save = screen.getByRole("button", { name: "Save history declaration" });
+    expect(save).toBeDisabled();
+    await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
+    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
+    await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
+    await user.type(screen.getByLabelText("Rule 1 volume threshold"), "100");
+    expect(save).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    await user.click(save);
+    await screen.findByText(/Declaration saved before any collection/);
+    const body = mocks.historySave.mock.calls[0][1];
+    expect(body.configuration.source).toEqual({ source_id: SOURCE.source_id, profile_sha256: SOURCE.profile_sha256,
+      evidence_class: "RECORDED_RESPONSE" });
+    expect(body.configuration.question).toBe("test request");
+    expect(body.configuration.rule_map.rules[0]).toMatchObject({ rule_source: "USER_ADOPTED",
+      price_expression: { op: "gt", args: [{ op: "price_return", lookback_buckets: 2 },
+        { op: "constant", value: "0.004", unit: "DIMENSIONLESS" }] } });
+    expect(body.configuration.permitted_access).toEqual(["RECORDED_RESPONSE"]);
+    expect(Object.values(body.field_origins).every((item) => (item as { adoption: string }).adoption === "ADOPTED")).toBe(true);
+  });
+
+  it("shows a waiting job and cancels it", async () => {
+    const user = userEvent.setup();
+    mocks.jobs.mockResolvedValueOnce({ jobs: [job("RESERVED")] }).mockResolvedValue({ jobs: [job("CANCELLED")] });
+    mocks.cancelJob.mockResolvedValue(job("CANCELLED"));
+    await openSaved(user);
+    expect(await screen.findByText(/Waiting for the research worker/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel this job" }));
+    expect(mocks.cancelJob).toHaveBeenCalledWith("job-RESERVED");
+    expect(await screen.findByText(/^Cancelled\./)).toBeInTheDocument();
+  });
+
+  it("retries a failed job as a new job with a new request key", async () => {
+    const user = userEvent.setup();
+    mocks.jobs.mockResolvedValue({ jobs: [job("FAILED")] });
+    mocks.startJob.mockResolvedValue(job("RESERVED"));
+    await openSaved(user);
+    await user.click(await screen.findByRole("button", { name: "Start investigation job" }));
+    await user.click(await screen.findByRole("button", { name: "Retry as a new job" }));
+    const [first, second] = mocks.startJob.mock.calls.map((call) => call[2].request_key);
+    expect(first).toBeTruthy(); expect(second).toBeTruthy(); expect(second).not.toBe(first);
+  });
+
+  it("shows a budget denial and an uncertain start reuses the same request", async () => {
+    const user = userEvent.setup();
+    mocks.startJob.mockRejectedValueOnce(new mocks.ApiError("budget"))
+      .mockRejectedValueOnce(Object.assign(new mocks.ApiError("net"), { status: 0, code: "network_error", detail: "x" }))
+      .mockResolvedValueOnce(job("RESERVED"));
+    await openSaved(user);
+    await user.click(screen.getByRole("button", { name: "Start investigation job" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unavailable");
+    await user.click(screen.getByRole("button", { name: "Start investigation job" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not confirm the start");
+    await user.click(screen.getByRole("button", { name: "Check again with the same start" }));
+    await waitFor(() => expect(mocks.startJob).toHaveBeenCalledTimes(3));
+    expect(mocks.startJob.mock.calls[2][2]).toEqual(mocks.startJob.mock.calls[1][2]);
+  });
+
+  it("shows a saved report honestly", async () => {
+    const user = userEvent.setup();
+    const report = { report_id: "rep-1", content_sha256: "s", stored_hash_matches_content: true, created_at: "",
+      content: { outcome: "CONTRADICTORY", outcome_reasons: ["variant_contrasts_have_opposite_signs"], outcome_accessed: true,
+        statistical_status: "UNRESOLVED", claims: { significance: "NOT_CLAIMED", capital_authority: "NONE" },
+        variants: [{ evaluation_id: "e1", variant_id: "rule-1", outcome: "DESCRIBED", triggered_minus_control_mean: "0.01",
+          triggered_observed: 4, control_observed: 5 }], contrary_findings: [],
+        protected_evaluations: [{ evaluation_id: "e2", role: "HOLDOUT", state: "NOT_READ" }], dataset_id: "ds-1",
+        source_id: SOURCE.source_id, evidence_class: "RECORDED_RESPONSE", content_label: "SYNTHETIC_FIXTURE",
+        dataset_verdict: { overall: "QUALIFIED" }, rule_map_sha256: "r", hypothesis: "h", notice: "Descriptive only." } };
+    mocks.jobs.mockResolvedValue({ jobs: [job("REPORTED", { report })] });
+    await openSaved(user);
+    expect(await screen.findByText("Saved report: CONTRADICTORY")).toBeInTheDocument();
+    expect(screen.getByText(/significance NOT_CLAIMED/)).toBeInTheDocument();
+    expect(screen.getByText(/Not read: HOLDOUT partition/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry as a new job" })).toBeNull();
+  });
 });

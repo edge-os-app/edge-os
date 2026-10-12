@@ -137,7 +137,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const headDraft = bundle?.drafts.find((d) => d.record_id === bundle.head.draft_id);
   const headBase = (headDraft?.content as { base_revision_id?: string | null } | undefined)?.base_revision_id ?? null;
   const revision = headDraft
-    ? bundle?.revisions.find((r) => r.parent_revision_id === headBase)
+    ? bundle?.revisions.find((r) => (r.parent_revision_id ?? null) === headBase)
     : bundle?.revisions[bundle.revisions.length - 1];
   const latestRevision = bundle?.revisions[bundle.revisions.length - 1];
   useEffect(() => {

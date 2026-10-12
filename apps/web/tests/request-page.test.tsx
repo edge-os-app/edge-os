@@ -10,6 +10,7 @@ vi.mock("../lib/api", () => ({
     revision: (...args: unknown[]) => mocks.revision(...args),
     walletProvider: async () => ({ provider: "unavailable", create_calls: null, lookup_calls: null }),
     walletSetup: async () => { throw new Error("no saved wallet setup"); },
+    historyDatasets: async () => ({ datasets: [] }),
   },
 }));
 
