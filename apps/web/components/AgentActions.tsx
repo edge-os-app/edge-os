@@ -188,7 +188,7 @@ const STAGE_COPY: Record<string, string> = {
   BROADCAST_ERROR: "The send returned an error. The effect is unknown; reconcile the original transaction.",
   BROADCAST_HASH_MISMATCH: "The send returned another hash. The effect is unknown.",
   SIGNING_UNKNOWN: "The signer reply was lost. Nothing was sent by Edge OS, but a signature may exist; the reserved amounts stay held.",
-  SIGNED_RESPONSE_REJECTED: "The signed bytes did not match the original. They were never sent; the reserved amounts stay held.",
+  SIGNED_RESPONSE_REJECTED: "The signer reply was unusable or did not match the original. Nothing was sent; the reserved amounts stay held.",
   STOPPED_AFTER_SIGNING: "A stop or expiry arrived after signing. Nothing was sent; the reserved amounts stay held.",
   REFUSED_UNSENT: "Refused before signing. Nothing was signed or sent.",
 };
@@ -198,7 +198,8 @@ function OriginalTransactionFacts({ original, settled }: { original: OriginalTra
   return (
     <div data-testid="action-original">
       <h4>Original transaction</h4>
-      <p data-testid="action-original-stage">{STAGE_COPY[original.stage] ?? original.stage}
+      <p data-testid="action-original-stage">{original.reason === "SIGNER_REFUSED"
+        ? "The signer refused. Nothing was signed or sent." : STAGE_COPY[original.stage] ?? original.stage}
         {!settled && " No replacement is ever created."}</p>
       <dl className="kv">
         <dt>Stage</dt><dd>{original.stage}{original.reason ? ` (${original.reason})` : ""}{original.reasons?.length ? ` · ${original.reasons.join(", ")}` : ""}</dd>

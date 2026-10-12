@@ -8,7 +8,6 @@ deposit port. A body can never post a confirmed deposit, a balance or a credit.
 
 from __future__ import annotations
 
-import datetime as dt
 from collections.abc import Generator
 from typing import Any, Literal
 
@@ -102,7 +101,7 @@ def read_funding(agent_id: str, request: Request, principal: Principal = Depends
         address = (wallet_address(session, principal.user_id, agent_id, agent.wallet_id)
                    if observed.wallet_address is not None else None)
         holdings = observed.view(observed.refusal(wallet_address=address, chain_id=agent.network_number,
-                                                  now=dt.datetime.now(dt.timezone.utc)))
+                                                  now=ports.clock()))
     except ProviderUnavailable:
         holdings = {"state": "UNAVAILABLE", "reason": "HOLDINGS_UNAVAILABLE", "evidence_class": None, "assets": []}
     allowances = [summary.model_dump(mode="json") for summary in request.app.state.financial.admission.balances(

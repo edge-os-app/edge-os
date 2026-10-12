@@ -227,7 +227,9 @@ def test_signed_bytes_for_another_nonce_are_rejected(original, owner_a, recordin
 
 
 @pytest.mark.parametrize("failing_stage,signs,outcome", [("PREPARED", 0, "DENIED_UNSENT"),
-                                                          ("SIGNED", 1, "SUBMITTED_UNKNOWN")])
+                                                          ("SIGN_REQUESTED", 0, "DENIED_UNSENT"),
+                                                          ("SIGNED", 1, "SUBMITTED_UNKNOWN"),
+                                                          ("BROADCAST_REQUESTED", 1, "SUBMITTED_UNKNOWN")])
 def test_a_failed_save_stops_before_the_next_effect(original, owner_a, recordings, failing_stage, signs, outcome):
     execution = original.app.state.financial.execution
     journal = execution._journal
@@ -243,7 +245,7 @@ def test_a_failed_save_stops_before_the_next_effect(original, owner_a, recording
 
     execution._journal = failing
     try:
-        job = submitted(original, owner_a, f"save-{failing_stage.lower()}-fx-original")
+        job = submitted(original, owner_a, f"save-{failing_stage.lower().replace('_', '-')}-fx-original")
     finally:
         execution._journal = journal
     assert job["outcome"] == outcome, job["reason"]
@@ -340,9 +342,12 @@ def test_a_receipt_on_another_chain_applies_nothing(original, owner_a):
 @pytest.mark.parametrize("edit,breach", [
     (lambda r: {**r, "logs": r["logs"][:1]}, "MISSING_RECONCILED"),
     (lambda r: {**r, "logs": r["logs"][1:]}, "MISSING_RECONCILED_INPUT"),
-    (lambda r: {**r, "status": "0x0", "gasUsed": None}, "MISSING_RECONCILED_GAS")])
+    (lambda r: {**r, "status": "0x0", "gasUsed": None}, "MISSING_RECONCILED_GAS"),
+    (lambda r: {**r, "gasUsed": None}, "MISSING_RECONCILED_GAS"),
+    (lambda r: {**r, "logs": [{**log, "data": hex(int(log["data"], 16))} for log in r["logs"]]},
+     "MISSING_RECONCILED_INPUT")])
 def test_a_receipt_without_every_actual_never_releases_the_liability(original, owner_a, edit, breach):
-    job = submitted(original, owner_a, f"partial-{breach[-5:].lower()}-fx-original")
+    job = submitted(original, owner_a, f"partial-{uuid.uuid4().hex[:8]}-fx-original")
     Inject(original, observer=receipt_edit(edit))
     settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
     body = action(original, owner_a, job["action_id"])
@@ -357,7 +362,7 @@ def test_changed_evidence_after_settlement_cannot_rewrite_the_original_outcome(o
     assert first["case_state"] == "CONFIRMED"
 
     def more_output(receipt):
-        receipt["logs"][1]["data"] = hex(int(receipt["logs"][1]["data"], 16) + 1)
+        receipt["logs"][1]["data"] = "0x" + format(int(receipt["logs"][1]["data"], 16) + 1, "064x")
         return receipt
 
     Inject(original, observer=receipt_edit(more_output))
@@ -368,18 +373,26 @@ def test_changed_evidence_after_settlement_cannot_rewrite_the_original_outcome(o
         ff.ENTRY_BASE_OUTPUT]
 
 
-@pytest.mark.parametrize("change,reason", [
-    (lambda h: {**h, "age_seconds": 600}, "HOLDINGS_STALE"),
-    (lambda h: {**h, "decimals": {**h["decimals"], "0x2222222222222222222222222222222222222222": 18}},
-     "HOLDINGS_INCOMPLETE"),
-    (lambda h: {**h, "tokens": {"0x1111111111111111111111111111111111111111": h["tokens"][
-        "0x1111111111111111111111111111111111111111"]}}, "HOLDINGS_INCOMPLETE")])
-def test_unusable_holdings_admit_nothing_and_show_unavailable(original, owner_a, recordings, change, reason):
+QUOTE_TOKEN = "0x2222222222222222222222222222222222222222"
+BASE_TOKEN = "0x1111111111111111111111111111111111111111"
+
+
+def word(value: int) -> str:
+    return "0x" + format(value, "064x")
+
+
+@pytest.mark.parametrize("case,change,reason", [
+    ("stale", lambda h: {**h, "age_seconds": 600}, "HOLDINGS_STALE"),
+    ("decimals", lambda h: {**h, "decimals": {**h["decimals"], QUOTE_TOKEN: word(18)}}, "HOLDINGS_INCOMPLETE"),
+    ("missing", lambda h: {**h, "tokens": {BASE_TOKEN: h["tokens"][BASE_TOKEN]}}, "HOLDINGS_INCOMPLETE"),
+    # A JSON-RPC `QUANTITY` where an `eth_call` returns a 32-byte `DATA` word is not read as a balance.
+    ("quantity-form", lambda h: {**h, "tokens": {**h["tokens"], QUOTE_TOKEN: hex(1000000000)}}, "HOLDINGS_INCOMPLETE")])
+def test_unusable_holdings_admit_nothing_and_show_unavailable(original, owner_a, recordings, case, change, reason):
     data = original.app.state.financial.ports.original.data
     saved = data["holdings"]
     data["holdings"] = change(saved)
     try:
-        job = submitted(original, owner_a, f"hold-{abs(hash(reason)) % 997}-{len(str(change))}-fx-original")
+        job = submitted(original, owner_a, f"hold-{case}-fx-original")
         funding = original.get(f"/v1/agents/{job['agent_id']}/funding", headers=owner_a).json()
     finally:
         data["holdings"] = saved
@@ -441,3 +454,106 @@ def test_a_route_the_recording_does_not_hold_is_blocked_before_signing(original,
     body = original_of(action(original, owner_a, job["action_id"]))
     assert (job["outcome"], body["reason"]) == ("DENIED_UNSENT", "ROUTE_BLOCKED")
     assert calls(recordings).get("signer.rpc", 0) == 0
+
+
+@pytest.mark.parametrize("case,reply", [
+    ("camel", {"method": "eth_signTransaction", "data": {"signedTransaction": "0x02", "encoding": "rlp"}}),
+    ("missing", {"method": "eth_signTransaction", "data": {"encoding": "rlp"}}),
+    ("not-object", "0x02f8")])
+def test_an_unrecognized_signer_reply_keeps_the_liability_and_is_never_sent(original, owner_a, recordings, case,
+                                                                         reply):
+    Inject(original, signer=lambda inner: Delegate(inner, after=lambda *_: reply))  # the signer did sign
+    job = submitted(original, owner_a, f"reply-{case}-fx-original")
+    body = action(original, owner_a, job["action_id"])
+    assert job["outcome"] == "SUBMITTED_UNKNOWN", job["reason"]
+    assert (original_of(body)["stage"], original_of(body)["reasons"]) == (
+        "SIGNED_RESPONSE_REJECTED", ["SIGNER_REPLY_UNRECOGNIZED"])
+    assert "RESERVED" in reservation_states(body)
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+def test_an_unmarked_placeholder_wallet_is_refused_as_another_signer_and_never_sent(original, owner_a, recordings):
+    """Amendment A1: the placeholder fixture address has no key, so the authored signature names another sender."""
+    ports = original.app.state.financial.ports
+    clients = (ports.original.clients(ports.clock), ports.original.profile)
+    ports.original_clients = lambda agent_id: clients
+    job = submitted(original, owner_a, "placeholder-wallet")
+    body = action(original, owner_a, job["action_id"])
+    assert job["outcome"] == "SUBMITTED_UNKNOWN", job["reason"]
+    assert original_of(body)["wallet_address"] != PUBLISHED_SENDER
+    assert (original_of(body)["stage"], original_of(body)["reasons"]) == (
+        "SIGNED_RESPONSE_REJECTED", ["SIGNED_SENDER_MISMATCH"])
+    assert "RESERVED" in reservation_states(body)
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+def test_a_removal_recorded_after_signing_prevents_the_broadcast(original, owner_a, recordings):
+    def remove_then_return(result, *_):
+        removed = original.post("/v1/agents/remove-fx-original/removal", headers=owner_a,
+                                json={"request_key": "remove-after-signing", "reason": "owner removed the agent"})
+        assert removed.status_code in (200, 201), removed.text
+        return result
+
+    Inject(original, signer=lambda inner: Delegate(inner, after=remove_then_return))
+    job = submitted(original, owner_a, "remove-fx-original")
+    body = original_of(action(original, owner_a, job["action_id"]))
+    assert job["outcome"] == "SUBMITTED_UNKNOWN" and body["stage"] == "STOPPED_AFTER_SIGNING"
+    assert "REMOVAL_REQUESTED" in body["reason"]
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+def test_concurrent_runs_of_one_job_sign_and_send_once(original, owner_a, recordings):
+    import threading
+
+    ready(original, owner_a, "twice-fx-original")
+    first = ff.schedule(original, owner_a, "twice-fx-original", "same").json()
+    again = ff.schedule(original, owner_a, "twice-fx-original", "same").json()
+    assert again["job_id"] == first["job_id"]
+    connected = original.app.state.financial.connected
+    threads = [threading.Thread(target=connected.run_job, args=(uuid.UUID(first["job_id"]),)) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    ff.run_job(original, first)
+    assert (calls(recordings)["signer.rpc"], calls(recordings)["broadcast.eth_sendRawTransaction"]) == (1, 1)
+
+
+def test_a_reconcile_during_signing_observes_nothing_and_never_interrupts_the_original(original, owner_a, recordings):
+    seen = {}
+
+    def reconcile_mid_sign(result, *_):
+        actions = original.get("/v1/agents/midsign-fx-original/actions", headers=owner_a).json()
+        seen["reply"] = original.post(f"/v1/actions/{actions['jobs'][0]['action_id']}/reconcile",
+                                      headers=owner_a).json()
+        return result
+
+    Inject(original, signer=lambda inner: Delegate(inner, after=reconcile_mid_sign))
+    job = submitted(original, owner_a, "midsign-fx-original")
+    assert (seen["reply"]["receipt_outcome"], seen["reply"]["detail"], seen["reply"]["applied"]) == (
+        "NOT_OBSERVED", "ORIGINAL_IN_FLIGHT", False)
+    body = original_of(action(original, owner_a, job["action_id"]))
+    assert (body["stage"], body["transaction_hash"]) == ("BROADCAST_RETURNED", ENTRY_NONCE0_HASH)
+
+
+def test_reconciling_a_refused_original_adds_no_evidence(original, owner_a):
+    Inject(original, signer=lambda inner: Delegate(inner, before=lambda *_: {"error": {"code": "policy_violation"}}))
+    job = submitted(original, owner_a, "refused-again-fx-original")
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert (settled["receipt_outcome"], settled["detail"], settled["applied"]) == (
+        "NOT_OBSERVED", "ORIGINAL_REFUSED_UNSENT", False)
+    assert settled["case_state"] != "DISCREPANCY"
+
+
+def test_holdings_whose_chain_cannot_be_read_admit_nothing(original, owner_a, recordings):
+    Inject(original, observer=lambda inner: Delegate(
+        inner, after=lambda result, method, params: "chain-143" if method == "eth_chainId" else result))
+    ports = original.app.state.financial.ports
+    observer = ports.original_clients("x-fx-original")[0].observer
+    holdings, saved = ports.holdings, ports.holdings._recordings.clients
+    ports.holdings._recordings.clients = lambda clock: dataclasses.replace(saved(clock), observer=observer)
+    try:
+        job = submitted(original, owner_a, "chainless-fx-original")
+    finally:
+        ports.holdings._recordings.clients = saved
+    assert (job["state"], job["reason"], job["action_id"]) == ("UNAVAILABLE", "HOLDINGS_UNAVAILABLE", None)

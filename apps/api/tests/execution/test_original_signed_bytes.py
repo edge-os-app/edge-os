@@ -17,7 +17,9 @@ from eth_account.typed_transactions import TypedTransaction
 from eth_utils import keccak
 from hexbytes import HexBytes
 
-from edge_os_api.execution.original_transaction import validate_signed
+from eth_account import Account
+
+from edge_os_api.execution.original_transaction import abi_word, validate_signed
 
 RECORDINGS = Path(__file__).parent.parent / "fixtures" / "original_transaction" / "original_transaction_v1.json"
 PUBLISHED_SENDER = "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23"
@@ -45,6 +47,7 @@ def test_keccak_matches_the_standard_empty_input_answer():
 
 
 def test_the_published_legacy_vector_hashes_its_full_bytes_and_is_refused_as_unsupported():
+    assert Account.recover_transaction(PUBLISHED_LEGACY_RAW) == PUBLISHED_SENDER
     assert "0x" + keccak(bytes.fromhex(PUBLISHED_LEGACY_RAW[2:])).hex() == PUBLISHED_LEGACY_HASH
     _, unsigned = recording()
     assert validate_signed(PUBLISHED_LEGACY_RAW, unsigned, PUBLISHED_SENDER) == (None, [
@@ -79,3 +82,10 @@ def test_a_tampered_byte_never_validates():
     tampered = signed[:-6] + ("00" if signed[-6:-4] != "00" else "01") + signed[-4:]
     transaction_hash, reasons = validate_signed(tampered, unsigned, PUBLISHED_SENDER)
     assert transaction_hash is None and reasons
+
+
+def test_abi_data_words_are_read_only_as_exact_32_byte_words():
+    assert abi_word("0x" + "00" * 31 + "12") == 18  # `decimals()` of an 18-decimal token, as `eth_call` returns it
+    assert abi_word("0x0000000000000000000000000000000000000000000000000000000005f5e100") == 100000000
+    assert abi_word("0x12") is None  # a QUANTITY is not a DATA word
+    assert abi_word("0x" + "00" * 33) is None and abi_word(None) is None

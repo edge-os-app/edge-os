@@ -499,6 +499,11 @@ class ExecutionService:
                     SubmissionAttemptRow.owner_id == owner,
                     SubmissionAttemptRow.attempt_id == attempt_id,
                 ).with_for_update().execution_options(populate_existing=True)).scalar_one()
+                if attempt.state != "IN_FLIGHT":
+                    # A concurrent reconciliation already settled this attempt; a late reply never rewrites it.
+                    session.commit()
+                    return TickResult(status=entry.state, reason=entry.blocking_reason,
+                                      selected_action_id=entry.action_id, queue_entry=_queue_view(entry, now))
                 receipt = self._receipt(action_intent, approval, outcome)
                 reconciliation = self._admission.reconcile(owner, entry.action_id, receipt)
                 status = reconciliation.decision_status

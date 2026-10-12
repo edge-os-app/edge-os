@@ -313,6 +313,27 @@ describe("original transaction and observed holdings (ORIGINAL-LOCAL)", () => {
     expect(screen.getByRole("button", { name: "Reconcile original action" })).toBeEnabled();
   });
 
+  it("says an explicit signer refusal signed and sent nothing, and an unusable reply keeps the amounts held", async () => {
+    mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
+      decision_slot: "2026-10-12T01:05:00Z", state: "COMPLETED", publication_revision_id: "r", execution_revision_id: "s:abc",
+      consent_adoption_id: "m-1", decision_id: "d", action_id: "p23:d:ENTRY", outcome: "DENIED_UNSENT",
+      reason: "SIGNER_REFUSED", runs: 1, created_at: "t", updated_at: "t" }] }));
+    const base = detail();
+    const refused = { ...ORIGINAL, stage: "REFUSED_UNSENT", reason: "SIGNER_REFUSED", transaction_hash: undefined };
+    mocks.action.mockResolvedValue(detail({ attempts: [{ ...base.attempts[0], content: { original_transaction: refused } }] }));
+    const { unmount } = render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    expect(await screen.findByTestId("action-original-stage")).toHaveTextContent("The signer refused. Nothing was signed or sent.");
+    unmount();
+    const unusable = { ...ORIGINAL, stage: "SIGNED_RESPONSE_REJECTED", reason: "SIGNED_RESPONSE_REJECTED",
+      reasons: ["SIGNER_REPLY_UNRECOGNIZED"], transaction_hash: undefined };
+    mocks.action.mockResolvedValue(detail({ attempts: [{ ...base.attempts[0], content: { original_transaction: unusable } }] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    expect(await screen.findByTestId("action-original-stage")).toHaveTextContent("Nothing was sent; the reserved amounts stay held.");
+    expect(screen.getByTestId("action-original-hash")).toHaveTextContent("None saved");
+  });
+
   it("shows the observation identity of current holdings and names a stale observation as unavailable", async () => {
     mocks.funding.mockResolvedValue(funding({ current_holdings: { state: "OBSERVED", evidence_class: "AUTHORED_RECORDING",
       assets: [{ ...QUOTE, raw: "1000000000" }], source: "recorded-holdings/1", finality: "FINALIZED",

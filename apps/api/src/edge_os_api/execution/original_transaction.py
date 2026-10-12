@@ -199,6 +199,18 @@ def hex_quantity(value: Any) -> int | None:
     return None
 
 
+def is_signer_refusal(reply: Any) -> bool:
+    """Only an explicit error envelope with no `data` proves the signer refused; nothing else does."""
+    return (isinstance(reply, Mapping) and isinstance(reply.get("error"), Mapping) and "data" not in reply)
+
+
+def abi_word(value: Any) -> int | None:
+    """An unsigned integer from one ABI-encoded 32-byte `DATA` word (`eth_call` result, log data), else None."""
+    if isinstance(value, str) and re.fullmatch(r"0x[0-9a-fA-F]{64}", value):
+        return int(value, 16)
+    return None
+
+
 def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -> tuple[str | None, list[str]]:
     """Validate injected signed bytes against the frozen unsigned transaction and wallet.
 
@@ -288,13 +300,16 @@ class OriginalTransactionTransport:
 
         try:
             reply = self._clients.signer.rpc(context.wallet_id, prepared_values["signing_request"]["body"])
-        except (ReplyLost, TimeoutError, OSError):
+        except (ReplyLost, TimeoutError, OSError, RpcError):
             return self._possible(journal, "SIGNING_UNKNOWN")
+        if is_signer_refusal(reply):
+            return self._unsent(journal, "SIGNER_REFUSED")
         data = reply.get("data") if isinstance(reply, Mapping) else None
         signed_hex = data.get("signed_transaction") if isinstance(data, Mapping) else None
         if signed_hex is None:
-            return self._unsent(journal, "SIGNER_REFUSED")
-        if not (isinstance(data, Mapping) and data.get("encoding") == "rlp"):
+            # Not a recognized refusal and no usable bytes: a signature may still exist, so the liability stays.
+            return self._possible(journal, "SIGNED_RESPONSE_REJECTED", {"reasons": ["SIGNER_REPLY_UNRECOGNIZED"]})
+        if data.get("encoding") != "rlp":
             return self._possible(journal, "SIGNED_RESPONSE_REJECTED", {"reasons": ["SIGNED_ENCODING_UNSUPPORTED"]})
         transaction_hash, reasons = validate_signed(signed_hex, unsigned, context.wallet_address)
         if transaction_hash is None:
@@ -443,10 +458,18 @@ class OriginalTransactionTransport:
 
 @dataclass(frozen=True)
 class ReceiptReading:
-    """One independent receipt reading bound through P20 to the saved original transaction."""
+    """One independent receipt reading bound through P20 to the saved original transaction.
+
+    `outcome` is the recovery vocabulary (`CONFIRMED`, `REVERTED`, `SUBMISSION_UNKNOWN`) or `REJECTED` when the
+    reading does not bind to the saved identity; a rejected reading is never applied.
+    """
 
     verdict: ObservationVerdict
     source_ref: str
+
+    @property
+    def outcome(self) -> str:
+        return "REJECTED" if self.verdict.state == ObservationState.REJECTED else RECEIPT_OUTCOMES[self.verdict.state]
 
 
 def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient) -> ReceiptReading:
@@ -509,7 +532,7 @@ def _transfers(receipt: Mapping[str, Any], token: str, *, source: str | None = N
         sender, recipient = "0x" + topics[1][-40:], "0x" + topics[2][-40:]
         if (source is not None and sender != source) or (target is not None and recipient != target):
             continue
-        amount = hex_quantity(log.get("data"))
+        amount = abi_word(log.get("data"))
         if amount is None:
             return None
         total, found = total + amount, True

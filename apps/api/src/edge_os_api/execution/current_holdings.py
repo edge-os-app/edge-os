@@ -22,6 +22,7 @@ from edge_os_api.execution.original_transaction import (
     ReplyLost,
     RpcClient,
     RpcError,
+    abi_word,
     hex_quantity,
     token_of,
 )
@@ -79,7 +80,7 @@ def read_rpc_holdings(client: RpcClient, *, wallet_address: str, assets: list[tu
         raise HoldingsUnavailable("HOLDINGS_UNAVAILABLE") from None
     number = hex_quantity(block.get("number")) if isinstance(block, dict) else None
     stamp = hex_quantity(block.get("timestamp")) if isinstance(block, dict) else None
-    if number is None or stamp is None:
+    if chain_id is None or number is None or stamp is None:  # an observation that cannot name its chain is refused
         raise HoldingsUnavailable("HOLDINGS_UNAVAILABLE")
     tag = hex(number)
     observed: dict[str, AssetAmount] = {}
@@ -91,8 +92,8 @@ def read_rpc_holdings(client: RpcClient, *, wallet_address: str, assets: list[tu
                 raw = hex_quantity(client.call("eth_getBalance", [wallet_address, tag]))
                 token_decimals: int | None = 18
             else:
-                token_decimals = hex_quantity(client.call("eth_call", [{"to": token, "data": DECIMALS_SELECTOR}, tag]))
-                raw = hex_quantity(client.call("eth_call", [
+                token_decimals = abi_word(client.call("eth_call", [{"to": token, "data": DECIMALS_SELECTOR}, tag]))
+                raw = abi_word(client.call("eth_call", [
                     {"to": token, "data": BALANCE_OF_SELECTOR + "0" * 24 + wallet_address[2:].lower()}, tag]))
         except (ReplyLost, TimeoutError, OSError, RpcError):
             raw, token_decimals = None, None

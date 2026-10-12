@@ -175,7 +175,7 @@ class RecordedObservationRpc:
             if target not in tokens:
                 return None
             if call_data == DECIMALS_SELECTOR:
-                return hex(int(decimals[target]))
+                return decimals[target]
             if call_data == BALANCE_OF_SELECTOR + "0" * 24 + wallet[2:]:
                 return tokens[target]
             return None

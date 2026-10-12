@@ -52,15 +52,21 @@ ACTIONS = (("ENTRY", QUOTE_TOKEN, 100000000, BASE_TOKEN, 50000000000000000000),
            ("EXIT", BASE_TOKEN, 50000000000000000000, QUOTE_TOKEN, 100000000))
 NONCES = range(8)
 GAS_USED, EFFECTIVE_GAS_PRICE = 150000, 2000000000
-HOLDINGS = {"block_number": "0x1e8480", "age_seconds": 12, "finality": "finalized",
-            "native": hex(10**18), "tokens": {QUOTE_TOKEN: hex(1000000000), BASE_TOKEN: hex(50 * 10**18)},
-            "decimals": {QUOTE_TOKEN: 6, BASE_TOKEN: 18}}
-
-
 def word(value: int | str) -> bytes:
     if isinstance(value, str):
         return bytes(12) + bytes.fromhex(value[2:])
     return value.to_bytes(32, "big")
+
+
+def data_word(value: int) -> str:
+    """JSON-RPC unformatted `DATA`: one 32-byte ABI word, as `eth_call` results and log data carry it."""
+    return "0x" + word(value).hex()
+
+
+# `eth_getBalance` and block fields are `QUANTITY`; `eth_call` results (`balanceOf`, `decimals`) are `DATA` words.
+HOLDINGS = {"block_number": "0x1e8480", "age_seconds": 12, "finality": "finalized", "native": hex(10**18),
+            "tokens": {QUOTE_TOKEN: data_word(1000000000), BASE_TOKEN: data_word(50 * 10**18)},
+            "decimals": {QUOTE_TOKEN: data_word(6), BASE_TOKEN: data_word(18)}}
 
 
 def calldata(sell: str, amount: int, buy: str, minimum: int) -> str:
@@ -84,7 +90,7 @@ def topic(address: str) -> str:
 
 def receipt(tx_hash: str, sell: str, amount: int, buy: str, output: int) -> dict[str, Any]:
     def transfer(token: str, source: str, target: str, raw: int) -> dict[str, Any]:
-        return {"address": token, "topics": [TRANSFER_TOPIC, topic(source), topic(target)], "data": hex(raw)}
+        return {"address": token, "topics": [TRANSFER_TOPIC, topic(source), topic(target)], "data": data_word(raw)}
 
     return {"transactionHash": tx_hash, "status": "0x1", "from": WALLET.lower(), "to": ENTRYPOINT,
             "blockNumber": "0x1e8481", "gasUsed": hex(GAS_USED), "effectiveGasPrice": hex(EFFECTIVE_GAS_PRICE),

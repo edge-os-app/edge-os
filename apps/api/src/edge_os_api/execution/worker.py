@@ -41,8 +41,8 @@ from edge_os_api.execution.connected_identity import (AdoptedConsent, ConnectedA
                                                       derive_approval, resolve_agent)
 from edge_os_api.execution.current_holdings import HoldingsUnavailable
 from edge_os_api.execution.models import DecisionRow, EvaluationJobRow, IntentRow, QueueRow, SubmissionAttemptRow
-from edge_os_api.execution.original_transaction import (RECEIPT_OUTCOMES, TRANSPORT_ID as ORIGINAL_TRANSPORT_ID,
-                                                        Leg, ObservationState, OriginalClients, OriginalContext,
+from edge_os_api.execution.original_transaction import (TRANSPORT_ID as ORIGINAL_TRANSPORT_ID,
+                                                        Leg, OriginalClients, OriginalContext,
                                                         OriginalTransactionTransport, RouteProfile,
                                                         read_original_receipt, token_of, wallet_address)
 from edge_os_api.execution.types import ActionQuote, IntentTerms, utc_iso
@@ -627,7 +627,7 @@ class ConnectedExecution:
                 .order_by(SubmissionAttemptRow.started_at.desc()).limit(1)).scalar_one_or_none()
         if attempt is None or attempt.transport_id != ORIGINAL_TRANSPORT_ID:
             return None
-        return dict(attempt.content.get("original_transaction") or {})
+        return {**(attempt.content.get("original_transaction") or {}), "in_flight": attempt.state == "IN_FLIGHT"}
 
     def _reconcile_original(self, owner_id: uuid.UUID, intent: IntentRow,
                             envelope: dict[str, Any]) -> ReconcileView:
@@ -635,6 +635,14 @@ class ConnectedExecution:
         clients = self._ports.original_clients(intent.agent_id)
         if clients is None:
             raise JobRefused("receipt_unavailable")
+        if envelope.get("stage") == "REFUSED_UNSENT" or (envelope.get("in_flight") and not envelope.get(
+                "transaction_hash")):
+            # A proved refusal is already settled, and an attempt still in flight has no identity to observe yet:
+            # neither gets new evidence, so nothing interrupts or rewrites the original.
+            case = self._services.recovery.status(owner_id, intent.action_id)
+            return ReconcileView(action_id=intent.action_id, receipt_outcome="NOT_OBSERVED", case_state=case.state,
+                                 decision_status=case.decision_status, applied=False, duplicate=False,
+                                 detail="ORIGINAL_IN_FLIGHT" if envelope.get("in_flight") else "ORIGINAL_REFUSED_UNSENT")
         base = dict(action_id=intent.action_id, binding=IdentityBinding.model_validate(intent.payload["binding"]),
                     operation=intent.operation, revision_id=intent.revision_id, policy_binding=intent.policy_binding,
                     payload_hash=intent.payload_hash, observed_at=utc_iso(self._clock()))
@@ -644,13 +652,12 @@ class ConnectedExecution:
                                        source_ref="original-receipt:none")
             return self._apply(owner_id, intent.action_id, evidence, "SUBMISSION_UNKNOWN")
         reading = read_original_receipt(envelope, clients[0].observer)
-        verdict = reading.verdict
-        if verdict.state == ObservationState.REJECTED:
+        verdict, outcome = reading.verdict, reading.outcome
+        if outcome == "REJECTED":
             case = self._services.recovery.status(owner_id, intent.action_id)
             return ReconcileView(action_id=intent.action_id, receipt_outcome="REJECTED", case_state=case.state,
                                  decision_status=case.decision_status, applied=False, duplicate=False,
                                  detail=";".join(verdict.reasons))
-        outcome = RECEIPT_OUTCOMES[verdict.state]
         known = outcome in ("CONFIRMED", "REVERTED")
         evidence = OutcomeEvidence(
             **base, outcome=outcome, detail=f"receipt:{verdict.state.value}:{','.join(verdict.reasons) or 'BOUND'}"[:200],
