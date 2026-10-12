@@ -12,7 +12,7 @@ Sources: `PV-CREATE`, `PV-WALLET`, `PV-SRV`, `PV-CS` (rechecked 2026-10-12); acc
 | Application authorization key | A private key the service uses to sign API requests. | The Edge OS service. | Authenticates server-side requests. It is not the user's EVM key. |
 | Policy-resource owner (`owner_id` of a policy) | The authorization signature required to modify the policy. Optional. | A user, a server key, or a key quorum. | When absent, the app secret alone can update the policy (PV-CREATE). |
 | Wallet owner (`owner_id`, `user_id`, `public_key`, or key quorum) | Owns the wallet; can update the wallet's policies and signers. | The user (and any key quorum member). | A **satisfying** key-quorum member can update policies and signers while the user is offline (PV-SRV). |
-| Additional signer (`signer_id`, a key quorum) | A signer added to a user-owned wallet, optionally with `override_policy_ids`. | The wallet owner authorizes the attachment. | Cannot change the wallet owner, its signers or its policies, and cannot export the key (R2). |
+| Additional signer (`signer_id`, a key quorum) | A signer added to a user-owned wallet, optionally with `override_policy_ids`. | The wallet owner authorizes the attachment. | Cannot change the wallet owner, its signers or its policies, and cannot export the key (`docs/research/PRIVY_AND_AGENT_EXECUTION_PATTERNS.md` §"Privy authorization models"; R2 shows removal and denial, not these limits directly). |
 | Condition-set owner | Required to create a condition set; updates need an authorization signature (PV-CS). | Listed owner. | If `in_condition_set` is used, this is a second resource to separate. |
 
 ## 2. The exact control hypothesis

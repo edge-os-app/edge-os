@@ -2,7 +2,7 @@
 
 Task `POLICY-PREP-L3-20261012-01` v1, P21/P20/#58. Prepared 2026-10-12. This file records only the sources this preparation rechecked on 2026-10-12. It reuses, and does not overwrite, the accepted pins in [`../route-restrictions/SOURCE_EVIDENCE.md`](../route-restrictions/SOURCE_EVIDENCE.md).
 
-Evidence vocabulary: `DOCUMENTED` (an official page describes the behavior), `SOURCE_INSPECTED` (a pinned public source shows it), `LOCAL_TESTED` (the accepted offline module exercised it), `PROVIDER_ACTUAL` (an approved provider call produced it), `NOT_RUN` (no evidence). This preparation added no `PROVIDER_ACTUAL` evidence.
+Evidence vocabulary: `DOCUMENTED` (an official page describes the behavior), `SOURCE_INSPECTED` (a pinned public source shows it), `LOCAL_TESTED` (the accepted offline module exercised it), `PROVIDER_ACTUAL` (an approved provider call produced it), `NOT_RUN` (no evidence). The capability matrix also uses `UNKNOWN` (a required behaviour with no reviewed evidence) and `UNSUPPORTED` (the independent layer cannot express it). This preparation added no `PROVIDER_ACTUAL` evidence.
 
 ## 1. Retrieval tools
 
@@ -41,7 +41,7 @@ These pages are rolling and publish no version pin. Claims below are `DOCUMENTED
 
 | ID | URL or pin | Result |
 |---|---|---|
-| K1 | https://docs.kuru.io/contracts/Contract-addresses | Mainnet Flow addresses unchanged: `KuruFlowEntrypoint (Aggregator)` `0xb3e6778480b2E488385E8205eA05E20060B813cb`; `KuruFlowRouter` `0x0d3a1BE29E9dEd63c7a5678b31e847D68F71FFa2`; `KuruForwarder` `0x974E61BBa9C4704E8Bcc1923fdC3527B41323FAA`. Testnet page still lists **no Flow entrypoint or router**. Official tokens: USDC `0x754704Bc059F8C67012fEd69BC8A327a5aafb603`, WMON `0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A`. |
+| K1 | https://docs.kuru.io/contracts/Contract-addresses | Mainnet Flow addresses unchanged: `KuruFlowEntrypoint (Aggregator)` `0xb3e6778480b2E488385E8205eA05E20060B813cb`; `KuruFlowRouter` `0x0d3a1BE29E9dEd63c7a5678b31e847D68F71FFa2`; `KuruForwarder` `0x974E61BBa9C4704E8Bcc1923fdC3527B41323FAA`. Testnet page still lists **no Flow entrypoint and no `KuruFlowRouter`** (it does list the core market `Router` `0x7EFbE105Ca7415dE98F96622173458ac1c054630`). Official tokens: USDC `0x754704Bc059F8C67012fEd69BC8A327a5aafb603`, WMON `0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A`. |
 | K4 | https://docs.monad.xyz/developer-essentials/network-information | Mainnet chain `143`; WMON `0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A`; current version `v0.15.2` / `MONAD_NINE`. |
 | S1 | `Kuru-contracts-flow-public` commit `70bc0c93c073f78697b99848eedefbf5dbe698c7`, `src/entrypoint/KuruFlowEntrypoint.sol` | SHA256 `15e19667ee20389b396a51143dccf7bbd31a701c610f1d78978c84f3b7fd1841` — **matches the retained P20 pin**. |
 | S2 | same commit, `src/entrypoint/KuruFlowEntrypointTypes.sol` | SHA256 `44d913012de00a2814e62f1e9c45c4408c8407c0457325de41efabecd05df1ac` — **matches the retained P20 pin**. |

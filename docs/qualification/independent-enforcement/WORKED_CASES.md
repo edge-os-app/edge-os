@@ -24,7 +24,7 @@ A local `AUTHORED_POLICY_ALLOW` is authored behaviour only. It is never an indep
 
 | Group | Cases | Expected local | Expected independent | Distinguishing evidence |
 |---|---|---|---|---|
-| Positive | `positive_execute_swap`, `positive_receiver` | `AUTHORED_POLICY_ALLOW` | `PROVIDER_POSITIVE_REQUIRED` | A provider-signed positive the policy allows. Included so a refusal-only policy cannot pass. |
+| Positive | `positive_execute_swap`, `positive_receiver` | `AUTHORED_POLICY_ALLOW` | `PROVIDER_POSITIVE_REQUIRED` | A provider-signed positive the policy allows. Included so a refusal-only policy cannot pass. `positive_receiver` evaluates under the receiver-method request build (the accepted `test_local_evaluation.py` receiver test shows the same dependency). |
 | Route bytes | `changed_program` | `BLOCKED` | `DENY_REQUIRED` | Isolated provider denial for changed `program` bytes. |
 | Input/output assets | `changed_input_asset`, `changed_output_asset` | `BLOCKED` | `DENY_REQUIRED` | Provider denial on the changed tuple token path. |
 | Amounts / min output | `changed_amount_user_sells`, `changed_min_output` | `BLOCKED` | `DENY_REQUIRED` | Provider denial on the changed tuple numeric path. |
@@ -33,6 +33,8 @@ A local `AUTHORED_POLICY_ALLOW` is authored behaviour only. It is never an indep
 | Native value | `native_value_zero`, `native_value_high`, `native_value_missing`, `erc20_value_nonzero` | `BLOCKED` | `DENY_REQUIRED` | Provider denial on value mismatch; native notional and gas stay separate. |
 | Chain/contract/function | `wrong_chain`, `wrong_contract`, `wrong_function`, `wrong_rpc_method` | `BLOCKED` | `DENY_REQUIRED` | Provider denial per wrong dimension. |
 | Approvals | `approvals_unexpressible` | `NOT_APPLICABLE` | `UNSUPPORTED` | No field source reads allowance. |
+| Capacity | `capacity_unset` | `NOT_APPLICABLE` | `UNSUPPORTED` | The exact gas/action budget is `UNSET`; the accepted checker returns `CAPACITY_UNKNOWN`. Unknown is not zero. |
+| Position inventory | `position_inventory_unexpressible` | `NOT_APPLICABLE` | `UNSUPPORTED` | No field source reads the position ledger; `HOST`-only capacity arithmetic. |
 | Malformed decode | `malformed_program_empty`, `malformed_truncated` | `DECODE_BLOCKED` | `DENY_REQUIRED` | Provider denial on a non-decoding payload; confirm no permissive fallback signs. |
 | Expiry | `expiry_intent_past` | `HOST_BLOCKED` | `UNSUPPORTED` | No calldata time condition; expiry is `HOST`-only. |
 | Revocation | `revocation_signer_removed` | `NOT_APPLICABLE` | `DENY_REQUIRED` | Post-removal provider denial not masked by an exhausted local counter. |

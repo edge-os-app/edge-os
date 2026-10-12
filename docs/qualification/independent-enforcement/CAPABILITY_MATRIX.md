@@ -43,6 +43,7 @@ This binding constrains only the chain, the contract, the function and the nativ
 |---|---|---|
 | Units | Intent amounts are `uint256` base units. Native MON is `18` decimals (gas separate); USDC is `6` decimals. Raw amounts are canonical base-10 with no sign, float, Boolean, leading zero or trailing character. | `S2` (types), accepted adapter `types.py` |
 | Native vs token notional | The `value` condition equals the native input raw for a native input and `0` for an ERC-20 input. Gas stays separate from the token notional. | `PV-OV`; `S1` (`msg.value >= amountUserSells`) |
+| Value encoding | `UNKNOWN`: the `value` example uses a hex string (`0x2386F26FC10000`), while the accepted local model compares decimal strings. Whether the provider accepts a decimal string for `value` is not documented. | `PV-EX`; accepted `types.py`; [SOURCE_EVIDENCE.md](SOURCE_EVIDENCE.md) §2 |
 | ABI | Every `ethereum_calldata` condition must carry an `abi`. The pinned ABI is `executeSwap(intent tuple, fees tuple, bytes program)` plus `address receiver` for the receiver variant. | `PV-OV`, `PV-EX`; `S1` |
 | Calldata decode | A condition that cannot decode against the `abi` evaluates false. A typed-data mismatch also evaluates false, so a permissive `ALLOW` rule can then sign. | `PV-SP` (metric default 0), accepted P21 note P9 |
 | Aggregation decode | A metric whose field is missing or whose calldata does not match the ABI **defaults to 0** — a permissive fallthrough for aggregation-based limits. | `PV-SP` |
