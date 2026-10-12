@@ -95,7 +95,9 @@ qualified.
 | RH-HTTP-C51 | A paced fixed-length body is bounded by the deadline | `test_http_transport.py::test_transport_bounds_a_paced_fixed_length_body_by_the_deadline` |
 | RH-HTTP-C52 | A paced body drip respects the deadline at the client boundary | `test_envio_query_client.py::test_paced_body_drip_respects_the_whole_call_deadline` |
 | RH-HTTP-C53 | A paced drip is a collector TIMEOUT with one attempt and no retry | `test_envio_query_client.py::test_paced_drip_is_a_timeout_through_the_accepted_collector` |
+| RH-HTTP-C54 | The deadline watchdog is armed before the connection | `test_http_transport.py::test_transport_watchdog_is_armed_before_the_connection` |
+| RH-HTTP-C55 | The deadline watchdog covers the request/connect phase | `test_http_transport.py::test_transport_watchdog_covers_the_request_phase` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
 suite. The accepted adapter adds RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C102; this task adds
-RH-HTTP-C01 to RH-HTTP-C53 and changes no existing case.
+RH-HTTP-C01 to RH-HTTP-C55 and changes no existing case.

@@ -106,6 +106,64 @@ def test_transport_bounds_a_paced_fixed_length_body_by_the_deadline() -> None:
         assert time.monotonic() - start < 0.3
 
 
+def test_transport_watchdog_is_armed_before_the_connection() -> None:
+    called = {"request": False}
+
+    class Conn:
+        def __init__(self) -> None:
+            self.sock = None
+
+        def request(self, *_args, **_kwargs) -> None:
+            called["request"] = True
+            raise AssertionError("the deadline already passed, request must not run")
+
+        def close(self) -> None:
+            return
+
+    def connect(*_args):
+        time.sleep(0.2)  # a slow connect the watchdog cannot interrupt (no socket yet)
+        return Conn()
+
+    transport = StdlibHttpTransport(connect=connect, clock=time.monotonic)
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+    assert called["request"] is False
+
+
+def test_transport_watchdog_covers_the_request_phase() -> None:
+    class FakeSock:
+        def __init__(self) -> None:
+            self.shut = False
+
+        def shutdown(self, _how: int) -> None:
+            self.shut = True
+
+    class SlowRequest:
+        def __init__(self) -> None:
+            self.sock = FakeSock()
+
+        def request(self, *_args, **_kwargs) -> None:
+            end = time.monotonic() + 5.0
+            while time.monotonic() < end:
+                if self.sock.shut:
+                    raise OSError("socket shut down at the deadline")
+                time.sleep(0.005)
+
+        def getresponse(self):
+            raise AssertionError("must not reach the response phase")
+
+        def close(self) -> None:
+            return
+
+    connection = SlowRequest()
+    transport = StdlibHttpTransport(connect=lambda *_args: connection, clock=time.monotonic)
+    start = time.monotonic()
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+    assert time.monotonic() - start < 0.3
+    assert connection.sock.shut is True
+
+
 def test_transport_cancels_before_opening_a_socket() -> None:
     called = {"connect": False}
 

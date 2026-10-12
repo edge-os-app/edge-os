@@ -5,19 +5,23 @@ through ``http.client`` and is used only when a caller injects it into a client
 with an explicit endpoint. It performs no I/O at import or construction, reads no
 credential and holds no default endpoint.
 
-Every request is bounded by one absolute monotonic deadline that covers connect,
-request transmission, the response-header phase and the body. A paced peer that
-keeps every individual receive under a socket timeout must not hold the call: a
-per-call daemon ``threading.Timer`` shuts the socket down at the deadline. Its
-containment is frozen: one timer per admitted call, cancelled in ``finally``; the
-callback performs one ``shutdown`` only, with no join, DNS, read or close; the
-connection is closed by the caller's ``finally`` and is never reused. A
-remaining-time check before the connect avoids the negative-timeout race. The
-retained body is capped while streaming. Redirects are never followed. A caller
-cancellation flag is checked before the socket opens and between body reads. A
-malformed HTTP framing reply is refused as a provider error rather than escaping as
-an undocumented exception. Provider-controlled text is never copied into an error
-message.
+Every request is bounded by one absolute monotonic deadline. A per-call daemon
+``threading.Timer`` is armed before the connection and shuts the socket down at the
+deadline, so a paced peer that keeps every individual receive under a socket
+timeout cannot hold the call: it covers the TLS handshake, request transmission,
+the status/header phase and the body. Its containment is frozen: one timer per
+admitted call, cancelled in ``finally``; the callback performs one ``shutdown``
+only, with no join, DNS, read or close; the connection is closed by the caller's
+``finally`` and is never reused. Name resolution and the initial TCP connect run
+inside ``http.client`` before a socket exists; they are bounded by the OS resolver
+and ``connect_timeout_seconds`` but cannot be interrupted by the watchdog, so a
+hung resolver can delay the ``SourceTimeout`` until it returns (a reported
+residual). A remaining-time check before the connect makes a just-crossed deadline
+a ``SourceTimeout``. The retained body is capped while streaming. Redirects are
+never followed. A caller cancellation flag is checked before the socket opens and
+between body reads. A malformed HTTP framing reply is refused as a provider error
+rather than escaping as an undocumented exception. Provider-controlled text is
+never copied into an error message.
 """
 
 from __future__ import annotations
@@ -110,14 +114,19 @@ class StdlibHttpTransport:
             remaining = deadline - self._clock()
             if remaining <= 0:
                 raise SourceTimeout("the HTTP request exceeded its time bound")
-            connection = self._connect(parts.scheme, parts.hostname, parts.port, min(timeout, remaining))
             # A socket timeout bounds one wait, not the whole call: a paced reply
-            # resets it on every receive. A deadline watchdog closes the socket at the
-            # absolute deadline, so paced headers or a paced body cannot hold the call.
+            # resets it on every receive. Arm the deadline watchdog before the
+            # connection so it covers the connect/TLS handshake, request, header and
+            # body phases; a fired deadline sets ``expired`` and shuts the socket.
             watchdog = threading.Timer(remaining, _expire)
             watchdog.daemon = True
             watchdog.start()
+            connection = self._connect(parts.scheme, parts.hostname, parts.port, min(timeout, remaining))
+            if expired:
+                raise SourceTimeout("the HTTP request exceeded its time bound")
             connection.request(method, path, body=body, headers=dict(headers))
+            if expired:
+                raise SourceTimeout("the HTTP request exceeded its time bound")
             response = connection.getresponse()
             chunks: list[bytes] = []
             total = 0
