@@ -515,13 +515,17 @@ def _transport_summary(content: dict[str, Any]) -> dict[str, Any] | None:
         return None
     corroboration = transport["corroboration"]
     chain = transport["chain_read"] or {}
-    return {"envio_pages_framed": transport["envio"]["pages_framed"], "client_calls": transport["client_calls"],
-            "chain_id": chain.get("chain_id"), "chain_network": chain.get("network"),
-            "corroboration": {key: corroboration[key] for key in ("class", "sample_size", "population_size",
-                                                                 "mismatches")},
-            "corroboration_reason": corroboration.get("reason"),
-            "recorded_declarations": sorted(key for key, value in content["evidence_basis"].items()
-                                            if value == "RECORDED_DECLARATION")}
+    summary = {"envio_pages_framed": transport["envio"]["pages_framed"], "client_calls": transport["client_calls"],
+               "chain_id": chain.get("chain_id"), "chain_network": chain.get("network"),
+               "corroboration": {key: corroboration[key] for key in ("class", "sample_size", "population_size",
+                                                                    "mismatches")},
+               "corroboration_reason": corroboration.get("reason"),
+               "recorded_declarations": sorted(key for key, value in content["evidence_basis"].items()
+                                               if value == "RECORDED_DECLARATION")}
+    if transport.get("clients") == "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT":  # additive; recorded summaries unchanged
+        summary.update({"clients": transport["clients"], "client_classes": transport["client_classes"],
+                        "transport_label": transport["transport_label"]})
+    return summary
 
 
 def _lock_key(job_id: uuid.UUID) -> tuple[int, int]:
@@ -671,6 +675,15 @@ class InvestigationWorker:
         config = declaration.content["configuration"]
         source = history_dataset.recorded_sources().get(config["source"]["source_id"])
         frozen = declaration.content["frozen"]["source_profile_sha256"]
+        if (source is not None and source["evidence_class"] == history_dataset.HTTP_CLASS
+                and self._settings.research_source_clients != "authored_http"):
+            # The HTTP composition was removed after the job was saved: refused before any client exists.
+            _event(session, job, "SOURCE_REFUSED", {"source_id": source["source_id"],
+                                                    "reason": "history_source_unavailable"})
+            _finish(session, job, self._settings, "UNAVAILABLE", "history_source_unavailable",
+                    provider="KNOWN", compute="KNOWN")
+            session.commit()
+            return
         if source is None or history_dataset.profile_sha256(source) != frozen:
             # Checked before any attempt: nothing was collected, so the whole reservation is released.
             _event(session, job, "SOURCE_REFUSED", {"source_id": config["source"]["source_id"],
@@ -833,6 +846,13 @@ class InvestigationWorker:
         if job.state == "RESERVED" and (job.cancel_requested_at is not None or self._clock() >= job.deadline_at):
             state = "CANCELLED" if job.cancel_requested_at is not None else "DEADLINE_EXCEEDED"
             _finish(session, job, self._settings, state, f"{state.lower()}_before_collection",
+                    provider="KNOWN", compute="KNOWN")
+            session.commit()
+            return
+        if job.state == "RESERVED" and self._settings.nansen_research_mode != "authored_fixture":
+            # The composition was removed after the job was saved: refused before any effect, everything released.
+            _event(session, job, "SOURCE_REFUSED", {"tool": nansen_reports.TOOL, "reason": "nansen_research_unavailable"})
+            _finish(session, job, self._settings, "UNAVAILABLE", "nansen_research_unavailable",
                     provider="KNOWN", compute="KNOWN")
             session.commit()
             return

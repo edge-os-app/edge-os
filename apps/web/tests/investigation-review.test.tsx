@@ -5,7 +5,7 @@ import { InvestigationReview } from "../components/InvestigationReview";
 
 const mocks = vi.hoisted(() => ({ proposal: vi.fn(), list: vi.fn(), save: vi.fn(), get: vi.fn(),
   historySources: vi.fn(), historyList: vi.fn(), historySave: vi.fn(), jobs: vi.fn(), startJob: vi.fn(),
-  cancelJob: vi.fn(), budget: vi.fn(),
+  cancelJob: vi.fn(), budget: vi.fn(), nansenReports: vi.fn(), startNansen: vi.fn(), nansenReport: vi.fn(),
   effectRuns: vi.fn(), adoptEffectRun: vi.fn(), executeEffectRun: vi.fn(), getEffectRun: vi.fn(),
   ApiError: class extends Error { status = 503; detail = "Unavailable"; code = "service_unavailable"; } }));
 vi.mock("../lib/api", () => ({
@@ -28,6 +28,10 @@ vi.mock("../lib/api", () => ({
     cancelInvestigationJob: (...args: unknown[]) => mocks.cancelJob(...args),
     get: async () => ({ intake: { content: { original_request: "test request" } } }),
     researchBudget: (...args: unknown[]) => mocks.budget(...args),
+    // The Nansen report section below the history section. Its default state is empty.
+    nansenReports: (...args: unknown[]) => mocks.nansenReports(...args),
+    startNansenReport: (...args: unknown[]) => mocks.startNansen(...args),
+    nansenReport: (...args: unknown[]) => mocks.nansenReport(...args),
   },
 }));
 
@@ -98,6 +102,8 @@ const saved = {
 beforeEach(() => {
   mocks.historySources.mockReset().mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [] });
   mocks.historyList.mockReset().mockResolvedValue({ declarations: [] });
+  mocks.nansenReports.mockReset().mockResolvedValue({ jobs: [] });
+  mocks.startNansen.mockReset(); mocks.nansenReport.mockReset();
   mocks.historySave.mockReset(); mocks.startJob.mockReset(); mocks.cancelJob.mockReset();
   mocks.jobs.mockReset().mockResolvedValue({ jobs: [] });
   mocks.budget.mockReset().mockResolvedValue(null);
@@ -504,6 +510,32 @@ describe("native recorded source (SOURCE-LOCAL)", () => {
     expect(facts).toHaveTextContent("receipt corroboration SAMPLED, 8 of 24 checked, 0 mismatches");
     expect(facts).toHaveTextContent("Recorded declarations, not read by the application: decimals, pool tokens.");
     expect(screen.getByText(/LIMITED, UNAVAILABLE_LIMITED_DATA/)).toBeInTheDocument();
+  });
+
+  it("labels facts from the P07 HTTP clients as authored responses and disables an unavailable source", async () => {
+    const user = userEvent.setup();
+    const HTTP = { ...NATIVE, source_id: "native-http-qualified/1", title: "Native recording through the HTTP clients",
+      evidence_class: "AUTHORED_HTTP_RESPONSE", available: false,
+      transport: { ...NATIVE.transport, clients: "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT" } };
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE, NATIVE, HTTP] });
+    const dataset = { dataset_id: "ds-h", content_sha256: "s", hashes_verified: {}, summary: { source_id: HTTP.source_id,
+      status: "COMPLETE", stop_reason: "COMPLETE", verdict: { overall: "QUALIFIED" }, binding_state: "BOUND",
+      unavailable_states: [], provider_requests: { ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 25 },
+      provider_requests_state: "MEASURED_CLIENT_CALLS", evidence_class: "AUTHORED_HTTP_RESPONSE", content_label: "SYNTHETIC_FIXTURE" },
+      transport: { envio_pages_framed: 2, client_calls: { ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 25 }, chain_id: 143, chain_network: "MONAD",
+        corroboration: { class: "COMPLETE", sample_size: 24, population_size: 24, mismatches: 0 }, corroboration_reason: null,
+        recorded_declarations: ["decimals"], clients: "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT",
+        client_classes: { ENVIO_HYPERSYNC: "HttpEnvioQueryClient", QUICKNODE_JSON_RPC: "HttpQuickNodeRpcClient" },
+        transport_label: "AUTHORED_HTTP_TRANSPORT" } };
+    mocks.jobs.mockResolvedValue({ jobs: [job("REPORTED", { dataset })] });
+    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    const option = await screen.findByRole("option", { name: /HTTP clients \(not available on this server\)/ });
+    expect(option).toBeDisabled();
+    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    const facts = await screen.findByTestId("history-transport");
+    expect(facts).toHaveTextContent("Authored HTTP responses served on this server through the accepted P07 HTTP clients (HttpEnvioQueryClient, HttpQuickNodeRpcClient), no network. Not provider data:");
+    expect(facts).not.toHaveTextContent("Native recording, replayed locally");
   });
 });
 

@@ -124,6 +124,27 @@ where d.content->>'evidence_class' = 'RECORDED_NATIVE_RESPONSE';
 
 Native fault cases (malformed page, wrong chain echo, provider failure, receipt mismatch, RPC failure, RPC on another chain, sampled corroboration, too few requests, cancellation, deadline, killed worker, other owner) are proved by `apps/api/tests/test_native_source_journey.py`, not by the mapped run.
 
+## P07 HTTP clients and Nansen reports in the application (#58 RESEARCH-PORTS-LOCAL)
+
+The research phase sets `EDGE_OS_RESEARCH_SOURCE_CLIENTS=authored_http` and `EDGE_OS_NANSEN_RESEARCH_MODE=authored_fixture` for this isolated run (production refuses both). Every reply is AUTHORED and served inside the API process at `.invalid` endpoints; nothing reaches a network or a provider. The verifier mints one more owner per width (`did:privy:test-ports-desktop`, `did:privy:test-ports-mobile-390`), so the HTTP-client job (27 requests) and the Nansen report (4 requests, 12 credits) fit that owner's budget.
+
+| Feature | Screen path | API | Tables | Expected | After restart | Evidence |
+|---|---|---|---|---|---|---|
+| Declare on the HTTP-client source | Research request → Recorded source = "Native recording through the HTTP clients (authored transport, qualifies)" → own rule → adopt → Save → Start investigation job | `GET /v1/research/history-sources` (`source_clients` `authored_http`, `available: true`), `POST …/history-investigations`, `POST …/jobs` | `investigation_declarations`, `investigation_jobs` (`kind` `HISTORY_INVESTIGATION`) | source class `AUTHORED_HTTP_RESPONSE`; "accepted P07 HTTP clients over authored responses"; reserved 27 | — | `*-rg-p1-http-declared.png` |
+| HTTP-client dataset | One worker pass, open the declaration | `GET /v1/research/investigation-jobs/{id}`, `GET /v1/research/history-datasets/{id}` | `history_datasets` | REPORTED, QUALIFIED; `transport.clients` `P07_HTTP_CLIENTS_AUTHORED_TRANSPORT`, classes `HttpEnvioQueryClient`/`HttpQuickNodeRpcClient`, label `AUTHORED_HTTP_TRANSPORT`, 27 response hashes, accounting unknown 0; usage MEASURED 27; no bearer value | byte-equal | `research-ports-inspection.json`, `*-rg-p3-http-report.png` |
+| Save a Nansen report | Same request → "Token holder and flow report" → token, symbol, records, credit limit → Save and reserve this report | `POST /v1/research/requests/{intake}/nansen-reports` | `nansen_requests`, `investigation_jobs` (`kind` `NANSEN_REPORT`), `usage_local.usage_reservations` | RESERVED, "No report yet."; reserved `nansen_credits` 12 | — | `*-rg-p2-nansen-reserved.png` |
+| Open the saved Nansen report | One worker pass → Open saved report | `GET …/nansen-reports`, `GET /v1/research/nansen-reports/{id}` | `nansen_reports`, `usage_local.usage_allocations` | question = the saved request text; "requests KNOWN 2 · credits KNOWN 6"; findings incl. Unresolved; "3 holder address records (not people, not amounts)"; "24 of 24 flow periods"; hashes recomputed; `AUTHORED_FIXTURE`; global credit ledger consumed 12, unknown 0 | reopens equal, one `ATTEMPT_STARTED` | `research-ports-inspection.json`, `*-rg-p4-nansen-report.png`, `*-rg-p5-ports-reopened.png` |
+| Other owner | Owner B reads the report, job, report list and dataset | `GET` → 404 | none | not found | 404 | `ui-research-ports-report.log` |
+| Leak scan | — | — | — | no `authored-local-fixture` or `x-nansen-credits-remaining` in logs or browser results | — | `steps.json` |
+
+```sql
+select j.kind, j.state, j.budget->'consumed', r.content->'report'->>'question', r.content->'settlement'
+from research_local.investigation_jobs j join research_local.nansen_reports r on r.job_id = j.job_id;
+select scope, reserved, consumed, unknown from usage_local.usage_allocations where resource = 'nansen_credits';
+```
+
+Fault cases (401/402/403/429, malformed and oversized replies, lost replies, missing credit header, cancel and deadline, killed worker, invalid request, budget refusal, repeated key, other owner, removed composition, production refusal, HTTP dataset adoption and replay) are proved by `apps/api/tests/test_research_ports_journey.py`, not by the mapped run.
+
 ## Original transaction, receipts and current holdings (#58 ORIGINAL-LOCAL)
 
 The verifier copies the AUTHORED recordings `apps/api/tests/fixtures/original_transaction/original_transaction_v1.json` into `<evidence>/original-recordings/` and sets `EDGE_OS_ORIGINAL_RECORDINGS_DIR` (local fixture mode only; production refuses it). Agents whose id contains `fx-original` get the fixture wallet's authored public test-signer address `0x2c7536E3605D9C16a7a3D7b1898e529396a65c23` and use offline recorded clients (route quote, `eth_signTransaction` reply, JSON-RPC). The clients append every call to `calls.jsonl` and every accepted send to `broadcasts.jsonl` in that folder. Nothing signs with a real key, sends a transaction or reads a chain.

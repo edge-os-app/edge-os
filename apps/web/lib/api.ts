@@ -65,12 +65,16 @@ export interface HistorySource {
   profile_sha256: string; market: HistoryMarket; window: { start: string; end: string }; history_provider: string;
   page_requests_recorded: number;
   transport: null | { history_provider: string; provider_version: string; corroboration_provider: string;
-    corroboration_sample_size: number; provider_requests_needed: number };
+    corroboration_sample_size: number; provider_requests_needed: number; clients?: "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT" };
+  /** False when this server has no composition for the source; a job on it is refused before any effect. */
+  available?: boolean;
 }
 export interface TransportSummary {
   envio_pages_framed: number; client_calls: Record<string, number>; chain_id: number | null; chain_network: string | null;
   corroboration: { class: string; sample_size: number; population_size: number; mismatches: number };
   corroboration_reason: string | null; recorded_declarations: string[];
+  /** Present only when the accepted P07 HTTP clients served the calls over the application's authored transport. */
+  clients?: "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"; client_classes?: Record<string, string>; transport_label?: string;
 }
 export interface HistoryRule {
   evaluation_id: string; trial_id: string; variant_id: string; price_expression: Record<string, unknown>;
@@ -123,6 +127,39 @@ export interface InvestigationJob {
       provider_requests_state: string; evidence_class: string; content_label: string };
     transport: TransportSummary | null };
   report: InvestigationReport | null;
+  kind?: "HISTORY_INVESTIGATION" | "NANSEN_REPORT";
+  nansen_report?: NansenReportSummary | null;
+}
+// #58 RESEARCH-PORTS-LOCAL Nansen reports: AUTHORED replies replayed locally; never provider data.
+export interface NansenSettlement {
+  provider_requests: { state: string; measured: number; lost: number };
+  nansen_credits: { state: string; measured: number; deducted: string | null; reserved_by_package: string };
+}
+export interface NansenReportSummary {
+  report_id: string; content_sha256: string; answer_state: string; question: string; token_symbol: string;
+  evidence_class: string; settlement: NansenSettlement;
+  outcomes: { operation: string; status: string; stop_reason: string | null }[];
+}
+export interface NansenFinding { code: string; verdict: string; statement: string; source_refs: string[]; limitations: string[] }
+export interface NansenReportRecord {
+  report_id: string; job_id: string; content_sha256: string; hashes_verified: Record<string, boolean>; created_at: string;
+  content: {
+    evidence_class: string; transport_label: string; notice: string; request_sha256: string; report_sha256: string;
+    settlement: NansenSettlement; outcomes: NansenReportSummary["outcomes"];
+    report: { question: string; token_address: string; token_symbol: string; answer_state: string;
+      window: { start_utc: string; end_utc: string }; findings: NansenFinding[];
+      limitations: { claim: string; missing_dependency: string }[]; unknowns: string[];
+      coverage: { attempts: number; pages: number; holder_rows: number; flow_buckets: number; expected_buckets: number;
+        missing_buckets: number; incomplete_buckets: number; complete_seconds: number | null;
+        pagination_is_last_page: boolean | null; stop_reason: string | null };
+      source_hashes: string[] };
+  };
+}
+export interface NansenReportBody {
+  operation_id: string; request_key: string; token_address: string; token_symbol: string;
+  window: { start_utc: string; end_utc: string }; operations: ("holders" | "flows")[];
+  limits: { max_requests: number; max_pages: number; max_bytes: number; max_credits: string; per_page: number };
+  deadline_seconds: number; compute_seconds: number;
 }
 export interface DatasetSummary {
   dataset_id: string; created_at: string; content_sha256: string; hashes_verified: Record<string, boolean>;
@@ -184,6 +221,11 @@ export const api = {
   investigationJob: (jobId: string) => request<InvestigationJob>(`/v1/research/investigation-jobs/${jobId}`).then((r) => r.body),
   cancelInvestigationJob: (jobId: string) =>
     request<InvestigationJob>(`/v1/research/investigation-jobs/${jobId}/cancel`, { method: "POST" }).then((r) => r.body),
+  nansenReports: (id: string) =>
+    request<{ jobs: InvestigationJob[] }>(`/v1/research/requests/${id}/nansen-reports`).then((r) => r.body),
+  startNansenReport: (id: string, body: NansenReportBody) =>
+    request<InvestigationJob>(`/v1/research/requests/${id}/nansen-reports`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  nansenReport: (reportId: string) => request<NansenReportRecord>(`/v1/research/nansen-reports/${reportId}`).then((r) => r.body),
   investigationReport: (reportId: string) =>
     request<InvestigationReport>(`/v1/research/investigation-reports/${reportId}`).then((r) => r.body),
   historyDatasets: () => request<{ datasets: DatasetSummary[] }>("/v1/research/history-datasets").then((r) => r.body),
