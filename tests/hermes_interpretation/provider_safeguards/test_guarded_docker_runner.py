@@ -1710,3 +1710,21 @@ def test_a_credential_hidden_by_json_escapes_in_the_result_is_caught_after_decod
 
     assert (result.status, result.error_class, result.text) == ("UNKNOWN", "CredentialEchoed", None)
     assert OLD not in json_module.dumps(dict(result.observed))
+
+
+@pytest.mark.parametrize("form", ["hex", "base64", "reversed", "upper"])
+def test_an_encoded_credential_hidden_by_one_json_escape_is_caught_after_decoding(tmp_path: Path, monkeypatch, form: str) -> None:
+    import base64 as b64
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    encoded = {"hex": OLD.encode().hex(), "base64": b64.b64encode(OLD.encode()).decode(), "reversed": OLD[::-1],
+               "upper": OLD.upper()}[form]
+    hidden = encoded[:4] + "\\u%04x" % ord(encoded[4]) + encoded[5:]  # one escaped character hides it from the byte scan
+
+    install_process(monkeypatch, lambda output: (output / "container-result.json").write_text(
+        '{"hermes": {"text": "' + hidden + '"}, "guard": {}}'), returncode=0)
+    runner, _, _ = build(tmp_path, credential)
+
+    result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert (result.status, result.error_class, result.text) == ("UNKNOWN", "CredentialEchoed", None)

@@ -542,13 +542,18 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     @staticmethod
     def _holds_secret(value: Any, secret: str) -> bool:
-        """True when the credential appears in any decoded string of the result, key or value, at any depth."""
-        lowered = secret.lower()
+        """True when any decoded string of the result, key or value, at any depth, holds the credential in any form.
+
+        It uses the same forms as sealing (`leak_scan.encodings`), compared without regard to case, so the two checks
+        agree on what "holds the credential" means. Decoding can undo escapes that hid a form from the byte scan.
+        """
+        forms = [form.lower() for form in encodings(secret)]
         pending = [value]
         while pending:
             item = pending.pop()
             if isinstance(item, str):
-                if lowered in item.lower():
+                data = item.encode("utf-8", "surrogatepass").lower()
+                if any(form in data for form in forms):
                     return True
             elif isinstance(item, dict):
                 pending.extend(item.keys())
