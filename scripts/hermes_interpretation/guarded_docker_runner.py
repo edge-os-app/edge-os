@@ -27,6 +27,7 @@ import json
 import math
 import os
 import re
+from glob import escape as glob_escape
 import resource
 import selectors
 import shutil
@@ -615,6 +616,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     # --- Supervised recovery ------------------------------------------------------------------------------------
 
+    def _quarantine_folders_of(self, turn: str) -> list[Path]:
+        """Exactly the quarantine folders this runner makes for one turn: `quarantine-<turn>-held` and
+        `quarantine-<turn>-<6 hex digits>`. A prefix match would also take another turn's folders (`turn-01-x` is a
+        prefix of `turn-01-x-y`); these exact names cannot collide between different turn names."""
+        exact = re.compile(rf"quarantine-{re.escape(turn)}-(held|[0-9a-f]{{6}})")
+        return [path for path in sorted(self.evidence_dir.glob(f"quarantine-{glob_escape(turn)}-*"))
+                if exact.fullmatch(path.name)]
+
     def _pending_folder(self) -> Path:
         return self.evidence_dir / PENDING_FOLDER
 
@@ -702,7 +711,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         if data is None:
             return  # the registered record stays as it was: the identity is not lost
         data["state"] = "pending"
-        data["held"] = sorted(held.name for held in self.evidence_dir.glob(f"quarantine-{task_dir.name}-*"))
+        data["held"] = sorted(held.name for held in self._quarantine_folders_of(task_dir.name))
         try:
             self._write_record(path, data)
         except OSError:
@@ -915,7 +924,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         if stopping["container_absent"]:
             turn_folder = self.evidence_dir / str(data.get("turn_folder"))
             targets = [turn_folder / "output", *(self.evidence_dir / str(name) for name in data.get("held") or []),
-                       *self.evidence_dir.glob(f"quarantine-{turn_folder.name}-*")]
+                       *self._quarantine_folders_of(turn_folder.name)]
             for target in dict.fromkeys(targets):
                 if target.parent != self.evidence_dir and target.parent != turn_folder:
                     continue  # never outside this run's evidence folder

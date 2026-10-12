@@ -947,7 +947,13 @@ def test_a_stop_command_that_hangs_cannot_run_the_turn_past_the_job_timeout_plus
 
     assert outcome == "EvidenceNotSealed" and late <= 0.0, late
     assert (spend.state("attempt-1"), spend.committed_usd()) == ("UNKNOWN", RESERVATION)
-    assert not list(evidence.glob("turn-*/output")) and plain_bytes_leak(evidence, OLD) == []
+    assert not list(evidence.glob("turn-*/output"))
+    # Removed in time, or (when host load slows the removal) moved whole into private quarantine: never left as output.
+    assert all(plain_bytes_leak(turn, OLD) == [] for turn in evidence.glob("turn-*"))
+    assert all(held.stat().st_mode & 0o077 == 0 for held in evidence.glob("quarantine-*"))
+    GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=evidence, policy=POLICY,
+                            script_for=lambda turn: {}).purge_quarantine()
+    assert plain_bytes_leak(evidence, OLD) == []
     assert len(calls) == 1, "a second command was started after the first had used the budget"
 
 
@@ -3465,3 +3471,55 @@ def test_an_unreadable_record_at_the_shared_top_level_never_blocks_this_run_and_
     after = (folder / "turn-07-unknown.json").lstat()
     assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
     assert outside.read_text() == '{"run_id": "repair-test"}'
+
+
+
+def test_recovery_never_takes_another_turns_quarantine_folder_whose_name_starts_with_this_turns(tmp_path: Path, monkeypatch) -> None:
+    """Round-33 review B1: `turn-01-x` is a prefix of `turn-01-x-y`; only this turn's exact quarantine names count."""
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    evidence = tmp_path / "evidence"
+    foreign = [evidence / "quarantine-turn-01-x-y-held", evidence / "quarantine-turn-01-x-y-1a2b3c",
+               evidence / "quarantine-turn-01-x-yz", evidence / "quarantine-turn-01-x-heldout"]
+    for folder in foreign:
+        folder.mkdir(parents=True)
+        (folder / "evidence.log").write_text("another turn's evidence")
+    own = [evidence / "quarantine-turn-01-x-held", evidence / "quarantine-turn-01-x-abc123"]
+    for folder in own:
+        folder.mkdir(parents=True)
+        (folder / "evidence.log").write_text(OLD)
+    record = {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-x-01",
+              "turn_folder": "turn-01-x", "held": [], "state": "pending", "attempts": 0, "pid": 999_999,
+              "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}
+    (evidence / "pending-cleanup").mkdir()
+    (evidence / "pending-cleanup" / "turn-01-x.json").write_text(_json.dumps(record))  # an earlier version's layout
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.recover_pending(5.0)
+
+    assert all(not folder.exists() for folder in own)  # this turn's own quarantine is recovered
+    assert all((folder / "evidence.log").read_text() == "another turn's evidence" for folder in foreign)  # untouched
+
+
+def test_a_failed_turn_records_only_its_own_exact_quarantine_names(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    evidence = tmp_path / "evidence"
+    foreign = evidence / "quarantine-turn-01-attempt-1-y-1a2b3c"  # another turn whose name starts with this turn's
+    foreign.mkdir(parents=True)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # never stoppable: the output is held
+    staged = tmp_path / "staged"  # more entries than the foreground may delete, so the output is moved to quarantine
+    staged.mkdir()
+    for index in range(300):
+        (staged / f"f{index}.log").write_text("x")
+    (staged / "secret.log").write_text(OLD)
+    install_process(monkeypatch, lambda output: os.rename(staged, output / "many"), returncode=-9)
+    runner, _, guarded = build(tmp_path, credential, timeout_seconds=0.3, seal_grace_seconds=0.3)
+
+    with pytest.raises(EvidenceNotSealed):
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    held = _records(tmp_path)[0]["held"]
+    assert held and foreign.name not in held and all(name.startswith("quarantine-turn-01-attempt-1-") for name in held)
+    assert foreign.exists()
