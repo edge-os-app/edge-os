@@ -127,7 +127,9 @@ profit. No fresh history is qualified.
 | RH-C85 | Absent page-start block fact refused | `test_source_transport.py::test_absent_boundary_block_fact_is_refused` |
 | RH-C86 | Page past the requested end refused | `test_source_transport.py::test_page_past_the_requested_end_is_refused` |
 | RH-C87 | Reversed page refused | `test_source_transport.py::test_reversed_page_is_refused` |
+| RH-C88 | Conflicting guard timestamp refused | `test_source_transport.py::test_conflicting_guard_timestamp_is_refused` |
+| RH-C89 | Conflicting guard hash refused | `test_source_transport.py::test_conflicting_guard_hash_is_refused` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
-suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C87. Neither changes the
+suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C89. Neither changes the
 existing cases.

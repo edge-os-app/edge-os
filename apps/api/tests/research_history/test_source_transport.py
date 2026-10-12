@@ -347,3 +347,23 @@ def test_reversed_page_is_refused() -> None:
     with pytest.raises(SourceContractError) as raised:
         source.next_response(_request())
     assert raised.value.code == "PAGE_BOUNDS_CONTRADICTED"
+
+
+def test_conflicting_guard_timestamp_is_refused() -> None:
+    bad_guard = {"block_number": 103, "timestamp": support.P1_LAST_TS + 1000, "hash": support.HASH_103,
+                 "first_block_number": 100, "first_parent_hash": "0x" + "44" * 32}
+    source = EnvioHypersyncSource(FakeClient([_page1(guard=bad_guard), _page2()]))
+    result = collect(support.profile(), source, _scan(), _limits())
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+    assert result["page_count"] == 0
+
+
+def test_conflicting_guard_hash_is_refused() -> None:
+    blocks = [{"number": 100, "timestamp": support.P1_FIRST_TS},
+              {"number": support.EVENT_QUOTE_IN["block_number"], "timestamp": support.E1_TS},
+              {"number": 103, "timestamp": support.P1_LAST_TS, "hash": "0x" + "55" * 32}]
+    source = EnvioHypersyncSource(FakeClient([_page1(blocks=blocks)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "PAGE_FACTS_CONFLICT"
