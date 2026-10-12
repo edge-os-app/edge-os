@@ -10,7 +10,7 @@ It extends `docs/qualification/hermes-provider/QUALIFICATION_PROPOSAL.md` and `L
 |---|---|
 | An actual provider accepts the exact admitted request and returns a reply the bounds allow | Yes, for the cases run |
 | Reported usage and the provider's own cost match the local settlement | Yes, for the cases run, if the provider reports them |
-| The transport sends one request per attempt, no retry, no redirect, no stream | Yes, with an egress-level count (section 6) |
+| The transport sends one request per attempt, no retry, no redirect, no stream | Only with an independent HTTP request count or the provider's own request records (section 6). Otherwise UNPROVED: the claim rests on the guard only |
 | A real model keeps the user's meaning | Only through the accepted proposal's manifest and meaning check, as a separate result |
 | Production hosting, supervision, storage and egress | No. Separate production qualification |
 | Provider billing stops at a local cap | No. Only a provider-side limit can do that (section 5) |
@@ -39,7 +39,7 @@ None of this exists. Each item is a separate reviewed change.
 3. The guard policy carrying the routing fields above as `required_extra`, with tests.
 4. The spend ledger on durable shared storage with the same reserve, settle, release and reconcile rules (accepted hosting assessment).
 5. A recorded decision path that resolves an UNKNOWN reservation without late evidence (accepted proposal 9a).
-6. A release that does not trust the job alone. Locally, a reservation is released when the job reports zero requests and the guard's own count is 0; both are written inside the Hermes process. For an ACTUAL route, a release must also need a host-side egress count of zero (section 6) or the provider's own record.
+6. A release that does not trust the job alone. Locally, a reservation is released when the job reports zero requests and the guard's own count is 0; both are written inside the Hermes process. For an ACTUAL route, a release must also need independent evidence that nothing reached the provider: zero connections to the provider host at the egress control, or the provider's own records showing no request for the attempt (section 6).
 
 ## 4. Secure credential handoff (PENDING)
 
@@ -61,7 +61,7 @@ None of this exists. Each item is a separate reviewed change.
 
 ## 6. Request, response and control cases
 
-Run in this order. Cases L1-L4 need no network and must pass on the release candidate first. N1-N3 are the only network cases.
+Run in this order. L1-L4 are a local preflight: they need no network and must give their expected outcome on the release candidate before any network case. N1-N3 are the only network cases.
 
 | Case | What | Expected |
 |---|---|---|
@@ -69,11 +69,14 @@ Run in this order. Cases L1-L4 need no network and must pass on the release cand
 | L2 | Guard refusal (policy output limit 2,048), authored transport | Nothing sent; released |
 | L3 | ACTUAL route with no release identity | `ActualProviderUnavailable` before anything is built |
 | L4 | Authored lost reply, oversized reply, crash and hang | UNKNOWN, full reservation, nothing published |
-| N1 | One manifest case (`g1-concrete`) | One request at the egress count; exact settle from reported usage; reply within bound; identities equal the attempt |
+| N1 | One manifest case (`g1-concrete`) | Exactly one HTTP request for the attempt by the independent request count; exact settle from reported usage; reply within bound; identities equal the attempt |
 | N2 | The remaining manifest cases, one request each, only after N1 passes and a person reviews it | As N1, plus the accepted meaning check reported separately |
-| N3 | A provider error case, only if the provider offers a safe way to cause one | No retry; UNKNOWN, full reservation |
+| N3 | A provider error case, only if the provider offers a safe way to cause one | Exactly one HTTP request (no retry) by the independent request count; UNKNOWN, full reservation |
 
-Control: an egress proxy or packet count independent of the job (accepted hosting assessment section 4) must show exactly one connection per attempt to the provider host and none elsewhere. Without it, the "one request" claim rests on the guard only and the run reports that limit.
+Two separate controls, both independent of the job:
+
+- **Request count.** One TCP or TLS connection can carry more than one HTTP request, and a packet counter cannot see requests inside HTTPS. So the one-request claim needs either an HTTP-level count by a component that sees each request (for example a host-side relay or a proxy that terminates TLS for this run only), or the provider's own per-request records (generation or request identifiers) for the run's key, read by a person. With neither, the run labels the one-request claim UNPROVED and keeps the guard-only limit.
+- **Egress evidence.** An egress proxy or packet counter (accepted hosting assessment section 4) records connections and destinations: connections only to the provider host and none elsewhere. This is egress evidence, not a request count. Zero connections to the provider host does show that nothing reached it.
 
 ## 7. Deadlines, egress, storage, supervision, recovery
 
@@ -86,11 +89,13 @@ Control: an egress proxy or packet count independent of the job (accepted hostin
 
 ## 8. Stop conditions
 
-The accepted proposal's frozen stop rules apply (section 8 there). Add:
+**Local preflight (L1-L4).** Each case passes when it gives exactly its expected outcome in section 6: L1-L3 send zero requests, and L4's lost, oversized, crash and hang cases end UNKNOWN with the full reservation and nothing published. These refusals and lost replies are the expected results there, not stop events. The preflight stops, and no network case starts, on any unexpected local outcome: a request reaching the authored transport in L1 or L2, anything built in L3, a released reservation or published text in L4, a credential form in evidence, or a leftover container.
+
+**Network cases (N1-N3).** The accepted proposal's frozen stop rules apply (section 8 there). Add:
 
 1. any transport refusal of a reply (`reply_too_large`, `reply_not_a_json_object`, `reply_status_invalid`);
 2. any `TransportLost` or `TransportIdentityMismatch`;
-3. an egress count other than one for an attempt;
+3. an independent HTTP request count other than the expected one per attempt, or a connection to any host other than the provider;
 4. any credential form found in evidence by sealing or the leak scan;
 5. a provider 403 for a key limit (the ceiling worked: stop and report).
 
@@ -98,7 +103,7 @@ Stop the whole batch, send nothing more, report to the controller.
 
 ## 9. Evidence to keep
 
-Per attempt: the attempt rows, the ledger events, the guard and transport evidence (hashes, sizes, header names only), the wire body hash and size, the reply status and size, reported usage and the provider's cost field, the egress count, the container lifecycle, D and C timings, and any overrun with its measured value. Keep real-provider evidence in its own private folder and label, separate from authored runs.
+Per attempt: the attempt rows, the ledger events, the guard and transport evidence (hashes, sizes, header names only), the wire body hash and size, the reply status and size, reported usage and the provider's cost field, the independent request count (or the provider's request records, or the UNPROVED label), the egress connection and destination record, the container lifecycle, D and C timings, and any overrun with its measured value. Keep real-provider evidence in its own private folder and label, separate from authored runs.
 
 ## 10. Decisions required from the builder
 
