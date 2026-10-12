@@ -332,6 +332,57 @@ Byte-identical resend is disabled in this milestone. A restart finds the IN_FLIG
 | Two owners | 404; 0 injected calls | `test_another_owner_cannot_read_or_reconcile_and_makes_no_call` |
 | Holdings identity shown apart from deposits | block, time, finality, wallet, source | `test_recorded_holdings_carry_their_observation_identity_apart_from_deposits` |
 
+## RESEARCH-PORTS-LOCAL: accepted P07 HTTP clients and Nansen reports in the application (frozen interfaces)
+
+Milestone `RELEASE-E2E-L2-20261012-RESEARCH-PORTS-LOCAL-v1`, base `f84ef41`. Local only. Every provider reply is AUTHORED and replayed by an application-owned transport; no client reaches a network, reads a credential or claims `ACTUAL_PROVIDER`. Production keeps both paths unavailable.
+
+**Configuration (local and test only; production refuses both).**
+- `research_source_clients`: `recorded` (default; the SOURCE-LOCAL recorded clients, unchanged) or `authored_http`.
+- `nansen_research_mode`: `unavailable` (default) or `authored_fixture`.
+- New caps: `research_budget_nansen_credits` (owner) and `usage_global_nansen_credits` (global), in whole credits.
+- No setting accepts an endpoint, a token or a transport. The composition module `core/research/provider_composition.py` holds the only endpoints (`https://hypersync.authored.invalid`, `https://quicknode.authored.invalid/authored`) and an authored, non-secret bearer value, and builds a fresh client per job.
+
+**P07 HTTP source (`AUTHORED_HTTP_RESPONSE`).**
+- The catalog adds `native-http-qualified/1` when `research_source_clients = authored_http`. It reuses the SOURCE-LOCAL native recording's profile, scan and declared `provider_facts`; `content_label` stays `SYNTHETIC_FIXTURE`. Existing sources keep their classes and meaning.
+- The job runs `collect_native` with the accepted `HttpEnvioQueryClient` and `HttpQuickNodeRpcClient` over `AuthoredHttpTransport`, an `HttpTransport` that answers `POST /query` with the recorded native HyperSync pages and JSON-RPC 2.0 posts with the recorded `eth_chainId` and receipts. The SOURCE-LOCAL `RequestBudget` guard still wraps both clients, so cancellation, the deadline and the declared request budget are checked before every client call, and a made call counts even when it fails. No retry.
+- `ClientBounds` come from the declaration: `deadline_seconds` = the declared deadline, `max_response_bytes` = declared `max_bytes`, `max_request_bytes` = 65536, `max_blocks_per_page` = the scan span, `connect_timeout_seconds` = min(10, deadline).
+- The dataset's `transport` adds `client_classes` (`HttpEnvioQueryClient`, `HttpQuickNodeRpcClient`), `http_accounting` (each client's `attempted_requests`, `completed_requests`, `unknown_liability`), `response_sha256` per reply and `transport_label` `AUTHORED_HTTP_TRANSPORT`. Usage is `MEASURED_CLIENT_CALLS` only when every made call completed; any client `unknown_liability` makes it `UNKNOWN` (whole reservation kept).
+- Provider failures keep their stable codes (`AUTH_DENIED`, `PAYMENT_REQUIRED`, `RATE_LIMITED`, `OVERSIZED_RESPONSE`, `MALFORMED_PROVIDER_RESPONSE`, …) through the accepted P07 stop path; no provider text, endpoint path or token reaches the dataset, API, browser or log. DNS/connect containment limits stay as the P07 note records (not exercised: the authored transport opens no socket).
+
+**Nansen report job (`NANSEN_REPORT`).**
+- `POST /v1/research/requests/{intake_id}/nansen-reports` with `{request_key, operation_id, token_address, token_symbol, window {start_utc, end_utc}, operations [holders|flows], holder_query?, flow_query?, limits {max_requests, max_pages, max_bytes, max_credits, per_page}, deadline_seconds, compute_seconds}`. The question is the saved request's exact text; the owner is the verified principal. Body fields outside the model are 422. `NansenRequest.validate()` errors are 422 with their stable code, before any reservation.
+- One original job per owner, request and `request_key` (same body → the original job; changed body → 409 `request_key_reused`). The job is an `investigation_jobs` row with `kind = NANSEN_REPORT` and `declaration_id` = the saved `nansen_requests` row (migration 0011 adds `kind`, `nansen_requests` and `nansen_reports`). Existing rows read as `HISTORY_INVESTIGATION`.
+- Before any provider effect the owner and global quotas reserve `provider_requests = max_requests`, `compute_seconds`, `nansen_credits = ceil(max_credits)`; a refusal saves the job `BUDGET_EXHAUSTED`.
+- The worker saves `ATTEMPT_STARTED` (tool `run_nansen_research`) before `run_research` runs, over `AuthoredNansenTransport` behind a guard that refuses before the next request on cancellation (`NansenCancelled`) or the job deadline (`NansenTimeout`). Nothing is retried.
+- Saved `nansen_reports` row: `request` (`nansen-research-request/1`), `evidence` (`nansen-research-evidence/1`), `report` (`nansen-research-report/1`), their package SHA-256 values (`canonical_sha256`), the record-contract `content_sha256`, `evidence_class` `AUTHORED_FIXTURE` and the transport label. Reopening reads this row; it never calls the transport or charges again.
+- Settlement: `provider_requests` KNOWN = attempted requests only when every attempt received a reply, else UNKNOWN (whole reservation). `nansen_credits` KNOWN = ceil(sum of deducted credits) only when every attempt reported a valid deducted-credit header, else UNKNOWN (whole credit reservation kept; never zero). Compute settles as for history jobs.
+- A worker stopped during the attempt resumes as `OUTCOME_UNKNOWN`: provider and credit reservations stay unknown liability, no second run.
+- The report view shows the exact question, `answer_state`, findings with verdicts and source references, limitations, coverage, unknowns, credit and request accounting and the labels `AUTHORED_FIXTURE` and "not provider data". Address counts are record counts; amounts keep raw text and unresolved verdicts. Nansen facts never enter a P07 dataset, a market adoption, a rule revision or a replay.
+
+**P27 forward observation (types only).** `research/forward_observation.py` freezes `ForwardObservation` (network, market binding, base/quote assets and units, event, collected_at, observed_at, finality, coverage, evidence_class, age_seconds, availability) and `forward_observation_from(source)`, which returns `UNAVAILABLE` with a reason for every historical, recorded, authored or Nansen source. No forward polling or scheduler is added.
+
+**Fault matrix** (each row names its test; the public route is the assertion, SQL is independent evidence):
+
+| Case | Expected |
+|---|---|
+| HTTP source job, happy path | REPORTED; dataset `client_classes` HTTP; calls Envio 2 / QuickNode 25 through the HTTP clients; corroboration COMPLETE; usage MEASURED_CLIENT_CALLS; replay labelled |
+| HTTP 401/402/429, oversized, malformed page | stable P07 stop code; partial dataset; no retry; no provider text saved |
+| HTTP lost reply (transport raises after send) | client unknown_liability 1 → usage UNKNOWN, reservation kept |
+| Cancel / deadline before a client call | refused before the call; counts unchanged |
+| Configuration `recorded` | HTTP source absent from the catalog; existing journeys unchanged |
+| Production with either new mode | settings refuse to load |
+| Nansen job, happy path | REPORTED; report reopens byte-equal; 2 transport calls; credits KNOWN from deducted headers |
+| Nansen 401/402/403/429, malformed, wrong token echo | partial report with stable code; no retry; no payment path |
+| Nansen missing credit header, lost reply | credits UNKNOWN (whole reservation); provider requests UNKNOWN for the lost reply |
+| Nansen cancel / deadline | stop before the next request; partial report |
+| Nansen worker killed in the attempt | OUTCOME_UNKNOWN; no second run; reservations unknown |
+| Nansen invalid request (empty token, wrong window, duplicate operation, unknown operation, extra field, owner field) | 422 before any reservation; zero transport calls |
+| Nansen budget refusal | BUDGET_EXHAUSTED; zero transport calls |
+| Repeat / changed `request_key` | original job / 409 |
+| Other owner | 404 for request, job and report; zero transport calls |
+| Unsupported question clause (buying, amount, concentration) | finding UNRESOLVED, `answer_state` PARTIAL |
+| Forward observation from any current source | UNAVAILABLE with reason |
+
 ## Decisions for the builder
 
 0. One open position per agent and revision at a time is enforced by the strategy (`max_open_positions: 1`) and the worker (an exit uses the open position); repeated entry/exit cycles are now possible because each entry has its own position id.

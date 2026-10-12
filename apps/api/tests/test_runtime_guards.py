@@ -106,4 +106,4 @@ def test_drifted_workers_exit_with_code_3(env, migrated, pg):
             assert result.returncode == 3, (module, result.stderr[-500:])
             assert "schema drift" in result.stderr
     finally:
-        pg.psql("update alembic_version set version_num = '0010'")
+        pg.psql("update alembic_version set version_num = '0011'")

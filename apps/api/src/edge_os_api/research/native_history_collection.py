@@ -164,12 +164,22 @@ def _skipped_corroboration(reason: str, population: int, clock: Callable[[], str
 
 
 def collect_native(source: Mapping[str, Any], bounds: Mapping[str, Any], deadline_utc: str | None,
-                   cancelled: Callable[[], bool], clock: Callable[[], str]) -> tuple[dict[str, Any], dict[str, Any],
-                                                                                    dict[str, Any]]:
+                   cancelled: Callable[[], bool], clock: Callable[[], str],
+                   base_clients: tuple[Any, Any, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any],
+                                                                              dict[str, Any]]:
     """Collect, corroborate and qualify one native recording. Returns the collection, the P07 normalized result and
-    the transport facts. P07 partial results return; a programmer defect propagates."""
+    the transport facts. P07 partial results return; a programmer defect propagates.
+
+    `base_clients` is `(envio, quicknode, transport)` composed by the application, for example the accepted P07 HTTP
+    clients over its authored transport. Without it the recorded clients replay the recording directly. The same
+    request guard wraps either pair."""
     budget = RequestBudget(bounds["provider_requests"], cancelled, deadline_utc, clock)
-    envio = EnvioHypersyncSource(GuardedEnvioClient(RecordedEnvioClient(source["envio_pages"]), budget), clock=clock)
+    if base_clients is None:
+        base_envio, base_rpc, http = RecordedEnvioClient(source["envio_pages"]), RecordedQuickNodeClient(
+            source["quicknode"]), None
+    else:
+        base_envio, base_rpc, http = base_clients
+    envio = EnvioHypersyncSource(GuardedEnvioClient(base_envio, budget), clock=clock)
     limits = CollectionLimits(max_pages=bounds["max_pages"], max_rows=bounds["max_rows"],
                               max_bytes=bounds["max_bytes"], deadline_utc=deadline_utc)
     collection = collect(source["profile"], envio, source["scan"], limits, clock=clock)
@@ -180,7 +190,7 @@ def collect_native(source: Mapping[str, Any], bounds: Mapping[str, Any], deadlin
     elif budget.remaining < 2:
         corroboration = _skipped_corroboration("REQUEST_BUDGET_EXHAUSTED", len(records), clock)
     else:
-        rpc = GuardedQuickNodeClient(RecordedQuickNodeClient(source["quicknode"]), budget)
+        rpc = GuardedQuickNodeClient(base_rpc, budget)
         try:
             chain_read = read_chain_id(rpc)
         except Refused as refused:  # never made
@@ -212,4 +222,11 @@ def collect_native(source: Mapping[str, Any], bounds: Mapping[str, Any], deadlin
     transport = {"envio": envio.transport_record(), "chain_read": chain_read, "corroboration": corroboration,
                  "client_calls": dict(budget.calls), "request_budget": bounds["provider_requests"],
                  "clients": "RECORDED_NATIVE_CLIENTS_LOCAL", "evidence_basis": dict(EVIDENCE_BASIS)}
+    if http is not None:
+        # The accepted P07 HTTP clients served these calls over the application's authored transport (no network).
+        transport.update({
+            "clients": "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT",
+            "client_classes": {ENVIO: type(base_envio).__name__, QUICKNODE: type(base_rpc).__name__},
+            "http_accounting": {ENVIO: base_envio.accounting(), QUICKNODE: base_rpc.accounting()},
+            "response_sha256": list(http.response_sha256), "transport_label": "AUTHORED_HTTP_TRANSPORT"})
     return collection, normalized, transport

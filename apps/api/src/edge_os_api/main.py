@@ -32,7 +32,7 @@ from edge_os_api.core.authentication import Principal, Verifier, require_princip
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
 from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
 from edge_os_api.research.fixture_interpreter import samples
-from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, PublicationBody, RetryBody, SpotReplayBody
+from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, NansenReportBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
 from edge_os_api.wallet_setup import router as wallet_setup
 from edge_os_api.wallet_setup.adapter import build_wallet_provider
@@ -273,7 +273,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/research/history-sources")
     def history_sources() -> dict[str, Any]:
         """The declared recorded sources. All are SYNTHETIC recordings; none is observed market history."""
-        return {**history_dataset.catalog(), "mode": settings.research_history_mode}
+        return {**history_dataset.catalog(settings.research_source_clients == "authored_http"),
+                "mode": settings.research_history_mode, "source_clients": settings.research_source_clients}
 
     @private.post("/research/requests/{intake_id}/history-investigations")
     def save_history_investigation(intake_id: str, data: Any = Depends(read_json),
@@ -326,6 +327,25 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     def get_investigation_report(report_id: str, principal: Principal = Depends(require_principal),
                                  session: Session = Depends(get_session)) -> Any:
         return run(session, lambda: investigation_jobs.get_report(session, principal, report_id))
+
+    @private.post("/research/requests/{intake_id}/nansen-reports")
+    def start_nansen_report(intake_id: str, data: Any = Depends(read_json),
+                            principal: Principal = Depends(require_principal),
+                            session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(NansenReportBody, data)
+        status, result = run(session, lambda: investigation_jobs.start_nansen_job(
+            session, principal, settings, intake_id, body), retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
+
+    @private.get("/research/requests/{intake_id}/nansen-reports")
+    def list_nansen_reports(intake_id: str, principal: Principal = Depends(require_principal),
+                            session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.list_nansen_jobs(session, principal, intake_id))
+
+    @private.get("/research/nansen-reports/{report_id}")
+    def get_nansen_report(report_id: str, principal: Principal = Depends(require_principal),
+                          session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.get_nansen_report(session, principal, report_id))
 
     @private.get("/research/history-datasets")
     def list_history_datasets(principal: Principal = Depends(require_principal),

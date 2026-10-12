@@ -37,7 +37,9 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-RESOURCES = ("provider_requests", "compute_seconds")
+# Every resource the shared ledger knows. A caller's caps name the ones it uses: a research history job uses the
+# first two, a Nansen report job also reserves `nansen_credits` (whole credits, rounded up).
+RESOURCES = ("provider_requests", "compute_seconds", "nansen_credits")
 GLOBAL_OWNER = uuid.UUID(int=0)  # the GLOBAL scope's owner key; never a real owner id
 OPERATOR_SOURCE = "operator:"  # cap_source prefix of a cap recorded by `set-cap`
 
@@ -110,6 +112,10 @@ class Caps:
     # The GLOBAL row's key. The application always uses GLOBAL_OWNER; tests isolate a global scope with their own key.
     global_key: uuid.UUID = GLOBAL_OWNER
 
+    def resources(self) -> tuple[str, ...]:
+        """The ledger resources these caps govern, in the one global lock order."""
+        return tuple(resource for resource in RESOURCES if resource in self.owner and resource in self.global_)
+
 
 class CapMismatch(RuntimeError):
     """A stored cap differs from the configured cap. Nothing is reserved until an operator decides."""
@@ -166,9 +172,9 @@ def _allocation(session: Session, scope: str, owner_key: uuid.UUID, resource: st
 def _locked_rows(session: Session, owner_id: uuid.UUID, caps: Caps, *, check: bool = True) -> list[AllocationRow]:
     """GLOBAL rows first, then OWNER rows, each in resource order: one lock order for every process."""
     rows = [_allocation(session, "GLOBAL", caps.global_key, resource, caps.global_[resource], lock=True, check=check)
-            for resource in RESOURCES]
+            for resource in caps.resources()]
     rows += [_allocation(session, "OWNER", owner_id, resource, caps.owner[resource], lock=True, check=check)
-             for resource in RESOURCES]
+             for resource in caps.resources()]
     return rows
 
 
@@ -197,7 +203,7 @@ def reserve(session: Session, owner_id: uuid.UUID, subject_kind: str, subject_id
     if prior is not None:
         return Grant(prior, replayed=True)
     for row in rows:
-        requested = int(amounts[row.resource])
+        requested = int(amounts.get(row.resource, 0))
         if _available(row) < requested:
             refusal = Refusal(row.scope, row.resource, requested, _available(row))
             _event(session, "REFUSED", owner_id, None, {"subject": [subject_kind, subject_id],
@@ -206,10 +212,11 @@ def reserve(session: Session, owner_id: uuid.UUID, subject_kind: str, subject_id
             return refusal
     now = utcnow()
     for row in rows:
-        row.reserved += int(amounts[row.resource])
+        row.reserved += int(amounts.get(row.resource, 0))
         row.updated_at = now
     reservation = ReservationRow(reservation_id=uuid.uuid4(), owner_id=owner_id, subject_kind=subject_kind,
-                                 subject_id=subject_id, amounts={key: int(amounts[key]) for key in RESOURCES},
+                                 subject_id=subject_id,
+                                 amounts={key: int(amounts.get(key, 0)) for key in caps.resources()},
                                  settled={}, created_at=now)
     session.add(reservation)
     session.flush()
@@ -260,7 +267,7 @@ def view(session: Session, owner_id: uuid.UUID, caps: Caps) -> dict[str, Any]:
     def totals(scope: str, configured: Mapping[str, int]) -> dict[str, Any]:
         result: dict[str, Any] = {name: {} for name in ("limits", "reserved", "consumed", "unknown_liability",
                                                         "overrun", "available")}
-        for resource in RESOURCES:
+        for resource in caps.resources():
             row = by_key.get((scope, resource))
             cap = configured[resource] if row is None else row.cap
             values = (0, 0, 0, 0) if row is None else (row.reserved, row.consumed, row.unknown, row.overrun)
@@ -283,7 +290,7 @@ def cap_mismatches(session: Session, caps: Caps) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     for scope, configured, key_filter in (("GLOBAL", caps.global_, AllocationRow.owner_key == caps.global_key),
                                           ("OWNER", caps.owner, AllocationRow.scope == "OWNER")):
-        for resource in RESOURCES:
+        for resource in caps.resources():
             count = session.execute(select(func.count()).select_from(AllocationRow).where(
                 AllocationRow.scope == scope, key_filter, AllocationRow.resource == resource,
                 AllocationRow.cap != configured[resource],
