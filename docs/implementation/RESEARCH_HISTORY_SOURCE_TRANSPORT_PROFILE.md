@@ -14,7 +14,7 @@ main-branch authority.
 - Preserved: the accepted adapter public semantics (`collect`, `normalize`, `project_binding`, the manifest, the
   `ResponseSource` protocol and `RecordedResponseSource`), the P07 module, the P02 contract, the fixtures and the
   closed allowances. `#58` still owns all application wiring.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (115 tests);
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (119 tests);
   `cd docs/qualification/p07 && python3 -B -m unittest -v test_p07` passes (73 tests);
   `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs are kept under the evidence folder and
   are not part of the commit.
@@ -81,7 +81,7 @@ time field is passed through unchanged and counted; the reused decoder refuses i
 network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data`, absent or non-list `logs`,
 non-list `blocks`, a non-object block fact, a non-quantity block number or block timestamp, `next_block` not a
 positive quantity, a `rollback_guard` that is not an object, a present guard or chain echo that is not a valid
-quantity, or a present guard hash that is not text),
+quantity, or a present block hash or `first_parent_hash` that is not the pinned `0x` + 64-hex block-hash form),
 `PAGE_BOUNDS_CONTRADICTED` (an empty or reversed page, a page past the requested end, or a guard block number
 that disagrees with the page bounds), `PAGE_FACTS_CONFLICT` (the guard timestamp or hash contradicts the page-end
 block fact), `OUT_OF_RANGE_BLOCK_FACT` (a block fact outside `[from_block,

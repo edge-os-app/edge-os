@@ -138,7 +138,11 @@ profit. No fresh history is qualified.
 | RH-C96 | Nested log block identity checked | `test_quicknode_corroboration.py::test_nested_log_block_identity_is_checked` |
 | RH-C97 | Absent or non-boolean removal is a missing fact | `test_quicknode_corroboration.py::test_absent_or_non_boolean_removal_is_missing_fact` |
 | RH-C98 | Nested log missing identity is a missing fact | `test_quicknode_corroboration.py::test_nested_log_missing_identity_is_missing_fact` |
+| RH-C99 | Malformed guard hash refused | `test_source_transport.py::test_malformed_guard_hash_is_refused` |
+| RH-C100 | Malformed `first_parent_hash` refused | `test_source_transport.py::test_malformed_first_parent_hash_is_refused` |
+| RH-C101 | Malformed page-end block hash refused | `test_source_transport.py::test_malformed_end_block_hash_is_refused` |
+| RH-C102 | Absent optional hashes are allowed | `test_source_transport.py::test_absent_optional_hashes_are_allowed` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
-suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C98. Neither changes the
+suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C102. Neither changes the
 existing cases.

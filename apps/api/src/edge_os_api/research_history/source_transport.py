@@ -27,6 +27,7 @@ last block) so the edge timestamps can be proven.
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -49,6 +50,9 @@ LOG_FIELDS = ("address", "topic0", "topic1", "topic2", "topic3", "data", "block_
 ORDER_FIELDS = ("block_number", "transaction_index", "log_index")
 IDENTITY_FIELDS = ("address", "transaction_hash")
 
+# The pinned 32-byte block-hash representation used by the accepted page schema.
+_BLOCK_HASH = re.compile(r"0x[0-9a-fA-F]{64}\Z")
+
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -70,10 +74,6 @@ def _quantity(value: Any) -> int | None:
             return None
         return parsed if parsed >= 0 else None
     return None
-
-
-def _hex_text(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None
 
 
 class SourceContractError(SourceFailure):
@@ -102,12 +102,12 @@ def _strict_quantity(value: Any, detail: str) -> int | None:
 
 
 def _strict_hex(container: Mapping[str, Any], key: str) -> str | None:
-    """An optional hex text fact. Absent is None; a present non-text value is refused."""
+    """An optional block-hash fact. Absent is None; a present non-hash value is refused."""
     if key not in container or container[key] is None:
         return None
     value = container[key]
-    if not isinstance(value, str) or not value:
-        raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", f"{key} is not hex text")
+    if not isinstance(value, str) or _BLOCK_HASH.fullmatch(value) is None:
+        raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", f"{key} is not a block hash")
     return value
 
 
@@ -239,8 +239,9 @@ class EnvioHypersyncSource:
                                           f"block {number} is outside the page [{from_block},{next_block})")
             if number in index:
                 prior = index[number]
-                if (_quantity(prior.get("timestamp")) != _quantity(block.get("timestamp"))
-                        or _hex_text(prior.get("hash")) != _hex_text(block.get("hash"))):
+                if (_strict_quantity(prior.get("timestamp"), "a duplicate block timestamp is not a quantity")
+                        != _strict_quantity(block.get("timestamp"), "a duplicate block timestamp is not a quantity")
+                        or _strict_hex(prior, "hash") != _strict_hex(block, "hash")):
                     raise SourceContractError("DUPLICATE_BLOCK_FACT",
                                               f"block {number} is claimed twice with different facts")
                 continue

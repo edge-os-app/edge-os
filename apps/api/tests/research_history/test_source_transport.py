@@ -413,3 +413,41 @@ def test_malformed_block_timestamp_is_refused() -> None:
     with pytest.raises(SourceContractError) as raised:
         source.next_response(_request())
     assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+
+
+def test_malformed_guard_hash_is_refused() -> None:
+    bad_guard = {"block_number": 103, "timestamp": support.P1_LAST_TS, "hash": "not-hex",
+                 "first_block_number": 100}
+    source = EnvioHypersyncSource(FakeClient([_page1(guard=bad_guard)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+
+
+def test_malformed_first_parent_hash_is_refused() -> None:
+    bad_guard = {"block_number": 103, "timestamp": support.P1_LAST_TS, "first_block_number": 100,
+                 "first_parent_hash": "not-hex"}
+    source = EnvioHypersyncSource(FakeClient([_page1(guard=bad_guard)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+
+
+def test_malformed_end_block_hash_is_refused() -> None:
+    blocks = [{"number": 100, "timestamp": support.P1_FIRST_TS},
+              {"number": support.EVENT_QUOTE_IN["block_number"], "timestamp": support.E1_TS},
+              {"number": 103, "timestamp": support.P1_LAST_TS, "hash": "not-hex"}]
+    guard = {"block_number": 103, "timestamp": support.P1_LAST_TS, "first_block_number": 100}
+    source = EnvioHypersyncSource(FakeClient([_page1(blocks=blocks, guard=guard)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+
+
+def test_absent_optional_hashes_are_allowed() -> None:
+    guard = {"block_number": 103, "timestamp": support.P1_LAST_TS, "first_block_number": 100}
+    source = EnvioHypersyncSource(FakeClient([_page1(guard=guard)]))
+    response = source.next_response(_request())
+    assert response is not None
+    assert "last_block_hash" not in response["page"]
+    assert "first_parent_hash" not in response["page"]
