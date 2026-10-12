@@ -20,9 +20,12 @@ column (`time_field`), that time, and a `time_basis`:
 `as_of` equals the newest `DIRECT` time. A case with no stored row has `as_of: null` and no
 projection.
 
-Counts come from rows, not from `runs`. `evaluation_attempts` equals the number of
-`execution_evaluation_jobs` rows listed; `evaluation_completions` counts the `COMPLETED` ones
-(`accounts/service_projection.py:162-177`). Evaluation health and submission health are separate:
+Counts come from rows, not from `runs`. Each `execution_evaluation_jobs` row carries its `state`;
+`evaluation_attempts` equals the number of listed job rows and `evaluation_completions` counts the
+rows whose `state` is `COMPLETED` (`accounts/service_projection.py:162-177`). Every submission field
+traces to a listed `execution_submission_attempts` row (`last_submission_attempt_at` is a
+`started_at`, `last_submission_completion_at` is the last `completed_at`), and `last_decision_input_at`
+traces to a listed `execution_decisions` row. Evaluation health and submission health are separate:
 the evaluation timestamps come from job rows, the submission timestamps and the decision input time
 come from `HealthView` over `SubmissionAttemptRow` and `DecisionRow`.
 
@@ -63,7 +66,10 @@ The worked numbers are small and exact, so a reviewer can recompute them.
   separate field and not converted.
 - `no_signal`: no `admission_positions` row exists, so basis, realized result and residual inventory
   are `UNKNOWN`, never `0`. The saved `dec-0002` decision is listed and summarized.
-- `stop_sticky_after_restart`: residual inventory is `25000000` base units after a confirmed partial
+- `stop_sticky_after_restart`: the timeline is decision `dec-0007` (`decision_at` `21:23`), intent
+  `act-0007` (`21:24`), submission attempt `sub-0007` (`started_at` `21:25`, `completed_at` `21:27`),
+  receipt `rcpt-0007` (`21:27`), stop `stop-0007` (`created_at` `21:29`), removal state `rmv-0007`
+  (`updated_at` `21:29:30`). Residual inventory is `25000000` base units after a confirmed partial
   exit. `realized_result` is `-500000000000000000` quote units; the negative sign is retained, never
   shown as zero. `scoped_stops` uses `created_at`; `admission_positions` has no time column and is
   `DERIVED`.

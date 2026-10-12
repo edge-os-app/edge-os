@@ -27,8 +27,8 @@
       "as_of": "2026-10-12T21:00:00Z",
       "provider_class": "FixtureChain (SERVICE_PROJECTION over authored fixture ports)",
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001a", "time_field": "updated_at", "time": "2026-10-12T20:50:00Z", "time_basis": "DIRECT" },
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001", "time_field": "updated_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001a", "state": "COMPLETED", "time_field": "updated_at", "time": "2026-10-12T20:50:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001", "state": "COMPLETED", "time_field": "updated_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_decisions", "id": "dec-0001", "time_field": "decision_at", "time": "2026-10-12T20:55:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_intents", "id": "act-0001", "time_field": "created_at", "time": "2026-10-12T20:56:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_queue", "id": "Q-0001", "time_field": "enqueued_at", "time": "2026-10-12T20:56:01Z", "time_basis": "DIRECT" },
@@ -99,7 +99,7 @@
       "as_of": "2026-10-12T21:05:00Z",
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0002", "time_field": "updated_at", "time": "2026-10-12T21:05:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0002", "state": "COMPLETED", "time_field": "updated_at", "time": "2026-10-12T21:05:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_decisions", "id": "dec-0002", "time_field": "decision_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
@@ -154,7 +154,7 @@
       "as_of": "2026-10-12T21:10:00Z",
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0003", "time_field": "updated_at", "time": "2026-10-12T21:10:00Z", "time_basis": "DIRECT" }
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0003", "state": "UNAVAILABLE", "time_field": "updated_at", "time": "2026-10-12T21:10:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
@@ -204,7 +204,7 @@
       "as_of": "2026-10-12T21:15:00Z",
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0004", "time_field": "updated_at", "time": "2026-10-12T21:15:00Z", "time_basis": "DIRECT" }
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0004", "state": "UNAVAILABLE", "time_field": "updated_at", "time": "2026-10-12T21:15:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
@@ -254,7 +254,7 @@
       "as_of": "2026-10-12T21:20:00Z",
       "provider_class": "ProviderUnavailable (SERVICE_PROJECTION)",
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0005", "time_field": "updated_at", "time": "2026-10-12T21:20:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0005", "state": "ENQUEUED", "time_field": "updated_at", "time": "2026-10-12T21:20:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_queue", "id": "Q-0005", "time_field": "enqueued_at", "time": "2026-10-12T21:19:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
@@ -308,7 +308,7 @@
       "as_of": "2026-10-12T21:25:00Z",
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0006", "time_field": "updated_at", "time": "2026-10-12T21:25:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0006", "state": "SUBMITTED", "time_field": "updated_at", "time": "2026-10-12T21:25:00Z", "time_basis": "DIRECT" },
         { "table": "recovery_local.recovery_cases", "id": "case-0006", "time_field": "updated_at", "time": "2026-10-12T21:24:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
@@ -362,8 +362,10 @@
       "as_of": "2026-10-12T21:29:30Z",
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0007", "time_field": "updated_at", "time": "2026-10-12T21:28:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0007", "state": "COMPLETED", "time_field": "updated_at", "time": "2026-10-12T21:28:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_decisions", "id": "dec-0007", "time_field": "decision_at", "time": "2026-10-12T21:23:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_intents", "id": "act-0007", "time_field": "created_at", "time": "2026-10-12T21:24:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_submission_attempts", "id": "sub-0007", "time_field": "started_at", "time": "2026-10-12T21:25:00Z", "time_basis": "DIRECT" },
         { "table": "admission_local.admission_receipts", "id": "rcpt-0007", "time_field": "created_at", "time": "2026-10-12T21:27:00Z", "time_basis": "DIRECT" },
         { "table": "admission_local.admission_positions", "id": "ag-health-07:stg-health:dec-0007", "time_field": "derived", "time": "2026-10-12T21:27:00Z", "time_basis": "DERIVED" },
         { "table": "stops_local.scoped_stops", "id": "stop-0007", "time_field": "created_at", "time": "2026-10-12T21:29:00Z", "time_basis": "DIRECT" },
@@ -380,7 +382,7 @@
           "evaluation_completions": 1,
           "last_evaluation_outcome": "SUBMITTED_CONFIRMED",
           "wait_or_fault_reason": null,
-          "last_submission_attempt_at": null,
+          "last_submission_attempt_at": "2026-10-12T21:25:00Z",
           "last_submission_completion_at": "2026-10-12T21:27:00Z",
           "last_decision_input_at": "2026-10-12T21:23:00Z",
           "next_scheduled_at": "2026-10-12T21:28:00Z",
@@ -499,7 +501,7 @@
       "as_of": "2026-10-12T21:44:10Z",
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0009", "time_field": "updated_at", "time": "2026-10-12T21:44:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0009", "state": "COMPLETED", "time_field": "updated_at", "time": "2026-10-12T21:44:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_intents", "id": "act-0009", "time_field": "created_at", "time": "2026-10-12T21:44:05Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_queue", "id": "Q-0009", "time_field": "enqueued_at", "time": "2026-10-12T21:44:10Z", "time_basis": "DIRECT" }
       ],
