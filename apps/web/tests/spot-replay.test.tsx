@@ -6,7 +6,7 @@ import { ReplayResult } from "../components/ReplayResult";
 import { SpotReplayPanel } from "../components/SpotReplayPanel";
 import type { SpotReplayRecord, SpotReplayDependency } from "../lib/types";
 
-const mocks = vi.hoisted(() => ({ create: vi.fn(), get: vi.fn() }));
+const mocks = vi.hoisted(() => ({ create: vi.fn(), get: vi.fn(), datasets: vi.fn() }));
 vi.mock("../lib/api", () => ({
   ApiError: class extends Error {
     constructor(public status: number, public code: string, public detail: string) { super(detail); }
@@ -14,6 +14,7 @@ vi.mock("../lib/api", () => ({
   api: {
     createSpotReplay: (...args: unknown[]) => mocks.create(...args),
     spotReplay: (...args: unknown[]) => mocks.get(...args),
+    historyDatasets: (...args: unknown[]) => mocks.datasets(...args),
   },
 }));
 
@@ -61,6 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.create.mockResolvedValue(replay);
   mocks.get.mockResolvedValue(replay);
+  mocks.datasets.mockResolvedValue({ datasets: [] });
 });
 
 describe("P13 spot replay", () => {
@@ -346,5 +348,45 @@ describe("P13 spot replay", () => {
     expect(mocks.get).toHaveBeenCalledWith(unrelated.replay_id);
     expect(mocks.create).toHaveBeenCalledTimes(2);
     expect(mocks.create.mock.calls[1][0]).toEqual(uncertainBody);
+  });
+});
+
+
+describe("RG05 replay on a saved recorded-history dataset", () => {
+  const dataset = { dataset_id: "d0000000-0000-4000-8000-000000000001", source_id: "recorded-syn-qualified/1",
+    evidence_class: "RECORDED_RESPONSE", content_label: "SYNTHETIC_FIXTURE", binding_state: "QUALIFIED_BINDING",
+    verdict: { overall: "QUALIFIED" }, window_start: "2026-09-25T10:00:00Z", window_end: "2026-09-25T12:00:00Z",
+    readable_until: "2026-09-25T11:00:00Z" };
+
+  it("sends the dataset instead of the fixture and labels the fills simulated", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [dataset] });
+    render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "50", unit: "QUOTE:0xbb" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
+    await screen.findByRole("option", { name: /recorded-syn-qualified/ }); // datasets load after the select renders
+    await user.selectOptions(screen.getByLabelText("Price data"), dataset.dataset_id);
+    expect(screen.getByTestId("spot-replay-history-source")).toHaveTextContent("Simulated fills");
+    expect(screen.getByLabelText("Window start (UTC)")).toHaveValue("2026-09-25T10:20:00Z");
+    expect(screen.getByLabelText("Window end (UTC, exclusive)")).toHaveValue("2026-09-25T11:00:00Z"); // protected after 11:00
+    expect(screen.getByTestId("spot-replay-history-source")).toHaveTextContent("Data after 2026-09-25T11:00:00Z is protected");
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
+    await user.click(screen.getByRole("button", { name: "Save replay on recorded history" }));
+    const body = mocks.create.mock.calls[0][0];
+    expect(body.history_dataset_id).toBe(dataset.dataset_id);
+    expect("dataset_fixture_id" in body).toBe(false);
+    expect(body.window_start).toBe("2026-09-25T10:20:00Z");
+  });
+
+  it("shows recorded-history lineage on a saved result", () => {
+    const saved = structuredClone(replay);
+    (saved.content.inputs as unknown as Record<string, unknown>).history_input = { dataset_id: dataset.dataset_id,
+      source_id: dataset.source_id, content_label: "SYNTHETIC_FIXTURE", declaration_id: "decl-1", job_id: "job-1",
+      dataset_market_binding_id: "m".repeat(64), strategy_market_binding_id: "m".repeat(64), fill_label: "simulated fills",
+      dataset_content_sha256: "h".repeat(64) };
+    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+    expect(screen.getByTestId("spot-replay-history-lineage")).toHaveTextContent("decl-1");
+    expect(screen.getByText(/Simulated fills on saved recorded-history dataset/)).toBeInTheDocument();
   });
 });

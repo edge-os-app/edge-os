@@ -11,7 +11,7 @@ import { AccountViews, type AccountViewName } from "./AccountViews";
 
 type Route = { name: "research" } | { name: "request"; id: string; sourceRecordId?: string }
   | { name: "later"; area: "Agents" | "Positions" | "Funds" }
-  | { name: "account"; area: AccountViewName; recordId?: string };
+  | { name: "account"; area: AccountViewName; recordId?: string; agentId?: string };
 
 function parse(hash: string): Route {
   const [path, query = ""] = hash.replace(/^#\/?/, "").split("?");
@@ -20,8 +20,8 @@ function parse(hash: string): Route {
     sourceRecordId: new URLSearchParams(query).get("source") ?? undefined };
   const area = parts[0] === "agents" ? "Agents" : parts[0] === "positions" ? "Positions" : parts[0] === "funds" ? "Funds" : null;
   if (area) {
-    const recordId = new URLSearchParams(query).get("record") ?? undefined;
-    return { name: "account", area, recordId };
+    const params = new URLSearchParams(query);
+    return { name: "account", area, recordId: params.get("record") ?? undefined, agentId: params.get("agent") ?? undefined };
   }
   return { name: "research" };
 }
@@ -93,8 +93,8 @@ export function Shell() {
             openConversation={openSheet} />
         )}
         {route.name === "later" && <Later area={route.area} />}
-        {route.name === "account" && <AccountViews key={`${route.area}:${route.recordId ?? ""}`} initialView={route.area}
-          sourceRecordId={route.recordId} />}
+        {route.name === "account" && <AccountViews key={`${route.area}:${route.recordId ?? ""}:${route.agentId ?? ""}`}
+          initialView={route.area} sourceRecordId={route.recordId} agentId={route.agentId} />}
       </main>
       <div className="convo convo-desktop" role="complementary" aria-label="Conversation" data-focus-surface="side">
         <Conversation context={context} idPrefix="side" />

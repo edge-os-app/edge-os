@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { getAccountView, loadAccountViews, type AccountViewRecord, type PositionFilters } from "../lib/account-views";
+import { AgentActions } from "./AgentActions";
+import { AgentAuthority } from "./AgentAuthority";
+import { AgentFunding } from "./AgentFunding";
 import { AgentRecords } from "./AgentRecords";
 import { FundRecords } from "./FundRecords";
 import { PositionRecords } from "./PositionRecords";
@@ -63,7 +66,34 @@ function relatedRecordMatches(source: AccountViewRecord, candidate: AccountViewR
   return row.agent_id === item.agent_id && row.wallet_id === item.wallet_id && row.network_id === item.network_id;
 }
 
-export function AccountViews({ initialView = "Agents", sourceRecordId }: { initialView?: AccountViewName; sourceRecordId?: string }) {
+const AGENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** One confirmed agent's saved services: authority on Agents, funding on Funds, actions on Positions. */
+function ConnectedAgent({ view, agentId }: { view: AccountViewName; agentId?: string }) {
+  const [draft, setDraft] = useState(agentId ?? "");
+  const [selected, setSelected] = useState(agentId ?? "");
+  useEffect(() => { setDraft(agentId ?? ""); setSelected(agentId ?? ""); }, [agentId]);
+  const open = () => {
+    if (!AGENT_ID.test(draft)) return;
+    setSelected(draft);
+    window.location.hash = `#/${view.toLowerCase()}?agent=${encodeURIComponent(draft)}`;
+  };
+  return (
+    <section className="stack" aria-label="Connected agent">
+      <form className="btn-row" onSubmit={(event) => { event.preventDefault(); open(); }}>
+        <label htmlFor="connected-agent">Agent ID</label>
+        <input id="connected-agent" className="input" value={draft} maxLength={64} style={{ minHeight: 44 }}
+          aria-invalid={draft !== "" && !AGENT_ID.test(draft)} onChange={(event) => setDraft(event.target.value)} />
+        <button className="btn btn-secondary" style={{ minHeight: 44 }} type="submit" disabled={!AGENT_ID.test(draft)}>Open agent</button>
+      </form>
+      {selected && view === "Agents" && <AgentAuthority key={selected} agentId={selected} />}
+      {selected && view === "Funds" && <AgentFunding key={selected} agentId={selected} />}
+      {selected && view === "Positions" && <AgentActions key={selected} agentId={selected} />}
+    </section>
+  );
+}
+
+export function AccountViews({ initialView = "Agents", sourceRecordId, agentId }: { initialView?: AccountViewName; sourceRecordId?: string; agentId?: string }) {
   const [view, setView] = useState<AccountViewName>(initialView);
   const [records, setRecords] = useState<AccountViewRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -167,6 +197,8 @@ export function AccountViews({ initialView = "Agents", sourceRecordId }: { initi
             onClick={() => setView(name)}>{name}</button>
         ))}
       </div>
+      <ConnectedAgent view={view} agentId={agentId} />
+      <h2>Authored account records</h2>
       {loading && <p role="status" aria-live="polite">Loading saved account records…</p>}
       {!loading && error && <section className="panel" role="alert">
         <p>{error} Existing records remain unchanged.</p>

@@ -15,10 +15,15 @@ from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding, invalid, not_found
 from edge_os_api.records.models import InvestigationAccessEvent, InvestigationDeclaration
-from edge_os_api.core.request_schemas import InvestigationBody, InvestigationConfiguration
+from edge_os_api.core.request_schemas import HistoryInvestigationBody, InvestigationBody, InvestigationConfiguration
+from edge_os_api.research import fixture_interpreter, history_dataset
+from edge_os_api.research.effect_comparison import expression_inputs
 from edge_os_api.research.service import get_owned, head_interpretation, intake_rows, lock_intake, parse_uuid
+from edge_os_api.strategies import compiler as strategy_compiler
 
 SCHEMA_VERSION = "p08.investigation-declaration/2"
+HISTORY_SCHEMA_VERSION = "p08.investigation-declaration/3"
+RULE_MAP_VERSION = "edge-os.hypothesis-rule-map/1"
 PROPOSAL_VERSION = "p08-bounded-review/2"
 BUDGET_VERSION = "p08-research-budget/2"
 FIXTURE_PROFILE = "fixture-unqualified-pool/1"
@@ -120,7 +125,7 @@ def get_proposal(session: Session, principal: Principal, intake_id: str) -> dict
 
 
 def _declaration_envelope(row: InvestigationDeclaration) -> dict[str, Any]:
-    return {"schema_version": SCHEMA_VERSION, "record_type": "InvestigationDeclaration",
+    return {"schema_version": row.content["schema_version"], "record_type": "InvestigationDeclaration",
             "record_id": str(row.declaration_id), "owner_id": str(row.owner_id),
             "operation_id": str(row.operation_id), "created_at": record_contract.utc_string(row.created_at),
             "content": row.content}
@@ -139,7 +144,8 @@ def _response(session: Session, row: InvestigationDeclaration, *, replay: bool =
             "study_started": False, "idempotent_replay": replay}
 
 
-def _request_fingerprint(principal: Principal, intake_id: uuid.UUID, body: InvestigationBody) -> str:
+def _request_fingerprint(principal: Principal, intake_id: uuid.UUID,
+                         body: InvestigationBody | HistoryInvestigationBody) -> str:
     canonical_body = record_contract.canonical_bytes(body.model_dump(mode="json")).decode("utf-8")
     return record_contract.sha256_hex({"owner_id": str(principal.user_id), "intake_record_id": str(intake_id),
                           "body": canonical_body})
@@ -315,10 +321,8 @@ def create_declaration(session: Session, principal: Principal, intake_id: str,
 def list_declarations(session: Session, principal: Principal, intake_id: str) -> dict[str, Any]:
     """Return an owner's exact declarations and their saved access events."""
     intake = get_owned(session, principal, intake_id, "IntakeRequest")
-    rows = list(session.execute(select(InvestigationDeclaration).where(
-        InvestigationDeclaration.owner_id == principal.user_id,
-        InvestigationDeclaration.intake_record_id == intake.record_id)
-        .order_by(InvestigationDeclaration.created_at, InvestigationDeclaration.declaration_id)).scalars())
+    rows = [row for row in _declaration_rows(session, principal, intake.record_id)
+            if row.content["schema_version"] == SCHEMA_VERSION]
     declarations = [_declaration_envelope(row) for row in rows]
     access_history = [_access_event(session, row) for row in rows]
     return {"declarations": declarations, "access_history": access_history}
@@ -332,6 +336,196 @@ def get_declaration(session: Session, principal: Principal, intake_id: str, decl
         InvestigationDeclaration.owner_id == principal.user_id,
         InvestigationDeclaration.intake_record_id == intake.record_id,
         InvestigationDeclaration.declaration_id == parsed_id)).scalar_one_or_none()
-    if row is None:
+    if row is None or row.content["schema_version"] != SCHEMA_VERSION:
         raise not_found("investigation declaration")
     return _response(session, row)
+
+
+def _declaration_rows(session: Session, principal: Principal, intake_id: uuid.UUID) -> list[InvestigationDeclaration]:
+    return list(session.execute(select(InvestigationDeclaration).where(
+        InvestigationDeclaration.owner_id == principal.user_id,
+        InvestigationDeclaration.intake_record_id == intake_id)
+        .order_by(InvestigationDeclaration.created_at, InvestigationDeclaration.declaration_id)).scalars())
+
+
+def _example_rule_hashes() -> frozenset[str]:
+    """Rules an example already tested: the fixture strategy, the fixture interpreter's choices and the P09 example."""
+    strategy = record_contract.FIXTURE_STRATEGY
+    quote_unit = strategy["market"]["quote_unit"]
+    examples: list[Any] = [strategy["entry"], strategy["exit"],
+                           {"op": "gt", "args": [{"op": "price"}, {"op": "constant", "value": "99", "unit": "PRICE"}]}]
+    examples += [option.value for option in fixture_interpreter.ENTRY_QUESTION.options]
+    examples += [{"op": "gt", "args": [{"op": "quote_volume"}, {"op": "constant", "value": value, "unit": quote_unit}]}
+                 for value in ("4", "6")]
+    return frozenset(record_contract.sha256_hex(item) for item in examples)
+
+
+EXAMPLE_RULE_HASHES = _example_rule_hashes()
+
+
+def _history_refusal(status: int, code: str, path: str, detail: str) -> AppError:
+    kind = "UNAVAILABLE" if status == 409 else "INVALID_INPUT"
+    return AppError(status, "INVESTIGATION", kind, code, [finding(code, path, detail)])
+
+
+def _check_history_configuration(body: HistoryInvestigationBody) -> dict[str, Any]:
+    """Bind the declaration to one served recorded source and the user's own rules. Returns that source."""
+    config = body.configuration
+    if config.source.evidence_class == "PROVIDER_ACTUAL":
+        raise _history_refusal(409, "actual_data_not_authorized", "/configuration/source/evidence_class",
+                               "Actual provider history needs a separately approved data packet. "
+                               "Only recorded responses are available.")
+    source = history_dataset.recorded_sources().get(config.source.source_id)
+    if source is None:
+        raise _history_refusal(422, "unsupported_history_source", "/configuration/source/source_id",
+                               "Choose one of the listed recorded sources.")
+    if config.source.profile_sha256 != history_dataset.profile_sha256(source):
+        raise _history_refusal(422, "history_source_changed", "/configuration/source/profile_sha256",
+                               "The recorded source differs from the one you reviewed. Reload the source list.")
+    if config.market.model_dump() != history_dataset.source_market(source):
+        raise _history_refusal(422, "history_market_mismatch", "/configuration/market",
+                               "The market must be the declared source's exact network, pool and assets.")
+    window = history_dataset.source_window(source)
+    if (config.window.start, config.window.end) != (parse_utc_text(window["start"]), parse_utc_text(window["end"])):
+        raise _history_refusal(422, "history_window_unsupported", "/configuration/window",
+                               "Only the declared source's recorded window is supported.")
+    bounds = config.resource_bounds
+    if bounds.max_pages < len(source["responses"]):
+        raise _history_refusal(422, "resource_bounds_too_small", "/configuration/resource_bounds/max_pages",
+                               f"This source needs {len(source['responses'])} page requests.")
+    market = {"network": config.market.network, "quote_unit": f"QUOTE:{config.market.quote_asset}",
+              "research_binding": {"base_asset": config.market.base_asset, "quote_asset": config.market.quote_asset}}
+    for index, rule in enumerate(config.rule_map.rules):
+        for name in ("price_expression", "volume_expression"):
+            path = f"/configuration/rule_map/rules/{index}/{name}"
+            expression = getattr(rule, name)
+            if record_contract.sha256_hex(expression) in EXAMPLE_RULE_HASHES:
+                raise _history_refusal(422, "example_rule_not_adoptable", path,
+                                       "This rule belongs to a worked example. Write and adopt your own rule.")
+            try:
+                if strategy_compiler.expression_info(expression, market, path).kind != "BOOLEAN":
+                    raise _history_refusal(422, "p06_condition_not_boolean", path, "Each adopted condition must be Boolean.")
+            except strategy_compiler.CompilerError as error:
+                raise _history_refusal(422, "unsupported_p06_expression", error.path, error.detail) from None
+        if config.rule_map.incremental_volume_declared and (
+                expression_inputs(rule.price_expression) != {"price"}
+                or expression_inputs(rule.volume_expression) != {"quote_volume"}):
+            raise _history_refusal(422, "incremental_volume_mapping_unsupported", f"/configuration/rule_map/rules/{index}",
+                                   "Incremental volume comparison needs a price-only rule and a quote-volume-only rule.")
+    return source
+
+
+def parse_utc_text(value: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def create_history_declaration(session: Session, principal: Principal, intake_id: str,
+                               body: HistoryInvestigationBody) -> tuple[int, dict[str, Any]]:
+    """Save one v3 declaration and its first access event before any collection, outcome or provider request."""
+    intake = get_owned(session, principal, intake_id, "IntakeRequest")
+    if intake.content["requested_job"] != "INVESTIGATE_EFFECT":
+        raise invalid("/requested_job", "Only an investigation request can save this declaration.",
+                      "investigation_job_required")
+    fingerprint = _request_fingerprint(principal, intake.record_id, body)
+    replay = _replay_or_conflict(session, _existing_for_key(session, principal, intake.record_id, body.idempotency_key),
+                                 fingerprint)
+    if replay is not None:
+        return replay
+    source = _check_history_configuration(body)
+    intake = lock_intake(session, principal, intake_id)
+    interpretation = head_interpretation(intake_rows(session, principal, intake.record_id))
+    current_revision_id = interpretation.content["interpretation_revision_id"] if interpretation is not None else None
+    replay = _replay_or_conflict(session, _existing_for_key(session, principal, intake.record_id, body.idempotency_key),
+                                 fingerprint)
+    if replay is not None:
+        return replay
+    if body.expected_interpretation_revision_id != current_revision_id:
+        session.rollback()
+        raise AppError(409, "INVESTIGATION", "CONFLICTED", "interpretation_revision_conflict", [finding(
+            "interpretation_revision_conflict", "/expected_interpretation_revision_id",
+            "The request changed. Reload it and review the current settings before saving.")])
+    if body.configuration.question != intake.content["original_request"]:
+        raise invalid("/configuration/question", "Keep the original question unchanged in the declaration.",
+                      "original_request_changed")
+    edge = body.edge_spec
+    if edge.parent_declaration_id is not None or edge.version != 1:
+        raise invalid("/edge_spec", "A recorded-history declaration starts a new hypothesis at version 1.",
+                      "invalid_hypothesis_lineage")
+    configuration = body.configuration.model_dump(mode="json")
+    rule_map = {**configuration["rule_map"], "declaration_hypothesis": edge.hypothesis, "edge_id": edge.edge_id,
+                "binding_state": "PENDING_DATASET_QUALIFICATION"}
+    now = dt.datetime.now(dt.timezone.utc)
+    declaration_id = uuid.uuid4()
+    content = {
+        "schema_version": HISTORY_SCHEMA_VERSION,
+        "original_request": intake.content["original_request"],
+        "restrictions": list(intake.content["restrictions"]),
+        "input_class": intake.content["input_class"],
+        "requested_job": intake.content["requested_job"],
+        "interpretation_revision_id": current_revision_id,
+        "edge_spec": edge.model_dump(mode="json"),
+        "configuration": configuration,
+        "rule_map": rule_map,
+        "field_origins": {name: value.model_dump(mode="json") for name, value in body.field_origins.items()},
+        "trial_ids": list(body.trial_ids),
+        "evaluation_ids": list(body.evaluation_ids),
+        "frozen": {"configuration_sha256": record_contract.sha256_hex(configuration),
+                   "rule_map_sha256": record_contract.sha256_hex(rule_map),
+                   "source_profile_sha256": history_dataset.profile_sha256(source),
+                   "scan": dict(source["scan"]), "frozen_at": record_contract.utc_string(now)},
+        "declaration_state": "PRE_OUTCOME_DECLARED",
+        "outcome_labels_read": False,
+    }
+    row = InvestigationDeclaration(
+        declaration_id=declaration_id, owner_id=principal.user_id, intake_record_id=intake.record_id,
+        edge_id=uuid.UUID(edge.edge_id), edge_version=edge.version, parent_declaration_id=None,
+        operation_id=uuid.UUID(body.operation_id), idempotency_key=body.idempotency_key,
+        fingerprint=fingerprint, content=content, created_at=now)
+    event = InvestigationAccessEvent(
+        event_id=uuid.uuid4(), owner_id=principal.user_id, declaration_id=declaration_id,
+        content={"schema_version": "p08.investigation-access/1", "event": "DECLARATION_SAVED",
+                 "outcome_labels_read": False, "provider_queries": 0, "study_started": False}, created_at=now)
+    session.add(row)
+    try:
+        session.flush()
+        session.add(event)
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        existing = _existing_for_key(session, principal, intake.record_id, body.idempotency_key)
+        if existing is not None:
+            return _replay_or_conflict(session, existing, fingerprint)  # type: ignore[return-value]
+        constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+        if constraint == "uq_investigation_owner_operation":
+            raise AppError(409, "INVESTIGATION", "CONFLICTED", "operation_id_reused", [finding(
+                "operation_id_reused", "/operation_id", "This operation ID belongs to another declaration.")]) from None
+        if constraint == "uq_investigation_edge_version":
+            raise AppError(409, "INVESTIGATION", "CONFLICTED", "edge_version_conflict", [finding(
+                "edge_version_conflict", "/edge_spec/version", "This hypothesis version already exists.")]) from None
+        raise
+    return 201, _response(session, row)
+
+
+def owned_history_declaration(session: Session, principal: Principal, intake_id: str,
+                              declaration_id: str) -> InvestigationDeclaration:
+    intake = get_owned(session, principal, intake_id, "IntakeRequest")
+    parsed_id = parse_uuid(declaration_id)
+    row = None if parsed_id is None else session.execute(select(InvestigationDeclaration).where(
+        InvestigationDeclaration.owner_id == principal.user_id,
+        InvestigationDeclaration.intake_record_id == intake.record_id,
+        InvestigationDeclaration.declaration_id == parsed_id)).scalar_one_or_none()
+    if row is None or row.content["schema_version"] != HISTORY_SCHEMA_VERSION:
+        raise not_found("investigation declaration")
+    return row
+
+
+def list_history_declarations(session: Session, principal: Principal, intake_id: str) -> dict[str, Any]:
+    intake = get_owned(session, principal, intake_id, "IntakeRequest")
+    rows = [row for row in _declaration_rows(session, principal, intake.record_id)
+            if row.content["schema_version"] == HISTORY_SCHEMA_VERSION]
+    return {"declarations": [_response(session, row) for row in rows]}
+
+
+def get_history_declaration(session: Session, principal: Principal, intake_id: str,
+                            declaration_id: str) -> dict[str, Any]:
+    return _response(session, owned_history_declaration(session, principal, intake_id, declaration_id))

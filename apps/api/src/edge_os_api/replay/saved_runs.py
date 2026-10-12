@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.strategies import compiler as strategy_compiler
-from edge_os_api.replay import simulator as spot_replay
+from edge_os_api.replay import history_inputs, simulator as spot_replay
 from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding, not_found
 from edge_os_api.records.models import SpotReplayConfiguration, SpotReplayRun
@@ -147,9 +147,9 @@ def _replay_input(body: SpotReplayBody, fixture: dict[str, Any], descriptor: dic
     )
 
 
-def _unavailable(error: spot_replay.ReplayError) -> dict[str, Any]:
+def _unavailable(error: spot_replay.ReplayError, evidence_class: str = "SYNTHETIC_FIXTURE") -> dict[str, Any]:
     return {"status": "UNAVAILABLE", "reason": {"code": error.code, "path": error.path,
-            "detail": error.detail}, "evidence_class": "SYNTHETIC_FIXTURE", "samples": [], "events": [],
+            "detail": error.detail}, "evidence_class": evidence_class, "samples": [], "events": [],
             "trades": [], "metrics": {}, "metric_statuses": {}, "metric_reasons": {},
             "repeatability_id": None, "open_position": None}
 
@@ -175,9 +175,68 @@ def _bind_configuration(session: Session, owner_id: uuid.UUID, run_configuration
                                 "Choose a new run-configuration ID for changed settings.")])
 
 
+def _fixture_run(session: Session, principal: Principal, body: SpotReplayBody,
+                 strategy: dict[str, Any]) -> tuple[dict[str, Any], spot_replay.ReplayInput]:
+    if body.dataset_fixture_id != FIXTURE_ID:
+        raise AppError(422, "SPOT_REPLAY", "INVALID_INPUT", "unsupported_dataset_fixture",
+                       [finding("unsupported_dataset_fixture", "/dataset_fixture_id",
+                                "Select the authored P13 synthetic fixture.")])
+    try:
+        fixture_hash, profile_hash = _sha256(FIXTURE_PATH), _sha256(PROFILE_PATH)
+        fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        if fixture.get("evidence_class") not in (None, "SYNTHETIC_FIXTURE"):
+            raise ValueError("fixture evidence class changed")
+    except (OSError, ValueError, json.JSONDecodeError):
+        raise AppError(503, "SPOT_REPLAY", "UNAVAILABLE", "fixture_profile_unavailable", []) from None
+    market_binding_id = strategy_compiler.market_binding_id(strategy["market"])
+    descriptor = _descriptor(body, strategy, fixture["dataset_revision_id"], market_binding_id)
+    snapshot = _input_snapshot(body, strategy, fixture, descriptor, market_binding_id)
+    snapshot["fixture_sha256"], snapshot["profile_sha256"] = fixture_hash, profile_hash
+    return snapshot, _replay_input(body, fixture, descriptor, market_binding_id)
+
+
+def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
+                 strategy: dict[str, Any]) -> tuple[dict[str, Any], spot_replay.ReplayInput, str]:
+    """The owner's saved dataset through the unchanged runtime. The runtime decides every refusal."""
+    row = history_inputs.load(session, principal, body.history_dataset_id or "")
+    history_inputs.refuse_protected(session, row, body.window_end)
+    dataset = history_inputs.replay_dataset(row, body.window_end)
+    try:
+        profile_hash = _sha256(PROFILE_PATH)
+    except OSError:
+        raise AppError(503, "SPOT_REPLAY", "UNAVAILABLE", "fixture_profile_unavailable", []) from None
+    descriptor = _descriptor(body, strategy, dataset.revision_id, dataset.market_binding_id)
+    snapshot = {
+        "profile_version": spot_replay.PROFILE_VERSION,
+        "strategy_revision_id": body.strategy_revision_id, "strategy_id": body.strategy_id,
+        "strategy_sha256": record_contract.sha256_hex(strategy), "strategy": strategy,
+        "run_configuration_id": body.run_configuration_id, "dataset_fixture_id": None,
+        "history_input": history_inputs.snapshot(row, strategy, history_inputs.rule_linkage(session, row, strategy)),
+        "dataset_revision_id": dataset.revision_id, "dataset_qualification": dataset.qualification,
+        "coverage_complete": dataset.coverage_complete, "evidence_class": dataset.evidence_class,
+        "profile_sha256": profile_hash, "market_binding_id": dataset.market_binding_id,
+        "window_start": record_contract.utc_string(body.window_start),
+        "window_end": record_contract.utc_string(body.window_end),
+        "initial_cash_quote": body.initial_cash_quote, "initial_base_amount": body.initial_base_amount,
+        "initial_basis_quote": body.initial_basis_quote, "essential_evidence": descriptor,
+        "buckets": [bucket for bucket in row.content["buckets"]
+                    if history_inputs._moment(bucket["bucket_end"]) < body.window_end],
+    }
+    run_input = spot_replay.ReplayInput(
+        strategy_revision_id=body.strategy_revision_id, run_configuration_id=body.run_configuration_id,
+        dataset=dataset, essential_evidence=descriptor, window_start=body.window_start, window_end=body.window_end,
+        initial_cash_quote=body.initial_cash_quote, initial_base_amount=body.initial_base_amount,
+        initial_basis_quote=body.initial_basis_quote)
+    return snapshot, run_input, dataset.evidence_class
+
+
 def create_spot_replay(session: Session, principal: Principal, body: SpotReplayBody) -> tuple[int, dict[str, Any]]:
     """Create one immutable replay, or return the identical result for its idempotency key."""
     request = body.model_dump(mode="json")
+    if request["history_dataset_id"] is None:
+        del request["history_dataset_id"]  # keeps every fixture request's original fingerprint
+    if request["dataset_fixture_id"] is None:
+        del request["dataset_fixture_id"]
     fingerprint_body = {key: value for key, value in request.items() if key != "idempotency_key"}
     fingerprint = record_contract.sha256_hex({"owner_id": str(principal.user_id), "method": "POST", "path": _PATH,
                                   "request": fingerprint_body})
@@ -203,25 +262,18 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
                        [finding("stale_strategy_revision", "/strategy_revision_id",
                                 "The saved strategy revision failed its integrity check.")])
     strategy = revision["strategy"]
-    if body.dataset_fixture_id != FIXTURE_ID:
-        raise AppError(422, "SPOT_REPLAY", "INVALID_INPUT", "unsupported_dataset_fixture",
-                       [finding("unsupported_dataset_fixture", "/dataset_fixture_id",
-                                "Select the authored P13 synthetic fixture.")])
-    try:
-        fixture_hash, profile_hash = _sha256(FIXTURE_PATH), _sha256(PROFILE_PATH)
-        fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-        if fixture.get("evidence_class") not in (None, "SYNTHETIC_FIXTURE"):
-            raise ValueError("fixture evidence class changed")
-    except (OSError, ValueError, json.JSONDecodeError):
-        raise AppError(503, "SPOT_REPLAY", "UNAVAILABLE", "fixture_profile_unavailable", []) from None
-
-    market_binding_id = strategy_compiler.market_binding_id(strategy["market"])
-    descriptor = _descriptor(body, strategy, fixture["dataset_revision_id"], market_binding_id)
-    snapshot = _input_snapshot(body, strategy, fixture, descriptor, market_binding_id)
-    snapshot["fixture_sha256"], snapshot["profile_sha256"] = fixture_hash, profile_hash
+    if body.history_dataset_id is not None:
+        snapshot, run_input, evidence_class = _history_run(session, principal, body, strategy)
+        notice = ("Simulated fills on a saved recorded-history dataset. Synthetic recorded responses, not observed "
+                  "market history. No gas, spread, additional impact, or capacity model. No trading permission.")
+    else:
+        snapshot, run_input = _fixture_run(session, principal, body, strategy)
+        evidence_class = "SYNTHETIC_FIXTURE"
+        notice = ("Synthetic replay only. Assumed fills; no gas, spread, additional impact, or capacity model. "
+                  "No trading permission is granted.")
     _bind_configuration(session, principal.user_id, body.run_configuration_id, snapshot)
     try:
-        result = spot_replay.run_spot_replay(strategy, _replay_input(body, fixture, descriptor, market_binding_id))
+        result = spot_replay.run_spot_replay(strategy, run_input)
         result_snapshot = {"status": "COMPLETE", "evidence_class": result.evidence_class,
                            "repeatability_id": result.repeatability_id,
                            "samples": _json_value(result.samples), "events": _json_value(result.events),
@@ -230,7 +282,7 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
                            "metric_reasons": _json_value(result.metric_reasons),
                            "open_position": _json_value(result.open_position)}
     except spot_replay.ReplayError as error:
-        result_snapshot = _unavailable(error)
+        result_snapshot = _unavailable(error, evidence_class)
 
     replay_id = uuid.uuid4()
     now = dt.datetime.now(dt.timezone.utc)
@@ -240,8 +292,7 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
                "idempotency": {"method": "POST", "path": _PATH, "key": body.idempotency_key,
                                "fingerprint": fingerprint},
                "inputs": snapshot, "result": result_snapshot,
-               "notice": "Synthetic replay only. Assumed fills; no gas, spread, additional impact, or capacity model. "
-                         "No trading permission is granted."}
+               "notice": notice}
     content_sha256 = record_contract.sha256_hex(content)
     row = SpotReplayRun(
         replay_id=replay_id, owner_id=principal.user_id, strategy_id=body.strategy_id,

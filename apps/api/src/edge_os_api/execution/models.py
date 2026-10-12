@@ -1,9 +1,7 @@
-"""Owned P23 execution tables.
+"""Owned P23 execution tables and the #58 durable evaluation jobs.
 
-These tables belong to the local execution stage. They are created by the owned
-package metadata inside a run-labelled test database and are never published
-through a shared migration in this stage. The migrated `public` schema and the
-P22 `admission_local` schema stay separate.
+Migration 0008 creates these tables in the `execution_local` schema. The migrated
+`public` schema and the P22 `admission_local` schema stay separate.
 """
 
 from __future__ import annotations
@@ -195,4 +193,53 @@ class SubmissionAttemptRow(ExecutionBase):
         ),
         Index("ix_execution_attempts_owner_wallet", "owner_id", "wallet_id", "network_id", "started_at"),
         Index("ix_execution_attempts_owner_action", "owner_id", "action_id"),
+    )
+
+
+JOB_STATES = ("QUEUED", "DECIDED", "ENQUEUED", "SUBMITTED", "COMPLETED", "UNAVAILABLE")
+
+
+class EvaluationJobRow(ExecutionBase):
+    """One durable bounded evaluation job for one approved agent and one five-minute decision slot.
+
+    The job identity is stable: the same owner, agent, adopted consent and decision slot resolve to one row,
+    however often the job is scheduled, so a repeat or a restart cannot create a replacement decision or
+    intent. The row also binds the saved publication revision UUID to the hash-derived execution revision
+    identity (IC01), and keeps the progress of the original decision, intent and action.
+    """
+
+    __tablename__ = "execution_evaluation_jobs"
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[str] = mapped_column(Text, nullable=False)
+    wallet_id: Mapped[str] = mapped_column(Text, nullable=False)
+    network_id: Mapped[str] = mapped_column(Text, nullable=False)
+    request_key: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_slot: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    strategy_id: Mapped[str] = mapped_column(Text, nullable=False)
+    publication_revision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    execution_revision_id: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    consent_adoption_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    consent_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    action_id: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    runs: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "agent_id", "request_key", name="uq_execution_jobs_owner_agent_request"),
+        UniqueConstraint("owner_id", "agent_id", "consent_adoption_id", "decision_slot",
+                         name="uq_execution_jobs_owner_agent_consent_slot"),
+        CheckConstraint("state IN ('QUEUED','DECIDED','ENQUEUED','SUBMITTED','COMPLETED','UNAVAILABLE')",
+                        name="ck_execution_jobs_state"),
+        CheckConstraint("length(request_key) BETWEEN 1 AND 200", name="ck_execution_jobs_request_key"),
+        Index("ix_execution_jobs_state", "state", "created_at"),
+        Index("ix_execution_jobs_owner_agent", "owner_id", "agent_id", "created_at"),
     )

@@ -21,7 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from edge_os_api.admission.accounting import ACQUISITIONS
-from edge_os_api.admission.service import AdmissionService
+from edge_os_api.admission.service import AdmissionService, StopReader
 from edge_os_api.admission.types import (
     ActionIntent,
     ActionInput,
@@ -93,6 +93,26 @@ _QUEUE_BY_OUTCOME = {
 }
 
 
+def _queue_transition(outcome_code: str, decision_status: str,
+                      reason: str | None) -> tuple[str, str | None, bool]:
+    """Map a reconciled P22 decision and a transport outcome to the queue state.
+
+    Returns the durable queue state, its blocking reason and whether the exclusive
+    claim must be retained. A rejected settlement (BREACHED) or a decision that
+    does not match the expected outcome for the attempted send (RECONCILE_MISMATCH)
+    keeps the claim and surfaces unresolved evidence rather than reporting success.
+    """
+    expected = _EXPECTED_STATUS[outcome_code]
+    if decision_status == "BREACHED":
+        return "BREACHED", f"BREACHED:{reason or 'UNKNOWN'}", True
+    if decision_status != expected:
+        return ("RECONCILE_MISMATCH",
+                f"RECONCILE_MISMATCH:{decision_status}:{reason or 'UNRESOLVED'}", True)
+    if outcome_code == "SUBMISSION_POSSIBLE":
+        return "SUBMITTED_UNKNOWN", "SUBMISSION_UNKNOWN", True
+    return _QUEUE_BY_OUTCOME[outcome_code], None, False
+
+
 def _utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
@@ -131,9 +151,10 @@ def _cap_for(approval: ApprovalSnapshot, asset_id: str) -> int | None:
 
 class ExecutionService:
     def __init__(self, session_factory: sessionmaker[Session], admission: AdmissionService, *,
-                 clock=None) -> None:
+                 stops: StopReader | None = None, clock=None) -> None:
         self._factory = session_factory
         self._admission = admission
+        self._stops = stops
         self._clock = clock or _utc_now
 
     # ------------------------------------------------------------------ decision
@@ -409,19 +430,24 @@ class ExecutionService:
                 session.add(claim)
                 entry.state = "CLAIMED"
                 entry.updated_at = now
+                prepared = PreparedSubmission(
+                    action_id=entry.action_id, owner_id=str(owner), wallet_id=wallet_id,
+                    network_id=network_id, operation=entry.operation, payload_hash=intent_row.payload_hash)
+                content = {"transport": transport.transport_id, "payload_hash": intent_row.payload_hash}
+                # IC06: a transport that names its original transaction references records them here, in the
+                # same transaction as the IN_FLIGHT attempt, before any possible effect.
+                references = getattr(transport, "original_references", None)
+                if references is not None:
+                    content["original_references"] = references(prepared)
                 attempt = SubmissionAttemptRow(
                     attempt_id=uuid.uuid4(), owner_id=owner, queue_id=entry.queue_id,
                     action_id=entry.action_id, agent_id=agent_id, wallet_id=wallet_id,
                     network_id=network_id, transport_id=transport.transport_id,
                     payload_hash=intent_row.payload_hash, state="IN_FLIGHT",
-                    content={"transport": transport.transport_id, "payload_hash": intent_row.payload_hash},
-                    started_at=now, completed_at=None)
+                    content=content, started_at=now, completed_at=None)
                 session.add(attempt)
                 session.flush()
                 attempt_id = attempt.attempt_id
-                prepared = PreparedSubmission(
-                    action_id=entry.action_id, owner_id=str(owner), wallet_id=wallet_id,
-                    network_id=network_id, operation=entry.operation, payload_hash=intent_row.payload_hash)
                 session.commit()
                 return prepared, action_intent, entry.queue_id, attempt_id
             except SQLAlchemyError:
@@ -445,33 +471,16 @@ class ExecutionService:
                 receipt = self._receipt(action_intent, approval, outcome)
                 reconciliation = self._admission.reconcile(owner, entry.action_id, receipt)
                 status = reconciliation.decision_status
-                expected = _EXPECTED_STATUS[outcome.outcome]
 
                 attempt.state = "TERMINAL"
                 attempt.outcome = outcome.outcome
                 attempt.detail = outcome.detail
                 attempt.completed_at = now
-                if status == "BREACHED":
-                    # A rejected settlement is never a confirmation. Retain the
-                    # claim and surface the breach so no next action can submit
-                    # until an explicit recovery.
-                    entry.state = "BREACHED"
-                    entry.blocking_reason = f"BREACHED:{reconciliation.reason or 'UNKNOWN'}"
-                    retain_claim = True
-                elif status != expected:
-                    # A submission-capable attempt cannot be reconciled to a
-                    # different settled state (for example an external P22
-                    # cancellation in the claim window). Keep the claim and record
-                    # unresolved blocking evidence instead of reporting a success.
-                    entry.state = "RECONCILE_MISMATCH"
-                    entry.blocking_reason = (
-                        f"RECONCILE_MISMATCH:{status}:{reconciliation.reason or 'UNRESOLVED'}")
-                    retain_claim = True
-                else:
-                    entry.state = _QUEUE_BY_OUTCOME[outcome.outcome]
-                    entry.blocking_reason = (
-                        "SUBMISSION_UNKNOWN" if outcome.outcome == "SUBMISSION_POSSIBLE" else None)
-                    retain_claim = outcome.outcome == "SUBMISSION_POSSIBLE"
+                # A rejected settlement is never a confirmation; an outcome that
+                # does not reconcile to its expected settled state keeps the claim
+                # and records unresolved blocking evidence instead of a success.
+                entry.state, entry.blocking_reason, retain_claim = _queue_transition(
+                    outcome.outcome, status, reconciliation.reason)
                 entry.updated_at = now
 
                 claim = self._active_claim(session, owner, agent_id, wallet_id, network_id)
@@ -486,6 +495,94 @@ class ExecutionService:
                 return TickResult(status=entry.state, reason=entry.blocking_reason,
                                   selected_action_id=entry.action_id, queue_entry=_queue_view(entry, now),
                                   evidence=evidence)
+            except SQLAlchemyError:
+                session.rollback()
+                raise
+
+    # ------------------------------------------------------------------ recovery
+
+    def converge_reconciled_outcome(
+        self,
+        verified_owner_id: uuid.UUID,
+        *,
+        action_id: str,
+        outcome_code: str,
+        detail: str,
+        decision_status: str,
+        reconciliation_reason: str | None,
+        event_at: dt.datetime | None = None,
+    ) -> QueueEntryView:
+        """Converge the saved queue entry, attempt and claim to a reconciled outcome.
+
+        This is the recovery twin of the in-`tick` completion step. It makes no
+        transport call and never creates a second economic action. It is
+        idempotent: a repeat against an already-converged entry returns the saved
+        view without another write. `outcome_code` uses the local transport
+        vocabulary so the mapping reuses the accepted `tick` behavior exactly.
+        """
+        now = event_at or self._clock()
+        with self._factory() as session:
+            try:
+                saved = self._queue_by_action(session, verified_owner_id, action_id)
+                if saved is None:
+                    raise ExecutionError(f"unknown action {action_id} for this owner")
+                agent_id, wallet_id, network_id = saved.agent_id, saved.wallet_id, saved.network_id
+                _wallet_lock(session, verified_owner_id, agent_id, wallet_id, network_id)
+                entry = session.execute(select(QueueRow).where(
+                    QueueRow.owner_id == verified_owner_id, QueueRow.queue_id == saved.queue_id,
+                ).with_for_update().execution_options(populate_existing=True)).scalar_one()
+                target_state, blocking_reason, retain_claim = _queue_transition(
+                    outcome_code, decision_status, reconciliation_reason)
+                if entry.state != target_state or entry.blocking_reason != blocking_reason:
+                    attempt = session.execute(select(SubmissionAttemptRow).where(
+                        SubmissionAttemptRow.owner_id == verified_owner_id,
+                        SubmissionAttemptRow.action_id == action_id,
+                    ).order_by(SubmissionAttemptRow.started_at.desc(), SubmissionAttemptRow.attempt_id.desc())
+                        .limit(1).with_for_update().execution_options(populate_existing=True)
+                    ).scalar_one_or_none()
+                    if attempt is not None and attempt.state == "IN_FLIGHT":
+                        attempt.state = "TERMINAL"
+                        attempt.outcome = outcome_code
+                        attempt.detail = detail
+                        attempt.completed_at = now
+                    entry.state = target_state
+                    entry.blocking_reason = blocking_reason
+                    entry.updated_at = now
+                    claim = self._active_claim_for_action(
+                        session, verified_owner_id, agent_id, wallet_id, network_id, action_id)
+                    if claim is not None and not retain_claim:
+                        claim.state = "RELEASED"
+                        claim.released_at = now
+                    session.commit()
+                else:
+                    session.commit()
+                return _queue_view(entry, now)
+            except SQLAlchemyError:
+                session.rollback()
+                raise
+
+    def retire_unsent(self, verified_owner_id: uuid.UUID, *, action_id: str, reason: str | None,
+                      event_at: dt.datetime | None = None) -> QueueEntryView | None:
+        """Mark a still-QUEUED entry `DENIED_UNSENT` after its admitted action was cancelled before any submission.
+
+        Only a `QUEUED` entry changes; a claimed or submitted entry is never touched. No transport call is made.
+        """
+        now = event_at or self._clock()
+        with self._factory() as session:
+            try:
+                saved = self._queue_by_action(session, verified_owner_id, action_id)
+                if saved is None:
+                    return None
+                _wallet_lock(session, verified_owner_id, saved.agent_id, saved.wallet_id, saved.network_id)
+                entry = session.execute(select(QueueRow).where(
+                    QueueRow.owner_id == verified_owner_id, QueueRow.queue_id == saved.queue_id,
+                ).with_for_update().execution_options(populate_existing=True)).scalar_one()
+                if entry.state == "QUEUED":
+                    entry.state = "DENIED_UNSENT"
+                    entry.blocking_reason = reason
+                    entry.updated_at = now
+                session.commit()
+                return _queue_view(entry, now)
             except SQLAlchemyError:
                 session.rollback()
                 raise
@@ -554,6 +651,19 @@ class ExecutionService:
         if saved[0].status != "ADMITTED":
             identity = f"ACTION_NOT_ADMITTED:{saved[0].status}"
             return denied(identity, identity)
+
+        # Durable scoped stops. The persisted records are consulted inside this
+        # submission transaction, so a queued action cannot bypass a newly
+        # recorded stop by replay, restart or stale input. A denied revalidation
+        # makes no transport call and leaves the admitted reservations in place.
+        if self._stops is not None:
+            stop_reasons = self._stops.denial_reasons(
+                session, owner, agent_id=action_intent.binding.agent_id,
+                wallet_id=action_intent.binding.wallet_id, network_id=action_intent.binding.network_id,
+                position_id=str(entry.position_id or ""), operation=action_intent.operation)
+            if stop_reasons:
+                reason = ";".join(stop_reasons)
+                return denied(reason, reason)
 
         proposal = self._admission.propose(owner, action_intent, approval, context)
         identity = f"{proposal.status}:{proposal.reason or ''}"
@@ -747,6 +857,20 @@ class ExecutionService:
     def _queue_by_action(self, session: Session, owner: uuid.UUID, action_id: str) -> QueueRow | None:
         return session.execute(select(QueueRow).where(
             QueueRow.owner_id == owner, QueueRow.action_id == action_id)).scalar_one_or_none()
+
+    def _active_claim_for_action(self, session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str,
+                                 network_id: str, action_id: str) -> ClaimRow | None:
+        """The active claim owned by one exact action.
+
+        Recovery convergence releases only the claim for the action it converges,
+        so a claim held by another still-unknown action on the same wallet is
+        never released.
+        """
+        return session.execute(select(ClaimRow).where(
+            ClaimRow.owner_id == owner, ClaimRow.agent_id == agent_id, ClaimRow.wallet_id == wallet_id,
+            ClaimRow.network_id == network_id, ClaimRow.action_id == action_id,
+            ClaimRow.released_at.is_(None),
+        ).with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
 
     def _active_claim(self, session: Session, owner: uuid.UUID, agent_id: str, wallet_id: str,
                       network_id: str) -> ClaimRow | None:

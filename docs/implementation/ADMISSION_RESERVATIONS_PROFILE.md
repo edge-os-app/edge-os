@@ -174,9 +174,13 @@ consumed.
   breach. The breach transition commits under the same per-wallet advisory lock
   as the settlement, so no admission can slip in between the rollback and the
   breach record. The decision becomes `BREACHED`, and new affected admissions for
-  that wallet and network are blocked until reconciled. A contradictory
-  pre-broadcast denial cannot clear a recorded confirmed or reverted breach; it
-  is refused with `CONTRADICTORY_RECOVERY`.
+  that wallet and network are blocked until reconciled. A recorded breach is never
+  silently replaced. A later confirmed, reverted or unknown receipt cannot settle
+  or downgrade it, and a contradictory pre-broadcast denial cannot clear it; each
+  is refused with `CONTRADICTORY_RECOVERY` and writes no new receipt, so the
+  durable breach, its receipt and its unreleased exposure are preserved. A
+  cancellation on a breached action is refused with
+  `NOT_CANCELLABLE_AFTER_SUBMISSION`.
 - The durable position quote asset and decimals are validated at admission for
   additions and exits, before any reservation, so an altered quote binding is a
   saved denial rather than a settlement-time failure.
@@ -206,3 +210,7 @@ Admission and reservation behavior here is application accounting under
 authored synthetic approvals and holdings. It is not provider enforcement and
 not live wallet inventory. Direct SQL inspection of saved rows is part of the
 evidence. See `docs/qualification/admission/`.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate the `admission_local` schema ships in migration 0008. The connected worker admits server-derived intents with a server-derived approval and holdings, and `AdmissionService` reads durable stops plus removal through `SubmissionControls`. No accounting rule changed. See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.

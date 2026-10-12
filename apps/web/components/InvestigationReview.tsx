@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import type { HistoryDeclaration, HistorySource, InvestigationJob, InvestigationReport, ResearchBudget } from "../lib/api";
 import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationProposal, InvestigationSaveResult } from "../lib/types";
 import { EffectComparisonPanel } from "./EffectComparisonPanel";
 
@@ -455,6 +456,371 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
           </div>
         </div>
       ) : null}
+      <HistoryInvestigation intakeId={intakeId} interpretationRevisionId={interpretationRevisionId} />
+    </section>
+  );
+}
+
+const HISTORY_FIELDS = ["edge_spec", "question", "source", "market", "window", "variants", "direction", "horizons",
+  "partitions", "evaluation_plan", "schedule", "rule_map", "resource_bounds", "permitted_access", "stopping_rule",
+  "budget_version"];
+const HISTORY_REVIEW = "history-investigation-review/1";
+const RUNNING = new Set(["QUEUED", "RESERVED", "COLLECTING", "EVALUATING"]);
+const STATE_COPY: Record<string, string> = {
+  QUEUED: "Saved. Waiting for capacity.",
+  RESERVED: "Waiting for the research worker. Its budget is reserved; nothing is collected yet.",
+  COLLECTING: "Collecting the recorded responses.",
+  EVALUATING: "Comparing with your adopted rules.",
+  REPORTED: "Report saved.",
+  CANCELLED: "Cancelled. Saved attempts and any partial dataset are kept.",
+  DEADLINE_EXCEEDED: "Stopped at its deadline. Saved attempts are kept.",
+  BUDGET_EXHAUSTED: "Refused: your research budget cannot reserve this job. Nothing was collected.",
+  UNAVAILABLE: "The collection outcome is unknown after a stop. It is not collected again; its full reservation stays counted.",
+  FAILED: "The job failed. Its attempts and unknown usage are kept.",
+};
+
+interface RuleRow { lookback: string; rise: "gt" | "lt"; threshold: string; volume: string }
+
+function expressions(row: RuleRow, quoteUnit: string) {
+  return {
+    price: { op: row.rise, args: [{ op: "price_return", lookback_buckets: Number(row.lookback) },
+      { op: "constant", value: row.threshold, unit: "DIMENSIONLESS" }] },
+    volume: { op: "gt", args: [{ op: "quote_volume" }, { op: "constant", value: row.volume, unit: quoteUnit }] },
+  };
+}
+
+function shiftMinutes(value: string, minutes: number): string {
+  return new Date(new Date(value).valueOf() + minutes * 60_000).toISOString().replace(".000Z", "Z");
+}
+
+function storedKey(name: string): string {
+  try {
+    const saved = window.sessionStorage.getItem(name);
+    if (saved) return saved;
+  } catch { /* storage may be blocked; a new key is still a single original start */ }
+  const key = `ui-${crypto.randomUUID()}`;
+  try { window.sessionStorage.setItem(name, key); } catch { /* ignore */ }
+  return key;
+}
+
+function forgetKey(name: string): void {
+  try { window.sessionStorage.removeItem(name); } catch { /* ignore */ }
+}
+
+function JobReport({ report }: { report: InvestigationReport }) {
+  const content = report.content;
+  return (
+    <div className="stack" data-testid="history-report">
+      <h5>Saved report: {content.outcome}</h5>
+      <p>{content.notice}</p>
+      <dl className="kv">
+        <dt>Report ID</dt><dd className="mono" data-testid="history-report-id">{report.report_id}</dd>
+        <dt>Stored copy</dt><dd>{report.stored_hash_matches_content ? "Read back. Its hash matches." : "Could not be confirmed."}</dd>
+        <dt>Reasons</dt><dd>{content.outcome_reasons.join(", ")}</dd>
+        <dt>Dataset</dt><dd className="mono" data-testid="history-report-dataset">{content.dataset_id}</dd>
+        <dt>Data</dt><dd>{content.source_id}; {content.evidence_class}; {content.content_label}; verdict {content.dataset_verdict.overall}</dd>
+        <dt>Statistics</dt><dd>{content.statistical_status}; significance {content.claims.significance}; capital authority {content.claims.capital_authority}</dd>
+      </dl>
+      {content.variants.length ? (
+        <table>
+          <caption>Adopted rules, triggered minus untriggered mean response</caption>
+          <thead><tr><th scope="col">Variant</th><th scope="col">Outcome</th><th scope="col">Triggered</th><th scope="col">Control</th><th scope="col">Difference</th></tr></thead>
+          <tbody>{content.variants.map((item) => (
+            <tr key={item.evaluation_id}><td>{item.variant_id}</td><td>{item.outcome}</td><td>{item.triggered_observed}</td>
+              <td>{item.control_observed}</td><td className="mono">{item.triggered_minus_control_mean ?? "none"}</td></tr>))}</tbody>
+        </table>
+      ) : null}
+      {content.contrary_findings.length ? <p className="status stop">Contrary findings kept: {content.contrary_findings.map((item) => `${item.variant_id} ${item.finding}`).join("; ")}</p> : null}
+      {content.protected_partitions?.length ? <p className="muted">Not read: {content.protected_partitions.map((item) => `${item.role} partition`).join(", ")}.</p> : null}
+    </div>
+  );
+}
+
+/** One recorded-history investigation: declare first, then run one original job at a time. */
+export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { intakeId: string; interpretationRevisionId: string | null }) {
+  const [question, setQuestion] = useState("");
+  const [sources, setSources] = useState<HistorySource[]>([]);
+  const [budget, setBudget] = useState<ResearchBudget | null>(null);
+  const [declarations, setDeclarations] = useState<HistoryDeclaration[]>([]);
+  const [selected, setSelected] = useState<HistoryDeclaration | null>(null);
+  const [jobs, setJobs] = useState<InvestigationJob[]>([]);
+  const [sourceId, setSourceId] = useState("");
+  const [hypothesis, setHypothesis] = useState("");
+  const [direction, setDirection] = useState("DESCRIPTIVE");
+  const [rules, setRules] = useState<RuleRow[]>([{ lookback: "", rise: "gt", threshold: "", volume: "" }]);
+  const [bounds, setBounds] = useState({ provider_requests: "2", compute_seconds: "30", deadline_seconds: "600" });
+  const [adopted, setAdopted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [uncertainStart, setUncertainStart] = useState(false);
+  // A save with no answer keeps its exact body; a retry resends it unchanged so the server can return the original.
+  const pendingName = `edge-os:history-declaration-pending:${intakeId}`;
+  const [pendingDeclaration, setPendingState] = useState<Record<string, unknown> | null>(() => {
+    try { const saved = window.sessionStorage.getItem(pendingName); return saved ? JSON.parse(saved) : null; }
+    catch { return null; }
+  });
+  // The unconfirmed body also survives a reload in this tab, so a retry after a reload resends the same request.
+  const setPendingDeclaration = (body: Record<string, unknown> | null) => {
+    setPendingState(body);
+    try {
+      if (body) window.sessionStorage.setItem(pendingName, JSON.stringify(body));
+      else window.sessionStorage.removeItem(pendingName);
+    } catch { /* storage may be blocked; the in-page retry still works */ }
+  };
+
+  const refreshBudget = async () => { try { setBudget(await api.researchBudget()); } catch { setBudget(null); } };
+  // Every call goes through a try: a missing or failing read shows a retry instead of breaking the plan above.
+  const loadAll = async () => {
+    setLoadError("");
+    try {
+      const [catalog, saved, request] = await Promise.all([api.historySources(), api.historyInvestigations(intakeId),
+        api.get(intakeId)].map((call) => Promise.resolve(call))) as [Awaited<ReturnType<typeof api.historySources>>,
+        Awaited<ReturnType<typeof api.historyInvestigations>>, Awaited<ReturnType<typeof api.get>>];
+      setSources(catalog.sources); setDeclarations(saved.declarations); setQuestion(request.intake.content.original_request);
+      await refreshBudget();
+    } catch (cause) { setLoadError(cause instanceof ApiError ? cause.detail : "Recorded-history research could not be loaded."); }
+  };
+  useEffect(() => { void loadAll(); }, [intakeId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadJobs = async (declaration: HistoryDeclaration) => {
+    try { setJobs((await api.investigationJobs(intakeId, declaration.declaration.record_id)).jobs); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.detail : "The saved jobs could not be loaded. Check again."); }
+  };
+  const open = async (declaration: HistoryDeclaration) => { setSelected(declaration); setError(""); setNotice(""); await loadJobs(declaration); };
+
+  const source = sources.find((item) => item.source_id === sourceId) ?? null;
+  const rulesComplete = rules.every((row) => /^[1-9][0-9]?$/.test(row.lookback) && /^-?[0-9]+(\.[0-9]+)?$/.test(row.threshold)
+    && /^[0-9]+(\.[0-9]+)?$/.test(row.volume));
+  const ready = source !== null && question.length > 0 && hypothesis.trim().length > 0 && rulesComplete && adopted;
+
+  const buildDeclaration = (source: HistorySource): Record<string, unknown> => {
+    const quoteUnit = `QUOTE:${source.market.quote_asset}`;
+    const trial = crypto.randomUUID();
+    const evaluations = rules.map(() => crypto.randomUUID());
+    const variants = rules.map((_, index) => `rule-${index + 1}`);
+    const descriptive = direction === "DESCRIPTIVE";
+    const { start, end } = source.window;
+    const partitions = descriptive
+      ? [{ partition_id: "described", role: "DESCRIPTIVE", start, end }]
+      : [{ partition_id: "train", role: "TRAINING", start, end: shiftMinutes(start, 60) },
+        { partition_id: "validate", role: "VALIDATION", start: shiftMinutes(start, 60), end: shiftMinutes(start, 90) },
+        { partition_id: "holdout", role: "HOLDOUT", start: shiftMinutes(start, 90), end }];
+    return {
+      operation_id: crypto.randomUUID(), idempotency_key: `ui-history-${crypto.randomUUID()}`,
+      expected_interpretation_revision_id: interpretationRevisionId,
+      edge_spec: { edge_id: crypto.randomUUID(), version: 1, parent_declaration_id: null, hypothesis: hypothesis.trim(),
+        claim: descriptive ? { status: "DESCRIPTIVE_ONLY", text: "Describe only." } : { status: "HYPOTHESIS", text: hypothesis.trim() },
+        falsification: descriptive ? { status: "DESCRIPTIVE_ONLY", criteria: "No outcome claim is evaluated." }
+          : { status: "DECLARED", criteria: direction === "OUTPERFORM" ? "The triggered minus untriggered mean is not positive." : "The triggered minus untriggered mean is not negative." },
+        alternatives: ["Short-term noise explains any difference."],
+        unknowns: ["Recorded responses are synthetic; no real pool behaviour is measured."] },
+      configuration: {
+        question, source: { source_id: source.source_id, profile_sha256: source.profile_sha256, evidence_class: "RECORDED_RESPONSE" },
+        market: source.market, window: source.window,
+        variants: variants.map((variant_id, index) => ({ variant_id, hypothesis: `Adopted rule ${index + 1}` })),
+        direction, horizons: [{ value: 5, unit: "MINUTES" }], partitions,
+        evaluation_plan: evaluations.map((evaluation_id, index) => ({ evaluation_id, trial_id: trial, variant_id: variants[index],
+          horizon: { value: 5, unit: "MINUTES" }, partition_ids: [partitions[0].partition_id] })),
+        schedule: { version: "p09.decision-clock/1", start: shiftMinutes(start, 15), end: shiftMinutes(end, -10), interval_seconds: 300 },
+        rule_map: { schema_version: "edge-os.hypothesis-rule-map/1", control: "UNTRIGGERED_DECISIONS", incremental_volume_declared: true,
+          rules: rules.map((row, index) => {
+            const built = expressions(row, quoteUnit);
+            return { evaluation_id: evaluations[index], trial_id: trial, variant_id: variants[index], price_expression: built.price,
+              volume_expression: built.volume, essential_inputs: ["price", "quote_volume"], rule_source: "USER_ADOPTED" };
+          }) },
+        resource_bounds: { provider_requests: Number(bounds.provider_requests), compute_seconds: Number(bounds.compute_seconds),
+          max_pages: Math.min(Number(bounds.provider_requests), source.page_requests_recorded + 1) || 1, max_rows: 2000,
+          max_bytes: 1_048_576, deadline_seconds: Number(bounds.deadline_seconds) },
+        permitted_access: ["RECORDED_RESPONSE"], stopping_rule: "Stop after the declared evaluations on the declared window.",
+        budget_version: "edge-os.research-budget/1",
+      },
+      field_origins: Object.fromEntries(HISTORY_FIELDS.map((name) => [name, name === "question"
+        ? { origin: "USER_STATED", source_ref: "original_request", adoption: "ADOPTED" }
+        : { origin: "USER_CONFIRMED", source_ref: HISTORY_REVIEW, adoption: "ADOPTED" }])),
+      trial_ids: [trial], evaluation_ids: evaluations,
+    };
+  };
+
+  const saveDeclaration = async (body: Record<string, unknown>) => {
+    setBusy(true); setError(""); setNotice(""); setPendingDeclaration(body);
+    try {
+      const saved = await api.saveHistoryInvestigation(intakeId, body);
+      setPendingDeclaration(null);
+      setDeclarations((current) => [...current.filter((item) => item.declaration.record_id !== saved.declaration.record_id), saved]);
+      setAdopted(false); await open(saved);
+      setNotice("Declaration saved before any collection. No data was read.");
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status !== 0) {
+        setPendingDeclaration(null);
+        setError(cause.detail);
+      } else {
+        setError("We could not confirm the save. Retry sends the same declaration, so it cannot save twice.");
+      }
+    } finally { setBusy(false); }
+  };
+
+  const declare = () => {
+    if (!ready || busy || !source || pendingDeclaration) return;
+    void saveDeclaration(buildDeclaration(source));
+  };
+
+  const startJob = async (fresh: boolean) => {
+    if (!selected || busy) return;
+    const name = `edge-os:history-job:${selected.declaration.record_id}`;
+    if (fresh) forgetKey(name);
+    const requestKey = storedKey(name);
+    const operation = storedKey(`${name}:operation`).replace(/^ui-/, "");
+    setBusy(true); setError(""); setNotice(""); setUncertainStart(false);
+    try {
+      await api.startInvestigationJob(intakeId, selected.declaration.record_id, { operation_id: operation, request_key: requestKey });
+      forgetKey(name); forgetKey(`${name}:operation`);
+      setNotice("Job saved and its budget reserved. It waits for the research worker.");
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 0) {
+        setUncertainStart(true);
+        setError("We could not confirm the start. Check again: it reuses the same request, so it cannot start twice.");
+      } else {
+        forgetKey(name); forgetKey(`${name}:operation`);
+        setError(cause instanceof ApiError ? cause.detail : "The job was not started.");
+      }
+    } finally { await loadJobs(selected); await refreshBudget(); setBusy(false); }
+  };
+
+  const cancel = async (job: InvestigationJob) => {
+    if (busy || !selected) return;
+    setBusy(true); setError("");
+    try { await api.cancelInvestigationJob(job.job_id); setNotice("Cancellation saved."); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.detail : "We could not confirm the cancellation. Check again."); }
+    finally { await loadJobs(selected); await refreshBudget(); setBusy(false); }
+  };
+
+  return (
+    <section className="stack" aria-labelledby="history-title" data-testid="history-investigation"
+      style={{ overflowWrap: "anywhere" }}>
+      <h3 id="history-title">Recorded-history investigation</h3>
+      <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>
+      {loadError ? <div className="status err" role="alert"><p>{loadError}</p><button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>Retry</button></div> : null}
+      {budget ? (
+        <p data-testid="research-budget">Research budget available: {budget.available.provider_requests} provider requests, {budget.available.compute_seconds} compute seconds. Reserved {budget.reserved.provider_requests}; unknown liability {budget.unknown_liability.provider_requests}.</p>
+      ) : null}
+      {error ? <p className="status err" role="alert">{error}</p> : null}
+      {notice ? <p className="status ok" role="status">{notice}</p> : null}
+      {pendingDeclaration && !busy ? <button className="btn btn-secondary" type="button" onClick={() => void saveDeclaration(pendingDeclaration)}>Retry the same declaration</button> : null}
+      {uncertainStart ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(false)} disabled={busy}>Check again with the same start</button> : null}
+
+      {declarations.length ? (
+        <div className="stack">
+          <h4>Saved history declarations</h4>
+          {declarations.map((item) => (
+            <div className="card" key={item.declaration.record_id}>
+              <strong>{item.declaration.content.edge_spec.hypothesis}</strong>
+              <span className="muted">{item.declaration.content.configuration.source.source_id} · {item.declaration.content.configuration.direction}</span>
+              <button className="btn btn-secondary" type="button" onClick={() => void open(item)} disabled={busy}>Open this declaration</button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {selected ? (
+        <div className="stack" data-testid="history-declaration">
+          <h4>Declaration {selected.declaration.record_id}</h4>
+          <dl className="kv">
+            <dt>Declaration ID</dt><dd className="mono" data-testid="history-declaration-id">{selected.declaration.record_id}</dd>
+            <dt>Saved before data</dt><dd>{selected.declaration.content.declaration_state}; provider queries {selected.access_history[0]?.provider_queries ?? 0}</dd>
+            <dt>Configuration hash</dt><dd className="mono">{selected.declaration.content.frozen.configuration_sha256}</dd>
+            <dt>Rule map hash</dt><dd className="mono">{selected.declaration.content.frozen.rule_map_sha256}</dd>
+            <dt>Reserved per job</dt><dd>{selected.declaration.content.configuration.resource_bounds.provider_requests} provider requests, {selected.declaration.content.configuration.resource_bounds.compute_seconds} compute seconds</dd>
+          </dl>
+          <div className="btn-row">
+            <button className="btn btn-primary" type="button" onClick={() => void startJob(false)} disabled={busy}>Start investigation job</button>
+            <button className="btn btn-secondary" type="button" onClick={() => void loadJobs(selected)} disabled={busy}>Check job status</button>
+          </div>
+          {jobs.map((job) => (
+            <div className="card stack" key={job.job_id} data-testid="history-job" data-state={job.state}>
+              <strong>Job {job.job_id.slice(0, 8)}: {job.state}</strong>
+              <p role="status">{STATE_COPY[job.state] ?? job.state}{job.terminal_reason ? ` (${job.terminal_reason})` : ""}</p>
+              <p className="muted">Attempts and events: {job.events.map((event) => event.kind).join(" → ")}</p>
+              <p className="muted">Provider requests: reserved {job.budget.reserved?.provider_requests ?? 0}, consumed {job.budget.consumed?.provider_requests ?? 0}, released {job.budget.released?.provider_requests ?? 0}, unknown liability {job.budget.unknown_liability?.provider_requests ?? 0}.</p>
+              {job.dataset ? <p>Dataset <span className="mono">{job.dataset.dataset_id}</span>: {job.dataset.summary.status}, {job.dataset.summary.verdict.overall}, {job.dataset.summary.binding_state}{job.dataset.summary.unavailable_states.length ? `; ${job.dataset.summary.unavailable_states.join(", ")}` : ""}; provider usage {job.dataset.summary.provider_requests_state}.</p> : null}
+              {RUNNING.has(job.state) && !job.cancel_requested_at ? <button className="btn btn-secondary" type="button" onClick={() => void cancel(job)} disabled={busy}>Cancel this job</button> : null}
+              {!RUNNING.has(job.state) && job.state !== "REPORTED" ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(true)} disabled={busy}>Retry as a new job</button> : null}
+              {job.report ? <JobReport report={job.report} /> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <details open={declarations.length === 0}>
+        <summary>Declare a new recorded-history investigation</summary>
+        <div className="stack">
+          <div className="field">
+            <label htmlFor="history-source">Recorded source</label>
+            <select id="history-source" className="input" value={sourceId} onChange={(event) => { setSourceId(event.target.value); setAdopted(false); }}>
+              <option value="">Choose a recorded source</option>
+              {sources.map((item) => <option key={item.source_id} value={item.source_id}>{item.title}</option>)}
+            </select>
+          </div>
+          {source ? <p className="muted">{source.evidence_class}, {source.content_label}. Pool <span className="mono">{source.market.pool_address}</span>; window {source.window.start} to {source.window.end}.</p> : null}
+          <div className="field">
+            <label htmlFor="history-hypothesis">Your hypothesis in your own words</label>
+            <textarea id="history-hypothesis" className="input" value={hypothesis} onChange={(event) => { setHypothesis(event.target.value); setAdopted(false); }} />
+          </div>
+          <div className="field">
+            <label htmlFor="history-direction">What you will check</label>
+            <select id="history-direction" className="input" value={direction} onChange={(event) => { setDirection(event.target.value); setAdopted(false); }}>
+              <option value="DESCRIPTIVE">Describe only</option>
+              <option value="OUTPERFORM">Triggered decisions outperform</option>
+              <option value="UNDERPERFORM">Triggered decisions underperform</option>
+            </select>
+          </div>
+          {rules.map((row, index) => (
+            <fieldset key={index} className="stack">
+              <legend>Rule {index + 1} (your own rule; worked-example rules are refused)</legend>
+              <label className="field">Price return lookback (buckets)
+                <input className="input" aria-label={`Rule ${index + 1} lookback buckets`} value={row.lookback} inputMode="numeric"
+                  onChange={(event) => { setRules(rules.map((item, at) => at === index ? { ...item, lookback: event.target.value.trim() } : item)); setAdopted(false); }} />
+              </label>
+              <label className="field">Return condition
+                <select className="input" aria-label={`Rule ${index + 1} return condition`} value={row.rise}
+                  onChange={(event) => { setRules(rules.map((item, at) => at === index ? { ...item, rise: event.target.value as "gt" | "lt" } : item)); setAdopted(false); }}>
+                  <option value="gt">is above</option><option value="lt">is below</option>
+                </select>
+              </label>
+              <label className="field">Return threshold (fraction, for example 0.004)
+                <input className="input" aria-label={`Rule ${index + 1} return threshold`} value={row.threshold}
+                  onChange={(event) => { setRules(rules.map((item, at) => at === index ? { ...item, threshold: event.target.value.trim() } : item)); setAdopted(false); }} />
+              </label>
+              <label className="field">Quote volume above (quote units)
+                <input className="input" aria-label={`Rule ${index + 1} volume threshold`} value={row.volume}
+                  onChange={(event) => { setRules(rules.map((item, at) => at === index ? { ...item, volume: event.target.value.trim() } : item)); setAdopted(false); }} />
+              </label>
+            </fieldset>
+          ))}
+          <div className="btn-row">
+            {rules.length < 3 ? <button className="btn btn-secondary" type="button" onClick={() => { setRules([...rules, { lookback: "", rise: "gt", threshold: "", volume: "" }]); setAdopted(false); }}>Add another rule</button> : null}
+            {rules.length > 1 ? <button className="btn btn-secondary" type="button" onClick={() => { setRules(rules.slice(0, -1)); setAdopted(false); }}>Remove the last rule</button> : null}
+          </div>
+          <fieldset className="stack">
+            <legend>Resource bounds reserved before any collection</legend>
+            {(["provider_requests", "compute_seconds", "deadline_seconds"] as const).map((name) => (
+              <label className="field" key={name}>{name.replace("_", " ")}
+                <input className="input" aria-label={`Bound ${name}`} value={bounds[name]} inputMode="numeric"
+                  onChange={(event) => { setBounds({ ...bounds, [name]: event.target.value.trim() }); setAdopted(false); }} />
+              </label>
+            ))}
+          </fieldset>
+          <label className="choice">
+            <input type="checkbox" checked={adopted} disabled={!source || !hypothesis.trim() || !rulesComplete}
+              onChange={(event) => setAdopted(event.target.checked)} />
+            I reviewed and adopt every setting above before any data is read
+          </label>
+          <button className="btn btn-primary" type="button" onClick={declare} disabled={!ready || pendingDeclaration !== null} aria-disabled={busy || undefined}>
+            {busy ? "Saving…" : "Save history declaration"}
+          </button>
+        </div>
+      </details>
     </section>
   );
 }

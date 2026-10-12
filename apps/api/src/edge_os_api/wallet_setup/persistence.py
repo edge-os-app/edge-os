@@ -1,9 +1,9 @@
-"""Local `wallet_setup_local` schema and row helpers.
+"""`wallet_setup_local` schema and row helpers.
 
-The tables live in their own metadata and are created only by the test/qualification harness.
-This package ships no migration and registers no shared model. `owner_id` follows the verified
-principal `users.id` by application convention; it carries no foreign key so the local schema
-stays self-contained.
+The tables live in their own metadata, separate from `records.Base`, and migration 0007 creates
+them through the normal additive path. This package registers no shared model. `owner_id` follows
+the verified principal `users.id` by application convention; it carries no foreign key so the
+schema stays self-contained.
 
 Appendix A (P15) says the envelope is `{schema_version, record_type, record_id, owner_id,
 operation_id, created_at, content}`. This local table is metadata for one setup identity, not a

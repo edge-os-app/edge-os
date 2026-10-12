@@ -959,6 +959,129 @@ class CheckedSendTests(unittest.TestCase):
         self.assertEqual(result["status"], "BLOCKED")
         self.assertFalse(any(call[0] == "enter" for call in self.bridge.calls))
 
+    @staticmethod
+    def _claude_296_footer():
+        return (
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (high) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update\n"
+            "5h:27%*(~2h44m) wk:3%*(~2d0h) extra:0%*($0.00/$30.00) | session:0m\n"
+            "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+        )
+
+    def test_claude_296_new_footer_rows_leave_empty_composer_idle(self):
+        self.assertFalse(_has_partial_input("❯ \n" + self._claude_296_footer()))
+
+    def test_claude_296_older_supported_footer_rows_stay_idle(self):
+        older = (
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (medium) | 💰 $0.19 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update\n"
+            "5h:0%* wk:19%*(~6d10h) extra:0%*($0.00/$30.00) | session:191m\n"
+            "⏸ manual mode on · ← for agents"
+        )
+        self.assertFalse(_has_partial_input("❯ \n" + older))
+
+    def test_claude_296_own_pointer_and_submission_with_new_footer(self):
+        text = "Reply only ACK-296-footer. Do not run tools."
+        header = "[tmux-bridge from:claude pane:%9 at:work:0.1 — load the smux skill to reply] "
+        footer = self._claude_296_footer()
+        own = header + text
+        before = "prior history\n❯ " + own + "\n" + footer
+        after = "prior history\n" + own + "\n❯ \n" + footer
+        self.assertTrue(_has_active_draft(before, "%9", text))
+        self.assertTrue(_submitted(after, before, "%9", text))
+
+    def test_claude_296_foreign_draft_with_new_footer_stays_partial(self):
+        text = "Reply only ACK-296-foreign. Do not run tools."
+        capture = (
+            "❯ [tmux-bridge from:other pane:%9 at:work:0.1 — load the smux skill to reply] foreign text\n"
+            + self._claude_296_footer()
+        )
+        self.assertTrue(_has_partial_input(capture))
+        self.assertFalse(_has_active_draft(capture, "%9", text))
+
+    def test_claude_296_footer_lookalike_above_boundary_stays_partial(self):
+        text = "Reply only ACK-296-above. Do not run tools."
+        header = "[tmux-bridge from:claude pane:%9 at:work:0.1 — load the smux skill to reply] "
+        capture = (
+            "❯ " + header + text + "\n"
+            "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n"
+            + self._claude_296_footer()
+        )
+        self.assertFalse(_has_active_draft(capture, "%9", text))
+        self.assertTrue(_has_partial_input(capture))
+
+    def test_claude_296_malformed_or_suffix_footer_rows_stay_blocked(self):
+        head = (
+            "❯ \n"
+            "────────────────────────────────────────────────────────────\n"
+            "🤖 Sonnet 5.5 (high) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update\n"
+        )
+        for row in (
+            "5h:27%*(~2h44m) wk:3%*(~2d0h) extra:0%*($0.00/$30.00) | session:0m trailing",
+            "5h:27%*(~2h44m) wk:3%*(~2d0h) extra:0%*($0.00/$30.00)",
+            "5h:27%*(JUNK) wk:3%*(~2d0h) extra:0%*($0.00/$30.00) | session:0m",
+            "5h:27%*(~2h44m) wk:3%*(token) extra:0%*($0.00/$30.00) | session:0m",
+            "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents trailing",
+            "⏵⏵ auto mode on",
+            "⏵⏵ auto mode on (shift+tab to cycle) (foreign)",
+            "⏵⏵ auto mode on (anything here) · ← for agents",
+            "5h:0% wk:19% extra:0%($0.00/$30.00) | session:191m",
+        ):
+            with self.subTest(row=row):
+                self.assertTrue(_has_partial_input(head + row))
+
+    def test_claude_296_footer_rows_without_or_short_boundary_stay_blocked(self):
+        rows = (
+            "🤖 Sonnet 5.5 (high) | 💰 $0.00 session / $0.00 today\n"
+            "[OMC#4.15.0L] -> 4.15.7 omc update\n"
+            "5h:27%*(~2h44m) wk:3%*(~2d0h) extra:0%*($0.00/$30.00) | session:0m\n"
+            "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+        )
+        self.assertTrue(_has_partial_input("❯ \n" + rows))
+        self.assertTrue(_has_partial_input("❯ \n" + "─\n" + rows))
+
+    def test_claude_296_checked_send_submits_once_and_blocks_duplicate(self):
+        text = "Reply only ACK-296-send. Do not run tools."
+        self.request["text"] = text
+        footer = self._claude_296_footer()
+        idle = "❯ \n" + footer
+
+        class ClaudeFooterBridge(FakeBridge):
+            def message(inner, target, message):
+                inner.calls.append(("message", target, message))
+                inner.envelope = (
+                    "[tmux-bridge from:claude pane:%1 at:work:0.0 — "
+                    "load the smux skill to reply] " + message
+                )
+                inner.capture = "❯ " + inner.envelope + "\n" + footer
+
+            def enter(inner, target):
+                inner.calls.append(("enter", target))
+                inner.capture = inner.envelope + "\n❯ \n" + footer
+
+        self.bridge = ClaudeFooterBridge(capture=idle)
+        self.request["preflight_sha256"] = hashlib.sha256(idle.encode()).hexdigest()
+        result = self.send()
+        self.assertEqual(result["status"], "SUBMITTED")
+        self.assertEqual(sum(call[0] == "message" for call in self.bridge.calls), 1)
+        self.assertEqual(sum(call[0] == "enter" for call in self.bridge.calls), 1)
+        before_duplicate = list(self.bridge.calls)
+        self.assertTrue(self.send()["duplicate"])
+        self.assertEqual(self.bridge.calls, before_duplicate)
+
+    def test_claude_296_checked_send_preserves_foreign_draft(self):
+        text = "Reply only ACK-296-foreign-send. Do not run tools."
+        self.request["text"] = text
+        capture = "❯ foreign unsent draft\n" + self._claude_296_footer()
+        self.request["preflight_sha256"] = hashlib.sha256(capture.encode()).hexdigest()
+        self.bridge = FakeBridge(capture=capture)
+        result = self.send()
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertFalse(any(call[0] in {"message", "enter"} for call in self.bridge.calls))
+
 
 class StopGuardTests(unittest.TestCase):
     def setUp(self):

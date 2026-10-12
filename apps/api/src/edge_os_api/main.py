@@ -20,6 +20,7 @@ from edge_os_api.accounts import views as account_views
 from edge_os_api.agent_context import controls as agent_context
 from edge_os_api.research import comparison_runs as effect_run
 from edge_os_api.research import investigation_adoption as investigation_adoption
+from edge_os_api.research import history_dataset, investigation_jobs, market_adoption
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service as service
 from edge_os_api.research.attempt_store import AdvisoryLockGuard
@@ -30,8 +31,17 @@ from edge_os_api.core.authentication import Principal, Verifier, require_princip
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
 from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
 from edge_os_api.research.fixture_interpreter import samples
-from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, InvestigationBody, PublicationBody, RetryBody, SpotReplayBody
+from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
+from edge_os_api.wallet_setup import router as wallet_setup
+from edge_os_api.wallet_setup.adapter import build_wallet_provider
+from edge_os_api.consent import routes as consent_routes
+from edge_os_api.core.financial_services import build_financial_services
+from edge_os_api.execution import routes as action_routes
+from edge_os_api.funding import routes as funding_routes
+from edge_os_api.recovery import routes as recovery_routes
+from edge_os_api.revocation import routes as removal_routes
+from edge_os_api.stops import routes as stop_routes
 
 log = logging.getLogger("edge_os")
 MAX_BODY_BYTES = 256 * 1024
@@ -107,6 +117,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
         engine.dispose()
         raise
     verifier = Verifier(settings.privy_app_id, settings.verification_keys)
+    # The local fixture is the only available wallet provider; production uses the fail-closed one.
+    wallet_provider = build_wallet_provider(settings.wallet_provider)
     session_factory = make_session_factory(engine)
     started_at = service.utcnow().isoformat()
     hermes = (HermesResearch(hermes_runner, session_factory, AdvisoryLockGuard(engine), time.monotonic)
@@ -127,6 +139,10 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
                   redoc_url="/redoc" if docs else None, openapi_url="/openapi.json" if docs else None)
     app.state.settings, app.state.verifier = settings, verifier
     app.state.engine, app.state.session_factory, app.state.hermes = engine, session_factory, hermes
+    app.state.wallet_provider = wallet_provider
+    # One composition of the accepted financial services. Its provider ports follow `execution_mode`:
+    # authored fixtures in local/test configuration, fail-closed unavailable ports in production.
+    app.state.financial = build_financial_services(session_factory, settings)
     install_handlers(app)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
                        allow_headers=["Authorization", "Content-Type"], allow_credentials=False)
@@ -169,6 +185,10 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/me")
     def me(principal: Principal = Depends(require_principal)) -> dict[str, str]:
         return {"user_id": str(principal.user_id)}
+
+    @private.get("/financial/provider")
+    def financial_provider() -> dict[str, Any]:
+        return app.state.financial.ports.describe()
 
     @private.get("/interpreter")
     def interpreter_info() -> dict[str, Any]:
@@ -224,6 +244,87 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
         status, result = run(session, lambda: investigation_adoption.create_declaration(
             session, principal, intake_id, body), retry="RECONCILE")
         return JSONResponse(result, status_code=status)
+
+    @private.get("/research/history-sources")
+    def history_sources() -> dict[str, Any]:
+        """The declared recorded sources. All are SYNTHETIC recordings; none is observed market history."""
+        return {**history_dataset.catalog(), "mode": settings.research_history_mode}
+
+    @private.post("/research/requests/{intake_id}/history-investigations")
+    def save_history_investigation(intake_id: str, data: Any = Depends(read_json),
+                                   principal: Principal = Depends(require_principal),
+                                   session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(HistoryInvestigationBody, data)
+        status, result = run(session, lambda: investigation_adoption.create_history_declaration(
+            session, principal, intake_id, body), retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
+
+    @private.get("/research/requests/{intake_id}/history-investigations")
+    def list_history_investigations(intake_id: str, principal: Principal = Depends(require_principal),
+                                    session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_adoption.list_history_declarations(session, principal, intake_id))
+
+    @private.get("/research/requests/{intake_id}/history-investigations/{declaration_id}")
+    def get_history_investigation(intake_id: str, declaration_id: str,
+                                  principal: Principal = Depends(require_principal),
+                                  session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_adoption.get_history_declaration(
+            session, principal, intake_id, declaration_id))
+
+    @private.post("/research/requests/{intake_id}/history-investigations/{declaration_id}/jobs")
+    def start_investigation_job(intake_id: str, declaration_id: str, data: Any = Depends(read_json),
+                                principal: Principal = Depends(require_principal),
+                                session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(InvestigationJobBody, data)
+        status, result = run(session, lambda: investigation_jobs.start_job(
+            session, principal, settings, intake_id, declaration_id, body), retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
+
+    @private.get("/research/requests/{intake_id}/history-investigations/{declaration_id}/jobs")
+    def list_investigation_jobs(intake_id: str, declaration_id: str,
+                                principal: Principal = Depends(require_principal),
+                                session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.list_jobs(session, principal, intake_id, declaration_id))
+
+    @private.get("/research/investigation-jobs/{job_id}")
+    def get_investigation_job(job_id: str, principal: Principal = Depends(require_principal),
+                              session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.get_job(session, principal, job_id))
+
+    @private.post("/research/investigation-jobs/{job_id}/cancel")
+    def cancel_investigation_job(job_id: str, principal: Principal = Depends(require_principal),
+                                 session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.cancel_job(session, principal, settings, job_id),
+                   retry="RECONCILE")
+
+    @private.get("/research/investigation-reports/{report_id}")
+    def get_investigation_report(report_id: str, principal: Principal = Depends(require_principal),
+                                 session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.get_report(session, principal, report_id))
+
+    @private.get("/research/history-datasets")
+    def list_history_datasets(principal: Principal = Depends(require_principal),
+                              session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: history_dataset.list_datasets(session, principal))
+
+    @private.get("/research/history-datasets/{dataset_id}")
+    def get_history_dataset(dataset_id: str, principal: Principal = Depends(require_principal),
+                            session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: history_dataset.dataset_view(
+            history_dataset.owned_dataset(session, principal, dataset_id)))
+
+    @private.post("/research/requests/{intake_id}/market-adoptions")
+    def adopt_market(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
+                     session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(MarketAdoptionBody, data)
+        status, result = run(session, lambda: market_adoption.adopt_dataset_market(session, principal, intake_id, body),
+                             retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
+
+    @private.get("/research/budget")
+    def research_budget(principal: Principal = Depends(require_principal),
+                        session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.get_budget(session, principal, settings))
 
     @private.get("/research/requests/{intake_id}/investigations")
     def get_investigations(intake_id: str, principal: Principal = Depends(require_principal),
@@ -311,4 +412,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     app.include_router(private)
     app.include_router(account_views.router)
     app.include_router(agent_context.router)
+    app.include_router(wallet_setup.router)
+    for financial_router in (funding_routes.router, consent_routes.router, action_routes.router,
+                             recovery_routes.router, stop_routes.router, removal_routes.router):
+        app.include_router(financial_router)
     return app

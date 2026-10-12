@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import type { DatasetSummary, HistorySpotReplayBody } from "../lib/api";
 import type { SpotReplayBody, SpotReplayDependency, SpotReplayRecord, Strategy } from "../lib/types";
 import { ReplayResult } from "./ReplayResult";
 
@@ -32,7 +33,39 @@ function makeBody(strategyId: string, revisionId: string, dependencies: Dependen
   };
 }
 
+function plusMinutes(value: string, minutes: number): string {
+  return new Date(new Date(value).valueOf() + minutes * 60_000).toISOString().replace(".000Z", "Z");
+}
+
+function historyBody(base: SpotReplayBody, dataset: DatasetSummary, start: string, end: string): HistorySpotReplayBody {
+  const { dataset_fixture_id: _fixture, ...rest } = base; // eslint-disable-line @typescript-eslint/no-unused-vars
+  return { ...rest, idempotency_key: `rg05-${crypto.randomUUID()}`, run_configuration_id: `rg05-config-${crypto.randomUUID()}`,
+    history_dataset_id: dataset.dataset_id, window_start: start, window_end: end };
+}
+
 export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Props) {
+  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
+  const [source, setSource] = useState("fixture");
+  const [windowStart, setWindowStart] = useState("");
+  const [windowEnd, setWindowEnd] = useState("");
+  useEffect(() => {
+    let current = true;
+    Promise.resolve().then(() => api.historyDatasets()).then((result) => {
+      if (current) setDatasets(result.datasets.filter((item) => item.binding_state === "QUALIFIED_BINDING"));
+    }).catch(() => { /* the synthetic fixture stays available; history datasets are optional here */ });
+    return () => { current = false; };
+  }, []);
+  const dataset = datasets.find((item) => item.dataset_id === source) ?? null;
+  const chooseSource = (value: string) => {
+    setSource(value); setPendingBody(null);
+    const chosen = datasets.find((item) => item.dataset_id === value);
+    if (chosen) {
+      setWindowStart(plusMinutes(chosen.window_start, 5 * (strategy.warmup_buckets + 1)));
+      const wanted = plusMinutes(chosen.window_start, 5 * (strategy.warmup_buckets + 13));
+      // Validation and holdout data stay unread: the default window ends at the dataset's readable limit.
+      setWindowEnd(new Date(wanted) > new Date(chosen.readable_until) ? chosen.readable_until : wanted);
+    }
+  };
   const availableSeries = useMemo(() => strategy.data_inputs.filter(
     (series): series is Series => series === "price" || series === "quote_volume"), [strategy.data_inputs]);
   const [dependencies, setDependencies] = useState<Dependencies>(emptyDependencies);
@@ -42,7 +75,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
   const [record, setRecord] = useState<SpotReplayRecord | null>(null);
   const [replayId, setReplayId] = useState("");
   const [loadNotice, setLoadNotice] = useState("");
-  const [pendingBody, setPendingBody] = useState<SpotReplayBody | null>(null);
+  const [pendingBody, setPendingBody] = useState<SpotReplayBody | HistorySpotReplayBody | null>(null);
 
   const updateDependency = (field: FieldName, index: number, changes: Partial<SpotReplayDependency>) => {
     setDependencies((current) => ({ ...current, [field]: current[field].map((dependency, position) =>
@@ -62,7 +95,8 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
   const save = async () => {
     if (busy || !reviewed.entry || !reviewed.exit) return;
     setBusy(true); setError(""); setLoadNotice("");
-    const body = pendingBody ?? makeBody(strategyId, strategyRevisionId, dependencies);
+    const fixtureBody = makeBody(strategyId, strategyRevisionId, dependencies);
+    const body = pendingBody ?? (dataset ? historyBody(fixtureBody, dataset, windowStart, windowEnd) : fixtureBody);
     setPendingBody(body);
     try {
       const saved = await api.createSpotReplay(body);
@@ -94,9 +128,29 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       <h2 id="spot-replay-title">Test the saved strategy on synthetic prices</h2>
       <p className="muted">The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
       <h3>New run settings (editable)</h3>
+      <div className="field">
+        <label htmlFor="spot-replay-source">Price data</label>
+        <select id="spot-replay-source" className="input" value={source} onChange={(event) => chooseSource(event.target.value)}>
+          <option value="fixture">Authored synthetic fixture p13.wc01/1</option>
+          {datasets.map((item) => <option key={item.dataset_id} value={item.dataset_id}>Saved recorded history {item.source_id} · {item.dataset_id.slice(0, 8)}</option>)}
+        </select>
+      </div>
+      {dataset ? (
+        <div className="stack" data-testid="spot-replay-history-source" style={{ overflowWrap: "anywhere" }}>
+          <p className="status stop">Simulated fills on saved recorded-history dataset {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. These prices are synthetic recorded responses, not observed market history. The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
+          <div className="field">
+            <label htmlFor="spot-replay-window-start">Window start (UTC)</label>
+            <input id="spot-replay-window-start" className="input mono" value={windowStart} onChange={(event) => setWindowStart(event.target.value.trim())} />
+          </div>
+          <div className="field">
+            <label htmlFor="spot-replay-window-end">Window end (UTC, exclusive)</label>
+            <input id="spot-replay-window-end" className="input mono" value={windowEnd} onChange={(event) => setWindowEnd(event.target.value.trim())} />
+          </div>
+        </div>
+      ) : null}
       <dl className="kv">
-        <dt>Fixture</dt><dd className="mono">p13.wc01/1 · synthetic only</dd>
-        <dt>Window</dt><dd>2026-10-01 12:05 to 12:35 UTC</dd>
+        <dt>Data</dt><dd className="mono">{dataset ? `${dataset.source_id} · simulated fills` : "p13.wc01/1 · synthetic only"}</dd>
+        <dt>Window</dt><dd>{dataset ? `${windowStart} to ${windowEnd}` : "2026-10-01 12:05 to 12:35 UTC"}</dd>
         <dt>Starting capital (quote)</dt><dd>1000. This fixed amount will be used for a new run.</dd>
         <dt>Starting base amount</dt><dd>0</dd>
         <dt>Starting cost basis</dt><dd>0</dd>
@@ -141,7 +195,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
 
       <button className="btn btn-primary" type="button" onClick={save} aria-disabled={busy || undefined}
         disabled={!reviewed.entry || !reviewed.exit}>
-        {busy ? "Saving replay…" : pendingBody ? "Retry same replay" : "Save synthetic replay"}
+        {busy ? "Saving replay…" : pendingBody ? "Retry same replay" : dataset ? "Save replay on recorded history" : "Save synthetic replay"}
       </button>
       {pendingBody ? <p role="status" className="muted">This attempt has an uncertain outcome. Retry uses its original inputs and key; edits above apply only to a new attempt.</p> : null}
       {error ? <p role="alert" className="status err">{error}</p> : null}

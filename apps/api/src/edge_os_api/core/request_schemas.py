@@ -100,7 +100,9 @@ class SpotReplayBody(StrictModel):
     idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     strategy_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     strategy_revision_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F-]{36}$")]
-    dataset_fixture_id: Literal["p13.wc01/1"]
+    # Exactly one input: the authored P13 fixture, or one of the owner's saved recorded-history datasets.
+    dataset_fixture_id: Literal["p13.wc01/1"] | None = None
+    history_dataset_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")] | None = None
     run_configuration_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     window_start: datetime
     window_end: datetime
@@ -108,6 +110,13 @@ class SpotReplayBody(StrictModel):
     initial_base_amount: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
     initial_basis_quote: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
     essential_fields: SpotReplayEssentialFields
+
+    @model_validator(mode="after")
+    def one_dataset(self) -> "SpotReplayBody":
+        if (self.dataset_fixture_id is None) == (self.history_dataset_id is None):
+            raise PydanticCustomError("one_dataset_required",
+                                      "Choose either the synthetic fixture or one saved history dataset.")
+        return self
 
 
 class EdgeClaim(StrictModel):
@@ -387,3 +396,233 @@ class EffectRunBody(StrictModel):
 class EffectAttemptBody(StrictModel):
     operation_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
     idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+
+
+class WalletSetupPrepareBody(StrictModel):
+    """One durable agent setup. The owner comes from the verified credential, never the body."""
+
+    network_id: Literal[143, 10143]
+    strategy_id: Identifier
+    strategy_revision_id: Identifier
+    request_key: Identifier
+
+
+class WalletSetupMutationBody(StrictModel):
+    """A dispatch, resume or cancel accepts no identity; any supplied field is rejected."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+Uuid4Text = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")]
+Address = Annotated[str, StringConstraints(pattern=r"^0x[0-9a-fA-F]{40}$")]
+Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class HistorySourceBinding(StrictModel):
+    """The one declared recorded source. Its id and profile digest must match the served source exactly."""
+
+    source_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,62}/[0-9]{1,4}$")]
+    profile_sha256: Sha256Hex
+    evidence_class: Literal["RECORDED_RESPONSE", "PROVIDER_ACTUAL"]
+
+
+class HistoryMarket(StrictModel):
+    network: Literal["MONAD"]
+    pool_address: Address
+    base_asset: Address
+    quote_asset: Address
+
+
+class HistoryWindow(InvestigationPeriod):
+    """A UTC window on the five-minute grid."""
+
+    @model_validator(mode="after")
+    def on_bucket_grid(self) -> "HistoryWindow":
+        if any(moment.microsecond or moment.second or moment.minute % 5 for moment in (self.start, self.end)):
+            raise ValueError("Window bounds must fall on the five-minute UTC grid.")
+        return self
+
+
+class HistoryResourceBounds(StrictModel):
+    """Reserved before any adapter effect. Each provider page is one provider request."""
+
+    provider_requests: int = Field(ge=1, le=64)
+    compute_seconds: int = Field(ge=1, le=600)
+    max_pages: int = Field(ge=1, le=64)
+    max_rows: int = Field(ge=1, le=10000)
+    max_bytes: int = Field(ge=1024, le=4_194_304)
+    deadline_seconds: int = Field(ge=1, le=3600)
+
+    @model_validator(mode="after")
+    def pages_fit_requests(self) -> "HistoryResourceBounds":
+        if self.max_pages > self.provider_requests:
+            raise ValueError("The page limit cannot exceed the reserved provider requests.")
+        return self
+
+
+class HypothesisRule(StrictModel):
+    """One adopted evaluation's exact P06 rules. Only the user's own adopted rule is accepted."""
+
+    evaluation_id: Uuid4Text
+    trial_id: Uuid4Text
+    variant_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
+    price_expression: dict[str, Any]
+    volume_expression: dict[str, Any]
+    essential_inputs: list[Literal["price", "quote_volume"]] = Field(min_length=1, max_length=2)
+    rule_source: Literal["USER_ADOPTED"]
+
+    @model_validator(mode="after")
+    def unique_essential_inputs(self) -> "HypothesisRule":
+        if len(set(self.essential_inputs)) != len(self.essential_inputs):
+            raise ValueError("Essential input mappings must be unique.")
+        return self
+
+
+class HypothesisRuleMap(StrictModel):
+    schema_version: Literal["edge-os.hypothesis-rule-map/1"]
+    rules: list[HypothesisRule] = Field(min_length=1, max_length=20)
+    control: Literal["UNTRIGGERED_DECISIONS"]
+    incremental_volume_declared: bool
+
+
+class HistoryInvestigationConfiguration(StrictModel):
+    question: Annotated[str, StringConstraints(min_length=1, max_length=10000), AfterValidator(_nfc_text)]
+    source: HistorySourceBinding
+    market: HistoryMarket
+    window: HistoryWindow
+    variants: list[InvestigationVariant] = Field(min_length=1, max_length=20)
+    direction: Literal["OUTPERFORM", "UNDERPERFORM", "DESCRIPTIVE"]
+    horizons: list[InvestigationHorizon] = Field(min_length=1, max_length=20)
+    partitions: list[InvestigationPartition] = Field(min_length=1, max_length=10)
+    evaluation_plan: list[InvestigationEvaluationPlan] = Field(min_length=1, max_length=20)
+    schedule: EffectRunSchedule
+    rule_map: HypothesisRuleMap
+    resource_bounds: HistoryResourceBounds
+    permitted_access: list[Literal["RECORDED_RESPONSE", "PROVIDER_ACTUAL"]] = Field(min_length=1, max_length=1)
+    stopping_rule: ReviewText
+    budget_version: Literal["edge-os.research-budget/1"]
+
+    @model_validator(mode="after")
+    def consistent_plan(self) -> "HistoryInvestigationConfiguration":
+        if len({item.variant_id for item in self.variants}) != len(self.variants):
+            raise ValueError("Variant identities must be unique.")
+        if len({item.partition_id for item in self.partitions}) != len(self.partitions):
+            raise ValueError("Partition identities must be unique.")
+        if self.permitted_access[0] != self.source.evidence_class:
+            raise ValueError("The permitted access route must match the declared source's evidence class.")
+        if any(item.start < self.window.start or item.end > self.window.end for item in self.partitions):
+            raise ValueError("Partition boundaries must be contained within the declared window.")
+        ordered = self.partitions
+        if any(left.end > right.start for left, right in zip(ordered, ordered[1:])):
+            raise ValueError("Partition boundaries must be ordered and non-overlapping.")
+        roles = {item.role for item in ordered}
+        if self.direction == "DESCRIPTIVE" and roles != {"DESCRIPTIVE"}:
+            raise ValueError("Descriptive work uses descriptive partitions only.")
+        if self.direction != "DESCRIPTIVE" and (not {"TRAINING", "VALIDATION", "HOLDOUT"} <= roles
+                                                 or "DESCRIPTIVE" in roles):
+            raise PydanticCustomError("predictive_partitions_incomplete",
+                                      "Predictive adoption requires bounded training, validation, and holdout partitions.")
+        partition_ids = {item.partition_id for item in ordered}
+        variant_ids = {item.variant_id for item in self.variants}
+        horizons = {(item.value, item.unit) for item in self.horizons}
+        plan_ids = [item.evaluation_id for item in self.evaluation_plan]
+        if len(plan_ids) != len(set(plan_ids)):
+            raise ValueError("Each evaluation identity must have one explicit plan row.")
+        if any(item.variant_id not in variant_ids or (item.horizon.value, item.horizon.unit) not in horizons
+               or len(item.partition_ids) != 1 or item.partition_ids[0] not in partition_ids
+               for item in self.evaluation_plan):
+            raise ValueError("Each evaluation must reference a declared variant, horizon and exactly one partition.")
+        rules = {item.evaluation_id: item for item in self.rule_map.rules}
+        if len(rules) != len(self.rule_map.rules) or set(rules) != set(plan_ids):
+            raise PydanticCustomError("rule_map_plan_mismatch",
+                                      "Map every declared evaluation to exactly one adopted rule.")
+        if any(rules[item.evaluation_id].trial_id != item.trial_id
+               or rules[item.evaluation_id].variant_id != item.variant_id for item in self.evaluation_plan):
+            raise PydanticCustomError("rule_map_plan_mismatch",
+                                      "Each rule must keep its evaluation's exact trial and variant identity.")
+        if self.schedule.start < self.window.start or self.schedule.end > self.window.end:
+            raise ValueError("The decision schedule must stay inside the declared window.")
+        return self
+
+
+HistoryAdoptedField = Literal[
+    "edge_spec", "question", "source", "market", "window", "variants", "direction", "horizons", "partitions",
+    "evaluation_plan", "schedule", "rule_map", "resource_bounds", "permitted_access", "stopping_rule",
+    "budget_version",
+]
+
+
+class HistoryFieldAdoption(StrictModel):
+    origin: Literal["USER_STATED", "USER_CONFIRMED"]
+    source_ref: Literal["original_request", "history-investigation-review/1"]
+    adoption: Literal["ADOPTED"]
+
+
+class HistoryInvestigationBody(StrictModel):
+    """`p08.investigation-declaration/3`: one recorded-history declaration, frozen before any collection."""
+
+    operation_id: Uuid4Text
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+    expected_interpretation_revision_id: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)] | None
+    edge_spec: InvestigationEdgeSpec
+    configuration: HistoryInvestigationConfiguration
+    field_origins: dict[HistoryAdoptedField, HistoryFieldAdoption]
+    trial_ids: list[Uuid4Text] = Field(min_length=1, max_length=20)
+    evaluation_ids: list[Uuid4Text] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def everything_adopted(self) -> "HistoryInvestigationBody":
+        required = set(HistoryInvestigationConfiguration.model_fields) | {"edge_spec"}
+        if set(self.field_origins) != required:
+            raise PydanticCustomError("required_setting_not_adopted",
+                                      "Every required setting needs explicit adoption before saving.")
+        for name, origin in self.field_origins.items():
+            expected = ("USER_STATED", "original_request") if name == "question" else (
+                "USER_CONFIRMED", "history-investigation-review/1")
+            if (origin.origin, origin.source_ref) != expected:
+                raise PydanticCustomError("configuration_origin_mismatch",
+                                          "Each setting must be confirmed in this review; the question stays as written.")
+        plan = self.configuration.evaluation_plan
+        if (len(set(self.evaluation_ids)) != len(self.evaluation_ids) or len(set(self.trial_ids)) != len(self.trial_ids)
+                or {item.evaluation_id for item in plan} != set(self.evaluation_ids)
+                or {item.trial_id for item in plan} != set(self.trial_ids)):
+            raise PydanticCustomError("evaluation_plan_identity_mismatch",
+                                      "Every declared trial and evaluation identity needs exactly one explicit plan row.")
+        descriptive = self.edge_spec.claim.status == "DESCRIPTIVE_ONLY"
+        if not ((descriptive and self.edge_spec.falsification.status == "DESCRIPTIVE_ONLY"
+                 and self.configuration.direction == "DESCRIPTIVE")
+                or (not descriptive and self.edge_spec.falsification.status == "DECLARED"
+                    and self.configuration.direction in {"OUTPERFORM", "UNDERPERFORM"})):
+            raise PydanticCustomError("declaration_semantics_conflict",
+                                      "Claim, falsification status, and direction must describe the same work.")
+        return self
+
+
+class InvestigationJobBody(StrictModel):
+    """Start one original investigation job. Repeating the same request key returns the original job."""
+
+    operation_id: Uuid4Text
+    request_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+
+
+DecimalText = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$")]
+
+
+class MarketAdoptionBody(StrictModel):
+    """Adopt one owner's QUALIFIED recorded-history market for a compiled strategy request, before publication.
+
+    The client names the dataset and restates the amounts for the new quote unit. It never supplies a binding or a
+    qualification; the server derives both from the saved dataset.
+    """
+
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+    expected_interpretation_revision_id: Uuid4Text
+    expected_parent_revision_id: Uuid4Text | None
+    dataset_id: Uuid4Text
+    adoption: Literal["ADOPT_DATASET_MARKET"]
+    quote_unit: Annotated[str, StringConstraints(pattern=r"^QUOTE:0x[0-9a-fA-F]{40}$")]
+    # The entry becomes this exact declared rule of the dataset's own declaration; the exit is restated here.
+    evaluation_id: Uuid4Text
+    exit_rule: dict[str, Any]
+    sizing_amount: DecimalText
+    max_quote_notional: DecimalText

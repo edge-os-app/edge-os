@@ -1333,7 +1333,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
 
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Positions" }).click();
   await page.getByRole("button", { name: "Load more records" }).click();
-  await page.getByLabel("Agent").selectOption("agent-a");
+  await page.getByLabel("Agent").and(page.locator("select")).selectOption("agent-a");
   await page.getByLabel("Wallet").selectOption("wallet-a");
   await expect(page.locator("summary")).toHaveCount(2);
   await expect(page.getByText("position-a-1", { exact: false })).toBeVisible();
@@ -1396,4 +1396,116 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await shot(page, project, "p19-permission-history");
   await page.getByRole("button", { name: "Research" }).click();
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
+});
+
+test("P17 wallet setup: prepare, dispatch, uncertain and cancelled states through the saved revision", async ({ page }, info) => {
+  const project = info.project.name;
+  const saved = JSON.parse(fs.readFileSync(resultsFile, "utf8"));
+  const thesis = saved[`thesis-${project}`];
+  expect(thesis && thesis.url, "the thesis test must have saved a revision first").toBeTruthy();
+  await open(page, tokens.a);
+  await page.goto(thesis.url);
+  const setup = page.getByRole("region", { name: "Agent wallet setup" });
+  await expect(setup).toBeVisible();
+  await expect(setup).toContainText("authored local fixture");
+  await expect(setup).toContainText("It is not a real wallet or provider");
+
+  const dispatchPosts = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/v1\/wallet-setup\/agents\/[^/]+\/dispatch$/.test(new URL(request.url()).pathname)) {
+      dispatchPosts.push(new URL(request.url()).pathname);
+    }
+  });
+
+  // 1. An exact saved revision prepares one durable setup, then one creation binds a wallet.
+  const agentId = `p17-wallet-${project}`;
+  await setup.getByLabel("Agent ID").fill(agentId);
+  await setup.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setup.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setup.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await setup.getByRole("button", { name: "Create wallet now" }).click();
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
+  const walletId = (await setup.getByTestId("wallet-setup-wallet").innerText()).trim();
+  expect(walletId.startsWith("fixture:")).toBe(true);
+  expect(dispatchPosts).toHaveLength(1);
+  await shot(page, project, "p17-wallet-confirmed");
+
+  // 2. A reload reconciles the saved identity by reading; it never replays a creation.
+  await page.reload();
+  const setupAfterReload = page.getByRole("region", { name: "Agent wallet setup" });
+  await setupAfterReload.getByLabel("Agent ID").fill(agentId);
+  await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
+  await expect(setupAfterReload.getByTestId("wallet-setup-wallet")).toHaveText(walletId);
+  expect(dispatchPosts).toHaveLength(1);
+
+  // 3. A lost response stays unknown and offers no second creation.
+  const lostAgent = `p17-lost-${project}-fixture-lost-response`;
+  await setupAfterReload.getByLabel("Agent ID").fill(lostAgent);
+  await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await setupAfterReload.getByRole("button", { name: "Create wallet now" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Outcome unknown");
+  await expect(setupAfterReload.getByTestId("wallet-setup-wallet")).toHaveText("Not bound");
+  await expect(setupAfterReload.getByRole("button", { name: "Create wallet now" })).toHaveCount(0);
+  await expect(setupAfterReload.getByRole("button", { name: "Check the saved setup again" })).toBeVisible();
+  await shot(page, project, "p17-wallet-unknown");
+
+  // 4. A pre-dispatch cancel is a proved cancellation with no creation call.
+  const cancelAgent = `p17-cancel-${project}`;
+  await setupAfterReload.getByLabel("Agent ID").fill(cancelAgent);
+  await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await setupAfterReload.getByRole("button", { name: "Cancel before creating" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Cancelled before dispatch");
+  await expect(setupAfterReload).toContainText("No creation call was made");
+  await shot(page, project, "p17-wallet-cancelled");
+
+  // 5. A committed HTTP reply loss: the dispatch reaches the server (which commits the intent and creates the
+  //    wallet), but the client never receives the reply. The UI must reconcile with a saved-state GET and show
+  //    the true state without any second dispatch or provider call.
+  const committedAgent = `p17-committed-${project}`;
+  await setupAfterReload.getByLabel("Agent ID").fill(committedAgent);
+  await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
+  await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
+  await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+
+  const committedPath = `/v1/wallet-setup/agents/${committedAgent}/dispatch`;
+  const providerUrl = `${process.env.P03_API_URL}/v1/wallet-setup/provider`;
+  const providerHeaders = { Authorization: `Bearer ${tokens.a}` };
+  const providerBefore = await (await page.request.get(providerUrl, { headers: providerHeaders })).json();
+  let droppedReply = false;
+  await page.route(`**${committedPath}`, async (route) => {
+    if (droppedReply) { await route.continue(); return; }
+    droppedReply = true;
+    await route.fetch();           // the server processes and commits
+    await route.abort("failed");   // the browser never receives the reply
+  });
+  await setupAfterReload.getByRole("button", { name: "Create wallet now" }).click();
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
+  await expect(setupAfterReload.getByTestId("wallet-setup-wallet")).toContainText("fixture:");
+  const committedWallet = (await setupAfterReload.getByTestId("wallet-setup-wallet").innerText()).trim();
+  const providerAfter = await (await page.request.get(providerUrl, { headers: providerHeaders })).json();
+  await page.unroute(`**${committedPath}`);
+  await shot(page, project, "p17-wallet-committed-reply-loss");
+
+  const committedPosts = dispatchPosts.filter((path) => path.endsWith(`/agents/${committedAgent}/dispatch`));
+  expect(committedPosts).toHaveLength(1);
+
+  record(`p17-setup-${project}`, {
+    revisionId: thesis.revisionId,
+    confirmed: { agentId, walletId },
+    unknown: { agentId: lostAgent },
+    cancelled: { agentId: cancelAgent },
+    committed: { agentId: committedAgent, walletId: committedWallet, committedPosts: committedPosts.length,
+      providerDelta: { create: providerAfter.create_calls - providerBefore.create_calls,
+        lookup: providerAfter.lookup_calls - providerBefore.lookup_calls } },
+    dispatchPostPaths: dispatchPosts,
+  });
 });

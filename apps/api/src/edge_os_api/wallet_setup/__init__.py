@@ -1,8 +1,10 @@
-"""Bounded local wallet setup: prepare, dispatch, cancel, resume and read.
+"""Bounded agent wallet setup: prepare, dispatch, cancel, resume and read.
 
-This is local preparation. It is not production wiring and the application exposes no wallet
-setup route. It creates no wallet, signer, funding, mandate activation, position or trading
-action. External wallet creation and lookup are authored fakes, never provider evidence.
+The application mounts these authenticated routes over the `wallet_setups` schema from migration
+0007. The only concrete provider is an authored local fixture, refused in production; real mode is
+the fail-closed unavailable provider. It creates no wallet, signer, funding, mandate activation,
+position or trading action. External wallet creation and lookup stay authored fakes, never provider
+evidence.
 """
 
 from edge_os_api.wallet_setup.persistence import (WALLET_SETUP_METADATA, WalletSetupBase, WalletSetupDenialRow,

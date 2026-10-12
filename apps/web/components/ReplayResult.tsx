@@ -13,6 +13,10 @@ function displayUtc(value: string): string {
 export function ReplayResult({ replay }: Props) {
   const result = replay.content.result;
   const inputs = replay.content.inputs;
+  const history = (inputs as { history_input?: { dataset_id: string; source_id: string; content_label: string;
+    declaration_id: string; job_id: string; dataset_market_binding_id: string | null; strategy_market_binding_id: string;
+    fill_label: string; dataset_content_sha256: string;
+    rule_linkage?: { state: string; evaluation_id: string | null } } }).history_input ?? null;
   const dependencies = (field: "entry" | "exit") => inputs.essential_evidence.fields[field];
   const bindingSummary = (field: "entry" | "exit") => {
     const binding = dependencies(field);
@@ -49,9 +53,28 @@ export function ReplayResult({ replay }: Props) {
       <dl className="kv">
         <dt>Replay ID</dt><dd className="mono" data-testid="spot-replay-id">{replay.replay_id}</dd>
         <dt>Saved hash</dt><dd className="mono">{replay.content_sha256}</dd>
-        <dt>Evidence</dt><dd>{result.evidence_class}. This is an authored fixture, not observed market history.</dd>
+        <dt>Evidence</dt><dd>{history
+          ? `${result.evidence_class}. Simulated fills on saved recorded-history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). Not observed market history.`
+          : `${result.evidence_class}. This is an authored fixture, not observed market history.`}</dd>
         <dt>Repeatability</dt><dd className="mono">{result.repeatability_id ?? "Unavailable before replay"}</dd>
       </dl>
+      {history ? (
+        <section aria-labelledby="spot-replay-lineage-title" data-testid="spot-replay-history-lineage"
+          style={{ overflowWrap: "anywhere" }}>
+          <h4 id="spot-replay-lineage-title">Recorded-history lineage ({history.fill_label})</h4>
+          <dl className="kv">
+            <dt>Dataset</dt><dd className="mono">{history.dataset_id}</dd>
+            <dt>Dataset hash</dt><dd className="mono">{history.dataset_content_sha256}</dd>
+            <dt>Declaration</dt><dd className="mono">{history.declaration_id}</dd>
+            <dt>Investigation job</dt><dd className="mono">{history.job_id}</dd>
+            <dt>Dataset market</dt><dd className="mono">{history.dataset_market_binding_id ?? "Unavailable: dataset not qualified"}</dd>
+            <dt>Revision market</dt><dd className="mono">{history.strategy_market_binding_id}</dd>
+            <dt>Entry rule</dt><dd>{history.rule_linkage?.state === "ENTRY_IS_DECLARED_RULE"
+              ? `The declared rule ${history.rule_linkage.evaluation_id}`
+              : "Not a rule of this dataset's declaration"}</dd>
+          </dl>
+        </section>
+      ) : null}
       <section aria-labelledby="spot-replay-saved-inputs-title" data-testid="spot-replay-saved-inputs">
         <h4 id="spot-replay-saved-inputs-title">Exact saved run settings</h4>
         <dl className="kv">

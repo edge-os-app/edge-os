@@ -1,8 +1,10 @@
 """Local wallet-setup test harness.
 
 Reuses the repository session fixtures (real run-labelled PostgreSQL, real test signing key and
-the real verifier). It adds only the `wallet_setup_local` tables and a test-only router. It does
-not modify the shared conftest, the shared models, the router or any migration.
+the real verifier) and the application's own authenticated wallet-setup router. It only points
+`app.state.wallet_provider` at a controlled authored fake; it adds no route of its own. The
+`wallet_setup_local` tables come from migration 0007, so `create_all` is a safety net for the
+local metadata only.
 """
 
 from __future__ import annotations
@@ -12,7 +14,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text as sql_text
 
 import fake_provider
-import routes
 
 from edge_os_api.core.database import make_engine
 from edge_os_api.main import create_app
@@ -21,7 +22,7 @@ from edge_os_api.wallet_setup.persistence import WALLET_SETUP_METADATA
 
 @pytest.fixture(scope="session")
 def wallet_schema(settings, migrated):
-    """Create only the local `wallet_setup_local` tables in this run's labelled database."""
+    """Ensure the local `wallet_setup_local` tables exist in this run's labelled database."""
     engine = make_engine(settings.database_url)
     WALLET_SETUP_METADATA.create_all(engine)
     try:
@@ -41,9 +42,8 @@ def _clean_wallet_state(wallet_schema):
 
 @pytest.fixture(scope="session")
 def wallet_app(settings, wallet_schema):
-    app = create_app(settings)
-    app.include_router(routes.build_wallet_setup_router())
-    return app
+    """The real application, whose own composition mounts the authenticated wallet-setup router."""
+    return create_app(settings)
 
 
 @pytest.fixture

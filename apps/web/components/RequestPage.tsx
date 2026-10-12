@@ -10,7 +10,9 @@ import { InterpretationAttempts } from "./InterpretationAttempts";
 import { AnswerMessage, QuestionForm } from "./QuestionForm";
 import { RulesReview } from "./RulesReview";
 import { InvestigationReview } from "./InvestigationReview";
+import { MarketAdoption } from "./MarketAdoption";
 import { SpotReplayPanel } from "./SpotReplayPanel";
+import { WalletSetup } from "./WalletSetup";
 
 interface Props {
   id: string;
@@ -130,7 +132,14 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
     return () => setContext(null);
   }, [bundle, busy, answer, reply, answerMessage, setContext]);
 
-  const revision = bundle?.revisions[0];
+  // The revision shown is the one published from the head draft: its parent is the draft's base revision. A NEW draft
+  // (for example after a market adoption) has no revision yet, so the page offers to save it.
+  const headDraft = bundle?.drafts.find((d) => d.record_id === bundle.head.draft_id);
+  const headBase = (headDraft?.content as { base_revision_id?: string | null } | undefined)?.base_revision_id ?? null;
+  const revision = headDraft
+    ? bundle?.revisions.find((r) => (r.parent_revision_id ?? null) === headBase)
+    : bundle?.revisions[bundle.revisions.length - 1];
+  const latestRevision = bundle?.revisions[bundle.revisions.length - 1];
   useEffect(() => {
     if (!revision) { setVerified(null); return; }
     let cancelled = false;
@@ -149,7 +158,8 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
     setAnswerMessage(undefined); // an earlier conflict notice must not outlive the next action
     focusSurface.current = null; // the Save button disappears; the layout effect lands focus on the new state
     try {
-      await api.publish(draft.content.strategy_id, { ...keys, expected_parent_revision_id: null, draft_id: draft.record_id, strategy: draft.content.source_syntax });
+      const base = (draft.content as { base_revision_id?: string | null }).base_revision_id ?? null;
+      await api.publish(draft.content.strategy_id, { ...keys, expected_parent_revision_id: base, draft_id: draft.record_id, strategy: draft.content.source_syntax });
       await reload();
     } catch (e) {
       focusSurface.current = undefined;
@@ -323,6 +333,14 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
         </section>
       )}
 
+      {intake.requested_job === "CREATE_STRATEGY" && (outcome === "COMPILED" || outcome === "PUBLISHED") && draft
+        && head.interpretation_revision_id ? (
+        <MarketAdoption intakeId={id} interpretationRevisionId={head.interpretation_revision_id}
+          parentRevisionId={latestRevision?.revision_id ?? null}
+          currentQuoteUnit={(draft.content.source_syntax as Strategy).sizing.unit}
+          reload={async () => { try { const next = await api.get(id); setBundle(next); return next.head.draft_id; } catch { return null; } }} />
+      ) : null}
+
       {revision && (
         <section className="panel" aria-labelledby="rev-title" data-testid="revision">
           <h2 id="rev-title">Saved revision</h2>
@@ -336,6 +354,8 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
           </dl>
         </section>
       )}
+
+      {revision && <WalletSetup revision={{ strategyId: revision.strategy_id, strategyRevisionId: revision.revision_id }} />}
 
       {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
         strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}

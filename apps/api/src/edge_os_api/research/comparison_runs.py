@@ -7,6 +7,7 @@ import datetime as dt
 import hashlib
 import json
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from edge_os_api.research.effect_comparison import compare_effects, evaluate_p06
 from edge_os_api.core.errors import AppError, finding, internal_error, not_found, service_unavailable
 from edge_os_api.records.models import EffectReport, EffectRunDeclaration, EffectRunEvent, InvestigationDeclaration
 from edge_os_api.core.request_schemas import EffectAttemptBody, EffectRunBody
+from edge_os_api.research.history_dataset import PROTECTED_ROLES, feature_rows
 from edge_os_api.research.service import get_owned, parse_uuid
 
 SCHEMA_VERSION = "p09.effect-run-declaration/1"
@@ -144,6 +146,10 @@ def adopt_effect_run(session: Session, principal: Principal, intake_id: str,
     if declaration is None:
         raise not_found("investigation declaration")
     config = declaration.content["configuration"]
+    if declaration.content["schema_version"] != "p08.investigation-declaration/2":
+        raise AppError(409, "EFFECT_COMPARISON", "UNAVAILABLE", "unsupported_p08_access",
+                       [finding("unsupported_p08_access", "/p08_declaration_id",
+                                "A recorded-history declaration runs through its investigation job, not this fixture run.")])
     if (config["permitted_access"] != ["FIXTURE_ONLY"]
             or config["pool_binding"]["profile_id"] != "fixture-unqualified-pool/1"):
         raise AppError(409, "EFFECT_COMPARISON", "UNAVAILABLE", "unsupported_p08_access",
@@ -520,3 +526,101 @@ def list_effect_runs(session: Session, principal: Principal, intake_id: str) -> 
         EffectRunDeclaration.intake_record_id == intake.record_id)
         .order_by(EffectRunDeclaration.created_at, EffectRunDeclaration.run_id)).scalars())
     return {"runs": [get_effect_run(session, principal, intake_id, str(row.run_id)) for row in rows]}
+
+
+HISTORY_REPORT_VERSION = "edge-os.investigation-report/1"
+# Training and descriptive partitions may be read. Validation and holdout outcomes stay unread here.
+EVALUABLE_ROLES = frozenset({"DESCRIPTIVE", "TRAINING"})
+assert not EVALUABLE_ROLES & PROTECTED_ROLES
+
+
+def _variant_outcome(variant: dict[str, Any]) -> str:
+    comparison = variant["general_comparison"]
+    if comparison["triggered"]["observed_count"] == 0 or comparison["control"]["observed_count"] == 0:
+        return "INSUFFICIENT_DATA"
+    return "DESCRIBED"
+
+
+def compare_history(declaration: dict[str, Any], dataset: dict[str, Any]) -> dict[str, Any]:
+    """Run the accepted P09 engine on one saved recorded-history dataset under one v3 declaration.
+
+    Only overall QUALIFIED, complete datasets are compared. Evaluations bound to a protected partition are listed and
+    never read. Every outcome is descriptive: no significance and no capital or execution authority is claimed.
+    """
+    config = declaration["configuration"]
+    rules = {rule["evaluation_id"]: rule for rule in declaration["rule_map"]["rules"]}
+    partitions = {item["partition_id"]: item for item in config["partitions"]}
+    base = {"schema_version": HISTORY_REPORT_VERSION, "statistical_status": "UNRESOLVED",
+            "claims": {"significance": "NOT_CLAIMED", "capital_authority": "NONE", "execution_authority": "NONE"},
+            "direction": config["direction"], "protected_evaluations": [], "protected_partitions": [], "variants": [],
+            "contrary_findings": [], "result": None}
+    if dataset["unavailable_states"] or dataset["verdict"]["overall"] != "QUALIFIED":
+        lost = {"SOURCE_UNAVAILABLE", "PARTIAL_COVERAGE"} & set(dataset["unavailable_states"])
+        return {**base, "outcome": "SOURCE_LOSS" if lost else "LIMITED_DATA",
+                "outcome_reasons": list(dataset["unavailable_states"]) or [dataset["verdict"]["overall"]],
+                "outcome_accessed": False}
+    evaluable, protected = [], []
+    for plan in config["evaluation_plan"]:
+        partition = partitions[plan["partition_ids"][0]]
+        (evaluable if partition["role"] in EVALUABLE_ROLES else protected).append((plan, partition))
+    base["protected_evaluations"] = [{"evaluation_id": plan["evaluation_id"], "partition_id": partition["partition_id"],
+                                      "role": partition["role"], "state": "NOT_READ"} for plan, partition in protected]
+    base["protected_partitions"] = [{"partition_id": item["partition_id"], "role": item["role"], "start": item["start"],
+                                     "end": item["end"], "state": "NOT_READ"}
+                                    for item in config["partitions"] if item["role"] not in EVALUABLE_ROLES]
+    if not evaluable:
+        return {**base, "outcome": "UNSUPPORTED", "outcome_reasons": ["protected_partition_not_authorized"],
+                "outcome_accessed": False}
+    plan = [item for item, _ in evaluable]
+    bindings = [{key: rules[item["evaluation_id"]][key] for key in
+                 ("evaluation_id", "trial_id", "variant_id", "price_expression", "volume_expression", "essential_inputs")}
+                for item in plan]
+    bounds = {item["evaluation_id"]: {"start": partition["start"], "end": partition["end"]} for item, partition in evaluable}
+    # Only data inside the readable partitions reaches the engine; protected-partition buckets and trades stay unread.
+    readable = [(parse_utc(partition["start"]), parse_utc(partition["end"])) for _, partition in evaluable]
+
+    def inside(moment: str, *, bucket: bool) -> bool:
+        """A bucket ending at t covers (t - 5 min, t]; a trade at t is a point. Both must lie inside the partition."""
+        value = parse_utc(moment)
+        return any(start < value <= end if bucket else start <= value < end for start, end in readable)
+
+    # Select readable buckets by their end time alone; protected buckets' values are never projected or read.
+    readable_buckets = [bucket for bucket in dataset["buckets"] if inside(bucket["bucket_end"], bucket=True)]
+    features = feature_rows({"buckets": readable_buckets})
+    trades = [trade for trade in dataset["trades"] if inside(trade["event_time"], bucket=False)]
+    schedule = dict(config["schedule"])
+    last_end = max(end for _, end in readable)
+    if parse_utc(schedule["end"]) > last_end:
+        schedule["end"] = last_end.isoformat().replace("+00:00", "Z")
+    decisions = evaluate_p06_bindings(schedule=schedule, evaluation_plan=plan, bindings=bindings,
+                                      feature_rows=features, market=dataset["strategy_market"])
+    result = compare_effects(schedule=schedule, evaluation_plan=plan, decisions=decisions,
+                             trades=trades,
+                             incremental_volume_declared=declaration["rule_map"]["incremental_volume_declared"],
+                             partition_bounds_by_evaluation=bounds)
+    variants = []
+    contrary = []
+    for variant in result["variants"]:
+        outcome = _variant_outcome(variant)
+        contrast = variant["general_comparison"]["triggered_minus_control_mean"]
+        variants.append({"evaluation_id": variant["evaluation_id"], "variant_id": variant["variant_id"],
+                         "outcome": outcome, "triggered_minus_control_mean": contrast,
+                         "triggered_observed": variant["general_comparison"]["triggered"]["observed_count"],
+                         "control_observed": variant["general_comparison"]["control"]["observed_count"]})
+        if outcome == "DESCRIBED" and config["direction"] != "DESCRIPTIVE":
+            expected_positive = config["direction"] == "OUTPERFORM"
+            value = Decimal(contrast)
+            if (value <= 0) if expected_positive else (value >= 0):
+                contrary.append({"evaluation_id": variant["evaluation_id"], "variant_id": variant["variant_id"],
+                                 "finding": "CONTRARY_TO_DECLARED_DIRECTION", "triggered_minus_control_mean": contrast})
+    described = [item for item in variants if item["outcome"] == "DESCRIBED"]
+    signs = {Decimal(item["triggered_minus_control_mean"]) > 0 for item in described
+             if Decimal(item["triggered_minus_control_mean"]) != 0}
+    if not described:
+        outcome, reasons = "INSUFFICIENT_DATA", ["no_variant_has_triggered_and_control_outcomes"]
+    elif len(signs) > 1:
+        outcome, reasons = "CONTRADICTORY", ["variant_contrasts_have_opposite_signs"]
+    else:
+        outcome, reasons = "DESCRIBED", ["descriptive_only"]
+    return {**base, "outcome": outcome, "outcome_reasons": reasons, "outcome_accessed": True, "variants": variants,
+            "contrary_findings": contrary, "result": result}

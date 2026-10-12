@@ -1,5 +1,6 @@
 import type { Bundle, EffectRunBody, EffectRunResult, InvestigationProposal, InvestigationSaveResult,
-  PublicationResult, RequestSummary, Sample, SpotReplayBody, SpotReplayRecord } from "./types";
+  PublicationResult, RequestSummary, Sample, SpotReplayBody, SpotReplayRecord, WalletProviderInfo,
+  WalletSetupPrepareBody, WalletSetupRecord } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: string, public findings: { path: string; detail: string }[] = []) {
@@ -57,6 +58,89 @@ export async function request<T>(path: string, init: RequestInit = {}, timeoutMs
   return { status: response.status, body: body as T };
 }
 
+// #58 recorded-history research. Every source is a SYNTHETIC recorded-response bundle; nothing calls a provider.
+export interface HistoryMarket { network: string; pool_address: string; base_asset: string; quote_asset: string }
+export interface HistorySource {
+  source_id: string; title: string; evidence_class: string; content_label: string; profile_version: string;
+  profile_sha256: string; market: HistoryMarket; window: { start: string; end: string }; history_provider: string;
+  page_requests_recorded: number;
+}
+export interface HistoryRule {
+  evaluation_id: string; trial_id: string; variant_id: string; price_expression: Record<string, unknown>;
+  volume_expression: Record<string, unknown>; essential_inputs: ("price" | "quote_volume")[]; rule_source: "USER_ADOPTED";
+}
+export interface HistoryDeclarationContent {
+  schema_version: string; original_request: string; declaration_state: string; outcome_labels_read: boolean;
+  edge_spec: { hypothesis: string; claim: { status: string; text: string } };
+  configuration: {
+    source: { source_id: string; profile_sha256: string; evidence_class: string }; market: HistoryMarket;
+    window: { start: string; end: string }; direction: string; resource_bounds: Record<string, number>;
+    evaluation_plan: { evaluation_id: string; variant_id: string; partition_ids: string[] }[];
+    partitions: { partition_id: string; role: string; start: string; end: string }[];
+  };
+  rule_map: { rules: HistoryRule[]; binding_state: string; control: string };
+  frozen: { configuration_sha256: string; rule_map_sha256: string; source_profile_sha256: string; frozen_at: string };
+}
+export interface HistoryDeclaration {
+  declaration: { record_id: string; schema_version: string; created_at: string; content: HistoryDeclarationContent };
+  access_history: { event: string; provider_queries: number; outcome_labels_read: boolean }[];
+}
+export interface BudgetAmounts { provider_requests: number; compute_seconds: number }
+export interface ResearchBudget {
+  limits: BudgetAmounts; reserved: BudgetAmounts; consumed: BudgetAmounts; unknown_liability: BudgetAmounts;
+  available: BudgetAmounts;
+}
+export interface ReportVariant {
+  evaluation_id: string; variant_id: string; outcome: string; triggered_minus_control_mean: string | null;
+  triggered_observed: number; control_observed: number;
+}
+export interface InvestigationReport {
+  report_id: string; content_sha256: string; stored_hash_matches_content: boolean; created_at: string;
+  content: {
+    outcome: string; outcome_reasons: string[]; outcome_accessed: boolean; statistical_status: string;
+    claims: Record<string, string>; variants: ReportVariant[]; contrary_findings: Record<string, string>[];
+    protected_evaluations: { evaluation_id: string; role: string; state: string }[];
+    protected_partitions: { partition_id: string; role: string; state: string }[]; dataset_id: string;
+    source_id: string; evidence_class: string; content_label: string; dataset_verdict: { overall: string };
+    rule_map_sha256: string; hypothesis: string; notice: string;
+  };
+}
+export interface InvestigationJob {
+  job_id: string; declaration_id: string; request_key: string; operation_id: string; state: string;
+  terminal_reason: string | null; budget: Record<string, BudgetAmounts>; deadline_at: string;
+  cancel_requested_at: string | null; created_at: string;
+  events: { kind: string; attempt_id: string | null; created_at: string; content: Record<string, unknown> }[];
+  dataset: null | { dataset_id: string; content_sha256: string; hashes_verified: Record<string, boolean>;
+    summary: { source_id: string; status: string; stop_reason: string; verdict: { overall: string };
+      binding_state: string; unavailable_states: string[]; provider_requests: Record<string, number> | null;
+      provider_requests_state: string; evidence_class: string; content_label: string } };
+  report: InvestigationReport | null;
+}
+export interface DatasetSummary {
+  dataset_id: string; created_at: string; content_sha256: string; hashes_verified: Record<string, boolean>;
+  quote_unit: string | null; source_id: string; evidence_class: string; content_label: string;
+  profile_evidence_class: string; status: string; verdict: { overall: string }; binding_state: string;
+  unavailable_states: string[]; market_binding: Record<string, unknown> | null; market_binding_id: string | null;
+  window_start: string; window_end: string; declaration_id: string; job_id: string;
+  readable_until: string;
+  declared_rules: { evaluation_id: string; variant_id: string; price_expression: Record<string, unknown>;
+    volume_expression: Record<string, unknown> }[];
+}
+export interface MarketAdoptionBody {
+  idempotency_key: string; expected_interpretation_revision_id: string; expected_parent_revision_id: string | null;
+  dataset_id: string; adoption: "ADOPT_DATASET_MARKET"; quote_unit: string; evaluation_id: string;
+  exit_rule: Record<string, unknown>; sizing_amount: string;
+  max_quote_notional: string;
+}
+export interface MarketAdoptionResult {
+  adoption: { interpretation_revision_id: string; draft_id: string; dataset_id: string; declaration_id: string;
+    market_binding_id: string; quote_unit: string; base_revision_id: string | null };
+  replayed: boolean;
+  bundle: Bundle;
+}
+/** A replay of one saved strategy revision on one of the owner's saved history datasets. */
+export type HistorySpotReplayBody = Omit<SpotReplayBody, "dataset_fixture_id"> & { history_dataset_id: string };
+
 export const api = {
   me: () => request<{ user_id: string }>("/v1/me").then((r) => r.body),
   interpreter: () => request<{ interpreter: { kind: string; id: string; notice: string }; samples: Sample[] }>("/v1/interpreter").then((r) => r.body),
@@ -74,9 +158,30 @@ export const api = {
   executeEffectRun: (id: string, runId: string, body: { operation_id: string; idempotency_key: string }) =>
     request<EffectRunResult>(`/v1/research/requests/${id}/effect-runs/${runId}/attempts`,
       { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
-  createSpotReplay: (body: SpotReplayBody) =>
+  createSpotReplay: (body: SpotReplayBody | HistorySpotReplayBody) =>
     request<SpotReplayRecord>("/v1/spot-replays", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   spotReplay: (id: string) => request<SpotReplayRecord>(`/v1/spot-replays/${id}`).then((r) => r.body),
+  historySources: () => request<{ label: string; mode: string; sources: HistorySource[] }>("/v1/research/history-sources").then((r) => r.body),
+  historyInvestigations: (id: string) =>
+    request<{ declarations: HistoryDeclaration[] }>(`/v1/research/requests/${id}/history-investigations`).then((r) => r.body),
+  historyInvestigation: (id: string, declarationId: string) =>
+    request<HistoryDeclaration>(`/v1/research/requests/${id}/history-investigations/${declarationId}`).then((r) => r.body),
+  saveHistoryInvestigation: (id: string, body: unknown) =>
+    request<HistoryDeclaration>(`/v1/research/requests/${id}/history-investigations`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  investigationJobs: (id: string, declarationId: string) =>
+    request<{ jobs: InvestigationJob[] }>(`/v1/research/requests/${id}/history-investigations/${declarationId}/jobs`).then((r) => r.body),
+  startInvestigationJob: (id: string, declarationId: string, body: { operation_id: string; request_key: string }) =>
+    request<InvestigationJob>(`/v1/research/requests/${id}/history-investigations/${declarationId}/jobs`,
+      { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  investigationJob: (jobId: string) => request<InvestigationJob>(`/v1/research/investigation-jobs/${jobId}`).then((r) => r.body),
+  cancelInvestigationJob: (jobId: string) =>
+    request<InvestigationJob>(`/v1/research/investigation-jobs/${jobId}/cancel`, { method: "POST" }).then((r) => r.body),
+  investigationReport: (reportId: string) =>
+    request<InvestigationReport>(`/v1/research/investigation-reports/${reportId}`).then((r) => r.body),
+  historyDatasets: () => request<{ datasets: DatasetSummary[] }>("/v1/research/history-datasets").then((r) => r.body),
+  researchBudget: () => request<ResearchBudget>("/v1/research/budget").then((r) => r.body),
+  adoptMarket: (id: string, body: MarketAdoptionBody) =>
+    request<MarketAdoptionResult>(`/v1/research/requests/${id}/market-adoptions`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   submit: (body: unknown) => request<Bundle>("/v1/research/requests", { method: "POST", body: JSON.stringify(body) }, INTERPRETER_TIMEOUT_MS).then((r) => r.body),
   /** One listed choice, or the user's own words. The interpreter reads words, so that call can take longer. */
   answer: (id: string, body: { previous_revision_id: string; question_id: string } & ({ choice_id: string } | { answer_text: string })) =>
@@ -90,4 +195,21 @@ export const api = {
     request<{ revision_id: string; content_sha256: string; manifest_sha256: string; created_at: string; stored_hash_matches_content: boolean; stored_manifest_hash_matches_content: boolean }>(
       `/v1/strategies/${strategyId}/revisions/${revisionId}`).then((r) => r.body),
   operation: (id: string) => request<PublicationResult>(`/v1/operations/${id}`).then((r) => r.body),
+  /** The active wallet-creation provider mode. Reports `unavailable` in any non-local configuration. */
+  walletProvider: () => request<WalletProviderInfo>("/v1/wallet-setup/provider").then((r) => r.body),
+  /** Owner-scoped wallet-setup reads and mutations. A missing setup is a 404 ApiError. */
+  walletSetup: (agentId: string) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}`).then((r) => r.body),
+  prepareWalletSetup: (agentId: string, body: WalletSetupPrepareBody) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/prepare`,
+      { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
+  dispatchWalletSetup: (agentId: string) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/dispatch`,
+      { method: "POST" }).then((r) => r.body),
+  resumeWalletSetup: (agentId: string) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/resume`,
+      { method: "POST" }).then((r) => r.body),
+  cancelWalletSetup: (agentId: string) =>
+    request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/cancel`,
+      { method: "POST" }).then((r) => r.body),
 };

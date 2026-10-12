@@ -4,6 +4,22 @@ Task OC-P40-PREP-20261010-01, issue #47. Prepared 2026-10-10, base `a90d8b7f1a7a
 
 Scope: preparation only. The cases below map accepted behavior to repository routes, views, records, tests and evidence. No check in this file was run for this package. Existing green tests and evidence are cited as coverage pointers, not as a fresh runtime result. Full P40 issue #47 stays OPEN.
 
+## Current status, #58 Stage 1 candidate and Task 6 local milestone (2026-10-12)
+
+This section supersedes the current-status cells below for P22–P26/P30; those rows remain as preparation history. Evidence class: local fixture only (`EDGE_OS_EXECUTION_MODE=fixture`, refused in production). Source: `docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md` and the `verify-edge-os` feature-map sections "Connected financial journey" and "Recorded-history research journey".
+
+| Capability | Current status | Evidence class | Still missing |
+|---|---|---|---|
+| Wallet setup for an exact revision; browser completion after independent lookup | Connected (routes, screens, verifier) | Local fixture | Real Privy creation/lookup (P16/P17, Stage 3) |
+| Funding declaration, reviewed deposits, once-only credit, holdings apart from deposits | Connected | Local fixture ports | Real deposit/holdings observation (Stage 3) |
+| Exact review and INACTIVE adoption; server activation verdict | Connected | Local fixture qualification | Real activation after P20/P21 qualification |
+| Bounded evaluation, decision before intent, admission, exclusive submission | Connected with a durable worker | Local fixture market, quote and transport | Real observations, quote, signing, broadcast (Stage 3); no continuing trading |
+| Original-action recovery after lost acknowledgement or process death | Connected | Local fixture receipts | Real receipts and chain identities (Stage 3) |
+| Scoped stop; removal denying from REQUESTED | Connected at admission and submission | Local fixture removal observation | Real signer removal (Stage 3) |
+| Recorded-history declaration, original jobs, dataset, report, market adoption and labelled replay (RG01–RG06) | Connected for recorded responses (Task 6 local milestone) | SYNTHETIC recorded responses | Actual collection and inference (approval packet pending); actual-history replay (P13 evidence-class change pending); G05 LIMITED representation |
+| Pre-public follow-ups F1–F6 (service-backed account projections; read-back failure disables follow-ups; original references before effect; hosted drift and recovery; manual accessibility; dependency advisory reachability) | TRACKED, NOT REPAIRED | — | Repairs proposed in `docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md`; next local milestone |
+| Hosted multi-user, quotas, real login (PU01–PU08) | NOT RUN | — | Stage 2 |
+
 ## 1. Purpose and boundary
 
 This map answers one question for each accepted journey behavior: where does the behavior live in the repository, what proves it today, and what is still missing? It separates:
