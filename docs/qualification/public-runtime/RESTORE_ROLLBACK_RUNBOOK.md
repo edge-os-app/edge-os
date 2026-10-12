@@ -6,7 +6,7 @@ Status: rehearsed locally on an owned, run-labelled PostgreSQL 18 container by `
 
 1. Stop the workers: `edge_os_api.execution.worker` and `edge_os_api.research.investigation_jobs`. A worker that sees a schema head it does not know stops itself (exit code 3) before any effect, so a missed worker is safe but noisy.
 2. Take a backup: `pg_dump -Fc -f <file> <database>`.
-3. Migrate forward: `cd apps/api && uv run --frozen alembic upgrade head`, then `uv run --frozen alembic check`. The check must report no difference.
+3. Migrate forward: `cd apps/api && uv run --frozen alembic upgrade head`, then `uv run --frozen alembic check`. The check must report no difference. Migration 0010 creates the GLOBAL allocations with the default caps (100000 provider requests, 10,000,000 compute seconds). A deployment that configures other `EDGE_OS_USAGE_GLOBAL_*` values is not ready (`quota_cap_mismatch`) after this step until an operator records each GLOBAL cap with `set-cap --scope GLOBAL`.
 4. Start the API. `/readyz` must return `{"status": "ready"}`. A 503 names one reason: `database_unavailable`, `schema_drift`, `verification_keys_missing` or `quota_cap_mismatch` (a GLOBAL cap). A ready reply with `attention.owner_quota_cap_mismatch` means some owners' caps differ from configuration; see below.
 5. Start the workers. Saved jobs, attempts and original actions continue from saved state; interrupted work is reconciled, never repeated.
 

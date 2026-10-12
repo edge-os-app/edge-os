@@ -26,6 +26,7 @@ from edge_os_api.funding.persistence import FundingCreditRow, FundingFlowRow, Fu
 from edge_os_api.records.contract_adapter import utc_string
 from edge_os_api.recovery.models import RecoveryCaseRow
 from edge_os_api.revocation.records import RemovalStateRow
+from edge_os_api.revocation.types import DENYING_STATES
 
 PROJECTION_VERSION = "account-view-projection/1"
 FLOW_KINDS = {"DEPOSIT": "DEPOSIT", "WITHDRAWAL": "WITHDRAWAL"}
@@ -71,14 +72,22 @@ def project(session: Session, owner_id: uuid.UUID, agent_id: str | None = None) 
         return list(session.execute(statement).scalars())
 
     records: list[dict[str, Any]] = []
-    removals = {(row.agent_id, row.wallet_id): row for row in rows(RemovalStateRow)}
+    # The latest removal per agent wallet names the permission state; the agent shows STOPPED only while some
+    # removal denies submission (DENYING_STATES), as enforcement does. A FAILED removal does not stop the agent.
+    removals: dict[tuple[str, str], RemovalStateRow] = {}
+    denying: set[tuple[str, str]] = set()
+    for row in sorted(rows(RemovalStateRow), key=lambda item: (item.updated_at, str(item.request_id))):
+        removals[(row.agent_id, row.wallet_id)] = row
+        if row.state in DENYING_STATES:
+            denying.add((row.agent_id, row.wallet_id))
     for profile in rows(FundingProfileRow):
         removal = removals.get((profile.agent_id, profile.wallet_id))
         records.append(_record("AGENT", profile.agent_id, {"table": "funding_local.funding_profiles",
                                                            "id": str(profile.profile_id)}, {
             "owner_id": owner, "evidence_class": "SERVICE_PROJECTION", "record_kind": "AGENT",
             "agent_id": profile.agent_id, "wallet_id": profile.wallet_id, "network_id": str(profile.network_id),
-            "status": "STOPPED" if removal is not None else "CONFIRMED", "updated_at": utc_string(profile.updated_at),
+            "status": "STOPPED" if (profile.agent_id, profile.wallet_id) in denying else "CONFIRMED",
+            "updated_at": utc_string(profile.updated_at),
             "permission_state": "REMOVAL_" + removal.state if removal is not None else "NO_REMOVAL_REQUESTED"}))
 
     credits: dict[uuid.UUID, list[FundingCreditRow]] = defaultdict(list)

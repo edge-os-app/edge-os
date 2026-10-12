@@ -379,10 +379,29 @@ def _measured_compute(session: Session, job_id: uuid.UUID) -> int:
 
 
 def _interrupted(session: Session, job_id: uuid.UUID) -> bool:
-    """A tool attempt that stopped without a saved result: its compute was spent but never measured."""
-    return any(event.kind == "ATTEMPT_RECONCILED"
-               and event.content.get("outcome") in {"INTERRUPTED_LOCAL_CALCULATION", "OUTCOME_UNKNOWN"}
-               for event in _events(session, job_id))
+    """Some tool attempt spent compute that was never measured, so the job's compute cannot be known (G-N2):
+
+    - an attempt reconciled as interrupted or with an unknown outcome;
+    - an attempt that started and has neither a finish nor a reconciliation (for example a killed comparison
+      followed by a cancel or the deadline);
+    - an attempt that finished without a compute measurement (for example a failed comparison).
+    """
+    session.flush()
+    events = _events(session, job_id)
+    finished = {event.attempt_id for event in events if event.kind == "ATTEMPT_FINISHED"}
+    reconciled = {uuid.UUID(event.content["attempt_id"]) for event in events
+                  if event.kind == "ATTEMPT_RECONCILED" and event.content.get("attempt_id")}
+    for event in events:
+        if event.kind == "ATTEMPT_RECONCILED" and event.content.get("outcome") in {
+                "INTERRUPTED_LOCAL_CALCULATION", "OUTCOME_UNKNOWN"}:
+            return True
+        if event.kind == "ATTEMPT_STARTED" and event.attempt_id not in finished | reconciled:
+            return True
+        if event.kind == "ATTEMPT_FINISHED":
+            usage = event.content.get("usage") or {}
+            if "compute_ms" not in usage and "compute_seconds" not in usage:
+                return True
+    return False
 
 
 def _finish(session: Session, job: InvestigationJobRow, settings: Settings, state: str, reason: str, *,

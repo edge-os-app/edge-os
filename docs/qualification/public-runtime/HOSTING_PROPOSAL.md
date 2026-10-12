@@ -57,6 +57,8 @@ High availability for PostgreSQL needs a higher workspace tier and is not in thi
 - Log retention and access rules on the platform. They must match `RETENTION_DELETION_SUPPORT.md`.
 - Alerting for `/readyz` failures, worker exit code 3 and `quota_cap_mismatch`.
 - Dependency advisories in the wallet SDK (`ADVISORY_ASSESSMENT.md`).
+- Quota throughput under load: every reservation and settlement locks the same two GLOBAL rows (one lock order, no deadlock found), so research starts are serialized. Acceptable at the planned scale; measure in a hosted load check.
+- Connection poolers: the API sets `statement_timeout` through the PostgreSQL startup `options`. Some transaction-mode poolers refuse startup options. The proposed topology connects directly to private PostgreSQL; a pooler needs its own check.
 
 ## Price sources (third-party, to confirm)
 

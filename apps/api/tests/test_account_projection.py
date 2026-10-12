@@ -101,3 +101,20 @@ def test_unavailable_ports_label(settings, owner_a):
     with TestClient(create_app(settings)) as client:
         body = projection(client, owner_a)
     assert body["ports"] == "UNAVAILABLE" and body["records"] == []
+
+
+def test_agent_is_stopped_only_while_a_removal_denies_submission(journey, owner_a, pg):
+    """Review B B3: a FAILED removal does not stop the agent (enforcement denies only DENYING_STATES)."""
+    ff.confirmed_agent(journey, owner_a, "proj-removal")
+    assert journey.post("/v1/agents/proj-removal/funding/declaration", headers=owner_a).status_code == 200
+    requested = journey.post("/v1/agents/proj-removal/removal", headers=owner_a,
+                             json={"request_key": "proj-removal-1", "reason": "owner removed the agent"})
+    assert requested.status_code == 200, requested.text
+
+    def agent():
+        return next(record["content"] for record in projection(journey, owner_a, "proj-removal")["records"]
+                    if record["content"]["record_kind"] == "AGENT")
+
+    assert agent()["status"] == "STOPPED" and agent()["permission_state"] == "REMOVAL_REQUESTED"
+    pg.psql("update revocation_local.removal_states set state = 'FAILED' where agent_id = 'proj-removal'")
+    assert agent()["status"] == "CONFIRMED" and agent()["permission_state"] == "REMOVAL_FAILED"

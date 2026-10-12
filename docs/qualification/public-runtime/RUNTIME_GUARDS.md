@@ -55,7 +55,7 @@ All guards use the existing FastAPI/SQLAlchemy/PostgreSQL stack. No new dependen
 
 ## Research findings closed in this milestone
 
-- **G-N2 (interrupted comparison compute):** a job with an interrupted or unknown local calculation now settles its compute as unknown liability, never as released capacity (`test_interrupted_comparison_keeps_its_compute_as_unknown_liability`).
+- **G-N2 (interrupted comparison compute):** a job settles its compute as unknown liability, never as released capacity, when any tool attempt is unmeasured. That covers three cases: an attempt reconciled as interrupted or unknown; an attempt that started and never finished, whether a restart, a cancel or the deadline ends the job; and an attempt that finished without a compute measurement, such as a failed comparison. Tests: `test_interrupted_comparison_keeps_its_compute_as_unknown_liability`, `test_a_killed_comparison_then_cancel_or_deadline_keeps_compute_unknown`, `test_a_failed_comparison_keeps_its_unmeasured_compute_unknown`.
 - **N4 (one-second overrun):** tools record milliseconds and settle `ceil(total_ms / 1000)` seconds. A known overrun is booked in full and recorded as overrun; it is never hidden or released.
 - **Immutable caps:** see "Caps" above.
 - **G-N1 (compute/deadline mismatch in the actual-data proposal):** the research proposal (`.scratch/…/r58-research/evidence/ACTUAL_DATA_AUTHORIZATION_PACKET.md` §6, frozen and not edited) gives a 1,800 s deadline but no compute reservation. The job API accepts `compute_seconds` ≤ 600 and `deadline_seconds` ≤ 3600. Compute is measured as the wall time of the job's tool calls, including provider pacing. With a 1,800 s deadline and a 600 s reservation, up to 1,200 s could be booked as overrun.

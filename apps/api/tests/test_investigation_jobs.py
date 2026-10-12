@@ -408,3 +408,44 @@ def test_interrupted_comparison_keeps_its_compute_as_unknown_liability(research,
     assert view["budget"]["unknown_liability"]["compute_seconds"] == 30
     assert view["budget"]["released"]["compute_seconds"] == 0
     assert view["budget"]["consumed"]["provider_requests"] == 2  # provider usage was known before the stop
+
+@pytest.mark.parametrize("ending", ["cancel", "deadline"])
+def test_a_killed_comparison_then_cancel_or_deadline_keeps_compute_unknown(research, owner_a, monkeypatch, ending):
+    """Review B B1: a comparison attempt that never finished is unmeasured, whatever ends the job."""
+    intake_id, declaration_id, _ = declare(research, owner_a)
+    job_id = start(research, owner_a, intake_id, declaration_id).json()["job_id"]
+
+    def killed(*args, **kwargs):
+        raise Killed()
+
+    monkeypatch.setattr(investigation_tools, "compare_declared_effects", killed)
+    with pytest.raises(Killed):
+        worker(research).run_job(uuid.UUID(job_id))
+    monkeypatch.undo()
+    assert job(research, owner_a, job_id)["state"] == "EVALUATING"
+    if ending == "cancel":
+        assert research.post(f"/v1/research/investigation-jobs/{job_id}/cancel", headers=owner_a).status_code == 200
+        worker(research).run_job(uuid.UUID(job_id))
+    else:
+        late = lambda: dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)  # noqa: E731
+        worker(research, clock=late).run_job(uuid.UUID(job_id))
+    view = job(research, owner_a, job_id)
+    assert view["state"] == ("CANCELLED" if ending == "cancel" else "DEADLINE_EXCEEDED")
+    assert view["budget"]["unknown_liability"]["compute_seconds"] == 30
+    assert view["budget"]["released"]["compute_seconds"] == 0
+    assert view["budget"]["consumed"]["provider_requests"] == 2
+
+
+def test_a_failed_comparison_keeps_its_unmeasured_compute_unknown(research, owner_a, monkeypatch):
+    """Review B N1: a failed comparison records no compute measurement, so its compute is not released."""
+    intake_id, declaration_id, _ = declare(research, owner_a)
+    job_id = start(research, owner_a, intake_id, declaration_id).json()["job_id"]
+
+    def broken(*args, **kwargs):
+        raise ValueError("calculation defect")
+
+    monkeypatch.setattr(investigation_tools, "compare_declared_effects", broken)
+    view = worker(research).run_job(uuid.UUID(job_id))
+    assert view["state"] == "FAILED" and view["terminal_reason"] == "comparison_failed"
+    assert view["budget"]["unknown_liability"]["compute_seconds"] == 30
+    assert view["budget"]["released"]["compute_seconds"] == 0
