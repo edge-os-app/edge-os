@@ -1194,12 +1194,22 @@ def test_a_path_too_long_for_the_plain_walk_is_moved_not_removed_without_a_clock
     assert not list((tmp_path / "evidence").glob("quarantine-*"))
 
 
+def _write_own_record(evidence: Path, run_id: str, turn_folder: str) -> None:
+    """A pending record of an earlier version, at the top level, that names this run: purge scopes to its turn."""
+    (evidence / "pending-cleanup").mkdir(exist_ok=True)
+    (evidence / "pending-cleanup" / f"{turn_folder}.json").write_text(_json.dumps(
+        {"version": 1, "run_id": run_id, "label": run_id, "container": f"p05-{run_id}-01", "turn_folder": turn_folder,
+         "held": [], "state": "pending", "attempts": 0, "pid": 999_999, "created": 0, "last_attempt": None,
+         "next_attempt_after": 0, "history": []}))
+
+
 def test_purge_goes_on_past_a_folder_it_cannot_remove_and_says_what_is_left(tmp_path: Path) -> None:
     runner = GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path, policy=POLICY, script_for=lambda t: {})
-    (tmp_path / "quarantine-a").mkdir()
-    (tmp_path / "quarantine-b").mkdir()
-    (tmp_path / "quarantine-b" / "kept.log").write_text("x")
-    (tmp_path / "quarantine-b").chmod(0o000)  # unreadable, so the plain walk cannot enter it before it is made ours
+    _write_own_record(tmp_path, "x", "turn-01-a")
+    (tmp_path / "quarantine-turn-01-a-held").mkdir()
+    (tmp_path / "quarantine-turn-01-a-abc123").mkdir()
+    (tmp_path / "quarantine-turn-01-a-abc123" / "kept.log").write_text("x")
+    (tmp_path / "quarantine-turn-01-a-abc123").chmod(0o000)  # unreadable, so the plain walk cannot enter it first
 
     runner.purge_quarantine()
 
@@ -1249,8 +1259,7 @@ def test_when_the_plain_walk_fails_for_any_reason_the_output_is_moved_and_never_
     assert latest_late() <= 0.0, (outcome, latest_late())  # an unbounded removal of 40,000 files would take seconds
     assert "quarantine-" in outcome[0] and not list((tmp_path / "evidence").glob("turn-*/output"))
     monkeypatch.undo()
-    GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path / "evidence", policy=POLICY,
-                            script_for=lambda t: {}).purge_quarantine()
+    runner.purge_quarantine()  # the run that made the quarantine purges it
     assert not list((tmp_path / "evidence").glob("quarantine-*"))
 
 
@@ -1365,7 +1374,8 @@ def test_a_second_interrupt_during_removal_still_moves_the_evidence_and_then_let
 def test_purge_says_which_folders_are_left_when_it_cannot_remove_them(tmp_path: Path, monkeypatch) -> None:
     import shutil
     runner = GuardedDockerTurnRunner(image="unused", run_id="x", evidence_dir=tmp_path, policy=POLICY, script_for=lambda t: {})
-    (tmp_path / "quarantine-stuck").mkdir()
+    _write_own_record(tmp_path, "x", "turn-01-a")
+    (tmp_path / "quarantine-turn-01-a-held").mkdir()
 
     def fails(*_args, **_kwargs):
         raise OSError("busy")
@@ -1373,7 +1383,7 @@ def test_purge_says_which_folders_are_left_when_it_cannot_remove_them(tmp_path: 
     monkeypatch.setattr(GuardedDockerTurnRunner, "_remove_tree", staticmethod(fails))
     monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)
 
-    with pytest.raises(EvidenceNotSealed, match="quarantine-stuck"):
+    with pytest.raises(EvidenceNotSealed, match="quarantine-turn-01-a-held"):
         runner.purge_quarantine()
 
 
@@ -3523,3 +3533,53 @@ def test_a_failed_turn_records_only_its_own_exact_quarantine_names(tmp_path: Pat
     held = _records(tmp_path)[0]["held"]
     assert held and foreign.name not in held and all(name.startswith("quarantine-turn-01-attempt-1-") for name in held)
     assert foreign.exists()
+
+
+
+def test_purging_this_runs_quarantine_never_touches_another_runs(tmp_path: Path, monkeypatch) -> None:
+    """Round-34 review B1: purge_quarantine() of one run removed every quarantine-* folder in a shared evidence folder."""
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    evidence = tmp_path / "evidence"
+    staged = {name: tmp_path / f"staged-{name}" for name in ("a", "b")}
+    for folder in staged.values():  # more entries than the foreground may delete: each output goes to quarantine
+        folder.mkdir()
+        for index in range(300):
+            (folder / f"f{index}.log").write_text("x")
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # never stoppable: evidence is held
+    runners = {}
+    for name in ("a", "b"):
+        install_process(monkeypatch, lambda output, name=name: os.rename(staged[name], output / "many"), returncode=-9)
+        runners[name] = GuardedDockerTurnRunner(image="unused", run_id=f"run-{name}", evidence_dir=evidence, policy=POLICY,
+                                                credential_file=credential, script_for=lambda turn: {},
+                                                timeout_seconds=0.3, seal_grace_seconds=0.3)
+        with pytest.raises(EvidenceNotSealed):
+            runners[name].run_turn(Turn(f"attempt-{name}", "prompt", "task", "m", "route", 4096))
+    a_held = sorted(p.name for p in evidence.glob("quarantine-turn-01-attempt-a-*"))
+    b_held = sorted(p.name for p in evidence.glob("quarantine-turn-01-attempt-b-*"))
+    assert a_held and b_held
+
+    runners["b"].purge_quarantine()
+
+    assert sorted(p.name for p in evidence.glob("quarantine-turn-01-attempt-a-*")) == a_held  # run A's are untouched
+    assert not list(evidence.glob("quarantine-turn-01-attempt-b-*"))  # run B's own are gone
+
+
+def test_recovery_ignores_held_names_an_earlier_version_recorded_that_belong_to_another_turn(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    evidence = tmp_path / "evidence"
+    foreign = evidence / "quarantine-turn-01-x-y-held"  # a prefix match an earlier version may have recorded
+    foreign.mkdir(parents=True)
+    (foreign / "evidence.log").write_text("another turn's evidence")
+    (evidence / "pending-cleanup").mkdir()
+    (evidence / "pending-cleanup" / "turn-01-x.json").write_text(_json.dumps(
+        {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-x-01",
+         "turn_folder": "turn-01-x", "held": [foreign.name], "state": "pending", "attempts": 0, "pid": 999_999,
+         "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}))
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.recover_pending(5.0)
+
+    assert (foreign / "evidence.log").read_text() == "another turn's evidence"

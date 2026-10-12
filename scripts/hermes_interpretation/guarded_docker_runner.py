@@ -591,9 +591,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         raise EvidenceNotSealed(f"evidence that may hold the credential was not removed in time; it is in the private folder {held.name}") from None
 
     def purge_quarantine(self) -> None:
-        """Remove every quarantine folder. This has no clock: run it between turns. Raises if any folder is left."""
+        """Remove THIS run's quarantine folders: the exact quarantine names of the turns its own pending records name.
+        Another run's quarantine in a shared evidence folder is never touched. This has no clock: an operator tool, run
+        between turns. The records stay, so supervised recovery still has to confirm each container gone. Raises if any
+        of this run's folders is left."""
         left = []
-        for held in self.evidence_dir.glob("quarantine-*"):
+        own = [held for _path, data in self._own_records() if data is not None
+               for held in self._quarantine_folders_of(str(data.get("turn_folder")))]
+        for held in dict.fromkeys(own):
             try:
                 self._remove_tree(held, float("inf"))
             except Exception:  # noqa: BLE001 - e.g. a chain longer than the path limit: the fd-based removal copes with that
@@ -923,7 +928,9 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         left: list[str] = []
         if stopping["container_absent"]:
             turn_folder = self.evidence_dir / str(data.get("turn_folder"))
-            targets = [turn_folder / "output", *(self.evidence_dir / str(name) for name in data.get("held") or []),
+            exact = {held.name for held in self._quarantine_folders_of(turn_folder.name)}
+            targets = [turn_folder / "output", *(self.evidence_dir / str(name) for name in data.get("held") or []
+                                                 if str(name) in exact),  # never a name another turn could own
                        *self._quarantine_folders_of(turn_folder.name)]
             for target in dict.fromkeys(targets):
                 if target.parent != self.evidence_dir and target.parent != turn_folder:
