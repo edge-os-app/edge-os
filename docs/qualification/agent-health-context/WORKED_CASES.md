@@ -31,7 +31,7 @@ canonical object per case is enough.
 |---|---|---|
 | `signal_open_position` | signal, one position, known realized result | health and results stay separate; unrealized and mark unknown |
 | `no_signal` | no-signal is useful work | no action; realized 0 is a fact, not a loss of permission |
-| `stale_input` | stale input | reason `STALE_CONTEXT`; unknown stays unknown |
+| `stale_input` | stale input | reason `OBSERVATIONS_WRONG_TIME`; unknown stays unknown |
 | `missing_input_wrong_market` | missing/wrong input | `OBSERVATIONS_WRONG_MARKET`; no decision |
 | `wait_provider_unavailable` | fault/wait | `WAITING:MARKET_UNAVAILABLE`; the saved action stays |
 | `pending_unknown_original` | pending unknown original transaction | `pending_reconciliation = true`; exact original identity kept |
