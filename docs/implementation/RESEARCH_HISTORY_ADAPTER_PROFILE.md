@@ -14,7 +14,7 @@ authority. The whole of P07 is not complete and no fresh history is qualified.
   results, the holdout and closed allowances are unchanged. Numeric and qualification logic is reused, not
   copied. P03's verifier, `main.py`, `core/`, existing `research/`, `replay/`, migrations and lockfiles are
   untouched. #58 owns database, API, schema, client, UI, verifier and job composition.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (43 tests);
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (53 tests);
   `cd docs/qualification/p07 && python3 -B -m unittest -v test_p07` passes (73 tests);
   `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs are kept under the assigned
   evidence folder and are not part of the commit.
@@ -78,14 +78,86 @@ continues. Nothing is repaired or guessed.
 - `gaps` and a canonical `collection_sha256`. A partial collection is never reported as complete.
 
 `normalize(profile, collection, evidence) -> NormalizedHistory` returns the bound P07 profile, exact decimals
-and units, the ordered decoded trades (`identity`, `price`, `quote_amount`, `base_amount`, `pool_side`), the
-reused `history_observations` output, the per-claim `qualify` result, the `binding_view`, gaps and the hashes
-that bind the result to the profile, the collection and the observations. `project_binding(profile, result)`
-projects to the accepted P02 binding and preserves refusal.
+and units, the ordered decoded trades (`identity`, `price`, `quote_amount`, `base_amount`, `pool_side`), an
+ordered bucket view, the reused `history_observations` output, the per-claim `qualify` result, the
+`binding_view`, gaps and the hashes that bind the result to the profile, the collection and the observations.
+`project_binding(profile, result)` projects to the accepted P02 binding and preserves refusal.
 
 `evidence_manifest` builds a portable manifest, saves it as P02 canonical bytes, reads it back, and
 `verify_manifest` recomputes the page digest and the counts. The same evidence always gives the same file and
 the same SHA-256.
+
+## Consumer interface (amendment 2026-10-12)
+
+The date controller amendment `r58-r7-a.md` adds four consumer requirements. Exact field paths follow.
+
+### 1. Ordered window buckets
+
+`NormalizedHistory["buckets"]` is one object per existing 300-second UTC window bucket, in time order. It is
+built with the accepted `bucketize` and `bucket_available_at` seams unchanged. `history_observations` still
+returns only summaries; the buckets are not placed there.
+
+| Field | Meaning |
+|---|---|
+| `bucket_start`, `bucket_end` | The bucket bounds `[start, end)` as ISO-8601 UTC text. |
+| `status` | `COMPLETE_OCCUPIED`, `COMPLETE_EMPTY`, `INCOMPLETE` or `UNQUALIFIED`. |
+| `close` | The exact decimal price string of the last qualified trade, or `null`. |
+| `quote_volume` | The exact quote volume text, or `null`. A complete-empty bucket keeps `"0"`. |
+| `available_at` | Earliest use time from the accepted availability helper, or `null`. |
+| `availability_basis` | `ASSUMED_DELAY`, `OBSERVED_DELIVERY` or `UNKNOWN`. |
+| `reasons` | The bucket reasons plus any availability reason. |
+
+A complete-empty bucket has a null close and its proved `"0"` volume. An incomplete or unqualified bucket has
+a null close and a null volume; it never becomes complete or zero here. There is no interpolation, carrying
+or lookahead. Reconstructed delay stays `ASSUMED_DELAY`; an absent delivery record leaves `available_at`
+null with basis `UNKNOWN` and reason `DELIVERY_NOT_RECORDED`. The full trade view stays in the raw bucket
+under `bucketize`; this view carries only the exact price string. Example bucket:
+
+```json
+{"bucket_start": "2026-09-25T10:00:00Z", "bucket_end": "2026-09-25T10:05:00Z",
+ "status": "COMPLETE_OCCUPIED", "close": "2", "quote_volume": "2",
+ "available_at": "2026-09-25T10:05:30Z", "availability_basis": "OBSERVED_DELIVERY", "reasons": []}
+```
+
+`evidence["delivery_records"]` is an optional `{bucket_start: arrival_utc}` mapping used only by the
+availability helper. It is not a financial value.
+
+### 2. Measured attempts versus provider requests
+
+`CollectionResult["source_invocations"]` separates the two:
+
+| Field | Meaning |
+|---|---|
+| `measured_local_attempts` | An exact local count of `next_response` calls, including a call that raised. |
+| `provider_requests` | `null` when unknown, or `{provider: count}` when the caller supplies evidence. |
+
+A source error or timeout after an invocation keeps the attempted count; it never reports `0` because no
+response arrived. Consuming an archived page is not evidence of a new or original provider request. The
+provenance block labels the measurement: `provenance.measurement.provider_requests` is `SUPPLIED_EVIDENCE` or
+`UNKNOWN`. `CollectionResult["coverage"]` retains the requested scan, the page ranges and whether the pages
+tile the scan. A provider `complete` flag alone is not proof of query or window coverage; the retained pages,
+segments, gaps and coverage flag are the evidence.
+
+### 3. `normalized_sha256`
+
+`NormalizedHistory["normalized_sha256"]` is the P02 canonical SHA-256 of the complete normalized payload with
+its own digest field removed. It binds `bound_profile`, `buckets`, `trades`, `observations`, the
+qualification, the binding view, the collection summary and the retained page identity. `collection_sha256`,
+`input_profile_sha256`, `bound_profile_sha256`, `observations_sha256` and `result_sha256` are retained beside
+it. The payload has no JSON floating-point value. Retained measurements use exact unit text; a clock reading
+is never a data or financial value.
+
+### 4. Input and failure semantics
+
+A malformed caller profile or limit raises the accepted `InvalidInput` before any source invocation. The
+adapter error classes subclass it. An ordinary source or provider failure returns a `PARTIAL`
+`CollectionResult` with an existing `stop_reason`; it is never `COMPLETE` and never retries implicitly.
+Malformed provider input is recorded as refusal or partial evidence; it is never repaired or dropped as
+successful coverage. Programmer defects and `BaseException` are not swallowed. The finite limits and the
+qualifier `InvalidInput`/`Unsupported` meanings are unchanged. Cancellation uses the injected source (a
+`SourceCancelled` exception) and the injected clock; the clock is a determinism seam, not a live
+elapsed-time guarantee. Only an overall `QUALIFIED` result projects to P02; `LIMITED` stays saved beside the
+declaration.
 
 ## Finite limits
 
@@ -130,6 +202,14 @@ result is carried beside the profile; `to_p02_binding` still refuses it.
 | Assumed and unknown availability | `test_availability_models_limit_or_unresolve_timing` |
 | Provenance, hash tampering, manifest round-trip | `test_evidence_manifest.py` |
 | LIMITED projection refusal | `test_limited_real_result_is_refused_by_the_p02_projection` |
+| Ordered window buckets with consumer fields (amendment 1) | `test_buckets_expose_every_window_bucket_with_consumer_fields` |
+| Incomplete buckets never become complete or zero (amendment 1) | `test_incomplete_buckets_never_become_complete_or_zero` |
+| Assumed delay and missing delivery availability (amendment 1) | `test_assumed_delay_and_missing_delivery_change_only_availability` |
+| Measured attempts vs provider requests (amendment 2) | `test_source_invocations_are_measured_and_provider_requests_stay_unknown`, `test_evidenced_provider_requests_are_labelled`, `test_cancel_retains_the_attempted_invocation` |
+| Coverage evidence retained (amendment 2) | `test_coverage_evidence_records_whether_the_pages_tile_the_scan` |
+| `normalized_sha256` repeatable, change and tamper (amendment 3) | `test_normalized_sha256_is_repeatable_binds_the_payload_and_changes` |
+| Malformed profile refused before invocation (amendment 4) | `test_malformed_profile_is_refused_before_any_invocation` |
+| Manifest consumer metadata | `test_evidence_manifest.py::test_manifest_includes_consumer_metadata` |
 | No live transport or environment discovery | `test_package_has_no_live_transport_or_environment_discovery` |
 
 ## Proposed feature-map row for #58

@@ -3,7 +3,8 @@
 The normalizer maps supplied provider events to P07 log records, materializes a
 bound P07 profile whose dataset carries the collected pages, runs the reused
 ``history_observations`` and ``qualify`` seams, and returns the raw evidence, the
-per-claim result and the hashes that bind the result to its inputs.
+per-claim result, an ordered bucket view and the hashes that bind the result to
+its inputs.
 
 Only facts a provider read can give arrive from the caller. Everything the pages
 and logs prove is derived by the reused engine. The result never claims that
@@ -20,6 +21,8 @@ from edge_os_api.research_history.errors import AdapterInputError
 from edge_os_api.research_history.qualification_engine import (
     InvalidInput,
     assemble_segments,
+    bucket_available_at,
+    bucketize,
     canonical_sha256,
     dataset_revision,
     feasibility,
@@ -90,12 +93,10 @@ def _materialize_profile(profile: Mapping[str, Any], collection: Mapping[str, An
     return bound
 
 
-def _resolve_feasibility(bound: Mapping[str, Any], evidence: Mapping[str, Any]) -> dict[str, Any]:
-    dataset = bound["dataset"]
-    assembled = assemble_segments(bound, dataset["query"], dataset["pages"],
-                                  dataset["collection"]["archive_height"] or 0)
+def _resolve_feasibility(evidence: Mapping[str, Any], assembled: Mapping[str, Any],
+                         availability: Mapping[str, Any]) -> dict[str, Any]:
     try:
-        return feasibility(evidence["feasibility_claim"], assembled["segments"], bound["availability"])
+        return feasibility(evidence["feasibility_claim"], assembled["segments"], availability)
     except InvalidInput as error:
         raise AdapterInputError("FEASIBILITY_CLAIM_INVALID", str(error)) from error
 
@@ -115,12 +116,40 @@ def _trade_view(profile: Mapping[str, Any], trade: Any) -> dict[str, Any]:
     }
 
 
-def _evidence_gaps(bound: Mapping[str, Any], collection: Mapping[str, Any],
+def _bucket_views(bound: Mapping[str, Any], decoded: Any, assembled: Mapping[str, Any],
+                  delivered: Mapping[str, str]) -> list[dict[str, Any]]:
+    """One ordered view per existing 300-second window bucket.
+
+    Uses the accepted ``bucketize`` and ``bucket_available_at`` seams unchanged. A
+    complete-empty bucket keeps a null close and its proved zero volume. Incomplete
+    or unqualified data never becomes complete or zero here.
+    """
+    buckets = bucketize(bound, decoded, assembled["segments"], bound["dataset"]["window"])
+    views: list[dict[str, Any]] = []
+    for bucket in buckets:
+        when = bucket_available_at(bound["availability"], bucket, delivered)
+        status = bucket["status"]
+        proven = status in ("COMPLETE_OCCUPIED", "COMPLETE_EMPTY")
+        close = bucket["close"]["price"] if (proven and bucket["close"]) else None
+        reasons = list(bucket["reasons"])
+        if when.get("reason"):
+            reasons.append(when["reason"])
+        views.append({
+            "bucket_start": bucket["start"],
+            "bucket_end": bucket["end"],
+            "status": status,
+            "close": close,
+            "quote_volume": bucket["quote_volume"] if proven else None,
+            "available_at": when.get("at"),
+            "availability_basis": when["basis"],
+            "reasons": reasons,
+        })
+    return views
+
+
+def _evidence_gaps(collection: Mapping[str, Any], assembled: Mapping[str, Any],
                    observations: Mapping[str, Any]) -> list[dict[str, str]]:
     gaps = [dict(gap) for gap in collection["gaps"]]
-    dataset = bound["dataset"]
-    assembled = assemble_segments(bound, dataset["query"], dataset["pages"],
-                                  dataset["collection"]["archive_height"] or 0)
     for item in assembled["breaks"]:
         gaps.append({"code": f"SEGMENT_{item['code']}", "detail": str(item.get("page_id"))})
     summary = observations["ingest"]
@@ -135,6 +164,11 @@ def _evidence_gaps(bound: Mapping[str, Any], collection: Mapping[str, Any],
     for code, count in sorted(summary["rejected_codes"].items()):
         gaps.append({"code": f"REJECTED_{code}", "detail": str(count)})
     return gaps
+
+
+def _collection_view(collection: Mapping[str, Any]) -> dict[str, Any]:
+    """The portable collection summary. The raw records stay with the caller."""
+    return {key: value for key, value in collection.items() if key != "records"}
 
 
 def normalize(profile: Mapping[str, Any], collection: Mapping[str, Any],
@@ -153,7 +187,14 @@ def normalize(profile: Mapping[str, Any], collection: Mapping[str, Any],
         raise AdapterInputError("BOUND_PROFILE_INVALID",
                                 "; ".join(f"{item['code']}@{item['path']}" for item in problems))
 
-    window = dict(bound["dataset"]["window"])
+    dataset = bound["dataset"]
+    assembled = assemble_segments(bound, dataset["query"], dataset["pages"],
+                                  dataset["collection"]["archive_height"] or 0)
+    decoded = ingest(bound, logs)
+    delivered = evidence.get("delivery_records")
+    delivered = dict(delivered) if isinstance(delivered, Mapping) else {}
+
+    window = dict(dataset["window"])
     observations = history_observations(bound, logs, window)
     observations["binding"] = {
         "chain_id": evidence["chain_id_source"],
@@ -164,7 +205,7 @@ def normalize(profile: Mapping[str, Any], collection: Mapping[str, Any],
                                      "fee_transfer_semantics": evidence["fee_transfer_semantics"]}
     observations["corroboration"] = dict(evidence["corroboration"])
     observations["finality_at_collection"] = evidence["finality_at_collection"]
-    observations["feasibility"] = _resolve_feasibility(bound, evidence)
+    observations["feasibility"] = _resolve_feasibility(evidence, assembled, bound["availability"])
     observations["provenance"] = {
         "supplied_by_caller": sorted(_REQUIRED_EVIDENCE),
         "derived_by_engine": ["ingest", "bucket_status_counts", "bucket_window", "segment_breaks", "feasibility"],
@@ -174,7 +215,6 @@ def normalize(profile: Mapping[str, Any], collection: Mapping[str, Any],
     }
 
     result = qualify(bound, observations)
-    decoded = ingest(bound, logs)
     quote_token = next(token for token in bound["pool_tokens"] if token["role"] == "QUOTE")
     base_token = next(token for token in bound["pool_tokens"] if token["role"] == "BASE")
 
@@ -183,7 +223,7 @@ def normalize(profile: Mapping[str, Any], collection: Mapping[str, Any],
     except ValueError as error:
         raise AdapterInputError("INPUT_PROFILE_NOT_CANONICAL", str(error)) from error
 
-    return {
+    normalized = {
         "input_profile_sha256": input_digest,
         "bound_profile": bound,
         "bound_profile_sha256": profile_sha256(bound),
@@ -191,15 +231,18 @@ def normalize(profile: Mapping[str, Any], collection: Mapping[str, Any],
         "decimals": {"base": base_token["decimals"], "quote": quote_token["decimals"]},
         "trades": [_trade_view(bound, trade) for trade in decoded.trades],
         "pages": [dict(page) for page in collection["pages"]],
-        "collection": dict(collection),
+        "collection": _collection_view(collection),
+        "buckets": _bucket_views(bound, decoded, assembled, delivered),
         "observations": observations,
         "observations_sha256": canonical_sha256(observations),
         "qualification": result,
         "result_sha256": canonical_sha256(result),
         "binding_view": research_binding_view(bound),
         "overall": result["overall"],
-        "gaps": _evidence_gaps(bound, collection, observations),
+        "gaps": _evidence_gaps(collection, assembled, observations),
     }
+    normalized["normalized_sha256"] = canonical_sha256(normalized)
+    return normalized
 
 
 def project_binding(profile: Mapping[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:

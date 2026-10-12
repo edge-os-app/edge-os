@@ -16,7 +16,11 @@ from edge_os_api.research_history import (
     normalize,
     project_binding,
 )
-from edge_os_api.research_history.qualification_engine import BindingNotEmittable, profile_problems
+from edge_os_api.research_history.qualification_engine import (
+    BindingNotEmittable,
+    canonical_sha256,
+    profile_problems,
+)
 
 HIGH_PRECISION = 10 ** 50 + 25
 HIGH_PRECISION_PRICE = "100000000000000000000000000000000000000000000000020"
@@ -218,3 +222,53 @@ def test_observations_label_supplied_and_derived_facts() -> None:
     assert "corroboration" in provenance["supplied_by_caller"]
     assert "ingest" in provenance["derived_by_engine"]
     assert provenance["collection_sha256"] == history["collection"]["collection_sha256"]
+
+
+def test_buckets_expose_every_window_bucket_with_consumer_fields() -> None:
+    history = _history()
+    buckets = history["buckets"]
+    assert [bucket["bucket_start"] for bucket in buckets] == [
+        "2026-09-25T10:00:00Z", "2026-09-25T10:05:00Z", "2026-09-25T10:10:00Z", "2026-09-25T10:15:00Z"]
+    first = buckets[0]
+    assert set(first) == {"bucket_start", "bucket_end", "status", "close", "quote_volume", "available_at",
+                          "availability_basis", "reasons"}
+    assert first["status"] == "COMPLETE_OCCUPIED" and first["close"] == "2" and first["quote_volume"] == "2"
+    assert first["availability_basis"] == "OBSERVED_DELIVERY" and first["available_at"] == "2026-09-25T10:05:30Z"
+    empty = buckets[2]
+    assert empty["status"] == "COMPLETE_EMPTY" and empty["close"] is None and empty["quote_volume"] == "0"
+
+
+def test_incomplete_buckets_never_become_complete_or_zero() -> None:
+    profile = support.profile()
+    profile["dataset"]["window"] = {"start_utc": "2026-09-25T10:00:00Z", "end_utc": "2026-09-25T10:15:00Z"}
+    short_page = support.build_page("rh-short", 100, 106, support.P1_FIRST_TS, support.T0 + 300)
+    history = _history(profile=profile, responses=support.single_page([], page=short_page))
+    buckets = {bucket["bucket_start"]: bucket for bucket in history["buckets"]}
+    assert buckets["2026-09-25T10:00:00Z"]["status"] == "COMPLETE_EMPTY"
+    assert buckets["2026-09-25T10:00:00Z"]["quote_volume"] == "0"
+    for start in ("2026-09-25T10:05:00Z", "2026-09-25T10:10:00Z"):
+        assert buckets[start]["status"] == "INCOMPLETE"
+        assert buckets[start]["close"] is None and buckets[start]["quote_volume"] is None
+
+
+def test_assumed_delay_and_missing_delivery_change_only_availability() -> None:
+    assumed = _history(profile=support.profile(availability={"model": "ASSUMED_DELAY", "delay_seconds": 180}))
+    assert assumed["buckets"][0]["availability_basis"] == "ASSUMED_DELAY"
+    assert assumed["buckets"][0]["available_at"] == "2026-09-25T10:08:00Z"
+    no_record = _history(evidence=support.evidence_facts(delivery_records={}))
+    assert no_record["buckets"][0]["availability_basis"] == "UNKNOWN"
+    assert no_record["buckets"][0]["available_at"] is None
+    assert "DELIVERY_NOT_RECORDED" in no_record["buckets"][0]["reasons"]
+
+
+def test_normalized_sha256_is_repeatable_binds_the_payload_and_changes() -> None:
+    first = _history()
+    second = _history()
+    assert first["normalized_sha256"] == second["normalized_sha256"]
+    payload = {key: value for key, value in first.items() if key != "normalized_sha256"}
+    assert canonical_sha256(payload) == first["normalized_sha256"]
+    tampered = copy.deepcopy(payload)
+    tampered["overall"] = "QUALIFIED_CHANGED"
+    assert canonical_sha256(tampered) != first["normalized_sha256"]
+    other = _history(profile=support.profile(decimals=(0, 0)), responses=support.single_page([]))
+    assert other["normalized_sha256"] != first["normalized_sha256"]

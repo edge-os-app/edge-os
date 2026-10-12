@@ -8,6 +8,7 @@ import pytest
 
 import _support as support
 from edge_os_api.research_history import (
+    AdapterInputError,
     CollectionLimits,
     HistoryRequest,
     InvalidLimits,
@@ -141,3 +142,40 @@ def test_invalid_limits_are_refused_before_any_fetch() -> None:
     for bad in ({"max_pages": 0}, {"max_rows": -1}, {"max_bytes": 0}):
         with pytest.raises(InvalidLimits):
             collect(support.profile(), RecordedResponseSource([]), support.SCAN, CollectionLimits(**{**support.limits(), **bad}), None)
+
+
+def test_source_invocations_are_measured_and_provider_requests_stay_unknown() -> None:
+    result = _collect(support.standard_responses())
+    assert result["source_invocations"] == {"measured_local_attempts": 2, "provider_requests": None}
+    assert result["provenance"]["measurement"]["provider_requests"] == "UNKNOWN"
+
+
+def test_evidenced_provider_requests_are_labelled() -> None:
+    result = collect(support.profile(), RecordedResponseSource(support.standard_responses()), support.SCAN,
+                     _limits(), {"provider_requests": {"ENVIO_HYPERSYNC": 5}})
+    assert result["source_invocations"]["provider_requests"] == {"ENVIO_HYPERSYNC": 5}
+    assert result["provenance"]["measurement"]["provider_requests"] == "SUPPLIED_EVIDENCE"
+
+
+def test_cancel_retains_the_attempted_invocation() -> None:
+    result = collect(support.profile(), _RaisingSource(SourceCancelled("stop")), support.SCAN, _limits(), None)
+    assert result["source_invocations"]["measured_local_attempts"] == 1
+    assert result["source_invocations"]["provider_requests"] is None
+
+
+def test_malformed_profile_is_refused_before_any_invocation() -> None:
+    broken = support.profile()
+    del broken["venue"]
+    source = RecordedResponseSource(support.standard_responses())
+    with pytest.raises(AdapterInputError) as raised:
+        collect(broken, source, support.SCAN, _limits(), None)
+    assert raised.value.code == "PROFILE_INVALID"
+    assert source.remaining == 2
+
+
+def test_coverage_evidence_records_whether_the_pages_tile_the_scan() -> None:
+    complete = _collect(support.standard_responses())
+    first, second = support.standard_responses()
+    gapped = _collect([first, {**second, "page": {**second["page"], "from_block": 108, "first_parent_hash": None}}])
+    assert complete["coverage"]["covers_requested_scan"] is True
+    assert gapped["coverage"]["covers_requested_scan"] is False

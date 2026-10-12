@@ -69,6 +69,15 @@ def test_manifest_records_the_collection_boundaries_and_qualification() -> None:
     assert manifest["engine"]["p07_qualification"] and manifest["engine"]["p02_checker"]
 
 
+def test_manifest_includes_consumer_metadata() -> None:
+    manifest = build_manifest(_history())
+    assert manifest["normalized_sha256"]
+    assert len(manifest["buckets"]) == 4
+    assert manifest["collection"]["coverage"]["covers_requested_scan"] is True
+    assert manifest["collection"]["source_invocations"] == {"measured_local_attempts": 2,
+                                                             "provider_requests": None}
+
+
 def test_package_has_no_live_transport_or_environment_discovery() -> None:
     forbidden = ("os.environ", "getenv", "import socket", "import httpx", "import requests",
                  "urllib.request", "subprocess", "api_key", "Authorization")

@@ -26,7 +26,7 @@ from edge_os_api.research_history.provider_transport import (
     SourceCancelled,
     SourceTimeout,
 )
-from edge_os_api.research_history.qualification_engine import canonical_sha256
+from edge_os_api.research_history.qualification_engine import canonical_sha256, profile_problems
 
 PAGE_KEYS = (
     "page_id",
@@ -86,6 +86,41 @@ def _raw_sha256(value: Any) -> str:
     return hashlib.sha256(_raw_bytes(value)).hexdigest()
 
 
+def _is_nonneg_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _provider_requests(provenance: Any) -> dict[str, int] | None:
+    """Evidenced actual provider request counts, or None when unknown.
+
+    Consuming an archived page is not evidence of a new or original provider request.
+    """
+    if not isinstance(provenance, Mapping):
+        return None
+    supplied = provenance.get("provider_requests")
+    if not isinstance(supplied, Mapping) or not supplied:
+        return None
+    if not all(isinstance(name, str) and name and _is_nonneg_int(count) for name, count in supplied.items()):
+        return None
+    return dict(supplied)
+
+
+def _covers_scan(pages: Sequence[Mapping[str, Any]], scan: Mapping[str, int]) -> bool:
+    """Whether the collected pages tile the requested scan with no gap or overlap."""
+    if not pages:
+        return False
+    ranges = []
+    for page in pages:
+        low, high = page.get("from_block"), page.get("next_block")
+        if not _is_nonneg_int(low) or not _is_nonneg_int(high) or high <= low:
+            return False
+        ranges.append((low, high))
+    ranges.sort()
+    if ranges[0][0] != scan["from_block"] or ranges[-1][1] != scan["to_block_exclusive"]:
+        return False
+    return all(nxt[0] == prev[1] for prev, nxt in zip(ranges, ranges[1:]))
+
+
 def _page_record(page: Mapping[str, Any]) -> dict[str, Any]:
     return {key: page[key] for key in PAGE_KEYS if key in page}
 
@@ -121,6 +156,10 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
     ``clock`` returns an ISO-8601 UTC string and is injected so tests stay deterministic.
     """
     limits.validate()
+    problems = profile_problems(profile)
+    if problems:
+        raise AdapterInputError("PROFILE_INVALID",
+                                "; ".join(f"{item['code']}@{item['path']}" for item in problems))
     request_scan = _scan_request(scan)
     provider_name = profile["source"]["history_provider"]
     definition = _query_definition(profile, request_scan)
@@ -144,6 +183,7 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
     page_signatures: set[tuple[Any, ...]] = set()
     seen_cursors: set[int] = set()
     bytes_used = 0
+    invocations = 0
     provider_version: str | None = None
     first_served: str | None = None
     last_served: str | None = None
@@ -163,6 +203,7 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
             stop_reason = "LIMIT_BYTES"
             break
         try:
+            invocations += 1
             response = source.next_response(request)
         except SourceCancelled:
             stop_reason = "CANCELLED"
@@ -256,6 +297,7 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
                                  cursor_after=after, max_rows=limits.max_rows)
 
     status = "COMPLETE" if stop_reason == "COMPLETE" else "PARTIAL"
+    provider_requests = _provider_requests(provenance)
     provenance_block = {
         "history_provider": provider_name,
         "data_route": profile["source"]["data_route"],
@@ -263,6 +305,10 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
         "first_served_utc": first_served,
         "last_served_utc": last_served,
         "origin": dict(provenance) if provenance is not None else {},
+        "measurement": {
+            "measured_local_attempts": "EXACT_LOCAL_COUNT",
+            "provider_requests": "SUPPLIED_EVIDENCE" if provider_requests is not None else "UNKNOWN",
+        },
     }
     collection = {
         "status": status,
@@ -279,6 +325,10 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
         "bytes": bytes_used,
         "requests": steps,
         "gaps": gaps,
+        "source_invocations": {"measured_local_attempts": invocations, "provider_requests": provider_requests},
+        "coverage": {"requested_scan": dict(request_scan),
+                     "page_ranges": [[page.get("from_block"), page.get("next_block")] for page in pages],
+                     "covers_requested_scan": _covers_scan(pages, request_scan)},
         "provenance": provenance_block,
     }
     collection["collection_sha256"] = _raw_sha256(

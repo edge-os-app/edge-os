@@ -1,18 +1,21 @@
 """Errors for the local research-history adapter.
 
-They are plain input errors. They carry a stable code so a caller can branch on
-the class without reading message text.
+They subclass the reused P07 ``InvalidInput`` so a consumer that catches the
+accepted error type also catches a malformed caller profile, limit, evidence or
+manifest. Each error carries a stable code so a caller can branch without
+reading message text.
 """
 
 from __future__ import annotations
 
+from edge_os_api.research_history.qualification_engine import InvalidInput
 
-class AdapterInputError(ValueError):
+
+class AdapterInputError(InvalidInput):
     """A caller supplied a value the adapter cannot turn into valid P07 evidence."""
 
     def __init__(self, code: str, detail: str) -> None:
-        super().__init__(f"{code}: {detail}")
-        self.code = code
+        super().__init__(code, detail)
         self.detail = detail
 
 

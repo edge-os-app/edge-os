@@ -70,6 +70,16 @@ profit. No fresh history is qualified.
 | RH-C30 | Wrong expected hash fails verification | `test_evidence_manifest.py::test_wrong_expected_hash_fails_verification` |
 | RH-C31 | Manifest records boundaries and qualification | `test_evidence_manifest.py::test_manifest_records_the_collection_boundaries_and_qualification` |
 | RH-C32 | No live transport or environment discovery | `test_evidence_manifest.py::test_package_has_no_live_transport_or_environment_discovery` |
+| RH-C34 | Measured attempts versus provider requests | `test_history_collector.py::test_source_invocations_are_measured_and_provider_requests_stay_unknown` |
+| RH-C35 | Evidenced provider requests are labelled | `test_history_collector.py::test_evidenced_provider_requests_are_labelled` |
+| RH-C36 | Cancel retains the attempted invocation | `test_history_collector.py::test_cancel_retains_the_attempted_invocation` |
+| RH-C37 | Malformed profile refused before any invocation | `test_history_collector.py::test_malformed_profile_is_refused_before_any_invocation` |
+| RH-C38 | Coverage evidence records scan tiling | `test_history_collector.py::test_coverage_evidence_records_whether_the_pages_tile_the_scan` |
+| RH-C39 | Ordered window buckets with consumer fields | `test_history_normalizer.py::test_buckets_expose_every_window_bucket_with_consumer_fields` |
+| RH-C40 | Incomplete buckets never become complete or zero | `test_history_normalizer.py::test_incomplete_buckets_never_become_complete_or_zero` |
+| RH-C41 | Assumed delay and missing delivery availability | `test_history_normalizer.py::test_assumed_delay_and_missing_delivery_change_only_availability` |
+| RH-C42 | `normalized_sha256` repeatable, change and tamper | `test_history_normalizer.py::test_normalized_sha256_is_repeatable_binds_the_payload_and_changes` |
+| RH-C43 | Manifest consumer metadata | `test_evidence_manifest.py::test_manifest_includes_consumer_metadata` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
 suite. This adapter adds cases RH-C01 to RH-C32 and changes neither.

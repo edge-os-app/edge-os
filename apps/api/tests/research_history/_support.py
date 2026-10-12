@@ -12,7 +12,7 @@ import copy
 import hashlib
 from typing import Any
 
-from edge_os_api.research_history.qualification_engine import epoch
+from edge_os_api.research_history.qualification_engine import epoch, iso_utc
 
 POOL = "0x" + "aa" * 20
 QUOTE = "0x" + "bb" * 20
@@ -183,6 +183,7 @@ def evidence_facts(**overrides: Any) -> dict[str, Any]:
         "corroboration": {"class": "COMPLETE", "provider": "QUICKNODE_JSON_RPC", "sample_size": 2,
                           "population_size": 2, "mismatches": 0},
         "finality_at_collection": "OBSERVED_FINAL",
+        "delivery_records": {iso_utc(_T0 + 300 * step): iso_utc(_T0 + 300 * step + 330) for step in range(4)},
         "feasibility_claim": {
             "schedule": {"anchor_utc": WINDOW_START, "period_seconds": 300,
                          "feature_end_offset_seconds": 0},
