@@ -172,7 +172,8 @@ class ConnectedExecution:
                 result = self.run_job(job_id)
             except Exception as error:  # noqa: BLE001 - one failing job must not stop other owners' jobs
                 # Saved stage state stays as it was; the failure is recorded on this job only and retried later.
-                log.exception("worker job %s failed: %s", job_id, type(error).__name__)
+                # The error class only: an injected client's message or traceback could carry private bytes.
+                log.error("worker job %s failed: %s", job_id, type(error).__name__)
                 self._update(job_id, reason=f"WORKER_ERROR:{type(error).__name__}")
                 continue
             if result is not None:

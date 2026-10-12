@@ -650,3 +650,67 @@ def test_a_mandate_that_expires_during_the_lifecycle_allows_no_next_effect(origi
     assert "MANDATE_EXPIRED" in original_of(body)["reason"]
     assert calls(recordings).get("signer.rpc", 0) == signs
     assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+# ------------------------------------------------------- review B on dac088a: malformed logs in a split leg
+
+def split_sell_leg(malform):
+    """Split the sell-token Transfer into 60 % and 40 % logs, then malform only the 40 % log."""
+    def edit(receipt):
+        sell = receipt["logs"][0]
+        amount = int(sell["data"], 16)
+        first = {**sell, "data": word(amount * 6 // 10)}
+        second = malform({**sell, "topics": list(sell["topics"]), "data": word(amount - amount * 6 // 10)})
+        receipt["logs"] = [first, second, *receipt["logs"][1:]]
+        return receipt
+    return edit
+
+
+@pytest.mark.parametrize("case,malform", [
+    ("topic0-no-prefix", lambda log: {**log, "topics": [log["topics"][0][2:], *log["topics"][1:]]}),
+    ("address-no-prefix", lambda log: {**log, "address": log["address"][2:]}),
+    ("topic-short", lambda log: {**log, "topics": [log["topics"][0], log["topics"][1][:40], log["topics"][2]]})])
+def test_a_malformed_log_anywhere_in_the_receipt_proves_no_amount(original, owner_a, case, malform):
+    job = submitted(original, owner_a, f"split-{case}-fx-original")
+    Inject(original, observer=receipt_edit(split_sell_leg(malform)))
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    body = action(original, owner_a, job["action_id"])
+    assert settled["decision_status"] == "BREACHED" and body["admission"][0]["reason"].startswith("MISSING_RECONCILED")
+    assert "RESERVED" in reservation_states(body)
+
+
+def test_a_well_formed_split_leg_sums_to_the_whole_amount(original, owner_a):
+    job = submitted(original, owner_a, "split-clean-fx-original")
+    Inject(original, observer=receipt_edit(split_sell_leg(lambda log: log)))
+    settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert settled["case_state"] == "CONFIRMED"
+    receipt = action(original, owner_a, job["action_id"])["receipts"][-1]
+    assert receipt["content"]["actual_input"]["raw"] == ff.ENTRY_QUOTE_INPUT
+
+
+def test_a_hash_shaped_slice_of_the_signed_bytes_is_never_saved_or_shown(original, owner_a):
+    signed = signed_entry_nonce0()
+    fragment = "0x" + signed[10:74]  # 32 bytes of the signed serialization, shaped like a hash
+    Inject(original, broadcast=lambda inner: Delegate(
+        inner, after=lambda result, method, params: fragment if method == "eth_sendRawTransaction" else result))
+    job = submitted(original, owner_a, "slice-fx-original")
+    response = original.get(f"/v1/actions/{job['action_id']}", headers=owner_a)
+    assert original_of(response.json())["stage"] == "BROADCAST_HASH_MISMATCH"
+    assert fragment[2:] not in response.text
+
+
+def test_an_unexpected_client_error_reaches_the_log_without_its_text(original, owner_a, caplog):
+    signed = signed_entry_nonce0()
+
+    def explode(result, method, params):
+        if method == "eth_sendRawTransaction":
+            raise ValueError("unexpected reply for " + params[0])
+        return result
+
+    Inject(original, broadcast=lambda inner: Delegate(inner, after=explode))
+    ready(original, owner_a, "explode-fx-original")
+    ff.schedule(original, owner_a, "explode-fx-original")
+    with caplog.at_level("INFO"):
+        original.app.state.financial.connected.run_pending(limit=50)
+    assert "worker job" in caplog.text and "ValueError" in caplog.text
+    assert signed[2:42] not in caplog.text

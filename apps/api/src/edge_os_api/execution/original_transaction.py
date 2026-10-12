@@ -339,9 +339,8 @@ class OriginalTransactionTransport:
             # Provider error text is never saved or shown: it can echo the request, including the signed bytes.
             return self._possible(journal, "BROADCAST_ERROR")
         if not isinstance(returned, str) or returned.lower() != transaction_hash:
-            # Only a hash-shaped reply is kept; any other reply text could carry the signed bytes.
-            return self._possible(journal, "BROADCAST_HASH_MISMATCH",
-                                  {"broadcast_returned": returned.lower() if is_hash(returned) else None})
+            # A reply other than our own hash is never kept: even a hash-shaped one can be a slice of the signed bytes.
+            return self._possible(journal, "BROADCAST_HASH_MISMATCH")
         return self._possible(journal, "BROADCAST_RETURNED", {"broadcast_returned": returned.lower()})
 
     # ------------------------------------------------------------------------------- stages
@@ -530,10 +529,14 @@ def _transfers(receipt: Mapping[str, Any], token: str, *, source: str | None = N
                target: str | None = None) -> int | None:
     """The total ERC-20 `Transfer` of `token` from `source` or to `target`; None when no such log exists."""
     total, found = 0, False
-    for log in receipt.get("logs") or []:
-        if not isinstance(log, Mapping) or str(log.get("address", "")).lower() != token.lower():
+    logs = receipt.get("logs") or []
+    # Any malformed log could be a skipped part of this leg, so a receipt with one proves no amount at all.
+    if not isinstance(logs, list) or not all(_well_formed_log(log) for log in logs):
+        return None
+    for log in logs:
+        if str(log["address"]).lower() != token.lower():
             continue
-        topics = [str(item).lower() for item in log.get("topics") or []]
+        topics = [str(item).lower() for item in log["topics"]]
         if not topics or topics[0] != TRANSFER_TOPIC:
             continue
         # A Transfer of this token whose indexed addresses are not exact padded 32-byte words proves nothing.
@@ -547,6 +550,14 @@ def _transfers(receipt: Mapping[str, Any], token: str, *, source: str | None = N
             return None
         total, found = total + amount, True
     return total if found else None
+
+
+def _well_formed_log(log: Any) -> bool:
+    """A log with a 20-byte address and topics that are exact 32-byte words (JSON-RPC `DATA`)."""
+    if not isinstance(log, Mapping) or not isinstance(log.get("address"), str) or not isinstance(log.get("topics"), list):
+        return False
+    return (_ADDRESS.fullmatch(log["address"]) is not None
+            and all(isinstance(item, str) and _TX_HASH.fullmatch(item) for item in log["topics"]))
 
 
 RECEIPT_OUTCOMES = {ObservationState.CONFIRMED: "CONFIRMED", ObservationState.REVERTED: "REVERTED",
@@ -576,7 +587,7 @@ def owner_projection(envelope: Mapping[str, Any] | None) -> dict[str, Any] | Non
         return None
     view = {key: value for key, value in envelope.items() if key in OWNER_FIELDS}
     returned = envelope.get("broadcast_returned")
-    view["broadcast_returned"] = returned if is_hash(returned) else None
+    view["broadcast_returned"] = returned if is_hash(returned) and returned == envelope.get("transaction_hash") else None
     request = envelope.get("signing_request")
     if isinstance(request, Mapping):
         view["signing_request_id"] = request.get("request_id")
