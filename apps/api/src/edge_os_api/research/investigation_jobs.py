@@ -514,7 +514,7 @@ class InvestigationWorker:
         job.state, job.updated_at = "COLLECTING", utcnow()
         session.commit()  # the original attempt is durable before the adapter runs
         try:
-            result, collection, normalized = investigation_tools.collect_recorded_history(
+            result, collection, normalized, transport = investigation_tools.collect_recorded_history(
                 source, config["resource_bounds"], _whole_seconds(job.deadline_at), lambda: self._cancelled(job.job_id),
                 lambda: _whole_seconds(self._clock()))
         except Exception as error:  # noqa: BLE001 - any adapter defect fails this job and keeps unknown liability
@@ -529,7 +529,7 @@ class InvestigationWorker:
         dataset_id = uuid.uuid4()
         content = history_dataset.dataset_content(
             dataset_id=dataset_id, owner_id=job.owner_id, declaration_id=job.declaration_id, job_id=job.job_id,
-            attempt_id=attempt_id, source=source, collection=collection, normalized=normalized)
+            attempt_id=attempt_id, source=source, collection=collection, normalized=normalized, transport=transport)
         history_dataset.save_dataset(session, content, normalized["raw_records"])
         findings = []
         if result.usage["provider_requests_state"] == "UNKNOWN":
@@ -565,7 +565,7 @@ class InvestigationWorker:
         finished = _finished(session, job.job_id, investigation_tools.COLLECT_TOOL)
         assert finished is not None
         usage = finished.content["usage"]
-        known = usage["provider_requests_state"] == "SUPPLIED_EVIDENCE"
+        known = usage["provider_requests_state"] in {"SUPPLIED_EVIDENCE", "MEASURED_CLIENT_CALLS"}
         consumed = sum(usage["provider_requests"].values()) if known else 0
         job.dataset_id = uuid.UUID(finished.content["dataset_id"])
         stop = finished.content["output"]["stop_reason"]

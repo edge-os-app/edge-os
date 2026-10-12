@@ -63,8 +63,10 @@ def test_source_catalog_lists_only_labelled_recordings(research, owner_a):
     catalog = research.get("/v1/research/history-sources", headers=owner_a).json()
     assert catalog["mode"] == "recorded"
     assert "SYNTHETIC" in catalog["label"]
-    assert {item["evidence_class"] for item in catalog["sources"]} == {"RECORDED_RESPONSE"}
+    # SOURCE-LOCAL adds native-shaped recordings; both classes are local recordings and none is provider-actual.
+    assert {item["evidence_class"] for item in catalog["sources"]} == {"RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE"}
     assert {item["content_label"] for item in catalog["sources"]} == {"SYNTHETIC_FIXTURE"}
+    assert "SYNTHETIC" in catalog["native_label"]
 
 
 def test_declaration_is_saved_before_any_collection_and_freezes_hashes(research, owner_a):

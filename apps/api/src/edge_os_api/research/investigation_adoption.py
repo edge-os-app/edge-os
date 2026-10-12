@@ -379,6 +379,9 @@ def _check_history_configuration(body: HistoryInvestigationBody) -> dict[str, An
     if source is None:
         raise _history_refusal(422, "unsupported_history_source", "/configuration/source/source_id",
                                "Choose one of the listed recorded sources.")
+    if config.source.evidence_class != source["evidence_class"]:
+        raise _history_refusal(422, "history_source_class_mismatch", "/configuration/source/evidence_class",
+                               "The evidence class must be the listed source's own class.")
     if config.source.profile_sha256 != history_dataset.profile_sha256(source):
         raise _history_refusal(422, "history_source_changed", "/configuration/source/profile_sha256",
                                "The recorded source differs from the one you reviewed. Reload the source list.")
@@ -390,9 +393,13 @@ def _check_history_configuration(body: HistoryInvestigationBody) -> dict[str, An
         raise _history_refusal(422, "history_window_unsupported", "/configuration/window",
                                "Only the declared source's recorded window is supported.")
     bounds = config.resource_bounds
-    if bounds.max_pages < len(source["responses"]):
+    if bounds.max_pages < history_dataset.page_requests(source):
         raise _history_refusal(422, "resource_bounds_too_small", "/configuration/resource_bounds/max_pages",
-                               f"This source needs {len(source['responses'])} page requests.")
+                               f"This source needs {history_dataset.page_requests(source)} page requests.")
+    if bounds.provider_requests < history_dataset.requests_needed(source):
+        raise _history_refusal(422, "resource_bounds_too_small", "/configuration/resource_bounds/provider_requests",
+                               f"This source needs {history_dataset.requests_needed(source)} provider requests: "
+                               "its pages, one chain read and one receipt per corroborated swap.")
     market = {"network": config.market.network, "quote_unit": f"QUOTE:{config.market.quote_asset}",
               "research_binding": {"base_asset": config.market.base_asset, "quote_asset": config.market.quote_asset}}
     for index, rule in enumerate(config.rule_map.rules):

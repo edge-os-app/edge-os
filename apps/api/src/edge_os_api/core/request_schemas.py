@@ -423,7 +423,7 @@ class HistorySourceBinding(StrictModel):
 
     source_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,62}/[0-9]{1,4}$")]
     profile_sha256: Sha256Hex
-    evidence_class: Literal["RECORDED_RESPONSE", "PROVIDER_ACTUAL"]
+    evidence_class: Literal["RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE", "PROVIDER_ACTUAL"]
 
 
 class HistoryMarket(StrictModel):
@@ -498,7 +498,8 @@ class HistoryInvestigationConfiguration(StrictModel):
     schedule: EffectRunSchedule
     rule_map: HypothesisRuleMap
     resource_bounds: HistoryResourceBounds
-    permitted_access: list[Literal["RECORDED_RESPONSE", "PROVIDER_ACTUAL"]] = Field(min_length=1, max_length=1)
+    permitted_access: list[Literal["RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE", "PROVIDER_ACTUAL"]] = Field(
+        min_length=1, max_length=1)
     stopping_rule: ReviewText
     budget_version: Literal["edge-os.research-budget/1"]
 
