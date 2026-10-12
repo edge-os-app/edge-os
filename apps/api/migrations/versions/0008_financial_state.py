@@ -569,6 +569,32 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Each schema holds only the tables this revision created, so dropping it removes exactly those tables.
+    # Drop exactly the tables this revision created (their indexes go with them), then each schema only if it
+    # is now empty: a schema that already held other objects is left in place.
+    op.drop_table('removal_states', schema='revocation_local')
+    op.drop_table('removal_requests', schema='revocation_local')
+    op.drop_table('removal_observations', schema='revocation_local')
+    op.drop_table('consent_reviews', schema='consent_local')
+    op.drop_table('consent_denials', schema='consent_local')
+    op.drop_table('consent_adoptions', schema='consent_local')
+    op.drop_table('scoped_stops', schema='stops_local')
+    op.drop_table('recovery_evidence', schema='recovery_local')
+    op.drop_table('recovery_cases', schema='recovery_local')
+    op.drop_table('execution_evaluation_jobs', schema='execution_local')
+    op.drop_table('execution_submission_attempts', schema='execution_local')
+    op.drop_table('execution_queue', schema='execution_local')
+    op.drop_table('execution_intents', schema='execution_local')
+    op.drop_table('execution_decisions', schema='execution_local')
+    op.drop_table('execution_claims', schema='execution_local')
+    op.drop_table('admission_reservations', schema='admission_local')
+    op.drop_table('admission_receipts', schema='admission_local')
+    op.drop_table('admission_positions', schema='admission_local')
+    op.drop_table('admission_decisions', schema='admission_local')
+    op.drop_table('admission_allowances', schema='admission_local')
+    op.drop_table('funding_profiles', schema='funding_local')
+    op.drop_table('funding_observations', schema='funding_local')
+    op.drop_table('funding_flows', schema='funding_local')
+    op.drop_table('funding_denials', schema='funding_local')
+    op.drop_table('funding_credits', schema='funding_local')
     for schema in reversed(FINANCIAL_SCHEMAS):
-        op.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        op.execute(f"DROP SCHEMA IF EXISTS {schema} RESTRICT")

@@ -9,6 +9,7 @@ separately as `activation`, from the server's own qualification profile.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Generator
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -36,7 +37,7 @@ class AdoptBody(StrictModel):
     expected_review_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
-def get_session(request: Request) -> Any:
+def get_session(request: Request) -> Generator[Session, None, None]:
     with request.app.state.session_factory() as session:
         yield session
 

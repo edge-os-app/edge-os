@@ -25,6 +25,7 @@ import hashlib
 import logging
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +47,8 @@ from edge_os_api.recovery.types import OutcomeEvidence
 log = logging.getLogger("edge_os.worker")
 
 RUNNABLE = ("QUEUED", "DECIDED", "ENQUEUED")
+# An intent is valid only before the next scheduled decision (the accepted P23 local bound).
+INTENT_VALIDITY = dt.timedelta(minutes=5)
 TERMINAL_QUEUE = {"SUBMITTED_CONFIRMED", "SUBMITTED_REVERTED", "DENIED_UNSENT", "REVALIDATION_DENIED",
                   "ADMISSION_DENIED", "SUBMISSION_NOT_OWNED"}
 SLOT = dt.timedelta(minutes=5)
@@ -158,15 +161,23 @@ class ConnectedExecution:
 
     def run_pending(self, limit: int = 20) -> list[dict[str, Any]]:
         """Advance up to `limit` runnable jobs, oldest first. A job another worker holds is skipped."""
-        with self._factory() as session:
-            ids = session.execute(select(EvaluationJobRow.job_id).where(EvaluationJobRow.state.in_(RUNNABLE))
-                                  .order_by(EvaluationJobRow.created_at).limit(limit)).scalars().all()
         results = []
-        for job_id in ids:
-            result = self.run_job(job_id)
+        for job_id in self._runnable_ids(limit):
+            try:
+                result = self.run_job(job_id)
+            except Exception as error:  # noqa: BLE001 - one failing job must not stop other owners' jobs
+                # Saved stage state stays as it was; the failure is recorded on this job only and retried later.
+                log.exception("worker job %s failed: %s", job_id, type(error).__name__)
+                self._update(job_id, reason=f"WORKER_ERROR:{type(error).__name__}")
+                continue
             if result is not None:
                 results.append(result)
         return results
+
+    def _runnable_ids(self, limit: int) -> list[uuid.UUID]:
+        with self._factory() as session:
+            return list(session.execute(select(EvaluationJobRow.job_id).where(EvaluationJobRow.state.in_(RUNNABLE))
+                                        .order_by(EvaluationJobRow.created_at).limit(limit)).scalars().all())
 
     def run_job(self, job_id: uuid.UUID) -> dict[str, Any] | None:
         """Advance one job as far as it can go now. Returns None when another worker holds it."""
@@ -236,14 +247,18 @@ class ConnectedExecution:
             warmup_buckets=agent.revision.warmup_buckets, position_open=position_open))
 
     def _position(self, agent: ConnectedAgent) -> PositionRow | None:
+        """The agent's open position for this exact revision, if any. Closed or never-filled rows are not open."""
         with self._factory() as session:
             return session.execute(select(PositionRow).where(
-                PositionRow.owner_id == agent.owner_id, PositionRow.position_id == self.position_id(agent))
-            ).scalar_one_or_none()
+                PositionRow.owner_id == agent.owner_id, PositionRow.agent_id == agent.agent_id,
+                PositionRow.wallet_id == agent.wallet_id, PositionRow.network_id == agent.network_id,
+                PositionRow.strategy_revision == agent.revision.revision_id, PositionRow.inventory > 0,
+            ).order_by(PositionRow.position_id).limit(1)).scalar_one_or_none()
 
     @staticmethod
-    def position_id(agent: ConnectedAgent) -> str:
-        return f"{agent.agent_id}:{agent.revision.revision_id}"
+    def entry_position_id(agent: ConnectedAgent, decision_id: uuid.UUID) -> str:
+        """Each entry opens its own position, so a closed or cancelled position never blocks a later entry."""
+        return f"{agent.agent_id}:{agent.revision.revision_id}:{decision_id}"
 
     def _decide(self, job: EvaluationJobRow, agent: ConnectedAgent) -> None:
         with self._factory() as session:
@@ -254,18 +269,18 @@ class ConnectedExecution:
                 DecisionRow.decision_at == job.decision_slot)).scalars().first()
             decision_id, status = (existing.decision_id, existing.status) if existing is not None else (None, None)
         if decision_id is None:
-            position = self._position(agent)
-            position_open = position is not None and int(position.inventory) > 0
+            position_open = self._position(agent) is not None
             try:
                 observed = self._observe(agent, job.decision_slot, position_open)
             except ProviderUnavailable:
                 self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="OBSERVATIONS_UNAVAILABLE")
                 return
-            if (observed.provenance.get("market_binding_id") != agent.revision.market_binding_id
-                    or observed.inputs.decision_time != utc_iso(job.decision_slot)
-                    and observed.inputs.observed_at() != job.decision_slot):
-                # Observations for another market or another decision time are never evaluated for this one.
+            # Observations for another market or another decision time are never evaluated for this one.
+            if observed.provenance.get("market_binding_id") != agent.revision.market_binding_id:
                 self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="OBSERVATIONS_WRONG_MARKET")
+                return
+            if observed.inputs.observed_at() != job.decision_slot:
+                self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="OBSERVATIONS_WRONG_TIME")
                 return
             view = self._services.execution.evaluate_and_decide(
                 job.owner_id, agent.revision, observed.inputs, agent_id=agent.agent_id, wallet_id=agent.wallet_id,
@@ -290,7 +305,7 @@ class ConnectedExecution:
         # Attributed inventory comes from the durable admission position, never from a caller.
         positions = {}
         position = self._position(agent)
-        if position is not None and int(position.inventory) > 0:
+        if position is not None:
             positions[position.position_id] = PositionState(
                 position_id=position.position_id,
                 binding=IdentityBinding(agent_id=position.agent_id, wallet_id=position.wallet_id,
@@ -301,31 +316,42 @@ class ConnectedExecution:
             agent_id=agent.agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id, balances=balances,
             positions=positions))
 
-    def _terms(self, agent: ConnectedAgent, consent: AdoptedConsent, operation: str,
-               now: dt.datetime) -> tuple[IntentTerms, Any]:
+    @staticmethod
+    def _entry_input_raw(agent: ConnectedAgent) -> str:
+        """The revision's fixed quote size in exact base units. A size finer than the quote decimals is refused."""
+        try:
+            scaled = Decimal(str(agent.strategy["sizing"]["amount"])).scaleb(agent.quote.decimals)
+        except (InvalidOperation, KeyError, TypeError):
+            raise JobRefused("SIZING_UNSUPPORTED") from None
+        if scaled <= 0 or scaled != scaled.to_integral_value():
+            raise JobRefused("SIZING_NOT_REPRESENTABLE")
+        return str(int(scaled))
+
+    def _terms(self, agent: ConnectedAgent, consent: AdoptedConsent, operation: str, now: dt.datetime,
+               decision_id: uuid.UUID) -> tuple[IntentTerms, Any]:
         """Server-derived exact terms. Entry size comes from the revision; output from a trusted quote."""
         policy, mandate = consent.consent_hash, str(consent.adoption_id)
         if operation == "ENTRY":
-            sizing = agent.strategy["sizing"]
-            quote_raw = str(int(sizing["amount"]) * 10 ** agent.quote.decimals)
+            quote_raw = self._entry_input_raw(agent)
             quoted = self._ports.quotes.quote(QuoteRequest(
                 operation="ENTRY", quote_asset_id=agent.quote.asset_id, quote_decimals=agent.quote.decimals,
                 base_asset_id=agent.base.asset_id, base_decimals=agent.base.decimals, quote_input_raw=quote_raw,
                 base_input_raw=None, observed_at=now))
             quote_input = AssetAmount(asset_id=agent.quote.asset_id, raw=quote_raw, decimals=agent.quote.decimals)
-            terms = IntentTerms(operation="ENTRY", position_id=self.position_id(agent), policy_binding=policy,
+            terms = IntentTerms(operation="ENTRY", position_id=self.entry_position_id(agent, decision_id),
+                                policy_binding=policy,
                                 mandate_id=mandate, quote_asset_id=agent.quote.asset_id, quantity=quoted.output,
                                 quote_input=quote_input, expected_quote=quote_input, mark=None, quote_status="FRESH")
             return terms, quoted
         position = self._position(agent)
-        if position is None or int(position.inventory) <= 0:
+        if position is None:
             raise JobRefused("NO_OPEN_POSITION")
         base_raw = str(int(position.inventory))
         quoted = self._ports.quotes.quote(QuoteRequest(
             operation="EXIT", quote_asset_id=agent.quote.asset_id, quote_decimals=agent.quote.decimals,
             base_asset_id=agent.base.asset_id, base_decimals=agent.base.decimals, quote_input_raw=None,
             base_input_raw=base_raw, observed_at=now))
-        terms = IntentTerms(operation="EXIT", position_id=self.position_id(agent), policy_binding=policy,
+        terms = IntentTerms(operation="EXIT", position_id=position.position_id, policy_binding=policy,
                             mandate_id=mandate, quote_asset_id=agent.quote.asset_id,
                             quantity=AssetAmount(asset_id=agent.base.asset_id, raw=base_raw,
                                                  decimals=agent.base.decimals),
@@ -350,7 +376,7 @@ class ConnectedExecution:
                                 saved_intent.admission_reason)
             return
         try:
-            terms, _ = self._terms(agent, consent, str(decision.operation), now)
+            terms, _ = self._terms(agent, consent, str(decision.operation), now, job.decision_id)
             context = self._holdings(agent, now)
         except ProviderUnavailable as error:
             self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE",
@@ -377,7 +403,12 @@ class ConnectedExecution:
             return
         approval, reason = derive_approval(agent, consent, qualification=self._qualification, now=now)
         if approval is None:
-            self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason=reason)
+            # Authority is gone and the action was never sent: release it through the accepted cancellation.
+            self._release_unsent(job, "UNAVAILABLE", reason)
+            return
+        if now - job.decision_slot >= INTENT_VALIDITY:
+            # Past the next decision the intent can never pass revalidation; it was never sent.
+            self._release_unsent(job, "INTENT_EXPIRED", "INTENT_EXPIRED")
             return
         with self._factory() as session:
             intent = session.execute(select(IntentRow).where(
@@ -392,8 +423,8 @@ class ConnectedExecution:
                 quote_input_raw=(payload["input"]["quote_input"] or {}).get("raw"),
                 base_input_raw=payload["quantity"]["raw"] if intent.operation == "EXIT" else None, observed_at=now))
         except ProviderUnavailable as error:
-            self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE",
-                         reason=f"{str(error).upper() or 'PROVIDER'}_UNAVAILABLE")
+            # A submission-stage outage keeps the saved action queued; a later pass ticks the same action.
+            self._update(job.job_id, reason=f"WAITING:{str(error).upper() or 'PROVIDER'}_UNAVAILABLE")
             return
         if intent.operation == "ENTRY":
             # The quote cost of the saved quantity at the fresh price. Unchanged prices reproduce the saved input;
@@ -413,7 +444,7 @@ class ConnectedExecution:
         try:
             transport = self._ports.transport(agent_id=agent.agent_id, plan=plan, operation=intent.operation)
         except ProviderUnavailable:
-            self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="TRANSPORT_UNAVAILABLE")
+            self._update(job.job_id, reason="WAITING:TRANSPORT_UNAVAILABLE")
             return
         tick = self._services.execution.tick(
             job.owner_id, agent_id=agent.agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id,
@@ -433,8 +464,25 @@ class ConnectedExecution:
         assert queue is not None
         self._settle_from_queue(job, queue)
 
+    def _release_unsent(self, job: EvaluationJobRow, outcome: str, reason: str | None) -> None:
+        """End a job whose admitted action was never submitted, releasing it through the accepted cancellation.
+
+        `AdmissionService.cancel` refuses anything already submission-owned, so a possibly-sent action keeps its
+        reservations and stays reconcilable.
+        """
+        assert job.action_id is not None
+        cancelled = self._services.admission.cancel(job.owner_id, job.action_id)
+        if cancelled.decision_status not in ("CANCELLED", "DENIED", "NOT_FOUND"):
+            self._update(job.job_id, state="SUBMITTED", outcome=cancelled.decision_status,
+                         reason=cancelled.reason or reason)
+            return
+        self._update(job.job_id, state="COMPLETED", outcome=outcome, reason=reason)
+
     def _settle_from_queue(self, job: EvaluationJobRow, queue: QueueRow) -> None:
-        if queue.state in TERMINAL_QUEUE:
+        if queue.state in ("REVALIDATION_DENIED", "SUBMISSION_NOT_OWNED"):
+            # Definitely unsent: release the admitted action instead of holding its reservations forever.
+            self._release_unsent(job, queue.state, queue.blocking_reason)
+        elif queue.state in TERMINAL_QUEUE:
             self._update(job.job_id, state="COMPLETED", outcome=queue.state, reason=queue.blocking_reason)
         else:  # CLAIMED, SUBMITTED_UNKNOWN, BREACHED, RECONCILE_MISMATCH: the original action needs reconciling
             self._update(job.job_id, state="SUBMITTED", outcome=queue.state, reason=queue.blocking_reason)

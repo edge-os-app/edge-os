@@ -135,3 +135,22 @@ def test_migrated_amounts_keep_exact_78_digit_precision_and_once_only_credit(set
             connection.execute(text("DELETE FROM funding_local.funding_credits WHERE owner_id = :owner"),
                                {"owner": owner})
         engine.dispose()
+
+
+def test_downgrade_to_pre_financial_head_removes_only_financial_tables_then_upgrades_again(upgrade_database):
+    url, upgrade_env = upgrade_database
+    assert alembic(upgrade_env, "upgrade", "head").returncode == 0
+    down = alembic(upgrade_env, "downgrade", PRE_FINANCIAL_HEAD)
+    assert down.returncode == 0, down.stderr
+    engine = create_engine(url)
+    try:
+        inspector = inspect(engine)
+        for base in FINANCIAL_BASES:
+            for table in base.metadata.tables.values():
+                assert not inspector.has_table(table.name, schema=table.schema), f"{table.schema}.{table.name}"
+        assert inspector.has_table("wallet_setups") and inspector.has_table("records")
+        assert alembic(upgrade_env, "upgrade", "head").returncode == 0
+        inspector = inspect(engine)
+        assert all(inspector.has_table(t.name, schema=t.schema) for b in FINANCIAL_BASES for t in b.metadata.tables.values())
+    finally:
+        engine.dispose()

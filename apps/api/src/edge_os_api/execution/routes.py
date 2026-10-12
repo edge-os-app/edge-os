@@ -8,6 +8,7 @@ reservations and receipts, and the recovery case of the exact original action.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -33,7 +34,7 @@ class ScheduleBody(StrictModel):
     request_key: str = Field(min_length=1, max_length=200)
 
 
-def get_session(request: Request) -> Any:
+def get_session(request: Request) -> Generator[Session, None, None]:
     with request.app.state.session_factory() as session:
         yield session
 

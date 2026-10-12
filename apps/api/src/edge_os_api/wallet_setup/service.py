@@ -237,8 +237,9 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
                           provider: WalletCreationPort) -> SetupRecord:
     """Record a wallet id returned by owner-linked browser creation, then bind it only after independent lookup.
 
-    The browser's wallet id is an untrusted claim. It is retained as evidence before the lookup, so a lost
-    lookup reply is reconciled later through `resume_setup`. The setup binds only when the provider's own
+    The browser's wallet id is an untrusted claim, retained as evidence before the lookup. The browser keeps its
+    wallet id, so after a lost lookup reply the browser repeats this completion; `resume_setup` cannot bind it,
+    because the browser claim carries no provider address. The setup binds only when the provider's own
     record names this verified owner, an Ethereum wallet and no other agent of this owner. A completion for a
     confirmed setup never replaces its wallet; a completion after a proved pre-dispatch cancellation, or for a
     setup this owner does not hold, binds nothing. No server-side creation runs on this path.

@@ -420,9 +420,14 @@ class FixtureRemovalObserver:
 # ------------------------------------------------------------------------------ the bundle
 
 class _Unavailable:
+    """A fail-closed port. Its refusal names the port, so a saved reason reads e.g. HOLDINGS_UNAVAILABLE."""
+
+    def __init__(self, port: str) -> None:
+        self._port = port
+
     def __getattr__(self, name: str) -> Any:
         def refuse(*_: Any, **__: Any) -> Any:
-            raise ProviderUnavailable(name)
+            raise ProviderUnavailable(self._port)
         return refuse
 
 
@@ -457,6 +462,6 @@ def build_provider_ports(mode: str, factory: sessionmaker[Session], effects_path
                              holdings=FixtureHoldings(factory, chain), receipts=FixtureReceipts(chain),
                              deposits=FixtureDepositObserver(factory), removals=FixtureRemovalObserver(),
                              chain=chain)
-    unavailable = _Unavailable()
-    return ProviderPorts(mode=UNAVAILABLE_MODE, market=unavailable, quotes=unavailable, holdings=unavailable,
-                         receipts=unavailable, deposits=UnavailableDepositObserver(), removals=unavailable)
+    return ProviderPorts(mode=UNAVAILABLE_MODE, market=_Unavailable("observations"), quotes=_Unavailable("quote"),
+                         holdings=_Unavailable("holdings"), receipts=_Unavailable("receipt"),
+                         deposits=UnavailableDepositObserver(), removals=_Unavailable("removal"))

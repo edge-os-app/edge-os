@@ -7,6 +7,7 @@ visible and recoverable.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -28,7 +29,7 @@ class StopBody(StrictModel):
     position_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
-def get_session(request: Request) -> Any:
+def get_session(request: Request) -> Generator[Session, None, None]:
     with request.app.state.session_factory() as session:
         yield session
 

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from edge_os_api.admission.types import AllowanceCap, ApprovalSnapshot, IdentityBinding
 from edge_os_api.consent.records import ConsentAdoptionRow, ConsentReviewRow
 from edge_os_api.consent.types import ReviewedTerms, parse_utc
+from edge_os_api.core.provider_ports import FIXTURE_MODE
 from edge_os_api.execution.types import FrozenRevision, freeze_revision
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.records.models import StrategyRevision
@@ -84,14 +85,6 @@ class AdoptedConsent:
     review_hash: str
     terms: ReviewedTerms
     adopted_at: dt.datetime
-
-
-class IdentityError(Exception):
-    """The saved identities disagree. The caller denies without any provider effect."""
-
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
-        self.code = code
 
 
 def asset_ids_for(network_number: int, market: dict[str, Any]) -> tuple[AssetIdentity, AssetIdentity, AssetIdentity]:
@@ -172,7 +165,7 @@ def derive_approval(agent: ConnectedAgent, consent: AdoptedConsent, *, qualifica
     Only the fixture qualification profile produces a snapshot, labelled SYNTHETIC. Expired terms, a
     different terms version, an asset outside the revision's market or a missing required limit deny.
     """
-    if qualification != "fixture":
+    if qualification != FIXTURE_MODE:
         return None, "ACTIVATION_UNAVAILABLE"
     terms = consent.terms
     if terms.terms_version != CONNECTED_TERMS_VERSION:

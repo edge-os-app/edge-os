@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Generator
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Request
@@ -35,7 +36,7 @@ class EmptyBody(StrictModel):
     """No observation, identity or state can be supplied."""
 
 
-def get_session(request: Request) -> Any:
+def get_session(request: Request) -> Generator[Session, None, None]:
     with request.app.state.session_factory() as session:
         yield session
 

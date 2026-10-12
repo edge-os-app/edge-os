@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
-import { financial, formatRaw, heldKey, releaseKey, type FundingView } from "../lib/financial";
+import { financial, formatRaw, heldKey, peekKey, releaseKey, type FundingView } from "../lib/financial";
 
 const MODE_COPY: Record<string, string> = {
   fixture: "Authored local fixture ports. Deposits and holdings here are not a wallet, a transfer or chain evidence.",
@@ -25,6 +25,12 @@ export function AgentFunding({ agentId }: { agentId: string }) {
     try {
       const saved = await financial.funding(agentId);
       if (current !== seq.current) return;
+      // A reference the server already saved (for example after a lost reply) is released, so the next
+      // reviewed deposit uses a fresh reference instead of colliding with the saved one.
+      for (const kind of ["TRADING", "NATIVE_GAS"]) {
+        const held = peekKey(`deposit-${kind}`, agentId);
+        if (held && saved.flows.some((flow) => flow.reference === held)) releaseKey(`deposit-${kind}`, agentId);
+      }
       setView(saved); setPhase("loaded"); setUncertain(false); setError("");
     } catch (failure) {
       if (current !== seq.current) return;
@@ -36,7 +42,7 @@ export function AgentFunding({ agentId }: { agentId: string }) {
   useEffect(() => { setPhase("loading"); void load(); }, [load]);
 
   /** A write. A lost reply leaves the outcome unknown: read the saved funding before offering another write. */
-  const write = async (action: () => Promise<unknown>, after?: () => void) => {
+  const write = async (action: () => Promise<unknown>, after?: () => void, onRefused?: () => void) => {
     if (busy || uncertain) return;
     setBusy(true); setError("");
     try {
@@ -46,6 +52,7 @@ export function AgentFunding({ agentId }: { agentId: string }) {
     } catch (failure) {
       if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) {
         setError(failure.detail);
+        onRefused?.();
       } else {
         setUncertain(true);
         setError("The outcome is not confirmed. Check the saved funding before repeating the change.");
@@ -108,7 +115,8 @@ export function AgentFunding({ agentId }: { agentId: string }) {
               <button className="btn btn-primary" style={{ minHeight: 44 }} type="button" disabled={busy || uncertain || !validRaw}
                 onClick={() => void write(() => financial.prepareDeposit(agentId, {
                   asset_class: assetClass, raw, reference: heldKey(`deposit-${assetClass}`, agentId) }),
-                () => { releaseKey(`deposit-${assetClass}`, agentId); setRaw(""); })}>
+                () => { releaseKey(`deposit-${assetClass}`, agentId); setRaw(""); },
+                () => releaseKey(`deposit-${assetClass}`, agentId))}>
                 {busy ? "Saving…" : "Save reviewed deposit"}
               </button>
               <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy || uncertain}

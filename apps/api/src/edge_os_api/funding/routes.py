@@ -8,6 +8,7 @@ deposit port. A body can never post a confirmed deposit, a balance or a credit.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Request
@@ -37,7 +38,7 @@ class EmptyBody(StrictModel):
     """No identity, balance, observation or credit can be supplied."""
 
 
-def get_session(request: Request) -> Any:
+def get_session(request: Request) -> Generator[Session, None, None]:
     with request.app.state.session_factory() as session:
         yield session
 

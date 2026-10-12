@@ -214,3 +214,26 @@ describe("agent actions", () => {
     expect(mocks.schedule.mock.calls[1][1]).toBe(key);
   });
 });
+
+describe("deposit reference recovery", () => {
+  it("releases a held reference once the saved flows show it, so a new deposit gets a fresh reference", async () => {
+    window.sessionStorage.clear();
+    mocks.funding.mockResolvedValueOnce(funding());
+    mocks.prepareDeposit.mockRejectedValueOnce(new ApiError(0, "network_error", "unreachable"));
+    render(<AgentFunding agentId="agent-r" />);
+    await userEvent.type(await screen.findByLabelText(/Amount in base units/), "5");
+    await userEvent.click(screen.getByRole("button", { name: "Save reviewed deposit" }));
+    await screen.findByRole("button", { name: "Check saved funding" });
+    const saved = mocks.prepareDeposit.mock.calls[0][1].reference;
+    mocks.funding.mockResolvedValue(funding({ flows: [{ flow_id: "f", agent_id: "agent-r", wallet_id: "w", network_id: 10143,
+      kind: "DEPOSIT", asset: { ...QUOTE, raw: "5" }, transport: "t", recipient: null, state: "PENDING", reference: saved,
+      transaction_reference: null, reason: null, created_at: "t", updated_at: "t" }] }));
+    await userEvent.click(screen.getByRole("button", { name: "Check saved funding" }));
+    await waitFor(() => expect(screen.getByTestId("funding-flows")).toHaveTextContent(saved));
+    mocks.prepareDeposit.mockResolvedValueOnce({});
+    await userEvent.type(screen.getByLabelText(/Amount in base units/), "7");
+    await userEvent.click(screen.getByRole("button", { name: "Save reviewed deposit" }));
+    await waitFor(() => expect(mocks.prepareDeposit).toHaveBeenCalledTimes(2));
+    expect(mocks.prepareDeposit.mock.calls[1][1].reference).not.toBe(saved);
+  });
+});

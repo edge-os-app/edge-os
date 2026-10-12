@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+import urllib.error
+import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -88,6 +91,11 @@ def inspect(pg: harness.Postgres, effects_path: Path, results: dict[str, Any], o
             expectations[f"{key}: unknown then reconciled original"] = (
                 [r["outcome"] for r in value["receipts"]] == ["SUBMISSION_UNKNOWN", "CONFIRMED"]
                 and list(value["effects_per_action"].values()) == [1])
+        if key.startswith("removed-"):
+            expectations[f"{key}: requested removal denied before any effect"] = (
+                [j["outcome"] for j in value["jobs"]] == ["ADMISSION_DENIED"]
+                and [j["reason"] for j in value["jobs"]] == ["REMOVAL_REQUESTED"]
+                and sum(value["effects_per_action"].values()) == 0)
         if key.startswith("stop-"):
             expectations[f"{key}: stop denied before any effect"] = (
                 [s["mode"] for s in value["stops"]] == ["HALT_ALL_SWAPS"]
@@ -101,6 +109,58 @@ def inspect(pg: harness.Postgres, effects_path: Path, results: dict[str, Any], o
         any(e["action_id"] in value["effects_per_action"] for value in checks.values()) for e in effects)
     return {"checks": checks, "expectations": expectations, "effects_lines": len(effects),
             "all_checks_pass": all(expectations.values())}
+
+
+def _http(method: str, url: str, token: str, body: object = None) -> tuple[int, Any]:
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": f"Bearer {token}", **({"Content-Type": "application/json"} if data else {})})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - loopback only
+            return response.status, json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read() or b"{}")
+
+
+def browser_completion(pg: harness.Postgres, ui_env: dict[str, str]) -> dict[str, Any]:
+    """IC04 through the mounted API: a browser-reported wallet id binds only after the fixture lookup names the
+    verified owner; a foreign id stays UNKNOWN. No browser creation runs (that needs a real provider)."""
+    api, token_a, token_b = ui_env["P03_API_URL"], ui_env["P03_TOKEN_A"], ui_env["P03_TOKEN_B"]
+    owner_a = _http("GET", f"{api}/v1/me", token_a)[1]["user_id"]
+    owner_b = _http("GET", f"{api}/v1/me", token_b)[1]["user_id"]
+    revision = _rows(pg, "select strategy_id, revision_id::text from strategy_revisions "
+                         f"where owner_id = '{owner_a}' order by created_at desc limit 1")[0]
+    suffix = uuid.uuid4().hex[:8]
+    agents = {"bound": f"fin-ic04-{suffix}", "foreign": f"fin-ic04f-{suffix}"}
+    for agent in agents.values():
+        status, _ = _http("POST", f"{api}/v1/wallet-setup/agents/{agent}/prepare", token_a, {
+            "network_id": 10143, "strategy_id": revision["strategy_id"],
+            "strategy_revision_id": revision["revision_id"], "request_key": f"key-{agent}"})
+        assert status == 200, status
+    bound = _http("POST", f"{api}/v1/wallet-setup/agents/{agents['bound']}/complete", token_a,
+                  {"wallet_id": f"fixture:{owner_a}:{agents['bound']}"})[1]
+    foreign = _http("POST", f"{api}/v1/wallet-setup/agents/{agents['foreign']}/complete", token_a,
+                    {"wallet_id": f"fixture:{owner_b}:{agents['foreign']}"})[1]
+    other_owner = _http("POST", f"{api}/v1/wallet-setup/agents/{agents['bound']}/complete", token_b,
+                        {"wallet_id": f"fixture:{owner_b}:{agents['bound']}"})[0]
+    events = _rows(pg, "select e.event_type, e.content->>'trusted' trusted from wallet_setup_events e join wallet_setups s "
+                       f"using (setup_id) where s.agent_id = '{agents['bound']}' order by e.sequence")
+    return {"agents": agents, "bound": bound, "foreign": foreign, "owner_b_status": other_owner, "events": events,
+            "checks": {
+                "browser id binds after lookup": bound.get("state") == "CONFIRMED"
+                and bound.get("wallet_id") == f"fixture:{owner_a}:{agents['bound']}",
+                "foreign id stays unknown and unbound": foreign.get("state") == "UNKNOWN"
+                and foreign.get("wallet_id") is None,
+                "owner B cannot complete owner A's setup": other_owner == 404,
+                "untrusted claim saved before binding": [e["event_type"] for e in events]
+                == ["PREPARED", "DISPATCH_INTENT", "RESULT_RETURNED", "WALLET_BOUND"] and events[2]["trusted"] == "false",
+            }}
+
+
+def browser_completion_after_restart(ui_env: dict[str, str], before: dict[str, Any]) -> bool:
+    api, token_a = ui_env["P03_API_URL"], ui_env["P03_TOKEN_A"]
+    status, setup = _http("GET", f"{api}/v1/wallet-setup/agents/{before['agents']['bound']}", token_a)
+    return status == 200 and setup.get("state") == "CONFIRMED" and setup.get("wallet_id") == before["bound"]["wallet_id"]
 
 
 def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, ui_env: dict[str, str],
@@ -118,6 +178,11 @@ def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, u
     rec.write("financial-inspection.json", inspection)
     ok &= rec.step("financial rows and the independent effect record agree (direct SQL)",
                    bool(results) and inspection["all_checks_pass"], inspection["expectations"])
+    completion = browser_completion(pg, ui_env)
+    rec.write("ic04-browser-completion.json", completion)
+    ok &= rec.step("IC04 browser completion binds only after lookup; foreign and other-owner results refused (API, SQL)",
+                   all(completion["checks"].values()), completion["checks"])
+    inspection["ic04"] = completion
     worker.stop()
     return ok, inspection
 
@@ -137,5 +202,7 @@ def after_restart(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence:
     ok &= rec.step("financial rows and effects unchanged by the restart (no second economic action)",
                    after["checks"] == before["checks"] and after["effects_lines"] == before["effects_lines"],
                    {"effects_before": before["effects_lines"], "effects_after": after["effects_lines"]})
+    ok &= rec.step("IC04 browser-completed wallet reopens bound after the restart",
+                   "ic04" in before and browser_completion_after_restart(ui_env, before["ic04"]))
     worker.stop()
     return ok

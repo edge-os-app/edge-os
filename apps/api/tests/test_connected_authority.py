@@ -68,7 +68,9 @@ def test_control_recorded_after_admission_denies_at_submission(journey, owner_a,
     assert (done["outcome"], done["reason"]) == ("REVALIDATION_DENIED", expected)
     assert ff.effects(journey) == []
     action = journey.get(f"/v1/actions/{done['action_id']}", headers=owner_a).json()
-    assert action["admission"][0]["status"] == "ADMITTED"  # reservations stay until explicitly released
+    # The denied action was never sent, so the worker releases it through the accepted cancellation.
+    assert action["admission"][0]["status"] == "CANCELLED"
+    assert {r["state"] for r in action["reservations"]} == {"RELEASED"}
     assert all(attempt["state"] != "IN_FLIGHT" for attempt in action["attempts"])
 
 
@@ -163,6 +165,90 @@ def test_unavailable_holdings_keep_the_action_unavailable(journey, owner_a):
     assert ff.effects(journey) == []
 
 
+def _shifted(journey, minutes):
+    connected = journey.app.state.financial.connected
+    original = connected._clock
+    connected._clock = lambda: original() + dt.timedelta(minutes=minutes)
+    return lambda: setattr(connected, "_clock", original)
+
+
+def test_a_late_worker_releases_the_expired_unsent_action_and_the_next_slot_can_enter(journey, owner_a):
+    agent = "auth-late-worker"
+    ff.ready_for_action(journey, owner_a, agent)
+    release = hold_before_submission(journey)
+    job = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "first").json())
+    release()
+    restore = _shifted(journey, 6)  # the worker comes back after the next decision slot
+    try:
+        late = ff.run_job(journey, job)
+        assert (late["state"], late["outcome"]) == ("COMPLETED", "INTENT_EXPIRED")
+        action = journey.get(f"/v1/actions/{late['action_id']}", headers=owner_a).json()
+        assert action["admission"][0]["status"] == "CANCELLED"
+        assert {r["state"] for r in action["reservations"]} == {"RELEASED"}
+        nxt = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "second").json())
+    finally:
+        restore()
+    assert nxt["job_id"] != job["job_id"]
+    assert nxt["outcome"] == "SUBMITTED_CONFIRMED", nxt
+    assert len(ff.effects(journey)) == 1
+
+
+def test_a_submission_stage_outage_waits_on_the_same_action_then_submits(journey, owner_a):
+    agent = "auth-outage"
+    ff.ready_for_action(journey, owner_a, agent)
+    release = hold_before_submission(journey)
+    job = ff.run_job(journey, ff.schedule(journey, owner_a, agent).json())
+    release()
+    quotes = journey.app.state.financial.ports.quotes
+    real_quote = quotes.quote
+
+    def outage(request):
+        raise ProviderUnavailable("quote")
+    quotes.quote = outage
+    waiting = ff.run_job(journey, job)
+    assert (waiting["state"], waiting["reason"]) == ("ENQUEUED", "WAITING:QUOTE_UNAVAILABLE")
+    action = journey.get(f"/v1/actions/{waiting['action_id']}", headers=owner_a).json()
+    assert action["queue"]["state"] == "QUEUED" and action["admission"][0]["status"] == "ADMITTED"
+    quotes.quote = real_quote
+    done = ff.run_job(journey, job)
+    assert (done["action_id"], done["outcome"]) == (waiting["action_id"], "SUBMITTED_CONFIRMED")
+    assert len(ff.effects(journey)) == 1
+
+
+def test_one_failing_job_does_not_stop_other_jobs(journey, owner_a):
+    for agent in ("auth-isolate-bad", "auth-isolate-good"):
+        ff.ready_for_action(journey, owner_a, agent)
+    bad = ff.schedule(journey, owner_a, "auth-isolate-bad").json()
+    good = ff.schedule(journey, owner_a, "auth-isolate-good").json()
+    connected = journey.app.state.financial.connected
+    real_run = connected.run_job
+
+    def run(job_id):
+        if str(job_id) == bad["job_id"]:
+            raise RuntimeError("authored failure")
+        return real_run(job_id)
+    connected.run_job = run
+    connected._runnable_ids = lambda limit: [uuid.UUID(bad["job_id"]), uuid.UUID(good["job_id"])]
+    advanced = connected.run_pending()
+    assert [item["job_id"] for item in advanced] == [good["job_id"]]
+    jobs = {j["job_id"]: j for j in journey.get("/v1/agents/auth-isolate-bad/actions", headers=owner_a).json()["jobs"]}
+    assert (jobs[bad["job_id"]]["state"], jobs[bad["job_id"]]["reason"]) == ("QUEUED", "WORKER_ERROR:RuntimeError")
+
+
+@pytest.mark.parametrize("amount,expected", [("100", "100000000"), ("12.5", "12500000"), ("0.000001", "1"),
+                                             ("0.0000001", None), ("0", None)])
+def test_entry_size_scales_exactly_or_is_refused(amount, expected):
+    from types import SimpleNamespace
+    from edge_os_api.execution.connected_identity import AssetIdentity
+    from edge_os_api.execution.worker import ConnectedExecution, JobRefused
+    agent = SimpleNamespace(strategy={"sizing": {"amount": amount}}, quote=AssetIdentity("q", 6))
+    if expected is None:
+        with pytest.raises(JobRefused):
+            ConnectedExecution._entry_input_raw(agent)
+    else:
+        assert ConnectedExecution._entry_input_raw(agent) == expected
+
+
 def test_concurrent_runs_and_schedules_create_one_job_and_one_effect(journey, owner_a):
     agent = "auth-concurrent"
     ff.ready_for_action(journey, owner_a, agent)
@@ -211,3 +297,17 @@ def test_unavailable_execution_mode_runs_nothing(settings, owner_a):
         job = ff.run_job(client, ff.schedule(client, owner_a, agent).json())
         assert (job["state"], job["reason"]) == ("UNAVAILABLE", "OBSERVATIONS_UNAVAILABLE")
         assert client.get("/v1/financial/provider", headers=owner_a).json()["mode"] == "unavailable"
+
+
+def test_consent_drift_after_scheduling_denies_the_job_without_any_effect(journey, owner_a, monkeypatch):
+    from dataclasses import replace
+    from edge_os_api.execution import worker as worker_module
+    agent = "auth-consent-drift"
+    ff.ready_for_action(journey, owner_a, agent)
+    job = ff.schedule(journey, owner_a, agent).json()
+    real = worker_module.adopted_consent
+    monkeypatch.setattr(worker_module, "adopted_consent",
+                        lambda session, connected: replace(real(session, connected), consent_hash="sha256:" + "9" * 64))
+    done = ff.run_job(journey, job)
+    assert (done["state"], done["outcome"], done["reason"]) == ("COMPLETED", "DENIED", "CONSENT_CHANGED")
+    assert done["decision_id"] is None and ff.effects(journey) == []

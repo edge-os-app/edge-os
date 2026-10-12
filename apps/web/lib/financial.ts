@@ -133,6 +133,11 @@ export function heldKey(scope: string, agentId: string): string {
   return key;
 }
 
+/** The held key, if any, without creating one. */
+export function peekKey(scope: string, agentId: string): string | null {
+  try { return window.sessionStorage.getItem(`edge-os:${scope}:${agentId}`); } catch { return null; }
+}
+
 export function releaseKey(scope: string, agentId: string): void {
   try { window.sessionStorage.removeItem(`edge-os:${scope}:${agentId}`); } catch { /* ignore */ }
 }

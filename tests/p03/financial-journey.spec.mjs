@@ -172,6 +172,23 @@ test("a stop denies new work before admission and a lost reply pauses new reques
   record(`stop-${project}`, { agentId });
 });
 
+test("a requested removal denies the next evaluation before any reservation or effect", async ({ page }, info) => {
+  const project = info.project.name;
+  const thesis = JSON.parse(fs.readFileSync(resultsFile, "utf8"))[`thesis-${project}`];
+  const agentId = `fin-${project}-removed`;
+  await open(page, tokens.a);
+  await readyAgent(page, thesis.url, agentId, project);
+  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  const actions = page.getByRole("region", { name: "Agent actions" });
+  await actions.getByRole("button", { name: "Request removal" }).click();
+  await expect(actions.getByTestId("actions-removal")).toContainText("Removal REQUESTED");
+  await actions.getByRole("button", { name: "Run one bounded evaluation" }).click();
+  await waitForJob(actions, "REMOVAL_REQUESTED");
+  await expect(actions.getByTestId("actions-jobs")).toContainText("ADMISSION_DENIED");
+  await shot(page, project, "removal-denied");
+  record(`removed-${project}`, { agentId });
+});
+
 test("another owner sees none of these agents or actions", async ({ page }, info) => {
   const project = info.project.name;
   const saved = JSON.parse(fs.readFileSync(financialFile, "utf8"))[`main-${project}`];

@@ -86,9 +86,19 @@ def test_lost_acknowledgement_stays_unknown_then_reconciles_the_original_action(
     assert before["admission"][0]["status"] == "SUBMISSION_UNKNOWN"
     assert {r["state"] for r in before["reservations"]} == {"RESERVED"}  # unknown keeps every reservation
 
-    # A second scheduled job for the wallet cannot submit past the unresolved original action.
+    # The same job is not rerun as a new submission, and a later slot cannot submit past the unresolved action.
     rerun = ff.run_job(journey, job)
     assert rerun["state"] == "SUBMITTED" and len(ff.effects(journey)) == 1
+    connected = journey.app.state.financial.connected
+    original_clock = connected._clock
+    connected._clock = lambda: original_clock() + __import__("datetime").timedelta(minutes=5)
+    try:
+        later = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "later-slot").json())
+    finally:
+        connected._clock = original_clock
+    assert later["job_id"] != job["job_id"]
+    assert (later["outcome"], later["reason"]) == ("ADMISSION_DENIED", "UNRESOLVED_PRIOR_ACTION")
+    assert len(ff.effects(journey)) == 1
 
     settled = journey.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a)
     assert settled.status_code == 200, settled.text
@@ -146,8 +156,17 @@ def test_open_position_exit_closes_the_attributed_inventory(journey, owner_a):
     assert exit_job["outcome"] == "SUBMITTED_CONFIRMED", exit_job
     action = journey.get(f"/v1/actions/{exit_job['action_id']}", headers=owner_a).json()
     assert action["operation"] == "EXIT"
-    position = journey.get(f"/v1/agents/{agent}/actions", headers=owner_a).json()["positions"][0]
-    assert position["inventory_raw"] == "0"
+    positions = journey.get(f"/v1/agents/{agent}/actions", headers=owner_a).json()["positions"]
+    assert [p["inventory_raw"] for p in positions] == ["0"]
+    # A closed position never blocks the next entry: a later slot opens a new position.
+    connected._clock = lambda: original_clock() + __import__("datetime").timedelta(minutes=10)
+    try:
+        again = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "re-entry").json())
+    finally:
+        connected._clock = original_clock
+    assert again["outcome"] == "SUBMITTED_CONFIRMED", again
+    positions = journey.get(f"/v1/agents/{agent}/actions", headers=owner_a).json()["positions"]
+    assert sorted(p["inventory_raw"] for p in positions) == ["0", ff.ENTRY_BASE_OUTPUT]
 
 
 class ProcessDied(BaseException):
@@ -232,6 +251,4 @@ def test_incomplete_or_wrong_tuple_receipts_keep_the_action_unknown_and_liable(j
     assert action["admission"][0]["status"] == expected
     assert {r["state"] for r in action["reservations"]} == {"RESERVED"}
     assert all(r["outcome"] != "CONFIRMED" or r["breach"] for r in action["receipts"])
-    second = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "after").json())
-    assert second["job_id"] == job["job_id"] or second["outcome"] != "SUBMITTED_CONFIRMED"
     assert len(ff.effects(journey)) == 1
