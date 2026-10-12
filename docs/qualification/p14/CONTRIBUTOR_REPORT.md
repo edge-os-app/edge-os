@@ -21,8 +21,12 @@ Focused baseline and candidate check:
   tests/test_proposed_replay_accounting.py tests/test_spot_replay.py)
 ```
 
-The candidate passes `69` focused numerical/P12 tests (one upstream
-FastAPI/Starlette deprecation warning). See [the P14 test matrix](TEST_MATRIX.md)
+The candidate currently passes `74` focused numerical/P12 tests (one upstream
+FastAPI/Starlette deprecation warning): the command now also includes
+`tests/test_proposed_market_context.py`. It covers the proposal's source-stamped
+multi-timeframe completion rule, fee-schedule gaps/overlaps, maker/taker and fee
+asset boundary, and spot-versus-derivative settlement metadata. See [the P14
+test matrix](TEST_MATRIX.md) and [venue-context register](VENUE_CONTEXT_BENCHMARKS.md)
 for the adversarial coverage and retained exclusions. The complete API suite was
 also attempted: its pure tests reached
 125 passes, but Docker could not create the isolated PostgreSQL volume, leaving

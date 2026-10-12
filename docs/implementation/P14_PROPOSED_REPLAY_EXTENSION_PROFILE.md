@@ -44,6 +44,40 @@ The cash balance is shared by every position.
   retaining cash, inventory, and basis. None of these states is represented as
   zero.
 
+## Proposed market-context, timeframe, and venue-accounting boundary
+
+The original numerical helper has a deliberately narrow, quote-cash spot model.
+It must not treat a changing public fee page as a historical fact. The separate
+`replay/proposed_market_context.py` proposal establishes the record needed
+before a later shared integration can compare venues or run multiple timeframes:
+
+- A **venue instrument** names venue, venue symbol, product/contract kind,
+  settlement asset and procedure, leverage, contract multiplier, the execution
+  timeframe, every context timeframe, and the historical-data source. Spot
+  cannot silently acquire leverage; derivatives cannot omit leverage,
+  multiplier, or funding source.
+- Every historical candle records its timeframe, UTC close time, retrieved time,
+  primary source reference, and content hash. At a decision time the proposal
+  accepts only the latest fully closed UTC bar for each requested timeframe. It
+  neither uses a future/in-progress bar nor forward-fills a missing close.
+- A **fee schedule snapshot** contains venue/instrument/product, effective UTC
+  interval, retrieval time, primary source, account-tier reference, fee asset,
+  distinct maker and taker rates, and a discount/promotion reference where
+  applicable (the explicit value `NONE` means no discount/promotion was
+  assumed). Selection must yield exactly one dated schedule; a gap or overlap
+  is a named unknown, never zero cost.
+- The current cash-ledger adapter accepts only a dated **spot**, quote-fee,
+  non-rebate maker/taker rate. A base-token/discount-token fee, maker rebate,
+  or any linear/inverse perpetual is explicitly refused rather than mispriced.
+  Derivatives require a separate proposal for contract multiplier, margin,
+  funding, liquidation, and settlement.
+
+These are proposals, not an assertion that any venue's current published rate
+reconstructs an old account fill. For a historical account run, the venue's
+actual per-fill fee is preferred when available. Otherwise the run must display
+the schedule snapshot, tier, fee asset, discount/promotion assumptions and its
+effective period as an estimate.
+
 The helper receives pre-qualified actions and explicitly supplied prices; it
 does not evaluate P06 signals or define new evidence eligibility. It also has no
 persistence, cross-asset valuation, order routing, capital flows, or permission

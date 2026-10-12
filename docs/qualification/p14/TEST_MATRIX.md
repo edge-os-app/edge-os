@@ -20,6 +20,10 @@ extension, qualify a dataset/fill/cost source, or establish a saved runtime.
 | Schedule integrity | Empty, naïve, non-UTC, off-grid, and non-increasing ticks | The proposal refuses them before replay. |
 | Determinism | Run identical proposed inputs twice | Samples, events, and positions compare identically. |
 | Starting capital | Negative initial cash | Replay construction rejects it. |
+| Multi-timeframe context | 5m and 1h source-stamped bars at one decision time | Only fully completed UTC bars are accepted; missing/future/in-progress context cannot become a price. |
+| Venue/product facts | Spot versus linear/inverse declaration | Settlement procedure/asset, contract kind, multiplier, funding source and derivative leverage are explicit; an unknown cannot inherit a spot default. |
+| Fee provenance | Dated schedule selection | Exactly one applicable source/tier/fee-asset schedule is required; gaps and overlaps have named failures. |
+| Fee role/asset/contract boundary | Maker versus taker, quote asset versus other fee asset, spot versus derivative | The spot ledger refuses an unsupported fee unit, rebate, or contract instead of emitting false P&L. |
 
 Run the numerical regression set from the repository root:
 
@@ -27,6 +31,7 @@ Run the numerical regression set from the repository root:
 (cd apps/api && uv run --frozen pytest -q \
   tests/test_proposed_replay_accounting.py \
   tests/test_proposed_replay_accounting_edges.py \
+  tests/test_proposed_market_context.py \
   tests/test_spot_replay.py)
 ```
 
