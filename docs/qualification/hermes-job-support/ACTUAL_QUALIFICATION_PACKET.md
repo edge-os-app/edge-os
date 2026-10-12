@@ -44,7 +44,7 @@ None of this exists. Each item is a separate reviewed change.
 ## 4. Secure credential handoff (PENDING)
 
 - A dedicated provider key for this run only, with a provider-side credit limit set by a person (section 5). No shared or personal key.
-- The key reaches the host as a file only (never an argument, environment variable of the API process, log line or prompt). The accepted runner reads it once per turn and mounts a private read-only copy for the transport only. Hermes' client keeps the placeholder key.
+- The key reaches the host as a file only (never an argument, environment variable of the API process, log line or prompt). The accepted runner reads it once per turn and mounts a private read-only copy into the job container. Hermes' client keeps the placeholder key, but the job, the transport and Hermes share one process, so Hermes code could read that copy. Only a host-side relay that holds the key outside the job container (section 3 item 1) would isolate it from Hermes; until that decision, the key's exposure is the whole job process.
 - The key value never enters a task packet, review, evidence file, saved attempt or ledger. Sealing and the leak scan check evidence after every attempt.
 - Rollback: revoke or zero the key, turn the live setting off, keep the ledger.
 - Who creates, stores, injects and revokes the key: PENDING (accepted checklist line 6).
@@ -55,13 +55,13 @@ None of this exists. Each item is a separate reviewed change.
 - Prices: STALE. The accepted proposal's prompt USD 2.00 and completion USD 7.50 per million tokens are Probe A's old ceilings. Read the provider's public price list on the run day, record URL and date, and recompute.
 - Reservation per attempt: `(max_request_bytes + 64) x prompt price + max_tokens x completion price`, held before the request. With stale prices: USD 0.047744 (first reading), USD 0.051328 (follow-up). Reasoning tokens count as completion tokens.
 - Cumulative cap, retry slots, per-run allowance: PENDING (accepted proposal proposes USD 0.75, not decided).
-- Provider-side ceiling: OpenRouter documents a per-key credit limit; a key at its limit fails with 403 before reaching a provider (Context7 `/openrouterteam/docs`, checked 2026-10-12). Without such a limit, close the run as UNRESOLVED or record an explicit acceptance of local accounting only.
+- Provider-side ceiling: OpenRouter documents a per-key credit limit; a key at its limit is refused before reaching a provider. Its documents disagree on the status: the limits reference gives 402 with `error.metadata.limit_source` `openrouter_key_limit`, and a key-capping guide gives 403 `Key limit exceeded`; budget caps give 403 (Context7 `/openrouterteam/docs`, checked 2026-10-12). Without such a limit, close the run as UNRESOLVED or record an explicit acceptance of local accounting only.
 - Unknown liability: a lost reply, an oversized reply, a crash, missing usage, a timeout or an identity mismatch keeps the full reservation as UNKNOWN and blocks the scope. OpenRouter documents that a non-streaming request is not cancelled by a client disconnect and is billed for the complete response (Context7, checked 2026-10-12). So a kill must never release a reservation.
 - Reconciliation: after the run, compare each attempt with the provider's own record (usage `cost`, generation record) through a read-only account view that a person opens. Record it with `SpendLedger.reconcile`, never by editing rows. A disagreement keeps the higher charge until a person decides.
 
 ## 6. Request, response and control cases
 
-Run in this order. L1-L4 are a local preflight: they need no network and must give their expected outcome on the release candidate before any network case. N1-N3 are the only network cases.
+Run in this order, one attempt at a time on the run's key (the zero-connection release window in section 3 item 6 depends on it). L1-L4 are a local preflight: they need no network and must give their expected outcome on the release candidate before any network case. N1-N3 are the only network cases.
 
 | Case | What | Expected |
 |---|---|---|
@@ -70,12 +70,12 @@ Run in this order. L1-L4 are a local preflight: they need no network and must gi
 | L3 | ACTUAL route with no release identity | `ActualProviderUnavailable` before anything is built |
 | L4 | Authored lost reply, oversized reply, crash and hang | UNKNOWN, full reservation, nothing published |
 | N1 | One manifest case (`g1-concrete`) | Exactly one HTTP request for the attempt by the independent request count or the provider's records; with neither, the one-request claim is labelled UNPROVED and network stop 4 (connections) still applies; exact settle from reported usage; reply within bound; identities equal the attempt |
-| N2 | The remaining manifest cases, one request each, only after N1 passes with its request count proved (independent HTTP count or provider records) and a person reviews it. With N1's count UNPROVED, N2 does not run unless the builder records an acceptance of guard-only counting for N2 | As N1, plus the accepted meaning check reported separately |
+| N2 | The remaining manifest cases, one request each, only after N1 passes with its request count proved (independent HTTP count or provider records) and a person reviews it. With N1's count UNPROVED, N2 does not run unless the builder records an acceptance of guard-only counting for N2 and N3 | As N1, plus the accepted meaning check reported separately |
 | N3 | A provider error case, only if the provider offers a safe way to cause one, under the same proved-count condition as N2. It runs last | Exactly one HTTP request (no retry) by the independent request count or the provider's records; with neither (N3 then runs only under the recorded guard-only acceptance), the one-request claim is labelled UNPROVED and network stop 4 (connections) still applies; UNKNOWN, full reservation. This expected provider error and unknown usage meet the accepted stop rules for a provider error and for unknown usage, so the batch ends after N3 by design; N3 passes only when nothing else in the stop list below occurred |
 
 Two separate controls, both independent of the job:
 
-- **Request count.** One TCP or TLS connection can carry more than one HTTP request, and a packet counter cannot see requests inside HTTPS. So the one-request claim needs either an HTTP-level count by a component that sees each request (for example a host-side relay or a proxy that terminates TLS for this run only), or the provider's own per-request records (generation or request identifiers) for the run's key, read by a person. With neither, the run labels the one-request claim UNPROVED and keeps the guard-only limit.
+- **Request count.** One TCP or TLS connection can carry more than one HTTP request, and a packet counter cannot see requests inside HTTPS. So the one-request claim needs either an HTTP-level count by a component that sees each request (for example a host-side relay or a proxy that terminates TLS for this run only), or the provider's own per-request records (generation or request identifiers) for the run's key, read by a person. When the count comes only from provider records, a person reads each attempt's records before the next attempt starts. With neither, the run labels the one-request claim UNPROVED and keeps the guard-only limit.
 - **Egress evidence.** An egress proxy or packet counter (accepted hosting assessment section 4) records connections and destinations: connections only to the provider host and none elsewhere. This is egress evidence, not a request count. Zero connections to the provider host does show that nothing reached it.
 
 ## 7. Deadlines, egress, storage, supervision, recovery
@@ -98,7 +98,7 @@ Two separate controls, both independent of the job:
 3. a request count for an attempt, by the independent HTTP count or by the provider's records, other than the expected one per attempt (whichever source shows it first), or a connection to any host other than the provider;
 4. other than exactly one provider connection for an attempt that sent a request, or any provider connection for an attempt that sent none (a possible hidden retry or stray request, even when the request count is UNPROVED);
 5. any credential form found in evidence by sealing or the leak scan;
-6. a provider 403 for a key limit (the ceiling worked: stop and report).
+6. a provider 402 or 403 key-limit or budget error (for example `limit_source` `openrouter_key_limit`): the ceiling worked; stop and report. Never retry it, even when a `Retry-After` header is present.
 
 Stop the whole batch, send nothing more, report to the controller.
 
@@ -123,3 +123,4 @@ Per attempt: the attempt rows, the ledger events, the guard and transport eviden
 - Provider behavior on a lost connection beyond the documented non-streaming billing: not tested.
 - Exact reply sizes of the chosen model: not measured.
 - Provider-only egress on any host: not established.
+- The key-limit status code: OpenRouter's documents give both 402 and 403 (section 5). STALE until read again on the run day.

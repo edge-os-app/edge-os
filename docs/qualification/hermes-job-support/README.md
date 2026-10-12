@@ -22,7 +22,7 @@ Hermes client (placeholder URL and key)
   -> reply admission      status 100-599, at most max_reply_bytes, a JSON object; otherwise 502 and its content dropped
 ```
 
-Hermes never holds the host's endpoint or credential. The credential file is mounted for the transport only; Hermes' client carries `fixture-only-not-a-secret`, which the guard requires. The job and the transport share one process, so this is not isolation from Hermes code. It keeps the credential out of Hermes' client, its request dumps and its logs, and sealing still removes it from all evidence.
+Hermes' client never holds the host's endpoint or credential. The credential file is mounted read-only into the job container, and only the transport passes its value on; Hermes' client carries `fixture-only-not-a-secret`, which the guard requires. The job, the transport and Hermes share one process, so Hermes code could read the copy: this is not isolation from Hermes code. It keeps the credential out of Hermes' client, its request dumps and its logs, and sealing still removes it from all evidence.
 
 New files:
 

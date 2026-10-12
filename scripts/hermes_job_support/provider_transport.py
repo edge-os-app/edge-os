@@ -1,7 +1,8 @@
 """The provider transport contract shared by the host and the container job. Standard library only; no I/O anywhere.
 
-Pinned Hermes talks to a fixed placeholder client: `HERMES_CLIENT_URL` with `HERMES_CLIENT_KEY`. It never holds the
-host's endpoint or credential. For each interpretation attempt the job:
+Pinned Hermes talks to a fixed placeholder client: `HERMES_CLIENT_URL` with `HERMES_CLIENT_KEY`. Hermes' client never
+holds the host's endpoint or credential (Hermes shares the job's process, so this is not isolation from Hermes code).
+For each interpretation attempt the job:
 
 1. admits the physical request (`physical_refusal`): POST to the placeholder URL, the SDK's own header names only, JSON
    in and out, no streaming, SDK retry count 0, and the body names this attempt (`session_id` is `p05-<attempt id>`);

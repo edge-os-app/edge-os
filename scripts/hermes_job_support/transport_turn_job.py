@@ -1,7 +1,8 @@
 """Container entrypoint: one ACTUAL pinned-Hermes turn whose one request goes through an injected provider transport.
 
 It reuses the accepted P05 job (`hermes_turn_job`, inside the image) and the accepted provider guard. Hermes talks to a
-placeholder client and never holds the host's endpoint or credential. Each request Hermes sends is checked first as a
+placeholder client, which never holds the host's endpoint or credential; Hermes shares this process, so it is not
+isolated from the credential copy the transport reads. Each request Hermes sends is checked first as a
 physical request, then by the guard; only then is a host request built and handed to the transport. A refused request
 gets a 429 and no transport sees it. A reply the route does not allow gets a 502 and its content is dropped, so nothing
 from it can be published. The container has no network; in this candidate the only transport is the AUTHORED one.
