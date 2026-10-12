@@ -53,6 +53,11 @@ MAX_ESCAPES = 65_536  # more JSON escapes than this in one file: too costly to u
 MAX_STDOUT_BYTES = 1024 * 1024  # the host keeps at most this much of the job's own output
 MAX_CREDENTIAL_BYTES = 64 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024  # a result file larger than this is not read: the turn ends as UNKNOWN
+# Parsing, checking and mapping a result cannot be stopped part way, so it starts only when the time left covers its
+# worst case: measured at most 0.014 s per MiB on hostile shapes (nested lists, dense escapes); this allows about 4 times
+# that. With less time left the result is not read and the turn ends as UNKNOWN.
+RESULT_SECONDS_PER_BYTE = 0.05 / (1024 * 1024)
+RESULT_MIN_SECONDS = 0.005
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
 
@@ -714,12 +719,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                                     error_class="CredentialEchoed" if echoed else "ContainerResultUnreadable")
         raw, data = read
         # The same test as sealing, on the same bytes: decoding can undo escapes that hid a form from a plain byte scan.
-        if plan.secret and holds_credential(data, encodings(plan.secret)):
-            return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
-                                    error_class="CredentialEchoed")
-        if time.monotonic() > plan.deadline:  # the checks above are linear, but the deadline still decides
+        try:
+            echoed_in_result = bool(plan.secret) and holds_credential(data, encodings(plan.secret), plan.deadline)
+        except TimeoutError:
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerResultUnreadable")
+        if echoed_in_result:
+            return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
+                                    error_class="CredentialEchoed")
         try:
             mapped = self._map(raw)
             guard = raw["guard"]
@@ -729,6 +736,9 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerResultUnreadable")
         mapped = replace(mapped, observed=observed)
+        if time.monotonic() > plan.deadline:  # the result was budgeted to fit; if it did not, the deadline still decides
+            return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
+                                    error_class="ContainerResultUnreadable")
         if echoed:
             return replace(mapped, status="UNKNOWN", text=None, error_class="CredentialEchoed")
         return mapped
@@ -760,8 +770,11 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         finally:
             os.close(fd)
             os.close(folder)
-        if len(data) > MAX_RESULT_BYTES or time.monotonic() > plan.deadline:
+        if len(data) > MAX_RESULT_BYTES:
             return None
+        if plan.deadline - time.monotonic() < RESULT_MIN_SECONDS + len(data) * RESULT_SECONDS_PER_BYTE:
+            return None  # not enough of the one deadline is left to finish with this result
+
         try:
             parsed = json.loads(data.decode("utf-8"))
         except (ValueError, RecursionError, UnicodeDecodeError):

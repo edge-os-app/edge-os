@@ -2097,3 +2097,31 @@ def test_the_job_client_cannot_put_more_than_the_stdout_limit_on_host_disk(tmp_p
     assert elapsed <= 1.0 + 0.3, (status, elapsed)
     assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
     assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
+
+
+# --- Repair after round-22 review A1: reading the result after sealing stays inside the one deadline -----------------
+
+@pytest.mark.parametrize("exit_at", [0.955, 0.965, 0.975, 0.985])
+def test_reading_a_hostile_4_mib_result_after_sealing_ends_inside_the_deadline(tmp_path: Path, monkeypatch, exit_at: float) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    lists = b"[]," * 600_000
+    text = b"\\u0041" * 65_000 + OLD[:-3].encode() * 30_000  # never the whole credential
+    result = b'{"x":[' + lists.rstrip(b",") + b'],"t":"' + text + b'"}'
+    runner, spend, guarded = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=0.3)
+    plans, _removals = _spy_plan_and_removal(monkeypatch, runner)
+
+    def behaviour(output: Path) -> None:  # the job writes its result, then exits by itself (code 0) late in the turn
+        (output / "container-result.json").write_bytes(result)
+        time.sleep(max(0.0, plans[0].job_deadline - 1.0 + exit_at - time.monotonic()))
+
+    install_process(monkeypatch, behaviour, returncode=0)
+
+    status, _elapsed = _timed_run(guarded)
+    ended = time.monotonic()
+
+    assert ended <= plans[0].deadline + 0.01, (status, ended - plans[0].deadline)  # the ledger's settle is the 0.01 s
+    # a late exit leaves sealing no time, and that fails closed too; either way the full reservation stays
+    assert status in {"UNKNOWN", "EvidenceNotSealed"} and spend.state("attempt-1") == "UNKNOWN"
+    assert spend.committed_usd() == Decimal("0.054848")
+    assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
