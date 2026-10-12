@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     # `fixture` uses the authored local wallet-creation fixture. Production refuses it and uses the
     # fail-closed `unavailable` provider, so no real wallet provider is configured yet.
     wallet_provider: Literal["fixture", "unavailable"] = "unavailable"
+    # `fixture` composes the financial journey over authored local provider fixtures: deposit observations,
+    # market observations, action quotes, holdings, submission/receipt effects and removal observations, plus a
+    # server-owned fixture qualification that lets an adopted INACTIVE consent drive a fixture action. Production
+    # refuses it. `unavailable` keeps every provider port fail-closed, so no funded action can run.
+    execution_mode: Literal["fixture", "unavailable"] = "unavailable"
+    # Fixture mode only: an append-only file that records each authored submission effect outside the
+    # application database, so a restarted process reconciles the original action and a verifier counts effects
+    # independently. Without it the fixture keeps effects in process memory.
+    fixture_effects_path: str | None = None
 
     @field_validator("privy_app_id")
     @classmethod
@@ -116,6 +125,10 @@ class Settings(BaseSettings):
             problems.append("interpreter: only the fixture interpreter is available in production")
         if self.env == "production" and self.wallet_provider != "unavailable":
             problems.append("wallet_provider: only the unavailable provider is allowed in production")
+        if self.env == "production" and self.execution_mode != "unavailable":
+            problems.append("execution_mode: only the unavailable execution mode is allowed in production")
+        if self.fixture_effects_path is not None and self.execution_mode != "fixture":
+            problems.append("fixture_effects_path: only the fixture execution mode records fixture effects")
         if self.env == "production" and self.privy_app_id == TEST_APP_ID:
             problems.append("privy_app_id: the test app id is refused in production")
         if problems:

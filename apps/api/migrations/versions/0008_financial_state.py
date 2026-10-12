@@ -352,6 +352,39 @@ def upgrade() -> None:
     )
     op.create_index('ix_execution_attempts_owner_action', 'execution_submission_attempts', ['owner_id', 'action_id'], unique=False, schema='execution_local')
     op.create_index('ix_execution_attempts_owner_wallet', 'execution_submission_attempts', ['owner_id', 'wallet_id', 'network_id', 'started_at'], unique=False, schema='execution_local')
+    op.create_table('execution_evaluation_jobs',
+    sa.Column('job_id', sa.UUID(), nullable=False),
+    sa.Column('owner_id', sa.UUID(), nullable=False),
+    sa.Column('agent_id', sa.Text(), nullable=False),
+    sa.Column('wallet_id', sa.Text(), nullable=False),
+    sa.Column('network_id', sa.Text(), nullable=False),
+    sa.Column('request_key', sa.Text(), nullable=False),
+    sa.Column('decision_slot', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('strategy_id', sa.Text(), nullable=False),
+    sa.Column('publication_revision_id', sa.UUID(), nullable=False),
+    sa.Column('execution_revision_id', sa.Text(), nullable=False),
+    sa.Column('content_hash', sa.Text(), nullable=False),
+    sa.Column('manifest_hash', sa.Text(), nullable=False),
+    sa.Column('consent_adoption_id', sa.UUID(), nullable=False),
+    sa.Column('consent_hash', sa.Text(), nullable=False),
+    sa.Column('state', sa.Text(), nullable=False),
+    sa.Column('decision_id', sa.UUID(), nullable=True),
+    sa.Column('action_id', sa.Text(), nullable=True),
+    sa.Column('outcome', sa.Text(), nullable=True),
+    sa.Column('reason', sa.Text(), nullable=True),
+    sa.Column('runs', sa.BigInteger(), server_default=sa.text('0'), nullable=False),
+    sa.Column('provenance', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.CheckConstraint("state IN ('QUEUED','DECIDED','ENQUEUED','SUBMITTED','COMPLETED','UNAVAILABLE')", name=op.f('execution_evaluation_jobs_ck_execution_jobs_state_check')),
+    sa.CheckConstraint('length(request_key) BETWEEN 1 AND 200', name=op.f('execution_evaluation_jobs_ck_execution_jobs_request_key_check')),
+    sa.PrimaryKeyConstraint('job_id', name=op.f('execution_evaluation_jobs_pkey')),
+    sa.UniqueConstraint('owner_id', 'agent_id', 'consent_adoption_id', 'decision_slot', name='uq_execution_jobs_owner_agent_consent_slot'),
+    sa.UniqueConstraint('owner_id', 'agent_id', 'request_key', name='uq_execution_jobs_owner_agent_request'),
+    schema='execution_local'
+    )
+    op.create_index('ix_execution_jobs_owner_agent', 'execution_evaluation_jobs', ['owner_id', 'agent_id', 'created_at'], unique=False, schema='execution_local')
+    op.create_index('ix_execution_jobs_state', 'execution_evaluation_jobs', ['state', 'created_at'], unique=False, schema='execution_local')
     op.create_table('recovery_cases',
     sa.Column('case_id', sa.UUID(), nullable=False),
     sa.Column('owner_id', sa.UUID(), nullable=False),

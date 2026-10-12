@@ -34,6 +34,13 @@ from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBod
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
 from edge_os_api.wallet_setup import router as wallet_setup
 from edge_os_api.wallet_setup.adapter import build_wallet_provider
+from edge_os_api.consent import routes as consent_routes
+from edge_os_api.core.financial_services import build_financial_services
+from edge_os_api.execution import routes as action_routes
+from edge_os_api.funding import routes as funding_routes
+from edge_os_api.recovery import routes as recovery_routes
+from edge_os_api.revocation import routes as removal_routes
+from edge_os_api.stops import routes as stop_routes
 
 log = logging.getLogger("edge_os")
 MAX_BODY_BYTES = 256 * 1024
@@ -132,6 +139,9 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     app.state.settings, app.state.verifier = settings, verifier
     app.state.engine, app.state.session_factory, app.state.hermes = engine, session_factory, hermes
     app.state.wallet_provider = wallet_provider
+    # One composition of the accepted financial services. Its provider ports follow `execution_mode`:
+    # authored fixtures in local/test configuration, fail-closed unavailable ports in production.
+    app.state.financial = build_financial_services(session_factory, settings)
     install_handlers(app)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
                        allow_headers=["Authorization", "Content-Type"], allow_credentials=False)
@@ -174,6 +184,10 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/me")
     def me(principal: Principal = Depends(require_principal)) -> dict[str, str]:
         return {"user_id": str(principal.user_id)}
+
+    @private.get("/financial/provider")
+    def financial_provider() -> dict[str, Any]:
+        return app.state.financial.ports.describe()
 
     @private.get("/interpreter")
     def interpreter_info() -> dict[str, Any]:
@@ -317,4 +331,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     app.include_router(account_views.router)
     app.include_router(agent_context.router)
     app.include_router(wallet_setup.router)
+    for financial_router in (funding_routes.router, consent_routes.router, action_routes.router,
+                             recovery_routes.router, stop_routes.router, removal_routes.router):
+        app.include_router(financial_router)
     return app
