@@ -44,10 +44,12 @@ canonical object per case is enough.
 
 The worked numbers are small and exact, so a reviewer can recompute them.
 
-- `signal_open_position`: entry sells `100000000` base units (6 decimals) of
-  `0x2222...2222` for `50000000000000000000` quote units (18 decimals) of `0x1111...1111`.
-  The realized result is `1250000000000000000` quote units. Basis is
-  `50000000000000000000`. The exit at nonce 1 is a separate original transaction.
+- `signal_open_position`: one fresh entry spends `50000000000000000000` quote units to acquire
+  `100000000` base units (6 decimals). The entry retains the full inventory, so the realized result
+  is a stored `0` quote units and the basis is `50000000000000000000`. A later exit would be a
+  separate original transaction.
+- `no_signal`: no position row exists, so basis, realized result and residual inventory are
+  `UNKNOWN`, never `0`. This is the contract's own unknown rule.
 - `stop_sticky_after_restart`: residual inventory is `25000000` base units after a confirmed
   partial exit. Realized result is `-500000000000000000` quote units; the negative sign is retained,
   never shown as zero.

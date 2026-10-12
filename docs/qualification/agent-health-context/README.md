@@ -31,8 +31,9 @@ capability is proved.
 ## Boundaries
 
 - P31 stays blocked by P27. This documentation does not complete P31, P27 or issue #58.
-- The canonical P27 producer is not implemented. Every scheduler, standing-permission and
-  forward-feed field below is `MISSING` and carries a producer obligation.
+- The canonical P27 producer is not implemented. The accepted bounded pipeline already exposes a
+  `HealthView` (`execution/types.py:321-332`); the projection must reuse it. The recurring scheduler,
+  standing permission and forward-feed fields carry a `MISSING` producer obligation.
 - Current financial records override stale context. Clearing or disabling context omits memory
   but keeps the required owner, safety and permission state.
 - Manual sale (P32) and every unqualified operation stay unavailable. A preview is not

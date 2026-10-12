@@ -30,6 +30,10 @@ AgentHealthProjection
 uses for read-only projections of connected rows. It is not `SYNTHETIC_AUTHORED`. The projection
 is never stored as an account record.
 
+A worked case may carry only the sections it demonstrates. A section that is absent means "not
+applicable in this case", not an empty value. The `context` section (section 8) appears only in a
+context case and does not change the meaning of a missing `worker_health` or `trading_results`.
+
 ## 2. Scope identity: `scope`
 
 The owner is the verified principal (`Principal.user_id`). No request body, query, navigation
@@ -58,13 +62,13 @@ next, why did it wait or fault, what needs reconciliation, and what stops or rem
 | Field | Source | Status |
 |---|---|---|
 | `last_attempt_at` | newest `execution_local.execution_evaluation_jobs.updated_at` for the scope | PRESENT (f84) |
-| `last_completion_at` | newest `updated_at` where `state = 'COMPLETED'` | PRESENT (f84) |
+| `last_completion_at` | newest `updated_at` where `state = 'COMPLETED'`; `HealthView.last_completion_at` computes it from submission attempts | PRESENT (f84) / projection PROPOSED |
 | `last_outcome` | the newest job `outcome` and `reason` | PRESENT (f84) |
 | `evaluation_attempts` | count of jobs for the scope (projected today as `evaluation_attempts`) | PRESENT (f84) |
 | `evaluation_completions` | count where `state = 'COMPLETED'` | PRESENT (f84) |
-| `latest_input_updated_at` | `execution_evaluation_jobs.provenance.observations` holds observation times, but no canonical input-time field is projected | MISSING (producer obligation) |
-| `input_event_time`, `collection_time` | IC02 supplies observation provenance; no normalised field exists | MISSING (P27 producer obligation) |
-| `next_scheduled_work` | no scheduler table exists; `accounts/service_projection.py` sets `next_work` only for a pending reconciliation | MISSING (P27 producer obligation) |
+| `latest_input_updated_at` | `HealthView.last_input_at` (the last decision time) via `ExecutionService.status` (`execution/types.py:321-332`, `execution/service.py:828-870`); per-observation collection time is not normalised | PRESENT (f84, bounded pipeline) / collection time MISSING |
+| `input_event_time`, `collection_time` | `HealthView.last_input_at` gives the decision time; IC02 observation provenance holds raw times | PRESENT (f84, decision time) / collection time MISSING (P27 producer obligation) |
+| `next_scheduled_work` | `HealthView.next_scheduled_at` derives the next five-minute slot from the last decision (`execution/service.py:855-857`) and is exposed at `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:106`); this is a bounded-pipeline estimate, and no recurring scheduler table exists | PRESENT (f84, derived estimate) / recurring schedule MISSING (P27 producer obligation) |
 | `wait_or_fault_reason` | job `reason`, including `WAITING:<PORT>_UNAVAILABLE`, `WORKER_ERROR:<class>`, `OBSERVATIONS_WRONG_MARKET`, `OBSERVATIONS_WRONG_TIME`, `IDENTITY_CHANGED`, `IDENTITY_UNAVAILABLE`, `CONSENT_CHANGED` | PRESENT (f84) |
 | `pending_reconciliation` | `recovery_local.recovery_cases.state IN ('OPEN','UNKNOWN')` for the action, and `outcome = 'SUBMITTED_UNKNOWN'` | PRESENT (f84) |
 | `stop_state` | `stops_local.scoped_stops` (P25); read today by admission, not yet projected | PRESENT (f84) / projection PROPOSED |
@@ -76,6 +80,15 @@ Invariant: a process label, heartbeat or liveness signal alone cannot fill worke
 requires the saved evaluation attempt, completion, next-work or wait reason and the pending
 reconciliation. A settled agent with no scheduler row is `UNKNOWN`, not `RUNNING`, exactly as
 `accounts/service_projection.py` already reports it.
+
+The accepted bounded pipeline already has a normalised, owner-scoped health view: `HealthView` in
+`execution/types.py:321-332`, produced by `ExecutionService.status` (`execution/service.py:828-870`)
+and exposed by `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:83-106`). It supplies
+`last_attempt_at`, `last_completion_at`, `last_input_at`, `last_decision_id`, `next_scheduled_at` and
+`blocking_reason` for the bounded action pipeline. The projection must reuse these values rather than
+rebuild them. The `MISSING` obligation is only the recurring scheduler, its missed-slot policy and a
+normalised per-observation collection time; a lane-2 implementer must not invent a second source for
+a value `HealthView` already computes.
 
 ## 4. Trading results: `trading_results`
 
@@ -161,6 +174,7 @@ A frozen P31 health consumer reads the producer snapshot. It:
 
 ## 10. Out of scope for this agreement
 
-No producer is implemented here. `next_scheduled_work`, `deployment_id`, normalised input/collection
-times and revision-linked real edge evidence remain `MISSING`. Full P27 recurring operation, manual
-sale P32 and every unqualified operation stay separate and OPEN.
+No producer is implemented here. The bounded-pipeline `HealthView` already exists and must be
+reused; the recurring scheduler (`next_scheduled_work` for repeated operation), `deployment_id`, a
+normalised per-observation collection time and revision-linked real edge evidence remain `MISSING`.
+Full P27 recurring operation, manual sale P32 and every unqualified operation stay separate and OPEN.

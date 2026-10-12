@@ -35,7 +35,7 @@
         "evidence_class": "SERVICE_PROJECTION",
         "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-01", "wallet_id": "wal-0001", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
         "worker_health": { "last_attempt_at": "2026-10-12T21:00:00Z", "last_completion_at": "2026-10-12T21:00:00Z", "last_outcome": "SUBMITTED_CONFIRMED", "evaluation_attempts": 4, "evaluation_completions": 4, "latest_input_updated_at": null, "next_scheduled_work": null, "wait_or_fault_reason": null, "pending_reconciliation": false, "stop_state": "NONE", "removal_state": "NOT_REQUESTED", "residual_inventory": { "asset_id": "monad:143/0x2222222222222222222222222222222222222222", "raw": "100000000", "decimals": 6 } },
-        "trading_results": { "basis": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "50000000000000000000", "decimals": 18 } }, "realized_result": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "1250000000000000000", "decimals": 18 } }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": { "asset_id": "monad:143/native", "raw": "300000000000000", "decimals": 18 }, "deposits": [{ "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "50000000000000000000", "decimals": 18, "included_in_realized_result": false }] },
+        "trading_results": { "basis": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "50000000000000000000", "decimals": 18 } }, "realized_result": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "0", "decimals": 18 } }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": { "asset_id": "monad:143/native", "raw": "300000000000000", "decimals": 18 }, "deposits": [{ "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "50000000000000000000", "decimals": 18, "included_in_realized_result": false }] },
         "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
         "record_refs": [
           { "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "ag-health-01:wal-0001:monad:143", "updated_at": "2026-10-12T21:00:00Z" },
@@ -47,7 +47,7 @@
         "renders_from": "expected_direct_projection",
         "statements": [
           "Agent ag-health-01 finished 4 of 4 evaluations in monad:143; the last completed at 21:00:00Z.",
-          "Open position holds 100000000 base units (6 decimals); realized result is 1250000000000000000 quote units.",
+          "Open position holds 100000000 base units (6 decimals); realized result is 0 quote units for this fresh entry and basis is 50000000000000000000 quote units.",
           "Estimated unrealized result and mark are unknown; no observed mark exists.",
           "A deposit of 50000000000000000000 quote units is a capital flow, not a trading result.",
           "Native gas is shown separately and is not converted."
@@ -73,8 +73,8 @@
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
         "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-02", "wallet_id": "wal-0002", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
-        "worker_health": { "last_attempt_at": "2026-10-12T21:05:00Z", "last_completion_at": "2026-10-12T21:05:00Z", "last_outcome": "NO_SIGNAL", "evaluation_attempts": 1, "evaluation_completions": 1, "latest_input_updated_at": null, "next_scheduled_work": null, "wait_or_fault_reason": null, "pending_reconciliation": false, "stop_state": "NONE", "removal_state": "NOT_REQUESTED", "residual_inventory": { "asset_id": "monad:143/0x2222222222222222222222222222222222222222", "raw": "0", "decimals": 6 } },
-        "trading_results": { "basis": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "0", "decimals": 18 } }, "realized_result": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "0", "decimals": 18 } }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
+        "worker_health": { "last_attempt_at": "2026-10-12T21:05:00Z", "last_completion_at": "2026-10-12T21:05:00Z", "last_outcome": "NO_SIGNAL", "evaluation_attempts": 1, "evaluation_completions": 1, "latest_input_updated_at": null, "next_scheduled_work": null, "wait_or_fault_reason": null, "pending_reconciliation": false, "stop_state": "NONE", "removal_state": "NOT_REQUESTED", "residual_inventory": null },
+        "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
         "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
         "record_refs": [{ "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "ag-health-02:wal-0002:monad:143", "updated_at": "2026-10-12T21:05:00Z" }],
         "as_of": "2026-10-12T21:05:00Z"
@@ -84,7 +84,7 @@
         "statements": [
           "Agent ag-health-02 completed 1 evaluation with no signal; no action exists.",
           "A no-signal decision is useful work, not a failed trade and not a loss of permission.",
-          "Realized result is 0 quote units; no position holds inventory.",
+          "No position row exists yet, so basis, realized result and residual inventory are unknown, not zero.",
           "Unrealized result and mark are unknown; no mark exists."
         ],
         "values_agree": true,
@@ -108,7 +108,7 @@
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
         "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-03", "wallet_id": "wal-0003", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
-        "worker_health": { "last_attempt_at": "2026-10-12T21:10:00Z", "last_completion_at": null, "last_outcome": "UNAVAILABLE", "evaluation_attempts": 1, "evaluation_completions": 0, "latest_input_updated_at": null, "next_scheduled_work": null, "wait_or_fault_reason": "STALE_CONTEXT", "pending_reconciliation": false, "stop_state": "NONE", "removal_state": "NOT_REQUESTED", "residual_inventory": null },
+        "worker_health": { "last_attempt_at": "2026-10-12T21:10:00Z", "last_completion_at": null, "last_outcome": "UNAVAILABLE", "evaluation_attempts": 1, "evaluation_completions": 0, "latest_input_updated_at": null, "next_scheduled_work": null, "wait_or_fault_reason": "OBSERVATIONS_WRONG_TIME", "pending_reconciliation": false, "stop_state": "NONE", "removal_state": "NOT_REQUESTED", "residual_inventory": null },
         "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
         "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
         "record_refs": [{ "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "ag-health-03:wal-0003:monad:143", "updated_at": "2026-10-12T21:10:00Z" }],
@@ -116,9 +116,9 @@
       },
       "expected_conversation_summary": {
         "renders_from": "expected_direct_projection",
-        "statements": [
-          "Agent ag-health-03 has no completed evaluation; the last attempt returned UNAVAILABLE with reason STALE_CONTEXT.",
-          "The stale input prevented a decision; no action exists.",
+          "statements": [
+          "Agent ag-health-03 has no completed evaluation; the last attempt returned UNAVAILABLE with reason OBSERVATIONS_WRONG_TIME.",
+          "The stale input (observations for another decision time) prevented a decision; no action exists.",
           "Realized result, basis and residual inventory stay unknown, not zero."
         ],
         "values_agree": true,
