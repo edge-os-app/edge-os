@@ -24,7 +24,7 @@ The Render/Fly/Vercel comparison from the earlier revision is retained only as d
 | Health | `GET /healthz` (process, build SHA, started-at); `GET /readyz` (database + schema revision + keys + quota caps) | `main.py` |
 | Migrations | `alembic upgrade head` and `alembic check`; forward-only; API refuses to start on a revision mismatch | `apps/api/migrations/env.py`; `core/database.py` |
 | Database URL | `EDGE_OS_DATABASE_URL` must start `postgresql+psycopg://`; production needs `sslmode=require` or stricter and a non-loopback host | `core/settings.py` |
-| Build identity | `EDGE_OS_BUILD_SHA` required in production; the API binds `--host 0.0.0.0 --port $PORT` | `core/settings.py` |
+| Build identity | `EDGE_OS_BUILD_SHA` required in production; the container is started with `--host 0.0.0.0 --port $PORT` (an operator start command in the Compose proposal, not a code setting) | `core/settings.py`; HOST_QUALIFICATION_RUNBOOK Stage 3 |
 | Background worker | `python -m edge_os_api.execution.worker` — bounded loop, no port; `--once`/`--interval`; stops with exit code 3 on schema drift | `execution/worker.py` |
 | Research worker | `python -m edge_os_api.research.investigation_jobs` — same bounded-loop contract | `research/investigation_jobs.py` |
 | Browser API routing | The web calls `${NEXT_PUBLIC_API_BASE_URL}${path}` at build time; no rewrite or proxy exists in `next.config.ts` | `apps/web/lib/api.ts` |

@@ -35,7 +35,7 @@ Build the images outside the serving VPS and deploy immutable digests; a build o
 | 1.2 | API image | A pinned Python `3.14.x` image with `uv sync --frozen` against `apps/api/uv.lock`; a non-root runtime user; no package manager downloaded at startup. | check |
 | 1.3 | Web image | A pinned Node `24.x` image with `npm ci` against `apps/web/package-lock.json`; `NEXT_PUBLIC_*` values passed as build args; `next start`. | check |
 | 1.4 | Contract/qualification assets in the image | The image contains at minimum `docs/contracts/p02/check_contract.py`, `docs/contracts/p06/contract.json`, `docs/qualification/p07/qualification.py`, `docs/implementation/EFFECT_COMPARISON_PROFILE.md`, `docs/implementation/SPOT_REPLAY_RUNTIME_PROFILE.md`. A package with only Python source fails to start (`EngineUnavailable` for P07). | check |
-| 1.5 | Digest identity | Images are referenced by digest (`docker compose config --lock-image-digests` produces the override); the build record names source/tree, Python/Node/toolchain versions and all runtime assets. | check |
+| 1.5 | Digest identity | Images are referenced by digest. `docker compose config --lock-image-digests` produces an **override** file (image entries only) that must be layered on the base production file; the build record names source/tree, Python/Node/toolchain versions and all runtime assets. | check |
 | 1.6 | No secret in the image | No secret, key or token appears in any image layer, and no fixture label appears in the web bundle (the repository's own bundle scan logic). | check |
 
 Fail closed: a floating tag, a root runtime user, or a missing asset stops the deploy.
@@ -50,6 +50,8 @@ Set the application names in the host secret store / Compose environment. Keep s
 | `api` service | `EDGE_OS_ENV=production`, `EDGE_OS_DATABASE_URL` (composed, `postgresql+psycopg://…?sslmode=require`), `EDGE_OS_PRIVY_APP_ID`, `EDGE_OS_PRIVY_VERIFICATION_KEY`, `EDGE_OS_CORS_ALLOWED_ORIGINS`, `EDGE_OS_BUILD_SHA`, the `EDGE_OS_*` quota/rate values, and the provider modes `unavailable` |
 | `web` service | `NEXT_PUBLIC_API_BASE_URL` (build time), `NEXT_PUBLIC_PRIVY_APP_ID` (build time). **No database or session secret.** |
 
+The API's `EDGE_OS_DATABASE_URL` necessarily contains the database credential; not sending a separate `POSTGRES_PASSWORD` variable to the API is not itself a security boundary. The boundary is that only the `postgres` service holds the raw `POSTGRES_*` variables and the credential is passed to the API only inside its composed connection URL.
+
 | # | Check | Done when | Class |
 |---|---|---|---|
 | 2.1 | No forbidden name present (`EDGE_OS_PRIVY_APP_SECRET`, `EDGE_OS_AUTH_DISABLED`, `EDGE_OS_DEV_AUTH_BYPASS`). | Startup does not raise `unsupported configuration present`. | check |
@@ -63,15 +65,22 @@ Fail closed: a production-rule failure stops startup by design. Do not relax the
 
 Run a single explicit **serialized** migration step before the API takes traffic (not auto-migrate on each API start).
 
+The lock file is an **override**, not a complete Compose file: `--lock-image-digests` writes image entries only. Always pass the base production file first, then the lock override, for `up`, `run` and every related check, and inspect the merged config for the intended ports, networks, volumes, secrets, healthchecks and commands before deploying.
+
 ```bash
 # Build the web bundle with the public API origin baked in, then deploy by digest.
 docker compose -f compose.production.yml config --lock-image-digests > compose.locked.yml
-docker compose -f compose.locked.yml up -d postgres
+# Inspect the MERGED model (base first, then the override) before deploying.
+docker compose -f compose.production.yml -f compose.locked.yml config > /tmp/edge-os-merged.yml
+# Confirm ports, networks, volumes, secret env, healthchecks and commands, then:
+docker compose -f compose.production.yml -f compose.locked.yml up -d postgres
 # One explicit migration step against the direct (non-pooled) database:
-docker compose -f compose.locked.yml run --rm api uv run --frozen alembic upgrade head
-docker compose -f compose.locked.yml run --rm api uv run --frozen alembic check   # must report no difference
-docker compose -f compose.locked.yml up -d api web execution-worker research-worker
+docker compose -f compose.production.yml -f compose.locked.yml run --rm api uv run --frozen alembic upgrade head
+docker compose -f compose.production.yml -f compose.locked.yml run --rm api uv run --frozen alembic check   # must report no difference
+docker compose -f compose.production.yml -f compose.locked.yml up -d api web execution-worker research-worker
 ```
+
+Do not commit a resolved config that contains secret values. A single `-f compose.locked.yml` would drop the base service model; do not use it.
 
 | # | Check | Expected observation | Class |
 |---|---|---|---|
@@ -114,7 +123,7 @@ The Hermes runtime is **not available** at this base (gate H2). Until lane-1 out
 
 Fail closed: a missing isolation control keeps real-model/research capability unavailable. Do not run a real Hermes job without the accepted isolation and a recorded inference budget.
 
-## Stage 6 — Persistence, restart, off-VPS backup, restore and rollback (REVERSIBLE OPERATOR SETUP)
+## Stage 6 — Persistence, restart, off-VPS backup, restore and rollback (mixed: 6.1–6.6 reversible; 6.7 destructive, last-resort)
 
 | # | Check | Expected observation | Class |
 |---|---|---|---|
