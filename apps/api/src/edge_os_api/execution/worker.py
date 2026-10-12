@@ -261,6 +261,12 @@ class ConnectedExecution:
             except ProviderUnavailable:
                 self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="OBSERVATIONS_UNAVAILABLE")
                 return
+            if (observed.provenance.get("market_binding_id") != agent.revision.market_binding_id
+                    or observed.inputs.decision_time != utc_iso(job.decision_slot)
+                    and observed.inputs.observed_at() != job.decision_slot):
+                # Observations for another market or another decision time are never evaluated for this one.
+                self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="OBSERVATIONS_WRONG_MARKET")
+                return
             view = self._services.execution.evaluate_and_decide(
                 job.owner_id, agent.revision, observed.inputs, agent_id=agent.agent_id, wallet_id=agent.wallet_id,
                 network_id=agent.network_id)

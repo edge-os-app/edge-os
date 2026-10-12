@@ -233,6 +233,63 @@ def cancel_setup(session: Any, principal: Principal, *, agent_id: str) -> SetupR
     return to_record(row)
 
 
+def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, wallet_id: str,
+                          provider: WalletCreationPort) -> SetupRecord:
+    """Record a wallet id returned by owner-linked browser creation, then bind it only after independent lookup.
+
+    The browser's wallet id is an untrusted claim. It is retained as evidence before the lookup, so a lost
+    lookup reply is reconciled later through `resume_setup`. The setup binds only when the provider's own
+    record names this verified owner, an Ethereum wallet and no other agent of this owner. A completion for a
+    confirmed setup never replaces its wallet; a completion after a proved pre-dispatch cancellation, or for a
+    setup this owner does not hold, binds nothing. No server-side creation runs on this path.
+    """
+    _validate_agent_id(agent_id)
+    if not evidence_is_wellformed(WalletEvidence(wallet_id=wallet_id, owner_id=principal.user_id,
+                                                 chain_type="ethereum", address="claim")) or len(wallet_id) > 200:
+        raise invalid("/wallet_id", "The wallet ID must be 1 to 200 storable characters.", "invalid_wallet_id")
+    row = load_setup(session, principal.user_id, agent_id, lock=True)
+    if row is None:
+        raise not_found(_SQM)
+    if row.state == SetupState.CONFIRMED.value:
+        if row.wallet_id != wallet_id:
+            record_denial(session, row.owner_id, row.agent_id, "CONFLICTING_RESULT",
+                          {"saved_wallet_id": row.wallet_id, "returned_wallet_id": wallet_id,
+                           "source": "BROWSER_COMPLETION"})
+            session.commit()
+        else:
+            session.rollback()
+        return to_record(row)
+    if row.cancellation_intent == CancellationIntent.REQUESTED_BEFORE_DISPATCH.value and not row.creation_dispatched:
+        record_denial(session, row.owner_id, row.agent_id, "LATE_RESULT_AFTER_CANCEL",
+                      {"returned_wallet_id": wallet_id, "source": "BROWSER_COMPLETION"})
+        session.commit()
+        return to_record(row)
+    if not row.creation_dispatched:
+        _mark_dispatch_intent(session, row)
+    insert_event(session, row, SetupEventType.RESULT_RETURNED,
+                 {"wallet_id": wallet_id, "owner_id": str(principal.user_id), "chain_type": "ethereum",
+                  "address": None, "source": "BROWSER_COMPLETION", "trusted": False})
+    session.commit()
+    looked_up = lookup_wallet_evidence(provider, wallet_id)
+    locked = load_setup(session, principal.user_id, agent_id, lock=True)
+    assert locked is not None
+    if locked.state == SetupState.CONFIRMED.value:  # a concurrent completion or resume bound first
+        session.rollback()
+        return to_record(locked)
+    if looked_up is None:
+        return mark_unknown(session, locked, SetupReason.RECONCILE_NO_MATCH.value)
+    if not (looked_up.wallet_id == wallet_id and looked_up.owner_id == locked.owner_id
+            and looked_up.chain_type == "ethereum"):
+        record_denial(session, locked.owner_id, locked.agent_id, "BROWSER_RESULT_WRONG_IDENTITY",
+                      {"returned_wallet_id": wallet_id})
+        return mark_unknown(session, locked, SetupReason.RECONCILE_WRONG_IDENTITY.value)
+    if conflicting_binding(session, locked.owner_id, locked.agent_id, looked_up.wallet_id) is not None:
+        record_denial(session, locked.owner_id, locked.agent_id, "SAME_OWNER_CROSS_AGENT",
+                      {"wallet_id": looked_up.wallet_id})
+        return mark_unknown(session, locked, SetupReason.CONFLICTING_WALLET.value)
+    return bind_wallet(session, locked, looked_up.wallet_id, _evidence_dict(looked_up), SetupEventType.WALLET_BOUND)
+
+
 def get_setup(session: Any, principal: Principal, *, agent_id: str) -> SetupRecord:
     """Owner-scoped read. A foreign or absent setup is a 404."""
     _validate_agent_id(agent_id)

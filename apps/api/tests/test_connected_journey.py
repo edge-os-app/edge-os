@@ -190,3 +190,48 @@ def test_restart_after_death_inside_submission_reconciles_without_a_second_effec
         final = restarted.get(f"/v1/actions/{resumed['action_id']}", headers=owner_a).json()
         assert final["queue"]["state"] == "SUBMITTED_CONFIRMED"
         assert [a["state"] for a in final["attempts"]] == ["TERMINAL"]
+
+
+def test_observations_for_another_market_are_never_evaluated(journey, owner_a):
+    agent = "journey-wrong-market"
+    ff.ready_for_action(journey, owner_a, agent)
+    market = journey.app.state.financial.ports.market
+    real_observe = market.observe
+
+    def other_market(request):
+        observed = real_observe(request)
+        return type(observed)(inputs=observed.inputs, provenance={**observed.provenance, "market_binding_id": "other"})
+    market.observe = other_market
+    job = ff.run_job(journey, ff.schedule(journey, owner_a, agent).json())
+    assert (job["state"], job["reason"], job["decision_id"]) == ("UNAVAILABLE", "OBSERVATIONS_WRONG_MARKET", None)
+    assert journey.get(f"/v1/agents/{agent}/actions", headers=owner_a).json()["decisions"] == []
+
+
+@pytest.mark.parametrize("receipt", ["missing_gas", "wrong_wallet"])
+def test_incomplete_or_wrong_tuple_receipts_keep_the_action_unknown_and_liable(journey, owner_a, receipt):
+    agent = f"journey-fx-unknown-{receipt.replace('_', '-')}"
+    ff.ready_for_action(journey, owner_a, agent)
+    job = ff.run_job(journey, ff.schedule(journey, owner_a, agent).json())
+    assert job["outcome"] == "SUBMITTED_UNKNOWN"
+    receipts = journey.app.state.financial.ports.receipts
+    real_observe = receipts.observe
+
+    def altered(*, action_id, wallet_id, network_id):
+        if receipt == "wrong_wallet":
+            return real_observe(action_id=action_id, wallet_id="another-wallet", network_id=network_id)
+        observed = real_observe(action_id=action_id, wallet_id=wallet_id, network_id=network_id)
+        return type(observed)(observed.outcome, observed.actual_input, observed.actual_output, None,
+                              observed.observed_at, observed.source_ref)
+    receipts.observe = altered
+    settled = journey.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
+    assert settled["case_state"] != "CONFIRMED", settled
+    action = journey.get(f"/v1/actions/{job['action_id']}", headers=owner_a).json()
+    # Missing gas fails closed as a durable breach; a wrong-tuple receipt proves nothing. Neither invents an
+    # amount, releases a reservation or lets the wallet start another action.
+    expected = "BREACHED" if receipt == "missing_gas" else "SUBMISSION_UNKNOWN"
+    assert action["admission"][0]["status"] == expected
+    assert {r["state"] for r in action["reservations"]} == {"RESERVED"}
+    assert all(r["outcome"] != "CONFIRMED" or r["breach"] for r in action["receipts"])
+    second = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "after").json())
+    assert second["job_id"] == job["job_id"] or second["outcome"] != "SUBMITTED_CONFIRMED"
+    assert len(ff.effects(journey)) == 1
