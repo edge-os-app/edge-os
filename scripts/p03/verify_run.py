@@ -386,6 +386,8 @@ def main() -> int:
         ok &= rec.step("web health", True, {"url": web_url})
 
         token_a, token_b, token_c = signer.token(OWNER_A), signer.token(OWNER_B), signer.token(OWNER_C)
+        # SOURCE-LOCAL native journey: one owner per browser width, each inside its own research budget.
+        native_tokens = {name: signer.token(f"did:privy:test-native-{name}") for name in ("desktop", "mobile-390")}
         token_bad = TestSigner().token(OWNER_A)
         p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
         rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
@@ -399,6 +401,8 @@ def main() -> int:
 
         if not args.skip_ui:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
+                      "P03_TOKEN_NATIVE_DESKTOP": native_tokens["desktop"],
+                      "P03_TOKEN_NATIVE_MOBILE_390": native_tokens["mobile-390"],
                       "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
                       "P19_AGENT_B_RECORD_ID": p19_fixtures["agent_record_ids"]["agent-b"],
                       "P19_LONG_MONITORING_RECORD_ID": p19_fixtures["long_monitoring_record_id"],
@@ -497,7 +501,7 @@ def main() -> int:
             time.sleep(args.hold_seconds)
 
         logs = [p for p in (evidence / "logs").glob("*.log")]
-        secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_c, token_bad, signer.private_pem))]
+        secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_c, token_bad, *native_tokens.values(), signer.private_pem))]
         ok &= rec.step("logs contain no token or private key", not secrets_seen, secrets_seen)
     except Exception as error:  # noqa: BLE001
         rec.step("run aborted", False, f"{type(error).__name__}: {error}")

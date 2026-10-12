@@ -163,15 +163,64 @@ def inspect(pg: harness.Postgres, results: dict[str, Any]) -> dict[str, Any]:
             "all_checks_pass": bool(results) and all(expectations.values())}
 
 
+def inspect_native(pg: harness.Postgres, results: dict[str, Any]) -> dict[str, Any]:
+    """Direct SQL over the SOURCE-LOCAL native journeys: the saved transport provenance, settlement and replay."""
+    checks: dict[str, Any] = {}
+    expectations: dict[str, bool] = {}
+    for key, run in results.items():
+        if not key.startswith("native-"):
+            continue
+        rows = _rows(pg, "select j.state, j.budget, d.content->>'evidence_class' evidence, "
+                         "d.content->>'content_label' label, d.content->'verdict'->>'overall' verdict, "
+                         "d.content->>'provider_requests_state' usage_state, d.content->'provider_requests' usage, "
+                         "d.content->'transport'->'client_calls' calls, "
+                         "d.content->'transport'->'corroboration'->>'class' corroboration, "
+                         "(d.content->'transport'->'corroboration'->>'mismatches')::int mismatches, "
+                         "(d.content->'transport'->'chain_read'->>'chain_id')::int chain, "
+                         "d.content->'transport'->'envio'->'content_sha256' page_hashes, "
+                         "d.content->'evidence_basis'->>'decimals' decimals_basis, d.content_sha256, "
+                         "d.content->'query'->>'address' pool from research_local.investigation_jobs j "
+                         "join research_local.history_datasets d using (dataset_id) "
+                         f"where j.declaration_id = '{run['declarationId']}'")
+        replay = _rows(pg, "select content->'result'->>'status' status, "
+                           "content->'inputs'->'history_input'->>'source_evidence_class' evidence, "
+                           "content->'inputs'->'history_input'->>'fill_label' fills, "
+                           "content->'inputs'->'history_input'->>'dataset_id' dataset from spot_replay_runs "
+                           f"where replay_id = '{run.get('replayId')}'") if run.get("replayId") else []
+        checks[key] = {"dataset": rows, "replay": replay}
+        row = rows[0] if rows else {}
+        expectations.update({
+            f"{key}: native job reported with a labelled synthetic native dataset": row.get("state") == "REPORTED"
+            and row.get("evidence") == "RECORDED_NATIVE_RESPONSE" and row.get("label") == "SYNTHETIC_FIXTURE"
+            and row.get("verdict") == "QUALIFIED" and row.get("pool") == "0x" + "d1" * 20,
+            f"{key}: transport provenance saved (2 Envio calls, 25 RPC calls, chain 143, 24 receipts matched)":
+            row.get("calls") == {"ENVIO_HYPERSYNC": 2, "QUICKNODE_JSON_RPC": 25} and row.get("chain") == 143
+            and row.get("corroboration") == "COMPLETE" and row.get("mismatches") == 0
+            and len(row.get("page_hashes") or []) == 2 and row.get("decimals_basis") == "RECORDED_DECLARATION",
+            f"{key}: measured client calls settled inside the reservation": row.get("usage_state") == "MEASURED_CLIENT_CALLS"
+            and row.get("budget", {}).get("consumed", {}).get("provider_requests") == 27
+            and row.get("budget", {}).get("unknown_liability", {}).get("provider_requests") == 0,
+            f"{key}: replay on the native dataset is labelled simulated": bool(replay)
+            and replay[0]["status"] == "COMPLETE" and replay[0]["evidence"] == "RECORDED_NATIVE_RESPONSE"
+            and replay[0]["fills"] == "simulated fills" and replay[0]["dataset"] == run.get("datasetId"),
+        })
+    return {"checks": checks, "expectations": expectations,
+            "all_checks_pass": bool(checks) and all(expectations.values())}
+
+
 def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, ui_env: dict[str, str],
           run_playwright: Callable[..., int]) -> tuple[bool, dict[str, Any]]:
     log_dir = evidence / "logs"
     code = run_playwright(["research-history-journey.spec.mjs"], ui_env, evidence / "ui-research-journey.log")
     ok = rec.step("research journey: declare first, waiting, cancel, retry, budget denial (desktop and 390px)",
                   code == 0, {"exit": code})
+    code = run_playwright(["research-native-journey.spec.mjs"], ui_env, evidence / "ui-research-native-journey.log")
+    ok &= rec.step("SOURCE-LOCAL native journey: declaration on a native recording and its original job, no worker "
+                   "running (desktop and 390px, one owner each)", code == 0, {"exit": code})
     results_path = evidence / "ui" / "research-results.json"
     results = json.loads(results_path.read_text()) if results_path.exists() else {}
-    killed = {key: _kill_during_collection(env, run["jobs"]["killed"], log_dir) for key, run in results.items()}
+    killed = {key: _kill_during_collection(env, run["jobs"]["killed"], log_dir) for key, run in results.items()
+              if key.startswith("research-")}
     ok &= rec.step("killed worker: the collection attempt was saved, then the process ended (exit 9)",
                    bool(killed) and all(value == 9 for value in killed.values()), killed)
     worker = _worker_once(env, log_dir, "research-worker-1")
@@ -179,11 +228,19 @@ def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, u
     code = run_playwright(["research-history-report.spec.mjs"], ui_env, evidence / "ui-research-report.log")
     ok &= rec.step("research reports, source loss, killed-job retry, market adoption, publication and labelled "
                    "history replay (desktop and 390px)", code == 0, {"exit": code})
+    code = run_playwright(["research-native-report.spec.mjs"], ui_env, evidence / "ui-research-native-report.log")
+    ok &= rec.step("SOURCE-LOCAL native report, transport facts, market adoption, publication and labelled replay; "
+                   "owner B denied (desktop and 390px)", code == 0, {"exit": code})
     results = json.loads(results_path.read_text()) if results_path.exists() else {}
-    inspection = inspect(pg, results)
+    inspection = inspect(pg, {key: run for key, run in results.items() if key.startswith("research-")})
     rec.write("research-inspection.json", inspection)
     ok &= rec.step("research rows, revisions and replays match the screens (direct SQL)",
                    inspection["all_checks_pass"], inspection["expectations"])
+    native = inspect_native(pg, results)
+    rec.write("research-native-inspection.json", native)
+    ok &= rec.step("SOURCE-LOCAL native datasets keep transport provenance, measured settlement and replay lineage "
+                   "(direct SQL)", native["all_checks_pass"], native["expectations"])
+    inspection["native"] = native
     return ok, inspection
 
 
@@ -195,7 +252,11 @@ def after_restart(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence:
     ok &= rec.step("research report, dataset, adopted revision and history replay reopen unchanged; owner B denied "
                    "(new browser context)", code == 0, {"exit": code})
     results = json.loads((evidence / "ui" / "research-results.json").read_text())
-    after = inspect(pg, results)
+    after = inspect(pg, {key: run for key, run in results.items() if key.startswith("research-")})
+    native_after = inspect_native(pg, results)
+    rec.write("research-native-inspection-after-restart.json", native_after)
+    ok &= rec.step("SOURCE-LOCAL native datasets, settlement and replays unchanged by the restart (direct SQL)",
+                   "native" in before and native_after["checks"] == before["native"]["checks"])
     rec.write("research-inspection-after-restart.json", after)
     unchanged = {key: {name: value for name, value in check.items() if name not in {"jobs", "events"}}
                  for key, check in before["checks"].items()}

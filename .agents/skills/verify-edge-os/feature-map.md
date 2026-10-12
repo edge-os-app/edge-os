@@ -103,6 +103,27 @@ select scope, owner_key, resource, cap, reserved, consumed, unknown, overrun fro
 select subject_kind, subject_id, amounts, settled from usage_local.usage_reservations;
 ```
 
+## Native recorded source through the P07 transport (#58 SOURCE-LOCAL)
+
+The verifier mints one owner per browser width (`did:privy:test-native-desktop`, `did:privy:test-native-mobile-390`), so each native job (27 provider requests) fits that owner's 40-request research budget. The source `native-syn-qualified/1` is a SYNTHETIC native-shaped recording, `RECORDED_NATIVE_RESPONSE`. The worker replays it through `EnvioHypersyncSource`, `collect`, `read_chain_id`, `corroborate_records` and `normalize` with offline recorded clients.
+
+| Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
+|---|---|---|---|---|---|---|
+| Declare on a native recording | Research request → Recorded source = "Native recording, full corroboration (qualifies)" → own rule → adopt → Save | `GET /v1/research/history-sources`, `POST …/history-investigations` | `investigation_declarations` | source class `RECORDED_NATIVE_RESPONSE`, reserved provider requests 27 (pages + chain read + 24 receipts), zero provider queries | — | `*-rg-n1-native-declared.png` |
+| Original job through the transport | Start investigation job; the verifier runs one worker pass | `POST …/jobs` | `investigation_jobs`, `investigation_events`, `history_datasets` | `REPORTED`; dataset `transport.client_calls` = Envio 2, QuickNode 25; chain 143; corroboration COMPLETE 24/0; usage `MEASURED_CLIENT_CALLS`; 27 consumed | unchanged | `research-native-inspection.json`, `*-rg-n2-native-report.png` |
+| Computed vs declared facts | Open the declaration | `GET /v1/research/investigation-jobs/{id}` | — | "chain id checked against recorded responses: 143 (MONAD)"; recorded declarations listed apart | reopens | `*-rg-n2-native-report.png`, `*-rg-n4-native-reopened.png` |
+| Native market and replay | Strategy request → adopt the native dataset market → Save → replay on the dataset | `POST …/market-adoptions`, `POST /v1/strategies/{id}/revisions`, `POST /v1/spot-replays` | `strategy_revisions`, `spot_replay_runs` | pool `0xd1…`, unit `QUOTE:0xd2…`; replay COMPLETE, `source_evidence_class` `RECORDED_NATIVE_RESPONSE`, "simulated fills" | unchanged | `*-rg-n3-native-replay.png` |
+| Other owner | Owner B reads the native dataset/replay | `GET` → 404 | none | not found | — | `ui-research-native-report.log` |
+
+```sql
+select j.state, j.budget->'consumed', d.content->'transport'->'client_calls', d.content->'transport'->'corroboration'->>'class',
+       d.content->>'provider_requests_state', d.content->'evidence_basis'
+from research_local.investigation_jobs j join research_local.history_datasets d using (dataset_id)
+where d.content->>'evidence_class' = 'RECORDED_NATIVE_RESPONSE';
+```
+
+Native fault cases (malformed page, wrong chain echo, provider failure, receipt mismatch, RPC failure, RPC on another chain, sampled corroboration, too few requests, cancellation, deadline, killed worker, other owner) are proved by `apps/api/tests/test_native_source_journey.py`, not by the mapped run.
+
 ## Public-runtime preparation (#58 Stage 2, local)
 
 `scripts/p03/runtime_phase.py` runs after every restart comparison, so its writes cannot change them. It needs the financial phase's saved agents.

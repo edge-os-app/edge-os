@@ -41,3 +41,23 @@ test("restarted services reopen the exact research and replay records", async ({
     expect((await apiGet(page, tokens.b, route)).status, route).toBe(404);
   }
 });
+
+test("restarted services reopen the native report, transport facts and replay unchanged", async ({ page }, info) => {
+  const project = info.project.name;
+  const token = process.env[`P03_TOKEN_NATIVE_${project.replace("-", "_").toUpperCase()}`];
+  const run = saved(`native-${project}`);
+  await open(page, token);
+  const section = await historySection(page, run.url);
+  await openDeclaration(section, run.hypothesis);
+  const job = section.getByTestId("history-job").first();
+  await expect(job).toHaveAttribute("data-state", "REPORTED");
+  await expect(job.getByTestId("history-transport")).toContainText("receipt corroboration COMPLETE, 24 of 24 checked, 0 mismatches");
+  const dataset = await apiGet(page, token, `/v1/research/history-datasets/${run.datasetId}`);
+  expect(dataset.body.hashes_verified).toEqual({ content_sha256: true, raw_evidence_sha256: true });
+  expect(dataset.body.content.transport.client_calls).toEqual({ ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 25 });
+  const replay = await apiGet(page, token, `/v1/spot-replays/${run.replayId}`);
+  expect(replay.status).toBe(200);
+  expect(replay.body.content.inputs.history_input.source_evidence_class).toBe("RECORDED_NATIVE_RESPONSE");
+  expect((await apiGet(page, tokens.b, `/v1/spot-replays/${run.replayId}`)).status).toBe(404);
+  await shot(page, project, "n4-native-reopened");
+});
