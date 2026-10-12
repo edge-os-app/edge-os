@@ -1834,3 +1834,21 @@ def test_sealing_a_file_dense_with_escapes_cannot_run_the_turn_past_its_deadline
 
     assert elapsed <= 1.0 + 1.0 + 0.4, (status, elapsed)
     assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+# --- Repair after round-19 review: names use the same credential test as contents --------------------------------
+
+@pytest.mark.parametrize("shape", ["hex-one-upper", "reversed-upper", "one-escape"])
+def test_a_name_that_encodes_the_credential_is_renamed_and_the_turn_says_so(tmp_path: Path, monkeypatch, shape: str) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    hexed = OLD.encode().hex()
+    name = {"hex-one-upper": hexed[:3] + hexed[3].upper() + hexed[4:],
+            "reversed-upper": OLD[::-1].upper(),
+            "one-escape": OLD[:5] + "\\u%04x" % ord(OLD[5]) + OLD[6:]}[shape]
+    install_process(monkeypatch, lambda output: (output / name).write_text("x"), returncode=3)
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert not [p for p in (tmp_path / "evidence").rglob("*") if p.name == name], "the name was kept"

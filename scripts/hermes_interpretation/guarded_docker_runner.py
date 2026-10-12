@@ -257,7 +257,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             if seen[0] > MAX_ENTRIES:
                 raise EvidenceNotSealed("the output holds more entries than can be scanned")
             raw = os.fsencode(name)  # a name that is not valid text is still bytes
-            if any(form in raw for form in forms):  # rename BEFORE descending, so the folder's files are still sealed
+            if holds_credential(raw, forms):  # the same test as contents; rename BEFORE descending, so the folder's files are still sealed
                 found[0] = True
                 renamed = f"redacted-name-{hashlib.sha256(raw).hexdigest()[:8]}-{uuid.uuid4().hex[:8]}"  # unique: no collision
                 os.rename(name, renamed, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
