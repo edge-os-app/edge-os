@@ -13,6 +13,7 @@ from edge_os_api.kuru_flow.policy_binding import (
     UNPROVEN_CONTROLS,
     PolicyFieldSource,
     PolicyRequest,
+    PreparedPolicyRequest,
     build_policy_request,
     validate_binding,
 )
@@ -221,3 +222,50 @@ def test_validate_clears_the_admin_reasons_when_bound():
     assert R_POLICY_ADMIN_OWNER_MISSING not in reasons
     assert R_POLICY_ADMIN_NOT_SEPARATED not in reasons
     assert prepared.request.owner_id == "ou_policy_owner"
+
+
+def _serialized(prepared: PreparedPolicyRequest) -> dict:
+    return prepared.model_dump(mode="python")
+
+
+def _bound_proposal() -> PreparedPolicyRequest:
+    return build_policy_request(
+        base_config(),
+        wallet_id=WALLET_ID,
+        policy_owner_id="ou_policy_owner",
+        administration_separated=True,
+    )
+
+
+def test_serialized_consistent_owner_revalidates_and_clears_admin_reasons():
+    revalidated = PreparedPolicyRequest.model_validate(_serialized(_bound_proposal()))
+    reasons = validate_binding(revalidated)
+    assert R_POLICY_ADMIN_OWNER_MISSING not in reasons
+    assert R_POLICY_ADMIN_NOT_SEPARATED not in reasons
+
+
+def test_payload_and_wrapper_owner_disagreements_are_rejected():
+    mutations = {
+        "payload_none": lambda payload: payload["request"].update({"owner_id": None}),
+        "payload_blank": lambda payload: payload["request"].update({"owner_id": ""}),
+        "payload_whitespace": lambda payload: payload["request"].update({"owner_id": "   "}),
+        "payload_different": lambda payload: payload["request"].update({"owner_id": "ou_other"}),
+        "wrapper_different": lambda payload: payload.update({"policy_owner_id": "ou_other"}),
+        "wrapper_none": lambda payload: payload.update({"policy_owner_id": None}),
+    }
+    for label, mutate in mutations.items():
+        payload = _serialized(_bound_proposal())
+        mutate(payload)
+        with pytest.raises(ValueError):
+            PreparedPolicyRequest.model_validate(payload)
+
+
+def test_default_ownerless_proposal_is_preserved_and_flagged():
+    revalidated = PreparedPolicyRequest.model_validate(_serialized(build_policy_request(base_config(), wallet_id=WALLET_ID)))
+    assert revalidated.request.owner_id is None
+    assert R_POLICY_ADMIN_OWNER_MISSING in validate_binding(revalidated)
+
+
+def test_blank_owner_is_flagged_even_when_payload_and_wrapper_agree():
+    prepared = build_policy_request(base_config(), wallet_id=WALLET_ID, policy_owner_id="   ")
+    assert R_POLICY_ADMIN_OWNER_MISSING in validate_binding(prepared)

@@ -36,7 +36,7 @@ The package uses relative imports to its parent adapter package. The adapter's o
 1. Call `validate_binding`. While it returns any reason, the request is incomplete and the affected real action stays closed. Do not weaken the reason set to get a pass.
 2. Treat `evaluate_authored_policy` as authored behavior only. Never surface its result as an independent provider restriction.
 3. Bind the transaction value to the actual native value or to `0` for an ERC-20 input. It is separate from the calldata token notional.
-4. Bind an explicit policy-resource owner outside executor control. An ownerless policy is updatable with the application secret alone (see [PRIVY_POLICY_BINDING_FEASIBILITY.md](PRIVY_POLICY_BINDING_FEASIBILITY.md#3-policy-ownership-and-update-authority)).
+4. Bind an explicit policy-resource owner outside executor control. The serialized request owner is authoritative; the wrapper metadata must equal it, or the model rejects the parse. An ownerless policy is updatable with the application secret alone (see [PRIVY_POLICY_BINDING_FEASIBILITY.md](PRIVY_POLICY_BINDING_FEASIBILITY.md#3-policy-ownership-and-update-authority)).
 5. Bind the request to the exact wallet, network, entrypoint, method and adopted values. A changed configuration needs a fresh request.
 
 ## Unresolved inputs for #58/P20

@@ -16,7 +16,7 @@ from __future__ import annotations
 import enum
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from ..types import FrozenModel, StrictModel
 
@@ -159,6 +159,13 @@ class PreparedPolicyRequest(FrozenModel):
     policy_owner_id: str | None = None
     administration_separated: bool = False
     provider_executed: str = PROVIDER_EXECUTED
+
+    @model_validator(mode="after")
+    def owner_fields_agree(self) -> "PreparedPolicyRequest":
+        """Keep one owner identity. The payload owner must match the metadata."""
+        if self.policy_owner_id != self.request.owner_id:
+            raise ValueError("policy_owner_id must equal request.owner_id")
+        return self
 
 
 class PolicyFacts(StrictModel):

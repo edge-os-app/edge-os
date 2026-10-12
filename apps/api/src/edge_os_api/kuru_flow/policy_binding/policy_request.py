@@ -251,7 +251,7 @@ def validate_binding(prepared: PreparedPolicyRequest) -> tuple[str, ...]:
         request
     ):
         reasons.append(f"{R_POLICY_REQUEST_INCOMPLETE}:entrypoint_method")
-    if not isinstance(prepared.policy_owner_id, str) or not prepared.policy_owner_id.strip():
+    if not isinstance(request.owner_id, str) or not request.owner_id.strip():
         reasons.append(R_POLICY_ADMIN_OWNER_MISSING)
     if not prepared.administration_separated:
         reasons.append(R_POLICY_ADMIN_NOT_SEPARATED)
