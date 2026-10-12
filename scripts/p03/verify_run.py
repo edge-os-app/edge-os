@@ -421,7 +421,7 @@ def main() -> int:
                 rec.write("sql-inspection.json", inspection)
                 ok &= rec.step("saved records match what the UI submitted (direct SQL)", inspection["all_checks_pass"], inspection["checks"])
                 storage_before_restart = p13_storage_snapshot(pg)
-                rec.write("p13-storage-after-research.json", storage_before_restart)
+                rec.write("p13-storage-before-restart.json", storage_before_restart)
                 p17_before_restart = p17_inspection(pg, results)
                 rec.write("p17-inspection.json", p17_before_restart)
                 ok &= rec.step("P17 wallet-setup rows match the UI run (direct SQL and event counts)",
