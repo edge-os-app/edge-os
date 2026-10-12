@@ -91,7 +91,9 @@ _RETRIEVAL_WORDS = frozenset({
 _NEUTRAL_WORDS = _FUNCTION_WORDS | _MODIFIER_WORDS | _RETRIEVAL_WORDS
 
 _TOKEN = re.compile(r"[a-z0-9]+")
-_CLAUSE_SPLIT = re.compile(r"[;,/]|\band\b|\bor\b|\bbut\b")
+# Split on every ordinary sentence/clause separator so a retrieval cue in one
+# request cannot qualify a different quantity in another request.
+_CLAUSE_SPLIT = re.compile(r"[;,./!?:\n\t\r]|\band\b|\bor\b|\bbut\b")
 
 
 def _contains(tokens: list[str], words: tuple[str, ...]) -> bool:

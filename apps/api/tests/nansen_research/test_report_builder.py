@@ -269,3 +269,31 @@ def test_mixed_returned_count_and_amount_is_partial_in_every_order() -> None:
         codes = {item.code: item.verdict for item in run.report.findings}
         assert codes["HOLDER_INVENTORY"] == "SUPPORTED", question
         assert codes["AMOUNT"] == "UNRESOLVED", question
+
+
+def test_combined_returned_count_and_population_are_partial_in_every_separator_and_order() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    head = "How many holder addresses did the provider return"
+    tail = "What is the total holder count"
+    for sep in ("? ", ". ", "! ", "\n", ": ", "?? ", ", ", "; "):
+        for question in (head + sep + tail + "?", tail + sep + head + "?"):
+            run = support.run(support.request(question=question, operations=("holders",)),
+                              [support.response(200, holders)])
+            assert run.report.answer_state == "PARTIAL", question
+            codes = {item.code: item.verdict for item in run.report.findings}
+            assert codes["HOLDER_INVENTORY"] == "SUPPORTED", question
+            assert codes["AMOUNT"] == "UNRESOLVED", question
+
+
+def test_a_retrieval_cue_does_not_qualify_a_separate_population_count() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    for question in (
+        "What is the total holder population? How many holder addresses did the provider return?",
+        "How many holder addresses did the provider return;\nwhat is the total holder population?",
+    ):
+        run = support.run(support.request(question=question, operations=("holders",)),
+                          [support.response(200, holders)])
+        assert run.report.answer_state == "PARTIAL", question
+        codes = {item.code: item.verdict for item in run.report.findings}
+        assert codes["HOLDER_INVENTORY"] == "SUPPORTED", question
+        assert codes["AMOUNT"] == "UNRESOLVED", question
