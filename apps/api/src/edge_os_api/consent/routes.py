@@ -13,8 +13,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from edge_os_api.consent.records import ConsentReviewRow
 from edge_os_api.consent.service import ConsentConflict, ConsentDenied, ConsentNotFound
 from edge_os_api.consent.types import AdoptionRequest, ReviewedTerms, ReviewRequest
 from edge_os_api.core.authentication import Principal, require_principal
@@ -102,11 +104,15 @@ def read(agent_id: str, request: Request, principal: Principal = Depends(require
     consent = request.app.state.financial.consent
     adoptions = [view.model_dump(mode="json") for view in consent.list_consents(principal.user_id)
                  if view.content.get("agent_id") == agent_id]
-    reviews = []
-    for adoption in adoptions:
-        try:
-            reviews.append(consent.read_review(principal.user_id, adoption["review_id"]).model_dump(mode="json"))
-        except ConsentNotFound:
-            continue
-    return {"agent_id": agent_id, "adoptions": adoptions, "reviews": reviews,
+    rows = session.execute(select(ConsentReviewRow.review_id).where(
+        ConsentReviewRow.owner_id == principal.user_id, ConsentReviewRow.agent_id == agent_id)
+        .order_by(ConsentReviewRow.created_at.desc())).scalars().all()
+    session.rollback()
+    reviews = [consent.read_review(principal.user_id, str(review_id)).model_dump(mode="json") for review_id in rows]
+    agent = resolve_agent(session, principal.user_id, agent_id)
+    assets = None if agent is None else {name: {"asset_id": identity.asset_id, "decimals": identity.decimals}
+                                         for name, identity in (("quote", agent.quote), ("base", agent.base),
+                                                                ("gas", agent.gas))}
+    return {"agent_id": agent_id, "adoptions": adoptions, "reviews": reviews, "assets": assets,
+            "identity": None if agent is None else agent.identity(),
             "activation": activation(request, session, principal, agent_id)}
