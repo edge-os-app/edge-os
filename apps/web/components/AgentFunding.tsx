@@ -24,7 +24,7 @@ export function AgentFunding({ agentId }: { agentId: string }) {
     const current = (seq.current += 1);
     try {
       const saved = await financial.funding(agentId);
-      if (current !== seq.current) return;
+      if (current !== seq.current) return false;
       // A reference the server already saved (for example after a lost reply) is released, so the next
       // reviewed deposit uses a fresh reference instead of colliding with the saved one.
       for (const kind of ["TRADING", "NATIVE_GAS"]) {
@@ -32,10 +32,12 @@ export function AgentFunding({ agentId }: { agentId: string }) {
         if (held && saved.flows.some((flow) => flow.reference === held)) releaseKey(`deposit-${kind}`, agentId);
       }
       setView(saved); setPhase("loaded"); setUncertain(false); setError("");
+      return true;
     } catch (failure) {
-      if (current !== seq.current) return;
+      if (current !== seq.current) return false;
       if (failure instanceof ApiError && failure.status === 404) { setView(null); setPhase("missing"); }
       else { setPhase("error"); setError(failure instanceof ApiError ? failure.detail : "Funding could not be loaded."); }
+      return false;
     }
   }, [agentId]);
 
@@ -48,7 +50,11 @@ export function AgentFunding({ agentId }: { agentId: string }) {
     try {
       await action();
       after?.();
-      await load();
+      if (!(await load())) {
+        // Saved, but not read back: keep every write blocked until a read shows the current saved state.
+        setUncertain(true); setPhase("loaded"); // keep the last saved view on screen, clearly marked unconfirmed
+        setError("The change was saved, but the current funding could not be read. Check the saved funding before you continue.");
+      }
     } catch (failure) {
       if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) {
         setError(failure.detail);

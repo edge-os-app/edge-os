@@ -34,13 +34,15 @@ export function AgentActions({ agentId }: { agentId: string }) {
     try {
       const [saved, savedStops, savedRemovals] = await Promise.all([
         financial.actions(agentId), financial.stops(agentId), financial.removals(agentId)]);
-      if (current !== seq.current) return;
+      if (current !== seq.current) return false;
       setView(saved); setStops(savedStops.stops); setRemovals(savedRemovals.removals);
       setPhase("loaded"); setUncertain(false); setError("");
+      return true;
     } catch (failure) {
-      if (current !== seq.current) return;
+      if (current !== seq.current) return false;
       if (failure instanceof ApiError && failure.status === 404) setPhase("missing");
       else { setPhase("error"); setError(failure instanceof ApiError ? failure.detail : "Saved actions could not be loaded."); }
+      return false;
     }
   }, [agentId]);
 
@@ -57,8 +59,13 @@ export function AgentActions({ agentId }: { agentId: string }) {
     try {
       await action();
       after?.();
+      if (!(await load())) {
+        // Saved, but not read back: no success claim, and every write stays blocked until a read succeeds.
+        setUncertain(true); setPhase("loaded"); // keep the last saved view on screen, clearly marked unconfirmed
+        setError("The change was saved, but the current actions could not be read. Check the saved actions before you continue.");
+        return;
+      }
       setNotice(done);
-      await load();
       if (detail) await openAction(detail.action_id);
     } catch (failure) {
       if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) setError(failure.detail);

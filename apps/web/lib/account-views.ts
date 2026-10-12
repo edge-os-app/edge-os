@@ -233,3 +233,25 @@ export const agentContextApi = {
       method: "POST", body: JSON.stringify({ expected_version }),
     }).then((result) => result.body),
 };
+
+/** #58 F1: read-only projections of the owner's connected financial rows. Never stored as account records. */
+export interface ServiceProjectionRecord {
+  schema_version: "account-view-projection/1";
+  record_type: "AccountViewProjection";
+  record_id: string;
+  source: { table: string; id: string };
+  content: Omit<AccountViewContent, "evidence_class"> & { evidence_class: "SERVICE_PROJECTION" };
+}
+
+export interface ServiceProjectionPage {
+  schema_version: "account-view-projection/1";
+  source: "SERVICE_PROJECTION";
+  ports: "FIXTURE" | "UNAVAILABLE";
+  notice: string;
+  records: ServiceProjectionRecord[];
+}
+
+export async function loadServiceProjection(agentId: string): Promise<ServiceProjectionPage> {
+  return request<ServiceProjectionPage>(`/v1/account-views/service?agent_id=${encodeURIComponent(agentId)}`)
+    .then((result) => result.body);
+}
