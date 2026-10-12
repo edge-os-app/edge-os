@@ -22,12 +22,35 @@ from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding, invalid
 from edge_os_api.core.request_schemas import MarketAdoptionBody
 from edge_os_api.records import contract_adapter as record_contract
-from edge_os_api.records.models import IdempotencyRecord, StrategyRevision
+from edge_os_api.records.models import IdempotencyRecord, InvestigationDeclaration, StrategyRevision
 from edge_os_api.research import history_dataset, service
+from edge_os_api.research.effect_comparison import expression_inputs
+from edge_os_api.research.investigation_adoption import EXAMPLE_RULE_HASHES, HISTORY_SCHEMA_VERSION
 from edge_os_api.research.outcome_router import route
 from edge_os_api.strategies import compiler as strategy_compiler
 
 QUESTION_ID = "adopt-recorded-market"
+
+
+def declared_entry(rule: dict[str, Any]) -> dict[str, Any]:
+    """The strategy entry for one declared rule: its price condition and its volume condition together."""
+    return {"op": "and", "args": [rule["price_expression"], rule["volume_expression"]]}
+
+
+def declared_rule(session: Session, principal: Principal, declaration_id: str,
+                  evaluation_id: str) -> tuple[InvestigationDeclaration, dict[str, Any]]:
+    """One USER_ADOPTED rule of the dataset's own v3 declaration, owner-scoped."""
+    declaration = session.execute(select(InvestigationDeclaration).where(
+        InvestigationDeclaration.owner_id == principal.user_id,
+        InvestigationDeclaration.declaration_id == uuid.UUID(declaration_id))).scalar_one_or_none()
+    rule = None
+    if declaration is not None and declaration.content["schema_version"] == HISTORY_SCHEMA_VERSION:
+        rule = next((item for item in declaration.content["rule_map"]["rules"]
+                     if item["evaluation_id"] == evaluation_id and item["rule_source"] == "USER_ADOPTED"), None)
+    if declaration is None or rule is None:
+        raise invalid("/evaluation_id", "Choose one rule that you declared for this dataset's investigation.",
+                      "declared_rule_not_found")
+    return declaration, rule
 
 
 def _conflict(code: str, path: str, detail: str) -> AppError:
@@ -112,15 +135,31 @@ def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
     dataset, market = _market_from_dataset(session, principal, body.dataset_id)
     if body.quote_unit != market["quote_unit"]:
         raise invalid("/quote_unit", "Confirm the dataset market's exact quote unit.", "quote_unit_mismatch")
+    declaration, rule = declared_rule(session, principal, dataset.content["declaration_id"], body.evaluation_id)
+    entry = declared_entry(rule)
+    for field_path, expression in (("/evaluation_id", entry), ("/exit_rule", body.exit_rule)):
+        if record_contract.sha256_hex(expression) in EXAMPLE_RULE_HASHES:
+            raise invalid(field_path, "This rule belongs to a worked example. Use your own rule.",
+                          "example_rule_not_adoptable")
+        if _quote_units(expression) - {market["quote_unit"]}:
+            raise invalid(field_path, "A rule compares against an amount in another market's quote unit. "
+                          "Restate it for this market.", "unit_mismatch")
+        try:
+            if strategy_compiler.expression_info(expression, market, field_path).kind != "BOOLEAN":
+                raise invalid(field_path, "A rule must be a Boolean condition.", "rule_not_boolean")
+        except strategy_compiler.CompilerError as error:
+            raise invalid(error.path, error.detail, error.code) from None
     evidence = {item["field_name"]: copy.deepcopy(item) for item in head.content["field_evidence"]}
-    foreign_units = _quote_units([evidence[name]["value"] for name in ("entry", "exit") if name in evidence])
-    foreign_units -= {market["quote_unit"]}
-    if foreign_units:
-        raise invalid("/field_evidence/entry", "A rule compares against an amount in another market's quote unit. "
-                      "Restate that rule for this market first.", "unit_mismatch")
     revision_id = uuid.uuid4()
     source_ref = f"history-dataset:{dataset.dataset_id}"
     confirmed = f"market-adoption:{revision_id}"
+    rule_ref = f"history-rule:{declaration.declaration_id}:{body.evaluation_id}"
+    inputs = sorted(expression_inputs(entry) | expression_inputs(body.exit_rule))
+    for name, value, ref in (("entry", entry, rule_ref), ("exit", copy.deepcopy(body.exit_rule), confirmed)):
+        restated = {key: item for key, item in evidence[name].items() if key != "adoption"}
+        evidence[name] = {**restated, "origin": "USER_CONFIRMED", "source_ref": ref, "value": value}
+    evidence["data_inputs"] = {**evidence["data_inputs"], "origin": "APPLICATION_CONFIGURED", "source_ref": confirmed,
+                               "adoption": "ADOPTED", "value": inputs}
     evidence["market"] = {**evidence["market"], "origin": "APPLICATION_CONFIGURED", "source_ref": source_ref,
                           "evidence_status": "HYPOTHESIS", "adoption": "ADOPTED", "value": market}
     # The owner restates both amounts for the new quote unit; nothing carries over from the old unit.
@@ -141,7 +180,8 @@ def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
                      "question": (f"Adopt the market of recorded dataset {dataset.dataset_id} "
                                   f"({dataset.content['source_id']}, {dataset.content['evidence_class']}, "
                                   f"{dataset.content['content_label']}) with trade size {body.sizing_amount} and "
-                                  f"limit {body.max_quote_notional} in {market['quote_unit']}?"),
+                                  f"limit {body.max_quote_notional} in {market['quote_unit']}, entering on declared rule "
+                                  f"{body.evaluation_id} and exiting on the restated exit rule?"),
                      "answer_ref": f"choice:{QUESTION_ID}:adopt", "changed_fields": changed,
                      "preserved_restrictions": list(head.content["preserved_restrictions"]),
                      "resulting_revision_id": str(revision_id)}
@@ -173,6 +213,7 @@ def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
                 "dataset_id": str(dataset.dataset_id), "dataset_content_sha256": dataset.content_sha256,
                 "declaration_id": dataset.content["declaration_id"], "job_id": dataset.content["job_id"],
                 "market_binding_id": dataset.content["market_binding_id"], "quote_unit": market["quote_unit"],
+                "evaluation_id": body.evaluation_id, "rule_map_sha256": declaration.content["frozen"]["rule_map_sha256"],
                 "base_revision_id": draft["base_revision_id"]}
     inserted = session.execute(pg_insert(IdempotencyRecord).values(
         owner_id=principal.user_id, method="POST", path=path, idempotency_key=body.idempotency_key,

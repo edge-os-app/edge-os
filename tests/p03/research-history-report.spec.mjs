@@ -70,6 +70,12 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await expect(adoption.getByRole("button", { name: "Adopt this market for a new draft" })).toBeDisabled();
   await adoption.getByLabel("Trade size in the new quote unit").fill("50");
   await adoption.getByLabel("Largest position value in the new quote unit").fill("50");
+  await expect(adoption.getByRole("checkbox")).toBeDisabled(); // a declared entry rule and an own exit rule are required
+  const declaredRule = (await apiGet(page, tokens.a, "/v1/research/history-datasets")).body.datasets
+    .find((item) => item.dataset_id === datasetId).declared_rules[0];
+  await adoption.getByLabel("Entry rule (one you declared for this dataset)").selectOption(declaredRule.evaluation_id);
+  await adoption.getByLabel("Exit lookback (buckets)").fill("2");
+  await adoption.getByLabel("Exit threshold (fraction, for example -0.001)").fill("-0.001");
   await adoption.getByRole("checkbox").check();
   await shot(page, project, "07-adopt-market");
   await adoption.getByRole("button", { name: "Adopt this market for a new draft" }).click();
@@ -84,12 +90,13 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   const replay = page.getByTestId("spot-replay");
   await replay.getByLabel("Price data").selectOption(datasetId);
   await expect(replay.getByTestId("spot-replay-history-source")).toContainText("Simulated fills");
-  await replay.getByRole("button", { name: "Add entry dependency" }).click();
-  await replay.getByRole("button", { name: "Add entry dependency" }).click();
-  await replay.getByLabel("entry dependency offset 2").fill("-3");
+  // The entry is the declared rule (1-bucket return and quote volume); the exit is the restated 2-bucket return.
+  for (let step = 0; step < 3; step += 1) await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByLabel("entry dependency offset 2").fill("-1");
+  await replay.getByLabel("entry dependency series 3").selectOption("quote_volume");
   await replay.getByRole("button", { name: "Add exit dependency" }).click();
   await replay.getByRole("button", { name: "Add exit dependency" }).click();
-  await replay.getByLabel("exit dependency offset 2").fill("-1");
+  await replay.getByLabel("exit dependency offset 2").fill("-2");
   await replay.getByLabel("I reviewed the entry dependency set").check();
   await replay.getByLabel("I reviewed the exit dependency set").check();
   await replay.getByRole("button", { name: "Save replay on recorded history" }).click();
@@ -98,6 +105,7 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await expect(result).toContainText("BUY_FILLED");
   await expect(result).toContainText("Simulated fills on saved recorded-history dataset");
   await expect(replay.getByTestId("spot-replay-history-lineage")).toContainText(run.main);
+  await expect(replay.getByTestId("spot-replay-history-lineage")).toContainText(`The declared rule ${declaredRule.evaluation_id}`);
   const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
   await shot(page, project, "08-history-replay");
   if (project === "mobile-390") await noSidewaysScroll(page);

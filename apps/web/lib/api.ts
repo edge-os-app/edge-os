@@ -122,10 +122,13 @@ export interface DatasetSummary {
   profile_evidence_class: string; status: string; verdict: { overall: string }; binding_state: string;
   unavailable_states: string[]; market_binding: Record<string, unknown> | null; market_binding_id: string | null;
   window_start: string; window_end: string; declaration_id: string; job_id: string;
+  declared_rules: { evaluation_id: string; variant_id: string; price_expression: Record<string, unknown>;
+    volume_expression: Record<string, unknown> }[];
 }
 export interface MarketAdoptionBody {
   idempotency_key: string; expected_interpretation_revision_id: string; expected_parent_revision_id: string | null;
-  dataset_id: string; adoption: "ADOPT_DATASET_MARKET"; quote_unit: string; sizing_amount: string;
+  dataset_id: string; adoption: "ADOPT_DATASET_MARKET"; quote_unit: string; evaluation_id: string;
+  exit_rule: Record<string, unknown>; sizing_amount: string;
   max_quote_notional: string;
 }
 export interface MarketAdoptionResult {

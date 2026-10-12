@@ -301,6 +301,17 @@ def list_datasets(session: Session, principal: Principal) -> dict[str, Any]:
     """The owner's saved datasets, newest first, with the facts a user reviews before adopting a market."""
     rows = session.execute(select(HistoryDatasetRow).where(HistoryDatasetRow.owner_id == principal.user_id)
                            .order_by(HistoryDatasetRow.created_at.desc()).limit(50)).scalars().all()
+    from edge_os_api.records.models import InvestigationDeclaration
+
+    declarations = {row.declaration_id: row for row in session.execute(select(InvestigationDeclaration).where(
+        InvestigationDeclaration.owner_id == principal.user_id,
+        InvestigationDeclaration.declaration_id.in_({row.declaration_id for row in rows} or {uuid.UUID(int=0)}))).scalars()}
+
+    def rules(declaration_id: uuid.UUID) -> list[dict[str, Any]]:
+        declaration = declarations.get(declaration_id)
+        return [] if declaration is None else [
+            {key: rule[key] for key in ("evaluation_id", "variant_id", "price_expression", "volume_expression")}
+            for rule in declaration.content["rule_map"]["rules"]]
     keys = ("source_id", "evidence_class", "content_label", "profile_evidence_class", "status", "stop_reason",
             "verdict", "binding_state", "unavailable_states", "market_binding", "market_binding_id", "window_start",
             "window_end", "declaration_id", "job_id")
@@ -308,4 +319,5 @@ def list_datasets(session: Session, principal: Principal) -> dict[str, Any]:
                           "content_sha256": row.content_sha256, "hashes_verified": verify_hashes(row),
                           "quote_unit": None if row.content["strategy_market"] is None
                           else row.content["strategy_market"]["quote_unit"],
+                          "declared_rules": rules(row.declaration_id),
                           **{key: row.content[key] for key in keys}} for row in rows]}

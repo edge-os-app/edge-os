@@ -16,7 +16,7 @@ from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from edge_os_api.records import contract_adapter as record_contract
 from flows import compiled_thesis, publish
-from research_flows import QUOTE_UNIT, adoption_body, reported_dataset
+from research_flows import OWN_EXIT, QUOTE_UNIT, UNKNOWN_RULE, adoption_body, reported_dataset
 
 
 @pytest.fixture(scope="module")
@@ -26,6 +26,14 @@ def research(env, migrated):
                               "EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS": "9000"})
     with TestClient(create_app(settings)) as client:
         yield client
+
+
+def evidence_of(bundle, name):
+    return next(item for item in bundle["interpretations"][-1]["content"]["field_evidence"] if item["field_name"] == name)
+
+
+def dataset_declaration(client, headers, dataset_id) -> str:
+    return client.get(f"/v1/research/history-datasets/{dataset_id}", headers=headers).json()["content"]["declaration_id"]
 
 
 def finding(response) -> str:
@@ -59,14 +67,20 @@ def test_adoption_creates_a_new_interpretation_and_draft_and_keeps_the_old_ones(
     assert strategy["sizing"] == {"kind": "FIXED_QUOTE_AMOUNT", "amount": "50", "unit": QUOTE_UNIT}
     assert strategy["risk_limits"]["max_quote_notional"] == "50"
     old = head_draft(before)["content"]["source_syntax"]
-    assert {key: value for key, value in strategy.items() if key not in {"market", "sizing", "risk_limits"}} == {
-        key: value for key, value in old.items() if key not in {"market", "sizing", "risk_limits"}}
+    changed = {"market", "sizing", "risk_limits", "entry", "exit", "data_inputs", "warmup_buckets"}
+    assert {key: value for key, value in strategy.items() if key not in changed} == {
+        key: value for key, value in old.items() if key not in changed}
+    declared = research.get("/v1/research/history-datasets", headers=owner_a).json()["datasets"]
+    rule = next(item for item in declared if item["dataset_id"] == dataset_id)["declared_rules"][0]
+    assert strategy["entry"] == {"op": "and", "args": [rule["price_expression"], rule["volume_expression"]]}
+    assert strategy["exit"] == OWN_EXIT and strategy["data_inputs"] == ["price", "quote_volume"]
+    assert evidence_of(after, "entry")["source_ref"] == f"history-rule:{dataset_declaration(research, owner_a, dataset_id)}:{rule['evaluation_id']}"
     evidence = {item["field_name"]: item for item in after["interpretations"][-1]["content"]["field_evidence"]}
     assert evidence["market"]["source_ref"] == f"history-dataset:{dataset_id}"
     assert evidence["sizing"]["origin"] == "USER_CONFIRMED" and "adoption" not in evidence["sizing"]
     clarification = after["clarifications"][-1]["content"]
     assert clarification["question_id"] == "adopt-recorded-market"
-    assert set(clarification["changed_fields"]) == {"market", "risk_limits", "sizing"}
+    assert set(clarification["changed_fields"]) == {"data_inputs", "entry", "exit", "market", "risk_limits", "sizing"}
     assert adopted["adoption"]["declaration_id"] == dataset["declaration_id"]
     record_contract.validate_record_bundle(
         [after["intake"], *after["interpretations"], *after["clarifications"],
@@ -80,7 +94,7 @@ def test_same_key_replays_after_a_lost_reply_and_other_body_conflicts(research, 
     first = research.post(path(bundle), headers=owner_a, json=body)
     with TestClient(create_app(research.app.state.settings)) as restarted:
         again = restarted.post(path(bundle), headers=owner_a, json=body)
-    assert first.status_code == 201 and again.status_code == 200 and again.json()["replayed"] is True
+    assert first.status_code == 201 and again.status_code == 200 and again.json()["replayed"] is True, again.text
     assert again.json()["adoption"] == first.json()["adoption"]
     assert len(again.json()["bundle"]["drafts"]) == len(first.json()["bundle"]["drafts"])
     changed = {**body, "sizing_amount": "51"}
@@ -158,19 +172,6 @@ def test_foreign_missing_tampered_and_stale_inputs_are_refused(research, owner_a
     assert unchanged["drafts"] == bundle["drafts"]
 
 
-def test_rule_in_another_quote_unit_must_be_restated(research, owner_a, monkeypatch):
-    from edge_os_api.research import market_adoption
-
-    assert market_adoption._quote_units({"op": "gt", "args": [{"op": "quote_volume"}, {
-        "op": "constant", "value": "4", "unit": "QUOTE:0x" + "22" * 20}]}) == {"QUOTE:0x" + "22" * 20}
-    dataset_id = reported_dataset(research, owner_a)
-    bundle = compiled_thesis(research, owner_a)
-    original = market_adoption._quote_units
-    monkeypatch.setattr(market_adoption, "_quote_units", lambda node: original(node) | {"QUOTE:0x" + "22" * 20})
-    response = research.post(path(bundle), headers=owner_a, json=adoption_body(bundle, dataset_id))
-    assert response.status_code == 422 and finding(response) == "unit_mismatch"
-
-
 def test_investigation_request_cannot_adopt_a_strategy_market(research, owner_a):
     from research_flows import investigation_request
 
@@ -179,3 +180,30 @@ def test_investigation_request_cannot_adopt_a_strategy_market(research, owner_a)
     body = adoption_body(bundle, dataset_id)
     response = research.post(path(bundle), headers=owner_a, json=body)
     assert response.status_code == 422 and finding(response) == "strategy_job_required"
+
+
+@pytest.mark.parametrize("change,code", [
+    ({"evaluation_id": UNKNOWN_RULE}, "declared_rule_not_found"),
+    ({"exit_rule": record_contract.FIXTURE_STRATEGY["exit"]}, "example_rule_not_adoptable"),
+    ({"exit_rule": {"op": "gt", "args": [{"op": "quote_volume"}, {"op": "constant", "value": "7",
+                                                               "unit": "QUOTE:0x" + "22" * 20}]}}, "unit_mismatch"),
+    ({"exit_rule": {"op": "price"}}, "rule_not_boolean"),
+])
+def test_rules_must_be_the_declared_rule_and_an_own_exit(research, owner_a, change, code):
+    dataset_id = reported_dataset(research, owner_a)
+    bundle = compiled_thesis(research, owner_a)
+    response = research.post(path(bundle), headers=owner_a, json={**adoption_body(bundle, dataset_id), **change})
+    assert response.status_code == 422 and finding(response) == code, response.text
+    unchanged = research.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).json()
+    assert unchanged["drafts"] == bundle["drafts"]
+
+
+def test_another_declarations_rule_cannot_be_borrowed(research, owner_a):
+    first = reported_dataset(research, owner_a)
+    second = reported_dataset(research, owner_a)
+    from research_flows import DECLARED_RULES
+
+    bundle = compiled_thesis(research, owner_a)
+    response = research.post(path(bundle), headers=owner_a,
+                             json=adoption_body(bundle, second, evaluation_id=DECLARED_RULES[first]))
+    assert response.status_code == 422 and finding(response) == "declared_rule_not_found"

@@ -400,10 +400,18 @@ def _lock_key(job_id: uuid.UUID) -> tuple[int, int]:
     return (int.from_bytes(digest[:4], "big", signed=True), int.from_bytes(digest[4:8], "big", signed=True))
 
 
+def _measured_compute(session: Session, job_id: uuid.UUID) -> int:
+    """Compute seconds the job's finished tool attempts measured. Pending changes are flushed first."""
+    session.flush()
+    return sum(event.content.get("usage", {}).get("compute_seconds", 0)
+               for event in _events(session, job_id) if event.kind == "ATTEMPT_FINISHED")
+
+
 def _finish(session: Session, job: InvestigationJobRow, settings: Settings, state: str, reason: str, *,
-            provider: str, compute: str, provider_consumed: int = 0, compute_consumed: int = 0) -> None:
+            provider: str, compute: str, provider_consumed: int = 0) -> None:
+    """End a job. Known compute settles at what its finished attempts measured; the rest is released."""
     _settle(session, job, settings, provider=provider, compute=compute, provider_consumed=provider_consumed,
-            compute_consumed=compute_consumed)
+            compute_consumed=_measured_compute(session, job.job_id) if compute == "KNOWN" else 0)
     job.state, job.terminal_reason, job.updated_at = state, reason, utcnow()
     _event(session, job, "JOB_" + state, {"reason": reason})
 
@@ -484,7 +492,18 @@ class InvestigationWorker:
     def _collect(self, session: Session, job: InvestigationJobRow) -> None:
         declaration = _declaration(session, job)
         config = declaration.content["configuration"]
-        source = history_dataset.recorded_sources()[config["source"]["source_id"]]
+        source = history_dataset.recorded_sources().get(config["source"]["source_id"])
+        frozen = declaration.content["frozen"]["source_profile_sha256"]
+        if source is None or history_dataset.profile_sha256(source) != frozen:
+            # Checked before any attempt: nothing was collected, so the whole reservation is released.
+            _event(session, job, "SOURCE_REFUSED", {"source_id": config["source"]["source_id"],
+                                                    "frozen_profile_sha256": frozen,
+                                                    "served": None if source is None else
+                                                    history_dataset.profile_sha256(source)})
+            _finish(session, job, self._settings, "UNAVAILABLE", "declared_source_changed",
+                    provider="KNOWN", compute="KNOWN")
+            session.commit()
+            return
         attempt_id = uuid.uuid4()
         tool_input = {"source_id": source["source_id"], "profile_sha256": history_dataset.profile_sha256(source),
                       "scan": source["scan"], "bounds": config["resource_bounds"]}
@@ -554,10 +573,10 @@ class InvestigationWorker:
                 provider_consumed=consumed)
         if stop == "CANCELLED":
             _finish(session, job, self._settings, "CANCELLED", "cancelled_during_collection",
-                    provider="KNOWN", compute="KNOWN", compute_consumed=usage["compute_seconds"])
+                    provider="KNOWN", compute="KNOWN")
         elif stop == "DEADLINE":
             _finish(session, job, self._settings, "DEADLINE_EXCEEDED", "deadline_during_collection",
-                    provider="KNOWN", compute="KNOWN", compute_consumed=usage["compute_seconds"])
+                    provider="KNOWN", compute="KNOWN")
         else:
             job.state, job.updated_at = "EVALUATING", utcnow()
             _event(session, job, "JOB_EVALUATING", {"dataset_id": str(job.dataset_id)})
@@ -625,10 +644,7 @@ class InvestigationWorker:
             "tool": result.tool, "outcome": result.outcome, "usage": result.usage, "provenance": result.provenance,
             "contrary_findings": result.contrary_findings, "report_id": str(report_id)}, attempt_id)
         job.report_id = report_id
-        compute_used = sum(event.content.get("usage", {}).get("compute_seconds", 0)
-                           for event in _events(session, job.job_id) if event.kind == "ATTEMPT_FINISHED")
-        _finish(session, job, self._settings, "REPORTED", result.outcome.lower(), provider="KNOWN", compute="KNOWN",
-                compute_consumed=compute_used)
+        _finish(session, job, self._settings, "REPORTED", result.outcome.lower(), provider="KNOWN", compute="KNOWN")
         session.commit()
 
 

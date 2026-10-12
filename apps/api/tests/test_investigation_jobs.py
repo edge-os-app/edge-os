@@ -321,3 +321,31 @@ def test_cancel_after_collection_keeps_the_dataset_and_reports_nothing(research,
     assert view["state"] == "CANCELLED" and view["terminal_reason"] == "cancelled_after_collection"
     assert view["dataset"] is not None and view["report"] is None
     assert view["budget"]["consumed"]["provider_requests"] == 2
+    measured = next(event for event in view["events"] if event["kind"] == "ATTEMPT_FINISHED")["content"]["usage"]
+    assert view["budget"]["consumed"]["compute_seconds"] == measured["compute_seconds"] >= 1
+    assert view["budget"]["released"]["compute_seconds"] == 30 - measured["compute_seconds"]
+
+
+def test_reported_job_consumes_its_measured_compute(research, owner_a):
+    intake_id, declaration_id, _ = declare(research, owner_a)
+    job_id = start(research, owner_a, intake_id, declaration_id).json()["job_id"]
+    view = worker(research).run_job(uuid.UUID(job_id))
+    measured = sum(event["content"]["usage"]["compute_seconds"] for event in view["events"]
+                   if event["kind"] == "ATTEMPT_FINISHED")
+    assert view["state"] == "REPORTED" and measured >= 2
+    assert view["budget"]["consumed"]["compute_seconds"] == measured
+    assert view["budget"]["released"]["compute_seconds"] == 30 - measured
+
+
+def test_changed_source_is_refused_before_any_attempt(research, owner_a, monkeypatch):
+    from edge_os_api.research import history_dataset
+
+    intake_id, declaration_id, _ = declare(research, owner_a)
+    job_id = start(research, owner_a, intake_id, declaration_id).json()["job_id"]
+    served = history_dataset.recorded_sources()
+    changed = {key: {**value, "profile": {**value["profile"], "profile_id": "changed/1"}} for key, value in served.items()}
+    monkeypatch.setattr(history_dataset, "recorded_sources", lambda: changed)
+    view = worker(research).run_job(uuid.UUID(job_id))
+    assert view["state"] == "UNAVAILABLE" and view["terminal_reason"] == "declared_source_changed"
+    assert "ATTEMPT_STARTED" not in kinds(view) and "SOURCE_REFUSED" in kinds(view)
+    assert view["budget"]["released"] == {"provider_requests": 2, "compute_seconds": 30}

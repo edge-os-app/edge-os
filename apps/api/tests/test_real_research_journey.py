@@ -297,3 +297,32 @@ def test_dataset_list_is_owner_scoped(research, owner_a, owner_b):
     assert entry["quote_unit"] == "QUOTE:0x" + "bb" * 20 and entry["hashes_verified"]["content_sha256"] is True
     theirs = research.get("/v1/research/history-datasets", headers=owner_b).json()["datasets"]
     assert job["dataset"]["dataset_id"] not in {item["dataset_id"] for item in theirs}
+
+
+def test_protected_only_plan_is_saved_as_unsupported_and_reopens(research, owner_a):
+    intake_id, declaration_id, _ = declare(research, owner_a, partition="holdout")
+    job = run_to_end(research, owner_a, intake_id, declaration_id)
+    content = job["report"]["content"]
+    assert content["outcome"] == "UNSUPPORTED" and content["outcome_accessed"] is False and content["result"] is None
+    assert {item["role"] for item in content["protected_evaluations"]} == {"HOLDOUT"}
+    reopened = research.get(f"/v1/research/investigation-reports/{job['report']['report_id']}", headers=owner_a).json()
+    assert reopened == job["report"]
+
+
+def test_contrary_findings_are_kept_for_the_declared_direction(research, owner_a):
+    seen = 0
+    for direction in ("OUTPERFORM", "UNDERPERFORM"):
+        intake_id, declaration_id, _ = declare(research, owner_a, direction=direction)
+        job = run_to_end(research, owner_a, intake_id, declaration_id)
+        content = job["report"]["content"]
+        contrary = {item["variant_id"] for item in content["contrary_findings"]}
+        expected = {item["variant_id"] for item in content["variants"] if item["outcome"] == "DESCRIBED"
+                    and ((item["triggered_minus_control_mean"].startswith("-") or item["triggered_minus_control_mean"]
+                          .strip("0.") == "") if direction == "OUTPERFORM"
+                         else not item["triggered_minus_control_mean"].startswith("-"))}
+        assert contrary == expected, (direction, content["variants"])
+        seen += len(contrary)
+        reopened = research.get(f"/v1/research/investigation-reports/{job['report']['report_id']}",
+                                headers=owner_a).json()
+        assert reopened["content"]["contrary_findings"] == content["contrary_findings"]
+    assert seen > 0  # one of the two directions contradicts the recorded prices

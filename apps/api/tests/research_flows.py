@@ -36,7 +36,7 @@ def source_entry(client, headers, source_id: str = QUALIFIED) -> dict[str, Any]:
 
 def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: str | None = None,
                  direction: str = "OUTPERFORM", rules: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
-                 bounds: dict[str, int] | None = None) -> dict[str, Any]:
+                 bounds: dict[str, int] | None = None, partition: str | None = None) -> dict[str, Any]:
     source = source_entry(client, headers, source_id)
     window = source["window"]
     trial = str(uuid.uuid4())
@@ -54,7 +54,7 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
              "end": "2026-09-25T11:30:00Z"},
             {"partition_id": "holdout", "role": "HOLDOUT", "start": "2026-09-25T11:30:00Z", "end": window["end"]},
         ]
-    first_partition = partitions[0]["partition_id"]
+    first_partition = partition or partitions[0]["partition_id"]
     return {
         "operation_id": str(uuid.uuid4()), "idempotency_key": key or f"rg01-{uuid.uuid4()}",
         "expected_interpretation_revision_id": bundle["head"]["interpretation_revision_id"],
@@ -138,12 +138,32 @@ def reported_dataset(client, headers, source_id: str = QUALIFIED) -> str:
     InvestigationWorker(client.app.state.session_factory, client.app.state.settings).run_job(uuid.UUID(job_id))
     view = client.get(f"/v1/research/investigation-jobs/{job_id}", headers=headers).json()
     assert view["state"] == "REPORTED", view["state"]
-    return view["dataset"]["dataset_id"]
+    dataset_id = view["dataset"]["dataset_id"]
+    DECLARED_RULES[dataset_id] = view["report"]["content"]["rule_map"]["rules"][0]["evaluation_id"]
+    return dataset_id
 
 
-def adoption_body(bundle, dataset_id: str, *, parent: str | None = None, key: str | None = None,
-                  quote_unit: str = QUOTE_UNIT, amount: str = "50", notional: str = "50") -> dict[str, Any]:
+# The user's own exit, restated at adoption: the two-bucket return falls below -0.1%. Not a worked-example rule.
+OWN_EXIT = {"op": "lt", "args": [{"op": "price_return", "lookback_buckets": 2},
+                                 {"op": "constant", "value": "-0.001", "unit": "DIMENSIONLESS"}]}
+
+
+def first_declared_rule(client, headers, dataset_id: str) -> str:
+    datasets = client.get("/v1/research/history-datasets", headers=headers).json()["datasets"]
+    return next(item for item in datasets if item["dataset_id"] == dataset_id)["declared_rules"][0]["evaluation_id"]
+
+
+# dataset id -> the first rule its declaration adopted, filled by `reported_dataset`.
+DECLARED_RULES: dict[str, str] = {}
+UNKNOWN_RULE = "00000000-0000-4000-8000-000000000001"
+
+
+def adoption_body(bundle, dataset_id: str, *, evaluation_id: str | None = None, parent: str | None = None, key: str | None = None,
+                  quote_unit: str = QUOTE_UNIT, amount: str = "50", notional: str = "50",
+                  exit_rule: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"idempotency_key": key or f"market-{uuid.uuid4()}",
+            "evaluation_id": evaluation_id or DECLARED_RULES.get(dataset_id, UNKNOWN_RULE),
+            "exit_rule": copy.deepcopy(exit_rule or OWN_EXIT),
             "expected_interpretation_revision_id": bundle["head"]["interpretation_revision_id"],
             "expected_parent_revision_id": parent, "dataset_id": dataset_id, "adoption": "ADOPT_DATASET_MARKET",
             "quote_unit": quote_unit, "sizing_amount": amount, "max_quote_notional": notional}
@@ -156,7 +176,8 @@ def history_replay_body(strategy_id: str, revision_id: str, dataset_id: str, *, 
             "run_configuration_id": f"history-{uuid.uuid4()}", "window_start": start, "window_end": end,
             "initial_cash_quote": "1000", "initial_base_amount": "0", "initial_basis_quote": "0",
             "essential_fields": {
-                "entry": {"state": "BOUND", "essential_dependencies": [{"series": "price", "offset_buckets": 0},
-                                                                      {"series": "price", "offset_buckets": -3}]},
+                "entry": {"state": "BOUND", "essential_dependencies": [
+                    {"series": "price", "offset_buckets": 0}, {"series": "price", "offset_buckets": -1},
+                    {"series": "quote_volume", "offset_buckets": 0}]},
                 "exit": {"state": "BOUND", "essential_dependencies": [{"series": "price", "offset_buckets": 0},
-                                                                     {"series": "price", "offset_buckets": -1}]}}}
+                                                                     {"series": "price", "offset_buckets": -2}]}}}

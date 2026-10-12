@@ -14,6 +14,19 @@ interface Props {
 }
 
 const AMOUNT = /^(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$/;
+const SIGNED = /^-?(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$/;
+
+function describe(node: unknown): string {
+  const item = node as { op?: string; args?: unknown[]; value?: unknown; lookback_buckets?: number; unit?: string };
+  if (!item || typeof item !== "object") return String(node);
+  if (item.op === "constant") return `${String(item.value)}${item.unit && item.unit !== "DIMENSIONLESS" ? ` ${item.unit}` : ""}`;
+  if (item.op === "price_return") return `${item.lookback_buckets}-bucket price return`;
+  if (item.op === "quote_volume") return "quote volume";
+  if (item.op === "price") return "price";
+  const symbol: Record<string, string> = { gt: ">", lt: "<", gte: "≥", lte: "≤", and: "and", or: "or" };
+  if (item.args && item.op && symbol[item.op]) return item.args.map(describe).join(` ${symbol[item.op]} `);
+  return JSON.stringify(node);
+}
 
 function failure(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.detail : fallback;
@@ -27,6 +40,9 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
   const [amount, setAmount] = useState("");
   const [notional, setNotional] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [ruleId, setRuleId] = useState("");
+  const [exitLookback, setExitLookback] = useState("");
+  const [exitThreshold, setExitThreshold] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -45,6 +61,9 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
   const chosen = qualified.find((item) => item.dataset_id === datasetId) ?? null;
   const binding = (chosen?.market_binding ?? {}) as Record<string, string | number | null | string[]>;
   const amountsValid = AMOUNT.test(amount) && AMOUNT.test(notional);
+  const rule = chosen?.declared_rules.find((item) => item.evaluation_id === ruleId) ?? null;
+  const exitValid = /^[1-9][0-9]?$/.test(exitLookback) && SIGNED.test(exitThreshold);
+  const ready = amountsValid && rule !== null && exitValid;
 
   const submit = async (body: MarketAdoptionBody) => {
     setBusy(true); setError(""); setSaved(""); setPending(body);
@@ -69,10 +88,13 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
   };
 
   const adopt = () => {
-    if (busy || !chosen || !confirmed || !amountsValid || !chosen.quote_unit) return;
+    if (busy || !chosen || !confirmed || !ready || !rule || !chosen.quote_unit) return;
     void submit({ idempotency_key: `ui-market-${crypto.randomUUID()}`, expected_interpretation_revision_id: interpretationRevisionId,
       expected_parent_revision_id: parentRevisionId, dataset_id: chosen.dataset_id, adoption: "ADOPT_DATASET_MARKET",
-      quote_unit: chosen.quote_unit, sizing_amount: amount, max_quote_notional: notional });
+      quote_unit: chosen.quote_unit, evaluation_id: rule.evaluation_id,
+      exit_rule: { op: "lt", args: [{ op: "price_return", lookback_buckets: Number(exitLookback) },
+        { op: "constant", value: exitThreshold, unit: "DIMENSIONLESS" }] },
+      sizing_amount: amount, max_quote_notional: notional });
   };
 
   return (
@@ -93,7 +115,7 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
       {qualified.length ? (
         <div className="field">
           <label htmlFor="market-dataset">Saved dataset</label>
-          <select id="market-dataset" className="input" value={datasetId} onChange={(event) => { setDatasetId(event.target.value); setConfirmed(false); }}>
+          <select id="market-dataset" className="input" value={datasetId} onChange={(event) => { setDatasetId(event.target.value); setRuleId(""); setConfirmed(false); }}>
             <option value="">Choose a qualified dataset</option>
             {qualified.map((item) => <option key={item.dataset_id} value={item.dataset_id}>{item.source_id} · {item.dataset_id.slice(0, 8)}</option>)}
           </select>
@@ -114,6 +136,23 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
             <dt>Binding evidence</dt><dd>{String(binding.evidence_class)}; route qualification {String(binding.qualification)}</dd>
             <dt>Quote unit</dt><dd className="mono">{chosen.quote_unit}</dd>
           </dl>
+          <div className="field">
+            <label htmlFor="market-rule">Entry rule (one you declared for this dataset)</label>
+            <select id="market-rule" className="input" value={ruleId} onChange={(event) => { setRuleId(event.target.value); setConfirmed(false); }}>
+              <option value="">Choose a declared rule</option>
+              {chosen.declared_rules.map((item) => <option key={item.evaluation_id} value={item.evaluation_id}>{item.variant_id}: {describe(item.price_expression)} and {describe(item.volume_expression)}</option>)}
+            </select>
+          </div>
+          <p className="muted">The draft's entry becomes exactly this declared rule. Worked-example rules are refused.</p>
+          <fieldset className="stack">
+            <legend>Exit rule in your own words: exit when the price return is below a threshold</legend>
+            <label className="field">Exit lookback (buckets)
+              <input className="input" inputMode="numeric" value={exitLookback} onChange={(event) => { setExitLookback(event.target.value.trim()); setConfirmed(false); }} />
+            </label>
+            <label className="field">Exit threshold (fraction, for example -0.001)
+              <input className="input" value={exitThreshold} onChange={(event) => { setExitThreshold(event.target.value.trim()); setConfirmed(false); }} />
+            </label>
+          </fieldset>
           <p className="status stop">The current draft uses {currentQuoteUnit}. Amounts are not converted. Enter both amounts again in {chosen.quote_unit}.</p>
           <div className="field">
             <label htmlFor="market-amount">Trade size in the new quote unit</label>
@@ -125,10 +164,10 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
           </div>
           {(amount || notional) && !amountsValid ? <p className="status err">Use plain decimal amounts, for example 50 or 12.5.</p> : null}
           <label className="choice">
-            <input type="checkbox" checked={confirmed} disabled={!amountsValid} onChange={(event) => setConfirmed(event.target.checked)} />
-            I adopt this market and these amounts in {chosen.quote_unit}
+            <input type="checkbox" checked={confirmed} disabled={!ready} onChange={(event) => setConfirmed(event.target.checked)} />
+            I adopt this market, this entry rule, this exit rule and these amounts in {chosen.quote_unit}
           </label>
-          <button className="btn btn-primary" type="button" onClick={adopt} disabled={!confirmed || !amountsValid} aria-disabled={busy || undefined}>
+          <button className="btn btn-primary" type="button" onClick={adopt} disabled={!confirmed || !ready} aria-disabled={busy || undefined}>
             {busy ? "Adopting…" : "Adopt this market for a new draft"}
           </button>
         </div>

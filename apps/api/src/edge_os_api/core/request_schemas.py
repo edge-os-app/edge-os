@@ -621,5 +621,8 @@ class MarketAdoptionBody(StrictModel):
     dataset_id: Uuid4Text
     adoption: Literal["ADOPT_DATASET_MARKET"]
     quote_unit: Annotated[str, StringConstraints(pattern=r"^QUOTE:0x[0-9a-fA-F]{40}$")]
+    # The entry becomes this exact declared rule of the dataset's own declaration; the exit is restated here.
+    evaluation_id: Uuid4Text
+    exit_rule: dict[str, Any]
     sizing_amount: DecimalText
     max_quote_notional: DecimalText

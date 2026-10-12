@@ -107,13 +107,15 @@ def inspect(pg: harness.Postgres, results: dict[str, Any]) -> dict[str, Any]:
         revisions = _rows(pg, "select revision_id::text, parent_revision_id::text parent, "
                               "strategy_canonical::jsonb->'market'->'research_binding'->>'pool_address' pool, "
                               "strategy_canonical::jsonb->'sizing'->>'unit' unit, "
-                              "strategy_canonical::jsonb->'sizing'->>'amount' amount "
+                              "strategy_canonical::jsonb->'sizing'->>'amount' amount, "
+                              "strategy_canonical::jsonb->'entry'->>'op' entry_op "
                               f"from strategy_revisions where strategy_id = '{run.get('strategyId')}' order by created_at")
         replays = _rows(pg, "select replay_id::text, content->'result'->>'status' status, "
                             "content->'result'->'reason'->>'code' reason, "
                             "content->'inputs'->'history_input'->>'dataset_id' dataset, "
                             "content->'inputs'->'history_input'->>'declaration_id' declaration, "
-                            "content->'inputs'->'history_input'->>'fill_label' fills "
+                            "content->'inputs'->'history_input'->>'fill_label' fills, "
+                            "content->'inputs'->'history_input'->'rule_linkage'->>'state' linkage "
                             "from spot_replay_runs where replay_id in "
                             f"('{run.get('replayId')}', '{run.get('mismatchReplayId')}')")
         by_id = {row["replay_id"]: row for row in replays}
@@ -146,10 +148,11 @@ def inspect(pg: harness.Postgres, results: dict[str, Any]) -> dict[str, Any]:
             and revisions[1]["parent"] == revisions[0]["revision_id"]
             and revisions[0]["pool"] == "0x3333333333333333333333333333333333333333"
             and revisions[1]["pool"] == "0x" + "aa" * 20 and revisions[1]["unit"] == "QUOTE:0x" + "bb" * 20
-            and revisions[1]["amount"] == "50",
+            and revisions[1]["amount"] == "50" and revisions[1]["entry_op"] == "and",
             f"{key}: history replay saved with exact lineage and simulated fills": run.get("replayId") in by_id
             and by_id[run["replayId"]]["status"] == "COMPLETE" and by_id[run["replayId"]]["dataset"] == run["datasetId"]
-            and by_id[run["replayId"]]["declaration"] == run["main"] and by_id[run["replayId"]]["fills"] == "simulated fills",
+            and by_id[run["replayId"]]["declaration"] == run["main"] and by_id[run["replayId"]]["fills"] == "simulated fills"
+            and by_id[run["replayId"]]["linkage"] == "ENTRY_IS_DECLARED_RULE",
             f"{key}: fixture revision refused on the history market": run.get("mismatchReplayId") in by_id
             and by_id[run["mismatchReplayId"]]["reason"] == "MARKET_BINDING_MISMATCH",
         })

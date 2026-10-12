@@ -29,6 +29,9 @@ const qualified = {
     amount_conversion_version: "v2/1", data_route: "ENVIO_QUICKNODE_CORROBORATED", evidence_class: "SYNTHETIC_FIXTURE",
     qualification: "UNQUALIFIED" },
   window_start: "2026-09-25T10:00:00Z", window_end: "2026-09-25T12:00:00Z", declaration_id: "decl-1", job_id: "job-1",
+  declared_rules: [{ evaluation_id: "e0000000-0000-4000-8000-000000000001", variant_id: "rule-1",
+    price_expression: { op: "gt", args: [{ op: "price_return", lookback_buckets: 1 }, { op: "constant", value: "0", unit: "DIMENSIONLESS" }] },
+    volume_expression: { op: "gt", args: [{ op: "quote_volume" }, { op: "constant", value: "100", unit: QUOTE }] } }],
 };
 const limited = { ...qualified, dataset_id: "d0000000-0000-4000-8000-000000000002", verdict: { overall: "LIMITED" },
   binding_state: "UNAVAILABLE_LIMITED_DATA", unavailable_states: ["PARTIAL_COVERAGE"], market_binding: null, quote_unit: null,
@@ -44,6 +47,9 @@ async function review(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(await screen.findByLabelText("Saved dataset"), qualified.dataset_id);
   await user.type(screen.getByLabelText("Trade size in the new quote unit"), "50");
   await user.type(screen.getByLabelText("Largest position value in the new quote unit"), "50");
+  await user.selectOptions(screen.getByLabelText("Entry rule (one you declared for this dataset)"), "e0000000-0000-4000-8000-000000000001");
+  await user.type(screen.getByLabelText("Exit lookback (buckets)"), "2");
+  await user.type(screen.getByLabelText("Exit threshold (fraction, for example -0.001)"), "-0.001");
   await user.click(screen.getByRole("checkbox"));
 }
 
@@ -71,6 +77,9 @@ describe("recorded market adoption", () => {
     expect(screen.getByLabelText("Trade size in the new quote unit")).toHaveValue("");
     expect(screen.getByRole("button", { name: "Adopt this market for a new draft" })).toBeDisabled();
     expect(screen.getByRole("checkbox")).toBeDisabled();
+    await user.type(screen.getByLabelText("Trade size in the new quote unit"), "50");
+    await user.type(screen.getByLabelText("Largest position value in the new quote unit"), "50");
+    expect(screen.getByRole("checkbox")).toBeDisabled(); // still needs a declared entry rule and an own exit rule
   });
 
   it("adopts with the exact confirmed body and shows success only after the read-back shows the new draft", async () => {
@@ -83,9 +92,11 @@ describe("recorded market adoption", () => {
     const body = mocks.adopt.mock.calls[0][1];
     expect(body).toMatchObject({ expected_interpretation_revision_id: "rev-1", expected_parent_revision_id: "revision-1",
       dataset_id: qualified.dataset_id, adoption: "ADOPT_DATASET_MARKET", quote_unit: QUOTE, sizing_amount: "50",
-      max_quote_notional: "50" });
-    expect(Object.keys(body).sort()).toEqual(["adoption", "dataset_id", "expected_interpretation_revision_id",
-      "expected_parent_revision_id", "idempotency_key", "max_quote_notional", "quote_unit", "sizing_amount"]);
+      max_quote_notional: "50", evaluation_id: "e0000000-0000-4000-8000-000000000001",
+      exit_rule: { op: "lt", args: [{ op: "price_return", lookback_buckets: 2 }, { op: "constant", value: "-0.001", unit: "DIMENSIONLESS" }] } });
+    expect(Object.keys(body).sort()).toEqual(["adoption", "dataset_id", "evaluation_id", "exit_rule",
+      "expected_interpretation_revision_id", "expected_parent_revision_id", "idempotency_key", "max_quote_notional",
+      "quote_unit", "sizing_amount"]);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 

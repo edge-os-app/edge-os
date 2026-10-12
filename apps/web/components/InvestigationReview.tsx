@@ -555,6 +555,8 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
   const [notice, setNotice] = useState("");
   const [loadError, setLoadError] = useState("");
   const [uncertainStart, setUncertainStart] = useState(false);
+  // A save with no answer keeps its exact body; a retry resends it unchanged so the server can return the original.
+  const [pendingDeclaration, setPendingDeclaration] = useState<Record<string, unknown> | null>(null);
 
   const refreshBudget = async () => { try { setBudget(await api.researchBudget()); } catch { setBudget(null); } };
   // Every call goes through a try: a missing or failing read shows a retry instead of breaking the plan above.
@@ -581,8 +583,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
     && /^[0-9]+(\.[0-9]+)?$/.test(row.volume));
   const ready = source !== null && question.length > 0 && hypothesis.trim().length > 0 && rulesComplete && adopted;
 
-  const declare = async () => {
-    if (!ready || busy || !source) return;
+  const buildDeclaration = (source: HistorySource): Record<string, unknown> => {
     const quoteUnit = `QUOTE:${source.market.quote_asset}`;
     const trial = crypto.randomUUID();
     const evaluations = rules.map(() => crypto.randomUUID());
@@ -594,8 +595,8 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
       : [{ partition_id: "train", role: "TRAINING", start, end: shiftMinutes(start, 60) },
         { partition_id: "validate", role: "VALIDATION", start: shiftMinutes(start, 60), end: shiftMinutes(start, 90) },
         { partition_id: "holdout", role: "HOLDOUT", start: shiftMinutes(start, 90), end }];
-    const body = {
-      operation_id: crypto.randomUUID(), idempotency_key: storedKey(`edge-os:history-declaration:${intakeId}:${hypothesis}`),
+    return {
+      operation_id: crypto.randomUUID(), idempotency_key: `ui-history-${crypto.randomUUID()}`,
       expected_interpretation_revision_id: interpretationRevisionId,
       edge_spec: { edge_id: crypto.randomUUID(), version: 1, parent_declaration_id: null, hypothesis: hypothesis.trim(),
         claim: descriptive ? { status: "DESCRIPTIVE_ONLY", text: "Describe only." } : { status: "HYPOTHESIS", text: hypothesis.trim() },
@@ -628,16 +629,29 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         : { origin: "USER_CONFIRMED", source_ref: HISTORY_REVIEW, adoption: "ADOPTED" }])),
       trial_ids: [trial], evaluation_ids: evaluations,
     };
-    setBusy(true); setError(""); setNotice("");
+  };
+
+  const saveDeclaration = async (body: Record<string, unknown>) => {
+    setBusy(true); setError(""); setNotice(""); setPendingDeclaration(body);
     try {
       const saved = await api.saveHistoryInvestigation(intakeId, body);
-      forgetKey(`edge-os:history-declaration:${intakeId}:${hypothesis}`);
+      setPendingDeclaration(null);
       setDeclarations((current) => [...current.filter((item) => item.declaration.record_id !== saved.declaration.record_id), saved]);
       setAdopted(false); await open(saved);
       setNotice("Declaration saved before any collection. No data was read.");
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.detail : "We could not confirm the save. Save again: it reuses the same key.");
+      if (cause instanceof ApiError && cause.status !== 0) {
+        setPendingDeclaration(null);
+        setError(cause.detail);
+      } else {
+        setError("We could not confirm the save. Retry sends the same declaration, so it cannot save twice.");
+      }
     } finally { setBusy(false); }
+  };
+
+  const declare = () => {
+    if (!ready || busy || !source || pendingDeclaration) return;
+    void saveDeclaration(buildDeclaration(source));
   };
 
   const startJob = async (fresh: boolean) => {
@@ -681,6 +695,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
       ) : null}
       {error ? <p className="status err" role="alert">{error}</p> : null}
       {notice ? <p className="status ok" role="status">{notice}</p> : null}
+      {pendingDeclaration && !busy ? <button className="btn btn-secondary" type="button" onClick={() => void saveDeclaration(pendingDeclaration)}>Retry the same declaration</button> : null}
       {uncertainStart ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(false)} disabled={busy}>Check again with the same start</button> : null}
 
       {declarations.length ? (
@@ -789,7 +804,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               onChange={(event) => setAdopted(event.target.checked)} />
             I reviewed and adopt every setting above before any data is read
           </label>
-          <button className="btn btn-primary" type="button" onClick={() => void declare()} disabled={!ready} aria-disabled={busy || undefined}>
+          <button className="btn btn-primary" type="button" onClick={declare} disabled={!ready || pendingDeclaration !== null} aria-disabled={busy || undefined}>
             {busy ? "Saving…" : "Save history declaration"}
           </button>
         </div>

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding
 from edge_os_api.replay import simulator as spot_replay
+from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import history_dataset
 from edge_os_api.strategies import compiler as strategy_compiler
 
@@ -64,7 +65,22 @@ def replay_dataset(row: history_dataset.HistoryDatasetRow, window_end: dt.dateti
         evidence_class=content["profile_evidence_class"])
 
 
-def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any]) -> dict[str, Any]:
+def rule_linkage(session: Session, row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any]) -> dict[str, Any]:
+    """Whether the replayed entry is exactly one rule the dataset's own declaration adopted. Reported, not enforced."""
+    from edge_os_api.records.models import InvestigationDeclaration
+    from edge_os_api.research.market_adoption import declared_entry
+
+    declaration = session.get(InvestigationDeclaration, row.content["declaration_id"])
+    rules = [] if declaration is None else declaration.content.get("rule_map", {}).get("rules", [])
+    entry = record_contract.sha256_hex(strategy["entry"])
+    match = next((rule for rule in rules if record_contract.sha256_hex(declared_entry(rule)) == entry), None)
+    return {"state": "ENTRY_IS_DECLARED_RULE" if match else "ENTRY_NOT_FROM_THIS_DECLARATION",
+            "evaluation_id": None if match is None else match["evaluation_id"],
+            "rule_map_sha256": None if declaration is None else declaration.content["frozen"]["rule_map_sha256"]}
+
+
+def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any],
+             linkage: dict[str, Any]) -> dict[str, Any]:
     """The lineage saved beside the replay: exact dataset, declaration, job, source and both market identities."""
     content = row.content
     return {
@@ -78,7 +94,7 @@ def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any]) -
         "dataset_market_binding_id": content["market_binding_id"],
         "strategy_market_binding_id": strategy_compiler.market_binding_id(strategy["market"]),
         "window_start": content["window_start"], "window_end": content["window_end"],
-        "fill_label": FILL_LABEL,
+        "rule_linkage": linkage, "fill_label": FILL_LABEL,
         "fill_assumptions": {"price": "bucket close of the decision bucket", "costs": strategy["cost_assumptions"],
                              "not_modeled": ["gas", "spread", "extra price impact", "capacity"]},
     }

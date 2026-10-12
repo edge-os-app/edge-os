@@ -55,6 +55,8 @@ def test_adopted_revision_replays_on_its_dataset_with_exact_lineage(research, ow
     assert content["result"]["evidence_class"] == "SYNTHETIC_FIXTURE"
     lineage = content["inputs"]["history_input"]
     assert lineage["dataset_id"] == dataset_id and lineage["fill_label"] == "simulated fills"
+    assert lineage["rule_linkage"]["state"] == "ENTRY_IS_DECLARED_RULE"
+    assert content["result"]["trades"], "the declared rule should trade on the recorded prices"
     assert lineage["dataset_market_binding_id"] == lineage["strategy_market_binding_id"]
     assert lineage["source_evidence_class"] == "RECORDED_RESPONSE" and lineage["content_label"] == "SYNTHETIC_FIXTURE"
     assert content["strategy_revision_id"] == revision_id and content["dataset_fixture_id"] is None
@@ -72,6 +74,7 @@ def test_original_fixture_revision_still_fails_on_the_history_market(research, o
     saved = replay(research, owner_a, history_replay_body(strategy_id, fixture_revision, dataset_id))
     assert saved["content"]["result"]["status"] == "UNAVAILABLE"
     assert saved["content"]["result"]["reason"]["code"] == "MARKET_BINDING_MISMATCH"
+    assert saved["content"]["inputs"]["history_input"]["rule_linkage"]["state"] == "ENTRY_NOT_FROM_THIS_DECLARATION"
 
 
 @pytest.mark.parametrize("start,end,code", [

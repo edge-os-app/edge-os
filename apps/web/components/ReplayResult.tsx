@@ -15,7 +15,8 @@ export function ReplayResult({ replay }: Props) {
   const inputs = replay.content.inputs;
   const history = (inputs as { history_input?: { dataset_id: string; source_id: string; content_label: string;
     declaration_id: string; job_id: string; dataset_market_binding_id: string | null; strategy_market_binding_id: string;
-    fill_label: string; dataset_content_sha256: string } }).history_input ?? null;
+    fill_label: string; dataset_content_sha256: string;
+    rule_linkage?: { state: string; evaluation_id: string | null } } }).history_input ?? null;
   const dependencies = (field: "entry" | "exit") => inputs.essential_evidence.fields[field];
   const bindingSummary = (field: "entry" | "exit") => {
     const binding = dependencies(field);
@@ -68,6 +69,9 @@ export function ReplayResult({ replay }: Props) {
             <dt>Investigation job</dt><dd className="mono">{history.job_id}</dd>
             <dt>Dataset market</dt><dd className="mono">{history.dataset_market_binding_id ?? "Unavailable: dataset not qualified"}</dd>
             <dt>Revision market</dt><dd className="mono">{history.strategy_market_binding_id}</dd>
+            <dt>Entry rule</dt><dd>{history.rule_linkage?.state === "ENTRY_IS_DECLARED_RULE"
+              ? `The declared rule ${history.rule_linkage.evaluation_id}`
+              : "Not a rule of this dataset's declaration"}</dd>
           </dl>
         </section>
       ) : null}
