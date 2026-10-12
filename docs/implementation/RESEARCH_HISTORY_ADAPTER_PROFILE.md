@@ -14,7 +14,7 @@ authority. The whole of P07 is not complete and no fresh history is qualified.
   results, the holdout and closed allowances are unchanged. Numeric and qualification logic is reused, not
   copied. P03's verifier, `main.py`, `core/`, existing `research/`, `replay/`, migrations and lockfiles are
   untouched. #58 owns database, API, schema, client, UI, verifier and job composition.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (53 tests);
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (55 tests);
   `cd docs/qualification/p07 && python3 -B -m unittest -v test_p07` passes (73 tests);
   `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs are kept under the assigned
   evidence folder and are not part of the commit.
@@ -136,7 +136,9 @@ response arrived. Consuming an archived page is not evidence of a new or origina
 provenance block labels the measurement: `provenance.measurement.provider_requests` is `SUPPLIED_EVIDENCE` or
 `UNKNOWN`. `CollectionResult["coverage"]` retains the requested scan, the page ranges and whether the pages
 tile the scan. A provider `complete` flag alone is not proof of query or window coverage; the retained pages,
-segments, gaps and coverage flag are the evidence.
+segments, gaps and coverage flag are the evidence. A response must echo the requested query; a missing query
+echo is refused as `QUERY_MISMATCH`. A page whose identity fields are not a non-negative integer range with a
+non-empty id and a 64-hex digest is refused as `PROVIDER_MALFORMED_PAGE` and the collection stays `PARTIAL`.
 
 ### 3. `normalized_sha256`
 
@@ -162,8 +164,9 @@ declaration.
 ## Finite limits
 
 `max_pages`, `max_rows` and `max_bytes` must be positive integers. `deadline_utc` is optional. A limit stop
-gives `PARTIAL`, never `COMPLETE`. These are caller-defined local test parameters, not paid or live
-allowances. The collector grants no quota.
+gives `PARTIAL`, never `COMPLETE`. A limit is tested before each fetch, so one in-flight response can move a
+counter past its cap by one before the loop stops. These are caller-defined local test parameters, not paid or
+live allowances. The collector grants no quota.
 
 ## Reuse mapping
 
@@ -209,6 +212,8 @@ result is carried beside the profile; `to_p02_binding` still refuses it.
 | Coverage evidence retained (amendment 2) | `test_coverage_evidence_records_whether_the_pages_tile_the_scan` |
 | `normalized_sha256` repeatable, change and tamper (amendment 3) | `test_normalized_sha256_is_repeatable_binds_the_payload_and_changes` |
 | Malformed profile refused before invocation (amendment 4) | `test_malformed_profile_is_refused_before_any_invocation` |
+| Response without a query echo refused | `test_response_without_a_query_echo_is_refused` |
+| Malformed page identity refused as provider evidence | `test_malformed_page_identity_is_refused_as_provider_evidence` |
 | Manifest consumer metadata | `test_evidence_manifest.py::test_manifest_includes_consumer_metadata` |
 | No live transport or environment discovery | `test_package_has_no_live_transport_or_environment_discovery` |
 

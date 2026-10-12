@@ -80,6 +80,8 @@ profit. No fresh history is qualified.
 | RH-C41 | Assumed delay and missing delivery availability | `test_history_normalizer.py::test_assumed_delay_and_missing_delivery_change_only_availability` |
 | RH-C42 | `normalized_sha256` repeatable, change and tamper | `test_history_normalizer.py::test_normalized_sha256_is_repeatable_binds_the_payload_and_changes` |
 | RH-C43 | Manifest consumer metadata | `test_evidence_manifest.py::test_manifest_includes_consumer_metadata` |
+| RH-C44 | Response without a query echo refused | `test_history_collector.py::test_response_without_a_query_echo_is_refused` |
+| RH-C45 | Malformed page identity refused as provider evidence | `test_history_collector.py::test_malformed_page_identity_is_refused_as_provider_evidence` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
-suite. This adapter adds cases RH-C01 to RH-C32 and changes neither.
+suite. This adapter adds cases RH-C01 to RH-C45 and changes neither.

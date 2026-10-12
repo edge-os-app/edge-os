@@ -73,7 +73,7 @@ def _materialize_profile(profile: Mapping[str, Any], collection: Mapping[str, An
     if pages:
         try:
             digest = dataset_revision(pages)
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, ValueError):
             digest = None  # a malformed page is reported by profile_problems below
         revision = {"basis": "PAGE_DIGESTS", "manifest_sha256": digest,
                     "page_count": len(pages), "row_count": row_count}

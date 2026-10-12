@@ -204,8 +204,9 @@ def test_synthetic_result_projects_as_unqualified_not_qualified() -> None:
 
 
 def test_malformed_page_and_missing_evidence_are_input_errors() -> None:
-    broken = support.single_page([copy.deepcopy(support.EVENT_QUOTE_IN)])
-    broken[0]["page"] = {k: v for k, v in broken[0]["page"].items() if k != "sha256"}
+    bad_page = support.build_page("rh-bad", 100, 111, support.P1_FIRST_TS, support.P2_LAST_TS,
+                                  last_block_hash="0x12")
+    broken = support.single_page([copy.deepcopy(support.EVENT_QUOTE_IN)], page=bad_page)
     collection = collect(support.profile(), RecordedResponseSource(broken), support.SCAN,
                          CollectionLimits(**support.limits()), None)
     with pytest.raises(AdapterInputError) as page_error:

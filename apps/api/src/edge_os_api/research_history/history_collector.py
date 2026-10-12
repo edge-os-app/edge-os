@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -119,6 +120,22 @@ def _covers_scan(pages: Sequence[Mapping[str, Any]], scan: Mapping[str, int]) ->
     if ranges[0][0] != scan["from_block"] or ranges[-1][1] != scan["to_block_exclusive"]:
         return False
     return all(nxt[0] == prev[1] for prev, nxt in zip(ranges, ranges[1:]))
+
+
+_PAGE_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_PAGE_NUMBERS = ("from_block", "next_block", "first_block_timestamp", "last_block_timestamp")
+
+
+def _page_shape_problems(page: Mapping[str, Any]) -> list[str]:
+    """Identity fields a page must carry before its content is trusted. Edge hashes stay for the profile."""
+    problems = [key for key in _PAGE_NUMBERS if not _is_nonneg_int(page.get(key))]
+    if not (isinstance(page.get("page_id"), str) and page["page_id"]):
+        problems.append("page_id")
+    if not (isinstance(page.get("sha256"), str) and _PAGE_SHA256.fullmatch(page["sha256"])):
+        problems.append("sha256")
+    if all(key not in problems for key in ("from_block", "next_block")) and page["next_block"] <= page["from_block"]:
+        problems.append("range")
+    return problems
 
 
 def _page_record(page: Mapping[str, Any]) -> dict[str, Any]:
@@ -245,6 +262,11 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
             gaps.append(_gap("PROVIDER_MALFORMED_PAGE", "page is not an object"))
             stop_reason = "PROVIDER_ERROR"
             break
+        shape_problems = _page_shape_problems(page)
+        if shape_problems:
+            gaps.append(_gap("PROVIDER_MALFORMED_PAGE", "bad fields: " + ", ".join(shape_problems)))
+            stop_reason = "PROVIDER_ERROR"
+            break
         events = response.get("events", [])
         if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
             gaps.append(_gap("PROVIDER_MALFORMED_EVENTS", "events is not a list"))
@@ -337,8 +359,7 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
 
 
 def _query_matches(query: Any, definition: Mapping[str, Any]) -> bool:
-    if query is None:
-        return True
+    """The response must echo the requested query. A missing echo is not trusted."""
     if not isinstance(query, Mapping):
         return False
     return all(query.get(key) == definition[key]

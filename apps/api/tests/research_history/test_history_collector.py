@@ -138,6 +138,22 @@ def test_response_for_another_pool_or_range_is_refused() -> None:
         assert any(gap["code"] == "QUERY_MISMATCH" for gap in result["gaps"])
 
 
+def test_response_without_a_query_echo_is_refused() -> None:
+    first = support.standard_responses()[0]
+    result = _collect([{key: value for key, value in first.items() if key != "query"}])
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+    assert any(gap["code"] == "QUERY_MISMATCH" for gap in result["gaps"])
+
+
+def test_malformed_page_identity_is_refused_as_provider_evidence() -> None:
+    first = support.standard_responses()[0]
+    result = _collect([{**first, "page": {**first["page"], "from_block": 100.5}}])
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+    assert result["page_count"] == 0
+    assert any(gap["code"] == "PROVIDER_MALFORMED_PAGE" for gap in result["gaps"])
+
+
 def test_invalid_limits_are_refused_before_any_fetch() -> None:
     for bad in ({"max_pages": 0}, {"max_rows": -1}, {"max_bytes": 0}):
         with pytest.raises(InvalidLimits):

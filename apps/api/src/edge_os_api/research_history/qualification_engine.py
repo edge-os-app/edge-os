@@ -70,7 +70,6 @@ BindingNotEmittable = _P07["BindingNotEmittable"]
 Trade = _P07["Trade"]
 
 canonical_bytes = _P02["canonical_bytes"]
-validate_record = _P02["validate_record"]
 
 
 def engine_hashes() -> dict[str, str]:
