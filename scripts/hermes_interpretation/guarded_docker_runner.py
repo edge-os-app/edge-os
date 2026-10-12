@@ -774,6 +774,10 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             if path.name in self._admission_failures:  # its last attempt could not be recorded, so it was not made
                 report["admission_failed"] = self._admission_failures[path.name]
             reports.append(report)
+        for name in self._unremovable_temporaries():  # a leftover the folder will not let go of: it blocks new turns
+            reports.append({"unremovable_temporary": name})
+        if self._storage_failed:  # a registration could not be written; new turns wait for a probe write to work
+            reports.append({"storage_unwritable": True})
         return reports
 
     def retry_exhausted(self) -> int:

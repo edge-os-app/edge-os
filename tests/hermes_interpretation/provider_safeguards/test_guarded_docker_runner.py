@@ -3242,6 +3242,8 @@ def test_repeated_new_requests_in_a_folder_that_refuses_rename_and_removal_leave
     assert results[0].error_class == "CleanupStorageUnwritable"
     assert all(result.error_class == "CleanupPending" for result in results[1:])  # the leftover blocks the rest
     assert spend.committed_usd() == Decimal("0")  # nothing was sent, so nothing is held as unknown
+    reported = runner.pending_cleanup()  # the failure stays visible to whoever must intervene
+    assert {"storage_unwritable": True} in reported and any("unremovable_temporary" in item for item in reported)
 
 
 def test_a_hard_link_at_the_temporary_name_is_never_written_through(tmp_path: Path) -> None:
