@@ -481,34 +481,41 @@
       "provider_class": "Authored P19 context records",
       "projection_ref": { "schema_version": "edge-os.agent-context-preview/1", "record_type": "AgentContextView", "record_id": "context:owner_a:ag-health-08" },
       "stored_rows": [
-        { "table": "records (AgentContextRecord)", "id": "ctx-v1", "memory_version": 1, "state": "ACTIVE", "time_field": "created_at", "time": "2026-10-12T21:36:00Z", "time_basis": "DIRECT" },
-        { "table": "records (AgentContextRecord)", "id": "ctx-v2", "memory_version": 2, "state": "ACTIVE", "time_field": "created_at", "time": "2026-10-12T21:37:00Z", "time_basis": "DIRECT" },
-        { "table": "records (AgentContextRecord)", "id": "ctx-v3", "memory_version": 3, "state": "DISABLED", "time_field": "created_at", "time": "2026-10-12T21:38:00Z", "time_basis": "DIRECT" },
-        { "table": "records (AgentContextRecord)", "id": "ctx-v4", "memory_version": 4, "state": "CLEARED", "time_field": "created_at", "time": "2026-10-12T21:39:00Z", "time_basis": "DIRECT" }
+        { "table": "records (AgentContextRecord)", "id": "ctx-v1", "memory_version": 1, "state": "ACTIVE", "entries": [ { "context_id": "preference-1", "kind": "PREFERENCE", "status": "ADOPTED", "text": "Use short evidence summaries.", "source_refs": [] }, { "context_id": "lesson-1", "kind": "LESSON", "status": "SUGGESTED", "text": "Lesson text.", "source_refs": [] } ], "time_field": "created_at", "time": "2026-10-12T21:36:00Z", "time_basis": "DIRECT" },
+        { "table": "records (AgentContextRecord)", "id": "ctx-v2", "memory_version": 2, "state": "ACTIVE", "entries": [ { "context_id": "preference-1", "kind": "CORRECTION", "status": "ADOPTED", "text": "Show the source and time.", "source_refs": [] }, { "context_id": "lesson-1", "kind": "LESSON", "status": "SUGGESTED", "text": "Lesson text.", "source_refs": [] } ], "time_field": "created_at", "time": "2026-10-12T21:37:00Z", "time_basis": "DIRECT" },
+        { "table": "records (AgentContextRecord)", "id": "ctx-v3", "memory_version": 3, "state": "DISABLED", "entries": [ { "context_id": "preference-1", "kind": "CORRECTION", "status": "ADOPTED", "text": "Show the source and time.", "source_refs": [] }, { "context_id": "lesson-1", "kind": "LESSON", "status": "SUGGESTED", "text": "Lesson text.", "source_refs": [] } ], "time_field": "created_at", "time": "2026-10-12T21:38:00Z", "time_basis": "DIRECT" },
+        { "table": "records (AgentContextRecord)", "id": "ctx-v4", "memory_version": 4, "state": "CLEARED", "entries": [], "time_field": "created_at", "time": "2026-10-12T21:39:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
         "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-08", "wallet_id": "wal-0008", "network_id": "monad:143", "execution_revision_id": null, "deployment_id": null },
         "context": {
+          "retrieval_rule": "retrieve_agent_context returns ADOPTED context_id/text only while state is ACTIVE; a non-ACTIVE state returns none (agent_context/controls.py:261-278).",
           "memory_version_history": [
-            { "version": 1, "record_id": "ctx-v1", "state": "ACTIVE", "entries": 2, "retrieved_by_task": [{ "context_id": "preference-1", "text": "Use short evidence summaries." }] },
-            { "version": 2, "record_id": "ctx-v2", "state": "ACTIVE", "entries": 2, "retrieved_by_task": [{ "context_id": "preference-1", "text": "Show the source and time." }, { "context_id": "lesson-1", "text": "Lesson text." }] },
-            { "version": 3, "record_id": "ctx-v3", "state": "DISABLED", "entries": 2, "retrieved_by_task": [] },
-            { "version": 4, "record_id": "ctx-v4", "state": "CLEARED", "entries": 0, "retrieved_by_task": [] }
+            { "version": 1, "record_id": "ctx-v1", "state": "ACTIVE", "entries_count": 2, "retrieved_by_task": [{ "context_id": "preference-1", "text": "Use short evidence summaries." }] },
+            { "version": 2, "record_id": "ctx-v2", "state": "ACTIVE", "entries_count": 2, "retrieved_by_task": [{ "context_id": "preference-1", "text": "Show the source and time." }] },
+            { "version": 3, "record_id": "ctx-v3", "state": "DISABLED", "entries_count": 2, "retrieved_by_task": [] },
+            { "version": 4, "record_id": "ctx-v4", "state": "CLEARED", "entries_count": 0, "retrieved_by_task": [] }
           ],
-          "financial_records_changed": false
+          "financial_records_changed": false,
+          "financial_records_changed_basis": "The P19 write path creates only an AgentContextRecord row and locks the owner's User row; it writes no funding, admission, execution, recovery, revocation or stop row (agent_context/controls.py:134-174)."
         },
-        "record_refs": [{ "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v4", "time": "2026-10-12T21:39:00Z", "time_field": "created_at" }],
+        "record_refs": [
+          { "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v1", "time": "2026-10-12T21:36:00Z", "time_field": "created_at" },
+          { "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v2", "time": "2026-10-12T21:37:00Z", "time_field": "created_at" },
+          { "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v3", "time": "2026-10-12T21:38:00Z", "time_field": "created_at" },
+          { "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v4", "time": "2026-10-12T21:39:00Z", "time_field": "created_at" }
+        ],
         "as_of": "2026-10-12T21:39:00Z"
       },
       "expected_conversation_summary": {
         "renders_from": "expected_direct_projection",
         "statements": [
-          "A correction made memory version 2 (ctx-v2), which the next applicable task used.",
-          "Disabling made version 3 (ctx-v3) and clearing made version 4 (ctx-v4); later tasks retrieve no memory.",
-          "Clearing and disabling changed no financial record, reservation, pending action or permission.",
-          "A suggested lesson stays a suggestion until the owner adopts it."
+          "The seed version 1 (ctx-v1) held preference-1 (ADOPTED) and lesson-1 (SUGGESTED); a task retrieved only preference-1.",
+          "A correction made version 2 (ctx-v2): preference-1 text became 'Show the source and time.' and its kind is CORRECTION; lesson-1 stayed SUGGESTED and is still not retrieved.",
+          "Disabling made version 3 (ctx-v3) and clearing made version 4 (ctx-v4); while the state is not ACTIVE, no entry is retrieved.",
+          "The write path creates only AgentContextRecord rows, so no financial record, reservation, pending action or permission changed (agent_context/controls.py:134-174)."
         ],
         "values_agree": true,
         "sources_agree": true,

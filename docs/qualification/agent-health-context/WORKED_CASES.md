@@ -65,7 +65,7 @@ renders from it and must agree on exact values, sources and unknowns.
 | `pending_unknown_original` | pending unknown original transaction | `pending_reconciliation = true`; exact original action and recovery case kept |
 | `stop_sticky_after_restart` | stop/removal sticky after restart | `HALT_ALL_SWAPS` + `CONFIRMED` removal deny; residual = confirmed entry; realized 0; gas recomputed |
 | `owner_b_navigation_retarget_denied` | owner B / target navigation | `404`, no provider call, no retarget, `as_of: null` |
-| `context_corrected_disabled_cleared` | stale vs corrected/disabled/cleared context | versions 1-4 with record ids; no financial record changes |
+| `context_corrected_disabled_cleared` | stale vs corrected/disabled/cleared context | versions 1-4 all cited; entry counts and retrieved ids/text derive from listed `entries`; the correction does not adopt the suggested lesson; disable/clear retrieve none; financial basis cited |
 | `repeated_preview_same_action` | repeated preview and job/action identity | a QUEUED action gives an `ENQUEUED` job; the repeated call returns the same job; the PROPOSED preview binds the saved queued action; `future_entries_active` is `UNKNOWN` (no control record) |
 
 ## Independently calculated values
@@ -88,6 +88,13 @@ renders from it and must agree on exact values, sources and unknowns.
   `job-0009` is `ENQUEUED` at `21:44:10`; `act-0009` is `QUEUED` (intent `21:44:05`, queue `21:44:10`).
   No stop, removal or deployment row exists, so `future_entries_active` is
   `{ "state": "UNKNOWN", "reason": "NO_CONTROL_RECORD" }`, never `false`.
+- `context_corrected_disabled_cleared`: each of `ctx-v1`..`ctx-v4` is cited in `record_refs` and
+  carries its `entries` payload. `entries_count` equals the listed entry count (2, 2, 2, 0). A task
+  retrieves only ADOPTED entries while the state is ACTIVE (`agent_context/controls.py:261-278`):
+  v1 retrieves `preference-1`, v2 retrieves the corrected `preference-1`, and v3 (DISABLED) and v4
+  (CLEARED) retrieve none. The correction changes the adopted text and kind; `lesson-1` stays
+  SUGGESTED, so it is not retrieved. The write path creates only `AgentContextRecord` rows
+  (`controls.py:134-174`), so no financial state changes; that claim names its source basis.
 
 ## Event ordering and expired scope
 

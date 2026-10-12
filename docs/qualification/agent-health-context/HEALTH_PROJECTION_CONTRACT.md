@@ -195,9 +195,13 @@ reference is enough; the agreement must not repeat the same saved value in sever
 
 - The authenticated owner controls lookup. A navigation target, an attached record or a conversation
   turn cannot retarget a saved task context to another owner, agent or wallet.
-- Clearing or disabling P19 memory (`agent_context/controls.py`, `clear_context`/`disable_context`)
-  omits the memory entries from later tasks. It keeps every required owner, safety and permission
-  state. The financial records are unchanged.
+- Retrieval returns ADOPTED `context_id`/`text` only while the state is `ACTIVE`; a `DISABLED` or
+  `CLEARED` state returns none (`agent_context/controls.py:261-278`). A correction changes the
+  adopted text and kind; it does not adopt a suggested lesson.
+- Clearing or disabling P19 memory (`clear_context`/`disable_context`) omits the memory entries from
+  later tasks. It keeps every required owner, safety and permission state. The P19 write path creates
+  only an `AgentContextRecord` row, so no financial record, reservation, pending action or permission
+  changes (`agent_context/controls.py:134-174`).
 - Memory never grants authority, changes adopted rules or changes the schedule.
 
 ## 9. Consumer interface
