@@ -388,6 +388,8 @@ def main() -> int:
         token_a, token_b, token_c = signer.token(OWNER_A), signer.token(OWNER_B), signer.token(OWNER_C)
         # SOURCE-LOCAL native journey: one owner per browser width, each inside its own research budget.
         native_tokens = {name: signer.token(f"did:privy:test-native-{name}") for name in ("desktop", "mobile-390")}
+        # RESEARCH-PORTS-LOCAL journey: one more owner per width for the HTTP-client job and the Nansen report.
+        native_tokens.update({f"ports-{name}": signer.token(f"did:privy:test-ports-{name}") for name in ("desktop", "mobile-390")})
         token_bad = TestSigner().token(OWNER_A)
         p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
         rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
@@ -403,6 +405,8 @@ def main() -> int:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
                       "P03_TOKEN_NATIVE_DESKTOP": native_tokens["desktop"],
                       "P03_TOKEN_NATIVE_MOBILE_390": native_tokens["mobile-390"],
+                      "P03_TOKEN_PORTS_DESKTOP": native_tokens["ports-desktop"],
+                      "P03_TOKEN_PORTS_MOBILE_390": native_tokens["ports-mobile-390"],
                       "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
                       "P19_AGENT_B_RECORD_ID": p19_fixtures["agent_record_ids"]["agent-b"],
                       "P19_LONG_MONITORING_RECORD_ID": p19_fixtures["long_monitoring_record_id"],
@@ -508,6 +512,11 @@ def main() -> int:
         signed_seen = [str(p.name) for p in texts if any(raw in p.read_text(errors="ignore") for raw in signed)]
         ok &= rec.step("logs and browser results contain no raw signed transaction bytes", bool(signed) and not signed_seen,
                        {"signed_vectors": len(signed), "found_in": signed_seen})
+        # RESEARCH-PORTS-LOCAL: the authored bearer value and authored credit headers stay inside the server process.
+        authored = ("authored-local-fixture", "x-nansen-credits-remaining")
+        authored_seen = [str(p.name) for p in texts if any(value in p.read_text(errors="ignore") for value in authored)]
+        ok &= rec.step("logs and browser results contain no authored bearer value or provider header",
+                       not authored_seen, authored_seen)
     except Exception as error:  # noqa: BLE001
         rec.step("run aborted", False, f"{type(error).__name__}: {error}")
         ok = False

@@ -61,3 +61,27 @@ test("restarted services reopen the native report, transport facts and replay un
   expect((await apiGet(page, tokens.b, `/v1/spot-replays/${run.replayId}`)).status).toBe(404);
   await shot(page, project, "n4-native-reopened");
 });
+
+test("restarted services reopen the HTTP-client dataset and the Nansen report unchanged", async ({ page }, info) => {
+  const project = info.project.name;
+  const token = process.env[`P03_TOKEN_PORTS_${project.replace("-", "_").toUpperCase()}`];
+  const run = saved(`ports-${project}`);
+  await open(page, token);
+  await page.goto(run.url);
+  const panel = page.getByTestId("nansen-report");
+  const nansenJob = panel.getByTestId("nansen-job").first();
+  await expect(nansenJob).toHaveAttribute("data-state", "REPORTED");
+  await nansenJob.getByRole("button", { name: "Open saved report" }).click();
+  const view = panel.getByTestId("nansen-report-view");
+  await expect(view.getByTestId("nansen-question")).toHaveText(`Question: ${run.question}`);
+  await expect(view.getByTestId("nansen-hashes")).toContainText("Saved hashes recomputed and matched.");
+  const report = (await apiGet(page, token, `/v1/research/nansen-reports/${run.reportId}`)).body;
+  expect(report.content_sha256).toBe(run.reportSha256);
+  // Reopening reads the saved report; it never bills or runs the transport again.
+  const job = (await apiGet(page, token, `/v1/research/investigation-jobs/${run.nansenJobId}`)).body;
+  expect(job.events.filter((event) => event.kind === "ATTEMPT_STARTED")).toHaveLength(1);
+  const dataset = await apiGet(page, token, `/v1/research/history-datasets/${run.datasetId}`);
+  expect(dataset.body.hashes_verified).toEqual({ content_sha256: true, raw_evidence_sha256: true });
+  expect((await apiGet(page, tokens.b, `/v1/research/nansen-reports/${run.reportId}`)).status).toBe(404);
+  await shot(page, project, "p5-ports-reopened");
+});

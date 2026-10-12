@@ -44,18 +44,25 @@ def input_sha256(payload: Mapping[str, Any]) -> str:
 
 
 def collect_recorded_history(source: Mapping[str, Any], bounds: Mapping[str, Any], deadline_utc: str | None,
-                             cancelled: Callable[[], bool], clock: Callable[[], str]) -> tuple[ToolResult, dict[str, Any],
-                                                                                               dict[str, Any],
-                                                                                               dict[str, Any] | None]:
+                             cancelled: Callable[[], bool], clock: Callable[[], str],
+                             http_clients: Callable[..., Any] | None = None) -> tuple[ToolResult, dict[str, Any],
+                                                                                      dict[str, Any],
+                                                                                      dict[str, Any] | None]:
     """Collect and qualify the one declared recorded source. P07 partial results are outcomes, not errors.
 
     A `RECORDED_NATIVE_RESPONSE` source runs through the accepted P07 transport and corroboration with recorded
-    clients and returns its transport facts; a bundle source returns None for them."""
+    clients; an `AUTHORED_HTTP_RESPONSE` source runs the same seams through the accepted P07 HTTP clients the caller
+    composed. Both return their transport facts; a bundle source returns None for them."""
     started = time.monotonic()
     transport = None
-    if source["evidence_class"] == history_dataset.NATIVE_CLASS:
+    if source["evidence_class"] in history_dataset.NATIVE_SHAPED:
+        base_clients = None
+        if source["evidence_class"] == history_dataset.HTTP_CLASS:
+            if http_clients is None:
+                raise ValueError("the HTTP source needs the application's composed HTTP clients")
+            base_clients = http_clients(source, bounds, cancelled)
         collection, normalized, transport = native_history_collection.collect_native(
-            source, bounds, deadline_utc, cancelled, clock)
+            source, bounds, deadline_utc, cancelled, clock, base_clients)
         usage_state, usage = history_dataset.measured_usage(transport)
     else:
         collection, normalized = history_dataset.collect_recorded(source, bounds, deadline_utc, cancelled, clock)

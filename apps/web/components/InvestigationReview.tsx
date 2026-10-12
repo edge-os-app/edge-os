@@ -5,6 +5,7 @@ import { api, ApiError } from "../lib/api";
 import type { HistoryDeclaration, HistorySource, InvestigationJob, InvestigationReport, ResearchBudget, TransportSummary } from "../lib/api";
 import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationProposal, InvestigationSaveResult } from "../lib/types";
 import { EffectComparisonPanel } from "./EffectComparisonPanel";
+import { ResearchNansenReport } from "./ResearchNansenReport";
 
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
@@ -457,6 +458,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
         </div>
       ) : null}
       <HistoryInvestigation intakeId={intakeId} interpretationRevisionId={interpretationRevisionId} />
+      <ResearchNansenReport intakeId={intakeId} />
     </section>
   );
 }
@@ -541,7 +543,9 @@ function TransportFacts({ transport }: { transport: TransportSummary }) {
   const corroboration = transport.corroboration;
   return (
     <p className="muted" data-testid="history-transport">
-      Native recording, replayed locally: {transport.envio_pages_framed} Envio pages framed; chain id checked against recorded responses: {transport.chain_id === null ? "not read" : `${transport.chain_id}${transport.chain_network ? ` (${transport.chain_network})` : " (not Monad)"}`}; receipt corroboration {corroboration.class}, {corroboration.sample_size} of {corroboration.population_size} checked, {corroboration.mismatches} mismatches{transport.corroboration_reason ? ` (${transport.corroboration_reason})` : ""}. Client calls: {Object.entries(transport.client_calls).map(([name, count]) => `${name} ${count}`).join(", ")}. Recorded declarations, not read by the application: {transport.recorded_declarations.join(", ").replaceAll("_", " ")}.
+      {transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+        ? `Authored HTTP responses served on this server through the accepted P07 HTTP clients (${Object.values(transport.client_classes ?? {}).join(", ")}), no network. Not provider data: `
+        : "Native recording, replayed locally: "}{transport.envio_pages_framed} Envio pages framed; chain id checked against recorded responses: {transport.chain_id === null ? "not read" : `${transport.chain_id}${transport.chain_network ? ` (${transport.chain_network})` : " (not Monad)"}`}; receipt corroboration {corroboration.class}, {corroboration.sample_size} of {corroboration.population_size} checked, {corroboration.mismatches} mismatches{transport.corroboration_reason ? ` (${transport.corroboration_reason})` : ""}. Client calls: {Object.entries(transport.client_calls).map(([name, count]) => `${name} ${count}`).join(", ")}. Recorded declarations, not read by the application: {transport.recorded_declarations.join(", ").replaceAll("_", " ")}.
     </p>
   );
 }
@@ -776,11 +780,14 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
                 provider_requests: String(next.transport ? next.transport.provider_requests_needed : next.page_requests_recorded) }));
             }}>
               <option value="">Choose a recorded source</option>
-              {sources.map((item) => <option key={item.source_id} value={item.source_id}>{item.title}</option>)}
+              {sources.map((item) => <option key={item.source_id} value={item.source_id} disabled={item.available === false}>
+                {item.title}{item.available === false ? " (not available on this server)" : ""}</option>)}
             </select>
           </div>
           {source ? <p className="muted">{source.evidence_class}, {source.content_label}. Pool <span className="mono">{source.market.pool_address}</span>; window {source.window.start} to {source.window.end}.</p> : null}
-          {source?.transport ? <p className="muted" data-testid="history-source-transport">Replayed through the accepted Envio HyperSync transport with QuickNode receipt checks, against recorded responses only. It needs {source.transport.provider_requests_needed} provider requests: {source.page_requests_recorded} pages, one chain read and {source.transport.corroboration_sample_size} receipts.</p> : null}
+          {source?.transport ? <p className="muted" data-testid="history-source-transport">{source.transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+            ? "Served through the accepted P07 HTTP clients over authored responses on this server, with no network and no credential."
+            : "Replayed through the accepted Envio HyperSync transport with QuickNode receipt checks, against recorded responses only."} It needs {source.transport.provider_requests_needed} provider requests: {source.page_requests_recorded} pages, one chain read and {source.transport.corroboration_sample_size} receipts.</p> : null}
           <div className="field">
             <label htmlFor="history-hypothesis">Your hypothesis in your own words</label>
             <textarea id="history-hypothesis" className="input" value={hypothesis} onChange={(event) => { setHypothesis(event.target.value); setAdopted(false); }} />

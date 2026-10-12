@@ -46,6 +46,10 @@ def configure(env: dict[str, str]) -> None:
     env["EDGE_OS_RESEARCH_HISTORY_MODE"] = "recorded"
     env["EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS"] = BUDGET_PROVIDER_REQUESTS
     env["EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS"] = "3600"
+    # RESEARCH-PORTS-LOCAL: the accepted P07 HTTP clients and the Nansen package over the application's AUTHORED
+    # transports (no network, no credential). Production refuses both values.
+    env["EDGE_OS_RESEARCH_SOURCE_CLIENTS"] = "authored_http"
+    env["EDGE_OS_NANSEN_RESEARCH_MODE"] = "authored_fixture"
 
 
 def actual_data_refusal(packet: str | None) -> str | None:
@@ -208,6 +212,75 @@ def inspect_native(pg: harness.Postgres, results: dict[str, Any]) -> dict[str, A
             "all_checks_pass": bool(checks) and all(expectations.values())}
 
 
+def inspect_ports(pg: harness.Postgres, results: dict[str, Any]) -> dict[str, Any]:
+    """Direct SQL over the RESEARCH-PORTS-LOCAL journeys: the HTTP-client dataset, the Nansen request, report, job
+    kind and its separate credit settlement in the shared quota ledger."""
+    checks: dict[str, Any] = {}
+    expectations: dict[str, bool] = {}
+    ports = {key: run for key, run in results.items() if key.startswith("ports-")}
+    for key, run in ports.items():
+        http = _rows(pg, "select j.kind, j.state, j.budget, d.content->>'evidence_class' evidence, "
+                         "d.content->>'content_label' label, d.content->'verdict'->>'overall' verdict, "
+                         "d.content->'transport'->>'clients' clients, d.content->'transport'->'client_classes' classes, "
+                         "d.content->'transport'->>'transport_label' transport_label, "
+                         "d.content->'transport'->'http_accounting' accounting, "
+                         "jsonb_array_length(d.content->'transport'->'response_sha256') responses, "
+                         "d.content->'transport'->'client_calls' calls, d.content_sha256, "
+                         "position('authored-local-fixture' in d.content::text) bearer_in_record "
+                         "from research_local.investigation_jobs j join research_local.history_datasets d using (dataset_id) "
+                         f"where j.declaration_id = '{run['declarationId']}'")
+        nansen = _rows(pg, "select j.kind, j.state, j.terminal_reason, j.budget, j.declaration_id::text request_id, "
+                           "q.content->'request'->>'question' request_question, q.content_sha256 request_sha256, "
+                           "r.report_id::text, r.content_sha256, r.content->>'evidence_class' evidence, "
+                           "r.content->>'transport_label' transport_label, r.content->'report'->>'question' question, "
+                           "r.content->'report'->>'answer_state' answer, r.content->'settlement' settlement, "
+                           "r.request_id = q.request_id request_bound "
+                           "from research_local.investigation_jobs j "
+                           "join research_local.nansen_requests q on q.request_id = j.declaration_id "
+                           "join research_local.nansen_reports r on r.job_id = j.job_id "
+                           f"where j.job_id = '{run['nansenJobId']}'")
+        events = [row["kind"] for row in _rows(pg, "select kind from research_local.investigation_events "
+                                                   f"where job_id = '{run['nansenJobId']}' order by seq")]
+        reservation = _rows(pg, "select amounts, settled from usage_local.usage_reservations "
+                                f"where subject_id = '{run['nansenJobId']}'")
+        checks[key] = {"http": http, "nansen": nansen, "events": events, "reservation": reservation}
+        row, report = (http[0] if http else {}), (nansen[0] if nansen else {})
+        expectations.update({
+            f"{key}: HTTP-client job reported a labelled authored dataset": row.get("kind") == "HISTORY_INVESTIGATION"
+            and row.get("state") == "REPORTED" and row.get("evidence") == "AUTHORED_HTTP_RESPONSE"
+            and row.get("label") == "SYNTHETIC_FIXTURE" and row.get("verdict") == "QUALIFIED",
+            f"{key}: the accepted P07 HTTP client classes served 27 authored responses":
+            row.get("clients") == "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT" and row.get("classes") == {
+                "ENVIO_HYPERSYNC": "HttpEnvioQueryClient", "QUICKNODE_JSON_RPC": "HttpQuickNodeRpcClient"}
+            and row.get("transport_label") == "AUTHORED_HTTP_TRANSPORT" and row.get("responses") == 27
+            and row.get("calls") == {"ENVIO_HYPERSYNC": 2, "QUICKNODE_JSON_RPC": 25}
+            and all(item.get("unknown_liability") == 0 for item in (row.get("accounting") or {"x": {}}).values()),
+            f"{key}: the authored bearer value is absent from the saved dataset": row.get("bearer_in_record") == 0,
+            f"{key}: HTTP-client usage settled as measured calls": row.get("budget", {}).get("consumed", {})
+            .get("provider_requests") == 27,
+            f"{key}: Nansen job saved its request and one bound report": report.get("kind") == "NANSEN_REPORT"
+            and report.get("state") == "REPORTED" and report.get("request_bound") is True
+            and report.get("evidence") == "AUTHORED_FIXTURE" and report.get("transport_label") == "AUTHORED_NANSEN_TRANSPORT",
+            f"{key}: the report question is the saved request text, unchanged": bool(report.get("question"))
+            and report.get("question") == report.get("request_question") == run.get("question"),
+            f"{key}: Nansen credits reserved separately and settled as known": bool(reservation)
+            and reservation[0]["amounts"].get("nansen_credits") == 12
+            and report.get("budget", {}).get("consumed", {}).get("nansen_credits") == 6
+            and report.get("budget", {}).get("unknown_liability", {}).get("nansen_credits") == 0
+            and (report.get("settlement") or {}).get("nansen_credits", {}).get("state") == "KNOWN",
+            f"{key}: one Nansen attempt, reserved before it started": events.count("ATTEMPT_STARTED") == 1
+            and "BUDGET_RESERVED" in events and events.index("BUDGET_RESERVED") < events.index("ATTEMPT_STARTED"),
+        })
+    allocations = _rows(pg, "select scope, cap, reserved, consumed, unknown from usage_local.usage_allocations "
+                            "where resource = 'nansen_credits' order by scope, owner_key")
+    checks["nansen_credit_allocations"] = allocations
+    expectations["global Nansen credit ledger holds exactly the known charges"] = bool(ports) and any(
+        row["scope"] == "GLOBAL" and row["consumed"] == 6 * len(ports) and row["reserved"] == 0 and row["unknown"] == 0
+        for row in allocations)
+    return {"checks": checks, "expectations": expectations,
+            "all_checks_pass": bool(ports) and all(expectations.values())}
+
+
 def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, ui_env: dict[str, str],
           run_playwright: Callable[..., int]) -> tuple[bool, dict[str, Any]]:
     log_dir = evidence / "logs"
@@ -217,6 +290,9 @@ def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, u
     code = run_playwright(["research-native-journey.spec.mjs"], ui_env, evidence / "ui-research-native-journey.log")
     ok &= rec.step("SOURCE-LOCAL native journey: declaration on a native recording and its original job, no worker "
                    "running (desktop and 390px, one owner each)", code == 0, {"exit": code})
+    code = run_playwright(["research-ports-journey.spec.mjs"], ui_env, evidence / "ui-research-ports-journey.log")
+    ok &= rec.step("RESEARCH-PORTS-LOCAL: declaration on the P07 HTTP-client source and a Nansen report request on the "
+                   "same saved request, no worker running (desktop and 390px, one owner each)", code == 0, {"exit": code})
     results_path = evidence / "ui" / "research-results.json"
     results = json.loads(results_path.read_text()) if results_path.exists() else {}
     killed = {key: _kill_during_collection(env, run["jobs"]["killed"], log_dir) for key, run in results.items()
@@ -231,6 +307,10 @@ def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, u
     code = run_playwright(["research-native-report.spec.mjs"], ui_env, evidence / "ui-research-native-report.log")
     ok &= rec.step("SOURCE-LOCAL native report, transport facts, market adoption, publication and labelled replay; "
                    "owner B denied (desktop and 390px)", code == 0, {"exit": code})
+    code = run_playwright(["research-ports-report.spec.mjs"], ui_env, evidence / "ui-research-ports-report.log")
+    ok &= rec.step("RESEARCH-PORTS-LOCAL: HTTP-client dataset with labelled client facts and the reopened Nansen report "
+                   "(exact question, findings, gaps, recomputed hashes); owner B denied (desktop and 390px)",
+                   code == 0, {"exit": code})
     results = json.loads(results_path.read_text()) if results_path.exists() else {}
     inspection = inspect(pg, {key: run for key, run in results.items() if key.startswith("research-")})
     rec.write("research-inspection.json", inspection)
@@ -241,6 +321,11 @@ def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, u
     ok &= rec.step("SOURCE-LOCAL native datasets keep transport provenance, measured settlement and replay lineage "
                    "(direct SQL)", native["all_checks_pass"], native["expectations"])
     inspection["native"] = native
+    ports = inspect_ports(pg, results)
+    rec.write("research-ports-inspection.json", ports)
+    ok &= rec.step("RESEARCH-PORTS-LOCAL datasets, Nansen requests, reports and separate credit settlement match the "
+                   "screens (direct SQL)", ports["all_checks_pass"], ports["expectations"])
+    inspection["ports"] = ports
     return ok, inspection
 
 
@@ -257,6 +342,11 @@ def after_restart(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence:
     rec.write("research-native-inspection-after-restart.json", native_after)
     ok &= rec.step("SOURCE-LOCAL native datasets, settlement and replays unchanged by the restart (direct SQL)",
                    "native" in before and native_after["checks"] == before["native"]["checks"])
+    ports_after = inspect_ports(pg, results)
+    rec.write("research-ports-inspection-after-restart.json", ports_after)
+    ok &= rec.step("RESEARCH-PORTS-LOCAL datasets, Nansen reports and credit settlement unchanged by the restart; "
+                   "reopening ran nothing again (direct SQL)",
+                   "ports" in before and ports_after["checks"] == before["ports"]["checks"])
     rec.write("research-inspection-after-restart.json", after)
     unchanged = {key: {name: value for name, value in check.items() if name not in {"jobs", "events"}}
                  for key, check in before["checks"].items()}
