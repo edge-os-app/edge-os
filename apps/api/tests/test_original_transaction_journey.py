@@ -12,6 +12,7 @@ import dataclasses
 import datetime as dt
 import json
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,15 @@ def original(settings, tmp_path, recordings):
     from edge_os_api.main import create_app
 
     with TestClient(create_app(configured)) as client:
+        # A fixed start 30 s into a future five-minute decision slot, advancing with real elapsed time: no run can
+        # cross a slot boundary and be refused for an expired intent or stale input instead of the case under test.
+        from edge_os_api.execution.worker import decision_slot
+
+        start = decision_slot(dt.datetime.now(dt.timezone.utc)) + dt.timedelta(minutes=5, seconds=30)
+        began = time.monotonic()
+        clock = lambda: start + dt.timedelta(seconds=time.monotonic() - began)  # noqa: E731
+        client.app.state.financial.connected._clock = clock
+        client.app.state.financial.ports.clock = clock
         yield client
 
 
