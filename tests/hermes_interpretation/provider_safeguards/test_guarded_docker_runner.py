@@ -2125,3 +2125,46 @@ def test_reading_a_hostile_4_mib_result_after_sealing_ends_inside_the_deadline(t
     assert status in {"UNKNOWN", "EvidenceNotSealed"} and spend.state("attempt-1") == "UNKNOWN"
     assert spend.committed_usd() == Decimal("0.054848")
     assert_outputs_clean_and_held_evidence_private(tmp_path, runner)
+
+
+# --- Repair after round-23 review A1: no job-chosen value is hashed unless its type is checked first ----------------
+
+def _returned_result(evidence: list) -> bytes:
+    import json as json_module
+    return json_module.dumps({
+        "hermes": {"outcome": "returned", "text": "ok", "error_class": None, "request_count": 1, "observed": {},
+                   "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "reported": True}},
+        "sandbox": {"network": {"blocked": True}},
+        "guard": {"admitted_count": 1, "seen_count": len(evidence) + 1, "evidence": evidence}}).encode()
+
+
+@pytest.mark.parametrize("reasons", ["colliding-integers", "plain-strings"])
+def test_refusal_reasons_chosen_by_the_job_cannot_make_the_summary_quadratic(tmp_path: Path, monkeypatch, reasons: str) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    count = 30_000 if reasons == "colliding-integers" else 3
+    evidence = [{"admitted": False, "reason": index * (2**61 - 1) if reasons == "colliding-integers" else "too-large"}
+                for index in range(1, count + 1)]
+    body = _returned_result(evidence)
+    install_process(monkeypatch, lambda output: (output / "container-result.json").write_bytes(body), returncode=0)
+    runner, _, _ = build(tmp_path, credential, timeout_seconds=1.0, seal_grace_seconds=0.3)
+    outcome: list = []
+
+    def go() -> None:
+        started = time.monotonic()
+        try:
+            outcome.append(runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096)))
+        except BaseException as error:  # noqa: BLE001
+            outcome.append(error)
+        outcome.append(time.monotonic() - started)
+
+    worker = threading.Thread(target=go, daemon=True)
+    worker.start()
+    worker.join(timeout=120)
+
+    assert not worker.is_alive() and outcome[1] <= 1.0 + 0.3, outcome[1:]
+    result = outcome[0]
+    if reasons == "colliding-integers":  # a reason that is not text is not a refusal the guard wrote
+        assert result.status == "UNKNOWN" and result.error_class == "ContainerResultUnreadable", result
+    else:
+        assert result.status == "RETURNED" and result.observed["guard_refusal_reasons"] == ["too-large"], result

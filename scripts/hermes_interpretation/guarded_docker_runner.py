@@ -730,8 +730,13 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         try:
             mapped = self._map(raw)
             guard = raw["guard"]
+            refused = [r["reason"] for r in guard["evidence"] if r["admitted"] is not True]
+            if not all(type(reason) is str for reason in refused):  # noqa: E721 - exact type, before any hashing
+                # The guard writes a text reason for every refusal. Anything else is not its evidence, and a job-chosen
+                # value hashed into a set can be made to collide (integers do), which costs time no clock can stop.
+                raise TypeError("a refusal reason that is not text")
             observed = {**mapped.observed, "guard_admitted": guard["admitted_count"], "guard_seen": guard["seen_count"],
-                        "guard_refusal_reasons": sorted({r["reason"] for r in guard["evidence"] if not r["admitted"]})}
+                        "guard_refusal_reasons": sorted(set(refused))}
         except (ValueError, RecursionError, KeyError, TypeError, AttributeError):  # a result the host cannot use
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerResultUnreadable")
