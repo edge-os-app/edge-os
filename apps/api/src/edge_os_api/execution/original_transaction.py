@@ -3,8 +3,8 @@
 This is the application seam for the original-action lifecycle (#58 ORIGINAL-LOCAL). It drives injected clients
 in a fixed order and saves each stage through the caller's journal before the next external effect:
 
-    route quote + nonce → PREPARED → stop/deadline recheck → SIGN_REQUESTED → signer
-    → signed bytes validated → SIGNED (bytes + Keccak hash) → recheck → BROADCAST_REQUESTED → one broadcast
+    route quote + nonce → PREPARED → SIGN_REQUESTED → stop/expiry recheck → signer
+    → signed bytes validated → SIGNED (bytes + Keccak hash) → BROADCAST_REQUESTED → recheck → one broadcast
     → BROADCAST_RETURNED
 
 Nothing is retried, re-quoted, re-nonced, re-fee'd or re-signed, and no second action exists. A failed save stops
@@ -291,14 +291,15 @@ class OriginalTransactionTransport:
             journal("PREPARED", prepared_values)
         except JournalError:
             return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
-        stop = self._recheck()
-        if stop is not None:
-            return self._unsent(journal, stop)
         unsigned = prepared_values["unsigned"]
         try:
             journal("SIGN_REQUESTED", {})
         except JournalError:
             return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
+        # After the save, immediately before the signer call: a slow save never grants a grace interval.
+        stop = self._recheck()
+        if stop is not None:
+            return self._unsent(journal, stop)
 
         try:
             reply = self._clients.signer.rpc(context.wallet_id, prepared_values["signing_request"]["body"])
@@ -323,13 +324,14 @@ class OriginalTransactionTransport:
                                "signed_bytes_length": len(signed)})
         except JournalError:
             return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail="PERSISTENCE_FAILED_AFTER_SIGNING")
-        stop = self._recheck()
-        if stop is not None:
-            return self._possible(journal, f"STOPPED_AFTER_SIGNING:{stop}")
         try:
             journal("BROADCAST_REQUESTED", {})
         except JournalError:
             return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail="PERSISTENCE_FAILED_AFTER_SIGNING")
+        # After the save, immediately before the send: a slow save never grants a grace interval.
+        stop = self._recheck()
+        if stop is not None:
+            return self._possible(journal, f"STOPPED_AFTER_SIGNING:{stop}")
 
         try:
             returned = self._clients.broadcast.call("eth_sendRawTransaction", [signed_hex])

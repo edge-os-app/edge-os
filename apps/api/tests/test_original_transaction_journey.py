@@ -724,3 +724,57 @@ def test_an_unexpected_client_error_reaches_the_log_without_its_text(original, o
         original.app.state.financial.connected.run_pending(limit=50)
     assert "worker job" in caplog.text and "ValueError" in caplog.text
     assert signed[2:42] not in caplog.text
+
+
+# ------------------------------------------- A3: authority changes while a stage save is in progress
+
+@pytest.mark.parametrize("stage,change,expected", [
+    ("SIGN_REQUESTED", "expiry", ("DENIED_UNSENT", "REFUSED_UNSENT", 0, "MANDATE_EXPIRED")),
+    ("SIGN_REQUESTED", "stop", ("DENIED_UNSENT", "REFUSED_UNSENT", 0, "STOPPED")),
+    ("BROADCAST_REQUESTED", "expiry", ("SUBMITTED_UNKNOWN", "STOPPED_AFTER_SIGNING", 1, "MANDATE_EXPIRED")),
+    ("BROADCAST_REQUESTED", "removal", ("SUBMITTED_UNKNOWN", "STOPPED_AFTER_SIGNING", 1, "REMOVAL_REQUESTED")),
+    ("BROADCAST_REQUESTED", "none", ("SUBMITTED_UNKNOWN", "BROADCAST_RETURNED", 1, None))])
+def test_an_authority_change_during_a_stage_save_allows_no_next_effect(original, owner_a, recordings, stage,
+                                                                      change, expected):
+    connected, ports = original.app.state.financial.connected, original.app.state.financial.ports
+    execution = original.app.state.financial.execution
+    start = connected._clock()
+    moment = {"now": start}
+    connected._clock = ports.clock = lambda: moment["now"]
+    agent = f"save-{stage[:4].lower()}-{change}-fx-original"
+    expiry = (start + dt.timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    journal = execution._journal
+
+    def slow_save(owner, attempt_id):
+        save = journal(owner, attempt_id)
+
+        def saved_then_changed(name, values):
+            save(name, values)  # the commit completes; the change lands while the worker was waiting on it
+            if name != stage:
+                return
+            if change == "expiry":
+                moment["now"] = start + dt.timedelta(seconds=11)
+            elif change == "stop":
+                original.post(f"/v1/agents/{agent}/stops", headers=owner_a,
+                              json={"mode": "HALT_ALL_SWAPS", "scope": "AGENT_WALLET_NETWORK"})
+            elif change == "removal":
+                original.post(f"/v1/agents/{agent}/removal", headers=owner_a,
+                              json={"request_key": f"{agent}-removal", "reason": "owner removed the agent"})
+        return saved_then_changed
+
+    execution._journal = slow_save
+    try:
+        ff.confirmed_agent(original, owner_a, agent, network_id=143)
+        ff.adopted(original, owner_a, agent, ff.funded(original, owner_a, agent), expiry=expiry)
+        job = ff.run_job(original, ff.schedule(original, owner_a, agent).json())
+    finally:
+        execution._journal = journal
+    body = action(original, owner_a, job["action_id"])
+    outcome, final_stage, signs, reason = expected
+    assert (job["outcome"], original_of(body)["stage"]) == (outcome, final_stage), job["reason"]
+    if reason is not None:
+        assert reason in original_of(body)["reason"]
+    assert calls(recordings).get("signer.rpc", 0) == signs
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == (1 if change == "none" else 0)
+    states = reservation_states(body)
+    assert ("RESERVED" in states) == (outcome == "SUBMITTED_UNKNOWN")  # released only when no signature exists
