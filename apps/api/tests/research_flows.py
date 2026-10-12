@@ -91,7 +91,8 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
                                     "price_expression": price, "volume_expression": volume,
                                     "essential_inputs": ["price", "quote_volume"], "rule_source": "USER_ADOPTED"}
                                    for evaluation, variant, (price, volume) in zip(evaluations, variants, rules)]},
-            "resource_bounds": bounds or {"provider_requests": 2, "compute_seconds": 30, "max_pages": 2,
+            "resource_bounds": bounds or {"provider_requests": (source["transport"] or {}).get(
+                                              "provider_requests_needed", 2), "compute_seconds": 30, "max_pages": 2,
                                           "max_rows": 200, "max_bytes": 1_048_576, "deadline_seconds": 600},
             "permitted_access": [source["evidence_class"]],
             "stopping_rule": "Stop after the declared evaluations on the declared window.",
@@ -130,11 +131,12 @@ def start(client, headers, intake_id: str, declaration_id: str, key: str | None 
                              "request_key": key or f"job-{uuid.uuid4()}"})
 
 
-def reported_dataset(client, headers, source_id: str = QUALIFIED, direction: str = "OUTPERFORM") -> str:
+def reported_dataset(client, headers, source_id: str = QUALIFIED, direction: str = "OUTPERFORM",
+                     rules: list[tuple[dict[str, Any], dict[str, Any]]] | None = None) -> str:
     """Declare, run one job to its report with a local worker, and return the saved dataset id."""
     from edge_os_api.research.investigation_jobs import InvestigationWorker
 
-    intake_id, declaration_id, _ = declare(client, headers, source_id=source_id, direction=direction)
+    intake_id, declaration_id, _ = declare(client, headers, source_id=source_id, direction=direction, rules=rules)
     job_id = start(client, headers, intake_id, declaration_id).json()["job_id"]
     InvestigationWorker(client.app.state.session_factory, client.app.state.settings).run_job(uuid.UUID(job_id))
     view = client.get(f"/v1/research/investigation-jobs/{job_id}", headers=headers).json()

@@ -289,3 +289,47 @@ def test_a_bundle_source_job_has_no_transport_summary(native, owner_a):
                           json={"operation_id": str(uuid.uuid4()), "request_key": f"bundle-{uuid.uuid4()}"}).json()
     view = run(native, started["job_id"])
     assert view["dataset"]["transport"] is None and "transport" not in dataset(native, owner_a, view)
+
+
+NATIVE_UNIT = "QUOTE:0x" + "d2" * 20
+
+
+def test_a_qualified_native_dataset_flows_to_adoption_publication_and_labelled_replay(native, owner_a, owner_b):
+    from flows import compiled_thesis, publish
+    from research_flows import adoption_body, history_replay_body, reported_dataset, rising, volume_above
+
+    dataset_id = reported_dataset(native, owner_a, source_id=QUALIFIED,
+                                  rules=[(rising(1), volume_above("10", NATIVE_UNIT))])
+    bundle = compiled_thesis(native, owner_a)
+    first, _ = publish(native, owner_a, bundle)
+    parent = first.json()["revision_id"]
+    adopted = native.post(f"/v1/research/requests/{bundle['intake']['record_id']}/market-adoptions", headers=owner_a,
+                          json=adoption_body(bundle, dataset_id, parent=parent, quote_unit=NATIVE_UNIT))
+    assert adopted.status_code == 201, adopted.text
+    second, _ = publish(native, owner_a, adopted.json()["bundle"], parent=parent)
+    assert second.status_code == 201, second.text
+    body = history_replay_body(bundle["head"]["strategy_id"], second.json()["revision_id"], dataset_id)
+    saved = native.post("/v1/spot-replays", headers=owner_a, json=body)
+    assert saved.status_code in (200, 201), saved.text
+    content = saved.json()["content"]
+    assert content["result"]["status"] == "COMPLETE" and content["result"]["evidence_class"] == "SYNTHETIC_FIXTURE"
+    lineage = content["inputs"]["history_input"]
+    assert lineage["source_evidence_class"] == "RECORDED_NATIVE_RESPONSE" and lineage["fill_label"] == "simulated fills"
+    assert lineage["dataset_id"] == dataset_id and lineage["rule_linkage"]["state"] == "ENTRY_IS_DECLARED_RULE"
+    assert "Simulated fills" in content["notice"]
+    assert native.get(f"/v1/spot-replays/{saved.json()['replay_id']}", headers=owner_a).json() == saved.json()
+    assert native.get(f"/v1/spot-replays/{saved.json()['replay_id']}", headers=owner_b).status_code == 404
+    assert native.get(f"/v1/research/history-datasets/{dataset_id}", headers=owner_b).status_code == 404
+
+
+def test_a_limited_native_dataset_cannot_be_adopted_as_a_market(native, owner_a):
+    from flows import compiled_thesis, publish
+    from research_flows import adoption_body, reported_dataset
+
+    dataset_id = reported_dataset(native, owner_a, source_id="native-syn-sampled/1")
+    bundle = compiled_thesis(native, owner_a)
+    first, _ = publish(native, owner_a, bundle)
+    refused = native.post(f"/v1/research/requests/{bundle['intake']['record_id']}/market-adoptions", headers=owner_a,
+                          json=adoption_body(bundle, dataset_id, parent=first.json()["revision_id"],
+                                             quote_unit=NATIVE_UNIT))
+    assert refused.status_code == 409 and refused.json()["code"] == "dataset_not_qualified"
