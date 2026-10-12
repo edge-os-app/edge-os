@@ -297,3 +297,17 @@ def test_a_retrieval_cue_does_not_qualify_a_separate_population_count() -> None:
         codes = {item.code: item.verdict for item in run.report.findings}
         assert codes["HOLDER_INVENTORY"] == "SUPPORTED", question
         assert codes["AMOUNT"] == "UNRESOLVED", question
+
+
+def test_an_unseparated_second_quantity_is_not_absorbed() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    for question in (
+        "How many holder addresses did the provider return what is the count of wallets?",
+        "How many holder addresses did the provider return how many wallets exist?",
+        "What is the number of wallets how many holder addresses did the provider return?",
+    ):
+        run = support.run(support.request(question=question, operations=("holders",)),
+                          [support.response(200, holders)])
+        assert run.report.answer_state != "SUPPORTED_OBSERVATIONS", question
+        codes = {item.code: item.verdict for item in run.report.findings}
+        assert codes.get("AMOUNT") == "UNRESOLVED", question

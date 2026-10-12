@@ -100,18 +100,37 @@ def _contains(tokens: list[str], words: tuple[str, ...]) -> bool:
     return any(word in token for token in tokens for word in words)
 
 
+def _inventory_groups(tokens: list[str]) -> int:
+    """The number of separate inventory-noun runs in a clause.
+
+    "holder addresses" is one run; "holder addresses ... wallets" is two, so an
+    undivided clause that names two inventory objects is ambiguous.
+    """
+    groups = 0
+    in_run = False
+    for token in tokens:
+        is_inventory = any(word in token for word in _INVENTORY_NOUNS)
+        if is_inventory and not in_run:
+            groups += 1
+        in_run = is_inventory
+    return groups
+
+
 def _amount_claim(question: str) -> bool:
     """Whether the question asks for a token amount/value/supply or an unproved total.
 
-    A returned-address count carries returned-inventory evidence, so an
-    inventory-count clause is not an amount claim. A token amount/value/supply, or a
-    count that no returned-inventory clause covers, is an unresolved amount claim.
+    A clause is a supported returned-inventory count only when it names exactly one
+    inventory object and a retrieval cue. Otherwise the quantity is unresolved: a
+    token amount/value/supply, a count with no returned-inventory clause, or an
+    undivided clause that names two inventory objects and borrows one retrieval cue
+    across both.
     """
     for clause in _clauses(question):
         if _contains(clause, _AMOUNT_OBJECT_WORDS):
             return True
-        if _contains(clause, _COUNT_CUE_WORDS) and not (
-                _contains(clause, _INVENTORY_NOUNS) and _contains(clause, _RETURN_CUE_WORDS)):
+        if _contains(clause, _COUNT_CUE_WORDS):
+            if _inventory_groups(clause) == 1 and _contains(clause, _RETURN_CUE_WORDS):
+                continue
             return True
     return False
 
