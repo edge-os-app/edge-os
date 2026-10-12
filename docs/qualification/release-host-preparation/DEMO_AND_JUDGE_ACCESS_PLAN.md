@@ -95,4 +95,4 @@ Source: `docs/research/00_HACKATHON_BRIEF.md` section 4, with public pages reche
 ## 8. Builder decisions required
 
 - A revised smaller release/claim needs an explicit builder decision; do not silently fall back to a fixture demo.
-- The exact claim freeze, host, judge access and repository visibility are builder decisions.
+- The exact claim freeze, host, judge access and repository visibility are builder decisions. The hosting target is the builder-selected **existing Contabo VPS** (amendment A2); the deployment topology and its unmet gates are in [HOST_DECISION_PACKET.md](HOST_DECISION_PACKET.md) and [HOST_QUALIFICATION_RUNBOOK.md](HOST_QUALIFICATION_RUNBOOK.md).

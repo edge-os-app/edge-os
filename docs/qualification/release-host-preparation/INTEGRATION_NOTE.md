@@ -6,10 +6,11 @@ This note explains how the [release-host-preparation package](README.md) is cons
 
 ## What this package is
 
-Six Markdown documents under `docs/qualification/release-host-preparation/` only:
+Seven Markdown documents under `docs/qualification/release-host-preparation/` only:
 
-- `HOST_DECISION_PACKET.md` — host reconciliation, cost separation, unmet gates H1–H12;
+- `HOST_DECISION_PACKET.md` — Contabo VPS target, Docker Compose topology, cost separation, unmet gates H1–H13;
 - `HOST_QUALIFICATION_RUNBOOK.md` — future ordered host checks;
+- `PRIOR_PROJECT_DEPLOYMENT_PATTERNS.md` — portable prior-project deployment lessons (read-only);
 - `RELEASE_EVIDENCE_MAP.md` — RC/PU/RG/IC/AUT + P40/P41 + sponsor trace;
 - `DEMO_AND_JUDGE_ACCESS_PLAN.md` — demo, checks, judge inventory, deadlines;
 - `README.md` — index and current status;
@@ -53,21 +54,24 @@ It changes no application, contract, migration, script or verifier file. The con
 
 - Verifies the exact candidate, both original PASS assessments and the owned-path inventory.
 - Integrates the documentation serially. No application behavior changes.
-- Opens the host/provider packet boundaries from `HOST_DECISION_PACKET.md` §6 and `HOST_QUALIFICATION_RUNBOOK.md` Stage 0 for the builder's decisions.
+- Opens the host/provider packet boundaries from `HOST_DECISION_PACKET.md` §8 and `HOST_QUALIFICATION_RUNBOOK.md` Stage 0 for the builder's decisions.
 
 ## Blocking order
 
-1. **H1 (provider-only egress)** blocks any release claim that enables a real provider. It needs a builder risk/architecture decision before a host is chosen for that claim.
-2. **H2 (isolated Hermes job runtime)** blocks real-model interpretation (RC01) and the hosted research capability (PU04).
-3. **Lane 2 P27 LOCAL** blocks the recurring-operation criteria (AUT01–AUT08) and their hosted checks.
-4. **Lane 3 P31** blocks AUT06's matching health evidence.
-5. **Builder packets** (auth, model, data, wallet, live, recurring) block Stages 4–7.
-6. **Publication** (RC19) blocks any claim that main contains this release.
+1. **H13 (VPS facts)** blocks the topology, sizes and orchestration choice; the builder supplies the facts or authorizes a read-only inspection.
+2. **H1 (provider-only egress)** blocks any release claim that enables a real provider. It needs a builder risk/architecture decision on the Contabo VPS.
+3. **H2 (isolated Hermes job runtime)** blocks real-model interpretation (RC01) and the hosted research capability (PU04).
+4. **H10 (off-VPS backup/restore)** blocks the persistence and recovery claim until a fresh-database restore drill and a real process-replacement restart pass.
+5. **Lane 2 P27 LOCAL** blocks the recurring-operation criteria (AUT01–AUT08) and their hosted checks.
+6. **Lane 3 P31** blocks AUT06's matching health evidence.
+7. **Builder packets** (auth, model, data, wallet, live, recurring) block Stages 4–7.
+8. **Publication** (RC19) blocks any claim that main contains this release.
 
 None of these blocks the documentation integration of this package.
 
 ## Current versus dated limits to preserve
 
+- Amendment A2 (2026-10-12) replaces the earlier Render/Fly/Vercel target with the builder-selected existing Contabo VPS; the prior prices remain dated context only.
 - Keep the earlier preparation documents' history intact. The earlier `HOSTING_AND_ACCESS_ASSESSMENT.md` was prepared against base `5689e1d6` with `NOT RUN`/`UNTESTED` statuses; the `c119e409` integration and the `MISSING_CONNECTION` class come from the workspace planning audit. Their `P05 unwired` and `not implemented` statements are stale for base `3e7ff8bd`; this package corrects them without rewriting the originals.
 - Record which statements are first-party facts (observed 2026-10-12) and which are inspected code at base `3e7ff8bd`.
 - Keep future data-retention and support promises conditional on implemented behavior and provider obligations (PU07).
