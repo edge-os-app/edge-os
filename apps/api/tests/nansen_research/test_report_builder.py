@@ -228,3 +228,44 @@ def test_a_mixed_count_and_amount_question_is_partial() -> None:
     assert codes["HOLDER_INVENTORY"] == "SUPPORTED"
     assert codes["AMOUNT"] == "UNRESOLVED"
     assert "amount" in {item.claim for item in run.report.limitations}
+
+
+def test_returned_inventory_count_phrasings_are_supported_without_a_false_limit() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    for question in (
+        "How many holder addresses did the provider return?",
+        "What is the count of holder addresses returned by the provider?",
+        "What is the number of holder addresses returned by the provider?",
+        "How many holder addresses did the provider return in total?",
+        "HOW MANY holder addresses did the provider return?!",
+        "How many addresses does the provider return?",
+    ):
+        run = support.run(support.request(question=question, operations=("holders",)),
+                          [support.response(200, holders)])
+        assert run.report.answer_state == "SUPPORTED_OBSERVATIONS", question
+        assert run.report.limitations == (), question
+        assert "AMOUNT" not in {item.code for item in run.report.findings}, question
+
+
+def test_token_amount_questions_keep_true_missing_units() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa", token_amount="123")], is_last_page=True)
+    for question in ("What is the total MOE amount?", "What is the total supply of MOE?"):
+        run = support.run(support.request(question=question, operations=("holders",)),
+                          [support.response(200, holders)])
+        assert run.report.answer_state != "SUPPORTED_OBSERVATIONS", question
+        assert "amount" in {item.claim for item in run.report.limitations}, question
+
+
+def test_mixed_returned_count_and_amount_is_partial_in_every_order() -> None:
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    for question in (
+        "How many holder addresses did the provider return, and what is the total amount?",
+        "What is the total amount and how many holder addresses did the provider return?",
+        "How many holder addresses did the provider return; what is the total amount?",
+    ):
+        run = support.run(support.request(question=question, operations=("holders",)),
+                          [support.response(200, holders)])
+        assert run.report.answer_state == "PARTIAL", question
+        codes = {item.code: item.verdict for item in run.report.findings}
+        assert codes["HOLDER_INVENTORY"] == "SUPPORTED", question
+        assert codes["AMOUNT"] == "UNRESOLVED", question

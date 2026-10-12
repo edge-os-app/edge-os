@@ -33,9 +33,16 @@ _CLAIM_KEYWORDS = (
     ("concentration", ("concentrat", "distribut", "share of supply", "percentage of supply")),
     ("flows", ("flow", "inflow", "outflow", "netflow", "net flow")),
     ("buying", ("bought", "buy", "purchase", "accumulat", "sold", "sell", "pnl", "profit")),
-    ("amount", ("amount", "total", "sum", "aggregate", "value", "worth", "capitalization", "marketcap",
-                "supply", "count", "number")),
 )
+
+# Quantity words. A token amount/value/supply needs documented units and a supply
+# denominator. A returned-address count is different: it is supported by the
+# returned inventory rows, and "count"/"number"/"total"/"many" only mean a token
+# amount when no returned-inventory count phrase covers them.
+_AMOUNT_OBJECT_WORDS = ("amount", "value", "worth", "capitalization", "marketcap", "supply", "balance")
+_COUNT_CUE_WORDS = ("count", "number", "total", "sum", "many")
+_INVENTORY_NOUNS = ("holder", "address", "wallet")
+_RETURN_CUE_WORDS = ("return", "provider", "provide")
 
 _CLAIM_FINDING_CODES = {
     "inventory": ("HOLDER_INVENTORY", "HOLDER_PAGINATION", "HOLDER_LABELS"),
@@ -53,6 +60,8 @@ _CLAIM_LIMITATIONS = {
 }
 
 _ALL_KEYWORDS = tuple(word for _claim, words in _CLAIM_KEYWORDS for word in words)
+_QUANTITY_ANCHORS = _AMOUNT_OBJECT_WORDS + _COUNT_CUE_WORDS
+_ANCHOR_WORDS = _ALL_KEYWORDS + _QUANTITY_ANCHORS
 
 # The shared vocabulary model. Only these three closed sets are neutral. Every
 # word in them is either grammatical (it carries no observation) or restates the
@@ -68,7 +77,7 @@ _FUNCTION_WORDS = frozenset({
     "me", "he", "she", "his", "her", "him", "us", "is", "are", "was", "were", "be", "been", "being",
     "am", "do", "does", "did", "done", "has", "have", "had", "will", "would", "can", "could", "should",
     "may", "might", "must", "not", "no", "only", "own", "same", "just", "also", "very", "please",
-    "what", "which", "who", "whom", "whose", "when", "where", "why", "how", "many", "much", "all",
+    "what", "which", "who", "whom", "whose", "when", "where", "why", "how", "much", "all",
     "any", "some", "both", "each", "few", "more", "most", "other", "such",
 })
 _MODIFIER_WORDS = frozenset({
@@ -82,28 +91,55 @@ _RETRIEVAL_WORDS = frozenset({
 _NEUTRAL_WORDS = _FUNCTION_WORDS | _MODIFIER_WORDS | _RETRIEVAL_WORDS
 
 _TOKEN = re.compile(r"[a-z0-9]+")
+_CLAUSE_SPLIT = re.compile(r"[;,/]|\band\b|\bor\b|\bbut\b")
+
+
+def _contains(tokens: list[str], words: tuple[str, ...]) -> bool:
+    return any(word in token for token in tokens for word in words)
+
+
+def _amount_claim(question: str) -> bool:
+    """Whether the question asks for a token amount/value/supply or an unproved total.
+
+    A returned-address count carries returned-inventory evidence, so an
+    inventory-count clause is not an amount claim. A token amount/value/supply, or a
+    count that no returned-inventory clause covers, is an unresolved amount claim.
+    """
+    for clause in _clauses(question):
+        if _contains(clause, _AMOUNT_OBJECT_WORDS):
+            return True
+        if _contains(clause, _COUNT_CUE_WORDS) and not (
+                _contains(clause, _INVENTORY_NOUNS) and _contains(clause, _RETURN_CUE_WORDS)):
+            return True
+    return False
+
+
+def _clauses(question: str) -> list[list[str]]:
+    parts = _CLAUSE_SPLIT.split(question.lower())
+    return [tokens for tokens in (_TOKEN.findall(part) for part in parts) if tokens]
 
 
 def question_coverage(question: str, token_symbol: str = "") -> tuple[tuple[str, ...], bool]:
     """The named claims and whether the whole question is covered.
 
     A token is neutral only when it is in the closed neutral vocabulary or the
-    request token symbol, or when it anchors a recognized claim. Any other content
-    word makes ``uncovered`` True, so a fragment match can never prove complete
-    coverage and the answer state stays conservative.
+    request token symbol, or when it anchors a recognized claim or quantity word.
+    Any other content word makes ``uncovered`` True, so a fragment match can never
+    prove complete coverage and the answer state stays conservative.
     """
     tokens = _TOKEN.findall(question.lower())
-    claims = tuple(claim for claim, words in _CLAIM_KEYWORDS
-                   if any(word in token for token in tokens for word in words))
+    claims = [claim for claim, words in _CLAIM_KEYWORDS if _contains(tokens, words)]
+    if _amount_claim(question):
+        claims.append("amount")
     neutral = set(_NEUTRAL_WORDS)
     if token_symbol:
         neutral.add(token_symbol.lower())
     uncovered = any(
         len(token) >= 2 and not token.isdigit() and token not in neutral
-        and not any(word in token for word in _ALL_KEYWORDS)
+        and not any(word in token for word in _ANCHOR_WORDS)
         for token in tokens
     )
-    return claims, uncovered
+    return tuple(claims), uncovered
 
 
 def classify_question(question: str, token_symbol: str = "") -> tuple[str, ...]:
