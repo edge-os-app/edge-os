@@ -318,7 +318,7 @@ def test_concurrent_turns_get_distinct_evidence_folders_and_container_names(tmp_
     names = [argv[argv.index("--name") + 1] for argv in launched]
     folders = {output_folder(argv) for argv in launched}
     assert len(names) == 2 and len(set(names)) == 2 and len(folders) == 2
-    assert sorted(p.name.split("-", 2)[2] for p in (tmp_path / "evidence").iterdir()) == ["attempt-a", "attempt-b"]
+    assert sorted(p.name.split("-", 2)[2] for p in (tmp_path / "evidence").glob("turn-*")) == ["attempt-a", "attempt-b"]
     assert spend.committed_usd() == RESERVATION * 2 and {spend.state("attempt-a"), spend.state("attempt-b")} == {"UNKNOWN"}
 
 
@@ -2553,3 +2553,190 @@ def test_a_negative_grace_is_refused_when_built_and_before_any_turn_effect(tmp_p
         runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
     assert launched == [] and runner.turn_count == 0 and not (tmp_path / "evidence").exists()
+
+
+# --- Supervised recovery (accepted cleanup rule, 2026-10-12; .scratch/p05-provider/evidence/SUPERVISED_RECOVERY_CONTRACT*.md)
+
+import json as _json  # noqa: E402
+
+
+def _records(tmp_path: Path) -> list[dict]:
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    return [_json.loads(path.read_text()) for path in sorted(folder.glob("*.json"))] if folder.exists() else []
+
+
+def _unstoppable_flood_turn(tmp_path: Path, monkeypatch, *, files: int = 40_000, **build_kwargs):
+    """A turn whose container is present and not ours (never stoppable), with a big output made before the turn."""
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    for index in range(files):
+        (staged / f"f{index}.log").write_text("x")
+    (staged / "secret.log").write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))
+    install_process(monkeypatch, lambda output: os.rename(staged, output / "many"), returncode=-9)
+    return build(tmp_path, credential, **build_kwargs)
+
+
+def test_the_foreground_unlinks_no_more_than_a_small_bounded_number_of_job_files(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    runner, spend, guarded = _unstoppable_flood_turn(tmp_path, monkeypatch, timeout_seconds=0.3, seal_grace_seconds=5.0)
+    unlinked: list[str] = []
+    real_unlink = os.unlink
+
+    def counting_unlink(path, *, dir_fd=None):
+        unlinked.append(path)
+        return real_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(module.os, "unlink", counting_unlink)
+    status, _elapsed = _timed_run(guarded, limit=60)
+
+    assert status == "EvidenceNotSealed" and len(unlinked) <= module.FOREGROUND_REMOVAL_ENTRIES, len(unlinked)
+    assert latest_late() <= 0.0, latest_late()
+    assert list((tmp_path / "evidence").glob("turn-*/output")) == []
+    assert spend.state("attempt-1") == "UNKNOWN" and spend.committed_usd() == Decimal("0.054848")
+    pending = _records(tmp_path)
+    assert len(pending) == 1 and pending[0]["state"] == "pending" and pending[0]["held"]
+
+
+def test_a_pending_cleanup_record_is_written_before_the_job_starts_and_removed_after_a_clean_turn(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    seen: list[list[dict]] = []
+    install_process(monkeypatch, lambda output: seen.append(_records(tmp_path)), returncode=3)
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert len(seen[0]) == 1 and seen[0][0]["state"] == "running" and seen[0][0]["container"].startswith("p05-repair-test-")
+    assert OLD not in _json.dumps(seen[0][0])
+    assert _records(tmp_path) == []  # a clean end leaves nothing pending
+
+
+def test_recovery_at_the_next_turn_removes_held_evidence_and_unblocks_new_work(tmp_path: Path, monkeypatch) -> None:
+    runner, spend, guarded = _unstoppable_flood_turn(tmp_path, monkeypatch, files=2_000, timeout_seconds=0.3, seal_grace_seconds=0.3)
+    with pytest.raises(EvidenceNotSealed):
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    assert _records(tmp_path) and list((tmp_path / "evidence").glob("quarantine-*"))
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))  # the container is gone now
+    install_process(monkeypatch, lambda output: None, returncode=3)
+
+    result = guarded.run_turn(Turn("attempt-2", "prompt", "task", "m", "route", 4096))
+
+    assert result.error_class != "CleanupPending" and _records(tmp_path) == []
+    assert not list((tmp_path / "evidence").glob("quarantine-*")) and plain_bytes_leak(tmp_path / "evidence", OLD) == []
+    assert spend.state("attempt-1") == "UNKNOWN"  # recovery never releases the unknown charge
+
+
+def test_new_work_is_refused_while_cleanup_cannot_be_confirmed(tmp_path: Path, monkeypatch) -> None:
+    runner, spend, guarded = _unstoppable_flood_turn(tmp_path, monkeypatch, files=10, timeout_seconds=0.3, seal_grace_seconds=0.3)
+    with pytest.raises(EvidenceNotSealed):
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+
+    result = guarded.run_turn(Turn("attempt-2", "prompt", "task", "m", "route", 4096))
+
+    assert result.status == "PROVIDER_FAILED" and result.request_count == 0 and result.error_class == "CleanupPending"
+    assert launched == []
+    assert spend.state("attempt-2") == "RELEASED" and spend.state("attempt-1") == "UNKNOWN"
+    assert spend.committed_usd() == Decimal("0.054848")
+
+
+def test_recovery_attempts_are_finite_and_an_exhausted_record_keeps_blocking(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_SECONDS", 0.0)
+    runner, _, guarded = _unstoppable_flood_turn(tmp_path, monkeypatch, files=10, timeout_seconds=0.3, seal_grace_seconds=0.3,
+                                                 recovery_budget_seconds=0.3)
+    with pytest.raises(EvidenceNotSealed):
+        guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    calls: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False, record=calls))
+
+    for _ in range(module.MAX_RECOVERY_ATTEMPTS + 3):
+        runner.recover_pending(0.3)
+    after_exhaustion = len(calls)
+    runner.recover_pending(0.3)
+
+    record = _records(tmp_path)[0]
+    assert record["state"] == "exhausted" and record["attempts"] == module.MAX_RECOVERY_ATTEMPTS
+    assert len(record["history"]) == module.MAX_RECOVERY_ATTEMPTS and len(calls) == after_exhaustion  # no more attempts
+    assert all(entry["end"] - entry["start"] <= entry["budget"] for entry in record["history"]), record["history"]
+    result = runner.run_turn(Turn("attempt-2", "prompt", "task", "m", "route", 4096))
+    assert result.error_class == "CleanupPending"
+    assert [r["container"] for r in runner.pending_cleanup()] == [record["container"]]
+
+
+def test_a_new_runner_after_a_restart_recovers_what_an_interrupted_turn_left(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+
+    def crash(output: Path) -> None:
+        (output / "secret.log").write_text(OLD)
+        raise SystemExit("the host process died during the turn")  # after registration, before any confirmation
+
+    install_process(monkeypatch, crash, returncode=3)
+    runner, _, _ = build(tmp_path, credential)
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_quarantine", lambda self, output, plan: None)  # the process dies first
+    with pytest.raises(SystemExit):
+        runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    monkeypatch.undo()
+    assert len(_records(tmp_path)) == 1  # the identity survived the interrupted turn
+    path = next((tmp_path / "evidence" / "pending-cleanup").glob("*.json"))
+    data = _json.loads(path.read_text())
+    data["pid"] = 999_999  # a process that no longer runs
+    path.write_text(_json.dumps(data))
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+
+    restarted = GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                        credential_file=credential, script_for=lambda turn: {}, timeout_seconds=60)
+    restarted.recover_pending(5.0)
+
+    assert _records(tmp_path) == [] and not list((tmp_path / "evidence").glob("turn-*/output"))
+    assert plain_bytes_leak(tmp_path / "evidence", OLD) == []
+
+
+def test_records_of_another_run_are_neither_recovered_nor_counted(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    foreign = {"version": 1, "run_id": "someone-else", "label": "someone-else", "container": "p05-someone-else-abc-01",
+               "turn_folder": "turn-01-x", "held": [], "state": "pending", "attempts": 0, "pid": 999_999,
+               "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}
+    (folder / "turn-01-x.json").write_text(_json.dumps(foreign))
+    calls: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(record=calls))
+    install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, _ = build(tmp_path, credential)
+
+    result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert result.error_class != "CleanupPending"
+    assert not any(args[0] == "kill" and "someone-else" in args[1] for args, _ in calls)
+    assert _json.loads((folder / "turn-01-x.json").read_text()) == foreign  # untouched
+
+
+@pytest.mark.parametrize("budget", [0, -1.0, float("nan"), float("inf")])
+def test_an_invalid_recovery_budget_is_refused(tmp_path: Path, budget: float) -> None:
+    with pytest.raises(ValueError):
+        GuardedDockerTurnRunner(image="unused", run_id="repair-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                script_for=lambda turn: {}, timeout_seconds=1.0, recovery_budget_seconds=budget)
+
+
+def test_recovery_never_touches_a_turn_that_is_still_running_in_a_live_process(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    running = {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-live-01",
+               "turn_folder": "turn-01-live", "held": [], "state": "running", "attempts": 0, "pid": os.getpid(),
+               "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}
+    (folder / "turn-01-live.json").write_text(_json.dumps(running))
+    calls: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(record=calls))
+    runner, _, _ = build(tmp_path, credential)
+
+    runner.recover_pending(1.0)
+
+    assert calls == [] and _json.loads((folder / "turn-01-live.json").read_text()) == running  # a concurrent turn is left alone

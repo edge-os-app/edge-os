@@ -35,6 +35,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import types
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -73,6 +74,13 @@ REWRITE_LIMIT_BYTES = 1024 * 1024  # a larger file that holds the credential is 
 # The sum (POST_JOB_RESERVE_SECONDS) stays below 0.1 s, so a 0.1 s job timeout with no grace can still launch a job.
 MOVE_RESERVE_SECONDS = 0.04
 POST_JOB_RESERVE_SECONDS = STEP_RESERVE_SECONDS + MOVE_RESERVE_SECONDS  # left after the job wait: 0.08 s
+# Deleting many job-made files can stall one unlink for most of a second (round-26 review), so the foreground deletes at
+# most this many entries; a larger output is moved whole into quarantine and supervised recovery deletes it later.
+FOREGROUND_REMOVAL_ENTRIES = 256
+# Supervised recovery (accepted cleanup rule, 2026-10-12; SUPERVISED_RECOVERY_CONTRACT.md and its addendum).
+MAX_RECOVERY_ATTEMPTS = 5
+RECOVERY_BACKOFF_SECONDS = 1.0  # before attempt n+1: this times 2 ** (n - 1)
+PENDING_FOLDER = "pending-cleanup"
 
 
 _JSON_ESCAPE = re.compile(rb"\\u([0-9a-fA-F]{4})|\\([\"\\/])")
@@ -223,6 +231,16 @@ class _TurnPlan:
     seal_deadline: float  # sealing stops by this time; the rest is kept for removing evidence that could not be sealed
 
 
+class _NoClient:
+    """Stands in for the job client during recovery: the client of an earlier process is gone; only the container counts."""
+
+    def kill(self) -> None:
+        pass
+
+    def communicate(self, timeout: float | None = None) -> tuple[None, None]:
+        return None, None
+
+
 @dataclass
 class _Launch:
     """What the lifecycle needs to know about the job process."""
@@ -235,10 +253,12 @@ class _Launch:
 
 class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def __init__(self, *, policy: GuardPolicy, credential_file: Path | None = None, seal_grace_seconds: float = 5.0,
-                 **kwargs: Any) -> None:
+                 recovery_budget_seconds: float = 5.0, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._check_deadline_settings(self.timeout_seconds, seal_grace_seconds)
+        self._check_recovery_budget(recovery_budget_seconds)
         self.policy, self.credential_file, self.seal_grace_seconds = policy, credential_file, seal_grace_seconds
+        self.recovery_budget_seconds = recovery_budget_seconds
         self._turn_lock = threading.Lock()
         self._token = uuid.uuid4().hex[:6]  # two runner objects with one run_id must not share container names
 
@@ -249,6 +269,11 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                 raise ValueError(f"{label} must be a finite number")  # a NaN would switch every deadline off
         if grace < 0:
             raise ValueError("seal_grace_seconds must not be negative")  # D would come before the job's own end
+
+    @staticmethod
+    def _check_recovery_budget(budget: Any) -> None:
+        if isinstance(budget, bool) or not isinstance(budget, (int, float)) or not math.isfinite(budget) or budget <= 0:
+            raise ValueError("recovery_budget_seconds must be a finite number above 0")
 
     def _plan(self) -> _TurnPlan:
         with self._turn_lock:
@@ -477,9 +502,20 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         A folder that a still-running container swaps for a link is unlinked as a link and never entered. A very deep
         tree needs more descriptors than the process may hold; that raises, and the caller moves the tree instead.
         With a finite `until`, a plain file larger than the scan limit is not unlinked: freeing it takes time that grows
-        with its size, which no clock check can cut short. That raises too, and the caller moves the tree.
+        with its size, which no clock check can cut short. More than FOREGROUND_REMOVAL_ENTRIES entries are not removed
+        either: mass deletion can stall one unlink for most of a second. Both raise, and the caller moves the tree.
         """
+        cls._remove_walk(root, until, FOREGROUND_REMOVAL_ENTRIES if until != math.inf else None)
+
+    @classmethod
+    def _remove_walk(cls, root: Path, until: float, entry_limit: int | None) -> None:
+        """The removal walk itself: at most `entry_limit` entries (None: no limit), and nothing after `until`."""
+        seen = [0]
+
         def visit(dir_fd: int, name: str, mode: int) -> None:
+            seen[0] += 1
+            if entry_limit is not None and seen[0] > entry_limit:
+                raise TimeoutError("too many entries to remove on the clock")
             if stat.S_ISDIR(mode):
                 return
             if (until != math.inf and stat.S_ISREG(mode)
@@ -561,6 +597,139 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             if isinstance(error, EvidenceNotSealed):
                 raise EvidenceNotSealed(str(error)) from None  # its cause may name a file that holds the credential
             raise EvidenceNotSealed(f"the evidence could not be sealed ({type(error).__name__})") from None
+
+    # --- Supervised recovery ------------------------------------------------------------------------------------
+
+    def _pending_folder(self) -> Path:
+        return self.evidence_dir / PENDING_FOLDER
+
+    @staticmethod
+    def _write_record(path: Path, data: dict[str, Any]) -> None:
+        """Write a record whole or not at all (temporary file, then rename); private to the host user."""
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, sort_keys=True)
+        os.replace(temporary, path)
+
+    @staticmethod
+    def _read_record(path: Path) -> dict[str, Any] | None:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _register(self, plan: _TurnPlan, task_dir: Path) -> Path:
+        """Record the turn's container and folders as pending cleanup BEFORE the job starts (no credential, no output)."""
+        path = self._pending_folder() / f"{task_dir.name}.json"
+        self._write_record(path, {"version": 1, "run_id": self.run_id, "label": plan.run_id, "container": plan.name,
+                                  "turn_folder": task_dir.name, "held": [], "state": "running", "pid": os.getpid(),
+                                  "attempts": 0, "created": time.time(), "last_attempt": None,
+                                  "next_attempt_after": 0.0, "history": []})
+        return path
+
+    def _mark_pending(self, path: Path, task_dir: Path) -> None:
+        """The turn did not end cleanly: keep its record, now pending, with the held folders it left."""
+        data = self._read_record(path)
+        if data is None:
+            return  # the registered record stays as it was: the identity is not lost
+        data["state"] = "pending"
+        data["held"] = sorted(held.name for held in self.evidence_dir.glob(f"quarantine-{task_dir.name}-*"))
+        try:
+            self._write_record(path, data)
+        except OSError:
+            pass  # the registered record still names the container and the turn folder
+
+    @staticmethod
+    def _alive(pid: Any) -> bool:
+        if not isinstance(pid, int) or pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _own_records(self) -> list[tuple[Path, dict[str, Any] | None]]:
+        folder = self._pending_folder()
+        if not folder.is_dir():
+            return []
+        found = []
+        for path in sorted(folder.glob("*.json")):
+            data = self._read_record(path)
+            if data is None or data.get("run_id") == self.run_id:  # an unreadable record is treated as ours: it blocks
+                found.append((path, data))
+        return found
+
+    def _blocking_records(self) -> list[Path]:
+        """Records that block new work: everything of this run except a turn still running in a live process."""
+        return [path for path, data in self._own_records()
+                if data is None or not (data.get("state") == "running" and self._alive(data.get("pid")))]
+
+    def pending_cleanup(self) -> list[dict[str, Any]]:
+        """The pending-cleanup records of this run, for reporting (they hold no credential and no job output)."""
+        return [data if data is not None else {"unreadable": path.name} for path, data in self._own_records()]
+
+    def recover_pending(self, budget_seconds: float) -> list[dict[str, Any]]:
+        """One supervised recovery pass with ONE budget C for every operation in it. Never touches the spend ledger.
+
+        For each record of this run whose turn is not running in a live process and whose backoff has passed: verify
+        the container is gone (killing it only if the name and label match), then remove the turn's leftover output and
+        held folders. Confirmed: the record is deleted. Not confirmed: the attempt is recorded, the backoff doubles, and
+        after MAX_RECOVERY_ATTEMPTS the record is marked exhausted, kept for intervention and never retried.
+        """
+        self._check_recovery_budget(budget_seconds)
+        deadline = time.monotonic() + budget_seconds
+        for path, data in self._own_records():
+            if time.monotonic() >= deadline:
+                break
+            if data is None or data.get("state") == "exhausted":
+                continue
+            if data.get("state") == "running" and self._alive(data.get("pid")):
+                continue
+            if time.time() < float(data.get("next_attempt_after") or 0.0):
+                continue
+            self._recover_one(path, data, deadline, budget_seconds)
+        return self.pending_cleanup()
+
+    def _recover_one(self, path: Path, data: dict[str, Any], deadline: float, budget: float) -> None:
+        start = time.monotonic()
+        stop_until = deadline - min(0.05, budget / 4)  # the rest of C is kept for removal and the record
+        identity = types.SimpleNamespace(name=str(data.get("container")), run_id=str(data.get("label")), stop_deadline=stop_until)
+        stopping = self._stop_owned(identity, _NoClient())
+        left: list[str] = []
+        if stopping["container_absent"]:
+            turn_folder = self.evidence_dir / str(data.get("turn_folder"))
+            targets = [turn_folder / "output", *(self.evidence_dir / str(name) for name in data.get("held") or []),
+                       *self.evidence_dir.glob(f"quarantine-{turn_folder.name}-*")]
+            for target in dict.fromkeys(targets):
+                if target.parent != self.evidence_dir and target.parent != turn_folder:
+                    continue  # never outside this run's evidence folder
+                if not os.path.lexists(target):
+                    continue
+                try:
+                    self._remove_walk(target, deadline - min(0.02, budget / 10), None)
+                except Exception:  # noqa: BLE001 - out of time or a walk failure: what is left stays recorded
+                    pass
+                if os.path.lexists(target):
+                    left.append(target.name)
+        else:
+            left.append(str(data.get("container")))
+        entry = {"start": start, "end": time.monotonic(), "budget": budget, "container_absent": stopping["container_absent"],
+                 "ownership_verified": stopping["ownership_verified"], "left": left, "at": time.time()}
+        if not left:
+            path.unlink(missing_ok=True)  # recovered: the container is gone and nothing is held
+            return
+        data["attempts"] = int(data.get("attempts") or 0) + 1
+        data["history"] = [*(data.get("history") or []), entry][-MAX_RECOVERY_ATTEMPTS:]
+        data["last_attempt"] = entry["at"]
+        data["next_attempt_after"] = entry["at"] + RECOVERY_BACKOFF_SECONDS * 2 ** (data["attempts"] - 1)
+        data["state"] = "exhausted" if data["attempts"] >= MAX_RECOVERY_ATTEMPTS else "pending"
+        self._write_record(path, data)
 
     # --- Stopping the container ------------------------------------------------------------------------------------
 
@@ -665,10 +834,27 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     # --- One turn -------------------------------------------------------------------------------------------------
 
     def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
+        """One turn. Recovery of earlier pending cleanup runs first, on its own budget; while any stays unconfirmed, no
+        new work starts (CleanupPending, nothing sent). The turn is registered as pending cleanup before the job starts,
+        and the record is removed only when the turn ends cleanly."""
+        self.recover_pending(self.recovery_budget_seconds)
+        if self._blocking_records():
+            return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
+                                    observed={"guard_admitted": 0}, error_class="CleanupPending")
         plan = self._plan()
         task_dir = self.evidence_dir / f"turn-{plan.sequence:02d}-{turn.attempt_id}"
         output = task_dir / "output"
         output.mkdir(parents=True)
+        record = self._register(plan, task_dir)
+        try:
+            result = self._run_turn_steps(turn, plan, task_dir, output)
+        except BaseException:
+            self._mark_pending(record, task_dir)
+            raise
+        record.unlink(missing_ok=True)  # ended cleanly: nothing is pending
+        return result
+
+    def _run_turn_steps(self, turn: HermesTurn, plan: _TurnPlan, task_dir: Path, output: Path) -> HermesTurnResult:
         launch = _Launch()
         try:
             with tempfile.TemporaryDirectory(prefix="p05-credential-") as private:
