@@ -193,7 +193,7 @@ def after_restart(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence:
     worker = start_worker(env, evidence / "logs", name="worker-restarted")
     processes.append(worker)
     ok = rec.step("bounded worker restarted on the same database", worker.popen.poll() is None)
-    code = run_playwright(["financial-reopen.spec.mjs"], ui_env, evidence / "ui-financial-reopen.log")
+    code = run_playwright(["financial-restart.spec.mjs"], ui_env, evidence / "ui-financial-restart.log")
     ok &= rec.step("financial journey reopens unchanged after API and worker restart (new browser context)",
                    code == 0, {"exit": code})
     results = json.loads((evidence / "ui" / "financial-results.json").read_text())

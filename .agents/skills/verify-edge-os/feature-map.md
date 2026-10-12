@@ -48,7 +48,7 @@ Not covered: real Privy login (`R1`–`R4` of the P01 profile), real wallets, de
 
 ## Connected financial journey (#58 Stage 1, fixture execution)
 
-The API runs with `EDGE_OS_EXECUTION_MODE=fixture` and `EDGE_OS_FIXTURE_EFFECTS_PATH=<evidence>/fixture-effects.jsonl`; production refuses both. `scripts/p03/financial_phase.py` starts the bounded worker (`python -m edge_os_api.execution.worker --interval 1`), drives `tests/p03/financial-journey.spec.mjs` at desktop and 390px after `e2e.spec.mjs` saved the thesis revision and its labelled synthetic replay, inspects rows with SQL and the independent effect record, and after the shared API restart restarts the worker and drives `financial-reopen.spec.mjs` in a new browser context. Every value is an authored fixture: no wallet, deposit, quote, transaction, receipt or removal at any provider.
+The API runs with `EDGE_OS_EXECUTION_MODE=fixture` and `EDGE_OS_FIXTURE_EFFECTS_PATH=<evidence>/fixture-effects.jsonl`; production refuses both. `scripts/p03/financial_phase.py` starts the bounded worker (`python -m edge_os_api.execution.worker --interval 1`), drives `tests/p03/financial-journey.spec.mjs` at desktop and 390px after `e2e.spec.mjs` saved the thesis revision and its labelled synthetic replay, inspects rows with SQL and the independent effect record, and after the shared API restart restarts the worker and drives `financial-restart.spec.mjs` in a new browser context. Every value is an authored fixture: no wallet, deposit, quote, transaction, receipt or removal at any provider.
 
 | Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
 |---|---|---|---|---|---|---|
