@@ -38,7 +38,8 @@ def build_engine(pg: object) -> Engine:
 
 
 @pytest.fixture(scope="session")
-def execution_engine(pg: object) -> Engine:
+def execution_engine(migrated: object) -> Engine:
+    pg = migrated  # migration 0008 creates these tables first; create_all is a no-op safety net
     engine = build_engine(pg)
     try:
         yield engine

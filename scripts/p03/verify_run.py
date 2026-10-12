@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness  # noqa: E402
 from tokens import OWNER_A, OWNER_B, OWNER_C, TestSigner  # noqa: E402
 from p05_phase import run_p05_phase  # noqa: E402
+import financial_phase  # noqa: E402
 
 THESIS = ("Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
           "Spot only.")
@@ -341,6 +342,8 @@ def main() -> int:
         env = harness.api_env(database_url=pg.url, public_pem=signer.public_pem, previous_pem=None, cors=[web_url])
         # This isolated run uses the authored local wallet-creation fixture; production refuses it.
         env["EDGE_OS_WALLET_PROVIDER"] = "fixture"
+        # The #58 financial phase uses the authored fixture execution ports; production refuses them too.
+        financial_phase.configure(env, evidence)
 
         migration = harness.migrate(env)
         rec.write("migrate.log", migration.stdout + migration.stderr)
@@ -419,6 +422,12 @@ def main() -> int:
                 ok &= rec.step("P17 local fixture provider call counters match the durable event rows",
                                p17_calls["consistent"], p17_calls)
 
+                _, owner_b_me = http("GET", f"{api_url}/v1/me", token_b)
+                owner_b_id = owner_b_me.get("user_id") if isinstance(owner_b_me, dict) else None
+                financial_ok, financial_before = financial_phase.drive(rec, pg, env, evidence, ui_env, run_playwright,
+                                                                       processes, owner_b_id)
+                ok &= financial_ok
+
                 # cross-owner denial against the real saved rows
                 denial = ownership_drive(pg, api_url, token_a, token_b)
                 rec.write("ownership-drive.json", denial)
@@ -447,6 +456,8 @@ def main() -> int:
                 ok &= rec.step("P17 reopen after restart created no wallet (provider counters reset and stay zero)",
                                p17_calls_after["body"].get("create_calls") == 0
                                and p17_calls_after["body"].get("lookup_calls") == 0, p17_calls_after)
+                ok &= financial_phase.after_restart(rec, pg, env, evidence, ui_env, run_playwright, processes,
+                                                    financial_before, owner_b_id)
                 storage_after_restart = p13_storage_snapshot(pg)
                 rec.write("p13-storage-after-restart.json", storage_after_restart)
                 ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",
@@ -993,7 +1004,11 @@ def ownership_drive(pg: harness.Postgres, api_url: str, token_a: str, token_b: s
 
     row = json.loads(pg.psql("select coalesce(json_agg(t), '[]'::json) from (select r.record_id, d.record_id draft_id, "
                              "d.content->>'strategy_id' strategy_id from records r join records d on d.intake_record_id = r.record_id "
-                             "where r.record_type='IntakeRequest' and d.record_type='StrategyDraft' limit 1) t"))
+                             "where r.record_type='IntakeRequest' and d.record_type='StrategyDraft' "
+                             # a draft with exactly one published revision, chosen deterministically: the check below
+                             # expects that one revision to survive the attacks unchanged
+                             "and (select count(*) from strategy_revisions s where s.strategy_id = d.content->>'strategy_id') = 1 "
+                             "order by d.seq limit 1) t"))
     if not row:
         return {"all_denied": False, "error": "no saved draft found to attack"}
     row = row[0] if isinstance(row, list) else row

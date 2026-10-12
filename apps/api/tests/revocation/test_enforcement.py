@@ -46,10 +46,10 @@ def test_pending_unknown_and_confirmed_deny_new_submission(
         session, OWNER_A, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK) == [reason]
 
 
-def test_requested_state_does_not_deny(revocation_engine, removal_service, session):
+def test_requested_state_denies_before_any_provider_effect(revocation_engine, removal_service, session):
     _requested(revocation_engine, removal_service)
     assert removal_service.submission_denial(
-        session, OWNER_A, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK) == []
+        session, OWNER_A, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK) == ["REMOVAL_REQUESTED"]
 
 
 def test_failed_removal_does_not_deny(revocation_engine, removal_service, session):

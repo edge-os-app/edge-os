@@ -430,19 +430,24 @@ class ExecutionService:
                 session.add(claim)
                 entry.state = "CLAIMED"
                 entry.updated_at = now
+                prepared = PreparedSubmission(
+                    action_id=entry.action_id, owner_id=str(owner), wallet_id=wallet_id,
+                    network_id=network_id, operation=entry.operation, payload_hash=intent_row.payload_hash)
+                content = {"transport": transport.transport_id, "payload_hash": intent_row.payload_hash}
+                # IC06: a transport that names its original transaction references records them here, in the
+                # same transaction as the IN_FLIGHT attempt, before any possible effect.
+                references = getattr(transport, "original_references", None)
+                if references is not None:
+                    content["original_references"] = references(prepared)
                 attempt = SubmissionAttemptRow(
                     attempt_id=uuid.uuid4(), owner_id=owner, queue_id=entry.queue_id,
                     action_id=entry.action_id, agent_id=agent_id, wallet_id=wallet_id,
                     network_id=network_id, transport_id=transport.transport_id,
                     payload_hash=intent_row.payload_hash, state="IN_FLIGHT",
-                    content={"transport": transport.transport_id, "payload_hash": intent_row.payload_hash},
-                    started_at=now, completed_at=None)
+                    content=content, started_at=now, completed_at=None)
                 session.add(attempt)
                 session.flush()
                 attempt_id = attempt.attempt_id
-                prepared = PreparedSubmission(
-                    action_id=entry.action_id, owner_id=str(owner), wallet_id=wallet_id,
-                    network_id=network_id, operation=entry.operation, payload_hash=intent_row.payload_hash)
                 session.commit()
                 return prepared, action_intent, entry.queue_id, attempt_id
             except SQLAlchemyError:
@@ -551,6 +556,32 @@ class ExecutionService:
                     session.commit()
                 else:
                     session.commit()
+                return _queue_view(entry, now)
+            except SQLAlchemyError:
+                session.rollback()
+                raise
+
+    def retire_unsent(self, verified_owner_id: uuid.UUID, *, action_id: str, reason: str | None,
+                      event_at: dt.datetime | None = None) -> QueueEntryView | None:
+        """Mark a still-QUEUED entry `DENIED_UNSENT` after its admitted action was cancelled before any submission.
+
+        Only a `QUEUED` entry changes; a claimed or submitted entry is never touched. No transport call is made.
+        """
+        now = event_at or self._clock()
+        with self._factory() as session:
+            try:
+                saved = self._queue_by_action(session, verified_owner_id, action_id)
+                if saved is None:
+                    return None
+                _wallet_lock(session, verified_owner_id, saved.agent_id, saved.wallet_id, saved.network_id)
+                entry = session.execute(select(QueueRow).where(
+                    QueueRow.owner_id == verified_owner_id, QueueRow.queue_id == saved.queue_id,
+                ).with_for_update().execution_options(populate_existing=True)).scalar_one()
+                if entry.state == "QUEUED":
+                    entry.state = "DENIED_UNSENT"
+                    entry.blocking_reason = reason
+                    entry.updated_at = now
+                session.commit()
                 return _queue_view(entry, now)
             except SQLAlchemyError:
                 session.rollback()

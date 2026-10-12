@@ -118,3 +118,7 @@ policy change, funding, broadcast, deployment or publication. Final P30 acceptan
 requires the later qualified P20 and P26 release evidence. A local stop stays
 distinct from provider removal; a local removal cannot cancel a broadcast
 transaction or release its reservations.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate the `revocation_local` schema ships in migration 0008, `revocation/routes.py` mounts request, read and reconcile, and the check is wired (`P30_CHECK_WIRED = True`) through `SubmissionControls` at admission and at submission ownership under the shared wallet lock. `REQUESTED` now denies (`REMOVAL_REQUESTED`) because the request is saved before any provider effect; the earlier statement that `REQUESTED` does not deny describes the preparation stage only. See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.

@@ -12,16 +12,23 @@ from collections.abc import Generator
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Request
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from edge_os_api.core.authentication import Principal, require_principal
-from edge_os_api.core.request_schemas import WalletSetupMutationBody, WalletSetupPrepareBody
+from edge_os_api.core.request_schemas import StrictModel, WalletSetupMutationBody, WalletSetupPrepareBody
 from edge_os_api.wallet_setup import service
 from edge_os_api.wallet_setup.adapter import provider_info
 from edge_os_api.wallet_setup.provider import WalletCreationPort
 from edge_os_api.wallet_setup.types import SetupRecord
 
 router = APIRouter(prefix="/v1/wallet-setup", tags=["wallet setup"])
+
+
+class BrowserCompletionBody(StrictModel):
+    """The wallet id the owner's browser received from owner-linked creation. Untrusted until looked up."""
+
+    wallet_id: str = Field(min_length=1, max_length=200)
 
 
 def serialize(record: SetupRecord) -> dict[str, Any]:
@@ -78,6 +85,15 @@ def cancel(agent_id: str, data: WalletSetupMutationBody | None = Body(default=No
            session: Session = Depends(get_session)) -> dict[str, Any]:
     """Record cancellation intent separately from setup state."""
     return serialize(service.cancel_setup(session, principal, agent_id=agent_id))
+
+
+@router.post("/agents/{agent_id}/complete")
+def complete(agent_id: str, data: BrowserCompletionBody, principal: Principal = Depends(require_principal),
+             session: Session = Depends(get_session),
+             provider: WalletCreationPort = Depends(get_provider)) -> dict[str, Any]:
+    """Bind a browser-created wallet only after an independent provider lookup confirms the exact owner."""
+    return serialize(service.complete_from_browser(session, principal, agent_id=agent_id, wallet_id=data.wallet_id,
+                                                   provider=provider))
 
 
 @router.get("/agents/{agent_id}")

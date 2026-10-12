@@ -277,3 +277,7 @@ Evaluation, queue and submission behavior here is local application behavior
 under authored synthetic approvals, holdings and fixtures. It is not provider
 enforcement, live wallet state or a real transport result. Direct SQL inspection
 of saved rows is part of the evidence. See `docs/qualification/execution/`.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate the `execution_local` schema ships in migration 0008 with the new `execution_evaluation_jobs` table. `execution/worker.py` drives evaluation, enqueue and tick from durable jobs; the attempt row now records `original_references` before the transport call when the transport defines them. Queue, claim and revalidation rules are unchanged. See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.

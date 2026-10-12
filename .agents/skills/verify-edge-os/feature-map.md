@@ -44,7 +44,37 @@ Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column na
 | Sign-out returns to the sign-in heading and clears everything this app stored in the tab. Another person signing in sees an empty form. A rejected session shows a message with focus, keeps the same person's draft and signs in again for real | desktop and 390px (fixture session) | `session-rejected-*` |
 | A closed or failed real Privy sign-in window ends in a message. A slow sign-in offers Try again and keeps the window | unit tests with a mocked bridge only | `apps/web/tests/auth.test.tsx` |
 
-Not covered: real Privy login (`R1`–`R4` of the P01 profile), real model output (the P05 provider is a local fake with authored text; a real-provider run needs a separate recorded release), production hosting and a provider spending cap, research execution, live agent state, wallets, funding, signing.
+Not covered: real Privy login (`R1`–`R4` of the P01 profile), real wallets, deposits, quotes, signing, broadcast, receipts and removal at a provider (the connected journey uses fixture ports only), real model output (the P05 provider is a local fake with authored text; a real-provider run needs a separate recorded release), production hosting and a provider spending cap, research execution, live agent state, wallets, funding, signing.
+
+## Connected financial journey (#58 Stage 1, fixture execution)
+
+The API runs with `EDGE_OS_EXECUTION_MODE=fixture` and `EDGE_OS_FIXTURE_EFFECTS_PATH=<evidence>/fixture-effects.jsonl`; production refuses both. `scripts/p03/financial_phase.py` starts the bounded worker (`python -m edge_os_api.execution.worker --interval 1`), drives `tests/p03/financial-journey.spec.mjs` at desktop and 390px after `e2e.spec.mjs` saved the thesis revision and its labelled synthetic replay, inspects rows with SQL and the independent effect record, and after the shared API restart restarts the worker and drives `financial-restart.spec.mjs` in a new browser context. Every value is an authored fixture: no wallet, deposit, quote, transaction, receipt or removal at any provider.
+
+| Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
+|---|---|---|---|---|---|---|
+| Wallet setup for the exact revision | Research request page → Agent wallet setup → Save, Create → "Fund this agent" link | `POST /v1/wallet-setup/agents/{id}/prepare`, `/dispatch` | `wallet_setups`, `wallet_setup_events` | `CONFIRMED`, fixture wallet | unchanged | `ui/screenshots/*-fin-*`, `financial-inspection.json` |
+| Browser wallet completion (IC04) | none in the browser (needs a real provider); driven through the mounted API by `financial_phase.py` | `POST /v1/wallet-setup/agents/{id}/complete` | `wallet_setup_events` `RESULT_RETURNED` (`trusted: false`) then `WALLET_BOUND` | binds only after lookup names the owner; a foreign id stays `UNKNOWN`; owner B gets 404 | reopens bound | `ic04-browser-completion.json`, `apps/api/tests/wallet_setup/test_browser_completion.py` |
+| Declare funded assets | Funds → Agent funding → Declare | `POST /v1/agents/{id}/funding/declaration` | `funding_local.funding_profiles` | quote token = trading, native MON = gas | unchanged | `financial-inspection.json` |
+| Reviewed deposits and reconciliation | Funds → Save reviewed deposit (×2) → Check deposits | `POST …/funding/flows`, `POST …/funding/reconcile`, `GET …/funding` | `funding_flows`, `funding_observations`, `funding_credits` | credited once per event; holdings shown apart from deposits | unchanged | `financial-inspection.json` `credits` |
+| Exact review and INACTIVE adoption | Agents → Agent authority → Review exact terms → Adopt | `POST …/consent/review`, `POST …/consent/adopt`, `GET …/consent` | `consent_local.consent_reviews`, `consent_adoptions` | status `INACTIVE`; activation `SYNTHETIC_FIXTURE_QUALIFICATION` | unchanged | `*-fin-*-authority.png`, `consents` |
+| Bounded evaluation and action | Positions → Run one bounded evaluation → Refresh → Open action | `POST /v1/agents/{id}/actions`, `GET …/actions`, `GET /v1/actions/{action}` | `execution_evaluation_jobs`, `execution_decisions`, `execution_intents`, `execution_queue`, `execution_submission_attempts`, `admission_local.*` | decision saved first; one intent; one effect; receipt `CONFIRMED`; no transaction hash invented | reopens; no second effect | `financial-inspection*.json`, `fixture-effects.jsonl` |
+| Interrupted acknowledgement and original recovery | agent id with `fx-lost-ack` → Run → Open action → Reconcile original action | `POST /v1/actions/{action}/reconcile` | `recovery_local.recovery_cases`, `recovery_evidence`, `admission_receipts` | `SUBMISSION_UNKNOWN` then `CONFIRMED`; one effect | reopens | `*-fin-action-unknown.png`, `lost-ack-*` checks |
+| Stop | Positions → Halt all swaps → Run | `POST/GET …/stops` | `stops_local.scoped_stops`, job `ADMISSION_DENIED` | `STOPPED_HALT_ALL_SWAPS`, zero effects | reopens | `*-fin-stop-denied.png`, `stop-*` checks |
+| Removal denial | separate agent: Request removal → Run one bounded evaluation | `POST …/removal`, `POST …/actions` | job `ADMISSION_DENIED REMOVAL_REQUESTED`, no reservation | zero effects | reopens | `*-fin-removal-denied.png`, `removed-*` checks |
+| Removal | Positions → Request removal → Check removal status | `POST/GET …/removal`, `POST …/removal/reconcile` | `revocation_local.removal_requests`, `removal_states`, `removal_observations` | `REQUESTED` denies at once; then fixture `CONFIRMED`; position and owner access stay | reopens | `*-fin-removal-confirmed.png` |
+| Lost reply on a write | Network abort on `POST …/actions` | same | none | "not confirmed"; new writes paused until a read; the held request key is reused | — | `ui-financial.log` |
+| Two owners | Owner B opens the deep links | `GET` as owner B → 404 / not ready | no rows for owner B | nothing shown | — | `financial-inspection.json` `owner B created no financial jobs`; `apps/api/tests/test_financial_routes.py` |
+| Concurrency, crash inside submission, stale quote, expiry, unavailable ports, incomplete receipts | none | same routes and worker | same | denial or unknown with zero added effects | covered | `apps/api/tests/test_connected_authority.py`, `test_connected_journey.py` |
+
+Financial SQL (run during a hold):
+```sql
+select agent_id, state, outcome, reason, action_id, runs from execution_local.execution_evaluation_jobs order by created_at;
+select action_id, operation, admission_status from execution_local.execution_intents order by created_at;
+select action_id, outcome from admission_local.admission_receipts order by created_at;
+select action_id, state, content->'original_references' from execution_local.execution_submission_attempts;
+select agent_id, state from revocation_local.removal_states;
+```
+Compare each action with `fixture-effects.jsonl`: at most one line per action, none for a denied or stopped job.
 
 ## SQL checks
 

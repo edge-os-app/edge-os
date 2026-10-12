@@ -119,3 +119,7 @@ inspectable and never becomes strategy capital.
 Funding behavior here is application accounting under authored synthetic observations. It is not
 provider, chain or financial evidence. Direct SQL inspection of saved rows is part of the evidence.
 See `docs/qualification/funding/`.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate the `funding_local` schema ships in migration 0008, and `funding/routes.py` mounts owner-scoped declaration, reviewed-deposit, reconcile and read routes. Asset identities come from the agent's saved revision; deposits are observed only through the server deposit port (authored fixture in local/test, unavailable in production). See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.

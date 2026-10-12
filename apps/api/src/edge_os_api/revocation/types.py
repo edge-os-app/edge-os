@@ -24,14 +24,17 @@ from edge_os_api.admission.types import NETWORKS
 
 # The accepted P15 signer-removal states. No other state is added here.
 REMOVAL_STATES = ("NOT_REQUESTED", "REQUESTED", "PENDING", "UNKNOWN", "CONFIRMED", "FAILED")
-# These derived states deny a new agent submission through the local P30 check.
-DENYING_STATES = ("PENDING", "UNKNOWN", "CONFIRMED")
+# These derived states deny a new agent submission through the P30 check. A REQUESTED removal denies too:
+# the request is persisted before any provider effect, so no fresh work is admitted while it is in flight
+# (#58 G14). Only FAILED and absent records leave submission to the other controls.
+DENYING_STATES = ("REQUESTED", "PENDING", "UNKNOWN", "CONFIRMED")
 # Provider-style observation outcomes. `NOT_REQUESTED` is not an observation.
 OBSERVATION_STATES = ("PENDING", "UNKNOWN", "CONFIRMED", "FAILED")
 
 # Stable denial tokens for the local P30 check. A local stop has its own tokens;
 # a stop never proves provider removal and never reuses these.
 DENIAL_REASON = {
+    "REQUESTED": "REMOVAL_REQUESTED",
     "PENDING": "REMOVAL_PENDING",
     "UNKNOWN": "REMOVAL_UNKNOWN",
     "CONFIRMED": "REMOVAL_CONFIRMED",

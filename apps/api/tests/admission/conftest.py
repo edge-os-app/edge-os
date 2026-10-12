@@ -20,7 +20,8 @@ from edge_os_api.admission.service import AdmissionService
 
 
 @pytest.fixture(scope="session")
-def admission_engine(pg: object) -> Engine:
+def admission_engine(migrated: object) -> Engine:
+    pg = migrated  # migration 0008 creates these tables first; create_all below is a no-op safety net
     engine = create_engine(pg.url, pool_pre_ping=True, pool_size=10, max_overflow=10,
                            connect_args={"options": "-csearch_path=admission_local,public"})
     with engine.begin() as connection:

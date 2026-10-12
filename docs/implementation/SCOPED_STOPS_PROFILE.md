@@ -150,3 +150,7 @@ synthetic approvals, holdings and fixtures. They are not provider enforcement,
 live wallet state, a real transport result or an exactly-once network guarantee.
 Direct SQL inspection of saved rows is part of the evidence. See
 `docs/qualification/scoped-stops/`.
+
+## Integration update (#58, 2026-10-12)
+
+The local-stage statements above record the preparation history. In the #58 connected candidate the `stops_local` schema ships in migration 0008 and `stops/routes.py` mounts owner-scoped USER stops for the bound wallet. Admission and execution read stops through `SubmissionControls`, which adds removal reasons. See `USER_RELEASE_INTEGRATION_PROFILE.md`. Fixture evidence only; live qualification stays NOT_RUN.

@@ -4,6 +4,21 @@ Task OC-P41-PREP-20261010-01, issue #48. Prepared 2026-10-10. Base `5689e1d6e71e
 
 Scope: preparation only. This map ties every proposed claim and artifact to its accepted source and its pending acceptance condition. A preparation PASS does not mean any listed condition passed.
 
+## Current status, #58 Stage 1 candidate (2026-10-12)
+
+This section supersedes the current-status cells below for P22–P26/P30; those rows remain as preparation history. Evidence class: local fixture only (`EDGE_OS_EXECUTION_MODE=fixture`, refused in production). Source: `docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md` and the `verify-edge-os` feature-map section "Connected financial journey".
+
+| Capability | Current status | Evidence class | Still missing |
+|---|---|---|---|
+| Wallet setup for an exact revision; browser completion after independent lookup | Connected (routes, screens, verifier) | Local fixture | Real Privy creation/lookup (P16/P17, Stage 3) |
+| Funding declaration, reviewed deposits, once-only credit, holdings apart from deposits | Connected | Local fixture ports | Real deposit/holdings observation (Stage 3) |
+| Exact review and INACTIVE adoption; server activation verdict | Connected | Local fixture qualification | Real activation after P20/P21 qualification |
+| Bounded evaluation, decision before intent, admission, exclusive submission | Connected with a durable worker | Local fixture market, quote and transport | Real observations, quote, signing, broadcast (Stage 3); no continuing trading |
+| Original-action recovery after lost acknowledgement or process death | Connected | Local fixture receipts | Real receipts and chain identities (Stage 3) |
+| Scoped stop; removal denying from REQUESTED | Connected at admission and submission | Local fixture removal observation | Real signer removal (Stage 3) |
+| Real-data research, qualified history, real-history replay (RG01–RG06) | NOT IMPLEMENTED in this candidate | — | Task 6 milestone and its approvals |
+| Hosted multi-user, quotas, real login (PU01–PU08) | NOT RUN | — | Stage 2 |
+
 ## 1. Proposed claims
 
 | Claim | Exact accepted source | Current status | Pending acceptance condition |

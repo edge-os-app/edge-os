@@ -269,6 +269,14 @@ export function WalletSetup({ agentId, revision, onClose }: {
             </div>
           )}
 
+          {record.state === "CONFIRMED" && (
+            <p className="btn-row">
+              <a className="btn btn-secondary" style={{ minHeight: 44 }} href={`#/funds?agent=${encodeURIComponent(record.agent_id)}`}>Fund this agent</a>
+              <a className="btn btn-secondary" style={{ minHeight: 44 }} href={`#/agents?agent=${encodeURIComponent(record.agent_id)}`}>Review bounded authority</a>
+              <a className="btn btn-secondary" style={{ minHeight: 44 }} href={`#/positions?agent=${encodeURIComponent(record.agent_id)}`}>Agent actions</a>
+            </p>
+          )}
+
           {record.state === "CONFIRMED" && record.cancellation_intent === "NONE" && (
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={blocked}
               onClick={() => void run(record.agent_id, () => api.cancelWalletSetup(record.agent_id), "The cancellation was not saved.")}>
