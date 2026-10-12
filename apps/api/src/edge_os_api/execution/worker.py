@@ -45,9 +45,9 @@ from edge_os_api.execution.original_transaction import (RECEIPT_OUTCOMES, TRANSP
                                                         Leg, ObservationState, OriginalClients, OriginalContext,
                                                         OriginalTransactionTransport, RouteProfile,
                                                         read_original_receipt, token_of, wallet_address)
-from edge_os_api.revocation.enforcement import SubmissionControls
 from edge_os_api.execution.types import ActionQuote, IntentTerms, utc_iso
 from edge_os_api.recovery.types import OutcomeEvidence
+from edge_os_api.revocation.enforcement import SubmissionControls
 
 log = logging.getLogger("edge_os.worker")
 
@@ -464,7 +464,7 @@ class ConnectedExecution:
         original = self._ports.original_clients(agent.agent_id)
         try:
             if original is not None:
-                transport = self._original_transport(job, agent, consent, approval, intent, *original)
+                transport = self._original_transport(job, agent, approval, intent, *original)
             else:
                 plan = self._planned_effect(payload, approval)
                 transport = self._ports.transport(agent_id=agent.agent_id, plan=plan, operation=intent.operation)
@@ -489,8 +489,8 @@ class ConnectedExecution:
         assert queue is not None
         self._settle_from_queue(job, queue)
 
-    def _original_transport(self, job: EvaluationJobRow, agent: ConnectedAgent, consent: AdoptedConsent,
-                            approval: ApprovalSnapshot, intent: IntentRow, clients: OriginalClients,
+    def _original_transport(self, job: EvaluationJobRow, agent: ConnectedAgent, approval: ApprovalSnapshot,
+                            intent: IntentRow, clients: OriginalClients,
                             profile: RouteProfile) -> OriginalTransactionTransport:
         """The original-transaction transport for the saved intent, bound to the verified wallet address."""
         with self._factory() as session:

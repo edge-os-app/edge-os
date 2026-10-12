@@ -135,7 +135,7 @@ test("a lost signer reply keeps the reserved amounts and is never sent or replac
   await expect(lineage.getByTestId("action-original-stage")).toContainText("The signer reply was lost");
   await expect(lineage.getByTestId("action-original-hash")).toHaveText("None saved");
   await lineage.getByRole("button", { name: "Reconcile original action" }).click();
-  await expect(lineage.getByTestId("action-queue-state")).toHaveText("SUBMITTED_UNKNOWN");
+  await expect(lineage.getByTestId("action-queue-state")).toHaveText("SUBMITTED_UNKNOWN (SUBMISSION_UNKNOWN)");
   await expect(lineage.getByTestId("action-receipts")).not.toContainText("CONFIRMED");
   await expect(lineage).toContainText("RESERVED");
   const actionId = (await lineage.getByRole("heading", { level: 3 }).innerText()).replace("Action ", "").trim();
