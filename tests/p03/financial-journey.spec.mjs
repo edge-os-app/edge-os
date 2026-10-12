@@ -67,6 +67,7 @@ async function readyAgent(page, thesisUrl, agentId, project) {
   await funding.getByRole("button", { name: "Check deposits" }).click();
   await expect(funding.getByTestId("funding-credited")).toContainText("1000 credited");
   await expect(funding.getByTestId("funding-holdings")).toContainText("SYNTHETIC_FIXTURE");
+  await noSidewaysScroll(page);
 
   await page.goto(`/#/agents?agent=${encodeURIComponent(agentId)}`);
   const authority = page.getByRole("region", { name: "Agent authority" });
@@ -124,6 +125,7 @@ test("bounded fixture action: wallet, funding, exact terms, decision, receipt an
   await expect(actions.getByTestId("actions-removal")).toContainText("Removal CONFIRMED");
   await expect(actions.getByTestId("actions-positions")).toContainText("50 base units held");
   await shot(page, project, "removal-confirmed");
+  await noSidewaysScroll(page);
 
   // Deep link and reload reopen the same saved state.
   await page.reload();
@@ -177,6 +179,7 @@ test("a stop denies new work before admission and a lost reply pauses new reques
   await waitForJob(actions, "STOPPED_HALT_ALL_SWAPS");
   await expect(actions.getByTestId("actions-jobs")).toContainText("ADMISSION_DENIED");
   await shot(page, project, "stop-denied");
+  await noSidewaysScroll(page);
   record(`stop-${project}`, { agentId });
 });
 
@@ -194,6 +197,7 @@ test("a requested removal denies the next evaluation before any reservation or e
   await waitForJob(actions, "REMOVAL_REQUESTED");
   await expect(actions.getByTestId("actions-jobs")).toContainText("ADMISSION_DENIED");
   await shot(page, project, "removal-denied");
+  await noSidewaysScroll(page);
   record(`removed-${project}`, { agentId });
 });
 

@@ -185,6 +185,7 @@ def test_a_late_worker_releases_the_expired_unsent_action_and_the_next_slot_can_
         action = journey.get(f"/v1/actions/{late['action_id']}", headers=owner_a).json()
         assert action["admission"][0]["status"] == "CANCELLED"
         assert {r["state"] for r in action["reservations"]} == {"RELEASED"}
+        assert action["queue"]["state"] == "DENIED_UNSENT"  # retired: no later tick selects it
         nxt = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "second").json())
     finally:
         restore()
@@ -311,3 +312,28 @@ def test_consent_drift_after_scheduling_denies_the_job_without_any_effect(journe
     done = ff.run_job(journey, job)
     assert (done["state"], done["outcome"], done["reason"]) == ("COMPLETED", "DENIED", "CONSENT_CHANGED")
     assert done["decision_id"] is None and ff.effects(journey) == []
+
+
+def test_an_entry_decided_while_an_earlier_entry_was_unresolved_cannot_open_a_second_position(journey, owner_a):
+    agent = "auth-second-entry-fx-lost-ack"
+    ff.ready_for_action(journey, owner_a, agent)
+    first = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "first").json())
+    assert first["outcome"] == "SUBMITTED_UNKNOWN"
+    connected = journey.app.state.financial.connected
+    restore = _shifted(journey, 5)
+    real_enqueue = connected._enqueue
+    connected._enqueue = lambda *args, **kwargs: None  # the worker stops after saving the second decision
+    try:
+        second = ff.run_job(journey, ff.schedule(journey, owner_a, agent, "second").json())
+        assert second["state"] == "DECIDED"
+        settled = journey.post(f"/v1/actions/{first['action_id']}/reconcile", headers=owner_a).json()
+        assert settled["case_state"] == "CONFIRMED"  # the first position is now open
+        connected._enqueue = real_enqueue
+        resumed = ff.run_job(journey, second)
+    finally:
+        connected._enqueue = real_enqueue
+        restore()
+    assert (resumed["outcome"], resumed["reason"]) == ("ADMISSION_DENIED", "POSITION_ALREADY_OPEN")
+    positions = journey.get(f"/v1/agents/{agent}/actions", headers=owner_a).json()["positions"]
+    assert [p["inventory_raw"] for p in positions if p["inventory_raw"] != "0"] == [ff.ENTRY_BASE_OUTPUT]
+    assert len(ff.effects(journey)) == 1

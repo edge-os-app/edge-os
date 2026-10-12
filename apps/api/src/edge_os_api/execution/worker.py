@@ -476,6 +476,8 @@ class ConnectedExecution:
             self._update(job.job_id, state="SUBMITTED", outcome=cancelled.decision_status,
                          reason=cancelled.reason or reason)
             return
+        # A still-queued entry for the released action is retired so no later tick selects it.
+        self._services.execution.retire_unsent(job.owner_id, action_id=job.action_id, reason=reason)
         self._update(job.job_id, state="COMPLETED", outcome=outcome, reason=reason)
 
     def _settle_from_queue(self, job: EvaluationJobRow, queue: QueueRow) -> None:

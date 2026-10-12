@@ -1,7 +1,8 @@
 """Authenticated, owner-scoped scoped-stop routes.
 
 The wallet and network come from the confirmed agent binding. A stop is an owner control: it denies the
-scoped unsent work and never cancels, liquidates or withdraws. Pending actions and residual inventory stay
+scoped unsent work and itself never cancels, liquidates or withdraws (the worker separately releases an
+admitted action the stop leaves provably unsent). Pending actions and residual inventory stay
 visible and recoverable.
 """
 

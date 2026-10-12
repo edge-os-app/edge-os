@@ -1,7 +1,7 @@
 """Compose the accepted financial services once, over the application's durable session factory.
 
-One `SubmissionControls` reader (durable stops plus removal) is handed to admission and execution, so a
-stop or a requested removal denies at admission and again under the same per-wallet lock immediately
+One combined reader (durable stops, removal and one open position per agent wallet) is handed to admission
+and execution, so each control denies at admission and again under the same per-wallet lock immediately
 before submission ownership. The trusted provider ports come from the configured execution mode only.
 """
 
@@ -16,6 +16,7 @@ from edge_os_api.consent.service import ConsentService
 from edge_os_api.core.provider_ports import ProviderPorts, build_provider_ports
 from edge_os_api.core.settings import Settings
 from edge_os_api.execution.service import ExecutionService
+from edge_os_api.execution.position_limit import CombinedControls, OnePositionPerWallet
 from edge_os_api.execution.worker import ConnectedExecution
 from edge_os_api.recovery.service import RecoveryService
 from edge_os_api.revocation.enforcement import SubmissionControls
@@ -27,7 +28,7 @@ from edge_os_api.stops.service import StopService
 class FinancialServices:
     stops: StopService
     removals: RemovalService
-    controls: SubmissionControls
+    controls: CombinedControls
     admission: AdmissionService
     execution: ExecutionService
     recovery: RecoveryService
@@ -41,7 +42,8 @@ def build_financial_services(factory: sessionmaker[Session], settings: Settings,
     ports = ports or build_provider_ports(settings.execution_mode, factory, settings.fixture_effects_path)
     stops = StopService(factory)
     removals = RemovalService(factory)
-    controls = SubmissionControls(stops, removals)
+    # Stops, removal and the one-position-per-wallet limit share the single StopReader seam.
+    controls = CombinedControls(SubmissionControls(stops, removals), OnePositionPerWallet())
     admission = AdmissionService(factory, stops=controls)
     execution = ExecutionService(factory, admission, stops=controls)
     recovery = RecoveryService(factory, admission, execution)

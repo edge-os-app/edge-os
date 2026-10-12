@@ -561,6 +561,32 @@ class ExecutionService:
                 session.rollback()
                 raise
 
+    def retire_unsent(self, verified_owner_id: uuid.UUID, *, action_id: str, reason: str | None,
+                      event_at: dt.datetime | None = None) -> QueueEntryView | None:
+        """Mark a still-QUEUED entry `DENIED_UNSENT` after its admitted action was cancelled before any submission.
+
+        Only a `QUEUED` entry changes; a claimed or submitted entry is never touched. No transport call is made.
+        """
+        now = event_at or self._clock()
+        with self._factory() as session:
+            try:
+                saved = self._queue_by_action(session, verified_owner_id, action_id)
+                if saved is None:
+                    return None
+                _wallet_lock(session, verified_owner_id, saved.agent_id, saved.wallet_id, saved.network_id)
+                entry = session.execute(select(QueueRow).where(
+                    QueueRow.owner_id == verified_owner_id, QueueRow.queue_id == saved.queue_id,
+                ).with_for_update().execution_options(populate_existing=True)).scalar_one()
+                if entry.state == "QUEUED":
+                    entry.state = "DENIED_UNSENT"
+                    entry.blocking_reason = reason
+                    entry.updated_at = now
+                session.commit()
+                return _queue_view(entry, now)
+            except SQLAlchemyError:
+                session.rollback()
+                raise
+
     def _revalidate(
         self, session: Session, owner: uuid.UUID, entry: QueueRow, intent_row: IntentRow,
         action_intent: ActionIntent, approval: ApprovalSnapshot, context: AdmissionContext,
