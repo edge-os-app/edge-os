@@ -20,6 +20,8 @@ A passing offline case is always `AUTHORED_FAKE_ONLY`. It is never `REAL_READY` 
 - [CONTROL_RESTRICTIONS.md](CONTROL_RESTRICTIONS.md) - the mandatory-control matrix and each control's enforcement layer and evidence class.
 - [WORKED_CAPACITY.md](WORKED_CAPACITY.md) - independent units and capacity arithmetic under the accepted P15 rules.
 - [LIVE_TEST_PACKET.md](LIVE_TEST_PACKET.md) - the one bounded future release proposal and its acceptance sequence.
+- [PRIVY_POLICY_BINDING_FEASIBILITY.md](PRIVY_POLICY_BINDING_FEASIBILITY.md) - the independent wallet-policy feasibility check, checked 2026-10-12.
+- [POLICY_BINDING_INTEGRATION_NOTE.md](POLICY_BINDING_INTEGRATION_NOTE.md) - the #58/P20 interface note for the offline policy binding.
 - [restriction_checker.py](restriction_checker.py) and [fixtures.json](fixtures.json) - the offline checker and its authored fixtures.
 - [test_restriction_checker.py](test_restriction_checker.py) - the offline unit tests.
 - [capacity_examples.py](capacity_examples.py) and [test_capacity_examples.py](test_capacity_examples.py) - the independent capacity arithmetic and its tests.
@@ -35,6 +37,12 @@ From the repository root:
 python3 -B -m unittest discover -s docs/qualification/route-restrictions -p 'test_*.py' -v
 python3 -B docs/qualification/route-restrictions/restriction_checker.py
 python3 -B docs/qualification/route-restrictions/capacity_examples.py
+```
+
+The independent wallet-policy binding adds its own offline checks:
+
+```sh
+(cd apps/api && uv run --frozen pytest tests/kuru_flow -q)
 ```
 
 The checker uses Python's standard library only. It loads one authored fixture file. It has no network, wallet, signing, provider or broadcast code path. The test suite proves that property by inspecting the checker's imports and by running the default command.
