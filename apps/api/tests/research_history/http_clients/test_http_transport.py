@@ -61,6 +61,16 @@ def test_transport_times_out_on_a_slow_reply() -> None:
             _request(transport, server.base_url + "/query", timeout=0.15)
 
 
+def test_transport_applies_the_deadline_to_the_header_phase() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(body=b"{}", delay_before_headers=0.3)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0,
+                     deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.25
+
+
 def test_transport_cancels_before_opening_a_socket() -> None:
     called = {"connect": False}
 

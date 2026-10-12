@@ -18,8 +18,8 @@ bounds. All actual statuses remain `NOT_RUN`.
   P07 module, the P02 contract and the package `__init__.py` are unchanged. The clients plug into the
   accepted protocols; they are imported explicitly and are not added to the top-level package
   namespace.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history/http_clients -v` passes (40
-  tests); the affected `tests/research_history` suite passes (159 tests); `python3 -B -m unittest -v
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history/http_clients -v` passes (47
+  tests); the affected `tests/research_history` suite passes (166 tests); `python3 -B -m unittest -v
   test_p07` passes (73 tests); `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs
   are kept under the assigned evidence folder and are not part of the commit.
 
@@ -76,8 +76,9 @@ second durable counter: request limits and local usage feed lane2's existing own
 
 ## Cancellation and bounds
 
-- `deadline_seconds` bounds the call before the socket opens and between body reads; the
-  response-header phase is bounded by `connect_timeout_seconds`; `max_response_bytes` bounds the
+- `deadline_seconds` bounds the whole call: the socket wait (connect and response-header phase) is set
+  to the remaining deadline and the deadline is re-checked between body reads;
+  `connect_timeout_seconds` caps each socket wait below the deadline; `max_response_bytes` bounds the
   retained reply body while streaming; `max_request_bytes` bounds the request body;
   `max_blocks_per_page` bounds one HyperSync page's block span.
 - `cancel` is an injected `() -> bool` flag. It is checked before the socket opens and between body
@@ -97,8 +98,10 @@ second durable counter: request limits and local usage feed lane2's existing own
 A redirect is never followed; a non-identity `Content-Encoding` is refused; a malformed HTTP framing
 reply (a bad status line, oversized headers, or a short body against `Content-Length`) is refused as
 `MALFORMED_PROVIDER_RESPONSE`; the connection is always closed; there is no retry and no fallback
-endpoint. The endpoint path, query and credentials never appear in an error or message
-(`safe_endpoint` drops them).
+endpoint. No provider-controlled text is copied into a message: the endpoint path, query and
+credentials never appear in an error (`safe_endpoint` drops them), the `Content-Encoding` value is not
+reproduced, and a JSON-RPC error is reported with at most its non-boolean integer code, never its
+provider-controlled message.
 
 ## Safe ownership
 

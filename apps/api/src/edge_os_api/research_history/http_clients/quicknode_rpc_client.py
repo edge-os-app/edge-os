@@ -60,15 +60,16 @@ _JSONRPC_VERSION = "2.0"
 
 
 def _sanitized_error_message(error: Any) -> str:
-    if isinstance(error, Mapping):
-        code = error.get("code")
-        message = error.get("message")
-        text = message if isinstance(message, str) else ""
-    else:
-        code = None
-        text = ""
-    text = "".join(character for character in text if character.isprintable())[:200]
-    return f"rpc error code={code!r} message={text!r}"
+    """A bounded refusal that never copies provider-controlled text.
+
+    The provider controls the JSON-RPC ``code`` and ``message``; either could echo
+    the request URL, a header or a key. Only a non-boolean integer code is reported,
+    and the message text is never reproduced.
+    """
+    code = error.get("code") if isinstance(error, Mapping) else None
+    if isinstance(code, int) and not isinstance(code, bool):
+        return f"the JSON-RPC provider returned an error (code {code})"
+    return "the JSON-RPC provider returned an error"
 
 
 class HttpQuickNodeRpcClient:
@@ -166,7 +167,9 @@ class HttpQuickNodeRpcClient:
         parsed = decode_json_reply(response)
         if parsed.get("jsonrpc") != _JSONRPC_VERSION:
             raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply is not JSON-RPC 2.0")
-        if parsed.get("id") != call_id:
+        reply_id = parsed.get("id")
+        # A JSON ``true`` equals the integer 1 in Python; require a non-boolean int.
+        if not isinstance(reply_id, int) or isinstance(reply_id, bool) or reply_id != call_id:
             raise HttpProviderError("MALFORMED_PROVIDER_RESPONSE", "reply id does not match the request")
         has_result = "result" in parsed
         has_error = "error" in parsed

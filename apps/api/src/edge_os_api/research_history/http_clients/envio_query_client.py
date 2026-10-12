@@ -37,6 +37,7 @@ from edge_os_api.research_history.http_clients.client_config import (
     ClientBounds,
     ClientConfigError,
     endpoint_has_path,
+    endpoint_has_query,
     safe_endpoint,
     validate_endpoint,
 )
@@ -79,8 +80,8 @@ class HttpEnvioQueryClient:
                  bounds: ClientBounds, clock: Callable[[], float] = time.monotonic,
                  cancel: Callable[[], bool] | None = None) -> None:
         validate_endpoint(endpoint)
-        if endpoint_has_path(endpoint):
-            raise ClientConfigError("the HyperSync endpoint must be the host base, without a path")
+        if endpoint_has_path(endpoint) or endpoint_has_query(endpoint):
+            raise ClientConfigError("the HyperSync endpoint must be the host base, without a path or query")
         if not isinstance(bearer_token, str) or not bearer_token:
             raise ClientConfigError("bearer_token must be a non-empty string")
         if not isinstance(bounds, ClientBounds):

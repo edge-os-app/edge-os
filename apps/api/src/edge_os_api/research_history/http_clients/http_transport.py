@@ -5,14 +5,16 @@ through ``http.client`` and is used only when a caller injects it into a client
 with an explicit endpoint. It performs no I/O at import or construction, reads no
 credential and holds no default endpoint.
 
-Every request is bounded three ways: a per-socket timeout, an absolute deadline
-checked before the socket opens and between body reads (so a slow dribbling body
-still stops), and a maximum retained body size checked while streaming (so an
-unbounded reply is refused before it is fully buffered). The response-header phase
-is bounded by the per-socket timeout. Redirects are never followed. The connection
-is always closed. A caller cancellation flag is checked before the socket opens and
-between body reads. A malformed HTTP framing reply is refused as a provider error
-rather than escaping as an undocumented exception.
+Every request is bounded three ways: an absolute deadline applied to the socket
+for the connect and response-header phase and checked between body reads (so a
+stalled header or a slow dribbling body still stops within the deadline), a
+per-socket cap that never exceeds the remaining deadline, and a maximum retained
+body size checked while streaming (so an unbounded reply is refused before it is
+fully buffered). Redirects are never followed. The connection is always closed. A
+caller cancellation flag is checked before the socket opens and between body reads.
+A malformed HTTP framing reply is refused as a provider error rather than escaping
+as an undocumented exception. Provider-controlled text (a content-encoding value)
+is never copied into an error message.
 """
 
 from __future__ import annotations
@@ -87,7 +89,10 @@ class StdlibHttpTransport:
         connection = None
         try:
             self._check(cancel, deadline)
-            connection = self._connect(parts.scheme, parts.hostname, parts.port, timeout)
+            # The socket wait never exceeds the remaining whole-call deadline, so a
+            # stalled connect or response-header phase cannot hold the call past it.
+            socket_timeout = min(timeout, deadline - self._clock())
+            connection = self._connect(parts.scheme, parts.hostname, parts.port, socket_timeout)
             connection.request(method, path, body=body, headers=dict(headers))
             response = connection.getresponse()
             chunks: list[bytes] = []
@@ -137,8 +142,9 @@ def decode_json_reply(response: HttpResponse) -> Mapping[str, Any]:
     """Decode a bounded JSON-object reply. Shared by both clients."""
     encoding = response.headers.get("content-encoding")
     if encoding is not None and encoding.lower() != "identity":
+        # The header value is provider-controlled and may echo a key; never copy it.
         raise HttpProviderError("UNSUPPORTED_CONTENT_ENCODING",
-                                f"reply used content-encoding {encoding!r}")
+                                "reply used a non-identity content-encoding")
     try:
         text = response.body.decode("utf-8")
     except UnicodeDecodeError as error:

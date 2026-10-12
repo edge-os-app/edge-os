@@ -8,6 +8,7 @@ No external host, credential or provider is touched.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -166,7 +167,7 @@ def test_the_bearer_token_never_leaks_into_an_error() -> None:
 
 def test_unsafe_endpoints_and_malformed_requests_are_refused() -> None:
     for endpoint in ("http://monad.hypersync.xyz", "https://user:pw@host/x", "https://monad.hypersync.xyz/query",
-                     "wss://monad.hypersync.xyz", ""):
+                     "https://monad.hypersync.xyz?token=SECRET", "wss://monad.hypersync.xyz", ""):
         with pytest.raises(ClientConfigError):
             HttpEnvioQueryClient(endpoint=endpoint, bearer_token=TOKEN,
                                  transport=http.FakeTransport([]), bounds=_bounds())
@@ -208,3 +209,54 @@ def test_slow_reply_at_the_real_client_boundary_is_a_timeout() -> None:
                                       transport=StdlibHttpTransport(), bounds=_bounds(connect_timeout_seconds=0.15))
         with pytest.raises(SourceTimeout):
             client.query(_request())
+
+
+def test_header_stall_respects_the_whole_call_deadline() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(body=b"{}", delay_before_headers=0.3)) as server:
+        client = HttpEnvioQueryClient(endpoint=server.base_url, bearer_token=TOKEN,
+                                      transport=StdlibHttpTransport(),
+                                      bounds=_bounds(deadline_seconds=0.05, connect_timeout_seconds=1.0))
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            client.query(_request())
+        assert time.monotonic() - start < 0.25
+
+
+def test_slow_stream_respects_the_whole_call_deadline() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(chunks=[b"a", b"b"], pause_between_chunks=0.3)) as server:
+        client = HttpEnvioQueryClient(endpoint=server.base_url, bearer_token=TOKEN,
+                                      transport=StdlibHttpTransport(),
+                                      bounds=_bounds(deadline_seconds=0.05, connect_timeout_seconds=1.0))
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            client.query(_request())
+        assert time.monotonic() - start < 0.4
+
+
+def test_envio_endpoint_with_a_query_is_refused() -> None:
+    with pytest.raises(ClientConfigError):
+        HttpEnvioQueryClient(endpoint="https://monad.hypersync.xyz?token=SECRET", bearer_token=TOKEN,
+                             transport=http.FakeTransport([]), bounds=_bounds())
+
+
+def test_envio_targets_the_query_route() -> None:
+    seen: dict[str, str] = {}
+
+    def responder(method: str, path: str, _headers, _body: bytes) -> http.Reply:
+        seen["method"], seen["path"] = method, path
+        return http.Reply(body=json.dumps(http.page_one()).encode("utf-8"))
+
+    with http.LoopbackServer(responder) as server:
+        client = HttpEnvioQueryClient(endpoint=server.base_url, bearer_token=TOKEN,
+                                      transport=StdlibHttpTransport(), bounds=_bounds())
+        client.query(_request())
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/query"
+
+
+def test_content_encoding_value_never_leaks() -> None:
+    client = _client(http.FakeTransport([http.response(body=b"x", headers={"Content-Encoding": TOKEN})]))
+    with pytest.raises(HttpProviderError) as raised:
+        client.query(_request())
+    assert raised.value.code == "UNSUPPORTED_CONTENT_ENCODING"
+    assert TOKEN not in str(raised.value)

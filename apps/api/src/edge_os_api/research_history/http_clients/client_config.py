@@ -117,6 +117,11 @@ def endpoint_has_path(endpoint: str) -> bool:
     return path not in ("", "/")
 
 
+def endpoint_has_query(endpoint: str) -> bool:
+    """Whether the endpoint carries a query string (a possible credential echo)."""
+    return _split_endpoint(endpoint).query != ""
+
+
 def endpoint_path(endpoint: str) -> str:
     return _split_endpoint(endpoint).path
 

@@ -131,6 +131,8 @@ def test_ids_increment_per_call() -> None:
 def test_malformed_envelopes_are_refused() -> None:
     frames = [
         {"jsonrpc": "2.0", "id": 2, "result": "0x1"},          # wrong id
+        {"jsonrpc": "2.0", "id": True, "result": "0x1"},       # boolean id equals 1 in Python
+        {"jsonrpc": "2.0", "id": "1", "result": "0x1"},        # string id
         {"id": 1, "result": "0x1"},                            # missing jsonrpc
         {"jsonrpc": "2.0", "id": 1},                           # neither result nor error
         {"jsonrpc": "2.0", "id": 1, "result": "0x1", "error": {"code": -1, "message": "x"}},  # both
@@ -155,7 +157,23 @@ def test_provider_error_becomes_a_refused_reply() -> None:
     with pytest.raises(HttpProviderError) as raised:
         _client(http.FakeTransport([http.response(body=frame)])).call("eth_chainId", [])
     assert raised.value.code == "PROVIDER_ERROR"
-    assert "boom" in str(raised.value)
+    assert "-32000" in str(raised.value)
+    assert "boom" not in str(raised.value)
+
+
+def test_provider_error_never_copies_provider_text() -> None:
+    # A provider can put anything, including an echoed key, in code or message.
+    frame = _envelope(1, error={"code": KEY, "message": KEY})
+    with pytest.raises(HttpProviderError) as raised:
+        _client(http.FakeTransport([http.response(body=frame)])).call("eth_chainId", [])
+    assert raised.value.code == "PROVIDER_ERROR"
+    assert KEY not in str(raised.value)
+
+    frame = _envelope(1, error={"code": -32000, "message": "boom-" + KEY})
+    with pytest.raises(HttpProviderError) as raised:
+        _client(http.FakeTransport([http.response(body=frame)])).call("eth_chainId", [])
+    assert KEY not in str(raised.value)
+    assert "boom" not in str(raised.value)
 
 
 def test_only_read_only_methods_are_allowed() -> None:

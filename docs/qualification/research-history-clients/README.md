@@ -71,7 +71,7 @@ qualified.
 | RH-HTTP-C27 | Construction performs no I/O; a transport is required | `test_quicknode_rpc_client.py::test_construction_performs_no_io_and_requires_a_transport` |
 | RH-HTTP-C28 | A call returns the result and sends a JSON-RPC envelope | `test_quicknode_rpc_client.py::test_call_returns_the_result_and_sends_a_jsonrpc_envelope` |
 | RH-HTTP-C29 | Ids increment per call | `test_quicknode_rpc_client.py::test_ids_increment_per_call` |
-| RH-HTTP-C30 | Malformed envelopes (wrong id, missing jsonrpc, neither/both) are refused | `test_quicknode_rpc_client.py::test_malformed_envelopes_are_refused` |
+| RH-HTTP-C30 | Malformed envelopes (wrong id incl. boolean/string, missing jsonrpc, neither/both) are refused | `test_quicknode_rpc_client.py::test_malformed_envelopes_are_refused` |
 | RH-HTTP-C31 | A provider error becomes a refused reply | `test_quicknode_rpc_client.py::test_provider_error_becomes_a_refused_reply` |
 | RH-HTTP-C32 | Only read-only methods are allowed | `test_quicknode_rpc_client.py::test_only_read_only_methods_are_allowed` |
 | RH-HTTP-C33 | Params must be a JSON array; the request byte bound holds | `test_quicknode_rpc_client.py::test_params_must_be_a_json_array_and_requests_respect_the_byte_bound` |
@@ -82,7 +82,14 @@ qualified.
 | RH-HTTP-C38 | A loopback corroboration completes through the accepted consumer | `test_quicknode_rpc_client.py::test_loopback_corroboration_completes_through_the_accepted_consumer` |
 | RH-HTTP-C39 | Malformed HTTP framing is refused, not escaped | `test_http_transport.py::test_transport_refuses_malformed_http_framing` |
 | RH-HTTP-C40 | Empty and encoded replies are refused at the QuickNode boundary | `test_quicknode_rpc_client.py::test_empty_and_encoded_replies_are_refused_at_the_client_boundary` |
+| RH-HTTP-C41 | The whole-call deadline bounds the transport header phase | `test_http_transport.py::test_transport_applies_the_deadline_to_the_header_phase` |
+| RH-HTTP-C42 | A header stall respects the whole-call deadline at the client boundary | `test_envio_query_client.py::test_header_stall_respects_the_whole_call_deadline` |
+| RH-HTTP-C43 | A slow stream respects the whole-call deadline at the client boundary | `test_envio_query_client.py::test_slow_stream_respects_the_whole_call_deadline` |
+| RH-HTTP-C44 | An Envio endpoint with a query is refused | `test_envio_query_client.py::test_envio_endpoint_with_a_query_is_refused` |
+| RH-HTTP-C45 | The Envio client targets the `/query` route | `test_envio_query_client.py::test_envio_targets_the_query_route` |
+| RH-HTTP-C46 | A content-encoding value never leaks into an error | `test_envio_query_client.py::test_content_encoding_value_never_leaks` |
+| RH-HTTP-C47 | A JSON-RPC provider error never copies provider text | `test_quicknode_rpc_client.py::test_provider_error_never_copies_provider_text` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
 suite. The accepted adapter adds RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C102; this task adds
-RH-HTTP-C01 to RH-HTTP-C40 and changes no existing case.
+RH-HTTP-C01 to RH-HTTP-C47 and changes no existing case.
