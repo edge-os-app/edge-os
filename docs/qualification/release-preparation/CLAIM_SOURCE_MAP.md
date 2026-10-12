@@ -4,9 +4,9 @@ Task OC-P41-PREP-20261010-01, issue #48. Prepared 2026-10-10. Base `5689e1d6e71e
 
 Scope: preparation only. This map ties every proposed claim and artifact to its accepted source and its pending acceptance condition. A preparation PASS does not mean any listed condition passed.
 
-## Current status, #58 Stage 1 candidate and Task 6 local milestone (2026-10-12)
+## Current status, #58 Stage 1, Task 6 and Stage 2 local milestones (2026-10-12)
 
-This section supersedes the current-status cells below for P22–P26/P30; those rows remain as preparation history. Evidence class: local fixture only (`EDGE_OS_EXECUTION_MODE=fixture`, refused in production). Source: `docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md` and the `verify-edge-os` feature-map sections "Connected financial journey" and "Recorded-history research journey".
+This section supersedes the current-status cells below for P22–P26/P30; those rows remain as preparation history. Evidence class: local fixture only (`EDGE_OS_EXECUTION_MODE=fixture`, refused in production). Source: `docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md` and the `verify-edge-os` feature-map sections "Connected financial journey", "Recorded-history research journey" and "Public-runtime preparation"; Stage 2 records in `docs/qualification/public-runtime/`.
 
 | Capability | Current status | Evidence class | Still missing |
 |---|---|---|---|
@@ -17,8 +17,14 @@ This section supersedes the current-status cells below for P22–P26/P30; those 
 | Original-action recovery after lost acknowledgement or process death | Connected | Local fixture receipts | Real receipts and chain identities (Stage 3) |
 | Scoped stop; removal denying from REQUESTED | Connected at admission and submission | Local fixture removal observation | Real signer removal (Stage 3) |
 | Recorded-history declaration, original jobs, dataset, report, market adoption and labelled replay (RG01–RG06) | Connected for recorded responses (Task 6 local milestone) | SYNTHETIC recorded responses | Actual collection and inference (approval packet pending); actual-history replay (P13 evidence-class change pending); G05 LIMITED representation |
-| Pre-public follow-ups F1–F6 (service-backed account projections; read-back failure disables follow-ups; original references before effect; hosted drift and recovery; manual accessibility; dependency advisory reachability) | TRACKED, NOT REPAIRED | — | Repairs proposed in `docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md`; next local milestone |
-| Hosted multi-user, quotas, real login (PU01–PU08) | NOT RUN | — | Stage 2 |
+| F1 service-backed account projections (read-only, unknown stays unknown) | Connected (Stage 2 local candidate) | Local fixture ports | Real provider data (Stage 3) |
+| F2 failed read-back keeps change controls paused | Repaired (Stage 2 local candidate) | Local browser and unit tests | — |
+| F3 original references before effect for every real transport | TRACKED, NOT REPAIRED | — | Stage 3 adapter seam |
+| F4 worker schema-drift stop; restore/rollback runbook | Repaired locally; runbook rehearsed on a local database | Local | Hosted rehearsal |
+| F5 manual accessibility | Keyboard pass on owned connected-agent, funding and projection surfaces | Local browser | Screen reader NOT_RUN; research, adoption and replay surfaces |
+| F6 dependency advisory reachability | Assessed read-only (25 advisories, all through the wallet SDK) | Build inspection | Controller disposition; no lockfile change |
+| Shared owner/global quotas, write rate, job and timeout limits, production startup and readiness checks | Implemented (Stage 2 local candidate) | Local PostgreSQL, separate processes | Hosted multi-process load; provider spending caps |
+| Hosted multi-user, real login (PU01–PU08); host selection | NOT RUN; hosting proposal only (not selected or bought) | — | Builder decision and Stage 3 |
 
 ## 1. Proposed claims
 

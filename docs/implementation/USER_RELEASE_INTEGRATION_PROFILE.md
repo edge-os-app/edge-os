@@ -11,7 +11,7 @@ Compose the accepted funding (P18), admission (P22), execution (P23), recovery (
 | File | Responsibility |
 |---|---|
 | `apps/api/migrations/versions/0008_financial_state.py`, `migrations/env.py` | Create the seven `*_local` schemas, their accepted tables and the evaluation jobs table. `alembic check` covers every metadata. |
-| `core/settings.py` | `execution_mode` (`fixture`/`unavailable`, production refuses `fixture`) and `fixture_effects_path`. |
+| `core/settings.py` | `execution_mode` (`fixture`/`unavailable`, production refuses `fixture`) and `fixture_effects_path`; Stage 2 quota, rate, job and timeout settings and production startup checks. |
 | `core/provider_ports.py` | Trusted provider ports and their fixture/unavailable adapters. |
 | `core/financial_services.py` | One composition of the services over the app's session factory. |
 | `execution/connected_identity.py` | IC01 revision resolver, consent lookup and IC05 approval derivation. |
@@ -138,14 +138,14 @@ Milestone `RELEASE-E2E-L2-20261012-RG-LOCAL`. Every history source is the author
 |---|---|---|---|
 | RG01 | `POST/GET /v1/research/requests/{id}/history-investigations[/{declaration}]` save `p08.investigation-declaration/3` before any collection with frozen configuration, rule-map and source-profile hashes; the hypothesis rule map `edge-os.hypothesis-rule-map/1` accepts only `USER_ADOPTED` rules and refuses the worked-example rules (fixture strategy entry/exit, fixture interpreter choices, P09 example); `PROVIDER_ACTUAL` access is refused (`actual_data_not_authorized`). v2 reads and the P09 fixture run ignore v3 declarations. | `core/request_schemas.py`, `research/investigation_adoption.py` | Local PASS candidate |
 | RG02 | `edge-os.history-dataset/1` rows in `research_local.history_datasets`, saved verbatim from P07 `collect`/`normalize` with raw records, recomputable hashes, verdicts, measured invocations, evidenced or unknown provider usage, binding state and unavailable states. Only overall QUALIFIED and complete data project to a market binding. | `research/history_dataset.py`, migration `0009` | Local recorded PASS candidate; actual data NOT RUN |
-| RG03 | `edge-os.investigation-job/1` jobs, append-only `investigation_events`, per-owner `research_budgets`; reservation before any adapter effect; duplicate start, last-slot competition, cancel, deadline, killed worker (OUTCOME_UNKNOWN, never collected again), lost reply after a saved result, missing/invalid usage, provider failure, budget exhaustion and restart. Tools `edge-os.investigation-tool/1` are deterministic and import no financial or network module. Worker: `python -m edge_os_api.research.investigation_jobs`. | `research/investigation_jobs.py`, `research/investigation_tools.py` | Local PASS candidate; no Hermes tool isolation is proved |
+| RG03 | `edge-os.investigation-job/1` jobs, append-only `investigation_events`, per-owner `research_budgets` (moved to `usage_local` shared quotas by Stage 2 migration 0010); reservation before any adapter effect; duplicate start, last-slot competition, cancel, deadline, killed worker (OUTCOME_UNKNOWN, never collected again), lost reply after a saved result, missing/invalid usage, provider failure, budget exhaustion and restart. Tools `edge-os.investigation-tool/1` are deterministic and import no financial or network module. Worker: `python -m edge_os_api.research.investigation_jobs`. | `research/investigation_jobs.py`, `research/investigation_tools.py` | Local PASS candidate; no Hermes tool isolation is proved |
 | RG04 | `edge-os.investigation-report/1` reports from the accepted P09 engine on the saved dataset: DESCRIBED, CONTRADICTORY, INSUFFICIENT_DATA, UNSUPPORTED, SOURCE_LOSS, LIMITED_DATA; validation and holdout partitions are never read; no significance, capital or execution claim. | `research/comparison_runs.py` `compare_history` | Local PASS candidate |
 | RG05 | `edge-os.history-replay-input/1`: `POST /v1/spot-replays` with `history_dataset_id` feeds the unchanged P13 runtime; buckets, availability and verdicts pass through unchanged; lineage, both market binding ids and "simulated fills" are saved. A strategy reaches the dataset market only through pre-publication adoption (`POST /v1/research/requests/{id}/market-adoptions`, amendment RG05-MARKET-ADOPTION-v1): a NEW interpretation, clarification, outcome and draft built from the owner's hash-verified QUALIFIED dataset; the entry becomes exactly one `USER_ADOPTED` rule of that dataset's own declaration (price and volume conditions joined by `and`), the exit is restated by the owner and refused when it is a worked-example rule, and amounts are restated in the new quote unit; replays record whether the entry is that declared rule; earlier drafts and revisions never change and the fixture revision still fails `MARKET_BINDING_MISMATCH`. | `replay/history_inputs.py`, `replay/saved_runs.py`, `research/market_adoption.py` | Local recorded PASS candidate; actual-source replay blocked by the runtime evidence-class check (proposal recorded, simulator unchanged) |
 | RG06 | Verifier research phase (`scripts/p03/research_phase.py`, three specs `research-history-*.spec.mjs`); `--actual-data PACKET` refuses without a recorded approval and, even with one, until an actual adapter exists. | `scripts/p03/`, `.agents/skills/verify-edge-os/` | Default run spends nothing |
 
 Retained limits: the recorded bundle is synthetic; actual collection, inference and actual-history replay need the separate authorization packet and the runtime change; LIMITED representation (G05) stays open; a local fake runner proves no real Hermes tool isolation.
 
-### Pre-public and live follow-ups (tracked, not repaired here)
+### Pre-public and live follow-ups (tracked; Stage 2 status in the next section)
 
 | ID | Follow-up | Proposed repair (summary) |
 |---|---|---|
@@ -155,6 +155,22 @@ Retained limits: the recorded bundle is synthetic; actual collection, inference 
 | F4 | Hosted schema drift and recovery | Workers re-check the schema head each pass; host runbook for migrate, restore and rollback with rehearsals |
 | F5 | Manual accessibility | Keyboard-only and screen-reader pass over the new research, adoption and replay surfaces |
 | F6 | Dependency advisories and runtime reachability | Read-only advisory review with reachability per advisory; upgrades as separate leased changes |
+
+## Stage 2 local public-runtime preparation
+
+Milestone `RELEASE-E2E-L2-20261012-RUNTIME-LOCAL`, base `6fab6f2`. Local only: no host, provider, credential, deployment or financial action. Details and proposals: `docs/qualification/public-runtime/`.
+
+| Area | Implementation | Files | Status |
+|---|---|---|---|
+| Shared quotas | Owner and GLOBAL allocations per resource with frozen caps, one reservation per original subject (locks GLOBAL then OWNER, both caps checked before any adapter call), idempotent KNOWN/UNKNOWN settlement with overrun, append-only events, operator-only `set-cap`. Migration 0010 moves `research_budgets` into OWNER allocations. | `usage/quota.py`, `migrations/versions/0010_shared_usage_quotas.py`, `research/investigation_jobs.py` | Local PASS candidate |
+| G-N2, N4, G-N1 | Interrupted compute stays unknown liability; compute is measured in milliseconds and settled as whole seconds with overrun booked; corrected actual-data bounds recorded. | `research/investigation_jobs.py`, `research/investigation_tools.py`, `RUNTIME_GUARDS.md` | Local PASS candidate |
+| Runtime guards | Production startup refusals (names only), `/readyz` reason codes including `quota_cap_mismatch`, shared per-owner write rate (429 + `Retry-After`), active research job limit, SQL statement timeout. | `core/settings.py`, `core/database.py`, `main.py`, `usage/rate_limit.py` | Local PASS candidate |
+| F1 | Read-only `GET /v1/account-views/service[?agent_id=]` projects the owner's funding, admission, execution, recovery and removal rows as `evidence_class = SERVICE_PROJECTION` through `AccountViewContent`; unknown marks and unrealized results stay UNKNOWN; deposits are flows, not results. Shown in the "Saved connected state" panel. | `accounts/service_projection.py`, `accounts/views.py`, `components/ServiceAccountState.tsx`, `lib/account-views.ts` | Local PASS candidate |
+| F2 | A saved change whose read-back fails keeps the last view marked unconfirmed and every change control paused until a read succeeds; no success notice. | `AgentActions.tsx`, `AgentFunding.tsx`, `AgentAuthority.tsx` | Local PASS candidate |
+| F3 | Not changed. The signing/adapter seam is reserved for Stage 3. | — | Open (Stage 3) |
+| F4 | Workers check the schema head before every pass and stop with exit code 3 before any effect; runbook rehearsed locally (dump, restore, check, downgrade/upgrade). | `core/worker_loop.py`, `execution/worker.py`, `tests/test_restore_rehearsal.py`, `RESTORE_ROLLBACK_RUNBOOK.md` | Local PASS candidate; hosted rehearsal open |
+| F5 | Keyboard-only pass over the owned connected-agent, funding and projection surfaces at desktop and 390px (`runtime.spec.mjs`). Screen reader: NOT_RUN. | `tests/p03/runtime.spec.mjs`, `KEYBOARD_QA.md` | Partial |
+| F6 | Read-only advisory and reachability record; no lockfile change. | `ADVISORY_ASSESSMENT.md` | Needs controller disposition |
 
 ## Decisions for the builder
 

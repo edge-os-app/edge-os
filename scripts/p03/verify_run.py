@@ -31,6 +31,7 @@ from tokens import OWNER_A, OWNER_B, OWNER_C, TestSigner  # noqa: E402
 from p05_phase import run_p05_phase  # noqa: E402
 import financial_phase  # noqa: E402
 import research_phase  # noqa: E402
+import runtime_phase  # noqa: E402
 
 THESIS = ("Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
           "Spot only.")
@@ -481,6 +482,8 @@ def main() -> int:
                                storage_after_restart == storage_before_restart,
                                {"spot_replay_runs": len(storage_before_restart["spot_replay_runs"]),
                                 "spot_replay_configurations": len(storage_before_restart["spot_replay_configurations"])})
+                # After every restart comparison, so its writes cannot change them.
+                ok &= runtime_phase.drive(rec, pg, env, evidence, ui_env, run_playwright, processes, signer)
 
         if not args.skip_ui and not args.skip_p05:
             ok &= run_p05_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,

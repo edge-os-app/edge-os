@@ -83,7 +83,7 @@ The API runs with `EDGE_OS_RESEARCH_HISTORY_MODE=recorded` and a 40-request owne
 | Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
 |---|---|---|---|---|---|---|
 | Declare before data | Research request (no thesis) → Recorded-history investigation → source, own hypothesis, own rules, bounds → adopt → Save | `GET /v1/research/history-sources`, `POST /v1/research/requests/{id}/history-investigations` | `investigation_declarations` (v3), `investigation_access_events` | `PRE_OUTCOME_DECLARED`, frozen hashes, zero provider queries | unchanged | `research-inspection.json`, `*-rg-01-declared.png` |
-| Waiting job | Start investigation job | `POST …/history-investigations/{d}/jobs` | `research_local.investigation_jobs`, `investigation_events`, `research_budgets` | `RESERVED` before any attempt | — | `*-rg-02-waiting.png` |
+| Waiting job | Start investigation job | `POST …/history-investigations/{d}/jobs` | `research_local.investigation_jobs`, `investigation_events`, `usage_local.usage_allocations`/`usage_reservations` | `RESERVED` before any attempt | — | `*-rg-02-waiting.png` |
 | Cancel and retry | Cancel this job → Retry as a new job | `POST /v1/research/investigation-jobs/{job}/cancel` | same | `CANCELLED`, reservation released; new job `RESERVED` | kept | `*-rg-03-cancel-retry.png` |
 | Budget denial | Declaration with 64 provider requests → Start | same | job `BUDGET_EXHAUSTED`, nothing reserved | alert, nothing collected | kept | `*-rg-04-budget-denied.png` |
 | Killed worker | none (verifier fault injection) | — | `ATTEMPT_STARTED` then `ATTEMPT_RECONCILED OUTCOME_UNKNOWN` | `UNAVAILABLE`, unknown liability kept, never collected again; retry is a new job | retried job reported | `research-inspection*.json` |
@@ -99,8 +99,23 @@ select declaration_id, state, terminal_reason, budget->'unknown_liability' from 
 select job_id, kind, attempt_id from research_local.investigation_events order by seq;
 select dataset_id, content->'verdict'->>'overall', content->>'binding_state', content->>'stop_reason' from research_local.history_datasets;
 select report_id, content->>'outcome' from research_local.investigation_reports;
-select * from research_local.research_budgets;
+select scope, owner_key, resource, cap, reserved, consumed, unknown, overrun from usage_local.usage_allocations order by resource, scope;
+select subject_kind, subject_id, amounts, settled from usage_local.usage_reservations;
 ```
+
+## Public-runtime preparation (#58 Stage 2, local)
+
+`scripts/p03/runtime_phase.py` runs after every restart comparison, so its writes cannot change them. It needs the financial phase's saved agents.
+
+| Check | How | Expected | Evidence |
+|---|---|---|---|
+| F1 projection (API) | `GET /v1/account-views/service?agent_id=fin-desktop` as owner A and owner B | owner A: every record `SERVICE_PROJECTION`, AGENT/CAPITAL_FLOW/POSITION/ACTION/MONITORING present, unrealized result and mark `UNKNOWN`, flows not in realized result; owner B: no records | `runtime-projection.json` |
+| Shared quotas (SQL) | `usage_local.usage_allocations` grouped by resource; `usage_reservations` | GLOBAL reserved/consumed/unknown/overrun equal the sum of OWNER rows; one reservation per reserving job | `runtime-quotas.json` |
+| Frozen cap and write rate | a second API process on the same database with `EDGE_OS_USAGE_GLOBAL_COMPUTE_SECONDS` + 1 and `EDGE_OS_WRITE_RATE_PER_MINUTE=2`; three writes by a new owner | `/readyz` 503 `quota_cap_mismatch` naming `compute_seconds`; third write 429 with `Retry-After` | `runtime-limits.json`, `logs/api-runtime-limits.log` |
+| Worker drift stop | a run-owned database at revision 0009; both workers `--once` | exit code 3, no rows written; database dropped | `runtime-drift.json`, `logs/worker-drift-*.log` |
+| F1 panel, F2 read-back, F5 keyboard (browser) | `runtime.spec.mjs` at desktop and 390px | "Saved connected state" lists projections, owner B sees none; a failed `GET …/funding` after "Check deposits" shows "The change was saved, but…" and pauses every change control until "Check saved funding" succeeds; Tab reaches every control with a visible focus outline and Enter activates "Check deposits" | `*-runtime-*.png`, `ui/keyboard-qa.json`, `ui-runtime.log` |
+
+Restore and rollback are rehearsed by `apps/api/tests/test_restore_rehearsal.py` (pytest), not by the mapped run.
 
 ## SQL checks
 

@@ -417,7 +417,7 @@ class InvestigationWorker:
             try:
                 result = self.run_job(job_id)
             except Exception as error:  # noqa: BLE001 - one job's defect must not stop other owners' jobs
-                log.exception("investigation job %s failed: %s", job_id, type(error).__name__)
+                log.error("investigation job %s failed: %s", job_id, type(error).__name__)  # no message: it may hold provider text
                 continue
             if result is not None:
                 results.append(result)
