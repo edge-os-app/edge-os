@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, formatRaw, type ConsentReview, type ConsentState, type ReviewedTerms } from "../lib/financial";
 
@@ -117,7 +117,7 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
           <dt>Network</dt><dd>{state.identity.network_id}</dd>
         </dl>}
 
-        {state.adoptions.length === 0 && !shown && assets && <fieldset style={{ border: 0, padding: 0 }}>
+        {state.adoptions.length === 0 && !shown && assets && <fieldset style={{ border: 0, padding: 0, minWidth: 0 }}>
           <legend><h3 style={{ margin: 0 }}>Terms to review</h3></legend>
           <p className="muted">Whole base units. Unlike assets are never added together.</p>
           {LIMITS.map((item) => <div key={item.key}>
@@ -163,10 +163,10 @@ function ReviewSummary({ review }: { review: ConsentReview }) {
       <dl className="kv">
         <dt>Review hash</dt><dd className="mono">{review.review_hash}</dd>
         <dt>Purpose</dt><dd>{terms.operating_purpose}{terms.trial_objective ? ` — ${terms.trial_objective}` : ""}</dd>
-        {terms.allocation.map((amount) => <div key={`alloc-${amount.asset_id}`}><dt>Allocation</dt>
-          <dd>{formatRaw(amount.raw, amount.decimals)} <span className="mono">{amount.asset_id}</span></dd></div>)}
-        {terms.allowances.map((term) => <div key={term.name}><dt>{term.name}</dt>
-          <dd>{formatRaw(term.amount.raw, term.amount.decimals)} <span className="mono">{term.amount.asset_id}</span></dd></div>)}
+        {terms.allocation.map((amount) => <Fragment key={`alloc-${amount.asset_id}`}><dt>Allocation</dt>
+          <dd>{formatRaw(amount.raw, amount.decimals)} <span className="mono">{amount.asset_id}</span></dd></Fragment>)}
+        {terms.allowances.map((term) => <Fragment key={term.name}><dt>{term.name}</dt>
+          <dd>{formatRaw(term.amount.raw, term.amount.decimals)} <span className="mono">{term.amount.asset_id}</span></dd></Fragment>)}
         {terms.gas_budget && <><dt>Gas budget</dt><dd>{formatRaw(terms.gas_budget.raw, terms.gas_budget.decimals)} MON</dd></>}
         <dt>Attempts</dt><dd>{terms.attempt_budget}</dd>
         <dt>Expiry</dt><dd><time dateTime={terms.expiry}>{terms.expiry}</time></dd>

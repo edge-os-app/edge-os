@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, formatRaw, heldKey, peekKey, releaseKey, type FundingView } from "../lib/financial";
 
@@ -132,18 +132,18 @@ export function AgentFunding({ agentId }: { agentId: string }) {
           {flow.transaction_reference && <> · observed event <span className="mono">{flow.transaction_reference}</span></>}
         </li>)}</ul>
         {view.deposit_balances.length > 0 && <dl className="kv" data-testid="funding-credited">
-          {view.deposit_balances.map((balance) => <div key={balance.asset_id}>
+          {view.deposit_balances.map((balance) => <Fragment key={balance.asset_id}>
             <dt>{balance.asset_class === "TRADING" ? "Credited trading deposits" : balance.asset_class === "NATIVE_GAS" ? "Credited gas deposits" : balance.asset_class}</dt>
             <dd>{formatRaw(balance.credited_deposits.raw, balance.credited_deposits.decimals)} credited · {formatRaw(balance.pending_deposits.raw, balance.pending_deposits.decimals)} pending</dd>
-          </div>)}
+          </Fragment>)}
         </dl>}
 
         <h3>Current holdings</h3>
         {view.current_holdings.state === "UNAVAILABLE"
           ? <p data-testid="funding-holdings">Current holdings are unavailable. No balance is shown or assumed.</p>
-          : <dl className="kv" data-testid="funding-holdings">{view.current_holdings.assets.map((asset) => <div key={asset.asset_id}>
+          : <dl className="kv" data-testid="funding-holdings">{view.current_holdings.assets.map((asset) => <Fragment key={asset.asset_id}>
               <dt className="mono">{asset.asset_id}</dt><dd>{formatRaw(asset.raw, asset.decimals)} ({view.current_holdings.evidence_class})</dd>
-            </div>)}</dl>}
+            </Fragment>)}</dl>}
         {view.allowances.length > 0 && <>
           <h3>Authority used</h3>
           <ul>{view.allowances.map((item) => <li key={item.asset_id}>
