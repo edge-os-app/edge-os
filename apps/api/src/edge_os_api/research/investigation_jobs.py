@@ -15,7 +15,6 @@ import datetime as dt
 import hashlib
 import logging
 import math
-import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -26,6 +25,7 @@ from sqlalchemy import (
     Identity,
     Text,
     UniqueConstraint,
+    func,
     select,
     text,
 )
@@ -230,6 +230,15 @@ def start_job(session: Session, principal: Principal, settings: Settings, intake
     if existing is not None:  # a concurrent start with this key won; the locks above serialized us behind it
         session.rollback()
         return _replay(session, existing, fingerprint)
+    # Counted under the owner's quota row locks, so concurrent starts of one owner cannot both pass the limit.
+    active = session.execute(select(func.count()).select_from(InvestigationJobRow).where(
+        InvestigationJobRow.owner_id == principal.user_id,
+        InvestigationJobRow.state.in_(("QUEUED", *RUNNABLE)))).scalar_one()
+    if active >= settings.research_max_active_jobs:
+        session.rollback()
+        raise _refusal(409, "too_many_active_jobs", "/",
+                       f"You already have {active} research jobs waiting or running. Cancel one or wait for one to "
+                       "finish. Nothing was started.")
     granted = isinstance(outcome, quota.Grant)
     zero = {"provider_requests": 0, "compute_seconds": 0}
     refused = None if granted else {"scope": outcome.scope, "resource": outcome.resource,
@@ -649,7 +658,7 @@ def _finished(session: Session, job_id: uuid.UUID, tool: str) -> InvestigationEv
 
 def main() -> None:
     """Bounded worker loop over saved investigation jobs. Nothing here creates new work."""
-    from edge_os_api.core.database import make_engine, make_session_factory, require_head
+    from edge_os_api.core.database import make_engine, make_session_factory
     from edge_os_api.core.settings import load_settings
 
     parser = argparse.ArgumentParser(description="Advance saved investigation jobs.")
@@ -658,20 +667,12 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
-    engine = make_engine(settings.database_url)
-    require_head(engine)
+    engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     worker = InvestigationWorker(make_session_factory(engine), settings)
-    while True:
-        try:
-            advanced = worker.run_pending()
-            if advanced:
-                log.info("investigation worker advanced %d job(s)", len(advanced))
-        except Exception as error:  # noqa: BLE001 - one failed pass must not stop the worker; state is durable
-            log.error("investigation worker pass failed: %s", type(error).__name__)
-        if args.once:
-            break
-        time.sleep(args.interval)
+    from edge_os_api.core import worker_loop
 
+    worker_loop.exit_with(worker_loop.run("investigation worker", engine, worker.run_pending, once=args.once,
+                                          interval=args.interval, log=log))
 
 if __name__ == "__main__":
     main()

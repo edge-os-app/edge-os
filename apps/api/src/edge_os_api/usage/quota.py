@@ -103,6 +103,8 @@ class Caps:
 
     owner: Mapping[str, int]
     global_: Mapping[str, int]
+    # The GLOBAL row's key. The application always uses GLOBAL_OWNER; tests isolate a global scope with their own key.
+    global_key: uuid.UUID = GLOBAL_OWNER
 
 
 class CapMismatch(RuntimeError):
@@ -154,7 +156,7 @@ def _allocation(session: Session, scope: str, owner_key: uuid.UUID, resource: st
 
 def _locked_rows(session: Session, owner_id: uuid.UUID, caps: Caps) -> list[AllocationRow]:
     """GLOBAL rows first, then OWNER rows, each in resource order: one lock order for every process."""
-    rows = [_allocation(session, "GLOBAL", GLOBAL_OWNER, resource, caps.global_[resource], lock=True)
+    rows = [_allocation(session, "GLOBAL", caps.global_key, resource, caps.global_[resource], lock=True)
             for resource in RESOURCES]
     rows += [_allocation(session, "OWNER", owner_id, resource, caps.owner[resource], lock=True)
              for resource in RESOURCES]
@@ -242,7 +244,7 @@ def view(session: Session, owner_id: uuid.UUID, caps: Caps) -> dict[str, Any]:
     """Owner totals plus the global remaining capacity. Reads only; creates nothing."""
     rows = session.execute(select(AllocationRow).where(
         ((AllocationRow.scope == "OWNER") & (AllocationRow.owner_key == owner_id))
-        | ((AllocationRow.scope == "GLOBAL") & (AllocationRow.owner_key == GLOBAL_OWNER)))).scalars().all()
+        | ((AllocationRow.scope == "GLOBAL") & (AllocationRow.owner_key == caps.global_key)))).scalars().all()
     by_key = {(row.scope, row.resource): row for row in rows}
 
     def totals(scope: str, configured: Mapping[str, int]) -> dict[str, Any]:
@@ -265,7 +267,8 @@ def view(session: Session, owner_id: uuid.UUID, caps: Caps) -> dict[str, Any]:
 
 def cap_mismatches(session: Session, caps: Caps) -> list[dict[str, Any]]:
     """Stored GLOBAL caps that differ from configuration (readiness evidence; no write)."""
-    rows = session.execute(select(AllocationRow).where(AllocationRow.scope == "GLOBAL")).scalars().all()
+    rows = session.execute(select(AllocationRow).where(AllocationRow.scope == "GLOBAL",
+                                                       AllocationRow.owner_key == caps.global_key)).scalars().all()
     return [{"scope": "GLOBAL", "resource": row.resource, "stored": row.cap, "configured": caps.global_[row.resource]}
             for row in rows if row.resource in caps.global_ and row.cap != caps.global_[row.resource]]
 
@@ -299,7 +302,7 @@ def main() -> None:
     change.add_argument("--reason", required=True)
     args = parser.parse_args()
     settings = load_settings()
-    engine = make_engine(settings.database_url)
+    engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     require_head(engine)
     with make_session_factory(engine)() as session:
         set_cap(session, args.scope, uuid.UUID(args.owner), args.resource, args.cap, args.reason)

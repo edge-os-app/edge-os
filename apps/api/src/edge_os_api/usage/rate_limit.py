@@ -28,16 +28,15 @@ class RequestWindowRow(UsageBase):
     __table_args__ = (PrimaryKeyConstraint("owner_id", "window_start", name="request_windows_pkey"),)
 
 
-class RateLimited(AppError):
-    def __init__(self, retry_after: int) -> None:
-        super().__init__(429, "RATE_LIMIT", "UNAVAILABLE", "rate_limited", [finding(
-            "rate_limited", "/", f"Too many changes in a short time. Wait {retry_after} seconds, then check the saved "
-                                 "state before you repeat a change.")])
-        self.retry_after = retry_after
+def rate_limited(retry_after: int) -> AppError:
+    return AppError(429, "RATE_LIMIT", "UNAVAILABLE", "rate_limited", [finding(
+        "rate_limited", "/", f"Too many changes in a short time. Wait {retry_after} seconds, then check the saved "
+                             "state before you repeat a change.")], retry="SAFE_SAME_KEY",
+                    headers={"Retry-After": str(retry_after)})
 
 
 def count_write(session: Session, owner_id: uuid.UUID, limit: int, now: dt.datetime | None = None) -> int:
-    """Count one write for the owner in the current window and commit the count. Raises `RateLimited` over the limit.
+    """Count one write for the owner in the current window and commit the count. Raises a 429 over the limit.
 
     The count commits on its own so a refused or failed request still counts; nothing else is in this transaction.
     """
@@ -49,5 +48,5 @@ def count_write(session: Session, owner_id: uuid.UUID, limit: int, now: dt.datet
                             .returning(RequestWindowRow.requests)).scalar_one()
     session.commit()
     if count > limit:
-        raise RateLimited(max(1, int((start + WINDOW - moment).total_seconds()) + 1))
+        raise rate_limited(max(1, int((start + WINDOW - moment).total_seconds()) + 1))
     return count

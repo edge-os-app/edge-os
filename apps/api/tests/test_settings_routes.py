@@ -57,7 +57,30 @@ def test_t10_production_refuses_test_app_and_http_origins(env):
         load_settings(prod)
     with pytest.raises(ConfigError, match="https"):
         load_settings({**prod, "EDGE_OS_PRIVY_APP_ID": "real-app", "EDGE_OS_CORS_ALLOWED_ORIGINS": "http://app.example.com"})
-    assert load_settings({**prod, "EDGE_OS_PRIVY_APP_ID": "real-app"}).docs_enabled is False
+    hosted = {**prod, "EDGE_OS_PRIVY_APP_ID": "real-app", "EDGE_OS_BUILD_SHA": "0123456789abcdef",
+              "EDGE_OS_DATABASE_URL": "postgresql+psycopg://app@db.internal.example:5432/edge_os?sslmode=require"}
+    assert load_settings(hosted).docs_enabled is False
+
+
+@pytest.mark.parametrize("change,message", [
+    ({"EDGE_OS_BUILD_SHA": ""}, "build_sha: production needs the exact build identity"),
+    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://app@127.0.0.1:5432/edge_os?sslmode=require"},
+     "database_url: production needs a hosted database"),
+    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://app@db.internal.example:5432/edge_os"},
+     "database_url: production needs sslmode=require"),
+    ({"EDGE_OS_RESEARCH_HISTORY_MODE": "recorded"}, "research_history_mode"),
+    ({"EDGE_OS_INTERPRETER": "hermes_local"}, "interpreter"),
+    ({"EDGE_OS_EXECUTION_MODE": "fixture"}, "execution_mode"),
+    ({"EDGE_OS_WALLET_PROVIDER": "fixture"}, "wallet_provider"),
+])
+def test_production_refuses_local_modes_and_missing_selected_settings(env, change, message):
+    secret = "postgresql+psycopg://app:do-not-echo-this@db.internal.example:5432/edge_os?sslmode=require"
+    hosted = {**env, "EDGE_OS_ENV": "production", "EDGE_OS_CORS_ALLOWED_ORIGINS": "https://app.example.com",
+              "EDGE_OS_PRIVY_APP_ID": "real-app", "EDGE_OS_BUILD_SHA": "0123456789abcdef",
+              "EDGE_OS_DATABASE_URL": secret}
+    with pytest.raises(ConfigError, match=message) as refused:
+        load_settings({**hosted, **change})
+    assert "do-not-echo-this" not in str(refused.value)
 
 
 def test_ambient_environment_is_ignored_by_the_harness(env, monkeypatch):

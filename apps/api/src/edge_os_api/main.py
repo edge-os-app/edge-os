@@ -21,6 +21,7 @@ from edge_os_api.agent_context import controls as agent_context
 from edge_os_api.research import comparison_runs as effect_run
 from edge_os_api.research import investigation_adoption as investigation_adoption
 from edge_os_api.research import history_dataset, investigation_jobs, market_adoption
+from edge_os_api.usage import quota, rate_limit
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service as service
 from edge_os_api.research.attempt_store import AdvisoryLockGuard
@@ -110,7 +111,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     settings = settings or load_settings()
     if settings.interpreter == "hermes_local" and hermes_runner is None:
         raise ConfigError("invalid configuration: interpreter: hermes_local needs a Hermes runner")
-    engine = make_engine(settings.database_url)
+    engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     try:
         require_head(engine)
     except SQLAlchemyError:
@@ -163,13 +164,32 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
             revision, head = current_revision(engine), script_head()
             with engine.connect() as connection:
                 connection.execute(text("select 1"))
+            with session_factory() as session:
+                mismatches = quota.cap_mismatches(session, investigation_jobs.caps(settings))
         except SQLAlchemyError:
-            return JSONResponse({"status": "unavailable"}, status_code=503)
-        if revision != head or not verifier.keys:
-            return JSONResponse({"status": "unavailable"}, status_code=503)
+            return JSONResponse({"status": "unavailable", "reason": "database_unavailable"}, status_code=503)
+        # Reason codes only; no value from configuration or the database is echoed.
+        if revision != head:
+            return JSONResponse({"status": "unavailable", "reason": "schema_drift"}, status_code=503)
+        if not verifier.keys:
+            return JSONResponse({"status": "unavailable", "reason": "verification_keys_missing"}, status_code=503)
+        if mismatches:
+            return JSONResponse({"status": "unavailable", "reason": "quota_cap_mismatch",
+                                 "resources": sorted(item["resource"] for item in mismatches)}, status_code=503)
         return JSONResponse({"status": "ready", "schema_revision": revision})
 
-    private = APIRouter(prefix="/v1", dependencies=[Depends(require_principal)])
+    def limit_writes(request: Request, principal: Principal = Depends(require_principal)) -> None:
+        """Count every authenticated write in the owner's shared PostgreSQL window; reads are not limited."""
+        if request.method in {"GET", "HEAD", "OPTIONS"}:
+            return
+        with session_factory() as session:
+            try:
+                rate_limit.count_write(session, principal.user_id, settings.write_rate_per_minute)
+            except SQLAlchemyError:
+                session.rollback()
+                raise service_unavailable("SAFE_SAME_KEY") from None
+
+    private = APIRouter(prefix="/v1", dependencies=[Depends(require_principal), Depends(limit_writes)])
 
     def run(session: Session, call: Callable[[], Any], retry: str = "SAFE_SAME_KEY") -> Any:
         try:
@@ -410,10 +430,11 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
 
     app.include_router(public)
     app.include_router(private)
-    app.include_router(account_views.router)
-    app.include_router(agent_context.router)
-    app.include_router(wallet_setup.router)
+    write_limited = [Depends(limit_writes)]
+    app.include_router(account_views.router, dependencies=write_limited)
+    app.include_router(agent_context.router, dependencies=write_limited)
+    app.include_router(wallet_setup.router, dependencies=write_limited)
     for financial_router in (funding_routes.router, consent_routes.router, action_routes.router,
                              recovery_routes.router, stop_routes.router, removal_routes.router):
-        app.include_router(financial_router)
+        app.include_router(financial_router, dependencies=write_limited)
     return app
