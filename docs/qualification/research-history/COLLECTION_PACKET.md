@@ -86,7 +86,7 @@ source = EnvioHypersyncSource(envio_client, context=SourceContext())      # envi
 chain = read_chain_id(quicknode_client)                                  # quicknode_client: #58-provided
 scan = {"from_block": from_block, "to_block_exclusive": to_block_exclusive}
 limits = CollectionLimits(max_pages=16, max_rows=10_000, max_bytes=4_194_304, deadline_utc=deadline)
-collection = collect(profile, source, scan, limits, provenance={"provider_requests": {"ENVIO_HYPERSYNC": 16}})
+collection = collect(profile, source, scan, limits, provenance=measured_provenance)
 corroboration = corroborate_records(quicknode_client, collection["records"],
                                     population_size=collection["row_count"], sample_size=8,
                                     chain_id=chain["chain_id"])
@@ -95,8 +95,9 @@ history = normalize(profile, collection, evidence)
 save_manifest(build_manifest(history), out_path)
 ```
 
-Each call reuses an accepted seam; the only new inputs are the two #58 clients and the approved bounds. The
-offline proof of these seams is the owned suite:
+Each call reuses an accepted seam. `measured_provenance` is the run driver's measured provider-request count
+(not the section 4 ceiling, which is a bound); omit it to keep `provider_requests` `UNKNOWN`. The only new inputs
+are the two #58 clients and the approved bounds. The offline proof of these seams is the owned suite:
 
 ```sh
 cd apps/api && uv run --frozen pytest tests/research_history -q

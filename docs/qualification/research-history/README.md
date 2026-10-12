@@ -123,7 +123,11 @@ profit. No fresh history is qualified.
 | RH-C81 | Empty corroboration is none | `test_quicknode_corroboration.py::test_empty_corroboration_is_none` |
 | RH-C82 | Invalid numeric identity is not identifiable | `test_quicknode_corroboration.py::{test_unidentifiable_record_counts_as_mismatch,test_invalid_numeric_identity_is_not_identifiable}` |
 | RH-C83 | Corroboration makes one call per sample | `test_quicknode_corroboration.py::test_corroboration_makes_one_call_per_identified_sample` |
+| RH-C84 | Out-of-range block fact refused | `test_source_transport.py::test_out_of_range_block_fact_is_refused` |
+| RH-C85 | Absent page-start block fact refused | `test_source_transport.py::test_absent_boundary_block_fact_is_refused` |
+| RH-C86 | Page past the requested end refused | `test_source_transport.py::test_page_past_the_requested_end_is_refused` |
+| RH-C87 | Reversed page refused | `test_source_transport.py::test_reversed_page_is_refused` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
-suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C83. Neither changes the
+suite. The adapter adds cases RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C87. Neither changes the
 existing cases.

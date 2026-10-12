@@ -195,8 +195,9 @@ class EnvioHypersyncSource:
         if chain_id is not None and chain_id != self._context.chain_id:
             raise SourceContractError("WRONG_NETWORK", f"expected chain {self._context.chain_id}, got {chain_id!r}")
 
-    def _block_index(self, data: Mapping[str, Any]) -> dict[int, Mapping[str, Any]]:
-        """Every present block fact, refusing a duplicate that disagrees with itself."""
+    def _block_index(self, data: Mapping[str, Any], from_block: int,
+                     next_block: int) -> dict[int, Mapping[str, Any]]:
+        """Every present block fact inside the page, refusing an out-of-range or self-contradicting fact."""
         blocks = data.get("blocks", [])
         if not isinstance(blocks, Sequence) or isinstance(blocks, (str, bytes)):
             raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data.blocks is not a list")
@@ -207,6 +208,9 @@ class EnvioHypersyncSource:
             number = _quantity(block.get("number"))
             if number is None:
                 raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a block number is not a quantity")
+            if number < from_block or number >= next_block:
+                raise SourceContractError("OUT_OF_RANGE_BLOCK_FACT",
+                                          f"block {number} is outside the page [{from_block},{next_block})")
             if number in index:
                 prior = index[number]
                 if (_quantity(prior.get("timestamp")) != _quantity(block.get("timestamp"))
@@ -244,7 +248,7 @@ class EnvioHypersyncSource:
             raise SourceContractError("PAGE_BOUNDS_CONTRADICTED",
                                       f"next_block {next_block} passes the requested end {request.to_block_exclusive}")
 
-        blocks = self._block_index(data)
+        blocks = self._block_index(data, from_block, next_block)
         guard = raw.get("rollback_guard")
         guard = guard if isinstance(guard, Mapping) else {}
 
@@ -306,16 +310,12 @@ class EnvioHypersyncSource:
         }
 
     def _first_timestamp(self, from_block: int, blocks: Mapping[int, Mapping[str, Any]]) -> int | None:
-        if from_block in blocks:
-            return _quantity(blocks[from_block].get("timestamp"))
-        present = sorted(blocks)
-        return _quantity(blocks[present[0]].get("timestamp")) if present else None
+        block = blocks.get(from_block)
+        return _quantity(block.get("timestamp")) if isinstance(block, Mapping) else None
 
     def _last_timestamp(self, next_block: int, blocks: Mapping[int, Mapping[str, Any]]) -> int | None:
-        if next_block - 1 in blocks:
-            return _quantity(blocks[next_block - 1].get("timestamp"))
-        present = sorted(blocks)
-        return _quantity(blocks[present[-1]].get("timestamp")) if present else None
+        block = blocks.get(next_block - 1)
+        return _quantity(block.get("timestamp")) if isinstance(block, Mapping) else None
 
     def _frame_logs(self, logs: Sequence[Any], blocks: Mapping[int, Mapping[str, Any]]) -> list[Any]:
         framed: list[Any] = []

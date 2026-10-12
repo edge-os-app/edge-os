@@ -308,3 +308,42 @@ def test_no_hidden_retry_when_pages_are_exhausted() -> None:
     assert result["status"] == "PARTIAL"
     assert client.calls == 2  # one page + one exhaustion probe
     assert source.transport_record()["attempted_requests"] == 2
+
+
+def test_out_of_range_block_fact_is_refused() -> None:
+    blocks = [{"number": 99, "timestamp": support.P1_FIRST_TS - 10},
+              {"number": support.EVENT_QUOTE_IN["block_number"], "timestamp": support.E1_TS},
+              {"number": 103, "timestamp": support.P1_LAST_TS}]
+    source = EnvioHypersyncSource(FakeClient([_page1(blocks=blocks)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "OUT_OF_RANGE_BLOCK_FACT"
+
+
+def test_absent_boundary_block_fact_is_refused() -> None:
+    blocks = [{"number": support.EVENT_QUOTE_IN["block_number"], "timestamp": support.E1_TS},
+              {"number": 103, "timestamp": support.P1_LAST_TS}]
+    source = EnvioHypersyncSource(FakeClient([_page1(blocks=blocks)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "PAGE_FACTS_INCOMPLETE"
+
+
+def test_page_past_the_requested_end_is_refused() -> None:
+    page = _page1()
+    page["next_block"] = 112
+    page["rollback_guard"]["block_number"] = 111
+    source = EnvioHypersyncSource(FakeClient([page]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "PAGE_BOUNDS_CONTRADICTED"
+
+
+def test_reversed_page_is_refused() -> None:
+    page = _page1()
+    page["next_block"] = 100
+    page["rollback_guard"]["block_number"] = 99
+    source = EnvioHypersyncSource(FakeClient([page]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "PAGE_BOUNDS_CONTRADICTED"

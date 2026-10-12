@@ -14,7 +14,7 @@ main-branch authority.
 - Preserved: the accepted adapter public semantics (`collect`, `normalize`, `project_binding`, the manifest, the
   `ResponseSource` protocol and `RecordedResponseSource`), the P07 module, the P02 contract, the fixtures and the
   closed allowances. `#58` still owns all application wiring.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (88 tests);
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (104 tests);
   `cd docs/qualification/p07 && python3 -B -m unittest -v test_p07` passes (73 tests);
   `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs are kept under the evidence folder and
   are not part of the commit.
@@ -43,7 +43,7 @@ The client returns a native Envio HyperSync `QueryResponse`. The transport maps:
 | `next_block` | `page.next_block` and `cursor.after` |
 | request `cursor_after` (else `from_block`) | `page.from_block` and `cursor.before` |
 | `rollback_guard.timestamp` (else the last block's timestamp) | `page.last_block_timestamp` |
-| the block at `from_block` (else the earliest present block) | `page.first_block_timestamp` |
+| the block at `from_block` (required for the page start) | `page.first_block_timestamp` |
 | `rollback_guard.first_parent_hash` | `page.first_parent_hash` (when present) |
 | `rollback_guard.hash` | `page.last_block_hash` (when present) |
 | content hash of the page facts and logs | `page.sha256` (becomes the dataset revision input) |
@@ -54,8 +54,10 @@ The client returns a native Envio HyperSync `QueryResponse`. The transport maps:
 A native numeric quantity (block number, timestamp, `next_block`) may arrive as an integer or as a hexadecimal
 `0x` quantity string; both are accepted and normalised. The transport validates the served page against the
 requested range: `from_block < next_block <= to_block_exclusive`; a present `rollback_guard.first_block_number`
-must equal the page start and `rollback_guard.block_number` must equal `next_block - 1`; a duplicate block fact
-that disagrees with itself (`DUPLICATE_BLOCK_FACT`) is refused; `data.logs` must be present (absence is not proved
+must equal the page start and `rollback_guard.block_number` must equal `next_block - 1`; a block fact outside the
+page `[from_block, next_block)` (`OUT_OF_RANGE_BLOCK_FACT`) or a duplicate block fact
+that disagrees with itself (`DUPLICATE_BLOCK_FACT`) is refused; the page-start block fact must be present;
+`data.logs` must be present (absence is not proved
 emptiness). The page content hash binds the page bounds, edge hashes and logs, so a source contradiction cannot
 become qualified coverage.
 
@@ -77,7 +79,8 @@ time field is passed through unchanged and counted; the reused decoder refuses i
 network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data`, absent or non-list `logs`,
 non-list `blocks`, a non-object block fact, a non-quantity block number, `next_block` not a positive quantity),
 `PAGE_BOUNDS_CONTRADICTED` (an empty or reversed page, a page past the requested end, or a guard block number
-that disagrees with the page bounds), `DUPLICATE_BLOCK_FACT` (one block number claimed twice with different
+that disagrees with the page bounds), `OUT_OF_RANGE_BLOCK_FACT` (a block fact outside `[from_block,
+next_block)`), `DUPLICATE_BLOCK_FACT` (one block number claimed twice with different
 facts), `PAGE_FACTS_INCOMPLETE` (the response cannot prove the page edge timestamps, or they fall) and
 `NON_JSON_PROVIDER_VALUE`. A client `SourceFailure`/`SourceTimeout`/`SourceCancelled`/`OSError` becomes the
 accepted partial result with the attempted count kept and no retry; any other exception propagates.
