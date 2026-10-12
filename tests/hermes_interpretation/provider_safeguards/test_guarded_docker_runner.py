@@ -2735,11 +2735,15 @@ def test_recovery_never_touches_a_turn_that_is_still_running_in_a_live_process(t
     (folder / "turn-01-live.json").write_text(_json.dumps(running))
     import guarded_docker_runner as module
     monkeypatch.setattr(module, "_ACTIVE_RECORDS", {str(folder / "turn-01-live.json")})  # a turn this process runs now
+    held = GuardedDockerTurnRunner._try_lock(folder / "turn-01-live.json")  # ... and holds its lock, as a live turn does
     calls: list = []
     monkeypatch.setattr(docker_turn_runner, "docker", docker_double(record=calls))
     runner, _, _ = build(tmp_path, credential)
 
-    runner.recover_pending(1.0)
+    try:
+        runner.recover_pending(1.0)
+    finally:
+        GuardedDockerTurnRunner._release(folder / "turn-01-live.json", held)
 
     assert calls == [] and _json.loads((folder / "turn-01-live.json").read_text()) == running  # a concurrent turn is left alone
 
@@ -2821,12 +2825,17 @@ def test_a_running_turn_of_another_live_process_blocks_new_work_and_is_not_touch
              "turn_folder": "turn-01-other", "held": [], "state": "running", "attempts": 0, "pid": os.getppid(),
              "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}
     (folder / "turn-01-other.json").write_text(_json.dumps(other))
+    owner = _hold_lock_in_another_process(folder / ".turn-01-other.json.lock")
     calls: list = []
     monkeypatch.setattr(docker_turn_runner, "docker", docker_double(record=calls))
     launched = install_process(monkeypatch, lambda output: None, returncode=3)
     runner, _, guarded = build(tmp_path, credential)
 
-    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    try:
+        result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    finally:
+        owner.kill()
+        owner.wait()
 
     assert result.error_class == "CleanupPending" and launched == [] and calls == []
     assert _json.loads((folder / "turn-01-other.json").read_text()) == other
@@ -2873,3 +2882,157 @@ def test_a_concurrent_recovery_right_after_registration_never_takes_the_new_turn
 
     records, output_kept = seen[0]
     assert len(records) == 1 and records[0]["state"] == "running" and output_kept and launched
+
+
+# --- Repair after round-28 review A3: recovery decides on each record's current content, never on a stale listing ---
+
+def test_recovery_never_acts_on_a_record_whose_turn_ended_cleanly_during_the_pass(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    evidence = tmp_path / "evidence"
+    folder = evidence / "pending-cleanup"
+    folder.mkdir(parents=True)
+    base = {"version": 1, "run_id": "repair-test", "label": "repair-test", "held": [], "attempts": 0, "created": 0,
+            "last_attempt": None, "next_attempt_after": 0, "history": []}
+    left_behind = {**base, "container": "p05-repair-test-a-01", "turn_folder": "turn-01-a", "state": "pending", "pid": 999_999}
+    live = {**base, "container": "p05-repair-test-b-02", "turn_folder": "turn-02-b", "state": "running", "pid": os.getpid()}
+    (folder / "turn-01-a.json").write_text(_json.dumps(left_behind))
+    (folder / "turn-02-b.json").write_text(_json.dumps(live))
+    (evidence / "turn-02-b" / "output").mkdir(parents=True)
+    (evidence / "turn-02-b" / "output" / "container-result.json").write_text("{}")  # the live turn's sealed result
+    monkeypatch.setattr(module, "_ACTIVE_RECORDS", {str(folder / "turn-02-b.json")})
+    live_lock = GuardedDockerTurnRunner._try_lock(folder / "turn-02-b.json")  # the live turn holds its lock
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    runner, _, _ = build(tmp_path, credential)
+    original = GuardedDockerTurnRunner._recover_one
+
+    def recover_then_the_live_turn_ends(self, path, data, deadline, budget):
+        original(self, path, data, deadline, budget)
+        if path.name == "turn-01-a.json":  # meanwhile the live turn ends cleanly: record deleted, lock given back
+            (folder / "turn-02-b.json").unlink()
+            GuardedDockerTurnRunner._release(folder / "turn-02-b.json", live_lock)
+            module._ACTIVE_RECORDS.discard(str(folder / "turn-02-b.json"))
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_recover_one", recover_then_the_live_turn_ends)
+
+    runner.recover_pending(5.0)
+
+    assert (evidence / "turn-02-b" / "output" / "container-result.json").exists()  # its sealed output is kept
+    assert not (folder / "turn-02-b.json").exists() and not (folder / "turn-01-a.json").exists()  # nothing written back
+
+
+def test_two_recovery_passes_never_work_on_one_record_at_once(tmp_path: Path, monkeypatch) -> None:
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    record = {"version": 1, "run_id": "repair-test", "label": "repair-test", "held": [], "attempts": 0, "created": 0,
+              "last_attempt": None, "next_attempt_after": 0, "history": [], "container": "p05-repair-test-a-01",
+              "turn_folder": "turn-01-a", "state": "pending", "pid": 999_999}
+    (folder / "turn-01-a.json").write_text(_json.dumps(record))
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))  # never confirmable
+    runner, _, _ = build(tmp_path, credential)
+    inner: list[int] = []
+    original = GuardedDockerTurnRunner._recover_one
+
+    def nested(self, path, data, deadline, budget):
+        inner.append(len(self.recover_pending(0.3)))  # a second pass while the first one holds the record
+        original(self, path, data, deadline, budget)
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_recover_one", nested)
+
+    runner.recover_pending(0.5)
+
+    assert len(inner) == 1  # the second pass did not take the claimed record (no nested attempt)
+    assert _json.loads((folder / "turn-01-a.json").read_text())["attempts"] == 1
+
+
+
+def _hold_lock_in_another_process(lock: Path) -> subprocess.Popen:
+    """A separate process that takes the lock and keeps it until it is killed (a live owner elsewhere)."""
+    import sys
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    owner = subprocess.Popen([sys.executable, "-c", (
+        "import fcntl, os, sys, time\n"
+        "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)\n"
+        "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+        "print('held', flush=True)\n"
+        "time.sleep(60)\n"), str(lock)], stdout=subprocess.PIPE, text=True)
+    assert owner.stdout.readline().strip() == "held"
+    return owner
+
+
+# --- Repair after round-28 review B1: ownership between processes is the record's lock, never a PID -----------------
+
+def test_a_left_behind_record_whose_pid_now_belongs_to_another_live_process_is_recovered(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    turn = tmp_path / "evidence" / "turn-01-crash"
+    (turn / "output").mkdir(parents=True)
+    (turn / "output" / "secret.log").write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    crashed = {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-crash-01",
+               "turn_folder": "turn-01-crash", "held": [], "state": "running", "attempts": 0, "pid": os.getppid(),
+               "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}  # that pid lives on, unrelated
+    (folder / "turn-01-crash.json").write_text(_json.dumps(crashed))
+    calls: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=True, record=calls))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, guarded = build(tmp_path, credential, recovery_budget_seconds=1.0)
+
+    guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert any(args[0] == "kill" and args[1] == "p05-repair-test-crash-01" for args, _ in calls)
+    assert _records(tmp_path) == [] and not (turn / "output").exists() and launched
+
+
+def test_a_live_turn_of_another_process_with_the_same_pid_is_never_recovered(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    other = {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-other-01",
+             "turn_folder": "turn-01-other", "held": [], "state": "running", "attempts": 0, "pid": os.getpid(),
+             "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}  # same pid, other namespace
+    (folder / "turn-01-other.json").write_text(_json.dumps(other))
+    owner = _hold_lock_in_another_process(folder / ".turn-01-other.json.lock")
+    calls: list = []
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(record=calls))
+    runner, _, guarded = build(tmp_path, credential)
+
+    try:
+        result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+        runner.retry_exhausted()
+    finally:
+        owner.kill()
+        owner.wait()
+
+    assert result.error_class == "CleanupPending" and calls == []  # no inspect, no kill of the live turn
+    assert _json.loads((folder / "turn-01-other.json").read_text()) == other
+
+
+def test_an_attempt_never_brings_back_a_record_that_vanished_during_it(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    folder.mkdir(parents=True)
+    record = {"version": 1, "run_id": "repair-test", "label": "repair-test", "container": "p05-repair-test-a-01",
+              "turn_folder": "turn-01-a", "held": [], "state": "pending", "attempts": 0, "pid": 999_999,
+              "created": 0, "last_attempt": None, "next_attempt_after": 0, "history": []}
+    (folder / "turn-01-a.json").write_text(_json.dumps(record))
+    runner, _, _ = build(tmp_path, credential)
+    original = GuardedDockerTurnRunner._stop_owned
+
+    def stop_while_someone_removes_the_record(self, plan, proc):
+        (folder / "turn-01-a.json").unlink()  # e.g. a person removed it during the attempt
+        return {**original(self, plan, proc), "container_absent": False}
+
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(owned=False))
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_stop_owned", stop_while_someone_removes_the_record)
+
+    runner.recover_pending(0.5)
+
+    assert not (folder / "turn-01-a.json").exists()

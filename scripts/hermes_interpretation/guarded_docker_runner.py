@@ -20,6 +20,7 @@ steps, and has to finish by the job timeout plus `seal_grace_seconds`.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import itertools
 import json
@@ -87,6 +88,9 @@ PENDING_FOLDER = "pending-cleanup"
 # are recognised as left behind.
 _ACTIVE_RECORDS: set[str] = set()
 _ACTIVE_LOCK = threading.Lock()
+# Ownership of a record is an exclusive flock on its lock file, held by the turn for its whole life and by a recovery
+# pass for one attempt. The kernel drops it when the holder dies, in any PID namespace on the same file system, so a
+# held lock means a live owner and a free lock means the owner is gone. PIDs are kept in records for reports only.
 
 
 _JSON_ESCAPE = re.compile(rb"\\u([0-9a-fA-F]{4})|\\([\"\\/])")
@@ -652,16 +656,34 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             pass  # the registered record still names the container and the turn folder
 
     @staticmethod
-    def _alive(pid: Any) -> bool:
-        if not isinstance(pid, int) or pid <= 0:
-            return False
+    def _lock_path(record: Path) -> Path:
+        return record.with_name(f".{record.name}.lock")
+
+    @classmethod
+    def _try_lock(cls, record: Path) -> int | None:
+        """Take the record's lock without waiting. Returns the descriptor that holds it, or None if someone holds it."""
+        lock = cls._lock_path(record)
+        lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return None
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    @classmethod
+    def _release(cls, record: Path, fd: int) -> None:
+        """Give the lock back; once the record is gone, its lock file goes first, while it is still held."""
+        try:
+            if not os.path.lexists(record):
+                cls._lock_path(record).unlink(missing_ok=True)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def _own_records(self) -> list[tuple[Path, dict[str, Any] | None]]:
         folder = self._pending_folder()
@@ -670,25 +692,21 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         found = []
         for path in sorted(folder.glob("*.json")):
             data = self._read_record(path)
+            if data is None and not os.path.lexists(path):
+                continue  # deleted since it was listed (a turn ended cleanly, or recovery finished): nothing pending
             if data is None or data.get("run_id") == self.run_id:  # an unreadable record is treated as ours: it blocks
                 found.append((path, data))
         return found
 
-    @staticmethod
-    def _this_process_running(path: Path, data: dict[str, Any]) -> bool:
-        """A turn that THIS process is executing now: in its active set (a same-pid restart starts with an empty set; a
-        turn whose final record write failed has left it), with this pid and still marked running."""
-        with _ACTIVE_LOCK:
-            active = str(path) in _ACTIVE_RECORDS
-        return active and data.get("state") == "running" and data.get("pid") == os.getpid()
-
-    def _another_process_running(self, data: dict[str, Any]) -> bool:
-        """A running turn of another process that is still alive: recovery must not touch its container."""
-        return data.get("state") == "running" and data.get("pid") != os.getpid() and self._alive(data.get("pid"))
-
     def _blocking_records(self) -> list[Path]:
-        """Records that block new work: everything of this run except a turn this very process is running now."""
-        return [path for path, data in self._own_records() if data is None or not self._this_process_running(path, data)]
+        """Records that block new work: everything of this run except the turns this very process is executing now.
+
+        A live turn of ANOTHER process blocks too (its lock is held, so recovery leaves it alone); a record whose owner
+        is gone blocks until recovery confirms it (its lock is free, so recovery takes it).
+        """
+        with _ACTIVE_LOCK:
+            active = set(_ACTIVE_RECORDS)
+        return [path for path, _data in self._own_records() if str(path) not in active]
 
     def pending_cleanup(self) -> list[dict[str, Any]]:
         """The pending-cleanup records of this run, for reporting (they hold no credential and no job output)."""
@@ -701,35 +719,59 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         later `recover_pending` that confirms the container gone and the evidence removed clears them. Returns how many.
         """
         count = 0
-        for path, data in self._own_records():
-            if data is not None and data.get("state") == "exhausted":
-                data.update(state="pending", attempts=0, next_attempt_after=0.0,
-                            interventions=int(data.get("interventions") or 0) + 1)
-                self._write_record(path, data)
-                count += 1
+        for path, _listed in self._own_records():
+            fd = self._try_lock(path)
+            if fd is None:
+                continue  # a live turn or a recovery pass holds it
+            try:
+                data = self._read_record(path)
+                if data is not None and data.get("run_id") == self.run_id and data.get("state") == "exhausted":
+                    data.update(state="pending", attempts=0, next_attempt_after=0.0,
+                                interventions=int(data.get("interventions") or 0) + 1)
+                    self._write_record(path, data)
+                    count += 1
+            finally:
+                self._release(path, fd)
         return count
 
     def recover_pending(self, budget_seconds: float) -> list[dict[str, Any]]:
         """One supervised recovery pass with ONE budget C for every operation in it. Never touches the spend ledger.
 
-        For each record of this run whose turn is not running in a live process and whose backoff has passed: verify
+        For each record of this run whose lock is free (its owner is gone) and whose backoff has passed: verify
         the container is gone (killing it only if the name and label match), then remove the turn's leftover output and
         held folders. Confirmed: the record is deleted. Not confirmed: the attempt is recorded, the backoff doubles, and
         after MAX_RECOVERY_ATTEMPTS the record is marked exhausted, kept for intervention and never retried.
         """
         self._check_recovery_budget(budget_seconds)
         deadline = time.monotonic() + budget_seconds
-        for path, data in self._own_records():
+        for path, _listed in self._own_records():
             if time.monotonic() >= deadline:
                 break
-            if data is None or data.get("state") == "exhausted":
+            claimed = self._claim(path)  # read again NOW, holding the record's lock: the listing may be stale
+            if claimed is None:
                 continue
-            if self._this_process_running(path, data) or self._another_process_running(data):
-                continue  # never stop a container that a live turn is using; it still blocks unless it is ours
-            if time.time() < float(data.get("next_attempt_after") or 0.0):
-                continue
-            self._recover_one(path, data, deadline, budget_seconds)
+            data, fd = claimed
+            try:
+                self._recover_one(path, data, deadline, budget_seconds)
+            finally:
+                self._release(path, fd)
         return self.pending_cleanup()
+
+    def _claim(self, path: Path) -> tuple[dict[str, Any], int] | None:
+        """Take a record for one recovery attempt by its lock, deciding on its CURRENT content. None: leave it alone.
+
+        A held lock means a live owner (a turn of this or another process, or another recovery pass): never touched. With
+        the lock taken, the record is read again and left alone if it is gone, of another run, exhausted or backing off.
+        """
+        fd = self._try_lock(path)
+        if fd is None:
+            return None
+        data = self._read_record(path)
+        if (data is None or data.get("run_id") != self.run_id or data.get("state") == "exhausted"
+                or time.time() < float(data.get("next_attempt_after") or 0.0)):
+            self._release(path, fd)
+            return None
+        return data, fd
 
     def _recover_one(self, path: Path, data: dict[str, Any], deadline: float, budget: float) -> None:
         start = time.monotonic()
@@ -764,7 +806,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         data["last_attempt"] = entry["at"]
         data["next_attempt_after"] = entry["at"] + RECOVERY_BACKOFF_SECONDS * 2 ** (data["attempts"] - 1)
         data["state"] = "exhausted" if data["attempts"] >= MAX_RECOVERY_ATTEMPTS else "pending"
-        self._write_record(path, data)
+        if os.path.lexists(path):  # claimed, so no other pass changes it; never bring back a record that is gone
+            self._write_record(path, data)
 
     # --- Stopping the container ------------------------------------------------------------------------------------
 
@@ -881,9 +924,13 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         output = task_dir / "output"
         output.mkdir(parents=True)
         record = self._pending_folder() / f"{task_dir.name}.json"
-        with _ACTIVE_LOCK:  # active BEFORE the record exists, so a concurrent recovery never takes it for left behind
+        with _ACTIVE_LOCK:  # this process's own live turn: it does not block its own runner
             _ACTIVE_RECORDS.add(str(record))
+        lock = None
         try:
+            lock = self._try_lock(record)  # held for the whole turn, BEFORE the record exists: a live owner
+            if lock is None:
+                raise EvidenceNotSealed(f"the pending-cleanup lock of {record.name} is held by someone else")
             try:
                 self._register(plan, task_dir)
                 result = self._run_turn_steps(turn, plan, task_dir, output)
@@ -893,7 +940,9 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             record.unlink(missing_ok=True)  # ended cleanly: nothing is pending
             return result
         finally:
-            with _ACTIVE_LOCK:  # whatever the record says now, this turn no longer runs
+            if lock is not None:  # whatever the record says now, its owner is no longer alive in this turn
+                self._release(record, lock)
+            with _ACTIVE_LOCK:
                 _ACTIVE_RECORDS.discard(str(record))
 
     def _run_turn_steps(self, turn: HermesTurn, plan: _TurnPlan, task_dir: Path, output: Path) -> HermesTurnResult:
