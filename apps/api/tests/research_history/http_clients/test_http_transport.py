@@ -164,6 +164,52 @@ def test_transport_watchdog_covers_the_request_phase() -> None:
     assert connection.sock.shut is True
 
 
+def _paced(prefix: bytes) -> bytes:
+    return prefix + b"Content-Length: 40\r\n\r\n" + b"x" * 40
+
+
+def test_transport_bounds_a_close_on_response_body() -> None:
+    raw = _paced(b"HTTP/1.1 200 OK\r\nConnection: close\r\n")
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_bounds_an_http10_response_body() -> None:
+    raw = _paced(b"HTTP/1.0 200 OK\r\n")
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_bounds_a_keep_alive_paced_body() -> None:
+    raw = _paced(b"HTTP/1.1 200 OK\r\n")
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_reuses_cleanly_after_a_timed_out_call() -> None:
+    raw = _paced(b"HTTP/1.1 200 OK\r\nConnection: close\r\n")
+    transport = StdlibHttpTransport()
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+    with http.LoopbackServer(lambda *_: http.Reply(body=b'{"ok":1}')) as server:
+        response = _request(transport, server.base_url + "/query")
+    assert response.status == 200
+    assert response.body == b'{"ok":1}'
+
+
 def test_transport_cancels_before_opening_a_socket() -> None:
     called = {"connect": False}
 

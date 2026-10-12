@@ -8,6 +8,7 @@ loopback server. No external host, credential or provider is touched.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 
 import pytest
@@ -25,7 +26,7 @@ from edge_os_api.research_history.http_clients import (
     StdlibHttpTransport,
     safe_endpoint,
 )
-from edge_os_api.research_history.provider_transport import SourceCancelled
+from edge_os_api.research_history.provider_transport import SourceCancelled, SourceTimeout
 
 ENDPOINT = "https://example.monad-mainnet.quiknode.pro/SECRET-KEY/"
 KEY = "SECRET-KEY"
@@ -244,3 +245,52 @@ def test_loopback_corroboration_completes_through_the_accepted_consumer() -> Non
     assert chain["chain_id"] == 143 and chain["network"] == "MONAD"
     assert result["class"] == "COMPLETE" and result["mismatches"] == 0
     assert client.accounting()["attempted_requests"] == 3
+
+
+def test_quicknode_slow_decode_is_a_timeout(monkeypatch) -> None:
+    import edge_os_api.research_history.http_clients.http_transport as http_transport
+
+    original = http_transport.json.loads
+
+    def slow(data):
+        time.sleep(0.2)
+        return original(data)
+
+    monkeypatch.setattr(http_transport.json, "loads", slow)
+    client = HttpQuickNodeRpcClient(endpoint=ENDPOINT,
+                                    transport=http.FakeTransport([http.response(body=_envelope(1, result="0x8f"))]),
+                                    bounds=_bounds(deadline_seconds=0.05))
+    with pytest.raises(SourceTimeout):
+        client.call("eth_chainId", [])
+    assert client.accounting() == {"attempted_requests": 1, "completed_requests": 0, "unknown_liability": 1}
+
+
+def test_quicknode_expired_decode_does_not_complete() -> None:
+    values = iter([0.0, 2.0])
+    client = HttpQuickNodeRpcClient(endpoint=ENDPOINT,
+                                    transport=http.FakeTransport([http.response(body=_envelope(1, result="0x8f"))]),
+                                    bounds=_bounds(deadline_seconds=1.0), clock=lambda: next(values))
+    with pytest.raises(SourceTimeout):
+        client.call("eth_chainId", [])
+    assert client.accounting() == {"attempted_requests": 1, "completed_requests": 0, "unknown_liability": 1}
+
+
+def test_quicknode_just_inside_the_deadline_completes() -> None:
+    values = iter([0.0, 0.9])
+    client = HttpQuickNodeRpcClient(endpoint=ENDPOINT,
+                                    transport=http.FakeTransport([http.response(body=_envelope(1, result="0x8f"))]),
+                                    bounds=_bounds(deadline_seconds=1.0), clock=lambda: next(values))
+    assert client.call("eth_chainId", []) == "0x8f"
+    assert client.accounting()["completed_requests"] == 1
+
+
+def test_quicknode_expired_decode_is_rpc_failed_through_corroboration() -> None:
+    values = iter([0.0, 2.0])
+    client = HttpQuickNodeRpcClient(
+        endpoint=ENDPOINT,
+        transport=http.FakeTransport([http.response(body=_envelope(1, result=_receipt_for(support.EVENT_QUOTE_IN)))]),
+        bounds=_bounds(deadline_seconds=1.0), clock=lambda: next(values))
+    result = corroborate_records(client, [_record(support.EVENT_QUOTE_IN)], sample_size=1, chain_id=143)
+    assert result["records"][0]["reason"] == "RPC_FAILED"
+    assert result["missingness"]["rpc_failed"] == 1
+    assert client.accounting()["completed_requests"] == 0

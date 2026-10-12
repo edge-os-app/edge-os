@@ -97,7 +97,20 @@ qualified.
 | RH-HTTP-C53 | A paced drip is a collector TIMEOUT with one attempt and no retry | `test_envio_query_client.py::test_paced_drip_is_a_timeout_through_the_accepted_collector` |
 | RH-HTTP-C54 | The deadline watchdog is armed before the connection | `test_http_transport.py::test_transport_watchdog_is_armed_before_the_connection` |
 | RH-HTTP-C55 | The deadline watchdog covers the request/connect phase | `test_http_transport.py::test_transport_watchdog_covers_the_request_phase` |
+| RH-HTTP-C56 | A close-on-response (HTTP/1.1 `Connection: close`) paced body is bounded | `test_http_transport.py::test_transport_bounds_a_close_on_response_body` |
+| RH-HTTP-C57 | An HTTP/1.0 paced body is bounded | `test_http_transport.py::test_transport_bounds_an_http10_response_body` |
+| RH-HTTP-C58 | A keep-alive paced body is bounded (control) | `test_http_transport.py::test_transport_bounds_a_keep_alive_paced_body` |
+| RH-HTTP-C59 | The transport reuses cleanly after a timed-out call | `test_http_transport.py::test_transport_reuses_cleanly_after_a_timed_out_call` |
+| RH-HTTP-C60 | A slow Envio decode is a timeout | `test_envio_query_client.py::test_envio_slow_decode_is_a_timeout` |
+| RH-HTTP-C61 | An expired Envio decode does not complete | `test_envio_query_client.py::test_envio_expired_decode_does_not_complete` |
+| RH-HTTP-C62 | The exact Envio deadline boundary is expired | `test_envio_query_client.py::test_envio_exact_deadline_boundary_is_expired` |
+| RH-HTTP-C63 | Just inside the Envio deadline completes | `test_envio_query_client.py::test_envio_just_inside_the_deadline_completes` |
+| RH-HTTP-C64 | An expired Envio decode is a collector TIMEOUT | `test_envio_query_client.py::test_envio_expired_decode_is_a_timeout_through_the_accepted_collector` |
+| RH-HTTP-C65 | A slow QuickNode decode is a timeout | `test_quicknode_rpc_client.py::test_quicknode_slow_decode_is_a_timeout` |
+| RH-HTTP-C66 | An expired QuickNode decode does not complete | `test_quicknode_rpc_client.py::test_quicknode_expired_decode_does_not_complete` |
+| RH-HTTP-C67 | Just inside the QuickNode deadline completes | `test_quicknode_rpc_client.py::test_quicknode_just_inside_the_deadline_completes` |
+| RH-HTTP-C68 | An expired QuickNode decode is RPC_FAILED through corroboration | `test_quicknode_rpc_client.py::test_quicknode_expired_decode_is_rpc_failed_through_corroboration` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
 suite. The accepted adapter adds RH-C01 to RH-C54; task P07-SOURCE adds RH-C55 to RH-C102; this task adds
-RH-HTTP-C01 to RH-HTTP-C55 and changes no existing case.
+RH-HTTP-C01 to RH-HTTP-C68 and changes no existing case.

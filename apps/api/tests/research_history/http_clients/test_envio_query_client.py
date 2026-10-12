@@ -292,3 +292,62 @@ def test_paced_drip_is_a_timeout_through_the_accepted_collector() -> None:
     assert result["stop_reason"] == "TIMEOUT"
     assert client.accounting() == {"attempted_requests": 1, "completed_requests": 0, "unknown_liability": 1}
     assert seen["requests"] == 1  # one physical attempt, no hidden retry
+
+
+def test_envio_slow_decode_is_a_timeout(monkeypatch) -> None:
+    import edge_os_api.research_history.http_clients.http_transport as http_transport
+
+    original = http_transport.json.loads
+
+    def slow(data):
+        time.sleep(0.2)
+        return original(data)
+
+    monkeypatch.setattr(http_transport.json, "loads", slow)
+    client = HttpEnvioQueryClient(endpoint=ENDPOINT, bearer_token=TOKEN,
+                                  transport=http.FakeTransport([http.response(body=http.page_one())]),
+                                  bounds=_bounds(deadline_seconds=0.05))
+    with pytest.raises(SourceTimeout):
+        client.query(_request())
+    assert client.accounting() == {"attempted_requests": 1, "completed_requests": 0, "unknown_liability": 1}
+
+
+def test_envio_expired_decode_does_not_complete() -> None:
+    values = iter([0.0, 2.0])  # deadline, then the post-decode expiry check
+    client = HttpEnvioQueryClient(endpoint=ENDPOINT, bearer_token=TOKEN,
+                                  transport=http.FakeTransport([http.response(body=http.page_one())]),
+                                  bounds=_bounds(deadline_seconds=1.0), clock=lambda: next(values))
+    with pytest.raises(SourceTimeout):
+        client.query(_request())
+    assert client.accounting() == {"attempted_requests": 1, "completed_requests": 0, "unknown_liability": 1}
+
+
+def test_envio_exact_deadline_boundary_is_expired() -> None:
+    values = iter([0.0, 1.0])
+    client = HttpEnvioQueryClient(endpoint=ENDPOINT, bearer_token=TOKEN,
+                                  transport=http.FakeTransport([http.response(body=http.page_one())]),
+                                  bounds=_bounds(deadline_seconds=1.0), clock=lambda: next(values))
+    with pytest.raises(SourceTimeout):
+        client.query(_request())
+    assert client.accounting()["completed_requests"] == 0
+
+
+def test_envio_just_inside_the_deadline_completes() -> None:
+    values = iter([0.0, 0.9])
+    client = HttpEnvioQueryClient(endpoint=ENDPOINT, bearer_token=TOKEN,
+                                  transport=http.FakeTransport([http.response(body=http.page_one())]),
+                                  bounds=_bounds(deadline_seconds=1.0), clock=lambda: next(values))
+    assert client.query(_request())["next_block"] == 104
+    assert client.accounting()["completed_requests"] == 1
+
+
+def test_envio_expired_decode_is_a_timeout_through_the_accepted_collector() -> None:
+    values = iter([0.0, 2.0])
+    client = HttpEnvioQueryClient(endpoint=ENDPOINT, bearer_token=TOKEN,
+                                  transport=http.FakeTransport([http.response(body=http.page_one())]),
+                                  bounds=_bounds(deadline_seconds=1.0), clock=lambda: next(values))
+    source = EnvioHypersyncSource(client, clock=lambda: support.COLLECTED_AT)
+    result = collect(support.profile(), source, support.SCAN, CollectionLimits(**support.limits()))
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "TIMEOUT"
+    assert client.accounting()["completed_requests"] == 0

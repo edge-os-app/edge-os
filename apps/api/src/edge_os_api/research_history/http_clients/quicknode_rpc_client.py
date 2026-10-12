@@ -38,7 +38,7 @@ from edge_os_api.research_history.http_clients.http_transport import (
     decode_json_reply,
     refuse_provider_status,
 )
-from edge_os_api.research_history.provider_transport import SourceCancelled
+from edge_os_api.research_history.provider_transport import SourceCancelled, SourceTimeout
 
 # The documented read-only methods the accepted corroboration and the collection
 # packet's identity reads need. No signing, broadcast, account or state-changing
@@ -157,8 +157,22 @@ class HttpQuickNodeRpcClient:
             max_response_bytes=self._bounds.max_response_bytes, cancel=self._cancel)
         self._raise_for_status(response)
         result = self._parse(response, call_id)
+        self._check_expiry(deadline)
         self._completed += 1
         return result
+
+    def _check_expiry(self, deadline: float) -> None:
+        """Reject expired or cancelled work after decode/validation, before success.
+
+        The transport enforces the deadline during I/O, but decode and validation
+        happen after it returns. Re-check the same absolute deadline and the cancel
+        flag before counting the reply as completed, so an expired or cancelled reply
+        never returns success or increments ``completed_requests``.
+        """
+        if self._cancel is not None and self._cancel():
+            raise SourceCancelled("the caller cancelled the request")
+        if self._clock() >= deadline:
+            raise SourceTimeout("the request exceeded its time bound")
 
     def _raise_for_status(self, response: HttpResponse) -> None:
         refuse_provider_status(response.status, f"the JSON-RPC call to {safe_endpoint(self._endpoint)}")

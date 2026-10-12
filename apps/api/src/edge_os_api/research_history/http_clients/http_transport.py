@@ -72,6 +72,27 @@ def _default_connect(scheme: str, host: str, port: int | None, timeout: float):
     raise ClientConfigError("transport scheme must be http or https")
 
 
+class _SocketOwner:
+    """Keeps the live socket reachable after ``http.client`` releases it.
+
+    ``HTTPConnection.getresponse()`` sets ``connection.sock = None`` for a
+    close-on-response reply while the response still reads from the same socket.
+    Wrapping the socket with this pass-through keeps a live handle for the deadline
+    watchdog; only the transport closes the real socket, in ``finally``.
+    """
+
+    def __init__(self, sock: Any) -> None:
+        self._sock = sock
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "_sock":
+            raise AttributeError(name)
+        return getattr(self._sock, name)
+
+    def close(self) -> None:  # the connection must not close the live socket
+        return
+
+
 class StdlibHttpTransport:
     """A bounded ``http.client`` transport. No redirect, no retry, no default host."""
 
@@ -98,11 +119,15 @@ class StdlibHttpTransport:
         connection = None
         watchdog: threading.Timer | None = None
         expired = False
+        holder: dict[str, Any] = {"sock": None}
 
         def _expire() -> None:
             nonlocal expired
             expired = True
-            sock = getattr(connection, "sock", None)
+            # Prefer the socket captured before http.client released it, so a
+            # close-on-response body is still interruptible; fall back to the live
+            # connection socket for the connect/TLS phase before the capture.
+            sock = holder["sock"] or getattr(connection, "sock", None)
             if sock is not None:
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
@@ -127,6 +152,12 @@ class StdlibHttpTransport:
             connection.request(method, path, body=body, headers=dict(headers))
             if expired:
                 raise SourceTimeout("the HTTP request exceeded its time bound")
+            # http.client clears connection.sock for a close-on-response reply; keep
+            # our own live handle so the watchdog can still stop a paced body.
+            raw = getattr(connection, "sock", None)
+            if raw is not None:
+                holder["sock"] = raw
+                connection.sock = _SocketOwner(raw)
             response = connection.getresponse()
             chunks: list[bytes] = []
             total = 0
@@ -162,6 +193,9 @@ class StdlibHttpTransport:
                 watchdog.cancel()
             if connection is not None:
                 connection.close()
+            raw = holder["sock"]
+            if raw is not None:
+                raw.close()
 
 
 def refuse_provider_status(status: int, where: str) -> None:

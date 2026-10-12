@@ -18,8 +18,8 @@ bounds. All actual statuses remain `NOT_RUN`.
   P07 module, the P02 contract and the package `__init__.py` are unchanged. The clients plug into the
   accepted protocols; they are imported explicitly and are not added to the top-level package
   namespace.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history/http_clients -v` passes (55
-  tests); the affected `tests/research_history` suite passes (174 tests); `python3 -B -m unittest -v
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history/http_clients -v` passes (68
+  tests); the affected `tests/research_history` suite passes (187 tests); `python3 -B -m unittest -v
   test_p07` passes (73 tests); `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs
   are kept under the assigned evidence folder and are not part of the commit.
 
@@ -81,14 +81,18 @@ second durable counter: request limits and local usage feed lane2's existing own
   handshake, request transmission, the status/header phase, body/framing reads and bounded decoding; a
   paced peer that keeps every individual receive under a socket timeout cannot renew the budget, and a
   remaining-time check before the connect (with no non-positive socket timeout) makes a just-crossed
-  deadline a `SourceTimeout`; a call never returns success from expired work. Name resolution and the
-  initial TCP connect run inside `http.client` before a socket exists and are bounded by the OS resolver
-  and `connect_timeout_seconds`; the socket watchdog cannot interrupt them, so a hung resolver can delay
-  the `SourceTimeout` until it returns (a reported residual, not covered). The containment is frozen: one
-  timer per admitted call, cancelled in `finally`; the callback performs one `shutdown` only, with no
-  join, DNS, read or close; the connection is closed in `finally` and is never reused.
-  `connect_timeout_seconds` caps each socket wait below the deadline; `max_response_bytes` bounds the
-  retained reply body while streaming; `max_request_bytes` bounds the request body;
+  deadline a `SourceTimeout`. The watchdog keeps its own live handle to the response socket, so a
+  close-on-response body (HTTP/1.0 or `Connection: close`) is stopped as well as a keep-alive body even
+  when `http.client` clears `connection.sock`. The same absolute deadline and cancel flag are re-checked
+  after decode/validation and before the reply is counted as completed, so an expired or cancelled reply
+  never returns success or increments `completed_requests` (it stays unknown liability). Name resolution
+  and the initial TCP connect run inside `http.client` before a socket exists and are bounded by the OS
+  resolver and `connect_timeout_seconds`; the socket watchdog cannot interrupt them, so a hung resolver
+  can delay the `SourceTimeout` until it returns (a reported residual, not covered). The containment is
+  frozen: one timer per admitted call, cancelled in `finally`; the callback performs one `shutdown` only,
+  with no join, DNS, read or close; the connection and its socket are closed in `finally` and are never
+  reused. `connect_timeout_seconds` caps each socket wait below the deadline; `max_response_bytes` bounds
+  the retained reply body while streaming; `max_request_bytes` bounds the request body;
   `max_blocks_per_page` bounds one HyperSync page's block span.
 - `cancel` is an injected `() -> bool` flag. It is checked before the socket opens and between body
   reads, so a cancellation takes effect before and during the operation. A set flag raises
