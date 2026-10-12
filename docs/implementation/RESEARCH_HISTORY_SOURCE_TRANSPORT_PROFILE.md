@@ -38,16 +38,26 @@ The client returns a native Envio HyperSync `QueryResponse`. The transport maps:
 
 | Native | Adapter field |
 |---|---|
-| `data.logs[]` (`address`,`topic0`..`topic3`,`data`,`block_number`,`block_hash`,`transaction_hash`,`transaction_index`,`log_index`,`removed`) | `events[]` (same keys) |
+| `data.logs[]` (`address`,`topic0`..`topic3`,`data`,`block_number`,`block_hash`,`transaction_hash`,`transaction_index`,`log_index`,`removed`) | `events[]` (same keys, `block_number` normalised to an integer) |
 | `data.blocks[].timestamp` joined on `log.block_number` | `event.block_timestamp` (raw integer text) |
 | `next_block` | `page.next_block` and `cursor.after` |
 | request `cursor_after` (else `from_block`) | `page.from_block` and `cursor.before` |
 | `rollback_guard.timestamp` (else the last block's timestamp) | `page.last_block_timestamp` |
-| the first block's timestamp | `page.first_block_timestamp` |
+| the block at `from_block` (else the earliest present block) | `page.first_block_timestamp` |
 | `rollback_guard.first_parent_hash` | `page.first_parent_hash` (when present) |
 | `rollback_guard.hash` | `page.last_block_hash` (when present) |
-| content hash of `{from_block,next_block,logs}` | `page.sha256` (becomes the dataset revision input) |
+| content hash of the page facts and logs | `page.sha256` (becomes the dataset revision input) |
 | `next_block >= to_block_exclusive` | `complete` |
+
+### Native quantities and page bounds
+
+A native numeric quantity (block number, timestamp, `next_block`) may arrive as an integer or as a hexadecimal
+`0x` quantity string; both are accepted and normalised. The transport validates the served page against the
+requested range: `from_block < next_block <= to_block_exclusive`; a present `rollback_guard.first_block_number`
+must equal the page start and `rollback_guard.block_number` must equal `next_block - 1`; a duplicate block fact
+that disagrees with itself (`DUPLICATE_BLOCK_FACT`) is refused; `data.logs` must be present (absence is not proved
+emptiness). The page content hash binds the page bounds, edge hashes and logs, so a source contradiction cannot
+become qualified coverage.
 
 The request/topic/range echo is rebuilt from the `HistoryRequest`, so the accepted collector's `QUERY_MISMATCH`
 check still applies. The provider, provider version and served time come from `context` and the injected clock.
@@ -64,9 +74,12 @@ time field is passed through unchanged and counted; the reused decoder refuses i
 
 `SourceContractError` subclasses the accepted `SourceFailure`, so the collector records a partial
 `PROVIDER_ERROR` with no retained page, row or byte. Codes: `WRONG_NETWORK` (the response names a different
-network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data`, `logs` not a list, `next_block` not
-a positive integer), `PAGE_FACTS_INCOMPLETE` (the response cannot prove the page edge timestamps, or they fall)
-and `NON_JSON_PROVIDER_VALUE`. A client `SourceFailure`/`SourceTimeout`/`SourceCancelled`/`OSError` becomes the
+network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data`, absent or non-list `logs`,
+non-list `blocks`, a non-object block fact, a non-quantity block number, `next_block` not a positive quantity),
+`PAGE_BOUNDS_CONTRADICTED` (an empty or reversed page, a page past the requested end, or a guard block number
+that disagrees with the page bounds), `DUPLICATE_BLOCK_FACT` (one block number claimed twice with different
+facts), `PAGE_FACTS_INCOMPLETE` (the response cannot prove the page edge timestamps, or they fall) and
+`NON_JSON_PROVIDER_VALUE`. A client `SourceFailure`/`SourceTimeout`/`SourceCancelled`/`OSError` becomes the
 accepted partial result with the attempted count kept and no retry; any other exception propagates.
 
 ## Injected QuickNode corroboration
@@ -78,14 +91,20 @@ compares a deterministic spread of retained records against `eth_getTransactionR
 
 | Field | Meaning |
 |---|---|
-| `class` | `COMPLETE` (every record compared), `SAMPLED` (part), `NONE` (no records). |
+| `class` | `COMPLETE` (every record compared), `SAMPLED` (part), `NONE` (no records or an unverified chain). |
 | `provider` | `QUICKNODE_JSON_RPC` — the independent corroborating source. |
+| `chain_verified`, `chain_id`, `network` | The independent `read_chain_id` result; `network` is `MONAD` only when the chain is 143. |
 | `sample_size`, `population_size`, `mismatches` | Counts the reused `qualify` reads. |
 | `records[]` | Per sample: `index`, `identity`, `matched`, `reason`. |
 
-A mismatch reason is `RECORD_NOT_IDENTIFIABLE`, `RECORD_NOT_PRESENT`, `RECEIPT_MISSING`, `RECEIPT_MALFORMED`,
-`LOG_NOT_FOUND`, `BLOCK_MISMATCH` or `RPC_FAILED`. Any of them counts toward `mismatches`; none is repaired.
-`read_chain_id(client)` reads `eth_chainId` (one call) and classifies the served network.
+A record is corroborated only when the receipt's transaction hash, transaction index, block number, block hash
+and the matching log (address, topics, data, log index, not removed) all agree. A mismatch reason is
+`RECORD_NOT_IDENTIFIABLE`, `RECORD_NOT_PRESENT`, `RECEIPT_MISSING`, `RECEIPT_MISSING_FACT`, `RECEIPT_MALFORMED`,
+`TRANSACTION_MISMATCH`, `BLOCK_MISMATCH`, `LOG_NOT_FOUND`, `LOG_REMOVED` or `RPC_FAILED`. Any of them counts
+toward `mismatches`; none is repaired, and a malformed nested receipt/log shape is a counted mismatch rather than
+an escaped exception. `chain_id` is the independent `read_chain_id` observation; a chain that is not 143 yields
+`class` `NONE`, `chain_verified` false, `reason` `CHAIN_NOT_MONAD` and no receipt call. `read_chain_id(client)`
+reads `eth_chainId` (one call) and classifies the served network.
 
 A full-window QuickNode `eth_getLogs` scan is not proposed: the first-party Monad JSON-RPC page lists a
 100-block range limit for `rpc.monad.xyz`, so a multi-day window is not feasible. Corroboration is by sample.

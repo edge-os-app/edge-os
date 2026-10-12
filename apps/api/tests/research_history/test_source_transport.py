@@ -15,7 +15,6 @@ import _support as support
 from edge_os_api.research_history import (
     CollectionLimits,
     EnvioHypersyncSource,
-    EnvioQueryClient,
     HistoryRequest,
     ResponseSource,
     SourceCancelled,
@@ -24,6 +23,7 @@ from edge_os_api.research_history import (
     SourceFailure,
     SourceTimeout,
     collect,
+    normalize,
 )
 
 _NATIVE_FIELDS = ("address", "topic0", "topic1", "topic2", "data", "block_number", "block_hash",
@@ -34,14 +34,17 @@ def _native_log(event: Mapping[str, Any]) -> dict[str, Any]:
     return {key: event[key] for key in _NATIVE_FIELDS if key in event}
 
 
-def _native_page(from_block: int, next_block: int, logs: list[Any], blocks: list[dict[str, Any]],
+def _native_page(from_block: int, next_block: int, logs: list[Any] | None, blocks: list[dict[str, Any]],
                  *, guard: dict[str, Any] | None = None, network: str | None = None,
-                 chain_id: int | None = None) -> dict[str, Any]:
+                 chain_id: int | None = None, include_logs: bool = True) -> dict[str, Any]:
+    data: dict[str, Any] = {"blocks": blocks}
+    if include_logs:
+        data["logs"] = logs if logs is not None else []
     response: dict[str, Any] = {
         "archive_height": support.ARCHIVE_HEIGHT,
         "next_block": next_block,
         "total_execution_time": 3,
-        "data": {"logs": logs, "blocks": blocks},
+        "data": data,
     }
     if guard is not None:
         response["rollback_guard"] = guard
@@ -53,26 +56,30 @@ def _native_page(from_block: int, next_block: int, logs: list[Any], blocks: list
 
 
 def _page1(logs: list[Any] | None = None, *, guard: dict[str, Any] | None = None,
-           network: str | None = None, chain_id: int | None = None) -> dict[str, Any]:
+           network: str | None = None, chain_id: int | None = None,
+           blocks: list[dict[str, Any]] | None = None, include_logs: bool = True) -> dict[str, Any]:
     default_guard = {"block_number": 103, "timestamp": support.P1_LAST_TS, "hash": support.HASH_103,
                      "first_block_number": 100, "first_parent_hash": "0x" + "44" * 32}
-    blocks = [{"number": 100, "timestamp": support.P1_FIRST_TS},
-              {"number": support.EVENT_QUOTE_IN["block_number"], "timestamp": support.E1_TS},
-              {"number": 103, "timestamp": support.P1_LAST_TS}]
+    default_blocks = [{"number": 100, "timestamp": support.P1_FIRST_TS},
+                      {"number": support.EVENT_QUOTE_IN["block_number"], "timestamp": support.E1_TS},
+                      {"number": 103, "timestamp": support.P1_LAST_TS}]
     return _native_page(100, 104, logs if logs is not None else [_native_log(support.EVENT_QUOTE_IN)],
-                        blocks, guard=guard if guard is not None else default_guard,
-                        network=network, chain_id=chain_id)
+                        blocks if blocks is not None else default_blocks,
+                        guard=guard if guard is not None else default_guard,
+                        network=network, chain_id=chain_id, include_logs=include_logs)
 
 
 def _page2(logs: list[Any] | None = None, *, guard: dict[str, Any] | None = None,
-           network: str | None = None, chain_id: int | None = None) -> dict[str, Any]:
+           network: str | None = None, chain_id: int | None = None,
+           blocks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     default_guard = {"block_number": 110, "timestamp": support.P2_LAST_TS, "hash": support.HASH_110,
                      "first_block_number": 104, "first_parent_hash": support.HASH_103}
-    blocks = [{"number": 104, "timestamp": support.P2_FIRST_TS},
-              {"number": support.EVENT_BASE_IN["block_number"], "timestamp": support.E2_TS},
-              {"number": 110, "timestamp": support.P2_LAST_TS}]
+    default_blocks = [{"number": 104, "timestamp": support.P2_FIRST_TS},
+                      {"number": support.EVENT_BASE_IN["block_number"], "timestamp": support.E2_TS},
+                      {"number": 110, "timestamp": support.P2_LAST_TS}]
     return _native_page(104, 111, logs if logs is not None else [_native_log(support.EVENT_BASE_IN)],
-                        blocks, guard=guard if guard is not None else default_guard,
+                        blocks if blocks is not None else default_blocks,
+                        guard=guard if guard is not None else default_guard,
                         network=network, chain_id=chain_id)
 
 
@@ -103,6 +110,11 @@ def _scan() -> dict[str, int]:
     return dict(support.SCAN)
 
 
+def _request() -> HistoryRequest:
+    return HistoryRequest(provider="ENVIO_HYPERSYNC", address=support.POOL, topic0=support.TOPIC0,
+                          from_block=100, to_block_exclusive=111, cursor_after=None, max_rows=64)
+
+
 def test_transport_satisfies_the_response_source_protocol() -> None:
     source = EnvioHypersyncSource(FakeClient([]))
     assert isinstance(source, ResponseSource)
@@ -127,6 +139,15 @@ def test_complete_collection_frames_native_pages() -> None:
     assert len(record["content_sha256"]) == 2
 
 
+def test_transport_composes_into_normalize() -> None:
+    source = EnvioHypersyncSource(FakeClient([_page1(), _page2()]), clock=lambda: support.COLLECTED_AT)
+    collection = collect(support.profile(), source, _scan(), _limits())
+    result = normalize(support.profile(), collection, support.evidence_facts())
+    assert result["overall"] in ("QUALIFIED", "LIMITED")
+    assert result["collection"]["status"] == "COMPLETE"
+    assert len(result["trades"]) == 2
+
+
 def test_page_content_hash_binds_the_page() -> None:
     client = FakeClient([_page1(), _page2()])
     source = EnvioHypersyncSource(client)
@@ -138,8 +159,7 @@ def test_page_content_hash_binds_the_page() -> None:
     changed = support.EVENT_QUOTE_IN.copy()
     changed["data"] = "0x" + "00" * 32 + support.EVENT_QUOTE_IN["data"][2 + 64:]
     client2 = FakeClient([_page1(logs=[_native_log(changed)]), _page2()])
-    source2 = EnvioHypersyncSource(client2)
-    result2 = collect(support.profile(), source2, _scan(), _limits())
+    result2 = collect(support.profile(), EnvioHypersyncSource(client2), _scan(), _limits())
     assert result2["pages"][0]["sha256"] != hashes[0]
 
 
@@ -147,21 +167,69 @@ def test_query_definition_is_echoed_from_the_request() -> None:
     client = FakeClient([_page1(), _page2()])
     source = EnvioHypersyncSource(client)
     result = collect(support.profile(), source, _scan(), _limits())
-    query = result["pages"][0]
-    assert query["from_block"] == 100
+    assert result["pages"][0]["from_block"] == 100
     assert client.requests[0].address == support.POOL
     assert client.requests[0].topic0 == support.TOPIC0
     assert client.requests[1].cursor_after == 104
 
 
+def test_hexadecimal_quantities_are_accepted() -> None:
+    def hexify(page: dict[str, Any]) -> dict[str, Any]:
+        page = copy.deepcopy(page)
+        page["next_block"] = hex(page["next_block"])
+        for block in page["data"]["blocks"]:
+            block["number"] = hex(block["number"])
+            block["timestamp"] = hex(block["timestamp"])
+        for log in page["data"]["logs"]:
+            log["block_number"] = hex(log["block_number"])
+        guard = page.get("rollback_guard")
+        if guard is not None:
+            guard["block_number"] = hex(guard["block_number"])
+            guard["first_block_number"] = hex(guard["first_block_number"])
+            guard["timestamp"] = hex(guard["timestamp"])
+        return page
+
+    client = FakeClient([hexify(_page1()), hexify(_page2())])
+    result = collect(support.profile(), EnvioHypersyncSource(client), _scan(), _limits())
+    assert result["status"] == "COMPLETE"
+    assert result["row_count"] == 2
+
+
+def test_contradictory_guard_bounds_are_refused() -> None:
+    bad_guard = {"block_number": 102, "timestamp": support.P1_LAST_TS, "hash": support.HASH_103,
+                 "first_block_number": 102, "first_parent_hash": "0x" + "44" * 32}
+    client = FakeClient([_page1(guard=bad_guard), _page2()])
+    source = EnvioHypersyncSource(client)
+    result = collect(support.profile(), source, _scan(), _limits())
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+    assert result["page_count"] == 0
+
+
+def test_missing_logs_list_is_refused_not_proved_empty() -> None:
+    client = FakeClient([_page1(include_logs=False), _page2()])
+    source = EnvioHypersyncSource(client)
+    result = collect(support.profile(), source, _scan(), _limits())
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+
+
+def test_duplicate_conflicting_block_fact_is_refused() -> None:
+    blocks = [{"number": 100, "timestamp": support.P1_FIRST_TS},
+              {"number": 100, "timestamp": support.P1_FIRST_TS + 1},
+              {"number": 103, "timestamp": support.P1_LAST_TS}]
+    client = FakeClient([_page1(blocks=blocks), _page2()])
+    source = EnvioHypersyncSource(client)
+    result = collect(support.profile(), source, _scan(), _limits())
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+
+
 def test_wrong_network_is_refused() -> None:
-    bad = _page1()
-    bad["chain_id"] = 1
+    bad = _page1(chain_id=1)
     source = EnvioHypersyncSource(FakeClient([bad]), context=SourceContext())
     with pytest.raises(SourceContractError) as raised:
-        source.next_response(HistoryRequest(provider="ENVIO_HYPERSYNC", address=support.POOL,
-                                            topic0=support.TOPIC0, from_block=100, to_block_exclusive=111,
-                                            cursor_after=None, max_rows=64))
+        source.next_response(_request())
     assert raised.value.code == "WRONG_NETWORK"
     assert source.transport_record()["attempted_requests"] == 1
 
@@ -169,27 +237,23 @@ def test_wrong_network_is_refused() -> None:
 def test_matching_network_echo_is_recorded() -> None:
     good = _page1(network="MONAD", chain_id=143)
     source = EnvioHypersyncSource(FakeClient([good]))
-    source.next_response(HistoryRequest(provider="ENVIO_HYPERSYNC", address=support.POOL, topic0=support.TOPIC0,
-                                        from_block=100, to_block_exclusive=111, cursor_after=None, max_rows=64))
+    source.next_response(_request())
     assert source.transport_record()["network_echo"] == "PRESENT"
 
 
 def test_malformed_native_response_is_a_source_failure() -> None:
     source = EnvioHypersyncSource(FakeClient(["not-an-object"]))
     with pytest.raises(SourceContractError) as raised:
-        source.next_response(HistoryRequest(provider="ENVIO_HYPERSYNC", address=support.POOL, topic0=support.TOPIC0,
-                                            from_block=100, to_block_exclusive=111, cursor_after=None, max_rows=64))
+        source.next_response(_request())
     assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
 
 
 def test_page_facts_incomplete_is_refused() -> None:
-    page = _page1()
-    page["data"]["blocks"] = []  # no edge timestamps
+    page = _page1(blocks=[])
     page.pop("rollback_guard")
     source = EnvioHypersyncSource(FakeClient([page]))
     with pytest.raises(SourceContractError) as raised:
-        source.next_response(HistoryRequest(provider="ENVIO_HYPERSYNC", address=support.POOL, topic0=support.TOPIC0,
-                                            from_block=100, to_block_exclusive=111, cursor_after=None, max_rows=64))
+        source.next_response(_request())
     assert raised.value.code == "PAGE_FACTS_INCOMPLETE"
 
 
@@ -198,8 +262,7 @@ def test_missing_fields_are_counted_not_repaired() -> None:
     partial.pop("transaction_index")
     partial["block_number"] = 999  # no block timestamp for 999
     source = EnvioHypersyncSource(FakeClient([_page1(logs=[partial])]))
-    source.next_response(HistoryRequest(provider="ENVIO_HYPERSYNC", address=support.POOL, topic0=support.TOPIC0,
-                                        from_block=100, to_block_exclusive=111, cursor_after=None, max_rows=64))
+    source.next_response(_request())
     record = source.transport_record()["missingness"]
     assert record["order_field"] == 1
     assert record["time_field"] == 1

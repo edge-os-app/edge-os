@@ -63,22 +63,46 @@ computes. Class is `SAMPLED` unless the window holds ≤8 records, in which case
 4. The reused P07 normalization and qualification unchanged; `LIMITED`/`UNRESOLVED` stays unbound.
 5. Builder bounds for this packet recorded (chain id, pool, orientation, window, availability model, spend).
 
-## 7. Collection and qualification commands (later run)
+## 7. Collection recipe and the missing dependency
 
-```sh
-# 1. Collect (injected clients; token is a runtime input, never logged)
-python3 -m edge_os_api.research_history.collect_run --window 2026-09-25T00:00:00Z 2026-09-27T00:00:00Z \
-  --scan-from <from_block> --scan-to-exclusive <to_block_exclusive> --out .scratch/p07-source/run
-# 2. Normalize + qualify (reused seams)
-python3 -m edge_os_api.research_history.qualify_run --manifest .scratch/p07-source/run/manifest.json
-# 3. Verify the manifest identity
-python3 -c "from edge_os_api.research_history import load_manifest, verify_manifest; \
-m=load_manifest('.scratch/p07-source/run/manifest.json'); print(verify_manifest(m))"
+The library seams exist and are tested offline. A live run needs two injected clients that `#58` owns; no owned
+run driver exists, and this milestone creates none.
+
+### Exact missing #58 dependency (report for controller disposition)
+
+An actual `EnvioQueryClient` (HyperSync endpoint + bearer token) and an actual `QuickNodeRpcClient` (Monad
+JSON-RPC endpoint + key), plus the run driver that wires them. `#58` owns that wiring. Until it exists, the
+collection stays conditioned on the bounds in sections 3-5 and the enablement prerequisites in section 6.
+
+### Executable recipe over the existing seams (given the injected clients)
+
+```python
+from edge_os_api.research_history import (
+    CollectionLimits, EnvioHypersyncSource, SourceContext,
+    build_manifest, collect, corroborate_records, normalize, read_chain_id, save_manifest,
+)
+
+source = EnvioHypersyncSource(envio_client, context=SourceContext())      # envio_client: #58-provided
+chain = read_chain_id(quicknode_client)                                  # quicknode_client: #58-provided
+scan = {"from_block": from_block, "to_block_exclusive": to_block_exclusive}
+limits = CollectionLimits(max_pages=16, max_rows=10_000, max_bytes=4_194_304, deadline_utc=deadline)
+collection = collect(profile, source, scan, limits, provenance={"provider_requests": {"ENVIO_HYPERSYNC": 16}})
+corroboration = corroborate_records(quicknode_client, collection["records"],
+                                    population_size=collection["row_count"], sample_size=8,
+                                    chain_id=chain["chain_id"])
+evidence = {**provider_facts, "corroboration": corroboration}            # provider_facts: the section 6 reads
+history = normalize(profile, collection, evidence)
+save_manifest(build_manifest(history), out_path)
 ```
 
-Commands 1-2 are placeholders for a small run driver `#58` owns; the library seams they call
-(`EnvioHypersyncSource`, `collect`, `corroborate_records`, `normalize`, `save_manifest`) exist and are tested
-offline. The run driver is not created here.
+Each call reuses an accepted seam; the only new inputs are the two #58 clients and the approved bounds. The
+offline proof of these seams is the owned suite:
+
+```sh
+cd apps/api && uv run --frozen pytest tests/research_history -q
+cd docs/qualification/p07 && python3 -B -m unittest test_p07
+python3 -B docs/contracts/p02/check_contract.py
+```
 
 ## 8. Stop conditions
 

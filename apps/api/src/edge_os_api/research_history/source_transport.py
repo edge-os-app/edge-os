@@ -11,18 +11,22 @@ adapter's recorded-response shape and records the facts the accepted collector
 retains: the request and cursor identity, the page identity, the page content
 hash, the collection time, the block/log ordering fields, the raw amount units
 and any missing order, identity or time field. It does not invent a page, a
-timestamp or a value the response does not carry.
+timestamp or a value the response does not carry, and it refuses a response whose
+page facts contradict the requested range.
 
 Pinned native shape (documentation 2026-10-12; not verified against a live
 response): ``{archive_height, next_block, total_execution_time, data:{blocks,
 logs}, rollback_guard:{block_number, timestamp, hash, first_block_number,
 first_parent_hash}}``. ``next_block`` is the block after the last served block.
+Numeric quantities (block numbers, timestamps, ``next_block``) may arrive as an
+integer or as a hexadecimal ``0x`` quantity string; both are accepted. The client
+must return the page boundary block facts (the block at ``from_block`` and the
+last block) so the edge timestamps can be proven.
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -44,15 +48,28 @@ LOG_FIELDS = ("address", "topic0", "topic1", "topic2", "topic3", "data", "block_
               "block_hash", "transaction_hash", "transaction_index", "log_index", "removed")
 ORDER_FIELDS = ("block_number", "transaction_index", "log_index")
 IDENTITY_FIELDS = ("address", "transaction_hash")
-_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _is_nonneg_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+def _quantity(value: Any) -> int | None:
+    """A native numeric quantity: a non-negative integer, or a ``0x``/decimal string."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = int(text, 16) if text[:2].lower() == "0x" else int(text, 10)
+        except ValueError:
+            return None
+        return parsed if parsed >= 0 else None
+    return None
 
 
 def _hex_text(value: Any) -> str | None:
@@ -87,12 +104,14 @@ class SourceContext:
     def validate(self) -> None:
         if not isinstance(self.network, str) or not self.network:
             raise SourceContractError("CONTEXT_INVALID", "network must be non-empty text")
-        if not _is_nonneg_int(self.chain_id) or self.chain_id == 0:
+        if not isinstance(self.chain_id, int) or isinstance(self.chain_id, bool) or self.chain_id <= 0:
             raise SourceContractError("CONTEXT_INVALID", "chain_id must be a positive integer")
         if self.provider != ENVIO_PROVIDER:
             raise SourceContractError("CONTEXT_INVALID", f"provider must be {ENVIO_PROVIDER}")
         if not isinstance(self.provider_version, str) or not self.provider_version:
             raise SourceContractError("CONTEXT_INVALID", "provider_version must be non-empty text")
+        if not isinstance(self.endpoint, str) or not self.endpoint:
+            raise SourceContractError("CONTEXT_INVALID", "endpoint must be non-empty text")
 
 
 @runtime_checkable
@@ -167,7 +186,7 @@ class EnvioHypersyncSource:
 
     def _check_network(self, raw: Mapping[str, Any]) -> None:
         network = raw.get("network")
-        chain_id = raw.get("chain_id")
+        chain_id = _quantity(raw.get("chain_id"))
         if network is None and chain_id is None:
             return
         self._network_echo = "PRESENT"
@@ -177,12 +196,25 @@ class EnvioHypersyncSource:
             raise SourceContractError("WRONG_NETWORK", f"expected chain {self._context.chain_id}, got {chain_id!r}")
 
     def _block_index(self, data: Mapping[str, Any]) -> dict[int, Mapping[str, Any]]:
-        index: dict[int, Mapping[str, Any]] = {}
+        """Every present block fact, refusing a duplicate that disagrees with itself."""
         blocks = data.get("blocks", [])
-        if isinstance(blocks, Sequence) and not isinstance(blocks, (str, bytes)):
-            for block in blocks:
-                if isinstance(block, Mapping) and _is_nonneg_int(block.get("number")):
-                    index[block["number"]] = block
+        if not isinstance(blocks, Sequence) or isinstance(blocks, (str, bytes)):
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data.blocks is not a list")
+        index: dict[int, Mapping[str, Any]] = {}
+        for block in blocks:
+            if not isinstance(block, Mapping):
+                raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a block fact is not an object")
+            number = _quantity(block.get("number"))
+            if number is None:
+                raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a block number is not a quantity")
+            if number in index:
+                prior = index[number]
+                if (_quantity(prior.get("timestamp")) != _quantity(block.get("timestamp"))
+                        or _hex_text(prior.get("hash")) != _hex_text(block.get("hash"))):
+                    raise SourceContractError("DUPLICATE_BLOCK_FACT",
+                                              f"block {number} is claimed twice with different facts")
+                continue
+            index[number] = block
         return index
 
     def _frame(self, request: HistoryRequest, raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -193,33 +225,53 @@ class EnvioHypersyncSource:
         data = raw.get("data")
         if not isinstance(data, Mapping):
             raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data is not an object")
-        logs = data.get("logs", [])
+        if "logs" not in data:
+            # Absence is not proved emptiness on the pinned schema.
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data.logs is absent")
+        logs = data["logs"]
         if not isinstance(logs, Sequence) or isinstance(logs, (str, bytes)):
             raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data.logs is not a list")
 
-        next_block = raw.get("next_block")
-        if not _is_nonneg_int(next_block) or next_block <= 0:
-            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "next_block must be a positive integer")
+        next_block = _quantity(raw.get("next_block"))
+        if next_block is None or next_block <= 0:
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "next_block must be a positive quantity")
+
+        from_block = request.cursor_after if request.cursor_after is not None else request.from_block
+        if from_block >= next_block:
+            raise SourceContractError("PAGE_BOUNDS_CONTRADICTED",
+                                      f"page [{from_block},{next_block}) is empty or reversed")
+        if next_block > request.to_block_exclusive:
+            raise SourceContractError("PAGE_BOUNDS_CONTRADICTED",
+                                      f"next_block {next_block} passes the requested end {request.to_block_exclusive}")
 
         blocks = self._block_index(data)
-        from_block = request.cursor_after if request.cursor_after is not None else request.from_block
         guard = raw.get("rollback_guard")
         guard = guard if isinstance(guard, Mapping) else {}
 
-        first_block = blocks.get(from_block)
-        first_ts = first_block.get("timestamp") if isinstance(first_block, Mapping) else None
-        last_ts = guard.get("timestamp")
-        if not _is_nonneg_int(last_ts):
-            last_block = blocks.get(next_block - 1)
-            last_ts = last_block.get("timestamp") if isinstance(last_block, Mapping) else None
-        if not _is_nonneg_int(first_ts) or not _is_nonneg_int(last_ts):
+        guard_first = _quantity(guard.get("first_block_number"))
+        guard_last = _quantity(guard.get("block_number"))
+        if guard_first is not None and guard_first != from_block:
+            raise SourceContractError("PAGE_BOUNDS_CONTRADICTED",
+                                      f"guard first block {guard_first} is not the page start {from_block}")
+        if guard_last is not None and guard_last != next_block - 1:
+            raise SourceContractError("PAGE_BOUNDS_CONTRADICTED",
+                                      f"guard last block {guard_last} is not the page end {next_block - 1}")
+
+        first_ts = self._first_timestamp(from_block, blocks)
+        last_ts = _quantity(guard.get("timestamp"))
+        if last_ts is None:
+            last_ts = self._last_timestamp(next_block, blocks)
+        if first_ts is None or last_ts is None:
             raise SourceContractError("PAGE_FACTS_INCOMPLETE",
                                       "the response does not prove the page edge timestamps")
         if last_ts < first_ts:
             raise SourceContractError("PAGE_FACTS_INCOMPLETE", "page edge timestamps fall")
 
         events = self._frame_logs(logs, blocks)
-        content_sha256 = self._content_sha256(from_block, next_block, events)
+        first_parent_hash = _hex_text(guard.get("first_parent_hash"))
+        last_block_hash = _hex_text(guard.get("hash"))
+        content_sha256 = self._content_sha256(from_block, next_block, first_ts, last_ts,
+                                              first_parent_hash, last_block_hash, events)
         self._content_hashes.append(content_sha256)
         self._pages += 1
 
@@ -231,9 +283,6 @@ class EnvioHypersyncSource:
             "first_block_timestamp": first_ts,
             "last_block_timestamp": last_ts,
         }
-        first_parent_hash = _hex_text(guard.get("first_parent_hash"))
-        last_block_hash = _hex_text(guard.get("hash")) or _hex_text(
-            (blocks.get(next_block - 1) or {}).get("hash") if isinstance(blocks.get(next_block - 1), Mapping) else None)
         if first_parent_hash is not None:
             page["first_parent_hash"] = first_parent_hash
         if last_block_hash is not None:
@@ -256,6 +305,18 @@ class EnvioHypersyncSource:
             "events": events,
         }
 
+    def _first_timestamp(self, from_block: int, blocks: Mapping[int, Mapping[str, Any]]) -> int | None:
+        if from_block in blocks:
+            return _quantity(blocks[from_block].get("timestamp"))
+        present = sorted(blocks)
+        return _quantity(blocks[present[0]].get("timestamp")) if present else None
+
+    def _last_timestamp(self, next_block: int, blocks: Mapping[int, Mapping[str, Any]]) -> int | None:
+        if next_block - 1 in blocks:
+            return _quantity(blocks[next_block - 1].get("timestamp"))
+        present = sorted(blocks)
+        return _quantity(blocks[present[-1]].get("timestamp")) if present else None
+
     def _frame_logs(self, logs: Sequence[Any], blocks: Mapping[int, Mapping[str, Any]]) -> list[Any]:
         framed: list[Any] = []
         for log in logs:
@@ -264,12 +325,15 @@ class EnvioHypersyncSource:
                 self._records += 1
                 continue
             record = {key: log[key] for key in LOG_FIELDS if key in log}
-            number = log.get("block_number")
-            block = blocks.get(number) if _is_nonneg_int(number) else None
-            if isinstance(block, Mapping) and _is_nonneg_int(block.get("timestamp")):
-                record["block_timestamp"] = str(block["timestamp"])
-            else:
+            number = _quantity(log.get("block_number"))
+            if number is not None:
+                record["block_number"] = number
+            block = blocks.get(number) if number is not None else None
+            timestamp = _quantity(block.get("timestamp")) if isinstance(block, Mapping) else None
+            if timestamp is None:
                 self._missing_time += 1
+            else:
+                record["block_timestamp"] = str(timestamp)
             if any(key not in record for key in ORDER_FIELDS):
                 self._missing_order += 1
             if any(key not in record for key in IDENTITY_FIELDS):
@@ -278,9 +342,15 @@ class EnvioHypersyncSource:
             self._records += 1
         return framed
 
-    def _content_sha256(self, from_block: int, next_block: int, events: Sequence[Any]) -> str:
+    def _content_sha256(self, from_block: int, next_block: int, first_ts: int, last_ts: int,
+                        first_parent_hash: str | None, last_block_hash: str | None,
+                        events: Sequence[Any]) -> str:
+        payload = {"from_block": from_block, "next_block": next_block,
+                   "first_block_timestamp": first_ts, "last_block_timestamp": last_ts,
+                   "first_parent_hash": first_parent_hash, "last_block_hash": last_block_hash,
+                   "logs": list(events)}
         try:
-            body = raw_bytes({"from_block": from_block, "next_block": next_block, "logs": list(events)})
+            body = raw_bytes(payload)
         except (TypeError, ValueError) as error:
             raise SourceContractError("NON_JSON_PROVIDER_VALUE",
                                       "a provider value is not JSON data") from error
