@@ -467,6 +467,11 @@ describe("native recorded source (SOURCE-LOCAL)", () => {
     await user.selectOptions(screen.getByLabelText("Recorded source"), NATIVE.source_id);
     expect(screen.getByTestId("history-source-transport")).toHaveTextContent("It needs 27 provider requests: 2 pages, one chain read and 24 receipts.");
     expect(screen.getByTestId("history-source-transport")).toHaveTextContent("against recorded responses only");
+    // Switching to a bundle source and back resets the reservation to each source's own need (Review A N2).
+    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
+    expect(screen.getByLabelText("Bound provider_requests")).toHaveValue("2");
+    await user.selectOptions(screen.getByLabelText("Recorded source"), NATIVE.source_id);
+    expect(screen.getByLabelText("Bound provider_requests")).toHaveValue("27");
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
     await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
     await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");

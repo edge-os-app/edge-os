@@ -17,7 +17,7 @@ An actual run replaces only the two recorded clients with actual clients behind 
 - `EnvioQueryClient.query(request)`;
 - `QuickNodeRpcClient.call(method, params)`.
 
-`RequestBudget` (cancellation, deadline, request budget before every call; no retry) stays in front of them.
+They plug into the existing guard wrappers `GuardedEnvioClient` and `GuardedQuickNodeClient`. These check cancellation, the deadline and the request budget before every call, count only made calls and never retry. A refusal during receipt corroboration stops the whole corroboration (`STOPPED_<reason>`, with `receipts_fetched`); it is never recorded as RPC failures. An actual client must be wrapped the same way; it cannot replace the wrapper.
 
 ## 2. Supported source, network, pool and window
 

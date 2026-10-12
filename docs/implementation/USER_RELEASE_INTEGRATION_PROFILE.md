@@ -197,6 +197,8 @@ Milestone `RELEASE-E2E-L2-20261012-SOURCE-LOCAL`, base `a7864a7`. Local only. Ev
 **Collection** (`research/native_history_collection.py`). One `RequestBudget` equal to the declared `provider_requests` guards every injected client call:
 - Before each call it checks cancellation, the job deadline and the remaining requests.
 - A refused call is never made or counted. A made call counts even when it fails. Nothing is retried.
+- The guard sits in `GuardedEnvioClient` and `GuardedQuickNodeClient`, which wrap any client. A refused Envio call becomes the accepted P07 stop (`CANCELLED`, `TIMEOUT` or `PROVIDER_ERROR`).
+- A refused RPC call raises the application-owned `Refused`, which P07 does not catch. Corroboration then ends as `NONE`, `STOPPED_CANCELLED`, `STOPPED_DEADLINE` or `STOPPED_REQUEST_BUDGET_EXHAUSTED`, with `receipts_fetched`. No refused call is ever recorded as a mismatch.
 - Corroboration samples min(declared, remaining requests) records. It is skipped as `NONE` when no record was kept (`NO_RECORDS`), fewer than 2 requests remain (`REQUEST_BUDGET_EXHAUSTED`) or the chain read failed (`CHAIN_READ_FAILED`).
 - `chain_id_source` is `PROVIDER_READ` only when the recorded RPC answered 143, else `UNKNOWN`.
 - `provider_facts` (decimals, pool tokens, venue, fee semantics, finality, delivery records, feasibility claim) are recorded declarations, labelled `RECORDED_DECLARATION` in `evidence_basis`.
@@ -238,6 +240,7 @@ Milestone `RELEASE-E2E-L2-20261012-SOURCE-LOCAL`, base `a7864a7`. Local only. Ev
 | Sampled corroboration | `LIMITED`, unbound | `test_sampled_corroboration…` |
 | Too few requests declared | 422 before any job | `test_a_declaration_without_requests…` |
 | Cancellation after page 1 | later calls refused, 1 consumed, 26 released | `test_cancellation_after_the_first_page…` |
+| Cancellation / deadline during receipts | corroboration `NONE` `STOPPED_*`, 4 receipts fetched, 0 mismatches, 7 consumed | `test_cancellation_during_receipts…`, `test_a_deadline_during_receipts…` |
 | Deadline before / after the pages | no call / chain read refused | `test_a_passed_deadline…`, `test_a_deadline_passing_after…` |
 | Worker killed in collection | unknown liability, never collected again | `test_a_worker_killed_during_collection…` |
 | Other owner | 404, no client call | `test_another_owner_cannot_start…` |

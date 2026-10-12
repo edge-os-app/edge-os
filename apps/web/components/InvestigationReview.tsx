@@ -772,7 +772,8 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               const next = sources.find((item) => item.source_id === event.target.value);
               setSourceId(event.target.value); setAdopted(false);
               // A native recording also needs one chain read and one receipt per corroborated swap.
-              if (next?.transport) setBounds((current) => ({ ...current, provider_requests: String(next.transport!.provider_requests_needed) }));
+              if (next) setBounds((current) => ({ ...current,
+                provider_requests: String(next.transport ? next.transport.provider_requests_needed : next.page_requests_recorded) }));
             }}>
               <option value="">Choose a recorded source</option>
               {sources.map((item) => <option key={item.source_id} value={item.source_id}>{item.title}</option>)}

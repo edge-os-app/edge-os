@@ -47,6 +47,15 @@ EVIDENCE_BASIS = {
 }
 
 
+class Refused(Exception):
+    """A guarded call was refused before it was made. P07 does not catch this type, so a refusal during receipt
+    corroboration stops the whole corroboration instead of becoming a per-sample RPC failure."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class RequestBudget:
     """The job's declared provider-request reservation, shared by every client call of one collection."""
 
@@ -65,24 +74,52 @@ class RequestBudget:
     def admit(self, provider: str) -> None:
         """Check before a call; count the call once admitted. A refused call is never made or counted."""
         if self._cancelled():
-            raise SourceCancelled("cancellation requested before the next provider call")
+            raise Refused("CANCELLED")
         if self._deadline is not None and epoch(self._clock()) >= self._deadline:
-            raise SourceTimeout("the job deadline passed before the next provider call")
+            raise Refused("DEADLINE")
         if self.remaining < 1:
-            raise SourceFailure("REQUEST_BUDGET_EXHAUSTED: the declared provider requests are used")
+            raise Refused("REQUEST_BUDGET_EXHAUSTED")
         self.calls[provider] += 1
+
+
+class GuardedEnvioClient:
+    """Wraps any `EnvioQueryClient` (recorded or actual) with the request guard. A refusal becomes the accepted P07
+    source stop, so the collector records CANCELLED, TIMEOUT or PROVIDER_ERROR and keeps what it already holds."""
+
+    _STOPS = {"CANCELLED": SourceCancelled, "DEADLINE": SourceTimeout, "REQUEST_BUDGET_EXHAUSTED": SourceFailure}
+
+    def __init__(self, client: Any, budget: RequestBudget) -> None:
+        self._client = client
+        self._budget = budget
+
+    def query(self, request: HistoryRequest) -> Mapping[str, Any] | None:
+        try:
+            self._budget.admit(ENVIO)
+        except Refused as refused:
+            raise self._STOPS[refused.reason](f"{refused.reason}: refused before the next provider call") from None
+        return self._client.query(request)
+
+
+class GuardedQuickNodeClient:
+    """Wraps any `QuickNodeRpcClient` (recorded or actual) with the request guard. A refusal raises `Refused`."""
+
+    def __init__(self, client: Any, budget: RequestBudget) -> None:
+        self._client = client
+        self._budget = budget
+
+    def call(self, method: str, params: Any) -> Any:
+        self._budget.admit(QUICKNODE)
+        return self._client.call(method, params)
 
 
 class RecordedEnvioClient:
     """An `EnvioQueryClient` that serves recorded native pages in order. `{"fault": ...}` raises that failure."""
 
-    def __init__(self, pages: list[Any], budget: RequestBudget) -> None:
+    def __init__(self, pages: list[Any]) -> None:
         self._pages = list(pages)
-        self._budget = budget
         self._index = 0
 
     def query(self, request: HistoryRequest) -> Mapping[str, Any] | None:
-        self._budget.admit(ENVIO)
         if self._index >= len(self._pages):
             return None
         page = self._pages[self._index]
@@ -100,12 +137,10 @@ class RecordedEnvioClient:
 class RecordedQuickNodeClient:
     """A `QuickNodeRpcClient` that answers `eth_chainId` and `eth_getTransactionReceipt` from the recording."""
 
-    def __init__(self, recording: Mapping[str, Any], budget: RequestBudget) -> None:
+    def __init__(self, recording: Mapping[str, Any]) -> None:
         self._recording = recording
-        self._budget = budget
 
     def call(self, method: str, params: Any) -> Any:
-        self._budget.admit(QUICKNODE)
         if method == "eth_chainId":
             return self._recording["eth_chainId"]
         if method == "eth_getTransactionReceipt":
@@ -116,11 +151,16 @@ class RecordedQuickNodeClient:
         raise ValueError(f"the recording has no {method!r} method")
 
 
-def _skipped_corroboration(reason: str, population: int, clock: Callable[[], str]) -> dict[str, Any]:
-    return {"provider": QUICKNODE, "chain_id": None, "population_size": population, "collected_at_utc": clock(),
-            "network": None, "chain_verified": False, "class": "NONE", "reason": reason, "sample_size": 0,
+def _skipped_corroboration(reason: str, population: int, clock: Callable[[], str], *, receipts_fetched: int = 0,
+                           chain_read: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Corroboration that was not completed. `receipts_fetched` counts made receipt calls whose comparison was not
+    finished; none of them is reported as a match or a mismatch."""
+    chain_id = None if chain_read is None else chain_read.get("chain_id")
+    return {"provider": QUICKNODE, "chain_id": chain_id, "population_size": population, "collected_at_utc": clock(),
+            "network": None if chain_read is None else chain_read.get("network"),
+            "chain_verified": chain_id == MONAD_CHAIN_ID, "class": "NONE", "reason": reason, "sample_size": 0,
             "mismatches": 0, "records": [], "missingness": {"unidentifiable": 0, "rpc_failed": 0, "not_present": 0},
-            "attempted_requests": 0}
+            "attempted_requests": receipts_fetched, "receipts_fetched": receipts_fetched}
 
 
 def collect_native(source: Mapping[str, Any], bounds: Mapping[str, Any], deadline_utc: str | None,
@@ -129,7 +169,7 @@ def collect_native(source: Mapping[str, Any], bounds: Mapping[str, Any], deadlin
     """Collect, corroborate and qualify one native recording. Returns the collection, the P07 normalized result and
     the transport facts. P07 partial results return; a programmer defect propagates."""
     budget = RequestBudget(bounds["provider_requests"], cancelled, deadline_utc, clock)
-    envio = EnvioHypersyncSource(RecordedEnvioClient(source["envio_pages"], budget), clock=clock)
+    envio = EnvioHypersyncSource(GuardedEnvioClient(RecordedEnvioClient(source["envio_pages"]), budget), clock=clock)
     limits = CollectionLimits(max_pages=bounds["max_pages"], max_rows=bounds["max_rows"],
                               max_bytes=bounds["max_bytes"], deadline_utc=deadline_utc)
     collection = collect(source["profile"], envio, source["scan"], limits, clock=clock)
@@ -140,20 +180,28 @@ def collect_native(source: Mapping[str, Any], bounds: Mapping[str, Any], deadlin
     elif budget.remaining < 2:
         corroboration = _skipped_corroboration("REQUEST_BUDGET_EXHAUSTED", len(records), clock)
     else:
-        rpc = RecordedQuickNodeClient(source["quicknode"], budget)
-        before = budget.calls[QUICKNODE]
+        rpc = GuardedQuickNodeClient(RecordedQuickNodeClient(source["quicknode"]), budget)
         try:
             chain_read = read_chain_id(rpc)
-        except (SourceCancelled, SourceTimeout, SourceFailure, OSError) as error:
-            # A refused call was never made; a made call that failed still counts.
-            chain_read = {"method": "eth_chainId", "chain_id": None, "network": None,
-                          "attempts": budget.calls[QUICKNODE] - before, "failure": type(error).__name__}
+        except Refused as refused:  # never made
+            chain_read = {"method": "eth_chainId", "chain_id": None, "network": None, "attempts": 0,
+                          "stopped": refused.reason}
+        except (SourceCancelled, SourceTimeout, SourceFailure, OSError) as error:  # made, failed, counted
+            chain_read = {"method": "eth_chainId", "chain_id": None, "network": None, "attempts": 1,
+                          "failure": type(error).__name__}
         sample = min(int(source["corroboration_sample_size"]), budget.remaining)
         if chain_read["chain_id"] is None:
-            corroboration = _skipped_corroboration("CHAIN_READ_FAILED", len(records), clock)
+            reason = f"STOPPED_{chain_read['stopped']}" if "stopped" in chain_read else "CHAIN_READ_FAILED"
+            corroboration = _skipped_corroboration(reason, len(records), clock)
         else:
-            corroboration = corroborate_records(rpc, records, sample_size=sample, chain_id=chain_read["chain_id"],
-                                                clock=clock)
+            before = budget.calls[QUICKNODE]
+            try:
+                corroboration = corroborate_records(rpc, records, sample_size=sample,
+                                                    chain_id=chain_read["chain_id"], clock=clock)
+            except Refused as refused:  # a stop between receipts ends corroboration; nothing is counted as a mismatch
+                corroboration = _skipped_corroboration(f"STOPPED_{refused.reason}", len(records), clock,
+                                                       receipts_fetched=budget.calls[QUICKNODE] - before,
+                                                       chain_read=chain_read)
     verified = chain_read is not None and chain_read["chain_id"] == MONAD_CHAIN_ID
     evidence = {**source["provider_facts"],
                 "chain_id_source": "PROVIDER_READ" if verified else "UNKNOWN",

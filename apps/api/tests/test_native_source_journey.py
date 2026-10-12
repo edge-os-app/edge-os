@@ -184,7 +184,8 @@ def test_cancellation_after_the_first_page_refuses_every_later_call(native, owne
     content = dataset(native, owner_a, view)
     assert view["state"] == "CANCELLED" and content["stop_reason"] == "CANCELLED"
     assert content["transport"]["client_calls"] == {"ENVIO_HYPERSYNC": 1, "QUICKNODE_JSON_RPC": 0}
-    assert content["transport"]["chain_read"]["failure"] == "SourceCancelled"
+    assert content["transport"]["chain_read"]["stopped"] == "CANCELLED"
+    assert content["transport"]["corroboration"]["reason"] == "STOPPED_CANCELLED"
     assert view["budget"]["consumed"]["provider_requests"] == 1
     assert view["budget"]["released"]["provider_requests"] == 26
 
@@ -267,7 +268,7 @@ def test_a_deadline_passing_after_the_pages_refuses_the_chain_read(native, owner
     view = worker.run_job(uuid.UUID(started["job_id"]))
     content = dataset(native, owner_a, view)
     assert content["status"] == "COMPLETE"
-    assert content["transport"]["chain_read"]["failure"] == "SourceTimeout"
+    assert content["transport"]["chain_read"]["stopped"] == "DEADLINE"
     assert content["transport"]["client_calls"] == {"ENVIO_HYPERSYNC": 2, "QUICKNODE_JSON_RPC": 0}
     assert content["market_binding"] is None
 
@@ -333,3 +334,73 @@ def test_a_limited_native_dataset_cannot_be_adopted_as_a_market(native, owner_a)
                           json=adoption_body(bundle, dataset_id, parent=first.json()["revision_id"],
                                              quote_unit=NATIVE_UNIT))
     assert refused.status_code == 409 and refused.json()["code"] == "dataset_not_qualified"
+
+
+
+def _stop_after_receipts(monkeypatch, receipts: int, stop) -> None:
+    """Calls `stop()` once the recorded RPC has answered the chain read and `receipts` receipt calls."""
+    from edge_os_api.research import native_history_collection
+
+    original = native_history_collection.RecordedQuickNodeClient.call
+    answered = []
+
+    def counted(self, method, params):
+        result = original(self, method, params)
+        if method == "eth_getTransactionReceipt":
+            answered.append(params[0])
+            if len(answered) == receipts:
+                stop()
+        return result
+
+    monkeypatch.setattr(native_history_collection.RecordedQuickNodeClient, "call", counted)
+
+
+def test_cancellation_during_receipts_stops_corroboration_without_inventing_mismatches(native, owner_a, monkeypatch):
+    """Review A B1: refused receipt calls are not RPC failures; four fetched receipts are not 24 checked."""
+    _, _, started = start_native(native, owner_a)
+    _stop_after_receipts(monkeypatch, 4, lambda: native.post(
+        f"/v1/research/investigation-jobs/{started['job_id']}/cancel", headers=owner_a))
+    view = run(native, started["job_id"])
+    content = dataset(native, owner_a, view)
+    corroboration = content["transport"]["corroboration"]
+    assert (corroboration["class"], corroboration["reason"]) == ("NONE", "STOPPED_CANCELLED")
+    assert (corroboration["receipts_fetched"], corroboration["mismatches"], corroboration["records"]) == (4, 0, [])
+    assert content["transport"]["client_calls"] == {"ENVIO_HYPERSYNC": 2, "QUICKNODE_JSON_RPC": 5}
+    assert content["market_binding"] is None and view["budget"]["consumed"]["provider_requests"] == 7
+
+
+def test_a_deadline_during_receipts_stops_corroboration_without_inventing_mismatches(native, owner_a, monkeypatch):
+    import datetime as dt
+
+    _, _, started = start_native(native, owner_a)
+    late = []
+    _stop_after_receipts(monkeypatch, 4, lambda: late.append(True))
+    clock = lambda: dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2 if late else 0)  # noqa: E731
+    worker = InvestigationWorker(native.app.state.session_factory, native.app.state.settings, clock=clock)
+    view = worker.run_job(uuid.UUID(started["job_id"]))
+    corroboration = dataset(native, owner_a, view)["transport"]["corroboration"]
+    assert (corroboration["reason"], corroboration["receipts_fetched"], corroboration["mismatches"]) == (
+        "STOPPED_DEADLINE", 4, 0)
+
+
+def test_too_few_remaining_requests_skip_corroboration_before_any_rpc_call():
+    """Collection seam: 2 pages use 2 of 3 requests; 1 remaining cannot hold a chain read and a receipt."""
+    from edge_os_api.research import history_dataset, native_history_collection
+
+    source = history_dataset.recorded_sources()[QUALIFIED]
+    bounds = {**NATIVE_BOUNDS, "provider_requests": 3}
+    _, normalized, transport = native_history_collection.collect_native(
+        source, bounds, None, lambda: False, lambda: "2026-09-25T12:30:00Z")
+    assert transport["corroboration"]["reason"] == "REQUEST_BUDGET_EXHAUSTED"
+    assert transport["client_calls"] == {"ENVIO_HYPERSYNC": 2, "QUICKNODE_JSON_RPC": 0}
+    assert normalized["overall"] != "QUALIFIED"
+
+
+def test_calls_beyond_the_reservation_are_never_known_usage():
+    from edge_os_api.research import history_dataset
+
+    over = {"client_calls": {"ENVIO_HYPERSYNC": 2, "QUICKNODE_JSON_RPC": 26}, "request_budget": 27}
+    inside = {"client_calls": {"ENVIO_HYPERSYNC": 2, "QUICKNODE_JSON_RPC": 25}, "request_budget": 27}
+    assert history_dataset.measured_usage(over) == ("INVALID", None)
+    assert history_dataset.measured_usage(inside) == ("MEASURED_CLIENT_CALLS",
+                                                      {"ENVIO_HYPERSYNC": 2, "QUICKNODE_JSON_RPC": 25})
