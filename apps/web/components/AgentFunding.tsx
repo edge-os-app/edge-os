@@ -142,7 +142,9 @@ export function AgentFunding({ agentId }: { agentId: string }) {
         {view.current_holdings.state === "UNAVAILABLE"
           ? <p data-testid="funding-holdings">Current holdings are unavailable. No balance is shown or assumed.</p>
           : <dl className="kv" data-testid="funding-holdings">{view.current_holdings.assets.map((asset) => <Fragment key={asset.asset_id}>
-              <dt className="mono">{asset.asset_id}</dt><dd>{formatRaw(asset.raw, asset.decimals)} ({view.current_holdings.evidence_class})</dd>
+              <dt>{asset.asset_id === view.declaration?.trading_asset.asset_id ? "Trading asset"
+                : asset.asset_id === view.declaration?.gas_asset.asset_id ? "Native gas" : "Acquired asset"}</dt>
+              <dd>{formatRaw(asset.raw, asset.decimals)} <span className="mono">{asset.asset_id}</span> ({view.current_holdings.evidence_class})</dd>
             </Fragment>)}</dl>}
         {view.allowances.length > 0 && <>
           <h3>Authority used</h3>

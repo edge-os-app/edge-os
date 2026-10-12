@@ -80,7 +80,8 @@ describe("agent funding", () => {
     render(<AgentFunding agentId="agent-a" />);
     expect(await screen.findByTestId("funding-mode")).toHaveTextContent(/not a wallet, a transfer or chain evidence/);
     expect(screen.getByTestId("funding-credited")).toHaveTextContent("1000 credited");
-    expect(screen.getByTestId("funding-holdings")).toHaveTextContent("900 (SYNTHETIC_FIXTURE)");
+    expect(screen.getByTestId("funding-holdings")).toHaveTextContent("Trading asset900 monad-testnet:10143/0x2222");
+    expect(screen.getByTestId("funding-holdings")).toHaveTextContent("(SYNTHETIC_FIXTURE)");
   });
 
   it("shows unavailable holdings without inventing a balance", async () => {

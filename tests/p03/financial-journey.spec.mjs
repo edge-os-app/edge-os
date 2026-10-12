@@ -34,8 +34,14 @@ async function open(page, token) {
 }
 
 async function noSidewaysScroll(page) {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow).toBeLessThanOrEqual(0);
+  const found = await page.evaluate(() => {
+    const width = document.documentElement.clientWidth;
+    const widest = [...document.querySelectorAll("body *")].map((el) => ({ el, right: el.getBoundingClientRect().right }))
+      .filter((item) => item.right > width + 1).sort((a, b) => b.right - a.right)[0];
+    return { overflow: document.documentElement.scrollWidth - width,
+      widest: widest ? `${widest.el.tagName.toLowerCase()}:${(widest.el.textContent ?? "").slice(0, 60)}` : null };
+  });
+  expect(found.overflow, `sideways scroll caused by ${found.widest}`).toBeLessThanOrEqual(0);
 }
 
 async function noSeriousAxe(page) {

@@ -1004,7 +1004,11 @@ def ownership_drive(pg: harness.Postgres, api_url: str, token_a: str, token_b: s
 
     row = json.loads(pg.psql("select coalesce(json_agg(t), '[]'::json) from (select r.record_id, d.record_id draft_id, "
                              "d.content->>'strategy_id' strategy_id from records r join records d on d.intake_record_id = r.record_id "
-                             "where r.record_type='IntakeRequest' and d.record_type='StrategyDraft' limit 1) t"))
+                             "where r.record_type='IntakeRequest' and d.record_type='StrategyDraft' "
+                             # a draft with exactly one published revision, chosen deterministically: the check below
+                             # expects that one revision to survive the attacks unchanged
+                             "and (select count(*) from strategy_revisions s where s.strategy_id = d.content->>'strategy_id') = 1 "
+                             "order by d.seq limit 1) t"))
     if not row:
         return {"all_denied": False, "error": "no saved draft found to attack"}
     row = row[0] if isinstance(row, list) else row
