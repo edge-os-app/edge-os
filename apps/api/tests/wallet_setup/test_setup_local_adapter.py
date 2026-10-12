@@ -108,6 +108,9 @@ def test_build_wallet_provider_selects_by_mode():
 def test_production_refuses_the_local_fixture(env):
     production = {**env, "EDGE_OS_ENV": "production", "EDGE_OS_PRIVY_APP_ID": "real-app",
                   "EDGE_OS_CORS_ALLOWED_ORIGINS": "https://app.example.com",
+                  # Stage 2 production rules: hosted database with TLS and an exact build identity.
+                  "EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@db.internal/edge?sslmode=require",
+                  "EDGE_OS_BUILD_SHA": "0" * 40,
                   "EDGE_OS_WALLET_PROVIDER": "fixture"}
     with pytest.raises(ConfigError, match="wallet_provider"):
         load_settings(production)
