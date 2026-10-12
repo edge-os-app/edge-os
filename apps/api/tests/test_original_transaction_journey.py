@@ -731,7 +731,9 @@ def test_an_unexpected_client_error_reaches_the_log_without_its_text(original, o
 @pytest.mark.parametrize("stage,change,expected", [
     ("SIGN_REQUESTED", "expiry", ("DENIED_UNSENT", "REFUSED_UNSENT", 0, "MANDATE_EXPIRED")),
     ("SIGN_REQUESTED", "stop", ("DENIED_UNSENT", "REFUSED_UNSENT", 0, "STOPPED")),
+    ("SIGN_REQUESTED", "removal", ("DENIED_UNSENT", "REFUSED_UNSENT", 0, "REMOVAL_REQUESTED")),
     ("BROADCAST_REQUESTED", "expiry", ("SUBMITTED_UNKNOWN", "STOPPED_AFTER_SIGNING", 1, "MANDATE_EXPIRED")),
+    ("BROADCAST_REQUESTED", "stop", ("SUBMITTED_UNKNOWN", "STOPPED_AFTER_SIGNING", 1, "STOPPED")),
     ("BROADCAST_REQUESTED", "removal", ("SUBMITTED_UNKNOWN", "STOPPED_AFTER_SIGNING", 1, "REMOVAL_REQUESTED")),
     ("BROADCAST_REQUESTED", "none", ("SUBMITTED_UNKNOWN", "BROADCAST_RETURNED", 1, None))])
 def test_an_authority_change_during_a_stage_save_allows_no_next_effect(original, owner_a, recordings, stage,
