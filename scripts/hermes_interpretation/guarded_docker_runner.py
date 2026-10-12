@@ -880,11 +880,12 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         task_dir = self.evidence_dir / f"turn-{plan.sequence:02d}-{turn.attempt_id}"
         output = task_dir / "output"
         output.mkdir(parents=True)
-        record = self._register(plan, task_dir)
-        with _ACTIVE_LOCK:
+        record = self._pending_folder() / f"{task_dir.name}.json"
+        with _ACTIVE_LOCK:  # active BEFORE the record exists, so a concurrent recovery never takes it for left behind
             _ACTIVE_RECORDS.add(str(record))
         try:
             try:
+                self._register(plan, task_dir)
                 result = self._run_turn_steps(turn, plan, task_dir, output)
             except BaseException:
                 self._mark_pending(record, task_dir)

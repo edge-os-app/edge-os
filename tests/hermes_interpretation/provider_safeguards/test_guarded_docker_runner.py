@@ -2850,3 +2850,26 @@ def test_a_turn_whose_pending_mark_could_not_be_written_still_blocks_and_is_reco
 
     assert result.error_class == "CleanupPending" and launched == []
     assert spend.state("attempt-1") == "UNKNOWN"
+
+
+def test_a_concurrent_recovery_right_after_registration_never_takes_the_new_turn_for_a_left_behind_one(tmp_path: Path, monkeypatch) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    monkeypatch.setattr(docker_turn_runner, "docker", docker_double(present=False))
+    launched = install_process(monkeypatch, lambda output: None, returncode=3)
+    runner, _, _ = build(tmp_path, credential)
+    original_register = GuardedDockerTurnRunner._register
+    seen: list = []
+
+    def register_then_another_thread_recovers(self, plan, task_dir):
+        path = original_register(self, plan, task_dir)
+        self.recover_pending(1.0)  # what a concurrent turn's recovery could do at exactly this moment
+        seen.append((_records(tmp_path), (task_dir / "output").exists()))
+        return path
+
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_register", register_then_another_thread_recovers)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    records, output_kept = seen[0]
+    assert len(records) == 1 and records[0]["state"] == "running" and output_kept and launched
