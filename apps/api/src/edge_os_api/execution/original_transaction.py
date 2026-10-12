@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 from edge_os_api.admission.types import AssetAmount
 from edge_os_api.execution.transport import PreparedSubmission, TransportOutcome
 from edge_os_api.kuru_flow import (
+    AdapterError,
     ApprovedAdapterConfiguration,
     ObservationInput,
     ObservationState,
@@ -355,6 +356,14 @@ class OriginalTransactionTransport:
         except (ReplyLost, TimeoutError, OSError, RpcError):
             return envelope, "ROUTE_UNAVAILABLE"
         minimum = context.buy.raw * profile.min_output_bps // 10000
+        try:
+            return self._candidate(prepared, envelope, response, minimum, now)
+        except (AdapterError, ValueError):  # a malformed declaration or response is refused before signing
+            return envelope, "ROUTE_DECLARATION_INVALID"
+
+    def _candidate(self, prepared: PreparedSubmission, envelope: dict[str, Any], response: Any, minimum: int,
+                   now: dt.datetime) -> tuple[dict[str, Any] | None, str | None]:
+        context, profile = self._context, self._profile
         config = ApprovedAdapterConfiguration(
             network_id=context.network_id, entrypoint_address=profile.entrypoint, method=profile.method,
             selector=profile.selector,

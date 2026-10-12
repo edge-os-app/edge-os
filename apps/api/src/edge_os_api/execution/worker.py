@@ -310,7 +310,7 @@ class ConnectedExecution:
         if observed.wallet_address is not None:
             with self._factory() as session:
                 address = wallet_address(session, agent.owner_id, agent.agent_id, agent.wallet_id)
-        refusal = observed.refusal(wallet_address=address, chain_id=agent.network_number, now=now)
+        refusal = observed.refusal(wallet_address=address, chain_id=agent.network_number, now=self._clock())
         if refusal is not None:
             raise HoldingsUnavailable(refusal)
         balances = {asset_id: Holding(asset_id=asset_id, decimals=amount.decimals, raw=amount.raw)
@@ -325,7 +325,9 @@ class ConnectedExecution:
                                         network_id=position.network_id, strategy_revision=position.strategy_revision,
                                         mandate_id=position.mandate_id),
                 asset_id=position.asset_id, decimals=int(position.decimals), inventory_raw=str(int(position.inventory)))
-        return AdmissionContext(checked_at=utc_iso(observed.observed_at), holdings=HoldingsSnapshot(
+        # The observation time, never later than this step's own time; an authored account without one is this step's.
+        checked = now if observed.observed_at is None else min(observed.observed_at, now)
+        return AdmissionContext(checked_at=utc_iso(checked), holdings=HoldingsSnapshot(
             agent_id=agent.agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id, balances=balances,
             positions=positions))
 

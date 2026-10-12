@@ -33,7 +33,7 @@ FRESHNESS = dt.timedelta(minutes=5)
 @dataclass(frozen=True)
 class HoldingsObservation:
     assets: dict[str, AssetAmount]
-    observed_at: dt.datetime
+    observed_at: dt.datetime | None  # None: an authored account computed at the caller's own read, no supplied time
     source: str
     evidence_class: str
     finality: str
@@ -50,16 +50,16 @@ class HoldingsObservation:
             return "HOLDINGS_WRONG_CHAIN"
         if self.missing:
             return "HOLDINGS_INCOMPLETE"
-        if self.observed_at > now:
+        if self.observed_at is not None and self.observed_at > now:
             return "HOLDINGS_TIME_INVALID"
-        if now - self.observed_at > FRESHNESS:
+        if self.observed_at is not None and now - self.observed_at > FRESHNESS:
             return "HOLDINGS_STALE"
         return None
 
     def view(self, refusal: str | None = None) -> dict[str, Any]:
         return {"schema": SCHEMA, "state": "UNAVAILABLE" if refusal else "OBSERVED", "reason": refusal,
                 "source": self.source, "evidence_class": self.evidence_class, "finality": self.finality,
-                "observed_at": self.observed_at.astimezone(dt.timezone.utc).isoformat(),
+                "observed_at": None if self.observed_at is None else self.observed_at.astimezone(dt.timezone.utc).isoformat(),
                 "wallet_address": self.wallet_address, "chain_id": self.chain_id, "block_number": self.block_number,
                 "missing": list(self.missing),
                 "assets": [amount.model_dump(mode="json") for amount in self.assets.values()]}

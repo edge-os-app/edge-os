@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, formatRaw, heldKey, releaseKey, type ActionDetail, type AgentActions as AgentActionsView,
-  type Removal, type Stop } from "../lib/financial";
+  type OriginalTransaction, type Removal, type Stop } from "../lib/financial";
 
 const JOB_COPY: Record<string, string> = {
   QUEUED: "Saved. Waiting for the bounded worker to evaluate it.",
@@ -152,6 +152,7 @@ export function AgentActions({ agentId }: { agentId: string }) {
 
 function ActionLineage({ detail, busy, onReconcile }: { detail: ActionDetail; busy: boolean; onReconcile: () => void }) {
   const references = detail.attempts[0]?.content.original_references;
+  const original = detail.attempts[detail.attempts.length - 1]?.content.original_transaction ?? null;
   const unsettled = detail.queue ? UNSETTLED.has(detail.queue.state) : false;
   return (
     <div data-testid="action-lineage">
@@ -168,14 +169,47 @@ function ActionLineage({ detail, busy, onReconcile }: { detail: ActionDetail; bu
         <dt>Queue</dt><dd data-testid="action-queue-state">{detail.queue ? `${detail.queue.state}${detail.queue.blocking_reason ? ` (${detail.queue.blocking_reason})` : ""}` : "None"}</dd>
         <dt>Receipts</dt><dd data-testid="action-receipts">{detail.receipts.length ? detail.receipts.map((r) => `${r.outcome}${r.breach ? " (breach)" : ""}`).join(" → ") : "None yet"}</dd>
         <dt>Recovery</dt><dd>{detail.recovery ? detail.recovery.state : "Not opened"}</dd>
-        <dt>Transaction hash</dt><dd className="mono">{references?.transaction_hash ?? `None (${references?.absent_reason ?? "not recorded"})`}</dd>
+        {!original && <><dt>Transaction hash</dt><dd className="mono">{references?.transaction_hash ?? `None (${references?.absent_reason ?? "not recorded"})`}</dd></>}
       </dl>
+      {original && <OriginalTransactionFacts original={original} settled={!unsettled} />}
       <h4>Reservations</h4>
       <ul>{detail.reservations.map((item, index) => <li key={index}>{item.scope} · {formatRaw(item.raw, item.decimals)} <span className="mono">{item.asset_id}</span> · {item.state}</li>)}</ul>
       {unsettled && <div className="btn-row">
         <button className="btn btn-primary" style={{ minHeight: 44 }} type="button" disabled={busy} onClick={onReconcile}>Reconcile original action</button>
         <span className="muted">Reads the original action's receipt. It never sends a replacement.</span>
       </div>}
+    </div>
+  );
+}
+
+const STAGE_COPY: Record<string, string> = {
+  BROADCAST_RETURNED: "Sent once. Its effect is unknown until its own receipt is reconciled.",
+  BROADCAST_UNKNOWN: "The send reply was lost. The effect is unknown; reconcile the original transaction.",
+  BROADCAST_ERROR: "The send returned an error. The effect is unknown; reconcile the original transaction.",
+  BROADCAST_HASH_MISMATCH: "The send returned another hash. The effect is unknown.",
+  SIGNING_UNKNOWN: "The signer reply was lost. Nothing was sent by Edge OS, but a signature may exist; the reserved amounts stay held.",
+  SIGNED_RESPONSE_REJECTED: "The signed bytes did not match the original. They were never sent; the reserved amounts stay held.",
+  STOPPED_AFTER_SIGNING: "A stop or expiry arrived after signing. Nothing was sent; the reserved amounts stay held.",
+  REFUSED_UNSENT: "Refused before signing. Nothing was signed or sent.",
+};
+
+/** The original transaction's saved identities (recorded test responses only; never a live chain claim). */
+function OriginalTransactionFacts({ original, settled }: { original: OriginalTransaction; settled: boolean }) {
+  return (
+    <div data-testid="action-original">
+      <h4>Original transaction</h4>
+      <p data-testid="action-original-stage">{STAGE_COPY[original.stage] ?? original.stage}
+        {!settled && " No replacement is ever created."}</p>
+      <dl className="kv">
+        <dt>Stage</dt><dd>{original.stage}{original.reason ? ` (${original.reason})` : ""}{original.reasons?.length ? ` · ${original.reasons.join(", ")}` : ""}</dd>
+        <dt>Transaction hash</dt><dd className="mono" data-testid="action-original-hash">{original.transaction_hash ?? "None saved"}</dd>
+        <dt>Candidate identity</dt><dd className="mono">{original.candidate_hash ?? "None"}</dd>
+        <dt>Nonce</dt><dd>{original.nonce ?? "None"}</dd>
+        {original.fee_envelope && <><dt>Fee limit</dt><dd>{original.fee_envelope.gas_limit} gas at most {formatRaw(String(original.fee_envelope.max_fee_per_gas), 9)} gwei</dd></>}
+        <dt>Signing request</dt><dd className="mono">{original.signing_request_id ?? "None"}</dd>
+        <dt>Wallet</dt><dd className="mono">{original.wallet_address} on chain {original.chain_id}</dd>
+        <dt>Evidence</dt><dd>{original.evidence_class}: authored recorded responses, not a live provider or chain.</dd>
+      </dl>
     </div>
   );
 }

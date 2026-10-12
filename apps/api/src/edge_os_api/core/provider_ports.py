@@ -366,11 +366,11 @@ class FixtureHoldings:
             for amount in spent:
                 if amount and amount["asset_id"] in totals:
                     totals[amount["asset_id"]] -= int(amount["raw"])
-        # The authored account is computed at this read, so its observation time is this read's time.
+        # The authored account is computed at the caller's read; it carries no supplied observation time.
         return HoldingsObservation(
             assets={asset_id: AssetAmount(asset_id=asset_id, raw=str(max(totals[asset_id], 0)), decimals=decimals)
                     for asset_id, decimals in assets},
-            observed_at=utc_now(), source=self.source_id, evidence_class=FIXTURE_EVIDENCE, finality="AUTHORED")
+            observed_at=None, source=self.source_id, evidence_class=FIXTURE_EVIDENCE, finality="AUTHORED")
 
 
 class RecordedOriginalHoldings:

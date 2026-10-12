@@ -153,6 +153,9 @@ class Delegate:
     def rpc(self, wallet_id, body):
         return self._run("rpc", wallet_id, body)
 
+    def quote(self, request):
+        return self._run("quote", request)
+
     def call(self, method, params):
         return self._run("call", method, params)
 
@@ -421,3 +424,20 @@ def test_the_exit_is_one_more_original_transaction_with_the_next_nonce(original,
     assert body["operation"] == "EXIT"
     assert (original_of(body)["nonce"], original_of(body)["transaction_hash"]) == (1, EXIT_NONCE1_HASH)
     assert calls(recordings)["broadcast.eth_sendRawTransaction"] == 2
+
+
+def test_holdings_observed_on_another_chain_admit_nothing(original, owner_a, recordings):
+    ff.confirmed_agent(original, owner_a, "testnet-fx-original", network_id=10143)
+    declaration = ff.funded(original, owner_a, "testnet-fx-original")
+    ff.adopted(original, owner_a, "testnet-fx-original", declaration)
+    job = ff.run_job(original, ff.schedule(original, owner_a, "testnet-fx-original").json())
+    assert (job["state"], job["reason"], job["action_id"]) == ("UNAVAILABLE", "HOLDINGS_WRONG_CHAIN", None)
+    assert calls(recordings).get("route.quote", 0) == 0 and calls(recordings).get("signer.rpc", 0) == 0
+
+
+def test_a_route_the_recording_does_not_hold_is_blocked_before_signing(original, owner_a, recordings):
+    Inject(original, route=lambda inner: Delegate(inner, after=lambda *_: {"status": "error", "error": "NO_ROUTE"}))
+    job = submitted(original, owner_a, "route-fx-original")
+    body = original_of(action(original, owner_a, job["action_id"]))
+    assert (job["outcome"], body["reason"]) == ("DENIED_UNSENT", "ROUTE_BLOCKED")
+    assert calls(recordings).get("signer.rpc", 0) == 0

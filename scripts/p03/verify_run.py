@@ -503,6 +503,11 @@ def main() -> int:
         logs = [p for p in (evidence / "logs").glob("*.log")]
         secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_c, token_bad, *native_tokens.values(), signer.private_pem))]
         ok &= rec.step("logs contain no token or private key", not secrets_seen, secrets_seen)
+        signed = financial_phase.authored_signed_bytes(evidence)
+        texts = [*logs, *(evidence / "ui").glob("*.json"), *evidence.glob("ui-*.log")]
+        signed_seen = [str(p.name) for p in texts if any(raw in p.read_text(errors="ignore") for raw in signed)]
+        ok &= rec.step("logs and browser results contain no raw signed transaction bytes", bool(signed) and not signed_seen,
+                       {"signed_vectors": len(signed), "found_in": signed_seen})
     except Exception as error:  # noqa: BLE001
         rec.step("run aborted", False, f"{type(error).__name__}: {error}")
         ok = False

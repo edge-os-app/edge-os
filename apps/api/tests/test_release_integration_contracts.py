@@ -100,7 +100,8 @@ def test_ic03_fixture_holdings_follow_effects_not_deposit_history(factory, tmp_p
     assets = [("monad-testnet:10143/q", 6), ("monad-testnet:10143/b", 18), ("monad-testnet:10143/native", 18)]
     empty = ports.holdings.observe(owner_id=owner, agent_id="a", wallet_id="w", network_id="monad-testnet:10143",
                                    assets=assets)
-    assert {asset: amount.raw for asset, amount in empty.items()} == {asset: "0" for asset, _ in assets}
+    # IC03 interface (ORIGINAL-LOCAL): the port returns one observation carrying the per-asset amounts.
+    assert {asset: amount.raw for asset, amount in empty.assets.items()} == {asset: "0" for asset, _ in assets}
     ports.chain.append(action_id="act", owner_id=str(owner), wallet_id="w", network_id="monad-testnet:10143",
                        outcome="APPLIED_CONFIRMED", actual_input={"asset_id": "monad-testnet:10143/q", "raw": "0",
                                                                   "decimals": 6},
@@ -108,7 +109,7 @@ def test_ic03_fixture_holdings_follow_effects_not_deposit_history(factory, tmp_p
                        actual_gas={"asset_id": "monad-testnet:10143/native", "raw": "0", "decimals": 18})
     after = ports.holdings.observe(owner_id=owner, agent_id="a", wallet_id="w", network_id="monad-testnet:10143",
                                    assets=assets)
-    assert after["monad-testnet:10143/b"].raw == "7"
+    assert after.assets["monad-testnet:10143/b"].raw == "7"
 
 
 def test_ic06_original_references_never_invent_chain_identities(tmp_path):
