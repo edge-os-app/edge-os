@@ -621,12 +621,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def _write_record(path: Path, data: dict[str, Any]) -> None:
         """Write a record whole or not at all (temporary file, then rename); private to the host user.
 
-        On any failure the record is left as it was and this operation's own temporary file is removed, so repeated
-        failures (a full disk, a refused rename) never pile up orphan files. The error is raised to the caller.
+        The temporary file has ONE fixed name per record (`.<record>.tmp`), so even a folder that refuses both the rename
+        and the removal (an append-only folder, a full disk) holds at most one such file per record, reused and truncated
+        by the next write. Every caller holds the record's lock, so no two writers share it. On any failure the record is
+        left as it was, the temporary file is removed if the folder allows it, and the error is raised to the caller.
         """
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        temporary = path.with_name(f".{path.name}.tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 json.dump(data, stream, sort_keys=True)

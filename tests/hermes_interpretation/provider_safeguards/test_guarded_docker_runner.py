@@ -3174,3 +3174,38 @@ def test_a_failed_atomic_write_removes_only_its_own_temporary_file(tmp_path: Pat
         GuardedDockerTurnRunner._write_record(folder / "turn-01-old.json", {"state": "pending"})
 
     assert sorted(p.name for p in folder.iterdir()) == [".turn-01-old.json.someone-elses"]
+
+
+
+def test_repeated_failed_writes_in_a_folder_that_refuses_rename_and_removal_leave_at_most_one_temporary_file(
+        tmp_path: Path, monkeypatch) -> None:
+    """Like an append-only folder (macOS chflags uappnd): files can be created, but neither renamed nor removed."""
+    import guarded_docker_runner as module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    folder = tmp_path / "evidence" / "pending-cleanup"
+    path = _pending_record(folder)
+    stops: list[str] = []
+    runner, _, guarded = build(tmp_path, credential, recovery_budget_seconds=0.1)
+    monkeypatch.setattr(GuardedDockerTurnRunner, "_stop_owned",
+                        lambda self, plan, proc: (stops.append(plan.name) or {"container_absent": False, "ownership_verified": False}))
+    real_unlink = module.os.unlink
+
+    def refuse_in_folder(target, *args, **kwargs):
+        name = Path(target).name  # any temporary file of the record, whatever the writer names it
+        if Path(target).parent == folder and name.startswith(f".{path.name}.") and not name.endswith(".lock"):
+            raise PermissionError("removal refused")
+        return real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "replace", lambda source, dest: (_ for _ in ()).throw(PermissionError("rename refused")))
+    monkeypatch.setattr(module.os, "unlink", refuse_in_folder)
+
+    for _ in range(50):
+        runner.recover_pending(0.1)
+    install_process(monkeypatch, lambda output: None, returncode=3)
+    result = guarded.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    leftovers = [p.name for p in folder.iterdir() if not p.name.endswith(".lock") and p.name != path.name]
+    assert len(leftovers) <= 1, leftovers  # one per record at most, never one per failure
+    assert stops == [] and _json.loads(path.read_text())["attempts"] == 0
+    assert result.error_class == "CleanupPending"
