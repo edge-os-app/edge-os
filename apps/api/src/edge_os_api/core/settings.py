@@ -9,7 +9,7 @@ from typing import Literal
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
-from pydantic import ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # application database, so a restarted process reconciles the original action and a verifier counts effects
     # independently. Without it the fixture keeps effects in process memory.
     fixture_effects_path: str | None = None
+    # `recorded` serves the authored SYNTHETIC recorded-response history bundle to owner investigation jobs. Production
+    # refuses it. `unavailable` refuses every history collection. No setting selects an actual provider source.
+    research_history_mode: Literal["recorded", "unavailable"] = "unavailable"
+    # Per-owner research capacity. A job reserves its declared bounds before any adapter effect; unknown usage keeps
+    # its whole reservation as liability.
+    research_budget_provider_requests: int = Field(default=16, ge=0, le=10000)
+    research_budget_compute_seconds: int = Field(default=900, ge=0, le=86400)
 
     @field_validator("privy_app_id")
     @classmethod
@@ -127,6 +134,8 @@ class Settings(BaseSettings):
             problems.append("wallet_provider: only the unavailable provider is allowed in production")
         if self.env == "production" and self.execution_mode != "unavailable":
             problems.append("execution_mode: only the unavailable execution mode is allowed in production")
+        if self.env == "production" and self.research_history_mode != "unavailable":
+            problems.append("research_history_mode: recorded synthetic history is refused in production")
         if self.fixture_effects_path is not None and self.execution_mode != "fixture":
             problems.append("fixture_effects_path: only the fixture execution mode records fixture effects")
         if self.env == "production" and self.privy_app_id == TEST_APP_ID:
