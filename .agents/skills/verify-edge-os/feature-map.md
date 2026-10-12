@@ -44,7 +44,7 @@ Rows were exercised by `scripts/p03/verify_run.py` unless the Evidence column na
 | Sign-out returns to the sign-in heading and clears everything this app stored in the tab. Another person signing in sees an empty form. A rejected session shows a message with focus, keeps the same person's draft and signs in again for real | desktop and 390px (fixture session) | `session-rejected-*` |
 | A closed or failed real Privy sign-in window ends in a message. A slow sign-in offers Try again and keeps the window | unit tests with a mocked bridge only | `apps/web/tests/auth.test.tsx` |
 
-Not covered: real Privy login (`R1`–`R4` of the P01 profile), real wallets, deposits, quotes, signing, broadcast, receipts and removal at a provider (the connected journey uses fixture ports only), real model output (the P05 provider is a local fake with authored text; a real-provider run needs a separate recorded release), production hosting and a provider spending cap, research execution, live agent state, wallets, funding, signing.
+Not covered: real Privy login (`R1`–`R4` of the P01 profile), real wallets, deposits, quotes, signing, broadcast, receipts and removal at a provider (the connected journey uses fixture ports only), real model output (the P05 provider is a local fake with authored text; a real-provider run needs a separate recorded release), production hosting and a provider spending cap, actual-data research collection and inference (recorded synthetic responses only), live agent state, wallets, funding, signing.
 
 ## Connected financial journey (#58 Stage 1, fixture execution)
 
@@ -75,6 +75,32 @@ select action_id, state, content->'original_references' from execution_local.exe
 select agent_id, state from revocation_local.removal_states;
 ```
 Compare each action with `fixture-effects.jsonl`: at most one line per action, none for a denied or stopped job.
+
+## Recorded-history research journey (#58 Task 6, recorded responses)
+
+The API runs with `EDGE_OS_RESEARCH_HISTORY_MODE=recorded` and a 40-request owner research budget; production refuses the recorded mode. `scripts/p03/research_phase.py` drives three specs at desktop and 390px: `research-history-journey.spec.mjs` with no worker running, then a fault-injected process that ends after one job's collection attempt is saved (a killed worker), one pass of `python -m edge_os_api.research.investigation_jobs --once`, `research-history-report.spec.mjs`, SQL inspection, and after the shared API restart another worker pass and `research-history-restart.spec.mjs` in a new browser context. Every source is the authored SYNTHETIC recorded bundle; no provider, model or credential is used. `--actual-data PACKET` refuses before anything starts.
+
+| Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
+|---|---|---|---|---|---|---|
+| Declare before data | Research request (no thesis) → Recorded-history investigation → source, own hypothesis, own rules, bounds → adopt → Save | `GET /v1/research/history-sources`, `POST /v1/research/requests/{id}/history-investigations` | `investigation_declarations` (v3), `investigation_access_events` | `PRE_OUTCOME_DECLARED`, frozen hashes, zero provider queries | unchanged | `research-inspection.json`, `*-rg-01-declared.png` |
+| Waiting job | Start investigation job | `POST …/history-investigations/{d}/jobs` | `research_local.investigation_jobs`, `investigation_events`, `research_budgets` | `RESERVED` before any attempt | — | `*-rg-02-waiting.png` |
+| Cancel and retry | Cancel this job → Retry as a new job | `POST /v1/research/investigation-jobs/{job}/cancel` | same | `CANCELLED`, reservation released; new job `RESERVED` | kept | `*-rg-03-cancel-retry.png` |
+| Budget denial | Declaration with 64 provider requests → Start | same | job `BUDGET_EXHAUSTED`, nothing reserved | alert, nothing collected | kept | `*-rg-04-budget-denied.png` |
+| Killed worker | none (verifier fault injection) | — | `ATTEMPT_STARTED` then `ATTEMPT_RECONCILED OUTCOME_UNKNOWN` | `UNAVAILABLE`, unknown liability kept, never collected again; retry is a new job | retried job reported | `research-inspection*.json` |
+| Report | Open declaration | `GET …/jobs`, `GET /v1/research/investigation-reports/{r}` | `history_datasets`, `investigation_reports` | outcome, variants, contrary findings, validation/holdout NOT_READ, no significance or capital claim | reopens unchanged | `*-rg-05-report.png` |
+| Source loss | Failing-source declaration | same | dataset `PARTIAL PROVIDER_ERROR`, `UNAVAILABLE_LIMITED_DATA` | report `SOURCE_LOSS`, no outcome read | — | `*-rg-06-source-loss.png` |
+| Market adoption | Strategy request → Save fixture revision → Use a recorded market → dataset, restated amounts → adopt → Save this revision | `GET /v1/research/history-datasets`, `POST /v1/research/requests/{id}/market-adoptions`, `POST /v1/strategies/{id}/revisions` | new `PromptInterpretation`, `Clarification`, `Outcome`, `StrategyDraft`; second `strategy_revisions` row with the dataset market | earlier revision unchanged | reopens | `*-rg-07-adopt-market.png` |
+| Labelled replay | Test the saved strategy → Price data = dataset → bind → Save replay on recorded history | `POST /v1/spot-replays` (`history_dataset_id`) | `spot_replay_runs` with `history_input` lineage | COMPLETE, simulated fills; fixture revision on the same dataset: `MARKET_BINDING_MISMATCH` | reopens without recompute | `*-rg-08-history-replay.png` |
+| Two owners | Owner B opens owner A's URLs | `GET` → 404 | none | not found | — | `ui-research-restart.log` |
+
+Research SQL (run during a hold):
+```sql
+select declaration_id, state, terminal_reason, budget->'unknown_liability' from research_local.investigation_jobs order by created_at;
+select job_id, kind, attempt_id from research_local.investigation_events order by seq;
+select dataset_id, content->'verdict'->>'overall', content->>'binding_state', content->>'stop_reason' from research_local.history_datasets;
+select report_id, content->>'outcome' from research_local.investigation_reports;
+select * from research_local.research_budgets;
+```
 
 ## SQL checks
 

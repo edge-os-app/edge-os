@@ -29,3 +29,7 @@ Focused API coverage is in `apps/api/tests/test_investigation_adoption.py`; UI a
 ## Limits
 
 This profile uses only an unqualified synthetic fixture. It does not qualify a research pool, make provider calls, inspect outcomes, run an investigation, create a strategy, or access a wallet. Numeric limits and provider policy remain unresolved for any future adopted run. The declaration is not P09 outcome-read authorization.
+
+## #58 Task 6 extension: recorded-history declarations (`p08.investigation-declaration/3`)
+
+Version 2 is unchanged. Version 3 declarations are saved by `POST /v1/research/requests/{id}/history-investigations` in the same `investigation_declarations` table, before any collection, with frozen configuration, rule-map and source-profile hashes. Version 2 reads and the P09 fixture run ignore them. Rules must be `USER_ADOPTED`; worked-example rules are refused. Details and limits: `USER_RELEASE_INTEGRATION_PROFILE.md`, section "Task 6 local implementation".

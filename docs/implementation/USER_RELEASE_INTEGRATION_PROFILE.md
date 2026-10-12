@@ -97,7 +97,7 @@ Not implemented here. Independent opaque-program limits, acquired/residual expos
 
 The same seam carries `OnePositionPerWallet` (`execution/position_limit.py`): an ENTRY or ADDITION is denied `POSITION_ALREADY_OPEN` while another position of the agent wallet holds inventory or has an unresolved entry/addition. It enforces the revision's `max_open_positions = 1` atomically at P22 admission and submission ownership, so a decision saved while an earlier entry was unresolved cannot open a second position. `acquire_submission` reports any such denial with the accepted status `STOPPED_SCOPE`.
 
-## RG interfaces frozen for Task 6 (definitions only; not implemented in this milestone)
+## RG interfaces frozen for Task 6 (definitions; the local implementation follows below)
 
 These are the frozen definitions Task 6 implements under its own lease. Versions are new; nothing here changes the accepted P02/P07/P08/P09 contracts or fixture bytes.
 
@@ -130,6 +130,32 @@ The P07 library was accepted on integration commit `1755e3c` (candidate `cc58e28
 
 P07 consumption follows controller amendment `r58-r7-a`: the isolated `research_history` library returns `CollectionResult` (status `COMPLETE`/`PARTIAL`, stable `stop_reason`, measured invocation counts separate from evidenced provider request counts, unknown as null) and `NormalizedHistory` with ordered buckets (`bucket_start`, `bucket_end`, `status`, `close` price string or null, `quote_volume`, `available_at`, `availability_basis`, `reasons`) and `normalized_sha256` over the payload without its own digest. Malformed caller input is `InvalidInput` before any source call. Only overall `QUALIFIED` projects to P02; `LIMITED` is stored beside the declaration and keeps real-market rule binding unavailable (G05 open). #58 owns the bucket-to-`InputObservation` mapping, verified-owner persistence, investigation jobs, budgets, HTTP and UI. The investigation job reuses the evaluation-job pattern above: one row per owner/request/declaration identity, reserved budget before effects, original attempt kept on cancellation, deadline or lost reply.
 
+## Task 6 local implementation (recorded responses only)
+
+Milestone `RELEASE-E2E-L2-20261012-RG-LOCAL`. Every history source is the authored SYNTHETIC recorded-response bundle `apps/api/tests/fixtures/research_history_recorded/recorded_history_v1.json`, written only by `apps/api/tests/history_recordings.py`. The API serves it only with `EDGE_OS_RESEARCH_HISTORY_MODE=recorded`; production refuses that mode. No provider, model, credential or network call is made.
+
+| ID | Implemented as | Main files | Status |
+|---|---|---|---|
+| RG01 | `POST/GET /v1/research/requests/{id}/history-investigations[/{declaration}]` save `p08.investigation-declaration/3` before any collection with frozen configuration, rule-map and source-profile hashes; the hypothesis rule map `edge-os.hypothesis-rule-map/1` accepts only `USER_ADOPTED` rules and refuses the worked-example rules (fixture strategy entry/exit, fixture interpreter choices, P09 example); `PROVIDER_ACTUAL` access is refused (`actual_data_not_authorized`). v2 reads and the P09 fixture run ignore v3 declarations. | `core/request_schemas.py`, `research/investigation_adoption.py` | Local PASS candidate |
+| RG02 | `edge-os.history-dataset/1` rows in `research_local.history_datasets`, saved verbatim from P07 `collect`/`normalize` with raw records, recomputable hashes, verdicts, measured invocations, evidenced or unknown provider usage, binding state and unavailable states. Only overall QUALIFIED and complete data project to a market binding. | `research/history_dataset.py`, migration `0009` | Local recorded PASS candidate; actual data NOT RUN |
+| RG03 | `edge-os.investigation-job/1` jobs, append-only `investigation_events`, per-owner `research_budgets`; reservation before any adapter effect; duplicate start, last-slot competition, cancel, deadline, killed worker (OUTCOME_UNKNOWN, never collected again), lost reply after a saved result, missing/invalid usage, provider failure, budget exhaustion and restart. Tools `edge-os.investigation-tool/1` are deterministic and import no financial or network module. Worker: `python -m edge_os_api.research.investigation_jobs`. | `research/investigation_jobs.py`, `research/investigation_tools.py` | Local PASS candidate; no Hermes tool isolation is proved |
+| RG04 | `edge-os.investigation-report/1` reports from the accepted P09 engine on the saved dataset: DESCRIBED, CONTRADICTORY, INSUFFICIENT_DATA, UNSUPPORTED, SOURCE_LOSS, LIMITED_DATA; validation and holdout partitions are never read; no significance, capital or execution claim. | `research/comparison_runs.py` `compare_history` | Local PASS candidate |
+| RG05 | `edge-os.history-replay-input/1`: `POST /v1/spot-replays` with `history_dataset_id` feeds the unchanged P13 runtime; buckets, availability and verdicts pass through unchanged; lineage, both market binding ids and "simulated fills" are saved. A strategy reaches the dataset market only through pre-publication adoption (`POST /v1/research/requests/{id}/market-adoptions`, amendment RG05-MARKET-ADOPTION-v1): a NEW interpretation, clarification, outcome and draft built from the owner's hash-verified QUALIFIED dataset; the entry becomes exactly one `USER_ADOPTED` rule of that dataset's own declaration (price and volume conditions joined by `and`), the exit is restated by the owner and refused when it is a worked-example rule, and amounts are restated in the new quote unit; replays record whether the entry is that declared rule; earlier drafts and revisions never change and the fixture revision still fails `MARKET_BINDING_MISMATCH`. | `replay/history_inputs.py`, `replay/saved_runs.py`, `research/market_adoption.py` | Local recorded PASS candidate; actual-source replay blocked by the runtime evidence-class check (proposal recorded, simulator unchanged) |
+| RG06 | Verifier research phase (`scripts/p03/research_phase.py`, three specs `research-history-*.spec.mjs`); `--actual-data PACKET` refuses without a recorded approval and, even with one, until an actual adapter exists. | `scripts/p03/`, `.agents/skills/verify-edge-os/` | Default run spends nothing |
+
+Retained limits: the recorded bundle is synthetic; actual collection, inference and actual-history replay need the separate authorization packet and the runtime change; LIMITED representation (G05) stays open; a local fake runner proves no real Hermes tool isolation.
+
+### Pre-public and live follow-ups (tracked, not repaired here)
+
+| ID | Follow-up | Proposed repair (summary) |
+|---|---|---|
+| F1 | Account views read authored P19 rows, not the connected financial schemas | Read-only service projection from `funding_local`/`execution_local`/`recovery_local`/`revocation_local`, labelled by source |
+| F2 | A failed read-back after a successful mutation re-enables writes over a stale view (`AgentActions`, `AgentFunding`, `AgentAuthority`) | Keep controls disabled and withdraw the success claim until a read succeeds |
+| F3 | `original_references` are saved before the effect only when a transport names them | Require them for every non-fixture transport; refuse submission otherwise |
+| F4 | Hosted schema drift and recovery | Workers re-check the schema head each pass; host runbook for migrate, restore and rollback with rehearsals |
+| F5 | Manual accessibility | Keyboard-only and screen-reader pass over the new research, adoption and replay surfaces |
+| F6 | Dependency advisories and runtime reachability | Read-only advisory review with reachability per advisory; upgrades as separate leased changes |
+
 ## Decisions for the builder
 
 0. One open position per agent and revision at a time is enforced by the strategy (`max_open_positions: 1`) and the worker (an exit uses the open position); repeated entry/exit cycles are now possible because each entry has its own position id.
@@ -140,4 +166,4 @@ P07 consumption follows controller amendment `r58-r7-a`: the isolated `research_
 
 ## Evidence classification and limits
 
-Local fixture only. NOT_RUN: real Privy login, real wallet creation or lookup, real deposits, quotes, observations, signing, broadcast, receipts, removal, model and hosted multi-process operation. The worker is bounded and manual or loop-driven; no always-on trading claim follows. RG01–RG06 and the live parts of IC01–IC08 remain open.
+Local fixture only. NOT_RUN: real Privy login, real wallet creation or lookup, real deposits, quotes, observations, signing, broadcast, receipts, removal, model and hosted multi-process operation. The worker is bounded and manual or loop-driven; no always-on trading claim follows. Actual-data RG02/RG05 and the live parts of IC01–IC08 remain open; RG01–RG06 have a local recorded-response implementation (section above).
