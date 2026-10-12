@@ -40,8 +40,8 @@ import time
 import types
 import uuid
 from dataclasses import asdict, dataclass, field, replace
-from pathlib import Path
-from collections.abc import Callable
+from pathlib import Path, PurePosixPath
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import docker_turn_runner
@@ -64,6 +64,7 @@ RESULT_SECONDS_PER_BYTE = 0.25 / (1024 * 1024)
 RESULT_MIN_SECONDS = 0.005
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
+JOB_FILES_FOLDER = PurePosixPath("/opt/p05job")  # the one folder a different job entry may add read-only files to
 # The longest step of sealing or removal that cannot be stopped part way (one form replaced in at most 1 MiB, one 1 MiB
 # read or write, one search of 8 MiB, one batch of 1,024 undone escapes, one scan for escapes that finds none) measured
 # about 0.002 s to 0.016 s idle and up to about 0.02 s under heavy load; sealing stops at least this long before
@@ -215,6 +216,63 @@ def _limit_client_file_size() -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_STDOUT_BYTES + 1, MAX_STDOUT_BYTES + 1))
 
 
+@dataclass(frozen=True)
+class JobEntry:
+    """Which job script the container runs, the read-only files it adds and the settings it is given.
+
+    The default is the accepted guarded job. Another entry runs in the same container, under the same lifecycle, with
+    the same input, output, guard and credential mounts; its own files go read-only into JOB_FILES_FOLDER only, and its
+    settings reach the job as `job_settings` in the input. Nothing here is read until a turn starts.
+
+    The entry keeps its own copies of the files and settings it is given, so a caller's list or dict that changes later
+    cannot change it.
+    """
+
+    script: str = "/opt/p05guard/guarded_turn_job.py"
+    files: tuple[tuple[Path, str], ...] = ()
+    settings: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "files", tuple((Path(source), target) for source, target in self.files))
+        try:
+            settings = json.loads(json.dumps(self.settings, allow_nan=False))
+        except (TypeError, ValueError):
+            raise ValueError("job settings must be plain JSON values") from None
+        object.__setattr__(self, "settings", settings)
+
+    def check(self) -> None:
+        """Refuse an entry that could run or mount anything outside its own read-only folder. No I/O.
+
+        The script is the accepted guarded job, or one of the entry's own files.
+        """
+        targets = [target for _source, target in self.files]
+        for target in targets:
+            path = PurePosixPath(target) if isinstance(target, str) else None
+            if path is None or "," in target or path.parent != JOB_FILES_FOLDER or path.name in {"", ".", ".."}:
+                raise ValueError("a job entry may only add files directly inside its own read-only folder")
+        if len(set(targets)) != len(targets):
+            raise ValueError("a job entry mounts each file once")
+        if any("," in str(source) for source, _target in self.files):
+            raise ValueError("a job file path may not hold a comma")  # it would split the mount option
+        if self.script != JobEntry.script and self.script not in targets:
+            raise ValueError("the job script must be the accepted guarded job or one of the entry's own files")
+        try:
+            json.dumps(self.settings, allow_nan=False)
+        except (TypeError, ValueError):
+            raise ValueError("job settings must be plain JSON values") from None
+
+    def resolved(self) -> JobEntry:
+        """The entry with each file at the real path the mount will use, refused if that path holds a comma.
+
+        `check` sees the names it was given; a link among them can lead to a path whose comma would split the mount
+        option. This reads the file system, so it runs when a turn starts, never at construction.
+        """
+        files = tuple((source.resolve(), target) for source, target in self.files)
+        if any("," in str(source) for source, _target in files):
+            raise ValueError("a job file's real path may not hold a comma")  # it would split the mount option
+        return replace(self, files=files)
+
+
 class EvidenceNotSealed(RuntimeError):
     """Saved evidence could not be proved free of the credential, or a container may still write to it."""
 
@@ -236,6 +294,7 @@ class _TurnPlan:
     timeout: float
     run_budget: int
     forbidden: tuple[str, ...]
+    job_entry: JobEntry
     job_deadline: float  # the job must be done by this time; all setup before the launch comes out of it
     deadline: float  # monotonic time by which everything the turn does must be done, cleanup included; never renewed
     stop_deadline: float  # the stop step must be done by this time; the rest is kept for sealing and removal
@@ -264,10 +323,12 @@ class _Launch:
 
 class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def __init__(self, *, policy: GuardPolicy, credential_file: Path | None = None, seal_grace_seconds: float = 5.0,
-                 recovery_budget_seconds: float = 5.0, **kwargs: Any) -> None:
+                 recovery_budget_seconds: float = 5.0, job_entry: JobEntry = JobEntry(), **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._check_deadline_settings(self.timeout_seconds, seal_grace_seconds)
         self._check_recovery_budget(recovery_budget_seconds)
+        job_entry.check()
+        self.job_entry = job_entry
         self.policy, self.credential_file, self.seal_grace_seconds = policy, credential_file, seal_grace_seconds
         self.recovery_budget_seconds = recovery_budget_seconds
         self._admission_failures: dict[str, str] = {}  # record name -> error class of its last failed admission
@@ -292,8 +353,10 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         with self._turn_lock:
             policy, source, timeout = self.policy, self.credential_file, self.timeout_seconds
             image, run_id, budget, forbidden = self.image, self.run_id, self.run_budget_seconds, tuple(self.forbidden)
-            grace = self.seal_grace_seconds
+            grace, entry = self.seal_grace_seconds, self.job_entry
             self._check_deadline_settings(timeout, grace)  # before a turn number is used or anything starts
+            entry.check()
+            entry = entry.resolved()  # before a turn number is used: a refused entry starts nothing
             self.turn_count += 1
             sequence = self.turn_count
         started = time.monotonic()  # the one deadline counts from here: everything the turn does is inside it
@@ -308,7 +371,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         seal_deadline = deadline - max(POST_JOB_RESERVE_SECONDS, min(0.25, grace / 20))
         stop_deadline = deadline - max(0.0, min(0.5, grace / 10))
         return _TurnPlan(sequence, f"p05-{run_id}-{self._token}-{sequence:02d}", run_id, image, policy, secret, timeout,
-                         budget, forbidden, job_deadline, deadline, min(stop_deadline, seal_deadline), seal_deadline)
+                         budget, forbidden, entry, job_deadline, deadline, min(stop_deadline, seal_deadline), seal_deadline)
 
     @staticmethod
     def _read_credential(source: Path) -> str:
@@ -1152,12 +1215,15 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                "model": turn.model, "route": turn.route, "max_output_tokens": turn.max_output_tokens,
                "run_budget_seconds": plan.run_budget, "provider_script": dict(self.script_for(turn)),
                "forbidden": list(plan.forbidden), "guard": {"policy": {**asdict(policy), "required_extra": dict(policy.required_extra)}}}
+        if plan.job_entry.settings:
+            job["job_settings"] = dict(plan.job_entry.settings)
         input_path = task_dir / "input.json"
         input_path.write_text(json.dumps(job, sort_keys=True), encoding="utf-8")
         input_path.chmod(0o400)
         name = plan.name
         mounts = [(input_path, "/job/input.json"), (HERE / "guarded_turn_job.py", "/opt/p05guard/guarded_turn_job.py"),
-                  (HERE / "provider_guard.py", "/opt/p05guard/provider_guard.py")]
+                  (HERE / "provider_guard.py", "/opt/p05guard/provider_guard.py"),
+                  *((Path(source), target) for source, target in plan.job_entry.files)]
         if plan.secret is not None:  # the job reads this private copy, so the host holds exactly what the job was given
             given = private / "credential"
             given.write_text(plan.secret, encoding="utf-8")
@@ -1172,7 +1238,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         argv += ["--mount", f"type=bind,src={output.resolve()},dst=/job/output",
                  "--env", f"HOME=/tmp/p05-{name}/home", "--env", f"HERMES_HOME=/tmp/p05-{name}/hermes-home",
                  "--env", f"XDG_CONFIG_HOME=/tmp/p05-{name}/config", "--env", f"XDG_CACHE_HOME=/tmp/p05-{name}/cache",
-                 "--env", "PYTHONDONTWRITEBYTECODE=1", plan.image, "-B", "/opt/p05guard/guarded_turn_job.py"]
+                 "--env", "PYTHONDONTWRITEBYTECODE=1", plan.image, "-B", plan.job_entry.script]
         # The job's own output goes to a file inside the output folder, never into host memory. After the container is
         # gone the file is cut to MAX_STDOUT_BYTES, and the lifecycle seals it with the rest of the output.
         if time.monotonic() >= plan.job_deadline:  # setup used the whole job budget: start nothing, so nothing was sent
