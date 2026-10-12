@@ -14,7 +14,7 @@ main-branch authority.
 - Preserved: the accepted adapter public semantics (`collect`, `normalize`, `project_binding`, the manifest, the
   `ResponseSource` protocol and `RecordedResponseSource`), the P07 module, the P02 contract, the fixtures and the
   closed allowances. `#58` still owns all application wiring.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (106 tests);
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (107 tests);
   `cd docs/qualification/p07 && python3 -B -m unittest -v test_p07` passes (73 tests);
   `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs are kept under the evidence folder and
   are not part of the commit.
@@ -42,7 +42,7 @@ The client returns a native Envio HyperSync `QueryResponse`. The transport maps:
 | `data.blocks[].timestamp` joined on `log.block_number` | `event.block_timestamp` (raw integer text) |
 | `next_block` | `page.next_block` and `cursor.after` |
 | request `cursor_after` (else `from_block`) | `page.from_block` and `cursor.before` |
-| `rollback_guard.timestamp` (else the last block's timestamp) | `page.last_block_timestamp` |
+| the block at `next_block - 1` (required; must agree with the guard when both are present) | `page.last_block_timestamp` |
 | the block at `from_block` (required for the page start) | `page.first_block_timestamp` |
 | `rollback_guard.first_parent_hash` | `page.first_parent_hash` (when present) |
 | `rollback_guard.hash` | `page.last_block_hash` (when present) |
@@ -57,7 +57,8 @@ requested range: `from_block < next_block <= to_block_exclusive`; a present `rol
 must equal the page start and `rollback_guard.block_number` must equal `next_block - 1`; a rollback guard whose
 timestamp or hash contradicts the page-end block fact (`PAGE_FACTS_CONFLICT`) is refused; a block fact outside the
 page `[from_block, next_block)` (`OUT_OF_RANGE_BLOCK_FACT`) or a duplicate block fact
-that disagrees with itself (`DUPLICATE_BLOCK_FACT`) is refused; the page-start block fact must be present;
+that disagrees with itself (`DUPLICATE_BLOCK_FACT`) is refused; the page-start and page-end block facts must be
+present;
 `data.logs` must be present (absence is not proved
 emptiness). The page content hash binds the page bounds, edge hashes and logs, so a source contradiction cannot
 become qualified coverage.

@@ -262,11 +262,15 @@ class EnvioHypersyncSource:
                                       f"guard last block {guard_last} is not the page end {next_block - 1}")
 
         end_block = blocks.get(next_block - 1)
-        end_ts = _quantity(end_block.get("timestamp")) if isinstance(end_block, Mapping) else None
-        end_hash = _hex_text(end_block.get("hash")) if isinstance(end_block, Mapping) else None
+        if not isinstance(end_block, Mapping):
+            raise SourceContractError("PAGE_FACTS_INCOMPLETE", "the page-end block fact is absent")
+        end_ts = _quantity(end_block.get("timestamp"))
+        if end_ts is None:
+            raise SourceContractError("PAGE_FACTS_INCOMPLETE", "the page-end block timestamp is absent")
+        end_hash = _hex_text(end_block.get("hash"))
         guard_ts = _quantity(guard.get("timestamp"))
         guard_hash = _hex_text(guard.get("hash"))
-        if guard_ts is not None and end_ts is not None and guard_ts != end_ts:
+        if guard_ts is not None and guard_ts != end_ts:
             raise SourceContractError("PAGE_FACTS_CONFLICT",
                                       "the guard timestamp contradicts the page-end block fact")
         if guard_hash is not None and end_hash is not None and guard_hash != end_hash:
@@ -274,16 +278,16 @@ class EnvioHypersyncSource:
                                       "the guard hash contradicts the page-end block fact")
 
         first_ts = self._first_timestamp(from_block, blocks)
-        last_ts = guard_ts if guard_ts is not None else end_ts
-        if first_ts is None or last_ts is None:
+        last_ts = end_ts
+        if first_ts is None:
             raise SourceContractError("PAGE_FACTS_INCOMPLETE",
-                                      "the response does not prove the page edge timestamps")
+                                      "the response does not prove the page start timestamp")
         if last_ts < first_ts:
             raise SourceContractError("PAGE_FACTS_INCOMPLETE", "page edge timestamps fall")
 
         events = self._frame_logs(logs, blocks)
         first_parent_hash = _hex_text(guard.get("first_parent_hash"))
-        last_block_hash = guard_hash if guard_hash is not None else end_hash
+        last_block_hash = end_hash if end_hash is not None else guard_hash
         content_sha256 = self._content_sha256(from_block, next_block, first_ts, last_ts,
                                               first_parent_hash, last_block_hash, events)
         self._content_hashes.append(content_sha256)

@@ -329,6 +329,15 @@ def test_absent_boundary_block_fact_is_refused() -> None:
     assert raised.value.code == "PAGE_FACTS_INCOMPLETE"
 
 
+def test_absent_page_end_fact_is_refused() -> None:
+    blocks = [{"number": 100, "timestamp": support.P1_FIRST_TS},
+              {"number": support.EVENT_QUOTE_IN["block_number"], "timestamp": support.E1_TS}]
+    source = EnvioHypersyncSource(FakeClient([_page1(blocks=blocks)]))
+    with pytest.raises(SourceContractError) as raised:
+        source.next_response(_request())
+    assert raised.value.code == "PAGE_FACTS_INCOMPLETE"
+
+
 def test_page_past_the_requested_end_is_refused() -> None:
     page = _page1()
     page["next_block"] = 112
