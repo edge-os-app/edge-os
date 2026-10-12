@@ -100,7 +100,7 @@ Sources of the criterion IDs:
 | IC03 | Current holdings distinct from deposits; reconciled attribution/reservations | L2 | IC03; `accounts/service_projection.py` | Service projection LOCAL | Real holdings/marks/effects after swaps | Real provider | Holdings vs deposits after swap/external movement | Provider packet |
 | IC04 | Owner-linked browser wallet completion + durable server recovery; exact tuple | L2 | IC04; `wallet_setup/service.py` | Local browser completion, LOCAL | Actual creation/lookup; late results; two owners | Real provider | Late-result/two-owner binding tests | Provider packet |
 | IC05 | Server-owned activation; fixture activation isolated | L2 | IC05; `execution/worker.py` | Fixture qualification LOCAL | Real activation from P20/P21 qualification | P20/P21 | Activation drift/unsupported-terms denial | Live packet |
-| IC06 | Persist original signing/nonce/bytes/hash/reference before/after effect | L2 | IC06; `execution/service.py`; `execution/transport.py` | Fixture records references only when named, LOCAL | Every non-fixture transport must name them | P20/P21 | Uncertain-broadcast reconciliation; no replacement | Live packet |
+| IC06 | Persist original signing/nonce/bytes/hash/reference before/after effect | L2 | IC06; `execution/service.py`; `execution/transport.py`; ORIGINAL-LOCAL `8a1d65dd` → `795682bf` | Fixture records references only when named, LOCAL; ORIGINAL-LOCAL accepted LOCAL: journaled unsigned/signing/nonce/fee/signed-byte/hash lifecycle and no replacement/re-sign on unknown (authored LOCAL, not actual chain) | Fill the references before the effect for every non-fixture transport; real signed bytes/hash, broadcast and chain evidence | P20/P21 | Uncertain-broadcast reconciliation; no replacement | Live packet |
 | IC07 | Independently observed receipts/effects; missing actuals stay unknown | L2 | IC07; `recovery/` | Fixture receipts LOCAL | Real receipt/effect observation; wrong-tuple/revert/unknown | Real chain | Missing actuals/gas; wrong tuple; restart convergence | Live packet |
 | IC08 | Independent opaque-program limits; acquired/residual exposure; MON treatment | L3 | IC08; route-restrictions; `docs/qualification/independent-enforcement/` | NOT IMPLEMENTED; independent-enforcement prep accepted LOCAL and integrated `f84ef415` (boundary-only feasibility; actual enforcement NOT_RUN) | Full independent enforcement + exposure; MON trading/gas profile | P21 design decision | Control-to-enforcer evidence; exposure proof | Design decision + live packet |
 
@@ -136,8 +136,9 @@ Sources of the criterion IDs:
 | Envio, Best Use of Envio | L2 | `METROPOLIS_BOUNTY_REQUIREMENTS_RECHECK_2026-10-07.md` | Recorded-native P07 transport LOCAL | Deployed/working Envio pipeline with real Monad data; consuming product; public code; end-to-end demo | Deploy/access + data packet | Working Envio pipeline in the consuming product | Deploy/access + data packet |
 | Kuru consumer trading | L2/L3 | `METROPOLIS_BOUNTY_REQUIREMENTS_RECHECK_2026-10-07.md` | Adapter COMPONENT | Working spot product through Kuru; target-user/demand/retention answers | Live packet + qualified P20/P21 controls | One approved Kuru consumer-trading action | Live packet + product decision |
 | Privy | L2 | Same recheck | Login path LOCAL | Visible functionality beyond login | Real-auth + feature packet | Visible beyond-login functionality | Real-auth + feature packet |
+| Monad, Best Community Team Project | BUILDER/L2 | `NANSEN_BOUNTY_PICKUP_RECHECK_2026-10-12.md`; `METROPOLIS_BOUNTY_REQUIREMENTS_RECHECK_2026-10-07.md` | SELECTED (confirmed); no separate product evidence yet | An onboarded community supporter represented; that group selected in the profile; standard submission | A recorded onboarded community-supporter identity | Represent the supporter and select the group in the profile | Builder product decision + submission authority |
 
-Sponsor selection was confirmed by the builder (five selected bounties). This map does not change selection or claim qualification. A dated public-rule recheck is required before submission.
+Sponsor selection was confirmed by the builder (five selected bounties: Best Community Team Project, Best Use of Envio, Kuru consumer trading, Privy, Nansen). This map does not change selection or claim qualification. A dated public-rule recheck is required before submission.
 
 ## 8. Summary counts
 
@@ -149,7 +150,7 @@ Sponsor selection was confirmed by the builder (five selected bounties). This ma
 | IC01–IC08 | 8 | 7 local interfaces; IC08 not implemented | actual-provider qualification |
 | AUT01–AUT08 | 8 | 3 local decision flow | scheduler + hosted/live recurring |
 | P40/P41 | 6 | preparation accepted | runtime/host/participant/assets |
-| Sponsor | 4 | Nansen local package | mounts + actual + demo |
+| Sponsor | 5 | 1 local package (Nansen) | mounts + actual + demo; community-supporter evidence |
 
 Counts are indicative of criteria that have any accepted local/component portion at this base under the defined evidence classes; they are not a claim that any criterion passes. For example RC16 and RC18 have local portions but their final hosted/rendered checks stay unrun.
 

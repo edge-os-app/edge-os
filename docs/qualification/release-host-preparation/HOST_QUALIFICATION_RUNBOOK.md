@@ -105,7 +105,7 @@ uv run --frozen python -m edge_os_api.research.investigation_jobs
 | 3.4 | Readiness failure codes | A wrong schema gives 503 `schema_drift`; a missing key gives 503 `verification_keys_missing`; a changed GLOBAL cap gives 503 `quota_cap_mismatch`; an unreachable database gives 503 `database_unavailable`. | check |
 | 3.5 | Workers start | Both worker processes run a bounded loop; neither binds a port. | check |
 | 3.6 | Worker schema-drift stop | On a database at revision `0009`, each worker stops with **exit code 3** and writes no row. | check |
-| 3.7 | Repository on disk | The deployed tree contains `docs/contracts/p02` and `docs/contracts/p06`. The API derives its repository root from its own module file path (`Path(__file__).resolve().parents[5]`), not from the process working directory, so the files must be on disk; the working directory itself is not the constraint. | check |
+| 3.7 | Repository files on disk | The deployed tree contains the repository files the API reads. Loaded at import (a missing file raises `EngineUnavailable` and stops the API): `docs/contracts/p02/check_contract.py`, `docs/contracts/p06/contract.json`, `docs/qualification/p07/qualification.py`. Read at first use: `docs/implementation/EFFECT_COMPARISON_PROFILE.md`, `docs/implementation/SPOT_REPLAY_RUNTIME_PROFILE.md`. The root is derived from the module file path (`parents[5]`); the working directory is not the constraint. | check |
 
 Stop trigger: any 503 other than the expected test condition stops the stage. Record the exact reason code.
 
@@ -146,10 +146,10 @@ Fail closed: a missing isolation control keeps real-model/research capability un
 | 6.2 | Reopen after restart | A saved revision reopens in a new browser context with the same text, hash and IDs; no recompute and no new row. | check |
 | 6.3 | Backup | `pg_dump -Fc -f <file> <database>` produces a backup. | check |
 | 6.4 | Restore rehearsal on the host | `pg_restore` into a new database; point `EDGE_OS_DATABASE_URL` at it; `alembic check` passes; `/readyz` is ready; a known budget and job match their pre-backup values. | check |
-| 6.5 | Schema downgrade (last resort) | `alembic downgrade 0009` then `upgrade head` keeps owner totals; the runbook records the data a downgrade loses. | check |
+| 6.5 | Schema downgrade (**last resort only**) | `alembic downgrade 0009` then `upgrade head` keeps OWNER totals, but the downgrade **drops** data that `0009` cannot hold: the usage event history (`usage_local.usage_events`, including `CAP_CHANGED` events), overrun amounts, `usage_local.usage_reservations` rows, `usage_local.request_windows`, and every GLOBAL allocation. A later `upgrade head` recreates GLOBAL allocations from OWNER totals at the **default** caps, so any operator-set GLOBAL cap is lost; it does not restore the dropped event, reservation or window rows. Do not read the OWNER-total result as proof that a downgrade is safe. Prefer restore (6.4). Use a downgrade only after a recorded preservation/reconciliation decision that accepts these losses, and never as a routine rollback. | check |
 | 6.6 | Rollback build | The host rolls back to the previous deploy; the previous version answers `/readyz`. | check |
 
-Stop trigger: a failed restore or a `/readyz` mismatch stops the stage. **No automatic migration rollback, deletion or counter reset.** A restore or downgrade is an operator action with a recorded reason. A restore loses records written after the backup, including financial records that may already have reached a provider; read the provider record of every action after the backup time before allowing new work.
+Stop trigger: a failed restore or a `/readyz` mismatch stops the stage. **No automatic migration rollback, deletion or counter reset.** A restore or downgrade is an operator action with a recorded reason. A restore loses records written after the backup, including financial records that may already have reached a provider; read the provider record of every action after the backup time before allowing new work. A downgrade additionally erases the usage audit trail listed in 6.5. Use the preferred restore (6.4) instead of a downgrade whenever the backup is recent enough.
 
 ## Stage 7 — Original action, revocation and recurring checks (EXTERNAL EFFECT — needs financial/recurring packet authority)
 
