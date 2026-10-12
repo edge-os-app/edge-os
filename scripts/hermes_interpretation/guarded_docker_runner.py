@@ -324,7 +324,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
             raise EvidenceNotSealed(f"evidence that may hold the credential could not be removed or moved ({type(error).__name__})") from None
         if interrupt is not None:
             raise interrupt
-        raise EvidenceNotSealed(f"evidence that may hold the credential was not removed in time; it is in the private folder {held.name}")
+        raise EvidenceNotSealed(f"evidence that may hold the credential was not removed in time; it is in the private folder {held.name}") from None
 
     def purge_quarantine(self) -> None:
         """Remove every quarantine folder. This has no clock: run it between turns. Raises if any folder is left."""
@@ -524,6 +524,9 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         if raw is None:
             return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
                                     error_class="ContainerResultUnreadable")
+        if plan.secret and self._holds_secret(raw, plan.secret):  # JSON escapes can hide it from the byte-level scan
+            return HermesTurnResult(status="UNKNOWN", text=None, usage=Usage(), request_count=None, observed={},
+                                    error_class="CredentialEchoed")
         try:
             mapped = self._map(raw)
             guard = raw["guard"]
@@ -536,6 +539,23 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         if echoed:
             return replace(mapped, status="UNKNOWN", text=None, error_class="CredentialEchoed")
         return mapped
+
+    @staticmethod
+    def _holds_secret(value: Any, secret: str) -> bool:
+        """True when the credential appears in any decoded string of the result, key or value, at any depth."""
+        lowered = secret.lower()
+        pending = [value]
+        while pending:
+            item = pending.pop()
+            if isinstance(item, str):
+                if lowered in item.lower():
+                    return True
+            elif isinstance(item, dict):
+                pending.extend(item.keys())
+                pending.extend(item.values())
+            elif isinstance(item, list):
+                pending.extend(item)
+        return False
 
     @classmethod
     def _read_result(cls, output: Path, plan: _TurnPlan) -> dict[str, Any] | None:

@@ -1686,3 +1686,27 @@ def test_an_os_error_that_names_the_credential_never_reaches_a_raised_error(tmp_
         runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
 
     assert OLD not in "".join(traceback.format_exception(failure.value)), "the credential reached a raised error"
+
+
+# --- Repair after round-15 review: the decoded result is checked, not only its raw bytes -------------------------
+
+@pytest.mark.parametrize("escape", ["one-char", "every-char"])
+def test_a_credential_hidden_by_json_escapes_in_the_result_is_caught_after_decoding(tmp_path: Path, monkeypatch, escape: str) -> None:
+    import json as json_module
+    credential = tmp_path / "credential"
+    credential.write_text(OLD)
+    if escape == "one-char":
+        hidden = OLD[:5] + "\\u%04x" % ord(OLD[5]) + OLD[6:]  # one character as a JSON escape: not in the scanned forms
+    else:
+        hidden = "".join("\\u%04x" % ord(c) for c in OLD[:-1]) + OLD[-1]
+
+    def behaviour(output: Path) -> None:
+        (output / "container-result.json").write_text('{"hermes": {"text": "' + hidden + '"}, "guard": {}}')
+
+    install_process(monkeypatch, behaviour, returncode=0)
+    runner, _, _ = build(tmp_path, credential)
+
+    result = runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    assert (result.status, result.error_class, result.text) == ("UNKNOWN", "CredentialEchoed", None)
+    assert OLD not in json_module.dumps(dict(result.observed))
