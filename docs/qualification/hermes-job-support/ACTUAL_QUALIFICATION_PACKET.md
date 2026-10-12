@@ -1,0 +1,117 @@
+# Actual-provider qualification packet for the Hermes transport job
+
+Status: PROPOSED. Label: NOT_RUN. This packet is not authority, not a budget and not a model choice. It makes no live request, reads no credential and spends nothing. It describes what a later, separately approved run must do. Every value marked PENDING is the builder's or controller's decision. Every value marked STALE must be read again on the day of the run.
+
+It extends `docs/qualification/hermes-provider/QUALIFICATION_PROPOSAL.md` and `LIVE_RELEASE_CHECKLIST.md`. Those stay in force; this packet adds what the transport seam changes. Where they disagree, the older accepted file wins until a recorded decision changes it.
+
+## 1. What a run would qualify, and what it would not
+
+| Claim | Would this run show it? |
+|---|---|
+| An actual provider accepts the exact admitted request and returns a reply the bounds allow | Yes, for the cases run |
+| Reported usage and the provider's own cost match the local settlement | Yes, for the cases run, if the provider reports them |
+| The transport sends one request per attempt, no retry, no redirect, no stream | Yes, with an egress-level count (section 6) |
+| A real model keeps the user's meaning | Only through the accepted proposal's manifest and meaning check, as a separate result |
+| Production hosting, supervision, storage and egress | No. Separate production qualification |
+| Provider billing stops at a local cap | No. Only a provider-side limit can do that (section 5) |
+
+## 2. Proposed identities (all PENDING)
+
+| Item | Proposal | Source and status |
+|---|---|---|
+| Candidate | The commit that holds the reviewed ACTUAL transport (section 3). Not this commit | Not written |
+| Base for this packet | `c9a6ac83dbb686dd744ca093c05f6932639df54c`; job files in `JOB_IDENTITIES.json` | This task |
+| Hermes | commit `54bc5e509c985f37265c3d416bd2c64b10fc77ba`, `uv.lock` SHA-256 `de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01` | Fixed |
+| Provider and endpoint | OpenRouter, `https://openrouter.ai/api/v1/chat/completions` as `TransportRoute(kind="ACTUAL")` | Accepted proposal section 3: PENDING |
+| Model | `openai/gpt-6.1-sol` | Accepted proposal: PENDING. No model is selected here |
+| Routing fields | `provider.allow_fallbacks=false`, `require_parameters=true`, `data_collection="deny"`, `max_price` | Accepted proposal: PENDING. They need `GuardPolicy.required_extra` values and a guard check |
+| Output limit | `max_tokens` 4,096 including reasoning | Accepted proposal: PENDING |
+| Request bytes | first 8,448, follow-up 10,240 | Accepted proposal |
+| Reply bound | `max_reply_bytes` PENDING; must be measured on authored replies of the chosen shape first. 65,536 is the local test value only | Not decided |
+| Job timeout and grace | proposal asks 60 s job, 5 s grace; recovery budget C 5 s | Accepted proposal: PENDING |
+
+## 3. Code that must exist before any request
+
+None of this exists. Each item is a separate reviewed change.
+
+1. An ACTUAL `ProviderTransport`: one HTTPS POST to the route endpoint, TLS verified, no redirect, no retry, no streaming, no connection reuse across attempts; a total timeout no larger than the turn's remaining job time; reads at most `max_reply_bytes + 1` bytes; raises `TransportLost` on any error after the request may have left. It must live where the network is, not in a no-network container. Where the transport runs (in the job with provider-only egress, or in a host-side relay that the job reaches without a socket to the host) is an open design decision.
+2. `build_transport_job` accepting an ACTUAL route only together with a recorded release identity, still refused by default. No fixture flag.
+3. The guard policy carrying the routing fields above as `required_extra`, with tests.
+4. The spend ledger on durable shared storage with the same reserve, settle, release and reconcile rules (accepted hosting assessment).
+5. A recorded decision path that resolves an UNKNOWN reservation without late evidence (accepted proposal 9a).
+
+## 4. Secure credential handoff (PENDING)
+
+- A dedicated provider key for this run only, with a provider-side credit limit set by a person (section 5). No shared or personal key.
+- The key reaches the host as a file only (never an argument, environment variable of the API process, log line or prompt). The accepted runner reads it once per turn and mounts a private read-only copy for the transport only. Hermes' client keeps the placeholder key.
+- The key value never enters a task packet, review, evidence file, saved attempt or ledger. Sealing and the leak scan check evidence after every attempt.
+- Rollback: revoke or zero the key, turn the live setting off, keep the ledger.
+- Who creates, stores, injects and revokes the key: PENDING (accepted checklist line 6).
+
+## 5. Money: units, ceilings, reservations, unknown liability
+
+- Units: the ledger stores integer nano-USD (10^-9 USD) and exact decimal token prices. No float.
+- Prices: STALE. The accepted proposal's prompt USD 2.00 and completion USD 7.50 per million tokens are Probe A's old ceilings. Read the provider's public price list on the run day, record URL and date, and recompute.
+- Reservation per attempt: `(max_request_bytes + 64) x prompt price + max_tokens x completion price`, held before the request. With stale prices: USD 0.047744 (first reading), USD 0.051328 (follow-up). Reasoning tokens count as completion tokens.
+- Cumulative cap, retry slots, per-run allowance: PENDING (accepted proposal proposes USD 0.75, not decided).
+- Provider-side ceiling: OpenRouter documents a per-key credit limit; a key at its limit fails with 403 before reaching a provider (Context7 `/openrouterteam/docs`, checked 2026-10-12). Without such a limit, close the run as UNRESOLVED or record an explicit acceptance of local accounting only.
+- Unknown liability: a lost reply, an oversized reply, a crash, missing usage, a timeout or an identity mismatch keeps the full reservation as UNKNOWN and blocks the scope. OpenRouter documents that a non-streaming request is not cancelled by a client disconnect and is billed for the complete response (Context7, checked 2026-10-12). So a kill must never release a reservation.
+- Reconciliation: after the run, compare each attempt with the provider's own record (usage `cost`, generation record) through a read-only account view that a person opens. Record it with `SpendLedger.reconcile`, never by editing rows. A disagreement keeps the higher charge until a person decides.
+
+## 6. Request, response and control cases
+
+Run in this order. Cases L1-L4 need no network and must pass on the release candidate first. N1-N3 are the only network cases.
+
+| Case | What | Expected |
+|---|---|---|
+| L1 | Physical refusal (wrong client URL in the job settings), authored transport | Nothing sent; reservation released |
+| L2 | Guard refusal (policy output limit 2,048), authored transport | Nothing sent; released |
+| L3 | ACTUAL route with no release identity | `ActualProviderUnavailable` before anything is built |
+| L4 | Authored lost reply, oversized reply, crash and hang | UNKNOWN, full reservation, nothing published |
+| N1 | One manifest case (`g1-concrete`) | One request at the egress count; exact settle from reported usage; reply within bound; identities equal the attempt |
+| N2 | The remaining manifest cases, one request each, only after N1 passes and a person reviews it | As N1, plus the accepted meaning check reported separately |
+| N3 | A provider error case, only if the provider offers a safe way to cause one | No retry; UNKNOWN, full reservation |
+
+Control: an egress proxy or packet count independent of the job (accepted hosting assessment section 4) must show exactly one connection per attempt to the provider host and none elsewhere. Without it, the "one request" claim rests on the guard only and the run reports that limit.
+
+## 7. Deadlines, egress, storage, supervision, recovery
+
+- D: one per turn, from the admitted settings, never renewed. The transport timeout comes out of the remaining job time.
+- C: one budget per recovery pass. Recovery never changes the ledger.
+- Egress: provider host only, TCP 443. The accepted hosting assessment found no documented host-name filter on the checked platform; this is UNRESOLVED and blocks N1.
+- Storage: evidence folder private, per run; quarantine purged between turns; retention bound PENDING.
+- Supervisor: who calls `recover_pending` on the host, how often, and who handles exhausted records: PENDING.
+- Restart: a crashed host's pending record must be recovered before new work, and its reservation reconciled by a person.
+
+## 8. Stop conditions
+
+The accepted proposal's frozen stop rules apply (section 8 there). Add:
+
+1. any transport refusal of a reply (`reply_too_large`, `reply_not_a_json_object`, `reply_status_invalid`);
+2. any `TransportLost` or `TransportIdentityMismatch`;
+3. an egress count other than one for an attempt;
+4. any credential form found in evidence by sealing or the leak scan;
+5. a provider 403 for a key limit (the ceiling worked: stop and report).
+
+Stop the whole batch, send nothing more, report to the controller.
+
+## 9. Evidence to keep
+
+Per attempt: the attempt rows, the ledger events, the guard and transport evidence (hashes, sizes, header names only), the wire body hash and size, the reply status and size, reported usage and the provider's cost field, the egress count, the container lifecycle, D and C timings, and any overrun with its measured value. Keep real-provider evidence in its own private folder and label, separate from authored runs.
+
+## 10. Decisions required from the builder
+
+1. Provider, endpoint, model, routing fields, reasoning level.
+2. Where the ACTUAL transport runs and how it gets provider-only egress.
+3. The key, its provider-side limit, and who handles it.
+4. Prices read on the run day; cumulative cap; retry slots; per-run allowance.
+5. Reply bound, timeouts, recovery budget and supervisor.
+6. Whether the run is a separate ticket with its own reviews (recommended by the accepted proposal).
+
+## 11. Missing or unknown
+
+- Current prices and model availability: not read.
+- Whether `max_price` rejects or reroutes in every case: not established.
+- Provider behavior on a lost connection beyond the documented non-streaming billing: not tested.
+- Exact reply sizes of the chosen model: not measured.
+- Provider-only egress on any host: not established.

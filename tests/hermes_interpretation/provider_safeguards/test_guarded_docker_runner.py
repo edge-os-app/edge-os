@@ -3583,3 +3583,74 @@ def test_recovery_ignores_held_names_an_earlier_version_recorded_that_belong_to_
     runner.recover_pending(5.0)
 
     assert (foreign / "evidence.log").read_text() == "another turn's evidence"
+
+
+# --- A different job entry for the same container (Hermes job support seam) -------------------------------------------
+
+from guarded_docker_runner import JobEntry  # noqa: E402
+
+
+def test_by_default_the_accepted_guarded_job_runs_with_its_two_files_and_no_job_settings(tmp_path: Path, monkeypatch) -> None:
+    launched = install_process(monkeypatch, lambda output: None)
+    runner, _, _ = build(tmp_path, None)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    [argv] = launched
+    assert argv[-2:] == ["-B", "/opt/p05guard/guarded_turn_job.py"]
+    assert [part.split("dst=")[1].split(",")[0] for part in argv if part.startswith("type=bind")] == [
+        "/job/input.json", "/opt/p05guard/guarded_turn_job.py", "/opt/p05guard/provider_guard.py", "/job/output"]
+    [job_input] = (tmp_path / "evidence").glob("turn-01-*/input.json")
+    assert "job_settings" not in _json.loads(job_input.read_text())
+
+
+def test_a_job_entry_runs_its_script_with_its_files_read_only_and_its_settings_in_the_job_input(tmp_path: Path, monkeypatch) -> None:
+    extra = tmp_path / "transport_turn_job.py"
+    extra.write_text("# job")
+    launched = install_process(monkeypatch, lambda output: None)
+    entry = JobEntry("/opt/p05job/transport_turn_job.py", ((extra, "/opt/p05job/transport_turn_job.py"),), {"route": "r1"})
+    runner, _, _ = build(tmp_path, None, job_entry=entry)
+
+    runner.run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+
+    [argv] = launched
+    assert argv[-2:] == ["-B", "/opt/p05job/transport_turn_job.py"]
+    assert f"type=bind,src={extra.resolve()},dst=/opt/p05job/transport_turn_job.py,readonly" in argv
+    assert "type=bind,src=" + str((HERE_OF_RUNNER / "provider_guard.py").resolve()) + ",dst=/opt/p05guard/provider_guard.py,readonly" in argv
+    [job_input] = (tmp_path / "evidence").glob("turn-01-*/input.json")
+    assert _json.loads(job_input.read_text())["job_settings"] == {"route": "r1"}
+
+
+def test_a_job_entry_set_during_a_turn_does_not_change_that_turn(tmp_path: Path, monkeypatch) -> None:
+    entry = JobEntry("/opt/p05job/a.py", ((tmp_path / "a.py", "/opt/p05job/a.py"),), {"route": "a"})
+    later = JobEntry("/opt/p05job/b.py", ((tmp_path / "b.py", "/opt/p05job/b.py"),), {"route": "b"})
+    holder: dict = {}
+    launched = install_process(monkeypatch, lambda output: setattr(holder["runner"], "job_entry", later))
+    holder["runner"], _, _ = build(tmp_path, None, job_entry=entry)
+
+    holder["runner"].run_turn(Turn("attempt-1", "prompt", "task", "m", "route", 4096))
+    holder["runner"].run_turn(Turn("attempt-2", "prompt", "task", "m", "route", 4096))
+
+    assert [argv[-1] for argv in launched] == ["/opt/p05job/a.py", "/opt/p05job/b.py"]
+
+
+@pytest.mark.parametrize("script, files, settings", [
+    ("/job/output/run.py", (), {}),  # a script the job itself could write
+    ("/opt/p05job/../p05guard/x.py", (), {}),
+    ("/opt/p05job/a.py", (("a.py", "/job/input.json"),), {}),  # a file over the job's own input
+    ("/opt/p05job/a.py", (("a.py", "/opt/p05guard/provider_guard.py"),), {}),  # over the accepted guard
+    ("/opt/p05job/a.py", (("a.py", "/opt/p05job/a.py"), ("b.py", "/opt/p05job/a.py")), {}),
+    ("/opt/p05job/a.py", (("a.py", "/opt/p05job/a,b.py"),), {}),  # a comma would split the mount option
+    ("/opt/p05job/a.py", (), {"x": float("nan")}),
+    ("/opt/p05job/a.py", (), {"x": object()}),
+])
+def test_a_job_entry_that_could_reach_beyond_its_own_read_only_folder_is_refused_before_anything_starts(
+        tmp_path: Path, script, files, settings) -> None:
+    entry = JobEntry(script, tuple((tmp_path / source, target) for source, target in files), settings)
+
+    with pytest.raises(ValueError):
+        build(tmp_path, None, job_entry=entry)
+    assert not (tmp_path / "evidence").exists()
+
+
+HERE_OF_RUNNER = Path(guarded_docker_runner.__file__).resolve().parent
