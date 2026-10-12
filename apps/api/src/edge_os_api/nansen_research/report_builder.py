@@ -54,12 +54,30 @@ def classify_question(question: str) -> tuple[str, ...]:
     return tuple(claim for claim, words in _CLAIM_KEYWORDS if any(word in text for word in words))
 
 
+def _missing_claim_finding(code: str, noun: str, requested: bool, stop_reason: str | None,
+                           refs: tuple[str, ...]) -> Finding:
+    """An explicit finding for a named claim with no usable evidence.
+
+    It distinguishes a claim that was never requested from one whose operation was
+    requested but produced no usable evidence because the run stopped.
+    """
+    if not requested:
+        statement = f"{noun} records were not requested for this run, so the question cannot be answered."
+    elif stop_reason is not None:
+        statement = (f"{noun} records were requested, but the run stopped before usable evidence "
+                     f"({stop_reason}).")
+    else:
+        statement = f"{noun} records were requested but produced no usable evidence."
+    return Finding(code=code, verdict="UNAVAILABLE", statement=statement,
+                   source_refs=refs, limitations=())
+
+
 def _answer_state(evidence: NansenEvidence, claims: tuple[str, ...], findings: list[Finding]) -> str:
     """A truthful state for the adopted question under the returned evidence."""
     verdict_by_code = {finding.code: finding.verdict for finding in findings}
     if not claims:
         if evidence.holder is None and evidence.flows is None:
-            return "UNAVAILABLE"
+            return "PARTIAL" if evidence.attempts > 0 else "UNAVAILABLE"
         return "PARTIAL" if evidence.stop_reason is not None else "SUPPORTED_OBSERVATIONS"
     answered = False
     unresolved = False
@@ -70,7 +88,7 @@ def _answer_state(evidence: NansenEvidence, claims: tuple[str, ...], findings: l
         if set(verdicts) & {"UNRESOLVED", "UNAVAILABLE"}:
             unresolved = True
     if not answered:
-        return "UNAVAILABLE"
+        return "PARTIAL" if evidence.stop_reason is not None else "UNAVAILABLE"
     if unresolved or evidence.stop_reason is not None:
         return "PARTIAL"
     return "SUPPORTED_OBSERVATIONS"
@@ -278,16 +296,13 @@ def build_report(request: NansenRequest, evidence: NansenEvidence) -> NansenRepo
             statement=("the returned holder and flow observations do not evidence buying; a purchase or "
                        "accumulation claim needs trade or transfer records."),
             source_refs=all_refs, limitations=()))
+    requested = set(request.operations)
     if "flows" in claims and evidence.flows is None:
-        findings.append(Finding(
-            code="FLOW_RECORDS", verdict="UNAVAILABLE",
-            statement="flow records were not requested for this run, so the flow question cannot be answered.",
-            source_refs=all_refs, limitations=()))
+        findings.append(_missing_claim_finding("FLOW_RECORDS", "flow", "flows" in requested,
+                                               evidence.stop_reason, all_refs))
     if "inventory" in claims and evidence.holder is None:
-        findings.append(Finding(
-            code="HOLDER_INVENTORY", verdict="UNAVAILABLE",
-            statement="holder records were not requested for this run, so the holder question cannot be answered.",
-            source_refs=all_refs, limitations=()))
+        findings.append(_missing_claim_finding("HOLDER_INVENTORY", "holder", "holders" in requested,
+                                               evidence.stop_reason, all_refs))
 
     limitations: tuple[Limitation, ...] = tuple(
         Limitation(claim=name, missing_dependency=dependency)

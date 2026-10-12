@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import nansen_fixtures as support
-from edge_os_api.nansen_research import NansenReport
+from edge_os_api.nansen_research import NansenReport, NansenTimeout
 
 
 def _buckets() -> list[dict]:
@@ -130,3 +130,40 @@ def test_a_null_value_usd_stays_unavailable_not_zero() -> None:
     value = next(finding for finding in run.report.findings if finding.code == "HOLDER_VALUE_USD")
     assert value.verdict == "UNAVAILABLE"
     assert "not zero" in value.statement
+
+
+def test_a_stopped_holder_run_reports_the_stop_not_a_missing_request() -> None:
+    question = "How many holder addresses did the provider return?"
+    page1 = support.holder_payload([support.holder_row("0xaaa")], is_last_page=False)
+    run = support.run(support.request(question=question, operations=("holders",)),
+                      [support.response(200, page1), NansenTimeout("TIMEOUT", "boom")])
+    finding = next(item for item in run.report.findings if item.code == "HOLDER_INVENTORY")
+    assert finding.verdict == "UNAVAILABLE"
+    assert "not requested" not in finding.statement
+    assert "TIMEOUT" in finding.statement
+    assert run.report.answer_state == "PARTIAL"
+
+
+def test_a_stopped_flow_run_reports_the_stop_not_a_missing_request() -> None:
+    question = "What do qualified basic flow records show?"
+    holders = support.holder_payload([support.holder_row("0xaaa")], is_last_page=True)
+    run = support.run(support.request(question=question, operations=("holders", "flows")),
+                      [support.response(200, holders), support.raw_response(500, b'{"code": "internal_error"}')])
+    finding = next(item for item in run.report.findings if item.code == "FLOW_RECORDS")
+    assert finding.verdict == "UNAVAILABLE"
+    assert "not requested" not in finding.statement
+    assert "internal_error" in finding.statement
+    assert run.report.answer_state == "PARTIAL"
+
+
+def test_a_budget_stop_reports_the_stop_not_a_missing_request() -> None:
+    question = "How many holder addresses did the provider return?"
+    page1 = support.holder_payload([support.holder_row("0xaaa")], is_last_page=False)
+    run = support.run(support.request(question=question, operations=("holders",),
+                                      limits=support.limits(max_requests=1)),
+                      [support.response(200, page1)])
+    finding = next(item for item in run.report.findings if item.code == "HOLDER_INVENTORY")
+    assert finding.verdict == "UNAVAILABLE"
+    assert "not requested" not in finding.statement
+    assert "REQUEST_LIMIT" in finding.statement
+    assert run.report.answer_state == "PARTIAL"
