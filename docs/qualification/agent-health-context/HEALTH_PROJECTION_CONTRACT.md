@@ -59,17 +59,37 @@ scope to a sibling record or another owner.
 Worker health answers: what did the worker try, what did it finish, with which inputs, what is
 next, why did it wait or fault, what needs reconciliation, and what stops or removals apply.
 
+Worker health mixes two different clocks. Evaluation health is the bounded decision pipeline; it is
+not submission health. The projection keeps them as separate fields with separate producers, so a
+no-signal evaluation is never reported as a completed trade attempt.
+
+**Evaluation-level fields** (producer `execution_local.execution_evaluation_jobs`):
+
 | Field | Source | Status |
 |---|---|---|
-| `last_attempt_at` | newest `execution_local.execution_evaluation_jobs.updated_at` for the scope | PRESENT (f84) |
-| `last_completion_at` | newest `updated_at` where `state = 'COMPLETED'`; `HealthView.last_completion_at` computes it from submission attempts | PRESENT (f84) / projection PROPOSED |
-| `last_outcome` | the newest job `outcome` and `reason` | PRESENT (f84) |
-| `evaluation_attempts` | count of jobs for the scope (projected today as `evaluation_attempts`) | PRESENT (f84) |
+| `last_evaluation_activity_at` | newest `execution_evaluation_jobs.updated_at` for the scope (the last saved job transition) | PRESENT (f84) |
+| `last_evaluation_completion_at` | newest `updated_at` where `state = 'COMPLETED'` | PRESENT (f84) |
+| `evaluation_attempts` | count of evaluation-job rows for the scope (projected today as `evaluation_attempts`) | PRESENT (f84) |
 | `evaluation_completions` | count where `state = 'COMPLETED'` | PRESENT (f84) |
-| `latest_input_updated_at` | `HealthView.last_input_at` (the last decision time) via `ExecutionService.status` (`execution/types.py:321-332`, `execution/service.py:828-870`); per-observation collection time is not normalised | PRESENT (f84, bounded pipeline) / collection time MISSING |
-| `input_event_time`, `collection_time` | `HealthView.last_input_at` gives the decision time; IC02 observation provenance holds raw times | PRESENT (f84, decision time) / collection time MISSING (P27 producer obligation) |
-| `next_scheduled_work` | `HealthView.next_scheduled_at` derives the next five-minute slot from the last decision (`execution/service.py:855-857`) and is exposed at `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:106`); this is a bounded-pipeline estimate, and no recurring scheduler table exists | PRESENT (f84, derived estimate) / recurring schedule MISSING (P27 producer obligation) |
-| `wait_or_fault_reason` | job `reason`, including `WAITING:<PORT>_UNAVAILABLE`, `WORKER_ERROR:<class>`, `OBSERVATIONS_WRONG_MARKET`, `OBSERVATIONS_WRONG_TIME`, `IDENTITY_CHANGED`, `IDENTITY_UNAVAILABLE`, `CONSENT_CHANGED` | PRESENT (f84) |
+| `last_evaluation_outcome`, `wait_or_fault_reason` | the newest job `outcome` and `reason`, including `WAITING:<PORT>_UNAVAILABLE`, `WORKER_ERROR:<class>`, `OBSERVATIONS_WRONG_MARKET`, `OBSERVATIONS_WRONG_TIME`, `IDENTITY_CHANGED`, `IDENTITY_UNAVAILABLE`, `CONSENT_CHANGED` | PRESENT (f84) |
+
+**Submission-level fields** (producer `SubmissionAttemptRow` via `ExecutionService.status`,
+`execution/types.py:321-332`, `execution/service.py:828-870`):
+
+| Field | Source | Status |
+|---|---|---|
+| `last_submission_attempt_at` | `HealthView.last_attempt_at` = the last `SubmissionAttemptRow.started_at` | PRESENT in the service / projection PROPOSED (route does not expose it) |
+| `last_submission_completion_at` | `HealthView.last_completion_at` = `max(attempt.completed_at)` | PRESENT in the service / projection PROPOSED |
+| `last_decision_input_at` | `HealthView.last_input_at` = the last decision time; the one normalised input time | PRESENT in the service / projection PROPOSED |
+| `last_decision_id` | `HealthView.last_decision_id` | PRESENT in the service / projection PROPOSED |
+| `next_scheduled_at` | `HealthView.next_scheduled_at` = last decision + 5 minutes, a bounded-pipeline estimate; no recurring scheduler exists | PRESENT at `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:106`) / recurring schedule MISSING (P27) |
+| `submission_blocking_reason` | `HealthView.blocking_reason` | PRESENT at the same route (`execution/routes.py:106`) |
+
+**Other fields:**
+
+| Field | Source | Status |
+|---|---|---|
+| `input_event_time`, `collection_time` | `last_decision_input_at` gives the decision time; IC02 observation provenance holds raw per-observation times; a normalised collection time does not exist | PRESENT (f84) decision time / collection time MISSING (P27) |
 | `pending_reconciliation` | `recovery_local.recovery_cases.state IN ('OPEN','UNKNOWN')` for the action, and `outcome = 'SUBMITTED_UNKNOWN'` | PRESENT (f84) |
 | `stop_state` | `stops_local.scoped_stops` (P25); read today by admission, not yet projected | PRESENT (f84) / projection PROPOSED |
 | `removal_state` | `revocation_local.removal_states.state` (P30) | PRESENT (f84) |
@@ -81,14 +101,16 @@ requires the saved evaluation attempt, completion, next-work or wait reason and 
 reconciliation. A settled agent with no scheduler row is `UNKNOWN`, not `RUNNING`, exactly as
 `accounts/service_projection.py` already reports it.
 
-The accepted bounded pipeline already has a normalised, owner-scoped health view: `HealthView` in
-`execution/types.py:321-332`, produced by `ExecutionService.status` (`execution/service.py:828-870`)
-and exposed by `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:83-106`). It supplies
-`last_attempt_at`, `last_completion_at`, `last_input_at`, `last_decision_id`, `next_scheduled_at` and
-`blocking_reason` for the bounded action pipeline. The projection must reuse these values rather than
-rebuild them. The `MISSING` obligation is only the recurring scheduler, its missed-slot policy and a
-normalised per-observation collection time; a lane-2 implementer must not invent a second source for
-a value `HealthView` already computes.
+`ExecutionService.status` (`execution/service.py:828-870`) already computes `HealthView`
+(`execution/types.py:321-332`) over owner-scoped rows: the two submission timestamps from
+`SubmissionAttemptRow`, the decision input time and id from `DecisionRow`, and the blocking reason.
+The route `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:83-106`) exposes only
+`blocking_reason` and `next_scheduled_at` from `HealthView`; its other fields need a read surface
+before a consumer can use them (projection PROPOSED). The projection must reuse the evaluation-job
+values for evaluation health and the `HealthView` values for submission health; it must not relabel
+one clock as the other. The `MISSING` obligation is the recurring scheduler, its missed-slot policy
+and a normalised per-observation collection time; a lane-2 implementer must not invent a second
+source for a value an accepted caller already computes.
 
 ## 4. Trading results: `trading_results`
 
@@ -137,16 +159,21 @@ Invariants:
 Each projected value carries a canonical reference rather than duplicated data:
 
 ```text
-record_refs[] = { kind, table, id, updated_at }
+record_refs[] = { kind, table, id, time_field, time }
 ```
+
+`time_field` names the row's real timestamp column. A position has no timestamp column, so its
+`time_field` is `derived` and its time is the latest intent or receipt of the position.
 
 The conversation and direct view quote the same `record_refs` identity. One canonical projection
 reference is enough; the agreement must not repeat the same saved value in several places.
 
 ## 7. Unknown, stale and unavailable rules
 
-- `as_of` is the newest stored `updated_at` among the referenced rows. The read clock never becomes
-  an `as_of` value. `accounts/service_projection.py` already follows this rule.
+- `as_of` is the newest stored row time among the referenced rows. A row that has no timestamp
+  column (a position) contributes only a derived time. The read clock never becomes an `as_of` value.
+  When no row exists, `as_of` is `null`, never a read time. `accounts/service_projection.py` already
+  follows this rule.
 - A missing row is `UNKNOWN` with a reason, never a fabricated value and never zero.
 - A stale input or a fresh-record override is explicit: current financial records override a stale
   conversation context (`docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md`, "Account
@@ -175,6 +202,6 @@ A frozen P31 health consumer reads the producer snapshot. It:
 ## 10. Out of scope for this agreement
 
 No producer is implemented here. The bounded-pipeline `HealthView` already exists and must be
-reused; the recurring scheduler (`next_scheduled_work` for repeated operation), `deployment_id`, a
+reused; the recurring scheduler (`next_scheduled_at` for repeated operation), `deployment_id`, a
 normalised per-observation collection time and revision-linked real edge evidence remain `MISSING`.
 Full P27 recurring operation, manual sale P32 and every unqualified operation stay separate and OPEN.

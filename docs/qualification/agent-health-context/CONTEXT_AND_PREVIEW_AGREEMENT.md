@@ -58,11 +58,16 @@ caller at the base commit.
 | Control | Accepted route / caller | State |
 |---|---|---|
 | Review + adopt consent (stays INACTIVE) | `POST …/consent/review`, `POST …/consent/adopt` (`consent/service.py`; IC05) | PRESENT (f84) |
-| Save a bounded action (no evaluation, no submission) | `POST …/actions` `{request_key}` (`execution/worker.py`; `execution/routes.py`) | PRESENT (f84) |
-| Read an action | `GET /v1/actions/{action_id}` | PRESENT (f84) |
+| Schedule one bounded evaluation job (may later evaluate, admit and submit) | `POST …/agents/{agent_id}/actions` `{request_key}` → `ConnectedExecution.schedule` (`execution/routes.py:72-81`; `execution/worker.py:119-150`) | PRESENT (f84) |
+| Read the agent's jobs, decisions, queue, positions and blocking reason | `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:83-106`) | PRESENT (f84) |
+| Read one action | `GET /v1/actions/{action_id}` | PRESENT (f84) |
 | Stop new entries / halt all swaps | `POST/GET …/stops` `{mode, scope, position_id?}` (`stops/`) | PRESENT (f84) |
 | Request removal | `POST/GET …/removal` `{request_key, reason}` (`revocation/`) | PRESENT (f84) |
 | Correct / adopt / disable / clear memory | `agent_context/controls.py` | PRESENT (f84) |
+
+The schedule call is not a harmless action save. It inserts one `EvaluationJobRow` with `state=QUEUED`,
+`decision_id=None` and `action_id=None`; a later worker pass may evaluate, admit and submit. The
+conversation must present it as a consequential control that can lead to a trade, not as a draft.
 
 Unavailable or unqualified operations, including manual sale (P32), partial exits, additions,
 liquidation and withdrawal, must be shown as unsupported. They must not appear as an actionable
@@ -81,16 +86,21 @@ For a consequential request, both channels use one preview shape (spec line 1421
 - the remaining exposure;
 - whether future entries stay active.
 
-The preview binds one `action_id` and the exact records that produced it. It is an estimate for a
-quote, not a guarantee.
+A read-only action preview is PROPOSED. It binds one `action_id` only when a saved action exists
+(`execution_local.execution_intents`, `execution_queue`). Before an action exists, the safe retained
+identity is the evaluation job, keyed by `request_key` on `(owner, agent, request_key)` and
+`(owner, agent, adopted consent, decision slot)`. A job may produce no action (no-signal) or an
+action later, so a job is not an action. The preview is an estimate for a quote, not a guarantee.
 
 ## 6. Preview identity and the action record
 
-- A preview does not create a second ledger. It reads the same action identity the direct control
-  reads (`execution_local.execution_intents`, `execution_queue`, `admission_decisions`).
-- A repeated request must find and resolve the existing action, not silently create a second
-  economic action. The accepted idempotency is per `(owner, agent, request_key)` and per
-  `(owner, agent, adopted consent, decision slot)`.
+- A preview does not create a second ledger. When an action exists, it reads the same action identity
+  the direct control reads (`execution_local.execution_intents`, `execution_queue`,
+  `admission_decisions`).
+- A repeated schedule call returns the same evaluation job. Its idempotency is per
+  `(owner, agent, request_key)` and per `(owner, agent, adopted consent, decision slot)`; that identity
+  is a job, not an action. The conversation must not claim a saved action exists when only a job
+  exists, and it must not silently create a second economic action.
 - A preview is not execution permission and is not submission support. Recheck current operational
   eligibility, authority and the target agent-wallet reservations before admission or submission.
   A stale preview cannot grant authority.
@@ -119,7 +129,10 @@ Guarantees:
 
 ## 8. Repeated preview and cross-owner behavior
 
-- A repeated request finds the same action (`Idempotent-Replay` on `POST …/actions`).
+- A repeated schedule call returns the same evaluation job (`Idempotent-Replay` on
+  `POST …/agents/{agent_id}/actions`); it does not prove an action exists.
+- An action preview binds one saved `action_id`; before an action is saved, only the job identity is
+  retained (section 6).
 - A cross-owner target is `404` and makes no provider call.
 - A stale target is refused. A's preview cannot retarget B after navigation; the owner and scope are
   read from the verified principal, not from the attached label.

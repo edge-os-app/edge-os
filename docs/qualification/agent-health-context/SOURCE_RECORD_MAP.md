@@ -39,19 +39,23 @@ marks it `MISSING`/`PROPOSED` with a producer obligation. Line numbers refer to 
 | `scope.content_hash`, `manifest_hash` | `execution_evaluation_jobs.content_hash`, `manifest_hash` | IC01 | PRESENT (f84) |
 | `scope.consent_adoption_id`, `consent_hash` | `execution_evaluation_jobs.consent_adoption_id`, `consent_hash` | IC01 | PRESENT (f84) |
 | `scope.deployment_id` | no column exists | - | MISSING (P27) |
-| `worker_health.last_attempt_at` | `max(execution_evaluation_jobs.updated_at)` | `service_projection.py:173` | PRESENT (f84) |
-| `worker_health.last_completion_at` | `max(updated_at)` where `state='COMPLETED'`; `HealthView.last_completion_at` | derivable from `service_projection.py:175`; `execution/service.py:854,865` | PRESENT (f84) / projection PROPOSED |
-| `worker_health.evaluation_attempts` | count of jobs | `service_projection.py:174` | PRESENT (f84) |
+| `worker_health.last_evaluation_activity_at` | `max(execution_evaluation_jobs.updated_at)` | `service_projection.py:173` | PRESENT (f84) |
+| `worker_health.last_evaluation_completion_at` | `max(updated_at)` where `state='COMPLETED'` | `service_projection.py:175` | PRESENT (f84) |
+| `worker_health.evaluation_attempts` | count of evaluation-job rows | `service_projection.py:174` | PRESENT (f84) |
 | `worker_health.evaluation_completions` | count where `state='COMPLETED'` | `service_projection.py:175` | PRESENT (f84) |
-| `worker_health.last_outcome` | `job.outcome` | `service_projection.py:166,177` | PRESENT (f84) |
-| `worker_health.wait_or_fault_reason` | `job.reason` (`WAITING:*`, `WORKER_ERROR:*`, `OBSERVATIONS_WRONG_*`, `IDENTITY_*`, `CONSENT_CHANGED`); `HealthView.blocking_reason` | `worker.py:282-302,446-473`; `execution/service.py:858-870` | PRESENT (f84) / projection PROPOSED |
+| `worker_health.last_evaluation_outcome` | `job.outcome` | `service_projection.py:166,177` | PRESENT (f84) |
+| `worker_health.wait_or_fault_reason` | `job.reason` (`WAITING:*`, `WORKER_ERROR:*`, `OBSERVATIONS_WRONG_*`, `IDENTITY_*`, `CONSENT_CHANGED`) | `worker.py:282-302,446-473` | PRESENT (f84) |
+| `worker_health.last_submission_attempt_at` | `HealthView.last_attempt_at` = last `SubmissionAttemptRow.started_at` | `execution/service.py:841-845,864` | PRESENT in service / projection PROPOSED |
+| `worker_health.last_submission_completion_at` | `HealthView.last_completion_at` = `max(attempt.completed_at)` | `execution/service.py:854,865` | PRESENT in service / projection PROPOSED |
+| `worker_health.last_decision_input_at` | `HealthView.last_input_at` = last decision time | `execution/service.py:853,866` | PRESENT in service / projection PROPOSED |
+| `worker_health.last_decision_id` | `HealthView.last_decision_id` | `execution/service.py:867` | PRESENT in service / projection PROPOSED |
+| `worker_health.next_scheduled_at` | `HealthView.next_scheduled_at` = last decision + 5 min | `execution/service.py:855-857`; exposed at `execution/routes.py:106` | PRESENT (f84, route) derived estimate / recurring MISSING (P27) |
+| `worker_health.submission_blocking_reason` | `HealthView.blocking_reason` | `execution/service.py:858-870`; exposed at `execution/routes.py:106` | PRESENT (f84, route) |
+| `worker_health.input_event_time`, `collection_time` | `last_decision_input_at` (decision time); IC02 observation provenance holds raw times | `execution/service.py:866`; `worker.py:285-302` | PRESENT (f84) decision time / collection time MISSING (P27) |
 | `worker_health.pending_reconciliation` | `recovery_cases.state IN ('OPEN','UNKNOWN')` (lines 144,159) and job `outcome='SUBMITTED_UNKNOWN'` via `UNSETTLED_JOB_OUTCOMES` (line 33, used at 166,176) | `service_projection.py` | PRESENT (f84) |
 | `worker_health.stop_state` | `stops_local.scoped_stops` | `stops/service.py`, `revocation/enforcement.py` | PRESENT (f84) / projection PROPOSED |
 | `worker_health.removal_state` | `revocation_local.removal_states.state` | `service_projection.py:79-91` | PRESENT (f84) |
 | `worker_health.residual_inventory` | `admission_positions.inventory` | `service_projection.py:126-141` | PRESENT (f84) |
-| `worker_health.latest_input_updated_at` | `HealthView.last_input_at` (last decision time) | `execution/types.py:321-332`, `execution/service.py:866` | PRESENT (f84) / per-observation collection time MISSING |
-| `worker_health.input_event_time`, `collection_time` | `HealthView.last_input_at` (decision time); IC02 observation provenance holds raw times | `execution/service.py:866`; `worker.py:285-302` | PRESENT (f84) decision time / collection time MISSING (P27) |
-| `worker_health.next_scheduled_work` | `HealthView.next_scheduled_at` = last decision + 5 min (bounded-pipeline estimate); no recurring scheduler table | `execution/service.py:855-857`, `execution/routes.py:106`; `service_projection.py:177` sets `next_work` only for pending reconciliation | PRESENT (f84) derived estimate / recurring schedule MISSING (P27) |
 | `worker_health.dataset_qualification` | `research_local.history_datasets` verdict | `research/history_dataset.py` | MISSING as health field |
 
 ## Trading result fields

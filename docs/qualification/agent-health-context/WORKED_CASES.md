@@ -9,12 +9,26 @@ chat proof. `NOT_RUN`: no runtime check was performed.
 
 ## Method
 
-Each case pins the exact stored rows (`table`, `id`, `updated_at`), the schema version, the evidence
-class and `as_of`. The expected **direct projection** is the canonical object. The expected
-**conversation summary** renders from that object and must agree with it on exact values, sources and
-unknowns. The summary states no value the projection does not hold.
+Each case lists every stored row in `stored_rows` with the table, id, the row's real timestamp
+column (`time_field`), that time, and a `time_basis`:
 
-The agreement is checked on three axes:
+- `DIRECT`: the row's own timestamp column. `admission_positions` has no timestamp column, so it is
+  never `DIRECT`.
+- `DERIVED`: the position time equals the latest intent or receipt of the position
+  (`accounts/service_projection.py:117-139`).
+
+`as_of` equals the newest `DIRECT` time. A case with no stored row has `as_of: null` and no
+projection.
+
+Counts come from rows, not from `runs`. `evaluation_attempts` equals the number of
+`execution_evaluation_jobs` rows listed; `evaluation_completions` counts the `COMPLETED` ones
+(`accounts/service_projection.py:162-177`). Evaluation health and submission health are separate:
+the evaluation timestamps come from job rows, the submission timestamps and the decision input time
+come from `HealthView` over `SubmissionAttemptRow` and `DecisionRow`.
+
+The expected **direct projection** is the canonical object. The expected **conversation summary**
+renders from it and must agree on exact values, sources and unknowns. The summary states no value the
+projection does not hold.
 
 | Axis | Check |
 |---|---|
@@ -22,67 +36,70 @@ The agreement is checked on three axes:
 | `sources_agree` | every statement names the same `record_refs` identity the projection names |
 | `unknowns_agree` | every `UNKNOWN` stays `UNKNOWN` in both; a summary never turns an unknown into zero |
 
-Data is not duplicated: the summary names `renders_from: expected_direct_projection`, so one
-canonical object per case is enough.
-
 ## Cases
 
 | Case | Requirement covered | Verdict on the contract |
 |---|---|---|
-| `signal_open_position` | signal, one position, known realized result | health and results stay separate; unrealized and mark unknown |
-| `no_signal` | no-signal is useful work | no action; no position row exists, so basis, realized result and residual inventory stay unknown, not zero; no loss of permission |
+| `signal_open_position` | signal, one position, known realized result | 2 job rows, 2 completions; evaluation and submission clocks separate; realized 0 for a fresh entry; deposit is a flow |
+| `no_signal` | no-signal is useful work | 1 job row and 1 decision row; no position row, so basis/realized/residual stay unknown, not zero |
 | `stale_input` | stale input | reason `OBSERVATIONS_WRONG_TIME`; unknown stays unknown |
 | `missing_input_wrong_market` | missing/wrong input | `OBSERVATIONS_WRONG_MARKET`; no decision |
-| `wait_provider_unavailable` | fault/wait | `WAITING:MARKET_UNAVAILABLE`; the saved action stays |
-| `pending_unknown_original` | pending unknown original transaction | `pending_reconciliation = true`; exact original identity kept |
-| `stop_sticky_after_restart` | stop/removal sticky after restart | `HALT_ALL_SWAPS` + `CONFIRMED` removal deny; residual inventory shown |
-| `owner_b_navigation_retarget_denied` | owner B / target navigation | `404`, no provider call, no retarget |
-| `context_corrected_disabled_cleared` | stale vs corrected/disabled/cleared context | versions 1-4; no financial record changes |
-| `repeated_preview_same_action` | repeated preview | same `action_id`; `Idempotent-Replay` |
+| `wait_provider_unavailable` | fault/wait | `WAITING:MARKET_UNAVAILABLE`; the queued action stays |
+| `pending_unknown_original` | pending unknown original transaction | `pending_reconciliation = true`; exact original action and recovery case kept |
+| `stop_sticky_after_restart` | stop/removal sticky after restart | `HALT_ALL_SWAPS` + `CONFIRMED` removal deny; residual inventory and a negative realized result shown |
+| `owner_b_navigation_retarget_denied` | owner B / target navigation | `404`, no provider call, no retarget, `as_of: null` |
+| `context_corrected_disabled_cleared` | stale vs corrected/disabled/cleared context | versions 1-4 with record ids; no financial record changes |
+| `repeated_preview_same_action` | repeated preview and job/action identity | repeated schedule returns the same job; the PROPOSED preview binds a saved action only when one exists |
 
 ## Independently calculated values
 
 The worked numbers are small and exact, so a reviewer can recompute them.
 
-- `signal_open_position`: one fresh entry spends `50000000000000000000` quote units to acquire
-  `100000000` base units (6 decimals). The entry retains the full inventory, so the realized result
-  is a stored `0` quote units and the basis is `50000000000000000000`. A later exit would be a
-  separate original transaction.
-- `no_signal`: no position row exists, so basis, realized result and residual inventory are
-  `UNKNOWN`, never `0`. This is the contract's own unknown rule.
-- `stop_sticky_after_restart`: residual inventory is `25000000` base units after a confirmed
-  partial exit. Realized result is `-500000000000000000` quote units; the negative sign is retained,
-  never shown as zero.
-- Native gas in `signal_open_position` is `300000000000000` MON (`150000 x 2000000000`), kept in a
-  separate field from the quote result.
+- `signal_open_position`: one fresh entry spends `50000000000000000000` quote units of `0x1111…1111`
+  to acquire `100000000` base units of `0x2222…2222` (6 decimals). Because the entry retains the full
+  inventory and no exit has run, `realized_result` is a stored `0` and `basis` is
+  `50000000000000000000`. The deposit `flow-0001` is a capital flow and is not a result.
+- Native gas for that entry is `150000 x 2000000000 = 300000000000000` MON (`rcpt-0001`), shown in a
+  separate field and not converted.
+- `no_signal`: no `admission_positions` row exists, so basis, realized result and residual inventory
+  are `UNKNOWN`, never `0`. The saved `dec-0002` decision is listed and summarized.
+- `stop_sticky_after_restart`: residual inventory is `25000000` base units after a confirmed partial
+  exit. `realized_result` is `-500000000000000000` quote units; the negative sign is retained, never
+  shown as zero. `scoped_stops` uses `created_at`; `admission_positions` has no time column and is
+  `DERIVED`.
 
 ## Event ordering and expired scope
 
 - Decisions are saved before an intent, and the intent before any submission (IC02). The summary
   reads states in that order: QUEUED → DECIDED → ENQUEUED → SUBMITTED/COMPLETED.
 - An expired intent or an expired mandate keeps the original refused before signing as
-  `DEFINITELY_UNSENT`; after signing it stays unknown and no broadcast runs (USER_RELEASE_INTEGRATION_PROFILE,
-  "Outcomes").
+  `DEFINITELY_UNSENT`; after signing it stays unknown and no broadcast runs
+  (USER_RELEASE_INTEGRATION_PROFILE, "Outcomes").
 - The decision slot is the latest five-minute UTC grid point at scheduling. A decision for another
-  slot is `OBSERVATIONS_WRONG_TIME`; observations for another market are
-  `OBSERVATIONS_WRONG_MARKET`.
+  slot is `OBSERVATIONS_WRONG_TIME`; observations for another market are `OBSERVATIONS_WRONG_MARKET`.
 - A control (stop or removal) that commits before the admission/submission transition denies the
   transition. A control that commits after ownership does not undo an in-flight original action; it
   stays recoverable (`revocation/enforcement.py`).
 
 ## Original pending identity
 
-`pending_unknown_original` keeps the exact `action_id` (`act-0006`) and its recovery-case identity.
-Reconciliation reads one receipt for that exact action, wallet and network. The system never
-constructs a replacement action, and a repeated request finds the same action
-(`execution/evaluation job` unique per `(owner, agent, adopted consent, decision slot)` and
-`(owner, agent, request_key)`).
+`pending_unknown_original` keeps the exact original `action_id` (`act-0006`) through its recovery case
+(`case-0006`). Reconciliation reads one receipt for that exact action, wallet and network. The system
+never constructs a replacement action.
+
+The schedule identity is separate from the action identity. A repeated schedule call returns the same
+`execution_evaluation_jobs` row, keyed per `(owner, agent, request_key)` and per
+`(owner, agent, adopted consent, decision slot)`; that identity is a job, and a job may produce no
+action (no-signal). An `action_id` exists only after evaluation admits and enqueues an action. The
+case `repeated_preview_same_action` lists both a job row and the action rows and keeps them distinct.
 
 ## Direct and conversation agreement
 
-For each case the direct projection and the conversation summary must agree exactly. `stop_sticky_after_restart`
-has `as_of` `2026-10-12T21:29:30Z`, the newest stored `updated_at`, never the read time. The
-conversation must show the same `as_of`, the same residual inventory and the same unknown states.
+For each case the direct projection and the conversation summary must agree exactly.
+`stop_sticky_after_restart` has `as_of` `2026-10-12T21:29:30Z`, the newest stored row time
+(`removal_states.updated_at`), never the read time. The conversation must show the same `as_of`, the
+same residual inventory and the same unknown states. The owner-B case has no stored row, so its
+`as_of` is `null`, not a read time.
 
 ## What these cases do not prove
 

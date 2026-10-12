@@ -39,7 +39,8 @@ request, not an adopted decision. A draft response is not automatically adopted.
   health class.
 - The exact normalised input/collection time fields (today only `provenance.observations` holds raw
   times).
-- The `next_scheduled_work` representation and the catch-up policy (AUT01).
+- The recurring-schedule representation (`next_scheduled_at` for repeated operation) and the catch-up
+  policy (AUT01).
 - The `deployment_id` identity and how it maps to `publication_revision_id` (the purpose label is not
   the trial label; a purpose change does not reset accounting).
 - Whether the health projection is one record per agent or one row per agent/wallet/network.
