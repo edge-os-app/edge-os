@@ -82,6 +82,13 @@ profit. No fresh history is qualified.
 | RH-C43 | Manifest consumer metadata | `test_evidence_manifest.py::test_manifest_includes_consumer_metadata` |
 | RH-C44 | Response without a query echo refused | `test_history_collector.py::test_response_without_a_query_echo_is_refused` |
 | RH-C45 | Malformed page identity refused as provider evidence | `test_history_collector.py::test_malformed_page_identity_is_refused_as_provider_evidence` |
+| RH-C46 | Complete flag with unproven scan stays partial | `test_history_collector.py::test_block_discontinuity_blocks_a_complete_claim` |
+| RH-C47 | Caps enforced before a complete claim | `test_history_collector.py::test_caps_are_enforced_before_a_complete_claim` |
+| RH-C48 | Invalid deadline refused before invocation | `test_history_collector.py::test_invalid_deadline_is_refused_before_any_invocation` |
+| RH-C49 | Ordinary source error becomes a partial result | `test_history_collector.py::test_ordinary_source_error_becomes_a_partial_result` |
+| RH-C50 | Malformed cursor refused | `test_history_collector.py::test_malformed_cursor_is_refused` |
+| RH-C51 | Raw evidence retained and replay | `test_evidence_manifest.py::test_manifest_retains_raw_evidence_and_replays` |
+| RH-C52 | Tampered raw records fail verification | `test_evidence_manifest.py::test_tampered_raw_records_fail_verification` |
 
 The existing P07 checks (`docs/qualification/p07`) and the P02 checker remain the controlling regression
-suite. This adapter adds cases RH-C01 to RH-C45 and changes neither.
+suite. This adapter adds cases RH-C01 to RH-C52 and changes neither.

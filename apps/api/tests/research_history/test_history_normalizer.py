@@ -266,7 +266,7 @@ def test_normalized_sha256_is_repeatable_binds_the_payload_and_changes() -> None
     first = _history()
     second = _history()
     assert first["normalized_sha256"] == second["normalized_sha256"]
-    payload = {key: value for key, value in first.items() if key != "normalized_sha256"}
+    payload = {key: value for key, value in first.items() if key not in ("normalized_sha256", "raw_records")}
     assert canonical_sha256(payload) == first["normalized_sha256"]
     tampered = copy.deepcopy(payload)
     tampered["overall"] = "QUALIFIED_CHANGED"

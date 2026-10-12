@@ -14,9 +14,11 @@ from edge_os_api.research_history import (
     build_manifest,
     collect,
     load_manifest,
+    load_raw_artifact,
     manifest_sha256,
     normalize,
     save_manifest,
+    save_raw_artifact,
     verify_manifest,
 )
 from edge_os_api.research_history.errors import ManifestTampered
@@ -76,6 +78,34 @@ def test_manifest_includes_consumer_metadata() -> None:
     assert manifest["collection"]["coverage"]["covers_requested_scan"] is True
     assert manifest["collection"]["source_invocations"] == {"measured_local_attempts": 2,
                                                              "provider_requests": None}
+    assert manifest["raw_evidence"]["record_count"] == 2
+
+
+def test_manifest_retains_raw_evidence_and_replays(tmp_path: Path) -> None:
+    profile = support.profile()
+    collection = collect(profile, RecordedResponseSource(support.standard_responses()), support.SCAN,
+                         CollectionLimits(**support.limits()), {"recorded_by": "test"})
+    history = normalize(profile, collection, support.evidence_facts())
+    manifest_path, artifact_path = tmp_path / "manifest.json", tmp_path / "raw.json"
+    digest = save_manifest(build_manifest(history), manifest_path)
+    loaded = load_manifest(manifest_path)
+    artifact_digest = save_raw_artifact(history["raw_records"], artifact_path)
+    assert artifact_digest == loaded["raw_evidence"]["sha256"]
+    assert loaded["raw_evidence"]["record_count"] == 2
+    verify_manifest(loaded, digest, raw_records=load_raw_artifact(artifact_path))
+    replayed = normalize(profile, {**collection, "records": load_raw_artifact(artifact_path)},
+                         support.evidence_facts())
+    assert replayed["normalized_sha256"] == history["normalized_sha256"]
+    assert replayed["observations"]["ingest"] == history["observations"]["ingest"]
+
+
+def test_tampered_raw_records_fail_verification() -> None:
+    manifest = build_manifest(_history())
+    records = list(_history()["raw_records"])
+    records[0] = {**records[0], "block_hash": "0x" + "00" * 32}
+    with pytest.raises(ManifestTampered) as raised:
+        verify_manifest(manifest, raw_records=records)
+    assert raised.value.code == "RAW_EVIDENCE_MISMATCH"
 
 
 def test_package_has_no_live_transport_or_environment_discovery() -> None:

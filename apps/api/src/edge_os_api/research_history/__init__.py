@@ -13,8 +13,10 @@ from edge_os_api.research_history.evidence_manifest import (
     MANIFEST_SCHEMA,
     build_manifest,
     load_manifest,
+    load_raw_artifact,
     manifest_sha256,
     save_manifest,
+    save_raw_artifact,
     verify_manifest,
 )
 from edge_os_api.research_history.history_collector import (
@@ -43,9 +45,11 @@ __all__ = [
     "build_manifest",
     "collect",
     "load_manifest",
+    "load_raw_artifact",
     "manifest_sha256",
     "normalize",
     "project_binding",
     "save_manifest",
+    "save_raw_artifact",
     "verify_manifest",
 ]

@@ -3,8 +3,11 @@
 The collector pulls pages from a caller-supplied response source until the source
 reports completion or a finite limit stops it. It records the exact page identity
 and hash, the request and cursor trace, the raw supplied events, provenance,
-collection gaps and a canonical collection hash. A partial collection is never
-reported as complete.
+collection gaps and a canonical collection hash. A partial or unproven collection
+is never reported as complete.
+
+A provider ``complete`` flag is not proof of the requested scan. A complete claim
+also needs the retained pages to tile the requested scan with no gap.
 
 No live transport exists here. The collector never reads an environment variable
 or a credential file and never opens a socket.
@@ -12,8 +15,6 @@ or a credential file and never opens a socket.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 import time
 from collections.abc import Mapping
@@ -27,7 +28,13 @@ from edge_os_api.research_history.provider_transport import (
     SourceCancelled,
     SourceTimeout,
 )
-from edge_os_api.research_history.qualification_engine import canonical_sha256, profile_problems
+from edge_os_api.research_history.qualification_engine import (
+    canonical_sha256,
+    epoch,
+    profile_problems,
+    raw_bytes,
+    raw_sha256,
+)
 
 PAGE_KEYS = (
     "page_id",
@@ -45,6 +52,8 @@ FIELD_SELECTION = {
             "log_index", "transaction_hash", "removed"],
     "block": ["number", "hash", "timestamp"],
 }
+
+_COVERAGE_BLOCKING_GAPS = ("BLOCK_DISCONTINUITY",)
 
 
 def _utc_now() -> str:
@@ -65,26 +74,17 @@ class CollectionLimits:
                             ("max_bytes", self.max_bytes)):
             if not isinstance(value, int) or isinstance(value, bool) or value < 1:
                 raise InvalidLimits(f"{name} must be a positive integer")
-        if self.deadline_utc is not None and not isinstance(self.deadline_utc, str):
-            raise InvalidLimits("deadline_utc must be an ISO-8601 UTC string or None")
+        if self.deadline_utc is not None:
+            if not isinstance(self.deadline_utc, str):
+                raise InvalidLimits("deadline_utc must be an ISO-8601 UTC string or None")
+            try:
+                epoch(self.deadline_utc)
+            except Exception as error:
+                raise InvalidLimits("deadline_utc must be a UTC instant: YYYY-MM-DDTHH:MM:SSZ") from error
 
 
 def _gap(code: str, detail: str) -> dict[str, str]:
     return {"code": code, "detail": detail}
-
-
-def _raw_bytes(value: Any) -> bytes:
-    """Deterministic size bytes for a raw response that may hold a non-canonical value.
-
-    A supplied response can carry a float or other value the P02 canonical encoder
-    refuses. Such a value must reach the decoder as a refusal, not stop collection.
-    """
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-                      default=str).encode("utf-8")
-
-
-def _raw_sha256(value: Any) -> str:
-    return hashlib.sha256(_raw_bytes(value)).hexdigest()
 
 
 def _is_nonneg_int(value: Any) -> bool:
@@ -173,6 +173,7 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
     ``clock`` returns an ISO-8601 UTC string and is injected so tests stay deterministic.
     """
     limits.validate()
+    deadline_epoch = None if limits.deadline_utc is None else epoch(limits.deadline_utc)
     problems = profile_problems(profile)
     if problems:
         raise AdapterInputError("PROFILE_INVALID",
@@ -207,7 +208,7 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
     stop_reason = "SOURCE_EXHAUSTED"
 
     while True:
-        if limits.deadline_utc is not None and clock() >= limits.deadline_utc:
+        if deadline_epoch is not None and epoch(clock()) >= deadline_epoch:
             stop_reason = "DEADLINE"
             break
         if len(pages) >= limits.max_pages:
@@ -228,6 +229,10 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
         except SourceTimeout:
             stop_reason = "TIMEOUT"
             break
+        except Exception as error:  # an ordinary source failure, never a programmer defect swallow
+            gaps.append(_gap("SOURCE_ERROR", type(error).__name__))
+            stop_reason = "PROVIDER_ERROR"
+            break
         if response is None:
             stop_reason = "SOURCE_EXHAUSTED"
             break
@@ -236,7 +241,7 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
             stop_reason = "PROVIDER_ERROR"
             break
 
-        bytes_used += len(_raw_bytes(response))
+        bytes_used += len(raw_bytes(response))
         if response.get("provider") != provider_name:
             gaps.append(_gap("PROVIDER_MISMATCH", f"expected {provider_name}"))
             stop_reason = "PROVIDER_ERROR"
@@ -274,7 +279,12 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
             break
 
         cursor = response.get("cursor")
-        after = cursor.get("after") if isinstance(cursor, Mapping) else None
+        cursor = cursor if isinstance(cursor, Mapping) else {}
+        after = cursor.get("after")
+        if not (after is None or _is_nonneg_int(after)):
+            gaps.append(_gap("PROVIDER_MALFORMED_CURSOR", "cursor.after must be a non-negative integer or null"))
+            stop_reason = "PROVIDER_ERROR"
+            break
         signature = (page.get("page_id"), page.get("from_block"), page.get("next_block"), page.get("sha256"))
         if signature in page_signatures:
             gaps.append(_gap("REPEATED_PAGE", f"page {page.get('page_id')} was already served"))
@@ -300,13 +310,23 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
         steps.append({
             "step": len(steps),
             "request": request.as_view(),
-            "cursor_before": cursor.get("before") if isinstance(cursor, Mapping) else None,
+            "cursor_before": cursor.get("before"),
             "cursor_after": after,
             "complete": response.get("complete") is True,
             "rows": len(events),
-            "bytes": len(_raw_bytes(response)),
+            "bytes": len(raw_bytes(response)),
         })
 
+        # The declared caps end the run before a completion claim, and the fetched evidence is kept.
+        if len(pages) > limits.max_pages:
+            stop_reason = "LIMIT_PAGES"
+            break
+        if len(records) > limits.max_rows:
+            stop_reason = "LIMIT_ROWS"
+            break
+        if bytes_used > limits.max_bytes:
+            stop_reason = "LIMIT_BYTES"
+            break
         if response.get("complete") is True:
             stop_reason = "COMPLETE"
             break
@@ -318,6 +338,11 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
                                  to_block_exclusive=request_scan["to_block_exclusive"],
                                  cursor_after=after, max_rows=limits.max_rows)
 
+    covered = _covers_scan(pages, request_scan) and not any(
+        gap["code"] in _COVERAGE_BLOCKING_GAPS for gap in gaps)
+    if stop_reason == "COMPLETE" and not covered:
+        gaps.append(_gap("COVERAGE_INCOMPLETE", "the provider complete flag does not prove the requested scan"))
+        stop_reason = "COVERAGE_INCOMPLETE"
     status = "COMPLETE" if stop_reason == "COMPLETE" else "PARTIAL"
     provider_requests = _provider_requests(provenance)
     provenance_block = {
@@ -353,7 +378,7 @@ def collect(profile: Mapping[str, Any], source: ResponseSource, scan: Mapping[st
                      "covers_requested_scan": _covers_scan(pages, request_scan)},
         "provenance": provenance_block,
     }
-    collection["collection_sha256"] = _raw_sha256(
+    collection["collection_sha256"] = raw_sha256(
         {"query": query, "pages": pages, "records": records})
     return collection
 

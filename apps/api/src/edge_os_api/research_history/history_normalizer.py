@@ -31,6 +31,7 @@ from edge_os_api.research_history.qualification_engine import (
     profile_problems,
     profile_sha256,
     qualify,
+    raw_sha256,
     research_binding_view,
     to_p02_binding,
     trade_identity,
@@ -240,8 +241,11 @@ def normalize(profile: Mapping[str, Any], collection: Mapping[str, Any],
         "binding_view": research_binding_view(bound),
         "overall": result["overall"],
         "gaps": _evidence_gaps(collection, assembled, observations),
+        "raw_evidence": {"sha256": raw_sha256(collection["records"]),
+                         "record_count": len(collection["records"])},
     }
     normalized["normalized_sha256"] = canonical_sha256(normalized)
+    normalized["raw_records"] = list(collection["records"])
     return normalized
 
 

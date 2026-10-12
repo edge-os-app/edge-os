@@ -113,12 +113,15 @@ def test_repeated_page_is_detected() -> None:
     assert any(gap["code"] == "REPEATED_PAGE" for gap in result["gaps"])
 
 
-def test_block_discontinuity_is_recorded_and_collection_continues() -> None:
+def test_block_discontinuity_blocks_a_complete_claim() -> None:
     first, second = support.standard_responses()
     gapped = {**second, "page": {**second["page"], "from_block": 108, "first_parent_hash": None}}
     result = _collect([first, gapped])
-    assert result["stop_reason"] == "COMPLETE"
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "COVERAGE_INCOMPLETE"
+    assert result["coverage"]["covers_requested_scan"] is False
     assert any(gap["code"] == "BLOCK_DISCONTINUITY" for gap in result["gaps"])
+    assert any(gap["code"] == "COVERAGE_INCOMPLETE" for gap in result["gaps"])
 
 
 def test_provider_mismatch_and_malformed_events_are_provider_errors() -> None:
@@ -152,6 +155,45 @@ def test_malformed_page_identity_is_refused_as_provider_evidence() -> None:
     assert result["stop_reason"] == "PROVIDER_ERROR"
     assert result["page_count"] == 0
     assert any(gap["code"] == "PROVIDER_MALFORMED_PAGE" for gap in result["gaps"])
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason", "row_count"),
+    [
+        ({"max_rows": 1}, "LIMIT_ROWS", 2),
+        ({"max_bytes": 1}, "LIMIT_BYTES", 2),
+    ],
+)
+def test_caps_are_enforced_before_a_complete_claim(overrides: dict[str, Any], reason: str,
+                                                   row_count: int) -> None:
+    events = [support.EVENT_QUOTE_IN, support.EVENT_BASE_IN]
+    result = _collect(support.single_page(events), **overrides)
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == reason
+    assert result["row_count"] == row_count
+
+
+def test_invalid_deadline_is_refused_before_any_invocation() -> None:
+    source = RecordedResponseSource(support.standard_responses())
+    with pytest.raises(InvalidLimits):
+        collect(support.profile(), source, support.SCAN, CollectionLimits(**support.limits(deadline_utc="not-a-time")), None)
+    assert source.remaining == 2
+
+
+def test_ordinary_source_error_becomes_a_partial_result() -> None:
+    result = collect(support.profile(), _RaisingSource(OSError("provider unavailable")), support.SCAN,
+                     _limits(), None)
+    assert result["status"] == "PARTIAL"
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+    assert result["source_invocations"]["measured_local_attempts"] == 1
+    assert any(gap["code"] == "SOURCE_ERROR" for gap in result["gaps"])
+
+
+def test_malformed_cursor_is_refused() -> None:
+    first = support.standard_responses()[0]
+    result = _collect([{**first, "cursor": {"before": None, "after": {"unexpected": 1}}}])
+    assert result["stop_reason"] == "PROVIDER_ERROR"
+    assert any(gap["code"] == "PROVIDER_MALFORMED_CURSOR" for gap in result["gaps"])
 
 
 def test_invalid_limits_are_refused_before_any_fetch() -> None:

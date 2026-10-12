@@ -22,6 +22,8 @@ from edge_os_api.research_history.qualification_engine import (
     canonical_sha256,
     dataset_revision,
     engine_hashes,
+    raw_bytes,
+    raw_sha256,
 )
 
 MANIFEST_SCHEMA = "p07.research_history_manifest/1"
@@ -55,6 +57,7 @@ def build_manifest(history: Mapping[str, Any]) -> dict[str, Any]:
         },
         "pages": history["pages"],
         "buckets": history["buckets"],
+        "raw_evidence": history["raw_evidence"],
         "dataset_revision": bound["dataset"]["dataset_revision"],
         "collection_sha256": collection["collection_sha256"],
         "observations_sha256": history["observations_sha256"],
@@ -83,7 +86,23 @@ def load_manifest(path: Path | str) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def verify_manifest(manifest: Mapping[str, Any], expected_sha256: str | None = None) -> bool:
+def save_raw_artifact(records: list[Any], path: Path | str) -> str:
+    """Write the raw supplied records to a run-owned file and return their SHA-256.
+
+    The raw records may hold a value the P02 canonical encoder refuses, so they use a
+    lenient deterministic JSON form. The manifest records only the digest and count.
+    """
+    body = raw_bytes(records)
+    Path(path).write_bytes(body)
+    return hashlib.sha256(body).hexdigest()
+
+
+def load_raw_artifact(path: Path | str) -> list[Any]:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def verify_manifest(manifest: Mapping[str, Any], expected_sha256: str | None = None,
+                    raw_records: list[Any] | None = None) -> bool:
     """Recompute the manifest identity. Raise ``ManifestTampered`` on any mismatch."""
     if expected_sha256 is not None and manifest_sha256(manifest) != expected_sha256:
         raise ManifestTampered("MANIFEST_HASH_MISMATCH", "manifest bytes do not match the expected hash")
@@ -97,4 +116,9 @@ def verify_manifest(manifest: Mapping[str, Any], expected_sha256: str | None = N
         raise ManifestTampered("PAGE_COUNT_MISMATCH", "page count differs from the pages present")
     if revision.get("row_count") != manifest["collection"]["row_count"]:
         raise ManifestTampered("ROW_COUNT_MISMATCH", "row count differs from the declared rows")
+    raw = manifest.get("raw_evidence", {})
+    if raw.get("record_count") != manifest["collection"]["row_count"]:
+        raise ManifestTampered("ROW_COUNT_MISMATCH", "raw record count differs from the declared rows")
+    if raw_records is not None and raw_sha256(raw_records) != raw.get("sha256"):
+        raise ManifestTampered("RAW_EVIDENCE_MISMATCH", "raw records differ from the declared digest")
     return True

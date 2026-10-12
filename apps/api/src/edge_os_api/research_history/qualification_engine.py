@@ -10,6 +10,7 @@ loud load failure, not a silent fallback.
 from __future__ import annotations
 
 import hashlib
+import json
 import runpy
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,20 @@ _P02 = _load(P02_CHECKER_PATH)
 
 def module_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def raw_bytes(value: Any) -> bytes:
+    """Deterministic bytes for raw provider data that may hold a non-canonical value.
+
+    A supplied response or record can carry a float or other value the P02 canonical
+    encoder refuses. Such a value must reach the decoder as a refusal, not stop work.
+    """
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      default=str).encode("utf-8")
+
+
+def raw_sha256(value: Any) -> str:
+    return hashlib.sha256(raw_bytes(value)).hexdigest()
 
 
 P07_MODULE_SHA256 = module_sha256(P07_MODULE_PATH)

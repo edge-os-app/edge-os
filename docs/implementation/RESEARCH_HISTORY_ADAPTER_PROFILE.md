@@ -14,7 +14,7 @@ authority. The whole of P07 is not complete and no fresh history is qualified.
   results, the holdout and closed allowances are unchanged. Numeric and qualification logic is reused, not
   copied. P03's verifier, `main.py`, `core/`, existing `research/`, `replay/`, migrations and lockfiles are
   untouched. #58 owns database, API, schema, client, UI, verifier and job composition.
-- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (55 tests);
+- Proof: `cd apps/api && uv run --frozen pytest tests/research_history -v` passes (62 tests);
   `cd docs/qualification/p07 && python3 -B -m unittest -v test_p07` passes (73 tests);
   `python3 -B docs/contracts/p02/check_contract.py` passes. Exact outputs are kept under the assigned
   evidence folder and are not part of the commit.
@@ -69,9 +69,10 @@ continues. Nothing is repaired or guessed.
 
 `collect(profile, source, scan, limits, provenance, clock) -> CollectionResult` returns:
 
-- `status` `COMPLETE` only when a page reports `complete`; otherwise `PARTIAL`.
+- `status` `COMPLETE` only when a page reports `complete` and the retained pages prove the requested scan;
+  otherwise `PARTIAL`.
 - `stop_reason`: `COMPLETE`, `SOURCE_EXHAUSTED`, `LIMIT_PAGES`, `LIMIT_ROWS`, `LIMIT_BYTES`, `DEADLINE`,
-  `CURSOR_CYCLE`, `REPEATED_PAGE`, `PROVIDER_ERROR`, `CANCELLED` or `TIMEOUT`.
+  `CURSOR_CYCLE`, `REPEATED_PAGE`, `COVERAGE_INCOMPLETE`, `PROVIDER_ERROR`, `CANCELLED` or `TIMEOUT`.
 - `pages` with exact page identity and hash; `records` in supplied order; `page_count`, `row_count`, `bytes`.
 - `query` with the definition and its canonical `identity_sha256`.
 - `requests`: the request, cursor-before, cursor-after, completion flag, rows and bytes per step.
@@ -136,37 +137,50 @@ response arrived. Consuming an archived page is not evidence of a new or origina
 provenance block labels the measurement: `provenance.measurement.provider_requests` is `SUPPLIED_EVIDENCE` or
 `UNKNOWN`. `CollectionResult["coverage"]` retains the requested scan, the page ranges and whether the pages
 tile the scan. A provider `complete` flag alone is not proof of query or window coverage; the retained pages,
-segments, gaps and coverage flag are the evidence. A response must echo the requested query; a missing query
-echo is refused as `QUERY_MISMATCH`. A page whose identity fields are not a non-negative integer range with a
-non-empty id and a 64-hex digest is refused as `PROVIDER_MALFORMED_PAGE` and the collection stays `PARTIAL`.
+segments, gaps and coverage flag are the evidence. A `complete` flag with pages that do not tile the scan
+gives `stop_reason` `COVERAGE_INCOMPLETE` and `PARTIAL`. A response must echo the requested query; a missing
+query echo is refused as `QUERY_MISMATCH`. A page whose identity fields are not a non-negative integer range
+with a non-empty id and a 64-hex digest is refused as `PROVIDER_MALFORMED_PAGE`. A cursor whose `after` is not
+a non-negative integer or null is refused as `PROVIDER_MALFORMED_CURSOR`. Any source exception other than the
+two declared ones becomes a `SOURCE_ERROR` gap and a `PROVIDER_ERROR` `PARTIAL` result, with the attempted
+count kept and no retry.
 
-### 3. `normalized_sha256`
+### 3. `normalized_sha256` and raw evidence
 
 `NormalizedHistory["normalized_sha256"]` is the P02 canonical SHA-256 of the complete normalized payload with
 its own digest field removed. It binds `bound_profile`, `buckets`, `trades`, `observations`, the
-qualification, the binding view, the collection summary and the retained page identity. `collection_sha256`,
-`input_profile_sha256`, `bound_profile_sha256`, `observations_sha256` and `result_sha256` are retained beside
-it. The payload has no JSON floating-point value. Retained measurements use exact unit text; a clock reading
-is never a data or financial value.
+qualification, the binding view, the collection summary, the retained page identity and `raw_evidence`.
+`collection_sha256`, `input_profile_sha256`, `bound_profile_sha256`, `observations_sha256` and `result_sha256`
+are retained beside it. The payload has no JSON floating-point value. Retained measurements use exact unit
+text; a clock reading is never a data or financial value.
+
+`NormalizedHistory["raw_records"]` keeps the exact supplied records, and `raw_evidence` holds
+`{sha256, record_count}` of them. The raw records may hold a value the canonical encoder refuses, so they are
+kept out of the hashed payload and written by `save_raw_artifact(records, path)` to a run-owned file with a
+lenient deterministic form. `load_raw_artifact(path)` reads them back. A consumer can replay normalization
+from the saved artifact: the same records, profile and evidence reproduce the same `normalized_sha256`, the
+same ingest counts and the same `collection_sha256`.
 
 ### 4. Input and failure semantics
 
 A malformed caller profile or limit raises the accepted `InvalidInput` before any source invocation. The
-adapter error classes subclass it. An ordinary source or provider failure returns a `PARTIAL`
-`CollectionResult` with an existing `stop_reason`; it is never `COMPLETE` and never retries implicitly.
-Malformed provider input is recorded as refusal or partial evidence; it is never repaired or dropped as
-successful coverage. Programmer defects and `BaseException` are not swallowed. The finite limits and the
-qualifier `InvalidInput`/`Unsupported` meanings are unchanged. Cancellation uses the injected source (a
-`SourceCancelled` exception) and the injected clock; the clock is a determinism seam, not a live
-elapsed-time guarantee. Only an overall `QUALIFIED` result projects to P02; `LIMITED` stays saved beside the
-declaration.
+adapter error classes subclass it. `deadline_utc` must be a real UTC instant; a non-instant string is refused
+before any fetch and the deadline is compared as instants, not text. An ordinary source or provider failure
+returns a `PARTIAL` `CollectionResult` with an existing `stop_reason`; it is never `COMPLETE` and never retries
+implicitly. Malformed provider input is recorded as refusal or partial evidence; it is never repaired or
+dropped as successful coverage. Programmer defects in the adapter and `BaseException` are not swallowed; only
+the source call catches an ordinary `Exception`. The finite limits and the qualifier
+`InvalidInput`/`Unsupported` meanings are unchanged. Cancellation uses the injected source (a `SourceCancelled`
+exception) and the injected clock; the clock is a determinism seam, not a live elapsed-time guarantee. Only an
+overall `QUALIFIED` result projects to P02; `LIMITED` stays saved beside the declaration.
 
 ## Finite limits
 
 `max_pages`, `max_rows` and `max_bytes` must be positive integers. `deadline_utc` is optional. A limit stop
-gives `PARTIAL`, never `COMPLETE`. A limit is tested before each fetch, so one in-flight response can move a
-counter past its cap by one before the loop stops. These are caller-defined local test parameters, not paid or
-live allowances. The collector grants no quota.
+gives `PARTIAL`, never `COMPLETE`. The caps are checked before each fetch and again after each accepted page,
+before any completion claim. A page that alone pushes a counter past its cap ends the run `PARTIAL` with the
+matching `LIMIT_*` reason, and the fetched evidence is kept. These are caller-defined local test parameters,
+not paid or live allowances. The collector grants no quota.
 
 ## Reuse mapping
 
@@ -175,7 +189,7 @@ live allowances. The collector grants no quota.
 | Observations from bound pages and logs | `history_observations(profile, logs, window)` |
 | Per-claim verdict and overall | `qualify(profile, observations)` |
 | Page revision digest | `dataset_revision(pages)` |
-| Dataset and observation identity | `profile_sha256`, canonical P02 bytes and `validate_record` |
+| Dataset and observation identity | `profile_sha256`, canonical P02 bytes |
 | Decode, ingest, coverage, buckets, availability, feasibility | the frozen P07 module, called, not copied |
 
 Facts are labelled: `supplied_by_caller` (provider-read facts), `derived_by_engine` (pages and logs) and
@@ -191,7 +205,7 @@ result is carried beside the profile; `to_p02_binding` still refuses it.
 | Finite page, row, byte and deadline limits | `test_finite_limits_stop_the_loop`, `test_deadline_uses_the_injected_clock` |
 | Cancel and timeout | `test_cancel_and_timeout_are_retained_as_partial` |
 | Cursor cycle and repeated page | `test_cursor_cycle_stops_before_a_duplicate_page`, `test_repeated_page_is_detected` |
-| Discontinuity | `test_block_discontinuity_is_recorded_and_collection_continues` |
+| Discontinuity blocks a complete claim | `test_block_discontinuity_blocks_a_complete_claim` |
 | Provider mismatch and malformed response | `test_provider_mismatch_and_malformed_events_are_provider_errors` |
 | Both directions and token order | `test_both_pool_sides_are_seen_and_token_order_is_the_p02_order` |
 | Reordered records | `test_supplied_record_order_does_not_change_the_result` |
@@ -214,6 +228,12 @@ result is carried beside the profile; `to_p02_binding` still refuses it.
 | Malformed profile refused before invocation (amendment 4) | `test_malformed_profile_is_refused_before_any_invocation` |
 | Response without a query echo refused | `test_response_without_a_query_echo_is_refused` |
 | Malformed page identity refused as provider evidence | `test_malformed_page_identity_is_refused_as_provider_evidence` |
+| Caps enforced before a complete claim (gate) | `test_caps_are_enforced_before_a_complete_claim` |
+| Invalid deadline refused before invocation (gate) | `test_invalid_deadline_is_refused_before_any_invocation` |
+| Ordinary source error becomes a partial result (gate) | `test_ordinary_source_error_becomes_a_partial_result` |
+| Malformed cursor refused (gate) | `test_malformed_cursor_is_refused` |
+| Raw evidence retained and replay (gate) | `test_manifest_retains_raw_evidence_and_replays` |
+| Tampered raw records fail verification (gate) | `test_tampered_raw_records_fail_verification` |
 | Manifest consumer metadata | `test_evidence_manifest.py::test_manifest_includes_consumer_metadata` |
 | No live transport or environment discovery | `test_package_has_no_live_transport_or_environment_discovery` |
 
