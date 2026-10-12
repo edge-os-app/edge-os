@@ -148,9 +148,9 @@ Sponsor selection was confirmed by the builder (five selected bounties). This ma
 | RG01–RG06 | 6 | 6 local recorded-response | actual-data qualification |
 | IC01–IC08 | 8 | 7 local interfaces; IC08 not implemented | actual-provider qualification |
 | AUT01–AUT08 | 8 | 3 local decision flow | scheduler + hosted/live recurring |
-
-Counts are indicative of criteria that have any accepted local/component portion at this base under the defined evidence classes; they are not a claim that any criterion passes. For example RC16 and RC18 have local portions but their final hosted/rendered checks stay unrun.
 | P40/P41 | 6 | preparation accepted | runtime/host/participant/assets |
 | Sponsor | 4 | Nansen local package | mounts + actual + demo |
+
+Counts are indicative of criteria that have any accepted local/component portion at this base under the defined evidence classes; they are not a claim that any criterion passes. For example RC16 and RC18 have local portions but their final hosted/rendered checks stay unrun.
 
 No criterion in this map is PASS. Full tickets and umbrella #58 stay OPEN.
