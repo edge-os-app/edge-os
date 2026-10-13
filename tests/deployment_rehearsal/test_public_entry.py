@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import socket
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -107,11 +109,91 @@ def test_forwards_pages_to_the_web_and_keeps_the_host_header(entry) -> None:
     assert api.seen == []
 
 
-def test_refuses_a_body_over_the_cap_without_contacting_an_upstream(entry) -> None:
+@pytest.mark.parametrize("size", [public_entry.MAX_BODY_BYTES + 1, 4 * 1024 * 1024, 8 * 1024 * 1024],
+                         ids=["cap-plus-one", "4MiB", "drain-ceiling"])
+def test_a_complete_oversized_body_is_refused_with_413_and_no_upstream_contact(entry, size: int) -> None:
+    """The client sends its whole body before reading; it must receive the 413, not a connection reset."""
     port, api, web = entry
-    status, _, body = _request(port, "POST", "/v1/x", b"x" * (public_entry.MAX_BODY_BYTES + 1))
+    status, headers, body = _request(port, "POST", "/v1/x", b"x" * size)
     assert status == 413 and json.loads(body)["reason"] == "body_too_large"
+    assert headers["connection"] == "close"
     assert api.seen == [] and web.seen == []
+
+
+def _raw(port: int, head: bytes) -> socket.socket:
+    client = socket.create_connection(("127.0.0.1", port), timeout=10)
+    client.sendall(head)
+    return client
+
+
+def _read_until_closed(client: socket.socket, limit: float) -> tuple[bytes, float]:
+    """Everything the entry sends until it closes the connection, and how long that took."""
+    started, data = time.monotonic(), b""
+    client.settimeout(limit)
+    try:
+        while chunk := client.recv(65536):
+            data += chunk
+    except ConnectionResetError:
+        pass
+    return data, time.monotonic() - started
+
+
+def test_a_huge_declared_length_is_refused_at_once_without_draining_it(entry) -> None:
+    port, api, web = entry
+    client = _raw(port, b"POST /v1/x HTTP/1.1\r\nHost: t\r\nContent-Length: 10737418240\r\n\r\n")
+    try:
+        data, elapsed = _read_until_closed(client, limit=5)
+    finally:
+        client.close()
+    assert data.startswith(b"HTTP/1.1 413 ") and b"body_too_large" in data
+    assert elapsed < 1.0
+    assert api.seen == [] and web.seen == []
+
+
+def test_a_sender_that_stops_early_is_closed_without_contacting_an_upstream(entry) -> None:
+    port, api, web = entry
+    declared = public_entry.MAX_BODY_BYTES + 10_000
+    client = _raw(port, b"POST /v1/x HTTP/1.1\r\nHost: t\r\nContent-Length: %d\r\n\r\n" % declared + b"x" * 1024)
+    client.shutdown(socket.SHUT_WR)  # the body ends early: the entry sees end of stream mid-drain
+    try:
+        data, elapsed = _read_until_closed(client, limit=5)
+    finally:
+        client.close()
+    assert (data == b"" or data.startswith(b"HTTP/1.1 413 ")) and elapsed < 1.0  # either is a safe end
+    assert api.seen == [] and web.seen == []
+    status, _, _ = _request(port, "GET", "/healthz")  # the entry still serves the next caller
+    assert status == 200
+
+
+def test_a_slow_drip_is_cut_off_at_the_total_drain_deadline(entry, monkeypatch) -> None:
+    """Each byte arrives well inside any per-read timeout; only a total deadline can stop the drain."""
+    monkeypatch.setattr(public_entry, "DRAIN_SECONDS", 1.0, raising=False)
+    port, api, web = entry
+    threads_before = threading.active_count()
+    client = _raw(port, b"POST /v1/x HTTP/1.1\r\nHost: t\r\nContent-Length: %d\r\n\r\n" % (public_entry.MAX_BODY_BYTES + 1))
+    started, closed_after = time.monotonic(), None
+    try:
+        client.settimeout(0.05)
+        while time.monotonic() - started < 4.0:
+            try:
+                client.send(b"x")
+                if client.recv(1) == b"":
+                    closed_after = time.monotonic() - started
+                    break
+            except TimeoutError:
+                continue
+            except (BrokenPipeError, ConnectionResetError):
+                closed_after = time.monotonic() - started
+                break
+    finally:
+        client.close()
+    assert closed_after is not None, "the entry kept draining past its deadline"
+    assert 0.9 <= closed_after <= 1.8
+    assert api.seen == [] and web.seen == []
+    deadline = time.monotonic() + 2.0
+    while threading.active_count() > threads_before and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert threading.active_count() <= threads_before, "the handler thread did not finish"
 
 
 def test_refuses_a_chunked_request_body(entry) -> None:

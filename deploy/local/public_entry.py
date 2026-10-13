@@ -13,11 +13,19 @@ import json
 import logging
 import os
 import sys
+import time
 from collections.abc import Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # The API refuses bodies above 256 KiB itself; the entry refuses clearly larger ones before contacting it.
 MAX_BODY_BYTES = 512 * 1024
+# A refused body up to DRAIN_LIMIT_BYTES is read and discarded before the 413, so a client that sends its whole body
+# first receives the refusal instead of a connection reset. The discard has one total deadline (not per read); a
+# sender that stalls, drips or stops early is disconnected without a reply. A larger declared body is refused at once.
+# These are LOCAL rehearsal bounds, not an accepted body size and not production hardening.
+DRAIN_LIMIT_BYTES = 8 * 1024 * 1024
+DRAIN_SECONDS = 5.0
+DRAIN_CHUNK_BYTES = 64 * 1024
 # The longest API call (interpreter wait) is 120 s; the entry waits a little longer before reporting a loss.
 UPSTREAM_TIMEOUT_SECONDS = 150.0
 HOP_BY_HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection",
@@ -59,6 +67,26 @@ def build_server(host: str, port: int, upstreams: Mapping[str, tuple[str, int]])
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def _drain(self, length: int) -> bool:
+            """Read and discard `length` body bytes within DRAIN_SECONDS in total; False on deadline or early end."""
+            deadline = time.monotonic() + DRAIN_SECONDS
+            previous = self.connection.gettimeout()
+            try:
+                while length > 0:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        return False
+                    self.connection.settimeout(left)  # no single read may wait past the total deadline
+                    chunk = self.rfile.read1(min(length, DRAIN_CHUNK_BYTES))  # at most one socket read
+                    if not chunk:
+                        return False
+                    length -= len(chunk)
+                return True
+            except OSError:  # TimeoutError at the deadline, or the sender reset the connection
+                return False
+            finally:
+                self.connection.settimeout(previous)
+
         def _forward(self) -> None:
             if self.headers.get("Transfer-Encoding"):
                 self._reply(411, {"status": "refused", "reason": "length_required"}, close=True)
@@ -68,6 +96,9 @@ def build_server(host: str, port: int, upstreams: Mapping[str, tuple[str, int]])
                 self._reply(400, {"status": "refused", "reason": "invalid_length"}, close=True)
                 return
             if int(declared) > MAX_BODY_BYTES:
+                if int(declared) <= DRAIN_LIMIT_BYTES and not self._drain(int(declared)):
+                    self.close_connection = True  # stalled, dripping or ended early: disconnect, no upstream, no reply
+                    return
                 self._reply(413, {"status": "refused", "reason": "body_too_large"}, close=True)
                 return
             body = self.rfile.read(int(declared)) if int(declared) else None

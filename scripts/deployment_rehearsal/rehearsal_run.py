@@ -412,8 +412,11 @@ class Rehearsal:
         self.rec.write("resources-after.json", after)
         leftovers = local_stack.leftovers(after, run_id=self.run_id) + [f"image:{tag}" for tag in remaining]
         foreign = local_stack.foreign_changes(self.before, after, run_id=self.run_id)
-        return self.rec.step("cleanup removed exactly this run's containers, volumes, networks and images; no other "
-                             "resource changed", leftovers == [] and foreign == [], {"leftovers": leftovers, "foreign": foreign})
+        others = local_stack.other_run_changes(self.before, after, run_id=self.run_id)
+        return self.rec.step("cleanup removed exactly this run's containers, volumes, networks and images; no "
+                             "unlabelled or conflictingly labelled resource changed (other runs' changes listed)",
+                             leftovers == [] and foreign == [], {"leftovers": leftovers, "foreign": foreign,
+                                                                 "other_runs": others})
 
     def run(self) -> bool:
         ok = False

@@ -10,7 +10,7 @@ Status: **LOCAL fixture profile only.** This packaging runs the accepted Edge OS
 | `migrate` | API image | the one explicit migration step: `alembic upgrade head`, then `alembic check` | `private` | no |
 | `api` | API image | `python -m edge_os_api` (refuses a schema that is not head) | `private` | no |
 | `web` | web image | `next start` of the bundle built with public values only | `private` | no |
-| `entry` | API image | stdlib loopback entry: `/healthz`, `/readyz`, `/v1/...` to `api`, everything else to `web` | `private`, `entry` | `127.0.0.1:<port>` only |
+| `entry` | API image | stdlib loopback entry: `/healthz`, `/readyz`, `/v1/...` to `api`, everything else to `web`; refuses bodies above 512 KiB with 413 (bounded discard, see the qualification README) | `private`, `entry` | `127.0.0.1:<port>` only |
 | `research-worker` | API image | `edge_os_api.research.investigation_jobs` | `private` | no |
 | `execution-worker` | API image | `edge_os_api.execution.worker` | `private` | no |
 | `recurring-producer` | API image | `edge_os_api.execution.recurring_producer` | `private` | no |
