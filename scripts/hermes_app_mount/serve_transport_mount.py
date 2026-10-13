@@ -5,7 +5,7 @@ Run it from `apps/api` with the API's Python, the usual EDGE_OS_* environment an
 the next item of `--script-file`, a JSON list of `{"case": name}` items with an optional `"transport_fault"`. Spend goes to
 the shared PostgreSQL ledger. Give each API process its own stable `--run-id`; a restart reuses it to recover its dead
 turns. `--report-file` receives the startup recovery result. No real provider, key or network. Used by the mapped
-verifier's P05 phase and by `tests/hermes_app_mount`.
+verifier's HERMES-MOUNT phase (`scripts/p03/hermes_app_mount_phase.py`) and by `tests/hermes_app_mount`.
 """
 
 from __future__ import annotations

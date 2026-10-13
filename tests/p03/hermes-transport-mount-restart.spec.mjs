@@ -16,17 +16,21 @@ async function openAttempts(page) {
   if (!(await details.evaluate((el) => el.open))) await details.locator("summary").click();
 }
 
-test("mounted attempts reopen unchanged after the mount process restarts", async ({ browser }, info) => {
+test("the saved revision and mounted attempts reopen unchanged after the mount process restarts", async ({ browser }, info) => {
   const project = info.project.name;
   const context = await browser.newContext({ viewport: info.project.use.viewport, hasTouch: info.project.use.hasTouch });
   const page = await context.newPage();
+  const problems = [];
+  page.on("console", (message) => { if (message.type() === "error") problems.push(`console: ${message.text()}`); });
+  page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
+  page.on("response", (response) => { if (response.status() >= 500) problems.push(`${response.status()} ${response.url()}`); });
   const writes = [];
   page.on("request", (request) => { if (request.method() !== "GET") writes.push(`${request.method()} ${request.url()}`); });
   await injectAuth(page, tokens.a);
 
   const completed = results[`mount-completed-${project}`];
   await page.goto(`/#/research/${completed.id}`);
-  await expect(outcome(page)).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION", { timeout: 30_000 });
+  await expect(page.getByTestId("revision-id")).toHaveText(completed.revision, { timeout: 30_000 });
   await openAttempts(page);
   await expect(rows(page)).toHaveCount(1);
   await expect(rows(page).first()).toHaveAttribute("data-attempt", completed.attempt);
@@ -40,5 +44,6 @@ test("mounted attempts reopen unchanged after the mount process restarts", async
   await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
 
   expect(writes, "reopening makes no write and starts no turn").toEqual([]);
+  expect(problems, "no console, page or server error").toEqual([]);
   await context.close();
 });

@@ -62,6 +62,25 @@ def job_names_the_attempt(workdir: Path, attempt_id: str) -> bool:
     return False
 
 
+def saved_revision(pg: harness.Postgres, item: dict[str, Any]) -> dict[str, Any]:
+    """The saved strategy revision of a completed mounted request: owner, request, draft and the attempt's interpretation."""
+    revision = item.get("revision", "")
+    [row] = sql_rows(pg, f"""
+        select (select count(*) from strategy_revisions where revision_id::text = '{revision}') revisions,
+               (select count(*) from strategy_revisions s join records r on r.owner_id = s.owner_id
+                  where s.revision_id::text = '{revision}' and r.record_id::text = '{item['id']}') owner_matches_request,
+               (select count(*) from strategy_revisions s join records d on d.record_id = s.draft_record_id
+                  where s.revision_id::text = '{revision}' and d.intake_record_id::text = '{item['id']}') draft_belongs_to_request,
+               (select count(*) from strategy_revisions s
+                  where s.revision_id::text = '{revision}'
+                  and s.content_sha256 = encode(sha256(convert_to(s.strategy_canonical, 'UTF8')), 'hex')) hash_recomputes,
+               (select count(*) from interpretation_attempt_links l join strategy_revisions s on s.owner_id = l.owner_id
+                  where l.attempt_id::text = '{item['attempt']}' and l.intake_record_id::text = '{item['id']}'
+                  and s.revision_id::text = '{revision}') attempt_interpretation_linked,
+               (select count(*) from interpretation_attempts where intake_record_id::text = '{item['id']}') attempts""")
+    return {**row, "all_checks_pass": bool(revision) and all(row[key] == 1 for key in row)}
+
+
 def turn_count(workdir: Path) -> int:
     return len(list((workdir / "turns").glob("turn-*")))
 
@@ -100,6 +119,7 @@ def inspect_mount(pg: harness.Postgres, api_url: str, token: str, workdir: Path,
             "public_spend_matches": public.get("spend", {}).get("state") == expected[0],
             "result_as_expected": (settled["status"], settled["parse_result"]) == (
                 ("COMPLETED", "ACCEPTED") if completed else ("UNKNOWN", "NOT_PARSED")),
+            "saved_revision": saved_revision(pg, item) if completed else None,
         }
     sql_http = inspect_attempts(pg, api_url, token, [item["id"] for item in results.values()])
     total = pg.psql("select coalesce(sum(case when state = 'SETTLED' then charged_nano_usd when state in "
@@ -113,6 +133,7 @@ def inspect_mount(pg: harness.Postgres, api_url: str, token: str, workdir: Path,
             and all(c["transport_identity_is_the_attempt"] and c["requests_at_the_transport"] == 1
                     and c["job_and_wire_name_the_attempt"] and c["reservation_owner_and_request_are_the_attempts"]
                     and c["usage_as_expected"]
+                    and (c["saved_revision"] is None or c["saved_revision"]["all_checks_pass"])
                     and c["reservation_as_expected"] and c["public_spend_matches"] and c["result_as_expected"]
                     for c in checks.values())}
 
@@ -142,14 +163,16 @@ def drive_mount(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port: i
 
         mount_env = {**ui_env, "HERMES_MOUNT_SCRIPT_FILE": str(workdir / "script-queue.json")}
         code = run_playwright(["hermes-transport-mount.spec.mjs"], mount_env, evidence / "ui-hermes-transport-mount.log")
-        ok &= rec.step("HERMES-MOUNT: browser drive at desktop and 390px (save, attempt and usage, reopen in a new "
-                       "context, other owner refused, lost reply unknown and not retried)", code == 0, {"exit": code})
+        ok &= rec.step("HERMES-MOUNT: browser drive at desktop and 390px (submit, attempt and usage, adopt and save the "
+                       "revision with no model call, reopen in a new context, other owner refused, lost reply unknown and "
+                       "not retried)", code == 0, {"exit": code})
         results_path = evidence / "ui" / "hermes-mount-results.json"
         results = json.loads(results_path.read_text()) if results_path.exists() else {}
         inspection = inspect_mount(pg, api_url, token_a, workdir, results)
         rec.write("hermes-mount-inspection.json", inspection)
         ok &= rec.step("HERMES-MOUNT: SQL matches HTTP; transport identity is the attempt; one request per job at the "
-                       "transport; exact charge or full unknown reservation per saved request", inspection["all_checks_pass"],
+                       "transport; exact charge or full unknown reservation per request; the saved revision belongs to the "
+                       "owner, the request and the mounted attempt's interpretation", inspection["all_checks_pass"],
                        {"liability_nano_usd": inspection["liability_nano_usd"],
                         "expected": inspection["expected_liability_nano_usd"]})
         ids = sorted({item["id"] for item in results.values()})
@@ -170,8 +193,8 @@ def drive_mount(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port: i
         harness.wait_http(f"{api_url}/readyz", timeout=120)
         restart = json.loads((workdir / "startup-2.json").read_text())
         code = run_playwright(["hermes-transport-mount-restart.spec.mjs"], mount_env, evidence / "ui-hermes-transport-mount-restart.log")
-        ok &= rec.step("HERMES-MOUNT: after a restart with the same run id the saved attempts reopen unchanged (new "
-                       "browser context, no write)", code == 0 and restart["startup_recovery"] == [],
+        ok &= rec.step("HERMES-MOUNT: after a restart with the same run id the saved revision and attempts reopen "
+                       "unchanged (new browser context, no write)", code == 0 and restart["startup_recovery"] == [],
                        {"exit": code, "startup": restart})
         after = {intake_id: attempt_snapshot(pg, intake_id) for intake_id in ids}
         rec.write("hermes-mount-rows.json", {"before": snapshots, "after": after, "spend_before": spend_rows,

@@ -43,9 +43,11 @@ async function submit(page, token, text) {
   return page.url().split("/research/")[1];
 }
 
-/** Page errors and server errors during a drive (browser-qa smoke check); an expected 404 for another owner is not one. */
+/** Console errors, page errors and server errors during a drive (browser-qa smoke check). An expected 404 for another
+ * owner is not one, and the browser logs that 404 to the console, so only the drive's own page is watched. */
 function watch(page) {
   const problems = [];
+  page.on("console", (message) => { if (message.type() === "error") problems.push(`console: ${message.text()}`); });
   page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
   page.on("response", (response) => { if (response.status() >= 500) problems.push(`${response.status()} ${response.url()}`); });
   return problems;
@@ -54,7 +56,7 @@ function watch(page) {
 test.describe.configure({ mode: "serial" });
 test.beforeEach(() => { fs.writeFileSync(queueFile, "[]"); });
 
-test("a saved request runs the mounted Hermes once, shows its attempt and usage, and reopens in a new context", async ({ page, browser }, info) => {
+test("a request runs the mounted Hermes once, shows its attempt and usage, is saved, and reopens in a new context", async ({ page, browser }, info) => {
   const project = info.project.name;
   const problems = watch(page);
   script({ case: "concrete-thesis" });
@@ -69,6 +71,19 @@ test("a saved request runs the mounted Hermes once, shows its attempt and usage,
   expect(remaining(), "one job consumed one authored reply").toBe(0);
   await page.screenshot({ path: path.join(shots, `${project}-mount-completed.png`), fullPage: true });
 
+  // The user saves the result: adopt the suggested settings, review the rules, save the revision. No model call.
+  await page.getByRole("button", { name: "Adopt these settings" }).first().click();
+  await expect(outcome(page)).toHaveAttribute("data-outcome", "COMPILED");
+  await expect(page.getByTestId("rules-review")).toContainText("Enter when price rose more than 1% over the last 15 minutes");
+  await page.getByRole("button", { name: "Save this revision" }).click();
+  await expect(page.getByTestId("revision")).toBeVisible();
+  await expect(page.getByTestId("revision")).toContainText("Read back from the database");
+  const revision = (await page.getByTestId("revision-id").innerText()).trim();
+  await openAttempts(page);
+  await expect(rows(page)).toHaveCount(1); // adopting and saving started no other attempt
+  await expect(rows(page).first()).toHaveAttribute("data-attempt", attempt);
+  await page.screenshot({ path: path.join(shots, `${project}-mount-saved.png`), fullPage: true });
+
   // The browser is closed; the same owner reopens the record in a new context and nothing is written.
   const again = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
   const reopened = await again.newPage();
@@ -76,7 +91,7 @@ test("a saved request runs the mounted Hermes once, shows its attempt and usage,
   reopened.on("request", (request) => { if (request.method() !== "GET") writes.push(`${request.method()} ${request.url()}`); });
   await injectAuth(reopened, tokens.a);
   await reopened.goto(`/#/research/${id}`);
-  await expect(outcome(reopened)).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION", { timeout: 30_000 });
+  await expect(reopened.getByTestId("revision-id")).toHaveText(revision, { timeout: 30_000 });
   await openAttempts(reopened);
   await expect(rows(reopened)).toHaveCount(1);
   await expect(rows(reopened).first()).toHaveAttribute("data-attempt", attempt);
@@ -92,7 +107,7 @@ test("a saved request runs the mounted Hermes once, shows its attempt and usage,
   await expect(foreign.getByTestId("attempts")).toHaveCount(0);
   await other.close();
   expect(problems, "no page error or server error").toEqual([]);
-  record(`mount-completed-${project}`, { id, attempt });
+  record(`mount-completed-${project}`, { id, attempt, revision });
 });
 
 test("a lost provider reply is an unknown outcome, is not accepted and is not retried", async ({ page }, info) => {
