@@ -274,8 +274,13 @@ class ConnectedExecution:
         return agent, consent, None
 
     def touch(self, job_id: uuid.UUID) -> None:
-        """Record that a pass looked at this job (its `updated_at`), without changing its state."""
-        self._update(job_id)
+        """Record that a pass looked at this job, without changing its state. `updated_at` moves strictly later than
+        it was, so a least-recently-tried window rotates even when several jobs share one clock reading."""
+        with self._factory() as session:
+            row = session.execute(select(EvaluationJobRow).where(EvaluationJobRow.job_id == job_id)
+                                  .with_for_update()).scalar_one()
+            row.updated_at = max(self._clock(), row.updated_at + dt.timedelta(microseconds=1))
+            session.commit()
 
     def _ended_deployment(self, job: EvaluationJobRow) -> str | None:
         """The end reason of the job's recurring deployment, if it has ended. Manual jobs have none."""
