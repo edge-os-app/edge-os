@@ -204,8 +204,8 @@ class RelaySupervisor:
                 "network_members": sorted(c["Name"] for c in network["Containers"].values())}
 
     def logs(self) -> str:
-        return "".join(docker("logs", name, check=False).stdout + docker("logs", name, check=False).stderr
-                       for name in (self.names["relay"], self.names["provider"]))
+        logs = [docker("logs", name, check=False) for name in (self.names["relay"], self.names["provider"])]
+        return "".join(each.stdout + each.stderr for each in logs)
 
     def stop(self) -> dict[str, Any]:
         for name in (self.names["relay"], self.names["provider"]):

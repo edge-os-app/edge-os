@@ -80,3 +80,20 @@ def relay(pinned_hermes_image: str, run_id: str, evidence_root: Path, synthetic_
         cleanup = supervisor.stop()
         (evidence_root / "relay-cleanup.json").write_text(json.dumps(cleanup, indent=1) + "\n")
         assert cleanup == {"containers_left": [], "networks_left": []}, cleanup
+
+
+def _api_fixtures() -> None:
+    """Reuse the API test session (PostgreSQL container, signing key, tokens) for the application tests."""
+    import importlib.util
+
+    if str(REPO / "scripts" / "p03") not in sys.path:
+        sys.path.insert(0, str(REPO / "scripts" / "p03"))
+    spec = importlib.util.spec_from_file_location("edge_os_api_test_session", REPO / "apps" / "api" / "tests" / "conftest.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for name in ("signer", "pg", "env", "migrated", "owner_a", "owner_b"):
+        globals()[name] = getattr(module, name)
+
+
+_api_fixtures()

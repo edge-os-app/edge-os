@@ -167,4 +167,12 @@ On every path out of the delegate (result or exception), `RelayTurnRunner` write
 
 ## Amendments
 
-None yet.
+A1 (during implementation, before the first review): corrections and additions, no change of boundary or authority.
+
+- Channel reply (3.4): a refusal reply also carries `before_send` (true: the relay refused before any request; false: the relay sent and refused the reply). The job counts a request only when `before_send` is false or the outcome is `reply`/`lost`.
+- Relay refusal of a request the job's own guard admitted (fault matrix row 3): the job guard's count is 1, so the accepted `GuardedTurnRunner` keeps the full reservation as UNKNOWN even though the relay's record proves nothing was sent. The relay does not rewrite the job guard's evidence. RELEASED needs both the relay's closed-not-started record and the job guard's 0 (a physical or guard refusal inside the job, a relay that was down, no reservation, no subject). This is conservative: an honest job never meets a relay refusal.
+- A hostile job that writes no `container-result.json` ends UNKNOWN (accepted runner: `ContainerResultUnreadable`) and keeps the reservation.
+- Two turn folders for one attempt (`channel_ambiguous`) are not served at all: no reply, no request; the grant closes at revocation or expiry.
+- The relay caps the open grants it serves in one pass at 1,024; closed attempts are skipped first (found by self-review; regression test `test_a_new_grant_is_served_however_many_earlier_attempts_are_closed`).
+- New owned file `scripts/hermes_provider_relay/relay_application_mount.py`: `open_relay_mount`, the accepted `open_transport_mount` composition (same refusals, PostgreSQL ledger, intake scope, startup recovery) over `build_relay_job`, with `subject_for` reading the saved attempt's owner and saved request and requiring them to equal the reservation row's owner, saved request and scope. Additive; `hermes_transport_mount.py` is unchanged and only imported.
+- Known limit: grant times use the host wall clock and the relay's (Docker VM) wall clock, with a 2 s allowance for a grant issued in the relay's future. A relay clock behind the host lets a request start up to that skew after the host's intended expiry; it is still recorded and its liability held.

@@ -224,3 +224,15 @@ def test_a_request_without_any_grant_is_never_looked_at(host) -> None:
     host.request("a17")
     time.sleep(0.3)
     assert nothing_sent(host, "a17") and not (host.channel("a17") / "reply.json").exists()
+
+
+def test_a_new_grant_is_served_however_many_earlier_attempts_are_closed(host) -> None:
+    for index in range(1100):  # more closed attempts than the relay serves open grants in one pass
+        attempt = f"a00-old-{index:04d}"
+        (host.root / "grants" / f"{attempt}.json").write_text("{}")
+        (host.root / "state" / attempt).mkdir()
+        (host.root / "state" / attempt / "closed.json").write_text('{"started": false}')
+    host.script("zz-new", CONTENT)
+    host.grant("zz-new")
+    host.request("zz-new")
+    assert host.reply("zz-new", 15)["outcome"] == "reply" and len(host.receipts("zz-new")) == 1

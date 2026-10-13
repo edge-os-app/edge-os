@@ -132,6 +132,7 @@ class Relay:
         self.lock = threading.RLock()  # orders start and close for every attempt; a refusal under it closes too
         self.event_lock = threading.Lock()
         self.handling: set[str] = set()
+        self.closed: set[str] = set()  # a closed attempt stays closed; it is never looked at again
         self.handlers = threading.BoundedSemaphore(MAX_HANDLERS)
         self.events = 0
         self.started_at = time.time()
@@ -167,6 +168,7 @@ class Relay:
         with self.lock:
             if not self._has(attempt, "closed.json"):
                 self._record(attempt, "closed.json", {"started": self._has(attempt, "started.json"), "why": why})
+            self.closed.add(attempt)
 
     # --- start --------------------------------------------------------------------------------------------------------
 
@@ -245,11 +247,17 @@ class Relay:
             os.close(channel)
 
     def serve_once(self) -> None:
-        names = sorted(name for name in os.listdir(self.grants) if name.endswith(".json"))[:MAX_GRANTS]
-        for name in names:
+        open_names = []
+        for name in sorted(os.listdir(self.grants)):
             attempt = name[:-5]
-            if not IDENTIFIER.fullmatch(attempt) or self._has(attempt, "closed.json"):
+            if not name.endswith(".json") or not IDENTIFIER.fullmatch(attempt) or attempt in self.closed:
                 continue
+            if self._has(attempt, "closed.json"):
+                self.closed.add(attempt)
+                continue
+            open_names.append(name)
+        for name in open_names[:MAX_GRANTS]:  # at most this many open grants are served per pass
+            attempt = name[:-5]
             grant = self._grant(attempt)
             if grant is None:
                 continue
