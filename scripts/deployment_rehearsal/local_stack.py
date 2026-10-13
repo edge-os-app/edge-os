@@ -21,7 +21,10 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO / "compose.local.yml"
 RUN_LABEL = "edge-os.rehearsal.run"
-OTHER_RUN_LABEL = "edge-os.test.run"
+# Run labels of the other verified owners on this host, each carrying its run identity as the value: the P03/P05
+# harness and pytest runs (`edge-os.test.run`) and the lane-1 Hermes relay supervisor (`edge-os.hermes-relay`).
+OTHER_RUN_LABELS = ("edge-os.test.run", "edge-os.hermes-relay")
+RECOGNIZED_RUN_LABELS = (RUN_LABEL, *OTHER_RUN_LABELS)
 RUN_ID = re.compile(r"^[a-z0-9]{4,20}$")
 PROFILES = ("--profile", "migrate", "--profile", "workers")
 # Docker CLI settings the compose child may need to find the daemon; nothing else is inherited.
@@ -80,48 +83,77 @@ def text(result: subprocess.CompletedProcess) -> str:
     return (result.stdout or b"").decode("utf-8", "replace").strip()
 
 
-def inventory() -> dict[str, dict[str, dict[str, str]]]:
-    """Every container, volume, network and image ID on this daemon with its rehearsal run label (or "")."""
-    found: dict[str, dict[str, dict[str, str]]] = {}
-    # A resource of another rehearsal run or of a P03 harness run (`edge-os.test.run`, e.g. a parallel lane) counts as
-    # owned by that run; only resources with neither label are compared for foreign changes.
-    template = '{{.ID}}\t{{.Label "%s"}}{{.Label "%s"}}\t{{.Names}}' % (RUN_LABEL, OTHER_RUN_LABEL)
-    for kind, args in {"containers": ["docker", "ps", "-a", "--no-trunc"], "volumes": ["docker", "volume", "ls"],
-                       "networks": ["docker", "network", "ls", "--no-trunc"]}.items():
-        fmt = template.replace("{{.Names}}", "{{.Name}}") if kind != "containers" else template
-        if kind == "volumes":
-            fmt = fmt.replace("{{.ID}}", "{{.Name}}", 1)
-        rows = [(row.split("\t") + ["", ""])[:3] for row in text(sh([*args, "--format", fmt])).splitlines() if row]
-        found[kind] = {key: {"run": run, "name": name} for key, run, name in rows}
+def owner_labels(labels: dict[str, str] | None) -> dict[str, str]:
+    """The recognized run labels a resource carries, with their run identities. Empty values do not count."""
+    return {name: value for name, value in (labels or {}).items() if name in RECOGNIZED_RUN_LABELS and value}
+
+
+def inventory() -> dict[str, dict[str, dict[str, Any]]]:
+    """Every container, volume, network and image ID on this daemon with its name and recognized run labels."""
+    found: dict[str, dict[str, dict[str, Any]]] = {}
+    labels = "\t".join('{{.Label "%s"}}' % name for name in RECOGNIZED_RUN_LABELS)
+    for kind, (args, key, name) in {"containers": (["docker", "ps", "-a", "--no-trunc"], "{{.ID}}", "{{.Names}}"),
+                                    "volumes": (["docker", "volume", "ls"], "{{.Name}}", "{{.Name}}"),
+                                    "networks": (["docker", "network", "ls", "--no-trunc"], "{{.ID}}", "{{.Name}}")}.items():
+        found[kind] = {}
+        for row in text(sh([*args, "--format", f"{key}\t{name}\t{labels}"])).splitlines():
+            fields = (row.split("\t") + [""] * (2 + len(RECOGNIZED_RUN_LABELS)))[:2 + len(RECOGNIZED_RUN_LABELS)]
+            if fields[0]:
+                found[kind][fields[0]] = {"name": fields[1],
+                                          "owners": owner_labels(dict(zip(RECOGNIZED_RUN_LABELS, fields[2:])))}
     # `docker image ls` cannot format labels; read them from one JSON inspect over every image ID.
     ids = sorted(set(text(sh(["docker", "image", "ls", "-a", "--no-trunc", "--format", "{{.ID}}"])).split()))
     images = json.loads(text(sh(["docker", "image", "inspect", *ids]))) if ids else []
-    found["images"] = {}
-    for image in images:
-        labels = (image.get("Config") or {}).get("Labels") or {}
-        found["images"][image["Id"]] = {"run": labels.get(RUN_LABEL, "") + labels.get(OTHER_RUN_LABEL, ""),
-                                        "name": ",".join(image.get("RepoTags") or [])}
+    found["images"] = {image["Id"]: {"name": ",".join(image.get("RepoTags") or []),
+                                     "owners": owner_labels((image.get("Config") or {}).get("Labels"))}
+                       for image in images}
     return found
 
 
-def _named(item: dict[str, str]) -> str:
-    return f" ({item['name']})" if item.get("name") else ""
+def owner_class(item: dict[str, Any], run_id: str) -> str:
+    """`own`, `other` (exactly one recognized run label, not this run), `unlabelled` or `conflict` (several)."""
+    owners = item.get("owners") or {}
+    if not owners:
+        return "unlabelled"
+    if len(owners) > 1:
+        return "conflict"
+    return "own" if owners.get(RUN_LABEL) == run_id else "other"
+
+
+def _described(item: dict[str, Any], run_id: str) -> str:
+    text_ = f" ({item['name']})" if item.get("name") else ""
+    owners = ", ".join(f"{name}={value}" for name, value in sorted((item.get("owners") or {}).items()))
+    if owner_class(item, run_id) == "conflict":
+        text_ += f" [conflicting run labels: {owners}]"
+    elif owners:
+        text_ += f" [{owners}]"
+    return text_
+
+
+def _changes(before: dict[str, Any], after: dict[str, Any], run_id: str, classes: set[str]) -> list[str]:
+    found: list[str] = []
+    for kind in ("containers", "volumes", "networks", "images"):
+        old = {key for key, item in before.get(kind, {}).items() if owner_class(item, run_id) in classes}
+        new = {key for key, item in after.get(kind, {}).items() if owner_class(item, run_id) in classes}
+        found += [f"{kind}:{key} disappeared" + _described(before[kind][key], run_id) for key in sorted(old - new)]
+        found += [f"{kind}:{key} appeared" + _described(after[kind][key], run_id) for key in sorted(new - old)]
+    return found
 
 
 def foreign_changes(before: dict[str, Any], after: dict[str, Any], *, run_id: str) -> list[str]:
-    """Resources not labelled for any rehearsal run that appeared or disappeared. Other runs are ignored."""
-    changes: list[str] = []
-    for kind in ("containers", "volumes", "networks", "images"):
-        old = {key for key, value in before.get(kind, {}).items() if not value["run"]}
-        new = {key for key, value in after.get(kind, {}).items() if not value["run"]}
-        changes += [f"{kind}:{key} disappeared" + _named(before[kind][key]) for key in sorted(old - new)]
-        changes += [f"{kind}:{key} appeared" + _named(after[kind][key]) for key in sorted(new - old)]
-    return changes
+    """Unlabelled or conflictingly labelled resources that appeared or disappeared. Any entry fails the run."""
+    return _changes(before, after, run_id, {"unlabelled", "conflict"})
+
+
+def other_run_changes(before: dict[str, Any], after: dict[str, Any], *, run_id: str) -> list[str]:
+    """Changes accounted to another recognized run (kept as evidence; that run owns them)."""
+    return _changes(before, after, run_id, {"other"})
 
 
 def leftovers(after: dict[str, Any], *, run_id: str) -> list[str]:
+    """Every resource that still carries this run's label, whatever else it carries."""
     return [f"{kind}:{key}" for kind in ("containers", "volumes", "networks", "images")
-            for key, value in after.get(kind, {}).items() if value["run"] == run_id]
+            for key, item in after.get(kind, {}).items() if (item.get("owners") or {}).get(RUN_LABEL) == run_id]
 
 
 class LocalStack:
