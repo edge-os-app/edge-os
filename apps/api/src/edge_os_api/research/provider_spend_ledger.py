@@ -129,6 +129,7 @@ class PostgresSpendLedger:
 
     @staticmethod
     def _liability(session: Session, owner: Any = None) -> int:
+        # shortcut: sums every reservation (indexed by owner) under the lock; keep running totals if reservations grow large
         where = " WHERE owner_id = :o" if owner is not None else ""
         return session.execute(text(f"SELECT {LIABILITY} FROM {SCHEMA}.provider_spend_reservations{where}"),
                                {"o": owner}).scalar_one()
