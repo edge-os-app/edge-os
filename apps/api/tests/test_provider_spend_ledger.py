@@ -230,3 +230,20 @@ def test_two_api_processes_contending_for_the_last_capacity_never_pass_either_ca
     assert all(len(granted & set(mine)) <= 2 for mine in owners.values())
     spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.11"))
     assert spend.committed_usd() == RESERVATION * 3 and {u.attempt_id for u in spend.unresolved()} == granted
+
+
+def test_a_downgrade_below_0013_is_refused_while_any_reservation_exists_and_keeps_it(
+        clean_spend, attempts, owner_a, migrated, env) -> None:
+    import subprocess
+
+    import harness
+    held = attempts.new(owner_a)
+    spend = PostgresSpendLedger(clean_spend, limits())
+    spend.reserve(held, scope="s", **BOUNDS)
+    spend.mark_unknown(held, reason="TransportLost")
+
+    down = subprocess.run([sys.executable, "-m", "alembic", "downgrade", "0012"], cwd=harness.API_DIR, env=env,
+                          capture_output=True, text=True, timeout=180)
+
+    assert down.returncode != 0 and "downgrade below 0013 refused" in down.stdout + down.stderr
+    assert spend.state(held) == "UNKNOWN" and spend.committed_usd() == RESERVATION

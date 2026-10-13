@@ -204,3 +204,23 @@ def test_an_exhausted_owner_cap_saves_a_refused_attempt_and_never_reaches_the_jo
     other_owner = create(app_client, owner_b, "concrete-thesis").json()["attempts"][0]
     assert other_owner["spend"]["state"] == "SETTLED" and len(boundary.turns) == 3
     assert [r[0] for r in rows(app_client, "select count(*) from usage_local.provider_spend_reservations")] == [3]
+
+
+def test_a_restart_with_a_changed_cap_refuses_new_attempts_before_the_job_until_a_recorded_change(
+        mounted, owner_a) -> None:
+    boundary = Boundary(job_report(turn_result(case("concrete-thesis")["provider"])),
+                        job_report(turn_result(case("concrete-thesis")["provider"])))
+    first_mount, first_client = mounted(boundary)
+    assert create(first_client, owner_a, "concrete-thesis").json()["attempts"][0]["spend"]["state"] == "SETTLED"
+
+    raised = SpendLimits(Decimal("5.00"), Decimal("5.00"), PRICE)  # a restarted process configured with other caps
+    restarted, restarted_client = mounted(boundary, raised)
+    refused = create(restarted_client, owner_a, "concrete-thesis").json()["attempts"][0]
+    assert (refused["status"], refused["error_class"], refused["request_count"]) == (
+        "PROVIDER_FAILED", "SpendLedgerUnavailable", 0)
+    assert len(boundary.turns) == 1  # refused before any job
+
+    restarted.spend.change_caps(global_cap_usd=Decimal("5.00"), owner_cap_usd=Decimal("5.00"), reason="test decision")
+    allowed = create(restarted_client, owner_a, "concrete-thesis").json()["attempts"][0]
+    assert allowed["spend"]["state"] == "SETTLED" and len(boundary.turns) == 2
+    assert first_mount.spend.committed_usd() == EXACT_CHARGE * 2
