@@ -28,7 +28,8 @@ marks it `MISSING`/`PROPOSED` with a producer obligation. Line numbers refer to 
 ## Worker health fields
 
 Status vocabulary: `EXPOSED (f84)` = the accepted account projection or route outputs it today;
-`SERVICE VALUE (f84)` = `ExecutionService.status` computes it but no read surface exposes it;
+`SERVICE VALUE (f84)` = an accepted service computes it but no read surface exposes it (currently the
+`ExecutionService.status` submission values);
 `STORED INPUT` = a stored column exists but no projection outputs it; `PROPOSED (lane2)` = the P27
 producer must derive and expose it; `MISSING` = no producer.
 
@@ -91,7 +92,7 @@ producer must derive and expose it; `MISSING` = no producer.
 | memory state ACTIVE/DISABLED/CLEARED | same | `controls.py:42,238-258` | EXPOSED (f84) |
 | context source ownership check | `records.record_id` owner-scoped | `controls.py:100-113` | EXPOSED (f84) |
 | `action_id` | `execution_intents.action_id`, `execution_queue.action_id` | `execution/routes.py` | EXPOSED (f84) |
-| preview permission/reservation/limit | `AdmissionService.balances` (`admission/service.py:709`) for allowances; `admission_reservations`, `admission_decisions` | reservations/decisions exposed at `execution/routes.py:139-141`; allowances are service-level | reservations/decisions EXPOSED (f84) / allowances SERVICE VALUE (`AdmissionService.balances`) / PROPOSED |
+| preview permission/reservation/limit | allowances from `AdmissionService.balances` (`admission/service.py:709`); `admission_reservations`, `admission_decisions` | allowances exposed at `GET /v1/agents/{agent_id}/funding` (`funding/routes.py:107-108`); reservations/decisions exposed at `execution/routes.py:139-141` | EXPOSED (f84) |
 | consent activation state | `derive_approval` | `connected_identity.py:161-169` | EXPOSED (f84) (fixture only) |
 
 ## Accepted tests that already cover these sources

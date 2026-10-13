@@ -81,8 +81,7 @@ Status vocabulary (used across this contract and `SOURCE_RECORD_MAP.md`):
 - `EXPOSED (f84)`: the accepted account projection (`accounts/service_projection.py`) or the route
   (`execution/routes.py`) outputs this value today.
 - `SERVICE VALUE (f84)`: an accepted service computes it, but no accepted read surface exposes it yet.
-  Name the exact computing service: `ExecutionService.status` for the submission values and
-  `AdmissionService.balances` (`admission/service.py:709`) for the allowances.
+  Name the exact computing service, for example `ExecutionService.status` for the submission values.
 - `STORED INPUT`: a stored column exists, but no projection outputs it today.
 - `PROPOSED (lane2)`: a derived projection field the lane2 P27 producer must expose.
 - `MISSING`: no producer exists.
