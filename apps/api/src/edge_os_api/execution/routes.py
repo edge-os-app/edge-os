@@ -24,6 +24,7 @@ from edge_os_api.core.request_schemas import StrictModel
 from edge_os_api.execution.connected_identity import resolve_agent
 from edge_os_api.execution.original_transaction import owner_projection
 from edge_os_api.execution.models import DecisionRow, IntentRow, QueueRow, SubmissionAttemptRow
+from edge_os_api.execution.recurring_scheduler import DeploymentRefused
 from edge_os_api.execution.worker import JobRefused
 from edge_os_api.recovery.models import RecoveryCaseRow
 from edge_os_api.records import contract_adapter as record_contract
@@ -33,6 +34,13 @@ router = APIRouter(prefix="/v1", tags=["actions"], dependencies=[Depends(require
 
 class ScheduleBody(StrictModel):
     request_key: str = Field(min_length=1, max_length=200)
+
+
+class DeploymentBody(StrictModel):
+    """Recurring activation binds the exact adopted consent the owner reviewed. Nothing else is accepted."""
+
+    request_key: str = Field(min_length=1, max_length=200)
+    expected_consent_hash: str = Field(min_length=1, max_length=200)
 
 
 def get_session(request: Request) -> Generator[Session, None, None]:
@@ -104,6 +112,56 @@ def agent_actions(agent_id: str, request: Request, principal: Principal = Depend
                            "realized_quote_raw": str(int(row.realized_quote)), "quote_asset_id": row.quote_asset_id}
                           for row in positions],
             "blocking_reason": health.blocking_reason, "next_scheduled_at": health.next_scheduled_at}
+
+
+DEPLOYMENT_DETAIL = {
+    "agent_not_ready": "The agent needs a confirmed wallet bound to an exact saved revision.",
+    "consent_not_adopted": "Adopt the exact reviewed terms for this agent first.",
+    "deployment_consent_mismatch": "The adopted terms changed. Review the current terms before activating.",
+    "deployment_ended": "Recurring operation for these terms has ended. Review and adopt new terms to start again.",
+    "deployment_not_found": "No recurring operation is saved for this agent.",
+    "activation_unavailable": "No qualified execution route exists in this build. Nothing was activated.",
+    "consent_expired": "The adopted terms have expired. Nothing was activated.",
+}
+
+
+def deployment_refused(error: DeploymentRefused) -> AppError:
+    if error.code == "deployment_not_found":
+        return not_found("deployment")
+    status = 503 if error.code == "activation_unavailable" else 409
+    detail = DEPLOYMENT_DETAIL.get(error.code, "Recurring operation cannot start with these terms. Nothing was activated.")
+    return AppError(status, "DEPLOYMENT", "UNAVAILABLE" if status == 503 else "CONFLICTED", error.code,
+                    [finding(error.code, "/", detail)], "SAFE_SAME_KEY" if status == 503 else "NOT_RETRYABLE")
+
+
+@router.post("/agents/{agent_id}/deployment")
+def activate_deployment(agent_id: str, data: DeploymentBody, request: Request,
+                        principal: Principal = Depends(require_principal)) -> JSONResponse:
+    try:
+        created, deployment = request.app.state.financial.recurring.activate(
+            principal.user_id, agent_id, data.request_key, data.expected_consent_hash)
+    except DeploymentRefused as error:
+        raise deployment_refused(error) from None
+    return JSONResponse(deployment, status_code=201 if created else 200,
+                        headers=None if created else {"Idempotent-Replay": "true"})
+
+
+@router.post("/agents/{agent_id}/deployment/end")
+def end_deployment(agent_id: str, request: Request, principal: Principal = Depends(require_principal)) -> Any:
+    try:
+        return request.app.state.financial.recurring.end(principal.user_id, agent_id)
+    except DeploymentRefused as error:
+        raise deployment_refused(error) from None
+
+
+@router.get("/agents/{agent_id}/deployment")
+def read_deployment(agent_id: str, request: Request, principal: Principal = Depends(require_principal),
+                    session: Session = Depends(get_session)) -> dict[str, Any]:
+    view = request.app.state.financial.recurring.projection(principal.user_id, agent_id)
+    # A saved deployment stays readable after its agent identity changed; an unknown agent is not found.
+    if view["deployment"] is None and resolve_agent(session, principal.user_id, agent_id) is None:
+        raise not_found("agent wallet")
+    return view
 
 
 @router.get("/actions/{action_id}")

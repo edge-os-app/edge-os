@@ -17,6 +17,7 @@ from edge_os_api.core.provider_ports import ProviderPorts, build_provider_ports
 from edge_os_api.core.settings import Settings
 from edge_os_api.execution.service import ExecutionService
 from edge_os_api.execution.position_limit import CombinedControls, OnePositionPerWallet
+from edge_os_api.execution.recurring_scheduler import RecurringOperation
 from edge_os_api.execution.worker import ConnectedExecution
 from edge_os_api.recovery.service import RecoveryService
 from edge_os_api.revocation.enforcement import SubmissionControls
@@ -35,6 +36,7 @@ class FinancialServices:
     consent: ConsentService
     ports: ProviderPorts
     connected: ConnectedExecution
+    recurring: RecurringOperation
 
 
 def build_financial_services(factory: sessionmaker[Session], settings: Settings,
@@ -51,6 +53,7 @@ def build_financial_services(factory: sessionmaker[Session], settings: Settings,
     consent = ConsentService(factory, admission=admission, stops=stops)
     services = FinancialServices(stops=stops, removals=removals, controls=controls, admission=admission,
                                  execution=execution, recovery=recovery, consent=consent, ports=ports,
-                                 connected=None)  # type: ignore[arg-type]
+                                 connected=None, recurring=None)  # type: ignore[arg-type]
     services.connected = ConnectedExecution(factory, services, ports, qualification=ports.mode)
+    services.recurring = RecurringOperation(factory, services, services.connected)
     return services

@@ -401,6 +401,40 @@ Milestone `RELEASE-E2E-L2-20261012-RESEARCH-PORTS-LOCAL-v1`, base `f84ef41`. Loc
 | Forward observation from any current source | UNAVAILABLE with reason | `test_no_current_source_is_a_forward_observation` |
 | Web panel and labels | exact question, findings, gaps, recomputed hashes, held credits, keyed retry, unavailable server, released refusal text; HTTP facts labelled authored | `apps/web/tests/research-nansen-report.test.tsx`, `apps/web/tests/investigation-review.test.tsx` |
 
+## P27 LOCAL: recurring operation through the existing job engine (frozen interfaces)
+
+Milestone `RELEASE-E2E-L2-20261013-P27-LOCAL-v1`, base `ed228f7`. The full typed contract is `docs/qualification/recurring-operation/CONTRACT.md`. Summary:
+
+- **Deployment.** An explicit authenticated activation binds the owner, agent, wallet/network, exact publication and execution revision, content/manifest hashes and the adopted consent hash (`expected_consent_hash`). There is one deployment per adopted consent, an ENDED deployment is terminal, and at most one ACTIVE deployment exists per agent wallet and network. Activation needs a server-derived approval (fixture qualification), so production refuses it.
+- **Producer.** `RecurringScheduler.tick` creates one ordinary evaluation job per due UTC five-minute slot for each ACTIVE deployment, under a row lock and the existing unique slot constraint. Slots skipped while no producer ran are recorded as missed (count plus the latest 20 intervals) and never replayed. Each pass also ends deployments whose identity, consent, approval or removal state changed, reconciles SUBMITTED originals from receipts only, and runs one bounded worker pass.
+- **Evaluation outcome.** Each evaluation saves `SIGNAL`, `NO_SIGNAL`, `INELIGIBLE` or `UNAVAILABLE` with input observed/collected and evaluation times before any intent. Observations need complete provenance, a forward evidence class allowed by the mode, the exact market and slot, and collection within the current slot.
+- **Limits and recovery.** These stay unchanged: the persistent admission counters, stops/removal enforcement, the one-position rule, wallet claims and original-transaction reconciliation.
+- **Projection.** `GET /v1/agents/{agent_id}/deployment` returns the deployment identity, producer cursor and next due slot, missed slots, the latest occurrences with evaluation and submission times, pending reconciliation and one wait reason. The direct account view renders it.
+- **Migration 0012.** It adds `execution_recurring_deployments`, `execution_evaluation_outcomes` and `execution_evaluation_jobs.deployment_id`. The downgrade refuses while any deployment exists.
+
+**Fault matrix** (tests in `apps/api/tests/test_recurring_operation.py` unless marked; real migrated PostgreSQL; expected values come from the authored fixture constants):
+
+| Case | Expected |
+|---|---|
+| Activation: exact binding, replay, other key, wrong consent hash, ended consent, production | one deployment; 200 replay; 409 `deployment_consent_mismatch`/`deployment_ended`; 503 `activation_unavailable` |
+| Repeated slots with the browser closed: entry → full exit → re-entry | three occurrences on three slots; ENTRY confirmed, EXIT closes the position, a later ENTRY opens a new one; three fixture effects |
+| Duplicate ticks in one slot and two producer processes at once | one job per slot; one effect |
+| Producer absent for several slots | `missed_slots` counted, one interval saved; one job for the current slot; no stale trade |
+| Restart of the producer between passes | resumes from the saved cursor; no duplicate |
+| Stale, missing, wrong-market, wrong-time, incomplete-provenance or non-forward observations | UNAVAILABLE outcome saved with its reason; no decision, no intent, no effect |
+| Cumulative quote allowance or attempt budget exhausted | ADMISSION_DENIED with the accepted reason; no effect; counters not reset by a new tick or a restart |
+| Consent expired after activation | deployment ENDED `CONSENT_EXPIRED`; no further occurrence |
+| Unknown original (lost acknowledgement) | the later occurrence waits on the wallet claim; the producer reconciles from the receipt; then later occurrences trade; one effect per action |
+| Other owner with an unknown action | the first owner's deployment keeps trading |
+| Stop new entries / halt all swaps during recurrence | entries denied (exit still allowed under STOP_NEW_ENTRIES); sticky after restart |
+| Removal requested during recurrence | deployment ENDED `REMOVAL_REQUESTED`; no new submission; residual inventory and owner reads kept |
+| Owner ends the deployment | ENDED `OWNER_ENDED`; no new occurrence; the same terms cannot restart it |
+| Projection | matches the saved rows: cursor, next due slot, missed slots, occurrences, outcome times, pending reconciliation, wait reason |
+| Migration 0012 downgrade with deployments | refused |
+| Producer clock offset outside fixture/local | refused |
+| Web panel (`apps/web/tests/agent-recurring.test.tsx`) | activation with the exact consent hash, projection, wait reasons, end control |
+| Mapped verifier (`tests/p03/recurring-*.spec.mjs`, `scripts/p03/recurring_phase.py`) | browser closed during producer passes; reopen; SQL; contention; two owners; stop/removal; restart |
+
 ## Decisions for the builder
 
 0. One open position per agent and revision at a time is enforced by the strategy (`max_open_positions: 1`) and the worker (an exit uses the open position); repeated entry/exit cycles are now possible because each entry has its own position id.

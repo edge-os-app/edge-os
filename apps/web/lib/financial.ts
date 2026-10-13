@@ -98,6 +98,29 @@ export interface ActionDetail {
 export interface Stop { stop_id: string; scope: string; mode: string; trigger: string; position_id: string | null; created_at: string }
 export interface Removal { request_id: string; state: string; reason: string; requested_at: string; updated_at: string; evidenced_signer: string | null }
 
+/** P27 LOCAL recurring operation: one explicit deployment per adopted consent and its durable projection. */
+export interface RecurringDeployment {
+  deployment_id: string; state: "ACTIVE" | "ENDED"; end_reason: string | null; request_key: string;
+  activated_at: string; ended_at: string | null;
+  identity: { agent_id: string; wallet_id: string; network_id: string; strategy_id: string; publication_revision_id: string;
+    execution_revision_id: string; content_hash: string; manifest_hash: string; consent_adoption_id: string; consent_hash: string };
+}
+
+export interface RecurringOccurrence extends EvaluationJob {
+  deployment_id: string | null;
+  evaluation: { outcome: string; reason: string | null; decision_id: string | null; inputs_observed_at: string | null;
+    inputs_collected_at: string | null; evaluated_at: string; evidence_class: string | null } | null;
+  submission: { attempt_id: string; state: string; outcome: string | null; started_at: string; completed_at: string | null } | null;
+}
+
+export interface RecurringProjection {
+  deployment: RecurringDeployment | null;
+  producer?: { last_tick_at: string | null; cursor_slot: string | null; next_due_slot: string | null; no_next_reason: string | null;
+    occurrences: number; missed_slots: number; missed_intervals: { from: string; to: string; count: number; recorded_at: string }[] };
+  occurrences?: RecurringOccurrence[]; pending_reconciliation?: string[]; stops?: string[]; removal?: string[];
+  wait_reason?: string | null; read_at?: string;
+}
+
 const agentPath = (agentId: string) => `/v1/agents/${encodeURIComponent(agentId)}`;
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }).then((r) => r.body);
@@ -125,6 +148,10 @@ export const financial = {
   requestRemoval: (agentId: string, requestKey: string, reason: string) =>
     post<Removal>(`${agentPath(agentId)}/removal`, { request_key: requestKey, reason }),
   reconcileRemoval: (agentId: string) => post<{ state: string }>(`${agentPath(agentId)}/removal/reconcile`),
+  deployment: (agentId: string) => request<RecurringProjection>(`${agentPath(agentId)}/deployment`).then((r) => r.body),
+  activateDeployment: (agentId: string, requestKey: string, consentHash: string) =>
+    post<RecurringDeployment>(`${agentPath(agentId)}/deployment`, { request_key: requestKey, expected_consent_hash: consentHash }),
+  endDeployment: (agentId: string) => post<RecurringDeployment>(`${agentPath(agentId)}/deployment/end`),
 };
 
 /** Exact base units with their decimals, never a float. */
