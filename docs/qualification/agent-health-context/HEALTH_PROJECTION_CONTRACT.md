@@ -63,39 +63,55 @@ Worker health mixes two different clocks. Evaluation health is the bounded decis
 not submission health. The projection keeps them as separate fields with separate producers, so a
 no-signal evaluation is never reported as a completed trade attempt.
 
+Status vocabulary (used across this contract and `SOURCE_RECORD_MAP.md`):
+
+- `EXPOSED (f84)`: the accepted account projection (`accounts/service_projection.py`) or the route
+  (`execution/routes.py`) outputs this value today.
+- `SERVICE VALUE (f84)`: `ExecutionService.status` computes it (`HealthView`) but no accepted read
+  surface exposes it yet.
+- `STORED INPUT`: a stored column exists, but no projection outputs it today.
+- `PROPOSED (lane2)`: a derived projection field the lane2 P27 producer must expose.
+- `MISSING`: no producer exists.
+
 **Evaluation-level fields** (producer `execution_local.execution_evaluation_jobs`):
 
 | Field | Source | Status |
 |---|---|---|
-| `last_evaluation_activity_at` | newest `execution_evaluation_jobs.updated_at` for the scope (the last saved job transition) | PRESENT (f84) |
-| `last_evaluation_completion_at` | newest `updated_at` where `state = 'COMPLETED'` | PRESENT (f84) |
-| `evaluation_attempts` | count of evaluation-job rows for the scope (projected today as `evaluation_attempts`) | PRESENT (f84) |
-| `evaluation_completions` | count where `state = 'COMPLETED'` | PRESENT (f84) |
-| `last_evaluation_outcome`, `wait_or_fault_reason` | the newest job `outcome` and `reason`, including `WAITING:<PORT>_UNAVAILABLE`, `WORKER_ERROR:<class>`, `OBSERVATIONS_WRONG_MARKET`, `OBSERVATIONS_WRONG_TIME`, `IDENTITY_CHANGED`, `IDENTITY_UNAVAILABLE`, `CONSENT_CHANGED` | PRESENT (f84) |
+| `last_evaluation_activity_at` | `execution_evaluation_jobs.updated_at` | EXPOSED (f84) (`service_projection.py:173`) |
+| `evaluation_attempts` | count of evaluation-job rows for the scope | EXPOSED (f84) (`service_projection.py:174`) |
+| `evaluation_completions` | count where `state = 'COMPLETED'` | EXPOSED (f84) (`service_projection.py:175`) |
+| `last_evaluation_completion_at` | newest `updated_at` where `state = 'COMPLETED'` | STORED INPUT / PROPOSED (lane2) |
+| `last_evaluation_outcome` | newest job `outcome`; `null` until an outcome is saved | STORED INPUT (`execution/models.py:229`) / PROPOSED (lane2) |
+| `last_evaluation_state` | newest job `state` (`execution/models.py:226`); carries the truthful status such as `ENQUEUED` | STORED INPUT / PROPOSED (lane2) |
+| `wait_or_fault_reason` | newest job `reason`, including `WAITING:<PORT>_UNAVAILABLE`, `WORKER_ERROR:<class>`, `OBSERVATIONS_WRONG_MARKET`, `OBSERVATIONS_WRONG_TIME`, `IDENTITY_CHANGED`, `IDENTITY_UNAVAILABLE`, `CONSENT_CHANGED` | STORED INPUT / PROPOSED (lane2) |
+
+`last_evaluation_outcome` and `last_evaluation_state` are separate. A job state is never reported as
+an outcome. When `job.outcome` is null, `last_evaluation_outcome` is `null` and
+`last_evaluation_state` carries the status.
 
 **Submission-level fields** (producer `SubmissionAttemptRow` via `ExecutionService.status`,
 `execution/types.py:321-332`, `execution/service.py:828-870`):
 
 | Field | Source | Status |
 |---|---|---|
-| `last_submission_attempt_at` | `HealthView.last_attempt_at` = the last `SubmissionAttemptRow.started_at` | PRESENT in the service / projection PROPOSED (route does not expose it) |
-| `last_submission_completion_at` | `HealthView.last_completion_at` = `max(attempt.completed_at)` | PRESENT in the service / projection PROPOSED |
-| `last_decision_input_at` | `HealthView.last_input_at` = the last decision time; the one normalised input time | PRESENT in the service / projection PROPOSED |
-| `last_decision_id` | `HealthView.last_decision_id` | PRESENT in the service / projection PROPOSED |
-| `next_scheduled_at` | `HealthView.next_scheduled_at` = last decision + 5 minutes, a bounded-pipeline estimate; no recurring scheduler exists | PRESENT at `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:106`) / recurring schedule MISSING (P27) |
-| `submission_blocking_reason` | `HealthView.blocking_reason` | PRESENT at the same route (`execution/routes.py:106`) |
+| `last_submission_attempt_at` | `HealthView.last_attempt_at` = the last `SubmissionAttemptRow.started_at` | SERVICE VALUE (f84) / PROPOSED (read surface) |
+| `last_submission_completion_at` | `HealthView.last_completion_at` = `max(attempt.completed_at)` | SERVICE VALUE (f84) / PROPOSED (read surface) |
+| `last_decision_input_at` | `HealthView.last_input_at` = the last decision time; the one normalised input time | SERVICE VALUE (f84) / PROPOSED (read surface) |
+| `last_decision_id` | `HealthView.last_decision_id` | SERVICE VALUE (f84) / PROPOSED (read surface) |
+| `next_scheduled_at` | `HealthView.next_scheduled_at` = last decision + 5 minutes, a bounded-pipeline estimate; no recurring scheduler exists | EXPOSED (f84) at `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:106`) / recurring schedule MISSING (P27) |
+| `submission_blocking_reason` | `HealthView.blocking_reason` | EXPOSED (f84) at the same route (`execution/routes.py:106`) |
 
 **Other fields:**
 
 | Field | Source | Status |
 |---|---|---|
-| `input_event_time`, `collection_time` | `last_decision_input_at` gives the decision time; IC02 observation provenance holds raw per-observation times; a normalised collection time does not exist | PRESENT (f84) decision time / collection time MISSING (P27) |
-| `pending_reconciliation` | `recovery_local.recovery_cases.state IN ('OPEN','UNKNOWN')` for the action, and `outcome = 'SUBMITTED_UNKNOWN'` | PRESENT (f84) |
-| `stop_state` | `stops_local.scoped_stops` (P25); read today by admission, not yet projected | PRESENT (f84) / projection PROPOSED |
-| `removal_state` | `revocation_local.removal_states.state` (P30) | PRESENT (f84) |
+| `input_event_time`, `collection_time` | `last_decision_input_at` gives the decision time; IC02 observation provenance holds raw per-observation times; a normalised collection time does not exist | SERVICE VALUE (f84) decision time / collection time MISSING (P27) |
+| `pending_reconciliation` | `recovery_local.recovery_cases.state IN ('OPEN','UNKNOWN')` for the action, and job `outcome = 'SUBMITTED_UNKNOWN'` | EXPOSED (f84) (`service_projection.py:176`) |
+| `stop_state` | `stops_local.scoped_stops` (P25); read by admission, not projected | STORED INPUT / PROPOSED (lane2) |
+| `removal_state` | `revocation_local.removal_states.state` (P30) | EXPOSED (f84) within the AGENT projection (`service_projection.py:79-91`) |
 | `control_state_basis` | names the source of `stop_state` and `removal_state`: the listed stop/removal rows, or the empty P25/P30 reader result when no row exists (`revocation/enforcement.py:80-86`) | PROPOSED |
-| `residual_inventory` | `admission_local.admission_positions.inventory` | PRESENT (f84) |
-| `dataset_qualification` | `research_local.history_datasets` verdict (QUALIFIED/LIMITED/UNRESOLVED) | MISSING as a health field (producer obligation) |
+| `residual_inventory` | `admission_local.admission_positions.inventory` | EXPOSED (f84) as the POSITION quantity (`service_projection.py:126-141`) |
+| `dataset_qualification` | `research_local.history_datasets` verdict (QUALIFIED/LIMITED/UNRESOLVED) | MISSING (producer obligation) |
 
 Invariant: a process label, heartbeat or liveness signal alone cannot fill worker health. Health
 requires the saved evaluation attempt, completion, next-work or wait reason and the pending
@@ -112,11 +128,14 @@ stop and removal state.
 `SubmissionAttemptRow`, the decision input time and id from `DecisionRow`, and the blocking reason.
 The route `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:83-106`) exposes only
 `blocking_reason` and `next_scheduled_at` from `HealthView`; its other fields need a read surface
-before a consumer can use them (projection PROPOSED). The projection must reuse the evaluation-job
-values for evaluation health and the `HealthView` values for submission health; it must not relabel
-one clock as the other. The `MISSING` obligation is the recurring scheduler, its missed-slot policy
-and a normalised per-observation collection time; a lane-2 implementer must not invent a second
-source for a value an accepted caller already computes.
+(projection PROPOSED). The accepted account projection (`accounts/service_projection.py:162-177`)
+exposes the evaluation counts and the last activity time, but not the evaluation outcome, completion
+time, job state or wait reason; those are stored inputs the P27 producer must derive and expose
+(lane2 obligation). The projection must keep the evaluation clock and the submission clock separate;
+it must not relabel one as the other, and it must not present a job `state` as an `outcome`. The
+`MISSING` obligation is the recurring scheduler, its missed-slot policy and a normalised
+per-observation collection time; a lane-2 implementer must not invent a second source for a value an
+accepted caller already computes.
 
 ## 4. Trading results: `trading_results`
 
@@ -124,13 +143,13 @@ Trading results answer: what did this agent's positions gain or lose, and what c
 
 | Field | Source | Status |
 |---|---|---|
-| `realized_result` | `admission_local.admission_positions.realized_quote` (`KNOWN` with amount) | PRESENT (f84) |
-| `basis` | `admission_positions.cost_basis` (`KNOWN` with amount) | PRESENT (f84) |
-| `estimated_unrealized_result` | no observed mark exists; stays `UNKNOWN` | PRESENT (f84) as UNKNOWN |
-| `mark` | no mark source exists; stays `UNKNOWN` | PRESENT (f84) as UNKNOWN |
-| `native_gas` | funding profile gas asset and `admission_local.admission_receipts` actual gas; kept separate from the reported unit | PRESENT (f84) |
-| `deposits` / `withdrawals` | `funding_local.funding_flows` and `funding_credits`; `included_in_realized_result = false` | PRESENT (f84) |
-| `provider_mode` | `core/settings.py` `execution_mode` (`fixture`/`unavailable`) | PRESENT (f84) |
+| `realized_result` | `admission_local.admission_positions.realized_quote` (`KNOWN` with amount) | EXPOSED (f84) as the POSITION realized result |
+| `basis` | `admission_positions.cost_basis` (`KNOWN` with amount) | EXPOSED (f84) as the POSITION basis |
+| `estimated_unrealized_result` | no observed mark exists; stays `UNKNOWN` | EXPOSED (f84) as UNKNOWN |
+| `mark` | no mark source exists; stays `UNKNOWN` | EXPOSED (f84) as UNKNOWN |
+| `native_gas` | funding profile gas asset and `admission_local.admission_receipts` actual gas; kept separate from the reported unit | STORED INPUT / PROPOSED (no accepted projection outputs gas) |
+| `deposits` / `withdrawals` | `funding_local.funding_flows` and `funding_credits`; `included_in_realized_result = false` | EXPOSED (f84) as CAPITAL_FLOW |
+| `provider_mode` | `core/settings.py` `execution_mode` (`fixture`/`unavailable`) | EXPOSED (f84) (`execution/routes.py`) |
 
 Invariants:
 
@@ -150,8 +169,8 @@ assumptions exist.
 
 | Field | Source | Status |
 |---|---|---|
-| `edge_revision` | an `AccountViewRecord` of kind `EDGE_EVIDENCE` in `records` | PRESENT (f84) as SYNTHETIC_AUTHORED only |
-| `edge_evidence_status` | same record: `HYPOTHESIS`/`DESCRIPTIVE_ONLY`/`UNRESOLVED`/`SUPPORTED`/`CONFLICTED` | PRESENT (f84) |
+| `edge_revision` | an `AccountViewRecord` of kind `EDGE_EVIDENCE` in `records` | EXPOSED (f84), `SYNTHETIC_AUTHORED` only |
+| `edge_evidence_status` | same record: `HYPOTHESIS`/`DESCRIPTIVE_ONLY`/`UNRESOLVED`/`SUPPORTED`/`CONFLICTED` | EXPOSED (f84) |
 | revision-linked real findings | `records.investigation_declarations`, `effect_reports`, `spot_replay_runs` hold findings but are not projected as edge evidence | MISSING (P27/P31 producer obligation) |
 
 Invariants:

@@ -30,6 +30,8 @@ Every claimed value recomputes from the listed rows:
 - counts come from rows. Each evaluation-job row carries `state`; `evaluation_attempts` equals the
   number of listed job rows and `evaluation_completions` counts `state == 'COMPLETED'`
   (`accounts/service_projection.py:162-177`).
+- `last_evaluation_outcome` is the newest job `outcome`; it is `null` when the row `outcome` is null.
+  `last_evaluation_state` carries the newest job `state`. A job state is never reported as an outcome.
 - `last_submission_attempt_at` is a `started_at`, `last_submission_completion_at` is the last
   `completed_at`, both from listed `execution_submission_attempts` rows;
   `last_decision_input_at` is a listed `execution_decisions.decision_at`; `next_scheduled_at` is that
@@ -37,6 +39,12 @@ Every claimed value recomputes from the listed rows:
 - `residual_inventory` copies a listed `admission_positions.inventory_raw`; `basis` copies its
   `cost_basis_raw`; `realized_result` copies its `realized_raw`; `native_gas` equals a listed receipt's
   `gas_used × effective_gas_price`; `deposits` copy a listed `funding_local.funding_flows` amount.
+
+Field classes are labelled in `HEALTH_PROJECTION_CONTRACT.md` §3 and `SOURCE_RECORD_MAP.md`: `EXPOSED`
+(the accepted projection or route outputs it), `SERVICE VALUE` (computed by `ExecutionService.status`,
+no read surface), `STORED INPUT / PROPOSED` (a stored column the lane2 P27 producer must expose), and
+`MISSING`. The evaluation counts and last activity are exposed today; the evaluation outcome,
+completion time, state and wait reason are stored inputs the lane2 producer must derive.
 
 Every row that supplies a known projected value appears in `record_refs` by its own id. A reference
 that merely resolves to a listed row is not enough: the contributing row must be the source of the
