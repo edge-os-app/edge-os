@@ -103,8 +103,8 @@ class RelaySupervisor:
         destination = ProviderDestination(PROVIDER_HOST, PROVIDER_PORT, PROVIDER_PATH)
         gateway = docker("network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}",
                          check=False).stdout.strip() or "172.17.0.1"
-        own_gateway = docker("network", "inspect", self.names["network"], "--format",
-                             "{{(index .IPAM.Config 0).Gateway}}").stdout.strip()  # the Docker host's side of it
+        own_gateway = docker("network", "inspect", self.names["network"], "--format",  # the Docker host's side of it
+                             "{{(index .IPAM.Config 0).Gateway}}", check=False).stdout.strip()
         relay_config = {
             "release": self.release.settings(), "destination": vars(destination),
             "channel_roots": {name: f"/relay/channels/{name}" for name in self.channel_roots},
@@ -115,8 +115,8 @@ class RelaySupervisor:
             "egress_probes": [{"host": PROVIDER_HOST, "port": PROVIDER_PORT, "expect": "reachable"},
                               {"host": "1.1.1.1", "port": 53, "expect": "blocked"},
                               {"host": gateway, "port": 53, "expect": "blocked"},
-                              {"host": own_gateway, "port": 53, "expect": "blocked"},
-                              {"host": own_gateway, "port": 80, "expect": "blocked"},
+                              *([{"host": own_gateway, "port": 53, "expect": "blocked"},
+                                 {"host": own_gateway, "port": 80, "expect": "blocked"}] if own_gateway else []),
                               {"host": "host.docker.internal", "port": 80, "expect": "blocked"}]}
         provider_config = {"bind": "0.0.0.0", "port": PROVIDER_PORT, "path": PROVIDER_PATH,
                            "cert": "/provider/tls/server.pem", "key": "/provider/tls/server.key",

@@ -46,15 +46,16 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
     context = ssl.create_default_context(cafile=ca_file)  # verified certificate and host name; no system CA store
     connection = http.client.HTTPSConnection(destination.host, destination.port, timeout=left, context=context)
     expired = threading.Event()
+    held: list[socket.socket] = []  # a reply that closes the connection detaches its socket; the watchdog keeps it
 
     def cut() -> None:
         expired.set()
-        sock = connection.sock
-        if sock is not None:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+        for sock in (*held, connection.sock):
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
 
     watchdog = threading.Timer(left, cut)
     watchdog.daemon = True
@@ -66,6 +67,9 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
                             ("authorization", f"Bearer {key}"), ("connection", "close")):
             connection.putheader(name, value)
         connection.endheaders(body)
+        held.append(connection.sock)
+        if expired.is_set():  # the watchdog may have fired between the send and the line above
+            raise ReplyLost("the deadline passed while sending")
         response = connection.getresponse()
         data = bytearray()
         while len(data) <= max_reply_bytes:
