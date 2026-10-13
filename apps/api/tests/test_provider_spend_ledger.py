@@ -247,3 +247,10 @@ def test_a_downgrade_below_0013_is_refused_while_any_reservation_exists_and_keep
 
     assert down.returncode != 0 and "downgrade below 0013 refused" in down.stdout + down.stderr
     assert spend.state(held) == "UNKNOWN" and spend.committed_usd() == RESERVATION
+
+    empty_spend_ledger(clean_spend)  # no reservation left, but a recorded cap decision is history too
+    PostgresSpendLedger(clean_spend, limits()).change_caps(global_cap_usd=Decimal("0.30"), owner_cap_usd=Decimal("0.30"),
+                                                           reason="recorded decision")
+    again = subprocess.run([sys.executable, "-m", "alembic", "downgrade", "0012"], cwd=harness.API_DIR, env=env,
+                           capture_output=True, text=True, timeout=180)
+    assert again.returncode != 0 and "downgrade below 0013 refused" in again.stdout + again.stderr

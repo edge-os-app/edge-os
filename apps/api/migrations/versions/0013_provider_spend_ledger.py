@@ -6,7 +6,8 @@ Revises: 0012
 `usage_local.provider_spend_settings` holds the one frozen configuration (global and owner caps in nano-USD, exact
 token prices). `provider_spend_reservations` holds one reservation per saved interpretation attempt, with that
 attempt's owner and saved request, copied from the append-only attempt row inside the reserving transaction. `provider_spend_events` is append-only. No existing row
-changes. The downgrade refuses while any reservation exists, because it would lose recorded spending liability.
+changes. The downgrade refuses while any reservation or event exists, because it would lose recorded spending liability
+or a recorded cap decision.
 """
 from alembic import op
 import sqlalchemy as sa
@@ -77,12 +78,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Revision 0012 cannot hold spending liability. Refuse instead of dropping it.
+    # Revision 0012 cannot hold spending liability or a recorded cap decision. Refuse instead of dropping them.
     op.execute(f"""
         DO $$
         BEGIN
-            IF EXISTS (SELECT 1 FROM {SCHEMA}.provider_spend_reservations) THEN
-                RAISE EXCEPTION 'downgrade below 0013 refused: provider spend reservations exist';
+            IF EXISTS (SELECT 1 FROM {SCHEMA}.provider_spend_reservations)
+                    OR EXISTS (SELECT 1 FROM {SCHEMA}.provider_spend_events) THEN
+                RAISE EXCEPTION 'downgrade below 0013 refused: provider spend reservations or events exist';
             END IF;
         END $$""")
     op.drop_table('provider_spend_events', schema=SCHEMA)

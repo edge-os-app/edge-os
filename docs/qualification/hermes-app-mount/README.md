@@ -19,7 +19,7 @@ app = create_app(settings, hermes_runner=mount.runner)   # EDGE_OS_INTERPRETER=h
 
 - `apps/api/src/edge_os_api/research/hermes_transport_mount.py` composes the accepted `GuardedTurnRunner`, `TransportTurnRunner` and container job, and adds no runner of its own. It refuses production, another interpreter, an ACTUAL route and a policy that does not match the application's interpreter before any effect. The spend scope is the saved request of the recorded attempt. At open it runs one recovery pass (budget C) for this `run_id`.
 - `apps/api/src/edge_os_api/research/provider_spend_ledger.py` is the shared spend ledger: the accepted `SpendLedger` methods, results and exceptions on PostgreSQL, with an owner cap and a global cap. Every write locks one settings row, so all API processes share one cap. Caps and prices freeze at first use; a different configured value refuses new reservations until `change_caps` records a decision.
-- Migration `0013` adds `usage_local.provider_spend_settings`, `provider_spend_reservations` and `provider_spend_events` (append-only). Its downgrade refuses while any reservation exists.
+- Migration `0013` adds `usage_local.provider_spend_settings`, `provider_spend_reservations` and `provider_spend_events` (append-only). Its downgrade refuses while any reservation or spend event exists.
 - A public attempt gains a read-only `spend` field (`state`, `charge_usd`) from the values the accepted runner saved. The web client is unchanged.
 
 Test support, not product code: `tests/hermes_app_mount/transport_mount_host.py` runs one API process over the mount with an authored script queue. Settings, `main.py`, the accepted `scripts/` code, `usage/`, the investigation job engine and the web client are unchanged.
@@ -55,7 +55,7 @@ The second and third commands need Docker. They build the pinned Hermes image fr
 
 ## 4. Limits
 
-- LOCAL only. The mount imports the accepted job code from `scripts/` and is refused in production. Only the AUTHORED transport exists.
+- LOCAL only. The mount and the spend ledger add `scripts/` folders to the import path at import time and reuse three private helpers of the accepted `spend_ledger` module; the application factory and `migrations/env.py` do not import them. Package these types properly before any hosted step. The mount is refused in production. Only the AUTHORED transport exists.
 - Each API process needs its own stable `run_id`. Two processes that share one are still safe, but their turns serialize (`CleanupPending`).
 - The local cap does not cap provider billing. A killed non-streaming request may still be billed (P05 known limit). An UNKNOWN reservation is resolved only by late evidence; a decision path for it is not built.
 - Zero-request release relies on counts written inside the job process: the guard's count, the transport's sent count and Hermes' count must all be 0. An ACTUAL route needs independent evidence first.

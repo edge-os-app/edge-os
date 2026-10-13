@@ -57,7 +57,7 @@ New module `apps/api/src/edge_os_api/research/provider_spend_ledger.py`, class `
 
 | Method | Rule |
 |---|---|
-| `reserve(attempt_id, *, scope, max_input_tokens, max_output_tokens) -> Reservation` | One transaction. The attempt must be a saved interpretation attempt (owner and saved request are copied from that row; a composite foreign key enforces it). Refused, writing nothing, on: existing attempt id (`ReservationExists`), unresolved liability in the scope (`ScopeBlocked`), configured caps or prices that differ from the frozen ones (`LedgerConfigMismatch`), owner liability + amount > owner cap or global liability + amount > global cap (`CapExceeded`). |
+| `reserve(attempt_id, *, scope, max_input_tokens, max_output_tokens) -> Reservation` | One transaction. The attempt must be a saved interpretation attempt (owner and saved request are copied from that row; see A1). Refused, writing nothing, on: existing attempt id (`ReservationExists`), unresolved liability in the scope (`ScopeBlocked`), configured caps or prices that differ from the frozen ones (`LedgerConfigMismatch`), owner liability + amount > owner cap or global liability + amount > global cap (`CapExceeded`). |
 | `settle(attempt_id, *, input_tokens, output_tokens) -> Settlement` | RESERVED with usable usage: exact charge at the frozen prices. Unusable usage: UNKNOWN, full reservation kept. Already SETTLED: compared as evidence (duplicate, or conflicting keeps the higher). |
 | `mark_unknown(attempt_id, *, reason)` | RESERVED becomes UNKNOWN; full reservation kept, scope stays blocked. |
 | `release_unsent(attempt_id, *, reason)` | Only from RESERVED; the only way liability is freed. The accepted runner calls it only when the job reported zero requests, the guard's own count is 0, the status is not TIMED_OUT, and (through `TransportTurnRunner`) the transport's own sent count agrees. |
@@ -69,7 +69,7 @@ Liability is: SETTLED rows at their charge, RESERVED and UNKNOWN rows at their f
 
 Atomicity: every write runs in one transaction that first locks the single configuration row (`SELECT ... FOR UPDATE`). This serializes all ledger writes across threads and API processes, as `BEGIN IMMEDIATE` does for the SQLite file. Caps and prices are frozen in that row at the first reservation. A different configured cap or price later refuses new reservations until `change_caps` records a decision; existing reservations always settle at the frozen prices.
 
-Tables (migration `0013`, schema `usage_local`): `provider_spend_settings` (one row), `provider_spend_reservations` (attempt id, owner, saved request, scope, state, amounts, token bounds, times; composite foreign key to `interpretation_attempts`), `provider_spend_events` (append-only). The downgrade is refused while any reservation exists.
+Tables (migration `0013`, schema `usage_local`): `provider_spend_settings` (one row), `provider_spend_reservations` (attempt id, owner, saved request, scope, state, amounts, token bounds, times; no foreign key, see A1), `provider_spend_events` (append-only). The downgrade is refused while any reservation or event exists (A2).
 
 ## 4. What a user sees
 
@@ -82,9 +82,9 @@ The saved attempt keeps the accepted runner's `spend_state` and `spend_charge_us
 | Production, ACTUAL route, wrong policy | none: mount refused | - | none | - | nothing | - |
 | Policy, cap, scope, config mismatch, unsaved attempt, ledger down | 0, no job | - | none | - | never reserved (PROVIDER_FAILED, count 0) | - |
 | Pending cleanup of an earlier turn | 0, no job | - | none | recovery pass first | RELEASED | recovered within C |
-| Physical or guard refusal | 0 | job ends | sealed | output removed | RELEASED (guard 0, transport 0) | - |
-| One request, usable usage | 1 | job ends | sealed | output removed | SETTLED exact | - |
-| Lost reply, oversized reply, crash after send, missing usage, identity mismatch | 1 (may be billed) | job ends | sealed, reply dropped | output removed | UNKNOWN, full reservation, scope blocked | still held |
+| Physical or guard refusal | 0 | job ends | sealed | sealed output kept in the turn folder | RELEASED (guard 0, transport 0) | - |
+| One request, usable usage | 1 | job ends | sealed | sealed output kept in the turn folder | SETTLED exact | - |
+| Lost reply, oversized reply, crash after send, missing usage, identity mismatch | 1 (may be billed) | job ends | sealed, reply dropped | sealed output kept in the turn folder | UNKNOWN, full reservation, scope blocked | still held |
 | Hung provider | 1 (may be billed) | stopped at D | sealed or quarantined | removed or quarantined | UNKNOWN (TIMED_OUT) | still held |
 | API process killed mid-turn | 0 or 1 | the next process with the same run id stops the container by name and label within C | output removed | record deleted when confirmed | stays RESERVED; recovery never touches spend | attempt closed INTERRUPTED by `recover_all`; scope blocked |
 | Settlement write fails | as above | - | - | - | SETTLEMENT_NOT_RECORDED, stays RESERVED | still held |
@@ -116,3 +116,5 @@ Not changed: `scripts/hermes_job_support/`, `scripts/hermes_interpretation/`, `u
 ## Amendments
 
 A1 (during slice 1): no database foreign key from a reservation to its attempt. No table in this repository declares a foreign key across metadata, and `alembic check` must compare the new tables. Instead `reserve` reads the saved attempt row inside its locked transaction and copies the owner and saved request from it; that row is append-only (an immutability trigger rejects updates and deletes), so the copy cannot drift. An id that is not a saved attempt raises `AttemptNotSaved` and writes nothing. The table definitions live in `research/provider_spend_tables.py` and are registered in `migrations/env.py`.
+
+A2 (after internal review round 1, non-blocking findings): corrections only. Section 3 and the tables row no longer claim a composite foreign key (A1 removed it). In the fault matrix, a turn that ends normally keeps its sealed output in its turn folder (the accepted runner removes output only for pending cleanup, quarantine and crash recovery); the earlier "output removed" in three rows was wrong. The migration downgrade now also refuses while any spend event exists, so a recorded cap decision is not dropped. The ledger documents its reliance on READ COMMITTED isolation.

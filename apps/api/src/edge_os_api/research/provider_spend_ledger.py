@@ -11,8 +11,9 @@ and processes, as `BEGIN IMMEDIATE` serializes the SQLite file. Caps and prices 
 different configured cap or price later refuses new reservations (`LedgerConfigMismatch`) until `change_caps` records an
 explicit decision; existing reservations always settle at the frozen prices.
 
-A reservation names a saved interpretation attempt: its owner and saved request are copied from that row, and a foreign
-key keeps them equal. Money is integer nano-USD and prices are exact decimals, as in the accepted ledger.
+A reservation names a saved interpretation attempt: its owner and saved request are copied from that row inside the
+reserving transaction. That row is append-only (an immutability trigger rejects updates and deletes), so the copy cannot
+drift; there is no database foreign key between the two tables. Money is integer nano-USD and prices are exact decimals, as in the accepted ledger.
 
 What this proves: shared LOCAL accounting. It cannot prove that a provider's own billing stops at the cap. LOCAL only:
 the accepted ledger types live under `scripts/`, which this module adds to the import path; the application factory
@@ -103,7 +104,11 @@ class PostgresSpendLedger:
             session.commit()
 
     def _locked(self, session: Session, *, check: bool) -> _Frozen:
-        """Freeze the settings at first use, then lock them: every write waits here, in every process."""
+        """Freeze the settings at first use, then lock them: every write waits here, in every process.
+
+        The cap check relies on PostgreSQL's default READ COMMITTED isolation: each statement after this lock sees every
+        write committed before the lock was granted. Under REPEATABLE READ the snapshot could predate the wait.
+        """
         configured, now = self._configured, _now()
         session.execute(text(
             f"INSERT INTO {SCHEMA}.provider_spend_settings VALUES (1, :g, :o, :p, :c, 'configuration-at-first-use', :now, :now) "
