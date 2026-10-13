@@ -11,13 +11,15 @@ from __future__ import annotations
 from collections.abc import Generator
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from edge_os_api.admission.models import PositionRow, ReservationRow
+from edge_os_api.agent_health.conversation import QUESTION_LIMIT, explain
+from edge_os_api.agent_health.snapshot import HealthNotFound, read_health
 from edge_os_api.core.authentication import Principal, require_principal
 from edge_os_api.core.errors import AppError, finding, not_found
 from edge_os_api.core.request_schemas import StrictModel
@@ -174,6 +176,28 @@ def read_deployment(agent_id: str, request: Request, principal: Principal = Depe
     if view["deployment"] is None and resolve_agent(session, principal.user_id, agent_id) is None:
         raise not_found("agent wallet")
     return view
+
+
+def _health(agent_id: str, request: Request, principal: Principal) -> dict[str, Any]:
+    try:
+        return read_health(request.app.state.session_factory, request.app.state.financial, principal.user_id, agent_id)
+    except HealthNotFound:
+        raise not_found("agent wallet") from None
+
+
+@router.get("/agents/{agent_id}/health")
+def read_agent_health(agent_id: str, request: Request,
+                      principal: Principal = Depends(require_principal)) -> dict[str, Any]:
+    """P31 LOCAL: the dated read-only health snapshot of the newest deployment. Reads only."""
+    return _health(agent_id, request, principal)
+
+
+@router.get("/agents/{agent_id}/health/explanation")
+def explain_agent_health(agent_id: str, request: Request,
+                         question: str = Query(min_length=1, max_length=QUESTION_LIMIT),
+                         principal: Principal = Depends(require_principal)) -> dict[str, Any]:
+    """P31 LOCAL read-only conversation: answers from the same snapshot, with no write, provider call or tool."""
+    return explain(_health(agent_id, request, principal), question)
 
 
 @router.get("/actions/{action_id}")

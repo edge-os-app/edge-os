@@ -2,6 +2,7 @@
 
 import { FIELD_LABEL, summarizeValue } from "../lib/describe";
 import type { Bundle, Clarification } from "../lib/types";
+import { AgentHealthConversation } from "./AgentHealthConversation";
 import { AnswerMessage, QuestionForm } from "./QuestionForm";
 
 export interface ConversationContext {
@@ -12,9 +13,11 @@ export interface ConversationContext {
   reply(questionId: string, text: string, origin?: HTMLElement): void;
 }
 
-/** Contextual conversation. It reads the same saved request and revision as the page. It has no financial tools. */
-export function Conversation({ context, idPrefix, showTitle = true }: { context: ConversationContext | null; idPrefix: string; showTitle?: boolean }) {
+/** Contextual conversation. It reads the same saved request and revision as the page. It has no financial tools.
+ * On an opened agent's account view it is the read-only agent health conversation instead. */
+export function Conversation({ context, idPrefix, showTitle = true, agentId }: { context: ConversationContext | null; idPrefix: string; showTitle?: boolean; agentId?: string }) {
   const title = showTitle ? <h2 tabIndex={-1} data-focus-target>Conversation</h2> : null;
+  if (agentId) return <>{title}<AgentHealthConversation key={agentId} agentId={agentId} /></>;
   if (!context) {
     return (
       <>

@@ -263,3 +263,55 @@ export const api = {
     request<WalletSetupRecord>(`/v1/wallet-setup/agents/${encodeURIComponent(agentId)}/cancel`,
       { method: "POST" }).then((r) => r.body),
 };
+
+// P31 LOCAL read-only agent health: one dated snapshot for the direct view and the read-only conversation.
+export type HealthField<T = unknown> = { state: "KNOWN"; value: T; source: string } | { state: "UNKNOWN"; reason: string };
+export interface HealthSourceRef { table: string; id: string; field: string; time: string }
+export interface HealthOccurrence {
+  job_id: string; decision_slot: string; job_state: string; job_outcome: string | null; job_reason: string | null;
+  action_id: string | null; job_updated_at: string;
+  evaluation: { outcome: string; reason: string | null; inputs_observed_at: HealthField<string>;
+    inputs_collected_at: HealthField<string>; evaluated_at: HealthField<string>; evidence_class: string | null } | null;
+  submission: { attempt_id: string; state: string; outcome: string | null; started_at: HealthField<string>;
+    completed_at: HealthField<string> } | null;
+}
+export interface AgentHealth {
+  schema_version: string; record_type: string; evidence_class: string; record_id: string; notice: string; provider_mode: string;
+  read_at: string; as_of: HealthSourceRef | null; as_of_meaning: string; snapshot_digest: string;
+  scope: { owner_id: string; agent_id: string; wallet_id: string; network_id: string; deployment_id: string | null };
+  deployment: { deployment_id: string; state: string; end_reason: string | null; activated_at: string; ended_at: string | null } | null;
+  identity: { saved_deployment: { execution_revision_id: string } | null;
+    current_resolution: HealthField<{ execution_revision_id: string }>; changed: HealthField<boolean> };
+  producer: { next_due_slot: HealthField<string>; producer_silent: HealthField<boolean>; last_tick_at: HealthField<string>;
+    cursor_slot: HealthField<string>; missed_slots: HealthField<number> };
+  wait_reason: HealthField<string | null>;
+  window: { occurrences_shown: number; limit: number };
+  occurrences: HealthOccurrence[];
+  last_evaluation: HealthField<Pick<HealthOccurrence, "job_id" | "decision_slot" | "job_state" | "evaluation">>;
+  last_trade_attempt: HealthField<Pick<HealthOccurrence, "job_id" | "decision_slot" | "action_id" | "job_outcome" | "submission">>;
+  pending_reconciliation: {
+    canonical: { rule: string; queue_states: string[]; source: string; action_ids: string[] } | { state: "UNKNOWN"; reason: string };
+    warnings: [{ kind: string; source: string; action_ids: string[] }, { kind: string; source: string; pending: boolean }];
+  };
+  controls: {
+    stops: { stop_id: string; mode: string; scope: string; position_id: string | null; created_at: string }[];
+    removals: { request_id: string; state: string; requested_at: string; updated_at: string }[];
+    control_state_basis: HealthField;
+  };
+  residual_inventory: { position_id: string; asset_id: string; quantity: { asset_id: string; raw: string; decimals: number };
+    position_state: string; updated_at: HealthField<string> }[];
+  unknown_inputs: { field: string; state: "UNKNOWN"; reason: string }[];
+  record_refs: HealthSourceRef[];
+}
+export interface HealthExplanation {
+  schema_version: string; question: string; topic: string; record_id: string; snapshot_digest: string;
+  as_of: HealthSourceRef | null; read_at: string; answer: { text: string; fields: string[] }[]; notice: string;
+  snapshot: AgentHealth;
+}
+
+const healthPath = (agentId: string) => `/v1/agents/${encodeURIComponent(agentId)}/health`;
+export const agentHealth = {
+  read: (agentId: string) => request<AgentHealth>(healthPath(agentId)).then((r) => r.body),
+  explain: (agentId: string, question: string) =>
+    request<HealthExplanation>(`${healthPath(agentId)}/explanation?question=${encodeURIComponent(question)}`).then((r) => r.body),
+};
