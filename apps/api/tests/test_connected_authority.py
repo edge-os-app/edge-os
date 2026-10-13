@@ -118,11 +118,12 @@ def test_expired_consent_leaves_the_action_unavailable(journey, owner_a):
     declaration = ff.funded(journey, owner_a, agent)
     expiry = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     ff.adopted(journey, owner_a, agent, declaration, expiry=expiry)
-    job = ff.schedule(journey, owner_a, agent).json()
     connected = journey.app.state.financial.connected
     original = connected._clock
     connected._clock = lambda: original() + dt.timedelta(hours=1)
     try:
+        # Scheduled and evaluated in the same (later) slot: a fresh evaluation, so the expiry is what denies.
+        job = ff.schedule(journey, owner_a, agent).json()
         done = ff.run_job(journey, job)
     finally:
         connected._clock = original

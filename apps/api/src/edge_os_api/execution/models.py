@@ -232,6 +232,8 @@ class EvaluationJobRow(ExecutionBase):
     provenance: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # P27: the recurring deployment that produced this occurrence; None for a manual evaluation (migration 0012).
+    deployment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     __table_args__ = (
         UniqueConstraint("owner_id", "agent_id", "request_key", name="uq_execution_jobs_owner_agent_request"),
@@ -242,4 +244,85 @@ class EvaluationJobRow(ExecutionBase):
         CheckConstraint("length(request_key) BETWEEN 1 AND 200", name="ck_execution_jobs_request_key"),
         Index("ix_execution_jobs_state", "state", "created_at"),
         Index("ix_execution_jobs_owner_agent", "owner_id", "agent_id", "created_at"),
+        Index("ix_execution_jobs_deployment", "deployment_id", "decision_slot"),
+    )
+
+
+EVALUATION_OUTCOMES = ("SIGNAL", "NO_SIGNAL", "INELIGIBLE", "UNAVAILABLE")
+
+
+class EvaluationOutcomeRow(ExecutionBase):
+    """The one saved evaluation outcome of one job, written before any intent (P27, migration 0012).
+
+    `execution_decisions` keeps its three statuses; an UNAVAILABLE evaluation has no decision row, so this row is
+    what records it. Input observed time, input collection time and evaluation time stay separate.
+    """
+
+    __tablename__ = "execution_evaluation_outcomes"
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[str] = mapped_column(Text, nullable=False)
+    deployment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    decision_slot: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    inputs_observed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    inputs_collected_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    evaluated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("outcome IN ('SIGNAL','NO_SIGNAL','INELIGIBLE','UNAVAILABLE')", name="outcome"),
+        CheckConstraint("(outcome = 'UNAVAILABLE') = (decision_id IS NULL)", name="decision_presence"),
+        Index("ix_execution_outcomes_owner_agent", "owner_id", "agent_id", "decision_slot"),
+    )
+
+
+DEPLOYMENT_STATES = ("ACTIVE", "ENDED")
+MISSED_INTERVALS_KEPT = 20
+
+
+class RecurringDeploymentRow(ExecutionBase):
+    """One explicit recurring authorization for one adopted consent of one agent wallet (P27, migration 0012).
+
+    The producer saves one occurrence job per due five-minute slot while ACTIVE. `cursor_slot` is the last slot it
+    saved; slots skipped while no producer ran are counted in `missed_slots` and never replayed. ENDED is terminal.
+    """
+
+    __tablename__ = "execution_recurring_deployments"
+    deployment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[str] = mapped_column(Text, nullable=False)
+    wallet_id: Mapped[str] = mapped_column(Text, nullable=False)
+    network_id: Mapped[str] = mapped_column(Text, nullable=False)
+    request_key: Mapped[str] = mapped_column(Text, nullable=False)
+    strategy_id: Mapped[str] = mapped_column(Text, nullable=False)
+    publication_revision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    execution_revision_id: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    consent_adoption_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    consent_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    end_reason: Mapped[str | None] = mapped_column(Text)
+    cursor_slot: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    occurrences: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    missed_slots: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    missed_intervals: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    last_tick_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "agent_id", "request_key", name="uq_recurring_deployments_owner_agent_request"),
+        UniqueConstraint("owner_id", "consent_adoption_id", name="uq_recurring_deployments_owner_consent"),
+        CheckConstraint("state IN ('ACTIVE','ENDED')", name="state"),
+        CheckConstraint("(state = 'ENDED') = (end_reason IS NOT NULL AND ended_at IS NOT NULL)", name="ended"),
+        CheckConstraint("length(request_key) BETWEEN 1 AND 200", name="request_key"),
+        CheckConstraint("missed_slots >= 0 AND occurrences >= 0", name="counts"),
+        Index("uq_recurring_deployments_active_wallet", "owner_id", "agent_id", "wallet_id", "network_id",
+              unique=True, postgresql_where=text("state = 'ACTIVE'")),
+        Index("ix_recurring_deployments_state", "state", "deployment_id"),
     )

@@ -35,12 +35,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from edge_os_api.admission.models import PositionRow
 from edge_os_api.admission.types import (AdmissionContext, ApprovalSnapshot, AssetAmount, Holding,
                                          HoldingsSnapshot, IdentityBinding, PositionState, ValueState)
-from edge_os_api.core.provider_ports import (MarketObservationRequest, PlannedFixtureEffect, ProviderUnavailable,
-                                             QuoteRequest)
+from edge_os_api.core.provider_ports import (FIXTURE_EVIDENCE, FIXTURE_MODE, MarketObservationRequest,
+                                             PlannedFixtureEffect, ProviderUnavailable, QuoteRequest)
 from edge_os_api.execution.connected_identity import (AdoptedConsent, ConnectedAgent, adopted_consent,
                                                       derive_approval, resolve_agent)
 from edge_os_api.execution.current_holdings import HoldingsUnavailable
-from edge_os_api.execution.models import DecisionRow, EvaluationJobRow, IntentRow, QueueRow, SubmissionAttemptRow
+from edge_os_api.execution.models import (DecisionRow, EvaluationJobRow, EvaluationOutcomeRow, IntentRow, QueueRow,
+                                          RecurringDeploymentRow, SubmissionAttemptRow)
 from edge_os_api.execution.original_transaction import (TRANSPORT_ID as ORIGINAL_TRANSPORT_ID,
                                                         Leg, OriginalClients, OriginalContext,
                                                         OriginalTransactionTransport, RouteProfile,
@@ -57,6 +58,36 @@ INTENT_VALIDITY = dt.timedelta(minutes=5)
 TERMINAL_QUEUE = {"SUBMITTED_CONFIRMED", "SUBMITTED_REVERTED", "DENIED_UNSENT", "REVALIDATION_DENIED",
                   "ADMISSION_DENIED", "SUBMISSION_NOT_OWNED"}
 SLOT = dt.timedelta(minutes=5)
+# P27 LOCAL observation policy. A forward decision needs these provenance facts, an evidence class the configured mode
+# accepts as a forward feed, and a collection inside the current slot. Historical, recorded, research or quote
+# classes are never forward observations.
+REQUIRED_PROVENANCE = ("evidence_class", "market_binding_id", "collected_at", "availability_basis", "finality")
+FORWARD_EVIDENCE = {FIXTURE_MODE: frozenset({FIXTURE_EVIDENCE})}
+
+
+def _parse_time(value: Any) -> dt.datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
+
+
+def observation_problem(provenance: dict[str, Any], slot: dt.datetime, now: dt.datetime,
+                        qualification: str) -> tuple[str | None, dt.datetime | None]:
+    """The first reason these observations cannot decide this slot now, and their collection time."""
+    if any(provenance.get(name) in (None, "") for name in REQUIRED_PROVENANCE):
+        return "OBSERVATIONS_PROVENANCE_INCOMPLETE", None
+    collected = _parse_time(provenance["collected_at"])
+    if collected is None:
+        return "OBSERVATIONS_PROVENANCE_INCOMPLETE", None
+    if provenance["evidence_class"] not in FORWARD_EVIDENCE.get(qualification, frozenset()):
+        return "OBSERVATIONS_NOT_FORWARD", collected
+    if not slot <= collected <= now or now - collected >= SLOT:
+        return "OBSERVATIONS_STALE", collected
+    return None, collected
 
 
 def decision_slot(now: dt.datetime) -> dt.datetime:
@@ -102,7 +133,8 @@ def job_view(row: EvaluationJobRow) -> dict[str, Any]:
             "state": row.state, "decision_id": str(row.decision_id) if row.decision_id else None,
             "action_id": row.action_id, "outcome": row.outcome, "reason": row.reason, "runs": int(row.runs),
             "provenance": row.provenance, "created_at": row.created_at.isoformat(),
-            "updated_at": row.updated_at.isoformat()}
+            "updated_at": row.updated_at.isoformat(),
+            "deployment_id": str(row.deployment_id) if row.deployment_id else None}
 
 
 class ConnectedExecution:
@@ -113,6 +145,11 @@ class ConnectedExecution:
         self._ports = ports
         self._qualification = qualification
         self._clock = clock or (lambda: dt.datetime.now(dt.timezone.utc))
+
+    @property
+    def qualification(self) -> str:
+        """The server-owned qualification profile (the provider mode). Never request input."""
+        return self._qualification
 
     # ----------------------------------------------------------------------------------- schedule
 
@@ -173,12 +210,16 @@ class ConnectedExecution:
             except Exception as error:  # noqa: BLE001 - one failing job must not stop other owners' jobs
                 # Saved stage state stays as it was; the failure is recorded on this job only and retried later.
                 # The error class only: an injected client's message or traceback could carry private bytes.
-                log.error("worker job %s failed: %s", job_id, type(error).__name__)
-                self._update(job_id, reason=f"WORKER_ERROR:{type(error).__name__}")
+                self.record_failure(job_id, type(error).__name__)
                 continue
             if result is not None:
                 results.append(result)
         return results
+
+    def record_failure(self, job_id: uuid.UUID, error_class: str) -> None:
+        """Record one job's failure on that job only; its saved stage stays as it was and a later pass retries."""
+        log.error("worker job %s failed: %s", job_id, error_class)
+        self._update(job_id, reason=f"WORKER_ERROR:{error_class}")
 
     def _runnable_ids(self, limit: int) -> list[uuid.UUID]:
         with self._factory() as session:
@@ -232,10 +273,36 @@ class ConnectedExecution:
             return None, None, "CONSENT_CHANGED"
         return agent, consent, None
 
+    def touch(self, job_id: uuid.UUID) -> None:
+        """Record that a pass looked at this job, without changing its state. `updated_at` moves strictly later than
+        it was, so a least-recently-tried window rotates even when several jobs share one clock reading."""
+        with self._factory() as session:
+            row = session.execute(select(EvaluationJobRow).where(EvaluationJobRow.job_id == job_id)
+                                  .with_for_update()).scalar_one()
+            row.updated_at = max(self._clock(), row.updated_at + dt.timedelta(microseconds=1))
+            session.commit()
+
+    def _ended_deployment(self, job: EvaluationJobRow) -> str | None:
+        """The end reason of the job's recurring deployment, if it has ended. Manual jobs have none."""
+        if job.deployment_id is None:
+            return None
+        with self._factory() as session:
+            row = session.execute(select(RecurringDeploymentRow.state, RecurringDeploymentRow.end_reason).where(
+                RecurringDeploymentRow.deployment_id == job.deployment_id,
+                RecurringDeploymentRow.owner_id == job.owner_id)).one_or_none()
+        return None if row is None or row.state != "ENDED" else str(row.end_reason)
+
     def _advance(self, job: EvaluationJobRow) -> None:
+        ended = self._ended_deployment(job)
+        if ended is not None:
+            # An ended deployment authorizes no further work: an occurrence not yet decided or admitted ends here, and
+            # an admitted, unsent one is released through the accepted cancellation. A submission-owned action is
+            # never cancelled; it keeps its reservations and stays reconcilable.
+            self._terminate(job, "DEPLOYMENT_ENDED", f"DEPLOYMENT_ENDED:{ended}")
+            return
         agent, consent, problem = self._context_for(job)
         if problem is not None:
-            self._update(job.job_id, state="COMPLETED", outcome="DENIED", reason=problem)
+            self._terminate(job, "DENIED", problem)
             return
         assert agent is not None and consent is not None
         if job.state == "QUEUED":
@@ -244,6 +311,28 @@ class ConnectedExecution:
             self._enqueue(job, agent, consent)
         elif job.state == "ENQUEUED":
             self._submit(job, agent, consent)
+
+    def _terminate(self, job: EvaluationJobRow, outcome: str, reason: str) -> None:
+        """End a job that may no longer proceed, without stranding an admitted original.
+
+        A worker can stop after `enqueue` saved the intent and before the job recorded its action. The saved intent is
+        found again by the job's decision and linked before anything ends, so its admitted, unsent action is released
+        through the accepted guarded cancellation (which refuses anything submission-owned; such an action keeps its
+        reservations and stays reconcilable). Without a saved intent the job simply ends denied.
+        """
+        action_id = job.action_id
+        if action_id is None and job.decision_id is not None:
+            with self._factory() as session:
+                saved = session.execute(select(IntentRow.action_id).where(
+                    IntentRow.owner_id == job.owner_id, IntentRow.decision_id == job.decision_id)).scalar_one_or_none()
+            if saved is not None:
+                self._update(job.job_id, action_id=saved)
+                job = self._load(job.job_id)
+                action_id = saved
+        if action_id is not None:
+            self._release_unsent(job, outcome, reason)
+            return
+        self._update(job.job_id, state="COMPLETED", outcome="DENIED", reason=reason)
 
     # ---------------------------------------------------------------------------- stages
 
@@ -274,32 +363,99 @@ class ConnectedExecution:
                 DecisionRow.revision_id == job.execution_revision_id,
                 DecisionRow.decision_at == job.decision_slot)).scalars().first()
             decision_id, status = (existing.decision_id, existing.status) if existing is not None else (None, None)
+            decided_at = existing.created_at if existing is not None else None
+            saved = session.get(EvaluationOutcomeRow, job.job_id)
+        if decision_id is None and saved is not None and saved.outcome == "UNAVAILABLE":
+            # The UNAVAILABLE outcome was saved and the worker stopped before the job ended: it stays final, and
+            # nothing is observed or decided again for this slot.
+            self._finish_unavailable(job, saved.reason or "OBSERVATIONS_UNAVAILABLE")
+            return
         if decision_id is None:
             position_open = self._position(agent) is not None
+            now = self._clock()
             try:
                 observed = self._observe(agent, job.decision_slot, position_open)
             except ProviderUnavailable:
-                self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="OBSERVATIONS_UNAVAILABLE")
+                self._unavailable(job, "OBSERVATIONS_UNAVAILABLE", now)
                 return
             # Observations for another market or another decision time are never evaluated for this one.
             if observed.provenance.get("market_binding_id") != agent.revision.market_binding_id:
-                self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="OBSERVATIONS_WRONG_MARKET")
+                self._unavailable(job, "OBSERVATIONS_WRONG_MARKET", now, observed)
                 return
             if observed.inputs.observed_at() != job.decision_slot:
-                self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason="OBSERVATIONS_WRONG_TIME")
+                self._unavailable(job, "OBSERVATIONS_WRONG_TIME", now, observed)
+                return
+            problem, collected = observation_problem(observed.provenance, job.decision_slot, now,
+                                                     self._qualification)
+            if problem is not None:
+                self._unavailable(job, problem, now, observed, collected)
                 return
             view = self._services.execution.evaluate_and_decide(
                 job.owner_id, agent.revision, observed.inputs, agent_id=agent.agent_id, wallet_id=agent.wallet_id,
                 network_id=agent.network_id)
             decision_id, status = view.decision_id, view.status
             provenance = {**job.provenance, "observations": observed.provenance}
+            self._save_outcome(job, status, None, decision_id, observed.inputs.observed_at(), collected, now,
+                               observed.provenance)
         else:
             provenance = job.provenance
+            # A restart after the decision was saved: the outcome row is written once from the saved decision. Its
+            # evaluation time is the decision's own time; an input collection time not saved before the stop stays
+            # unknown, and the row says it was recovered.
+            observations = provenance.get("observations") or {}
+            assert decided_at is not None
+            self._save_outcome(job, status, None, decision_id, job.decision_slot,
+                               _parse_time(observations.get("collected_at")), decided_at,
+                               {**observations, "recovered_after_restart": True})
         if status != "SIGNAL":
             self._update(job.job_id, state="COMPLETED", decision_id=decision_id, outcome=status,
                          reason=None, provenance=provenance)
             return
         self._update(job.job_id, state="DECIDED", decision_id=decision_id, provenance=provenance)
+
+    def _unavailable(self, job: EvaluationJobRow, reason: str, now: dt.datetime, observed: Any = None,
+                     collected: dt.datetime | None = None) -> None:
+        """Save the UNAVAILABLE outcome first, then end the job. No decision and no intent exist for it."""
+        provenance = observed.provenance if observed is not None else {}
+        observed_at = None
+        if observed is not None:
+            try:
+                observed_at = observed.inputs.observed_at()
+            except Exception:  # noqa: BLE001 - an unreadable input time stays unknown
+                observed_at = None
+        if collected is None and observed is not None:
+            collected = _parse_time(provenance.get("collected_at"))
+        # The outcome row and the job's end commit together, so a stop between them cannot leave a saved
+        # UNAVAILABLE outcome beside a job that later decides and trades.
+        with self._factory() as session:
+            session.execute(self._outcome_insert(job, "UNAVAILABLE", reason, None, observed_at, collected, now,
+                                                 provenance))
+            row = session.execute(select(EvaluationJobRow).where(EvaluationJobRow.job_id == job.job_id)
+                                  .with_for_update()).scalar_one()
+            row.state, row.outcome, row.reason, row.updated_at = "UNAVAILABLE", "UNAVAILABLE", reason, self._clock()
+            session.commit()
+
+    def _finish_unavailable(self, job: EvaluationJobRow, reason: str) -> None:
+        self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason=reason)
+
+    def _save_outcome(self, job: EvaluationJobRow, outcome: str, reason: str | None, decision_id: uuid.UUID | None,
+                      observed_at: dt.datetime | None, collected_at: dt.datetime | None, evaluated_at: dt.datetime,
+                      provenance: dict[str, Any]) -> None:
+        """One outcome row per job, written before any intent. A repeat keeps the first row."""
+        with self._factory() as session:
+            session.execute(self._outcome_insert(job, outcome, reason, decision_id, observed_at, collected_at,
+                                                 evaluated_at, provenance))
+            session.commit()
+
+    @staticmethod
+    def _outcome_insert(job: EvaluationJobRow, outcome: str, reason: str | None, decision_id: uuid.UUID | None,
+                        observed_at: dt.datetime | None, collected_at: dt.datetime | None,
+                        evaluated_at: dt.datetime, provenance: dict[str, Any]) -> Any:
+        return pg_insert(EvaluationOutcomeRow).values(
+            job_id=job.job_id, owner_id=job.owner_id, agent_id=job.agent_id, deployment_id=job.deployment_id,
+            decision_slot=job.decision_slot, outcome=outcome, reason=reason, decision_id=decision_id,
+            inputs_observed_at=observed_at, inputs_collected_at=collected_at, evaluated_at=evaluated_at,
+            provenance=dict(provenance)).on_conflict_do_nothing(index_elements=["job_id"])
 
     def _holdings(self, agent: ConnectedAgent, now: dt.datetime) -> AdmissionContext:
         """Current holdings as observed. `checked_at` is the observation time, so stale readings stay stale."""
@@ -378,18 +534,20 @@ class ConnectedExecution:
     def _enqueue(self, job: EvaluationJobRow, agent: ConnectedAgent, consent: AdoptedConsent) -> None:
         assert job.decision_id is not None
         now = self._clock()
-        approval, reason = derive_approval(agent, consent, qualification=self._qualification, now=now)
-        if approval is None:
-            self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason=reason)
-            return
         with self._factory() as session:
             decision = session.execute(select(DecisionRow).where(
                 DecisionRow.owner_id == job.owner_id, DecisionRow.decision_id == job.decision_id)).scalar_one()
             saved_intent = session.execute(select(IntentRow).where(
                 IntentRow.owner_id == job.owner_id, IntentRow.decision_id == job.decision_id)).scalar_one_or_none()
-        if saved_intent is not None:  # a restart after enqueue: reuse the one saved intent, never rebuild it
+        if saved_intent is not None:
+            # A restart after enqueue: reuse the one saved intent, never rebuild it. This runs before the authority
+            # check, so an admitted action is linked first and a later denial releases it through `_submit`.
             self._after_enqueue(job, saved_intent.action_id, saved_intent.admission_status,
                                 saved_intent.admission_reason)
+            return
+        approval, reason = derive_approval(agent, consent, qualification=self._qualification, now=now)
+        if approval is None:
+            self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason=reason)
             return
         try:
             terms, _ = self._terms(agent, consent, str(decision.operation), now, job.decision_id)
@@ -448,6 +606,24 @@ class ConnectedExecution:
         except HoldingsUnavailable as refused:
             self._update(job.job_id, reason=f"WAITING:{refused.reason}")
             return
+        # The observations read at submission meet the same boundary as the decision's: exact market and slot, complete
+        # provenance, a forward class and collection inside the current slot. A saved decision never qualifies a
+        # degraded later reading. The action stays saved and unsent; the reason is kept, and a later pass in the slot
+        # may read again (the intent expires at the next slot and is then released).
+        problem = None
+        if observed.provenance.get("market_binding_id") != agent.revision.market_binding_id:
+            problem = "OBSERVATIONS_WRONG_MARKET"
+        elif observed.inputs.observed_at() != job.decision_slot:
+            problem = "OBSERVATIONS_WRONG_TIME"
+        else:
+            problem, _ = observation_problem(observed.provenance, job.decision_slot, now, self._qualification)
+        if problem is not None:
+            self._update(job.job_id, reason=f"WAITING:SUBMISSION_{problem}",
+                         provenance={**job.provenance, "submission_observations": {
+                             "problem": problem, "checked_at": now.isoformat(),
+                             "evidence_class": observed.provenance.get("evidence_class"),
+                             "collected_at": observed.provenance.get("collected_at")}})
+            return
         if intent.operation == "ENTRY":
             # The quote cost of the saved quantity at the fresh price. Unchanged prices reproduce the saved input;
             # a moved price yields a different amount, which revalidation denies as QUOTE_CHANGED.
@@ -471,6 +647,10 @@ class ConnectedExecution:
                 transport = self._ports.transport(agent_id=agent.agent_id, plan=plan, operation=intent.operation)
         except ProviderUnavailable:
             self._update(job.job_id, reason="WAITING:TRANSPORT_UNAVAILABLE")
+            return
+        ended = self._ended_deployment(job)
+        if ended is not None:  # rechecked immediately before submission ownership, like the stops and removal
+            self._release_unsent(job, "DEPLOYMENT_ENDED", f"DEPLOYMENT_ENDED:{ended}")
             return
         tick = self._services.execution.tick(
             job.owner_id, agent_id=agent.agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id,

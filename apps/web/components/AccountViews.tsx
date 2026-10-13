@@ -6,6 +6,7 @@ import { AgentActions } from "./AgentActions";
 import { AgentAuthority } from "./AgentAuthority";
 import { AgentFunding } from "./AgentFunding";
 import { AgentRecords } from "./AgentRecords";
+import { AgentRecurring } from "./AgentRecurring";
 import { FundRecords } from "./FundRecords";
 import { PositionRecords } from "./PositionRecords";
 import { ServiceAccountState } from "./ServiceAccountState";
@@ -89,6 +90,7 @@ function ConnectedAgent({ view, agentId }: { view: AccountViewName; agentId?: st
       </form>
       {selected && view === "Agents" && <AgentAuthority key={selected} agentId={selected} />}
       {selected && view === "Funds" && <AgentFunding key={selected} agentId={selected} />}
+      {selected && view === "Positions" && <AgentRecurring key={`recurring-${selected}`} agentId={selected} />}
       {selected && view === "Positions" && <AgentActions key={selected} agentId={selected} />}
       {selected && <ServiceAccountState key={`${view}-${selected}`} agentId={selected} />}
     </section>

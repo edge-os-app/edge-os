@@ -6,6 +6,7 @@ the authored wallet fixture and the authored execution-mode fixture ports; both 
 
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,25 @@ def fixture_settings(settings: Any, effects: Path | None = None) -> Any:
                                        "fixture_effects_path": str(effects) if effects else None})
 
 
+class _SlotAnchoredClient(TestClient):
+    """A fixture client whose connected worker clock runs from the middle of the current five-minute slot.
+
+    Evaluations must use observations collected in their own slot, so a test that schedules and evaluates must not
+    straddle a real slot boundary. The clock still advances with real time; tests that shift it build on it.
+    """
+
+    def __enter__(self) -> "_SlotAnchoredClient":
+        client = super().__enter__()
+        start = dt.datetime.now(dt.timezone.utc)
+        anchor = start.replace(second=0, microsecond=0)
+        anchor = anchor - dt.timedelta(minutes=anchor.minute % 5) + dt.timedelta(seconds=150)
+        self.app.state.financial.connected._clock = (
+            lambda: anchor + (dt.datetime.now(dt.timezone.utc) - start))
+        return client
+
+
 def fixture_client(settings: Any, effects: Path | None = None) -> TestClient:
-    return TestClient(create_app(fixture_settings(settings, effects)))
+    return _SlotAnchoredClient(create_app(fixture_settings(settings, effects)))
 
 
 def published_revision(client: TestClient, headers: dict[str, str]) -> dict[str, Any]:
