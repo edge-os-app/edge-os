@@ -33,10 +33,10 @@
       "provider_class": "FixtureChain (SERVICE_PROJECTION over authored fixture ports)",
       "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-01:wal-0001:monad:143" },
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001a", "state": "COMPLETED", "outcome": "NO_SIGNAL", "time_field": "updated_at", "time": "2026-10-12T20:50:00Z", "time_basis": "DIRECT" },
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001", "state": "COMPLETED", "outcome": "SUBMITTED_CONFIRMED", "time_field": "updated_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" },
-        { "table": "execution_local.execution_decisions", "id": "dec-0001", "status": "SIGNAL", "operation": "ENTRY", "time_field": "decision_at", "time": "2026-10-12T20:55:00Z", "time_basis": "DIRECT" },
-        { "table": "execution_local.execution_intents", "id": "act-0001", "operation": "ENTRY", "quantity_raw": "100000000", "quantity_decimals": 6, "expected_output_raw": "50000000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T20:56:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001a", "agent_id": "ag-health-01", "wallet_id": "wal-0001", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "COMPLETED", "outcome": "NO_SIGNAL", "time_field": "updated_at", "time": "2026-10-12T20:50:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001", "agent_id": "ag-health-01", "wallet_id": "wal-0001", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "COMPLETED", "outcome": "SUBMITTED_CONFIRMED", "time_field": "updated_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_decisions", "id": "dec-0001", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "status": "SIGNAL", "operation": "ENTRY", "time_field": "decision_at", "time": "2026-10-12T20:55:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_intents", "id": "act-0001", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "operation": "ENTRY", "quantity_raw": "100000000", "quantity_decimals": 6, "expected_output_raw": "50000000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T20:56:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_queue", "id": "Q-0001", "state": "SUBMITTED_CONFIRMED", "time_field": "enqueued_at", "time": "2026-10-12T20:56:01Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_submission_attempts", "id": "sub-0001", "outcome": "CONFIRMED", "time_field": "started_at", "time": "2026-10-12T20:57:00Z", "completed_at": "2026-10-12T20:59:30Z", "time_basis": "DIRECT" },
         { "table": "admission_local.admission_receipts", "id": "rcpt-0001", "outcome": "CONFIRMED", "gas_used": 150000, "effective_gas_price": 2000000000, "gas_raw": "300000000000000", "gas_decimals": 18, "time_field": "created_at", "time": "2026-10-12T20:59:30Z", "time_basis": "DIRECT" },
@@ -46,7 +46,7 @@
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
-        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-01", "wallet_id": "wal-0001", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-01", "wallet_id": "wal-0001", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
         "worker_health": {
           "last_evaluation_activity_at": "2026-10-12T21:00:00Z",
           "last_evaluation_completion_at": "2026-10-12T21:00:00Z",
@@ -112,13 +112,13 @@
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-02:wal-0002:monad:143" },
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0002", "state": "COMPLETED", "outcome": "NO_SIGNAL", "time_field": "updated_at", "time": "2026-10-12T21:05:00Z", "time_basis": "DIRECT" },
-        { "table": "execution_local.execution_decisions", "id": "dec-0002", "status": "NO_SIGNAL", "operation": null, "time_field": "decision_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" }
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0002", "agent_id": "ag-health-02", "wallet_id": "wal-0002", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "COMPLETED", "outcome": "NO_SIGNAL", "time_field": "updated_at", "time": "2026-10-12T21:05:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_decisions", "id": "dec-0002", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "status": "NO_SIGNAL", "operation": null, "time_field": "decision_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
-        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-02", "wallet_id": "wal-0002", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-02", "wallet_id": "wal-0002", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
         "worker_health": {
           "last_evaluation_activity_at": "2026-10-12T21:05:00Z",
           "last_evaluation_completion_at": "2026-10-12T21:05:00Z",
@@ -169,12 +169,12 @@
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-03:wal-0003:monad:143" },
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0003", "state": "UNAVAILABLE", "outcome": "UNAVAILABLE", "reason": "OBSERVATIONS_WRONG_TIME", "time_field": "updated_at", "time": "2026-10-12T21:10:00Z", "time_basis": "DIRECT" }
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0003", "agent_id": "ag-health-03", "wallet_id": "wal-0003", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "UNAVAILABLE", "outcome": "UNAVAILABLE", "reason": "OBSERVATIONS_WRONG_TIME", "time_field": "updated_at", "time": "2026-10-12T21:10:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
-        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-03", "wallet_id": "wal-0003", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-03", "wallet_id": "wal-0003", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
         "worker_health": {
           "last_evaluation_activity_at": "2026-10-12T21:10:00Z",
           "last_evaluation_completion_at": null,
@@ -221,12 +221,12 @@
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-04:wal-0004:monad:143" },
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0004", "state": "UNAVAILABLE", "outcome": "UNAVAILABLE", "reason": "OBSERVATIONS_WRONG_MARKET", "time_field": "updated_at", "time": "2026-10-12T21:15:00Z", "time_basis": "DIRECT" }
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0004", "agent_id": "ag-health-04", "wallet_id": "wal-0004", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "UNAVAILABLE", "outcome": "UNAVAILABLE", "reason": "OBSERVATIONS_WRONG_MARKET", "time_field": "updated_at", "time": "2026-10-12T21:15:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
-        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-04", "wallet_id": "wal-0004", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-04", "wallet_id": "wal-0004", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
         "worker_health": {
           "last_evaluation_activity_at": "2026-10-12T21:15:00Z",
           "last_evaluation_completion_at": null,
@@ -273,13 +273,13 @@
       "provider_class": "ProviderUnavailable (SERVICE_PROJECTION)",
       "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-05:wal-0005:monad:143" },
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0005", "state": "ENQUEUED", "outcome": null, "reason": "WAITING:MARKET_UNAVAILABLE", "time_field": "updated_at", "time": "2026-10-12T21:20:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0005", "agent_id": "ag-health-05", "wallet_id": "wal-0005", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "ENQUEUED", "outcome": null, "reason": "WAITING:MARKET_UNAVAILABLE", "time_field": "updated_at", "time": "2026-10-12T21:20:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_queue", "id": "Q-0005", "state": "QUEUED", "time_field": "enqueued_at", "time": "2026-10-12T21:19:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
-        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-05", "wallet_id": "wal-0005", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-05", "wallet_id": "wal-0005", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
         "worker_health": {
           "last_evaluation_activity_at": "2026-10-12T21:20:00Z",
           "last_evaluation_completion_at": null,
@@ -329,13 +329,13 @@
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-06:wal-0006:monad:143" },
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0006", "state": "SUBMITTED", "outcome": "SUBMITTED_UNKNOWN", "reason": null, "time_field": "updated_at", "time": "2026-10-12T21:25:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0006", "agent_id": "ag-health-06", "wallet_id": "wal-0006", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "SUBMITTED", "outcome": "SUBMITTED_UNKNOWN", "reason": null, "time_field": "updated_at", "time": "2026-10-12T21:25:00Z", "time_basis": "DIRECT" },
         { "table": "recovery_local.recovery_cases", "id": "case-0006", "action_id": "act-0006", "state": "OPEN", "time_field": "updated_at", "time": "2026-10-12T21:24:00Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
-        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-06", "wallet_id": "wal-0006", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-06", "wallet_id": "wal-0006", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
         "worker_health": {
           "last_evaluation_activity_at": "2026-10-12T21:25:00Z",
           "last_evaluation_completion_at": null,
@@ -385,9 +385,9 @@
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-07:wal-0007:monad:143" },
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0007", "state": "COMPLETED", "outcome": "SUBMITTED_CONFIRMED", "time_field": "updated_at", "time": "2026-10-12T21:28:00Z", "time_basis": "DIRECT" },
-        { "table": "execution_local.execution_decisions", "id": "dec-0007", "status": "SIGNAL", "operation": "ENTRY", "time_field": "decision_at", "time": "2026-10-12T21:23:00Z", "time_basis": "DIRECT" },
-        { "table": "execution_local.execution_intents", "id": "act-0007", "operation": "ENTRY", "quantity_raw": "25000000", "quantity_decimals": 6, "expected_output_raw": "12500000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T21:24:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0007", "agent_id": "ag-health-07", "wallet_id": "wal-0007", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "COMPLETED", "outcome": "SUBMITTED_CONFIRMED", "time_field": "updated_at", "time": "2026-10-12T21:28:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_decisions", "id": "dec-0007", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "status": "SIGNAL", "operation": "ENTRY", "time_field": "decision_at", "time": "2026-10-12T21:23:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_intents", "id": "act-0007", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "operation": "ENTRY", "quantity_raw": "25000000", "quantity_decimals": 6, "expected_output_raw": "12500000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T21:24:00Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_submission_attempts", "id": "sub-0007", "outcome": "CONFIRMED", "time_field": "started_at", "time": "2026-10-12T21:25:00Z", "completed_at": "2026-10-12T21:27:00Z", "time_basis": "DIRECT" },
         { "table": "admission_local.admission_receipts", "id": "rcpt-0007", "outcome": "CONFIRMED", "gas_used": 75000, "effective_gas_price": 2000000000, "gas_raw": "150000000000000", "gas_decimals": 18, "time_field": "created_at", "time": "2026-10-12T21:27:00Z", "time_basis": "DIRECT" },
         { "table": "admission_local.admission_positions", "id": "ag-health-07:stg-health:dec-0007", "inventory_raw": "25000000", "inventory_decimals": 6, "cost_basis_raw": "12500000000000000000", "realized_raw": "0", "quote_asset_id": "monad:143/0x1111111111111111111111111111111111111111", "quote_decimals": 18, "time_field": "derived", "time": "2026-10-12T21:27:00Z", "time_basis": "DERIVED" },
@@ -397,7 +397,7 @@
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
-        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-07", "wallet_id": "wal-0007", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-07", "wallet_id": "wal-0007", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
         "worker_health": {
           "last_evaluation_activity_at": "2026-10-12T21:28:00Z",
           "last_evaluation_completion_at": "2026-10-12T21:28:00Z",
@@ -540,14 +540,14 @@
       "provider_class": "FixtureChain (SERVICE_PROJECTION)",
       "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-09:wal-0009:monad:143" },
       "stored_rows": [
-        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0009", "state": "ENQUEUED", "outcome": null, "reason": null, "time_field": "updated_at", "time": "2026-10-12T21:44:10Z", "time_basis": "DIRECT" },
-        { "table": "execution_local.execution_intents", "id": "act-0009", "operation": "ENTRY", "quantity_raw": "25000000", "quantity_decimals": 6, "expected_output_raw": "12500000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T21:44:05Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0009", "agent_id": "ag-health-09", "wallet_id": "wal-0009", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "ENQUEUED", "outcome": null, "reason": null, "time_field": "updated_at", "time": "2026-10-12T21:44:10Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_intents", "id": "act-0009", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "operation": "ENTRY", "quantity_raw": "25000000", "quantity_decimals": 6, "expected_output_raw": "12500000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T21:44:05Z", "time_basis": "DIRECT" },
         { "table": "execution_local.execution_queue", "id": "Q-0009", "state": "QUEUED", "time_field": "enqueued_at", "time": "2026-10-12T21:44:10Z", "time_basis": "DIRECT" }
       ],
       "expected_direct_projection": {
         "schema_version": "edge-os.agent-health-projection/1",
         "evidence_class": "SERVICE_PROJECTION",
-        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-09", "wallet_id": "wal-0009", "network_id": "monad:143", "execution_revision_id": "stg-health:abcdef0123456789", "deployment_id": null },
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-09", "wallet_id": "wal-0009", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
         "schedule_identity": { "request_key": "rk-0009", "job_id": "job-0009", "job_state": "ENQUEUED", "idempotent_replay": true, "identity_note": "A repeated schedule call returns this evaluation job; the job is not an action and may produce no action." },
         "action_preview": { "state": "PROPOSED", "action_id": "act-0009", "operation": "ENTRY", "status": "QUEUED", "target": { "position_id": "ag-health-09:stg-health:dec-0009", "asset_id": "monad:143/0x2222222222222222222222222222222222222222" }, "quantity": { "asset_id": "monad:143/0x2222222222222222222222222222222222222222", "raw": "25000000", "decimals": 6 }, "expected_movement": { "state": "UNKNOWN" }, "future_entries_active": { "state": "UNKNOWN", "reason": "NO_CONTROL_RECORD" }, "bound_record": "execution_local.execution_intents:act-0009" },
         "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
