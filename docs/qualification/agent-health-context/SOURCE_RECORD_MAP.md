@@ -37,16 +37,16 @@ producer must derive and expose it; `MISSING` = no producer.
 | `scope.owner_id` | `Principal.user_id` | `core/authentication.py`, `accounts/views.py:273-280` | EXPOSED (f84) |
 | `scope.agent_id`, `scope.wallet_id`, `scope.network_id` | saved job columns (`execution/models.py:214-216`); the account projection groups by them | `service_projection.py:162-177` | EXPOSED (f84) |
 | `scope.strategy_id`, `scope.publication_revision_id`, `scope.execution_revision_id`, `scope.content_hash`, `scope.consent_adoption_id`, `scope.consent_hash` | saved job columns (`execution/models.py:219-225`), serialized by `job_view` | `execution/worker.py:95-105`; exposed at `execution/routes.py:100` | EXPOSED (f84) as the saved job scope |
-| `scope.manifest_hash` | saved job column (`execution/models.py:223`); `job_view` omits it | no exposed caller for the saved value | STORED INPUT / PROPOSED (lane2) |
+| `scope.manifest_hash` (direct column) | saved job column (`execution/models.py:223`); `job_view` omits the direct key | `job_view` exposes `provenance.identity.manifest_sha256` (schedule-time nested digest, `execution/worker.py:141`), not the direct column; representation may differ | direct column STORED INPUT / PROPOSED (lane2); nested digest EXPOSED per-job |
 | `current_connected_identity` | `ConnectedAgent.identity()` (`connected_identity.py:72-77`) | exposed at `execution/routes.py:99`; the CURRENT resolution from `resolve_agent` (`connected_identity.py:100-128`), not a saved job's historical scope | EXPOSED (f84) |
 | `scope.deployment_id` | no column exists | - | MISSING (P27) |
 | `worker_health.last_evaluation_activity_at` | `execution_evaluation_jobs.updated_at` | `service_projection.py:173` | EXPOSED (f84) |
 | `worker_health.evaluation_attempts` | count of evaluation-job rows | `service_projection.py:174` | EXPOSED (f84) |
 | `worker_health.evaluation_completions` | count where `state='COMPLETED'` | `service_projection.py:175` | EXPOSED (f84) |
 | `worker_health.last_evaluation_completion_at` | newest `updated_at` where `state='COMPLETED'` (`execution/models.py:234`) | no exposed caller | STORED INPUT / PROPOSED (lane2) |
-| `worker_health.last_evaluation_outcome` | `job.outcome` (nullable, `execution/models.py:229`) | read only to derive pending reconciliation (`service_projection.py:166`); not projected as a field | STORED INPUT / PROPOSED (lane2) |
-| `worker_health.last_evaluation_state` | `job.state` (`execution/models.py:226`) | no exposed caller | STORED INPUT / PROPOSED (lane2) |
-| `worker_health.wait_or_fault_reason` | `job.reason` (`WAITING:*`, `WORKER_ERROR:*`, `OBSERVATIONS_WRONG_*`, `IDENTITY_*`, `CONSENT_CHANGED`) | no exposed caller | STORED INPUT / PROPOSED (lane2) |
+| `worker_health.last_evaluation_outcome` | `job.outcome` (nullable, `execution/models.py:229`) | raw `outcome` EXPOSED per-job via `job_view` (`execution/worker.py:95-106`); also read to derive pending reconciliation (`service_projection.py:166`) | raw input EXPOSED per-job / selected health field PROPOSED (lane2) |
+| `worker_health.last_evaluation_state` | `job.state` (`execution/models.py:226`) | raw `state` EXPOSED per-job via `job_view` | raw input EXPOSED per-job / selected health field PROPOSED (lane2) |
+| `worker_health.wait_or_fault_reason` | `job.reason` (`WAITING:*`, `WORKER_ERROR:*`, `OBSERVATIONS_WRONG_*`, `IDENTITY_*`, `CONSENT_CHANGED`) | raw `reason` EXPOSED per-job via `job_view` | raw input EXPOSED per-job / selected health field PROPOSED (lane2) |
 | `worker_health.last_submission_attempt_at` | `HealthView.last_attempt_at` = last `SubmissionAttemptRow.started_at` | `execution/service.py:841-845,864` | SERVICE VALUE (f84) / PROPOSED (read surface) |
 | `worker_health.last_submission_completion_at` | `HealthView.last_completion_at` = `max(attempt.completed_at)` | `execution/service.py:854,865` | SERVICE VALUE (f84) / PROPOSED (read surface) |
 | `worker_health.last_decision_input_at` | `HealthView.last_input_at` = last decision time | `execution/service.py:853,866` | SERVICE VALUE (f84) / PROPOSED (read surface) |
@@ -91,7 +91,7 @@ producer must derive and expose it; `MISSING` = no producer.
 | memory state ACTIVE/DISABLED/CLEARED | same | `controls.py:42,238-258` | EXPOSED (f84) |
 | context source ownership check | `records.record_id` owner-scoped | `controls.py:100-113` | EXPOSED (f84) |
 | `action_id` | `execution_intents.action_id`, `execution_queue.action_id` | `execution/routes.py` | EXPOSED (f84) |
-| preview permission/reservation/limit | `admission_allowances` (service-level); `admission_reservations`, `admission_decisions` | reservations/decisions exposed at `execution/routes.py:139-141`; allowances in `admission/service.py` | reservations/decisions EXPOSED (f84) / allowances SERVICE VALUE / PROPOSED |
+| preview permission/reservation/limit | `AdmissionService.balances` (`admission/service.py:709`) for allowances; `admission_reservations`, `admission_decisions` | reservations/decisions exposed at `execution/routes.py:139-141`; allowances are service-level | reservations/decisions EXPOSED (f84) / allowances SERVICE VALUE (`AdmissionService.balances`) / PROPOSED |
 | consent activation state | `derive_approval` | `connected_identity.py:161-169` | EXPOSED (f84) (fixture only) |
 
 ## Accepted tests that already cover these sources
@@ -111,15 +111,18 @@ producer must derive and expose it; `MISSING` = no producer.
   provider mode, the `HealthView` route values, and the connected identities).
 - `SERVICE VALUE (f84) / PROPOSED (read surface)`: computed by `ExecutionService.status` but not yet
   exposed (submission timestamps, decision input time and id).
-- `STORED INPUT / PROPOSED (lane2)`: stored columns the P27 producer must derive and expose
-  (`last_evaluation_completion_at`, `last_evaluation_outcome`, `last_evaluation_state`,
-  `wait_or_fault_reason`, `stop_state`, `scope.manifest_hash`, and the per-agent-wallet `native_gas`
-  aggregate).
-- `EXPOSED (f84)` also covers the saved job scope through the agent route's `jobs` array
-  (`job_view`, `execution/worker.py:95-105`; `execution/routes.py:100`) except `manifest_hash`, the
-  per-receipt `actual_gas` at `GET /v1/actions/{action_id}`, and the `current_connected_identity` at
-  `GET /v1/agents/{agent_id}/actions`; the current identity is the current resolution, not a saved
-  job's historical scope.
+- Raw per-job inputs are EXPOSED through the agent route's `jobs` array (`job_view`,
+  `execution/worker.py:95-106`; `execution/routes.py:100`): the saved job scope (strategy, publication
+  and execution revision, content hash, consent ids), `state`, `outcome`, `reason`, `updated_at` and
+  `provenance` (which carries `identity.manifest_sha256`). An exposed raw per-job input is not the same
+  as the proposed selected or aggregated health field.
+- `STORED INPUT / PROPOSED (lane2)`: the selected/aggregated health fields and inputs with no direct
+  route key (`last_evaluation_completion_at`; the selected outcome/state/wait-reason fields; the direct
+  `scope.manifest_hash` column; `stop_state`; the per-agent-wallet `native_gas` aggregate).
+- `EXPOSED (f84)` also covers the evaluation counts and last activity (`service_projection.py:162-177`),
+  pending reconciliation, removal state, position results, capital flows, the per-receipt `actual_gas`
+  at `GET /v1/actions/{action_id}`, the `HealthView` route values, and `current_connected_identity` at
+  `GET /v1/agents/{agent_id}/actions` (the current resolution, not a saved job's historical scope).
 - `MISSING`: `deployment_id`, a normalised per-observation **collection** time,
   `dataset_qualification`, revision-linked real edge evidence, adopted return metrics, and the
   recurring scheduler with its missed-slot policy.

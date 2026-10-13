@@ -43,10 +43,11 @@ Every claimed value recomputes from the listed rows:
 Field classes are labelled in `HEALTH_PROJECTION_CONTRACT.md` §3 and `SOURCE_RECORD_MAP.md`: `EXPOSED`
 (the accepted projection or route outputs it), `SERVICE VALUE` (an accepted service computes it, no
 read surface), `STORED INPUT / PROPOSED` (a stored column the lane2 P27 producer must expose), and
-`MISSING`. The evaluation counts and last activity are exposed today; the evaluation outcome,
-completion time, state and wait reason are stored inputs the lane2 producer must derive. The saved job
-scope (strategy, publication/execution revision, content hash and consent ids) is exposed through the
-agent route's `jobs` array; `manifest_hash` is not. The current connected identity at
+`MISSING`. The evaluation counts and last activity are exposed today. The raw saved job scope, `state`,
+`outcome` and `reason` are exposed per-job through the agent route's `jobs` array (`job_view`); the
+proposed selected health fields (the completion time and the selected outcome/state/wait reason) still
+need their selection rule and consumer agreement. The direct `manifest_hash` column is not exposed,
+though `job_view` carries `provenance.identity.manifest_sha256`. The current connected identity at
 `GET /v1/agents/{agent_id}/actions` is a separate value that can differ from a saved job's historical
 scope.
 

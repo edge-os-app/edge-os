@@ -29,19 +29,23 @@ no second engine. This keeps one canonical reference instead of duplicated data.
 
 P31 remains a P27 dependency. Documentation does not satisfy AUT06 and does not complete P27 or P31.
 
-The producer must expose the stored-input fields that no accepted projection outputs today:
-`last_evaluation_completion_at`, `last_evaluation_outcome` (null until saved), `last_evaluation_state`,
-`wait_or_fault_reason`, `stop_state`, `scope.manifest_hash`, and the per-agent-wallet `native_gas`
+The producer must expose the stored-input fields that no accepted projection outputs today: the
+selected/aggregated health fields (`last_evaluation_completion_at`, the selected outcome/state/wait
+reason), the direct `scope.manifest_hash` column, `stop_state`, and the per-agent-wallet `native_gas`
 aggregate. The evaluation counts and last activity time are already exposed by
-`accounts/service_projection.py:162-177`. The saved job scope (strategy, publication/execution
-revision, content hash and consent ids) is already exposed through the agent route's `jobs` array
-(`job_view`, `execution/worker.py:95-105`; `execution/routes.py:100`); `manifest_hash` is not. The
-CURRENT connected identity (strategy, publication/execution revision and hashes) is exposed by
-`ConnectedAgent.identity()` at `execution/routes.py:99`, but that is the current resolution from
-`resolve_agent`, not a saved job's historical scope; do not treat it as proof that a saved job's scope
-is exposed. Per-receipt gas is exposed at `GET /v1/actions/{action_id}`; the per-agent aggregate is not.
-The submission timestamps and the decision input time are computed by `ExecutionService.status` but
-need a read surface. A job `state` is never projected as an `outcome`.
+`accounts/service_projection.py:162-177`. The raw saved job scope (strategy, publication/execution
+revision, content hash, consent ids) and the raw `state`, `outcome`, `reason`, `updated_at` and
+`provenance` are already exposed through the agent route's `jobs` array (`job_view`,
+`execution/worker.py:95-106`; `execution/routes.py:100`); an exposed raw per-job input is not the same
+as the proposed selected field. The direct `manifest_hash` column is not exposed, but `job_view`
+exposes `provenance.identity.manifest_sha256` (the schedule-time nested digest, `worker.py:141`), whose
+representation may differ. The CURRENT connected identity (strategy, publication/execution revision
+and hashes) is exposed by `ConnectedAgent.identity()` at `execution/routes.py:99`, but that is the
+current resolution from `resolve_agent`, not a saved job's historical scope; do not treat it as proof
+that a saved job's scope is exposed, and do not assume the current `content_sha256` is byte-identical
+to the saved job's `content_hash`. Per-receipt gas is exposed at `GET /v1/actions/{action_id}`; the
+per-agent aggregate is not. The submission timestamps and the decision input time are computed by
+`ExecutionService.status` but need a read surface. A job `state` is never projected as an `outcome`.
 
 ## 3. Cross-lane choice to agree
 

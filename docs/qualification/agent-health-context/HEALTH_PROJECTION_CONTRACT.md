@@ -49,7 +49,7 @@ job scope is exposed through the agent route's `jobs` array (`job_view`, `execut
 | `scope.owner_id` | verified `Principal.user_id` | EXPOSED (f84) |
 | `scope.agent_id`, `scope.wallet_id`, `scope.network_id` | saved job columns `execution_local.execution_evaluation_jobs` (`execution/models.py:214-216`); the account projection groups by them (`accounts/service_projection.py:162-177`) | EXPOSED (f84) |
 | `scope.strategy_id`, `scope.publication_revision_id`, `scope.execution_revision_id`, `scope.content_hash`, `scope.consent_adoption_id`, `scope.consent_hash` | saved job columns (`execution/models.py:219-225`), serialized by `job_view` (`execution/worker.py:95-105`), exposed at `execution/routes.py:100` | EXPOSED (f84) as the saved job scope |
-| `scope.manifest_hash` | saved job column (`execution/models.py:223`); `job_view` omits it | STORED INPUT / PROPOSED (lane2) |
+| `scope.manifest_hash` (direct column) | saved job column (`execution/models.py:223`); `job_view` omits the direct key | STORED INPUT / PROPOSED (lane2). `job_view` exposes `provenance.identity.manifest_sha256` (saved by `schedule`, `execution/worker.py:141`), which is the schedule-time nested digest, not the direct column; its representation may differ. |
 | `current_connected_identity` (agent/wallet/network, strategy, publication/execution revision, content/manifest digest) | `ConnectedAgent.identity()` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84), the CURRENT resolution |
 | `deployment_id` | no deployment identity column exists | MISSING (P27 producer obligation) |
 | `network_id` treatment | network prefix on asset ids (`docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md`, IC01); descriptive | descriptive |
@@ -58,7 +58,10 @@ job scope is exposed through the agent route's `jobs` array (`job_view`, `execut
 (`execution/connected_identity.py:100-128`). So `current_connected_identity` is the current resolution;
 it is distinct from a saved job's historical scope, which comes from the job row's own columns. The
 projection's job scope uses the saved job columns and must equal the intent and decision identities
-(IC01), never the current resolution. Do not assume equality across revisions.
+(IC01), never the current resolution. Do not assume equality across revisions. Digest representation
+also differs: the saved job's `content_hash` is a job column, while the current identity's
+`content_sha256` is the same underlying digest under a different name and possibly a different prefix;
+do not treat one as byte-identical to the other without a stated normalization.
 
 A record scope is exact. Two positions that hold the same token but differ in agent, wallet or
 network stay separate. A conversation attaches one record identity; it cannot silently widen that
@@ -77,9 +80,9 @@ Status vocabulary (used across this contract and `SOURCE_RECORD_MAP.md`):
 
 - `EXPOSED (f84)`: the accepted account projection (`accounts/service_projection.py`) or the route
   (`execution/routes.py`) outputs this value today.
-- `SERVICE VALUE (f84)`: an accepted service computes it (for example `ExecutionService.status`, or
-  `admission/service.py` for allowances), but no accepted read surface exposes it yet; the named
-  caller stays explicit.
+- `SERVICE VALUE (f84)`: an accepted service computes it, but no accepted read surface exposes it yet.
+  Name the exact computing service: `ExecutionService.status` for the submission values and
+  `AdmissionService.balances` (`admission/service.py:709`) for the allowances.
 - `STORED INPUT`: a stored column exists, but no projection outputs it today.
 - `PROPOSED (lane2)`: a derived projection field the lane2 P27 producer must expose.
 - `MISSING`: no producer exists.
@@ -88,17 +91,18 @@ Status vocabulary (used across this contract and `SOURCE_RECORD_MAP.md`):
 
 | Field | Source | Status |
 |---|---|---|
-| `last_evaluation_activity_at` | `execution_evaluation_jobs.updated_at` | EXPOSED (f84) (`service_projection.py:173`) |
+| `last_evaluation_activity_at` | `execution_evaluation_jobs.updated_at` | EXPOSED (f84): aggregate at `service_projection.py:173`; raw per-job at `job_view` (`execution/worker.py:95-106`) |
 | `evaluation_attempts` | count of evaluation-job rows for the scope | EXPOSED (f84) (`service_projection.py:174`) |
 | `evaluation_completions` | count where `state = 'COMPLETED'` | EXPOSED (f84) (`service_projection.py:175`) |
-| `last_evaluation_completion_at` | newest `updated_at` where `state = 'COMPLETED'` | STORED INPUT / PROPOSED (lane2) |
-| `last_evaluation_outcome` | newest job `outcome`; `null` until an outcome is saved | STORED INPUT (`execution/models.py:229`) / PROPOSED (lane2) |
-| `last_evaluation_state` | newest job `state` (`execution/models.py:226`); carries the truthful status such as `ENQUEUED` | STORED INPUT / PROPOSED (lane2) |
-| `wait_or_fault_reason` | newest job `reason`, including `WAITING:<PORT>_UNAVAILABLE`, `WORKER_ERROR:<class>`, `OBSERVATIONS_WRONG_MARKET`, `OBSERVATIONS_WRONG_TIME`, `IDENTITY_CHANGED`, `IDENTITY_UNAVAILABLE`, `CONSENT_CHANGED` | STORED INPUT / PROPOSED (lane2) |
+| `last_evaluation_completion_at` | newest `updated_at` where `state = 'COMPLETED'` | STORED INPUT / PROPOSED (lane2): no direct completion key exists; `job_view` exposes only `updated_at` |
+| `last_evaluation_outcome` | newest job `outcome`; `null` until an outcome is saved | raw job `outcome` EXPOSED per-job via `job_view` (`execution/worker.py:95-106`, route `execution/routes.py:100`); the selected health field is PROPOSED (lane2) |
+| `last_evaluation_state` | newest job `state` (`execution/models.py:226`); carries the truthful status such as `ENQUEUED` | raw job `state` EXPOSED per-job via `job_view`; the selected health field is PROPOSED (lane2) |
+| `wait_or_fault_reason` | newest job `reason` | raw job `reason` EXPOSED per-job via `job_view`; the selected health field is PROPOSED (lane2) |
 
-`last_evaluation_outcome` and `last_evaluation_state` are separate. A job state is never reported as
-an outcome. When `job.outcome` is null, `last_evaluation_outcome` is `null` and
-`last_evaluation_state` carries the status.
+`last_evaluation_outcome` and `last_evaluation_state` are separate. A job state is never reported as an
+outcome. The route's `jobs` array exposes the raw per-job `state`, `outcome` and `reason`; the health
+projection's selected, exact-job field is still PROPOSED and needs its selection rule and consumer
+agreement. An exposed raw per-job input is not the same as the proposed aggregate.
 
 **Submission-level fields** (producer `SubmissionAttemptRow` via `ExecutionService.status`,
 `execution/types.py:321-332`, `execution/service.py:828-870`):
@@ -140,12 +144,15 @@ stop and removal state.
 The route `GET /v1/agents/{agent_id}/actions` (`execution/routes.py:83-106`) exposes only
 `blocking_reason` and `next_scheduled_at` from `HealthView`; its other fields need a read surface
 (projection PROPOSED). The accepted account projection (`accounts/service_projection.py:162-177`)
-exposes the evaluation counts and the last activity time, but not the evaluation outcome, completion
-time, job state or wait reason; those are stored inputs the P27 producer must derive and expose
-(lane2 obligation). The projection must keep the evaluation clock and the submission clock separate;
-it must not relabel one as the other, and it must not present a job `state` as an `outcome`. The
-`MISSING` obligation is the recurring scheduler, its missed-slot policy and a normalised
-per-observation collection time; a lane-2 implementer must not invent a second source for a value an
+exposes the evaluation counts and the last activity time. The raw per-job `state`, `outcome`, `reason`,
+scope and `updated_at` are exposed through the agent route's `jobs` array (`job_view`,
+`execution/worker.py:95-106`; `execution/routes.py:100`). The health projection's selected completion
+time, and its selected outcome/state/wait-reason fields, remain PROPOSED (lane2 obligation) and need
+their selection rule and consumer agreement. The projection must keep the evaluation clock and the
+submission clock separate; it must not relabel one as the other, and it must not present a job `state`
+as an `outcome`. The `MISSING` obligation is the recurring scheduler, its missed-slot policy and a
+normalised per-observation collection time; a lane-2 implementer must not invent a second source for a
+value an
 accepted caller already computes.
 
 ## 4. Trading results: `trading_results`
