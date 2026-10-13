@@ -1208,3 +1208,16 @@ def test_an_end_with_no_deployment_at_all_ends_nothing(journey, owner_a):
     ready(journey, owner_a, "rec-r1c-none")
     response = journey.post("/v1/agents/rec-r1c-none/deployment/end", headers=owner_a)
     assert response.status_code == 404
+
+
+def test_an_end_that_runs_out_of_attempts_ends_nothing_and_says_so(journey, owner_a, monkeypatch):
+    """Exhausted End attempts fail closed: 409 `end_conflict` with end wording, and the deployment stays as saved."""
+    from edge_os_api.execution import recurring_scheduler
+
+    agent = "rec-end-exhausted"
+    deployed(journey, owner_a, agent)
+    monkeypatch.setattr(recurring_scheduler, "END_ATTEMPTS", 0)
+    response = journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a)
+    assert (response.status_code, response.json()["code"]) == (409, "end_conflict")
+    assert "Nothing was ended" in response.json()["findings"][0]["detail"]
+    assert projection(journey, owner_a, agent)["deployment"]["state"] == "ACTIVE"

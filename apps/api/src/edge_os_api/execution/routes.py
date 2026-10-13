@@ -130,6 +130,7 @@ DEPLOYMENT_DETAIL = {
     "deployment_consent_mismatch": "The adopted terms changed. Review the current terms before activating.",
     "deployment_ended": "Recurring operation for these terms has ended. Review and adopt new terms to start again.",
     "deployment_not_found": "No recurring operation is saved for this agent.",
+    "end_conflict": "Recurring operation changed while it was being ended. Nothing was ended; check it and try again.",
     "activation_unavailable": "No qualified execution route exists in this build. Nothing was activated.",
     "consent_expired": "The adopted terms have expired. Nothing was activated.",
     "agent_removed": "Agent removal was requested. Recurring operation cannot start for this agent.",

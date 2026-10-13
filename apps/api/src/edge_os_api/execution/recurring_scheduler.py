@@ -177,7 +177,7 @@ class RecurringOperation:
                         session.commit()  # nothing to end; the lock is released with this transaction
                         return deployment_view(latest)
                 session.rollback()  # the ACTIVE deployment now binds another wallet: lock that one instead
-            raise DeploymentRefused("deployment_conflict")
+            raise DeploymentRefused("end_conflict")
 
     # --------------------------------------------------------------------------------- producer
 
