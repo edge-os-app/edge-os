@@ -21,7 +21,7 @@ Focused baseline and candidate check:
   tests/test_proposed_replay_accounting.py tests/test_spot_replay.py)
 ```
 
-The candidate currently passes `75` focused numerical/P12 tests (one upstream
+The candidate currently passes `76` focused numerical/P12 tests (one upstream
 FastAPI/Starlette deprecation warning): the command now also includes
 `tests/test_proposed_market_context.py`. It covers the proposal's source-stamped
 multi-timeframe completion rule, fee-schedule gaps/overlaps, maker/taker and fee
@@ -37,6 +37,8 @@ remain separate requirements. P12/1 saved-run behavior was not modified.
 
 The current candidate also rejects a non-contiguous five-minute schedule before
 any later fill can be applied; it does not silently bridge a missing bucket.
+It also rejects an unusable venue/instrument declaration before otherwise valid
+context bars can be accepted.
 
 `verify-edge-os` was read and applied as the project verification procedure.
 Its feature-map and browser/SQL path are inapplicable to this intentionally

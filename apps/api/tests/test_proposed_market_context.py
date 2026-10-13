@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -26,6 +27,13 @@ def _spot() -> ProposedVenueInstrument:
     )
 
 
+def _completed_snapshots() -> dict[str, ProposedTickerSnapshot]:
+    return {
+        "5m": ProposedTickerSnapshot(FIVE_MINUTES, AT, Decimal("101"), "TRADE", "official:klines?5m", AT, "sha256:five"),
+        "1h": ProposedTickerSnapshot(ONE_HOUR, datetime(2026, 10, 1, 12, tzinfo=UTC), Decimal("100"), "MARK", "official:klines?1h", AT, "sha256:hour"),
+    }
+
+
 def _schedule(**changes: object) -> ProposedFeeScheduleSnapshot:
     values: dict[str, object] = {
         "venue": "example-venue", "instrument": "BTC-USDT", "contract_kind": "SPOT",
@@ -39,14 +47,26 @@ def _schedule(**changes: object) -> ProposedFeeScheduleSnapshot:
 
 
 def test_multi_timeframe_context_uses_only_completed_bars_with_provenance() -> None:
-    snapshots = {
-        "5m": ProposedTickerSnapshot(FIVE_MINUTES, AT, Decimal("101"), "TRADE", "official:klines?5m", AT, "sha256:five"),
-        "1h": ProposedTickerSnapshot(ONE_HOUR, datetime(2026, 10, 1, 12, tzinfo=UTC), Decimal("100"), "MARK", "official:klines?1h", AT, "sha256:hour"),
-    }
-    accepted, reasons = resolve_completed_context(AT, _spot(), snapshots)
+    accepted, reasons = resolve_completed_context(AT, _spot(), _completed_snapshots())
     assert tuple(accepted) == ("5m", "1h")
     assert reasons == ()
     assert completed_bar_end(AT, ONE_HOUR) == datetime(2026, 10, 1, 12, tzinfo=UTC)
+
+
+def test_context_rejects_unusable_instrument_even_when_its_bars_are_valid() -> None:
+    snapshots = _completed_snapshots()
+    for instrument in (
+        replace(_spot(), venue=""),
+        replace(_spot(), instrument=""),
+        replace(_spot(), settlement_asset=None),
+        replace(_spot(), historical_data_source_ref=""),
+        replace(_spot(), settlement_procedure_ref=""),
+        replace(_spot(), contract_kind="UNSUPPORTED"),
+        replace(_spot(), leverage=Decimal("2")),
+    ):
+        accepted, reasons = resolve_completed_context(AT, instrument, snapshots)
+        assert accepted == {}
+        assert reasons == ("MARKET_CONTEXT_UNAVAILABLE",)
 
 
 def test_future_stale_or_unknown_context_is_refused_not_forward_filled() -> None:

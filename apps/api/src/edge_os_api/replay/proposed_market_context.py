@@ -133,6 +133,8 @@ def resolve_completed_context(
     snapshots: Mapping[str, ProposedTickerSnapshot | None],
 ) -> tuple[Mapping[str, ProposedTickerSnapshot], tuple[str, ...]]:
     """Accept only the latest completed, self-identifying context bar per timeframe."""
+    if not instrument.is_usable():
+        return {}, ("MARKET_CONTEXT_UNAVAILABLE",)
     accepted: dict[str, ProposedTickerSnapshot] = {}
     reasons: list[str] = []
     for timeframe in instrument.context_timeframes:
