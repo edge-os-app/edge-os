@@ -41,10 +41,13 @@ Every claimed value recomputes from the listed rows:
   `gas_used × effective_gas_price`; `deposits` copy a listed `funding_local.funding_flows` amount.
 
 Field classes are labelled in `HEALTH_PROJECTION_CONTRACT.md` §3 and `SOURCE_RECORD_MAP.md`: `EXPOSED`
-(the accepted projection or route outputs it), `SERVICE VALUE` (computed by `ExecutionService.status`,
-no read surface), `STORED INPUT / PROPOSED` (a stored column the lane2 P27 producer must expose), and
+(the accepted projection or route outputs it), `SERVICE VALUE` (an accepted service computes it, no
+read surface), `STORED INPUT / PROPOSED` (a stored column the lane2 P27 producer must expose), and
 `MISSING`. The evaluation counts and last activity are exposed today; the evaluation outcome,
-completion time, state and wait reason are stored inputs the lane2 producer must derive.
+completion time, state and wait reason are stored inputs the lane2 producer must derive. The job-bound
+scope identities and hashes are stored inputs; the current connected identity at
+`GET /v1/agents/{agent_id}/actions` is a separate value that can differ from a saved job's historical
+scope.
 
 Every row that supplies a known projected value appears in `record_refs` by its own id. A reference
 that merely resolves to a listed row is not enough: the contributing row must be the source of the

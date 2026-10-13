@@ -38,11 +38,12 @@ producer must derive and expose it; `MISSING` = no producer.
 | `scope.agent_id` | `execution_evaluation_jobs.agent_id` | `service_projection.py:162-177` | EXPOSED (f84) |
 | `scope.wallet_id` | `execution_evaluation_jobs.wallet_id` | same | EXPOSED (f84) |
 | `scope.network_id` | `execution_evaluation_jobs.network_id` | same | EXPOSED (f84) |
-| `scope.strategy_id` | `execution_evaluation_jobs.strategy_id` | `ConnectedAgent.identity()` (`connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84) |
-| `scope.publication_revision_id` | `execution_evaluation_jobs.publication_revision_id` | same | EXPOSED (f84) |
-| `scope.execution_revision_id` | `execution_evaluation_jobs.execution_revision_id` | same | EXPOSED (f84) |
-| `scope.content_hash`, `manifest_hash` | `execution_evaluation_jobs.content_hash`, `manifest_hash` | same, as `content_sha256`/`manifest_sha256` | EXPOSED (f84) |
-| `scope.consent_adoption_id`, `consent_hash` | `execution_evaluation_jobs.consent_adoption_id`, `consent_hash` | `identity()` does not carry them | STORED INPUT / PROPOSED (lane2) |
+| `scope.strategy_id` | saved job column `execution_evaluation_jobs.strategy_id` (`execution/models.py:219-223`) | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
+| `scope.publication_revision_id` | saved job column (`execution/models.py:219-223`) | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
+| `scope.execution_revision_id` | saved job column (`execution/models.py:219-223`) | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
+| `scope.content_hash`, `manifest_hash` | saved job columns (`execution/models.py:222-223`) | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
+| `scope.consent_adoption_id`, `consent_hash` | saved job columns | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
+| `current_connected_identity` | `ConnectedAgent.identity()` (`connected_identity.py:72-77`) | exposed at `execution/routes.py:99`; the CURRENT resolution from `resolve_agent` (`connected_identity.py:100-128`), not a saved job's historical scope | EXPOSED (f84) |
 | `scope.deployment_id` | no column exists | - | MISSING (P27) |
 | `worker_health.last_evaluation_activity_at` | `execution_evaluation_jobs.updated_at` | `service_projection.py:173` | EXPOSED (f84) |
 | `worker_health.evaluation_attempts` | count of evaluation-job rows | `service_projection.py:174` | EXPOSED (f84) |
@@ -117,7 +118,11 @@ producer must derive and expose it; `MISSING` = no producer.
   exposed (submission timestamps, decision input time and id).
 - `STORED INPUT / PROPOSED (lane2)`: stored columns the P27 producer must derive and expose
   (`last_evaluation_completion_at`, `last_evaluation_outcome`, `last_evaluation_state`,
-  `wait_or_fault_reason`, `stop_state`, `native_gas`, strategy/revision identity, hashes, consent ids).
+  `wait_or_fault_reason`, `stop_state`, the job-bound scope identities and hashes and the consent
+  ids, and the per-agent-wallet `native_gas` aggregate).
+- `EXPOSED (f84)` also covers the per-receipt `actual_gas` at `GET /v1/actions/{action_id}` and the
+  `current_connected_identity` at `GET /v1/agents/{agent_id}/actions`; the current identity is the
+  current resolution, not a saved job's historical scope.
 - `MISSING`: `deployment_id`, a normalised per-observation **collection** time,
   `dataset_qualification`, revision-linked real edge evidence, adopted return metrics, and the
   recurring scheduler with its missed-slot policy.

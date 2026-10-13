@@ -40,15 +40,23 @@ The owner is the verified principal (`Principal.user_id`). No request body, quer
 target or conversation turn can set or retarget it. This reuses the accepted boundary in
 `core/authentication.py` and the `owner_id`-only reads in `accounts/views.py`.
 
+The projection scope binds the saved evaluation-job identity, not the current resolution.
+
 | Field | Source | Status |
 |---|---|---|
-| `owner_id` | verified `Principal.user_id` | EXPOSED (f84) |
-| `agent_id`, `wallet_id`, `network_id` | `ConnectedAgent.identity()` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99`; also the account projection | EXPOSED (f84) |
-| `strategy_id`, `publication_revision_id`, `execution_revision_id` | `ConnectedAgent.identity()` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84) |
-| `content_hash`, `manifest_hash` | `ConnectedAgent.identity()` as `content_sha256`/`manifest_sha256` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84) |
-| `consent_adoption_id`, `consent_hash` | `execution_local.execution_evaluation_jobs`; `identity()` does not carry them | STORED INPUT / PROPOSED (lane2) |
-| `network_id` treatment | network prefix on asset ids (`docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md`, IC01); descriptive, not a separate status row | descriptive |
+| `scope.owner_id` | verified `Principal.user_id` | EXPOSED (f84) |
+| `scope.agent_id`, `scope.wallet_id`, `scope.network_id` | saved job columns `execution_local.execution_evaluation_jobs` (`execution/models.py:219-223`) | STORED INPUT / PROPOSED (lane2) |
+| `scope.strategy_id`, `scope.publication_revision_id`, `scope.execution_revision_id`, `scope.content_hash`, `scope.manifest_hash` | saved job columns `execution_evaluation_jobs` (`execution/models.py:219-223`) | STORED INPUT / PROPOSED (lane2) |
+| `scope.consent_adoption_id`, `scope.consent_hash` | saved job columns `execution_evaluation_jobs` | STORED INPUT / PROPOSED (lane2) |
+| `current_connected_identity` (agent/wallet/network, strategy, publication/execution revision, content/manifest digest) | `ConnectedAgent.identity()` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84), the CURRENT resolution |
 | `deployment_id` | no deployment identity column exists | MISSING (P27 producer obligation) |
+| `network_id` treatment | network prefix on asset ids (`docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md`, IC01); descriptive | descriptive |
+
+`resolve_agent` builds `ConnectedAgent` from the current wallet setup and the current `StrategyRevision`
+(`execution/connected_identity.py:100-128`). So `current_connected_identity` is the current resolution;
+it is not proof that any particular saved job's historical revision or hash is exposed. The projection's
+job scope is the saved job columns and must equal the intent and decision identities (IC01), never the
+current resolution. Do not assume equality across revisions.
 
 A record scope is exact. Two positions that hold the same token but differ in agent, wallet or
 network stay separate. A conversation attaches one record identity; it cannot silently widen that
@@ -67,8 +75,9 @@ Status vocabulary (used across this contract and `SOURCE_RECORD_MAP.md`):
 
 - `EXPOSED (f84)`: the accepted account projection (`accounts/service_projection.py`) or the route
   (`execution/routes.py`) outputs this value today.
-- `SERVICE VALUE (f84)`: `ExecutionService.status` computes it (`HealthView`) but no accepted read
-  surface exposes it yet.
+- `SERVICE VALUE (f84)`: an accepted service computes it (for example `ExecutionService.status`, or
+  `admission/service.py` for allowances), but no accepted read surface exposes it yet; the named
+  caller stays explicit.
 - `STORED INPUT`: a stored column exists, but no projection outputs it today.
 - `PROPOSED (lane2)`: a derived projection field the lane2 P27 producer must expose.
 - `MISSING`: no producer exists.
