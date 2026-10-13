@@ -1,0 +1,575 @@
+{
+  "schema_version": "edge-os.agent-health-worked-cases/1",
+  "milestone": "P31-HEALTH-CONTRACT-L3-20261012-01v1",
+  "base_commit": "f84ef415278196db2c8bba73eaa154a1ef00748b",
+  "tree": "91cc55446a6d2dc3672cd153a0bec225a3fed009",
+  "evidence_class": "SYNTHETIC_FIXTURE",
+  "public": true,
+  "unsigned": true,
+  "notice": "Authored unsigned contract examples. Every stored row is listed with its real timestamp column and the numeric inputs the projection needs, so a reviewer can recompute every claimed value. No signing, broadcast, provider, model or host check ran. A missing row stays UNKNOWN. as_of is null when no row exists.",
+  "projection_version": "edge-os.agent-health-projection/1",
+  "time_basis": {
+    "DIRECT": "the row's own timestamp column, named in time_field",
+    "DERIVED": "a position has no timestamp column; its time is the latest intent or receipt of the position (accounts/service_projection.py:117-139)"
+  },
+  "owners": {
+    "owner_a": "10000000-0000-4000-8000-000000000001",
+    "owner_b": "10000000-0000-4000-8000-000000000002"
+  },
+  "assets": {
+    "base": { "asset_id": "monad:143/0x2222222222222222222222222222222222222222", "decimals": 6 },
+    "quote": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "decimals": 18 },
+    "native": { "asset_id": "monad:143/native", "decimals": 18 }
+  },
+  "cases": [
+    {
+      "case_id": "signal_open_position",
+      "title": "One no-signal job then one signal job admits and confirms one entry; residual inventory is the entry amount and realized is 0",
+      "owner": "owner_a",
+      "agent_id": "ag-health-01",
+      "wallet_id": "wal-0001",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:00:00Z",
+      "provider_class": "FixtureChain (SERVICE_PROJECTION over authored fixture ports)",
+      "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-01:wal-0001:monad:143" },
+      "stored_rows": [
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001a", "agent_id": "ag-health-01", "wallet_id": "wal-0001", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "COMPLETED", "outcome": "NO_SIGNAL", "time_field": "updated_at", "time": "2026-10-12T20:50:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0001", "agent_id": "ag-health-01", "wallet_id": "wal-0001", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "COMPLETED", "outcome": "SUBMITTED_CONFIRMED", "time_field": "updated_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_decisions", "id": "dec-0001", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "status": "SIGNAL", "operation": "ENTRY", "time_field": "decision_at", "time": "2026-10-12T20:55:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_intents", "id": "act-0001", "revision_id": "stg-health:abcdef0123456789", "operation": "ENTRY", "quantity_raw": "100000000", "quantity_decimals": 6, "expected_output_raw": "50000000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T20:56:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_queue", "id": "Q-0001", "state": "SUBMITTED_CONFIRMED", "time_field": "enqueued_at", "time": "2026-10-12T20:56:01Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_submission_attempts", "id": "sub-0001", "outcome": "CONFIRMED", "time_field": "started_at", "time": "2026-10-12T20:57:00Z", "completed_at": "2026-10-12T20:59:30Z", "time_basis": "DIRECT" },
+        { "table": "admission_local.admission_receipts", "id": "rcpt-0001", "outcome": "CONFIRMED", "gas_used": 150000, "effective_gas_price": 2000000000, "gas_raw": "300000000000000", "gas_decimals": 18, "time_field": "created_at", "time": "2026-10-12T20:59:30Z", "time_basis": "DIRECT" },
+        { "table": "admission_local.admission_positions", "id": "ag-health-01:stg-health:dec-0001", "inventory_raw": "100000000", "inventory_decimals": 6, "cost_basis_raw": "50000000000000000000", "realized_raw": "0", "quote_asset_id": "monad:143/0x1111111111111111111111111111111111111111", "quote_decimals": 18, "time_field": "derived", "time": "2026-10-12T20:59:30Z", "time_basis": "DERIVED" },
+        { "table": "funding_local.funding_flows", "id": "flow-0001", "kind": "DEPOSIT", "amount_raw": "50000000000000000000", "amount_decimals": 18, "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "time_field": "updated_at", "time": "2026-10-12T20:50:00Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-01", "wallet_id": "wal-0001", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
+        "worker_health": {
+          "last_evaluation_activity_at": "2026-10-12T21:00:00Z",
+          "last_evaluation_completion_at": "2026-10-12T21:00:00Z",
+          "evaluation_attempts": 2,
+          "evaluation_completions": 2,
+          "last_evaluation_outcome": "SUBMITTED_CONFIRMED",
+          "last_evaluation_state": "COMPLETED",
+          "wait_or_fault_reason": null,
+          "last_submission_attempt_at": "2026-10-12T20:57:00Z",
+          "last_submission_completion_at": "2026-10-12T20:59:30Z",
+          "last_decision_input_at": "2026-10-12T20:55:00Z",
+          "next_scheduled_at": "2026-10-12T21:00:00Z",
+          "submission_blocking_reason": null,
+          "pending_reconciliation": false,
+          "stop_state": "NONE",
+          "removal_state": "NOT_REQUESTED", "control_state_basis": "No durable scoped_stops or removal_states row is listed for this wallet; the P25/P30 readers return no denial (revocation/enforcement.py:80-86).",
+          "residual_inventory": { "asset_id": "monad:143/0x2222222222222222222222222222222222222222", "raw": "100000000", "decimals": 6 }
+        },
+        "trading_results": {
+          "basis": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "50000000000000000000", "decimals": 18 } },
+          "realized_result": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "0", "decimals": 18 } },
+          "estimated_unrealized_result": { "state": "UNKNOWN" },
+          "mark": { "state": "UNKNOWN" },
+          "native_gas": { "asset_id": "monad:143/native", "raw": "300000000000000", "decimals": 18 },
+          "deposits": [{ "flow_id": "flow-0001", "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "50000000000000000000", "decimals": 18, "included_in_realized_result": false }]
+        },
+        "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
+        "record_refs": [
+          { "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0001a", "time": "2026-10-12T20:50:00Z", "time_field": "updated_at" },
+          { "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0001", "time": "2026-10-12T21:00:00Z", "time_field": "updated_at" },
+          { "kind": "DECISION", "table": "execution_local.execution_decisions", "id": "dec-0001", "time": "2026-10-12T20:55:00Z", "time_field": "decision_at" },
+          { "kind": "ACTION", "table": "execution_local.execution_intents", "id": "act-0001", "time": "2026-10-12T20:56:00Z", "time_field": "created_at" },
+          { "kind": "ACTION", "table": "execution_local.execution_queue", "id": "Q-0001", "time": "2026-10-12T20:56:01Z", "time_field": "enqueued_at" },
+          { "kind": "ACTION", "table": "execution_local.execution_submission_attempts", "id": "sub-0001", "time": "2026-10-12T20:57:00Z", "time_field": "started_at" },
+          { "kind": "RECEIPT", "table": "admission_local.admission_receipts", "id": "rcpt-0001", "time": "2026-10-12T20:59:30Z", "time_field": "created_at" },
+          { "kind": "POSITION", "table": "admission_local.admission_positions", "id": "ag-health-01:stg-health:dec-0001", "time": "2026-10-12T20:59:30Z", "time_field": "derived" },
+          { "kind": "CAPITAL_FLOW", "table": "funding_local.funding_flows", "id": "flow-0001", "time": "2026-10-12T20:50:00Z", "time_field": "updated_at" }
+        ],
+        "as_of": "2026-10-12T21:00:00Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "Agent ag-health-01 finished 2 of 2 evaluations (job-0001a NO_SIGNAL, job-0001 SUBMITTED_CONFIRMED).",
+          "The open position holds 100000000 base units (6 decimals); basis is 50000000000000000000 quote units; realized is 0 for this fresh entry.",
+          "Estimated unrealized result and mark are unknown; no observed mark exists.",
+          "The deposit flow-0001 of 50000000000000000000 quote units is a capital flow, not a trading result.",
+          "Native gas is 150000 x 2000000000 = 300000000000000 MON (rcpt-0001), shown separately and not converted."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "no_signal",
+      "title": "A no-signal decision is useful work and creates no action",
+      "owner": "owner_a",
+      "agent_id": "ag-health-02",
+      "wallet_id": "wal-0002",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:05:00Z",
+      "provider_class": "FixtureChain (SERVICE_PROJECTION)",
+      "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-02:wal-0002:monad:143" },
+      "stored_rows": [
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0002", "agent_id": "ag-health-02", "wallet_id": "wal-0002", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "COMPLETED", "outcome": "NO_SIGNAL", "time_field": "updated_at", "time": "2026-10-12T21:05:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_decisions", "id": "dec-0002", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "status": "NO_SIGNAL", "operation": null, "time_field": "decision_at", "time": "2026-10-12T21:00:00Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-02", "wallet_id": "wal-0002", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
+        "worker_health": {
+          "last_evaluation_activity_at": "2026-10-12T21:05:00Z",
+          "last_evaluation_completion_at": "2026-10-12T21:05:00Z",
+          "evaluation_attempts": 1,
+          "evaluation_completions": 1,
+          "last_evaluation_outcome": "NO_SIGNAL",
+          "last_evaluation_state": "COMPLETED",
+          "wait_or_fault_reason": null,
+          "last_submission_attempt_at": null,
+          "last_submission_completion_at": null,
+          "last_decision_input_at": "2026-10-12T21:00:00Z",
+          "next_scheduled_at": "2026-10-12T21:05:00Z",
+          "submission_blocking_reason": null,
+          "pending_reconciliation": false,
+          "stop_state": "NONE",
+          "removal_state": "NOT_REQUESTED", "control_state_basis": "No durable scoped_stops or removal_states row is listed for this wallet; the P25/P30 readers return no denial (revocation/enforcement.py:80-86).",
+          "residual_inventory": null
+        },
+        "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
+        "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
+        "record_refs": [
+          { "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0002", "time": "2026-10-12T21:05:00Z", "time_field": "updated_at" },
+          { "kind": "DECISION", "table": "execution_local.execution_decisions", "id": "dec-0002", "time": "2026-10-12T21:00:00Z", "time_field": "decision_at" }
+        ],
+        "as_of": "2026-10-12T21:05:00Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "Agent ag-health-02 completed 1 evaluation (job-0002, NO_SIGNAL) and saved decision dec-0002 (NO_SIGNAL).",
+          "A no-signal decision is useful work, not a failed trade and not a loss of permission.",
+          "No position row exists, so basis, realized result and residual inventory are unknown, not zero.",
+          "No submission attempt exists, so last_submission_attempt_at and last_submission_completion_at are unknown."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "stale_input",
+      "title": "A stale input is refused and the wait reason is named",
+      "owner": "owner_a",
+      "agent_id": "ag-health-03",
+      "wallet_id": "wal-0003",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:10:00Z",
+      "provider_class": "FixtureChain (SERVICE_PROJECTION)",
+      "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-03:wal-0003:monad:143" },
+      "stored_rows": [
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0003", "agent_id": "ag-health-03", "wallet_id": "wal-0003", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "UNAVAILABLE", "outcome": "UNAVAILABLE", "reason": "OBSERVATIONS_WRONG_TIME", "time_field": "updated_at", "time": "2026-10-12T21:10:00Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-03", "wallet_id": "wal-0003", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
+        "worker_health": {
+          "last_evaluation_activity_at": "2026-10-12T21:10:00Z",
+          "last_evaluation_completion_at": null,
+          "evaluation_attempts": 1,
+          "evaluation_completions": 0,
+          "last_evaluation_outcome": "UNAVAILABLE",
+          "last_evaluation_state": "UNAVAILABLE",
+          "wait_or_fault_reason": "OBSERVATIONS_WRONG_TIME",
+          "last_submission_attempt_at": null,
+          "last_submission_completion_at": null,
+          "last_decision_input_at": null,
+          "next_scheduled_at": null,
+          "submission_blocking_reason": null,
+          "pending_reconciliation": false,
+          "stop_state": "NONE",
+          "removal_state": "NOT_REQUESTED", "control_state_basis": "No durable scoped_stops or removal_states row is listed for this wallet; the P25/P30 readers return no denial (revocation/enforcement.py:80-86).",
+          "residual_inventory": null
+        },
+        "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
+        "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
+        "record_refs": [{ "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0003", "time": "2026-10-12T21:10:00Z", "time_field": "updated_at" }],
+        "as_of": "2026-10-12T21:10:00Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "Agent ag-health-03 has 0 completed evaluations; job-0003 is UNAVAILABLE with reason OBSERVATIONS_WRONG_TIME.",
+          "The stale input (observations for another decision time) prevented a decision; no action exists.",
+          "Realized result, basis and residual inventory stay unknown, not zero."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "missing_input_wrong_market",
+      "title": "Observations from another market end the job before a decision",
+      "owner": "owner_a",
+      "agent_id": "ag-health-04",
+      "wallet_id": "wal-0004",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:15:00Z",
+      "provider_class": "FixtureChain (SERVICE_PROJECTION)",
+      "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-04:wal-0004:monad:143" },
+      "stored_rows": [
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0004", "agent_id": "ag-health-04", "wallet_id": "wal-0004", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "UNAVAILABLE", "outcome": "UNAVAILABLE", "reason": "OBSERVATIONS_WRONG_MARKET", "time_field": "updated_at", "time": "2026-10-12T21:15:00Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-04", "wallet_id": "wal-0004", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
+        "worker_health": {
+          "last_evaluation_activity_at": "2026-10-12T21:15:00Z",
+          "last_evaluation_completion_at": null,
+          "evaluation_attempts": 1,
+          "evaluation_completions": 0,
+          "last_evaluation_outcome": "UNAVAILABLE",
+          "last_evaluation_state": "UNAVAILABLE",
+          "wait_or_fault_reason": "OBSERVATIONS_WRONG_MARKET",
+          "last_submission_attempt_at": null,
+          "last_submission_completion_at": null,
+          "last_decision_input_at": null,
+          "next_scheduled_at": null,
+          "submission_blocking_reason": null,
+          "pending_reconciliation": false,
+          "stop_state": "NONE",
+          "removal_state": "NOT_REQUESTED", "control_state_basis": "No durable scoped_stops or removal_states row is listed for this wallet; the P25/P30 readers return no denial (revocation/enforcement.py:80-86).",
+          "residual_inventory": null
+        },
+        "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
+        "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
+        "record_refs": [{ "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0004", "time": "2026-10-12T21:15:00Z", "time_field": "updated_at" }],
+        "as_of": "2026-10-12T21:15:00Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "Agent ag-health-04 has 0 completed evaluations; job-0004 is UNAVAILABLE with reason OBSERVATIONS_WRONG_MARKET.",
+          "The wrong-market observations caused no decision and no action.",
+          "No price is shown; the input identity did not match the revision market binding."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "wait_provider_unavailable",
+      "title": "A provider outage keeps the job waiting and the queued action intact",
+      "owner": "owner_a",
+      "agent_id": "ag-health-05",
+      "wallet_id": "wal-0005",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:20:00Z",
+      "provider_class": "ProviderUnavailable (SERVICE_PROJECTION)",
+      "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-05:wal-0005:monad:143" },
+      "stored_rows": [
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0005", "agent_id": "ag-health-05", "wallet_id": "wal-0005", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "ENQUEUED", "outcome": null, "reason": "WAITING:MARKET_UNAVAILABLE", "time_field": "updated_at", "time": "2026-10-12T21:20:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_queue", "id": "Q-0005", "state": "QUEUED", "time_field": "enqueued_at", "time": "2026-10-12T21:19:00Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-05", "wallet_id": "wal-0005", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
+        "worker_health": {
+          "last_evaluation_activity_at": "2026-10-12T21:20:00Z",
+          "last_evaluation_completion_at": null,
+          "evaluation_attempts": 1,
+          "evaluation_completions": 0,
+          "last_evaluation_outcome": null,
+          "last_evaluation_state": "ENQUEUED",
+          "wait_or_fault_reason": "WAITING:MARKET_UNAVAILABLE",
+          "last_submission_attempt_at": null,
+          "last_submission_completion_at": null,
+          "last_decision_input_at": null,
+          "next_scheduled_at": null,
+          "submission_blocking_reason": null,
+          "pending_reconciliation": false,
+          "stop_state": "NONE",
+          "removal_state": "NOT_REQUESTED", "control_state_basis": "No durable scoped_stops or removal_states row is listed for this wallet; the P25/P30 readers return no denial (revocation/enforcement.py:80-86).",
+          "residual_inventory": null
+        },
+        "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
+        "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
+        "record_refs": [
+          { "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0005", "time": "2026-10-12T21:20:00Z", "time_field": "updated_at" },
+          { "kind": "ACTION", "table": "execution_local.execution_queue", "id": "Q-0005", "time": "2026-10-12T21:19:00Z", "time_field": "enqueued_at" }
+        ],
+        "as_of": "2026-10-12T21:20:00Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "Agent ag-health-05 is waiting on the market port: job-0005 has state ENQUEUED and reason WAITING:MARKET_UNAVAILABLE; no outcome is saved yet, so last_evaluation_outcome is null.",
+          "The queued action Q-0005 stays QUEUED; no submission ran.",
+          "The job keeps waiting rather than losing the action; no replacement action was created."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "pending_unknown_original",
+      "title": "An unknown original action needs reconciliation before more work",
+      "owner": "owner_a",
+      "agent_id": "ag-health-06",
+      "wallet_id": "wal-0006",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:25:00Z",
+      "provider_class": "FixtureChain (SERVICE_PROJECTION)",
+      "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-06:wal-0006:monad:143" },
+      "stored_rows": [
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0006", "agent_id": "ag-health-06", "wallet_id": "wal-0006", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "SUBMITTED", "outcome": "SUBMITTED_UNKNOWN", "reason": null, "time_field": "updated_at", "time": "2026-10-12T21:25:00Z", "time_basis": "DIRECT" },
+        { "table": "recovery_local.recovery_cases", "id": "case-0006", "action_id": "act-0006", "state": "OPEN", "time_field": "updated_at", "time": "2026-10-12T21:24:00Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-06", "wallet_id": "wal-0006", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
+        "worker_health": {
+          "last_evaluation_activity_at": "2026-10-12T21:25:00Z",
+          "last_evaluation_completion_at": null,
+          "evaluation_attempts": 1,
+          "evaluation_completions": 0,
+          "last_evaluation_outcome": "SUBMITTED_UNKNOWN",
+          "last_evaluation_state": "SUBMITTED",
+          "wait_or_fault_reason": null,
+          "last_submission_attempt_at": null,
+          "last_submission_completion_at": null,
+          "last_decision_input_at": null,
+          "next_scheduled_at": null,
+          "submission_blocking_reason": null,
+          "pending_reconciliation": true,
+          "stop_state": "NONE",
+          "removal_state": "NOT_REQUESTED", "control_state_basis": "No durable scoped_stops or removal_states row is listed for this wallet; the P25/P30 readers return no denial (revocation/enforcement.py:80-86).",
+          "residual_inventory": null
+        },
+        "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
+        "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
+        "record_refs": [
+          { "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0006", "time": "2026-10-12T21:25:00Z", "time_field": "updated_at" },
+          { "kind": "ACTION", "table": "recovery_local.recovery_cases", "id": "case-0006", "time": "2026-10-12T21:24:00Z", "time_field": "updated_at" }
+        ],
+        "as_of": "2026-10-12T21:25:00Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "Agent ag-health-06 has one original action act-0006 (recovery case case-0006) in an unknown state.",
+          "Reconciliation must resolve the original action before another evaluation.",
+          "Reservations stay held and the result stays unknown; the system does not build a replacement action."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "stop_sticky_after_restart",
+      "title": "A stop and a removal deny new submission and stick after a restart; residual inventory is the confirmed entry amount",
+      "owner": "owner_a",
+      "agent_id": "ag-health-07",
+      "wallet_id": "wal-0007",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:29:30Z",
+      "provider_class": "FixtureChain (SERVICE_PROJECTION)",
+      "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-07:wal-0007:monad:143" },
+      "stored_rows": [
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0007", "agent_id": "ag-health-07", "wallet_id": "wal-0007", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "COMPLETED", "outcome": "SUBMITTED_CONFIRMED", "time_field": "updated_at", "time": "2026-10-12T21:28:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_decisions", "id": "dec-0007", "revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "status": "SIGNAL", "operation": "ENTRY", "time_field": "decision_at", "time": "2026-10-12T21:23:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_intents", "id": "act-0007", "revision_id": "stg-health:abcdef0123456789", "operation": "ENTRY", "quantity_raw": "25000000", "quantity_decimals": 6, "expected_output_raw": "12500000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T21:24:00Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_submission_attempts", "id": "sub-0007", "outcome": "CONFIRMED", "time_field": "started_at", "time": "2026-10-12T21:25:00Z", "completed_at": "2026-10-12T21:27:00Z", "time_basis": "DIRECT" },
+        { "table": "admission_local.admission_receipts", "id": "rcpt-0007", "outcome": "CONFIRMED", "gas_used": 75000, "effective_gas_price": 2000000000, "gas_raw": "150000000000000", "gas_decimals": 18, "time_field": "created_at", "time": "2026-10-12T21:27:00Z", "time_basis": "DIRECT" },
+        { "table": "admission_local.admission_positions", "id": "ag-health-07:stg-health:dec-0007", "inventory_raw": "25000000", "inventory_decimals": 6, "cost_basis_raw": "12500000000000000000", "realized_raw": "0", "quote_asset_id": "monad:143/0x1111111111111111111111111111111111111111", "quote_decimals": 18, "time_field": "derived", "time": "2026-10-12T21:27:00Z", "time_basis": "DERIVED" },
+        { "table": "stops_local.scoped_stops", "id": "stop-0007", "scope": "AGENT_WALLET_NETWORK", "mode": "HALT_ALL_SWAPS", "trigger": "USER", "time_field": "created_at", "time": "2026-10-12T21:29:00Z", "time_basis": "DIRECT" },
+        { "table": "revocation_local.removal_states", "id": "rmv-0007", "state": "CONFIRMED", "time_field": "updated_at", "time": "2026-10-12T21:29:30Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-07", "wallet_id": "wal-0007", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
+        "worker_health": {
+          "last_evaluation_activity_at": "2026-10-12T21:28:00Z",
+          "last_evaluation_completion_at": "2026-10-12T21:28:00Z",
+          "evaluation_attempts": 1,
+          "evaluation_completions": 1,
+          "last_evaluation_outcome": "SUBMITTED_CONFIRMED",
+          "last_evaluation_state": "COMPLETED",
+          "wait_or_fault_reason": null,
+          "last_submission_attempt_at": "2026-10-12T21:25:00Z",
+          "last_submission_completion_at": "2026-10-12T21:27:00Z",
+          "last_decision_input_at": "2026-10-12T21:23:00Z",
+          "next_scheduled_at": "2026-10-12T21:28:00Z",
+          "submission_blocking_reason": null,
+          "pending_reconciliation": false,
+          "stop_state": "HALT_ALL_SWAPS",
+          "removal_state": "CONFIRMED",
+          "control_state_basis": "Sourced by the listed stop-0007 and rmv-0007 rows.",
+          "residual_inventory": { "asset_id": "monad:143/0x2222222222222222222222222222222222222222", "raw": "25000000", "decimals": 6 }
+        },
+        "trading_results": {
+          "basis": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "12500000000000000000", "decimals": 18 } },
+          "realized_result": { "state": "KNOWN", "amount": { "asset_id": "monad:143/0x1111111111111111111111111111111111111111", "raw": "0", "decimals": 18 } },
+          "estimated_unrealized_result": { "state": "UNKNOWN" },
+          "mark": { "state": "UNKNOWN" },
+          "native_gas": { "asset_id": "monad:143/native", "raw": "150000000000000", "decimals": 18 },
+          "deposits": []
+        },
+        "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
+        "record_refs": [
+          { "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0007", "time": "2026-10-12T21:28:00Z", "time_field": "updated_at" },
+          { "kind": "DECISION", "table": "execution_local.execution_decisions", "id": "dec-0007", "time": "2026-10-12T21:23:00Z", "time_field": "decision_at" },
+          { "kind": "ACTION", "table": "execution_local.execution_intents", "id": "act-0007", "time": "2026-10-12T21:24:00Z", "time_field": "created_at" },
+          { "kind": "ACTION", "table": "execution_local.execution_submission_attempts", "id": "sub-0007", "time": "2026-10-12T21:25:00Z", "time_field": "started_at" },
+          { "kind": "RECEIPT", "table": "admission_local.admission_receipts", "id": "rcpt-0007", "time": "2026-10-12T21:27:00Z", "time_field": "created_at" },
+          { "kind": "POSITION", "table": "admission_local.admission_positions", "id": "ag-health-07:stg-health:dec-0007", "time": "2026-10-12T21:27:00Z", "time_field": "derived" },
+          { "kind": "AGENT", "table": "stops_local.scoped_stops", "id": "stop-0007", "time": "2026-10-12T21:29:00Z", "time_field": "created_at" },
+          { "kind": "AGENT", "table": "revocation_local.removal_states", "id": "rmv-0007", "time": "2026-10-12T21:29:30Z", "time_field": "updated_at" }
+        ],
+        "as_of": "2026-10-12T21:29:30Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "Agent ag-health-07 has a durable HALT_ALL_SWAPS stop and a CONFIRMED removal.",
+          "Both controls deny a new submission, including an exit, and both survive a restart.",
+          "The confirmed entry act-0007 leaves 25000000 base units (residual inventory) and owner access stays.",
+          "The entry realized 0; native gas is 75000 x 2000000000 = 150000000000000 MON (rcpt-0007)."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "owner_b_navigation_retarget_denied",
+      "title": "Owner B cannot read or retarget owner A's saved record",
+      "owner": "owner_b",
+      "agent_id": "ag-health-01",
+      "wallet_id": "wal-0001",
+      "network_id": "monad:143",
+      "as_of": null,
+      "provider_class": "SERVICE_PROJECTION",
+      "projection_ref": null,
+      "stored_rows": [],
+      "expected_direct_projection": null,
+      "expected_direct_result": { "http_status": 404, "code": "not_found", "provider_calls": 0, "as_of": "not applicable: no stored row for this owner and scope" },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_result",
+        "statements": [
+          "Owner B's request for owner A's record is not found.",
+          "No provider call runs, and the attached label cannot retarget the record to owner B.",
+          "The owner is read from the verified principal, not from the attachment or the URL.",
+          "There is no as_of value, because no stored row exists for this owner and scope."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "context_corrected_disabled_cleared",
+      "title": "Memory corrections, disable and clear change versions and no financial record",
+      "owner": "owner_a",
+      "agent_id": "ag-health-08",
+      "wallet_id": "wal-0008",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:39:00Z",
+      "provider_class": "Authored P19 context records",
+      "projection_ref": { "schema_version": "edge-os.agent-context-preview/1", "record_type": "AgentContextView", "record_id": "context:owner_a:ag-health-08" },
+      "stored_rows": [
+        { "table": "records (AgentContextRecord)", "id": "ctx-v1", "memory_version": 1, "state": "ACTIVE", "entries": [ { "context_id": "preference-1", "kind": "PREFERENCE", "status": "ADOPTED", "text": "Use short evidence summaries.", "source_refs": [] }, { "context_id": "lesson-1", "kind": "LESSON", "status": "SUGGESTED", "text": "Lesson text.", "source_refs": [] } ], "time_field": "created_at", "time": "2026-10-12T21:36:00Z", "time_basis": "DIRECT" },
+        { "table": "records (AgentContextRecord)", "id": "ctx-v2", "memory_version": 2, "state": "ACTIVE", "entries": [ { "context_id": "preference-1", "kind": "CORRECTION", "status": "ADOPTED", "text": "Show the source and time.", "source_refs": [] }, { "context_id": "lesson-1", "kind": "LESSON", "status": "SUGGESTED", "text": "Lesson text.", "source_refs": [] } ], "time_field": "created_at", "time": "2026-10-12T21:37:00Z", "time_basis": "DIRECT" },
+        { "table": "records (AgentContextRecord)", "id": "ctx-v3", "memory_version": 3, "state": "DISABLED", "entries": [ { "context_id": "preference-1", "kind": "CORRECTION", "status": "ADOPTED", "text": "Show the source and time.", "source_refs": [] }, { "context_id": "lesson-1", "kind": "LESSON", "status": "SUGGESTED", "text": "Lesson text.", "source_refs": [] } ], "time_field": "created_at", "time": "2026-10-12T21:38:00Z", "time_basis": "DIRECT" },
+        { "table": "records (AgentContextRecord)", "id": "ctx-v4", "memory_version": 4, "state": "CLEARED", "entries": [], "time_field": "created_at", "time": "2026-10-12T21:39:00Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-08", "wallet_id": "wal-0008", "network_id": "monad:143", "execution_revision_id": null, "deployment_id": null },
+        "context": {
+          "retrieval_rule": "retrieve_agent_context returns ADOPTED context_id/text only while state is ACTIVE; a non-ACTIVE state returns none (agent_context/controls.py:261-278).",
+          "memory_version_history": [
+            { "version": 1, "record_id": "ctx-v1", "state": "ACTIVE", "entries_count": 2, "retrieved_by_task": [{ "context_id": "preference-1", "text": "Use short evidence summaries." }] },
+            { "version": 2, "record_id": "ctx-v2", "state": "ACTIVE", "entries_count": 2, "retrieved_by_task": [{ "context_id": "preference-1", "text": "Show the source and time." }] },
+            { "version": 3, "record_id": "ctx-v3", "state": "DISABLED", "entries_count": 2, "retrieved_by_task": [] },
+            { "version": 4, "record_id": "ctx-v4", "state": "CLEARED", "entries_count": 0, "retrieved_by_task": [] }
+          ],
+          "financial_records_changed": false,
+          "financial_records_changed_basis": "The P19 write path creates only an AgentContextRecord row and locks the owner's User row; it writes no funding, admission, execution, recovery, revocation or stop row (agent_context/controls.py:134-174)."
+        },
+        "record_refs": [
+          { "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v1", "time": "2026-10-12T21:36:00Z", "time_field": "created_at" },
+          { "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v2", "time": "2026-10-12T21:37:00Z", "time_field": "created_at" },
+          { "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v3", "time": "2026-10-12T21:38:00Z", "time_field": "created_at" },
+          { "kind": "CONTEXT", "table": "records (AgentContextRecord)", "id": "ctx-v4", "time": "2026-10-12T21:39:00Z", "time_field": "created_at" }
+        ],
+        "as_of": "2026-10-12T21:39:00Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "The seed version 1 (ctx-v1) held preference-1 (ADOPTED) and lesson-1 (SUGGESTED); a task retrieved only preference-1.",
+          "A correction made version 2 (ctx-v2): preference-1 text became 'Show the source and time.' and its kind is CORRECTION; lesson-1 stayed SUGGESTED and is still not retrieved.",
+          "Disabling made version 3 (ctx-v3) and clearing made version 4 (ctx-v4); while the state is not ACTIVE, no entry is retrieved.",
+          "The write path creates only AgentContextRecord rows, so no financial record, reservation, pending action or permission changed (agent_context/controls.py:134-174)."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    },
+    {
+      "case_id": "repeated_preview_same_action",
+      "title": "A repeated schedule call returns the same ENQUEUED job; the PROPOSED preview binds a saved queued action",
+      "owner": "owner_a",
+      "agent_id": "ag-health-09",
+      "wallet_id": "wal-0009",
+      "network_id": "monad:143",
+      "as_of": "2026-10-12T21:44:10Z",
+      "provider_class": "FixtureChain (SERVICE_PROJECTION)",
+      "projection_ref": { "schema_version": "edge-os.agent-health-projection/1", "record_type": "AgentHealthProjection", "record_id": "health:owner_a:ag-health-09:wal-0009:monad:143" },
+      "stored_rows": [
+        { "table": "execution_local.execution_evaluation_jobs", "id": "job-0009", "agent_id": "ag-health-09", "wallet_id": "wal-0009", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "state": "ENQUEUED", "outcome": null, "reason": null, "time_field": "updated_at", "time": "2026-10-12T21:44:10Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_intents", "id": "act-0009", "revision_id": "stg-health:abcdef0123456789", "operation": "ENTRY", "quantity_raw": "25000000", "quantity_decimals": 6, "expected_output_raw": "12500000000000000000", "expected_output_decimals": 18, "time_field": "created_at", "time": "2026-10-12T21:44:05Z", "time_basis": "DIRECT" },
+        { "table": "execution_local.execution_queue", "id": "Q-0009", "state": "QUEUED", "time_field": "enqueued_at", "time": "2026-10-12T21:44:10Z", "time_basis": "DIRECT" }
+      ],
+      "expected_direct_projection": {
+        "schema_version": "edge-os.agent-health-projection/1",
+        "evidence_class": "SERVICE_PROJECTION",
+        "scope": { "owner_id": "10000000-0000-4000-8000-000000000001", "agent_id": "ag-health-09", "wallet_id": "wal-0009", "network_id": "monad:143", "strategy_id": "stg-health", "publication_revision_id": "20000000-0000-4000-8000-000000000001", "execution_revision_id": "stg-health:abcdef0123456789", "content_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "manifest_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "consent_adoption_id": "30000000-0000-4000-8000-000000000001", "consent_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "deployment_id": null },
+        "schedule_identity": { "request_key": "rk-0009", "job_id": "job-0009", "job_state": "ENQUEUED", "idempotent_replay": true, "identity_note": "A repeated schedule call returns this evaluation job; the job is not an action and may produce no action." },
+        "action_preview": { "state": "PROPOSED", "action_id": "act-0009", "operation": "ENTRY", "status": "QUEUED", "target": { "position_id": "ag-health-09:stg-health:dec-0009", "asset_id": "monad:143/0x2222222222222222222222222222222222222222" }, "quantity": { "asset_id": "monad:143/0x2222222222222222222222222222222222222222", "raw": "25000000", "decimals": 6 }, "expected_movement": { "state": "UNKNOWN" }, "future_entries_active": { "state": "UNKNOWN", "reason": "NO_CONTROL_RECORD" }, "bound_record": "execution_local.execution_intents:act-0009" },
+        "trading_results": { "basis": { "state": "UNKNOWN" }, "realized_result": { "state": "UNKNOWN" }, "estimated_unrealized_result": { "state": "UNKNOWN" }, "mark": { "state": "UNKNOWN" }, "native_gas": null, "deposits": [] },
+        "edge_evidence": { "edge_revision": null, "edge_evidence_status": null },
+        "record_refs": [
+          { "kind": "MONITORING", "table": "execution_local.execution_evaluation_jobs", "id": "job-0009", "time": "2026-10-12T21:44:10Z", "time_field": "updated_at" },
+          { "kind": "ACTION", "table": "execution_local.execution_intents", "id": "act-0009", "time": "2026-10-12T21:44:05Z", "time_field": "created_at" },
+          { "kind": "ACTION", "table": "execution_local.execution_queue", "id": "Q-0009", "time": "2026-10-12T21:44:10Z", "time_field": "enqueued_at" }
+        ],
+        "as_of": "2026-10-12T21:44:10Z"
+      },
+      "expected_conversation_summary": {
+        "renders_from": "expected_direct_projection",
+        "statements": [
+          "A repeated schedule call returns the same evaluation job job-0009 (ENQUEUED, Idempotent-Replay); a job is not an action.",
+          "The saved action act-0009 is QUEUED (intent 21:44:05, queue 21:44:10), so the PROPOSED preview binds it and shows a QUEUED ENTRY of 25000000 base units.",
+          "Expected movement and trading results are unknown; the preview is not execution permission and a stale preview cannot grant authority."
+        ],
+        "values_agree": true,
+        "sources_agree": true,
+        "unknowns_agree": true
+      }
+    }
+  ]
+}
