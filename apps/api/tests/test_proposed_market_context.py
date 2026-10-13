@@ -2,6 +2,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
+
 from edge_os_api.replay.proposed_market_context import (
     ProposedFeeScheduleSnapshot,
     ProposedTickerSnapshot,
@@ -29,8 +31,13 @@ def _spot() -> ProposedVenueInstrument:
 
 def _completed_snapshots() -> dict[str, ProposedTickerSnapshot]:
     return {
-        "5m": ProposedTickerSnapshot(FIVE_MINUTES, AT, Decimal("101"), "TRADE", "official:klines?5m", AT, "sha256:five"),
-        "1h": ProposedTickerSnapshot(ONE_HOUR, datetime(2026, 10, 1, 12, tzinfo=UTC), Decimal("100"), "MARK", "official:klines?1h", AT, "sha256:hour"),
+        "5m": ProposedTickerSnapshot(
+            FIVE_MINUTES, AT, Decimal("101"), "TRADE", "official:klines?5m", AT, AT, "sha256:five",
+        ),
+        "1h": ProposedTickerSnapshot(
+            ONE_HOUR, datetime(2026, 10, 1, 12, tzinfo=UTC), Decimal("100"), "MARK",
+            "official:klines?1h", datetime(2026, 10, 1, 12, tzinfo=UTC), AT, "sha256:hour",
+        ),
     }
 
 
@@ -70,10 +77,42 @@ def test_context_rejects_unusable_instrument_even_when_its_bars_are_valid() -> N
 
 
 def test_future_stale_or_unknown_context_is_refused_not_forward_filled() -> None:
-    unknown = ProposedTickerSnapshot(ONE_HOUR, datetime(2026, 10, 1, 13, tzinfo=UTC), None, "TRADE", "official:klines", AT, "sha256:unknown")
+    unknown = ProposedTickerSnapshot(
+        ONE_HOUR, datetime(2026, 10, 1, 13, tzinfo=UTC), None, "TRADE", "official:klines",
+        datetime(2026, 10, 1, 13, tzinfo=UTC), datetime(2026, 10, 1, 13, tzinfo=UTC), "sha256:unknown",
+    )
     accepted, reasons = resolve_completed_context(AT, _spot(), {"1h": unknown})
     assert accepted == {}
     assert reasons == ("CONTEXT_UNAVAILABLE:5m", "CONTEXT_UNAVAILABLE:1h")
+
+
+def test_completed_context_must_have_been_available_by_the_decision_time() -> None:
+    snapshots = _completed_snapshots()
+    snapshots["5m"] = replace(
+        snapshots["5m"], available_at=AT + timedelta(seconds=1), retrieved_at=AT + timedelta(seconds=1),
+    )
+
+    accepted, reasons = resolve_completed_context(AT, _spot(), snapshots)
+
+    assert tuple(accepted) == ("1h",)
+    assert reasons == ("CONTEXT_NOT_YET_AVAILABLE:5m",)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"available_at": AT - timedelta(seconds=1)},
+        {"retrieved_at": AT - timedelta(seconds=1)},
+    ),
+)
+def test_context_rejects_impossible_source_timing(changes: dict[str, datetime]) -> None:
+    snapshots = _completed_snapshots()
+    snapshots["5m"] = replace(snapshots["5m"], **changes)
+
+    accepted, reasons = resolve_completed_context(AT, _spot(), snapshots)
+
+    assert tuple(accepted) == ("1h",)
+    assert reasons == ("CONTEXT_UNAVAILABLE:5m",)
 
 
 def test_venue_product_context_requires_settlement_and_explicit_derivative_leverage() -> None:

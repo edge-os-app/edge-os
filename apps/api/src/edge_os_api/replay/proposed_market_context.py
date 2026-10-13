@@ -28,13 +28,14 @@ class ProposedTimeframe:
 
 @dataclass(frozen=True)
 class ProposedTickerSnapshot:
-    """One retrieved historical bar; ``None`` price deliberately means unknown."""
+    """One historical bar with separate source-availability and retrieval times."""
 
     timeframe: ProposedTimeframe
     ended_at: datetime
     close: Decimal | None
     price_kind: str  # TRADE, MARK, or INDEX
     source_ref: str
+    available_at: datetime
     retrieved_at: datetime
     content_hash: str
 
@@ -42,7 +43,10 @@ class ProposedTickerSnapshot:
         return (
             self.timeframe.is_usable()
             and _is_utc(self.ended_at)
+            and _is_utc(self.available_at)
             and _is_utc(self.retrieved_at)
+            and self.available_at >= self.ended_at
+            and self.retrieved_at >= self.available_at
             and self.close is not None
             and self.close.is_finite()
             and self.close > 0
@@ -144,6 +148,8 @@ def resolve_completed_context(
             reasons.append(f"CONTEXT_UNAVAILABLE:{timeframe.label}")
         elif snapshot.timeframe != timeframe or snapshot.ended_at != expected_end:
             reasons.append(f"CONTEXT_BAR_MISMATCH:{timeframe.label}")
+        elif snapshot.available_at > at:
+            reasons.append(f"CONTEXT_NOT_YET_AVAILABLE:{timeframe.label}")
         else:
             accepted[timeframe.label] = snapshot
     return accepted, tuple(reasons)

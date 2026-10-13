@@ -61,10 +61,12 @@ before a later shared integration can compare venues or run multiple timeframes:
   timeframe, every context timeframe, and the historical-data source. Spot
   cannot silently acquire leverage; derivatives cannot omit leverage,
   multiplier, or funding source.
-- Every historical candle records its timeframe, UTC close time, retrieved time,
-  primary source reference, and content hash. At a decision time the proposal
-  accepts only the latest fully closed UTC bar for each requested timeframe. It
-  neither uses a future/in-progress bar nor forward-fills a missing close.
+- Every historical candle records its timeframe, UTC close time, source
+  availability time, retrieval time, primary source reference, and content hash.
+  At a decision time the proposal accepts only the latest fully closed UTC bar
+  for each requested timeframe that was available no later than that decision.
+  It neither uses a future/in-progress or late bar nor forward-fills a missing
+  close. Source availability and later archival retrieval are distinct facts.
 - A **fee schedule snapshot** contains venue/instrument/product, effective UTC
   interval, retrieval time, primary source, account-tier reference, fee asset,
   distinct maker and taker rates, and a discount/promotion reference where

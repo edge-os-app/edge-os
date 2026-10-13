@@ -15,31 +15,46 @@ The host skill catalog was inspected on 2026-10-11. The repository's suggested
 claimed as used. Repository contracts, worked cases, P13 tests, Decimal 50
 context, and the small-existing-module convention were applied directly.
 
-Focused baseline and candidate check:
+Focused candidate checks:
 
 ```sh
 (cd apps/api && uv run --frozen pytest -q \
-  tests/test_proposed_replay_accounting.py tests/test_spot_replay.py)
+  tests/test_proposed_replay_accounting.py \
+  tests/test_proposed_replay_accounting_edges.py \
+  tests/test_proposed_market_context.py \
+  tests/test_spot_replay.py)
+(cd apps/api && uv run --frozen python -m compileall -q src tests)
+python3 docs/contracts/p02/check_contract.py
 ```
 
-The candidate currently passes `76` focused numerical/P12 tests (one upstream
-FastAPI/Starlette deprecation warning): the command now also includes
-`tests/test_proposed_market_context.py`. It covers the proposal's source-stamped
-multi-timeframe completion rule, fee-schedule gaps/overlaps, maker/taker and fee
-asset boundary, and spot-versus-derivative settlement metadata. See [the P14
-test matrix](TEST_MATRIX.md) and [venue-context register](VENUE_CONTEXT_BENCHMARKS.md)
-for the adversarial coverage and retained exclusions. The complete API suite was
-also attempted: its pure tests reached
-125 passes, but Docker could not create the isolated PostgreSQL volume, leaving
-13 harness failures and 255 dependent setup errors. That environment blocker is
-outside this pure numerical change; it does not replace the required complete
-candidate verification. UI, mapped verifier, independent reviews, and gate
+The focused set passes `79` tests (one upstream FastAPI/Starlette deprecation
+warning); Python compilation and the P02 contract check also pass. It covers
+the proposal's source-stamped multi-timeframe completion and decision-time
+availability rules, fee-schedule gaps/overlaps, maker/taker and fee-asset
+boundary, and spot-versus-derivative settlement metadata. See [the P14 test
+matrix](TEST_MATRIX.md) and [venue-context register](VENUE_CONTEXT_BENCHMARKS.md)
+for adversarial coverage and retained exclusions.
+
+The full API suite was attempted after the rebase, but cannot complete in this
+environment: its session PostgreSQL fixture fails while creating a labelled
+Docker volume because the Docker daemon is unavailable. A `--maxfail=1`
+reproduction confirms that root cause; it is not a P14 test failure and does
+not replace complete candidate verification. `uv sync --frozen` passed.
+
+The web locked install, typecheck and tests also passed (`230` web tests), but
+the host has Node `25.5.0`, not the workflow-required Node 24; those successful
+web results are supplementary rather than a compliant full-path result.
+`tests/p03` installed its locked dependencies and Chromium, but the mapped P03
+run was not started because its Docker preflight fails and the required pinned
+Hermes checkout is absent. UI, mapped verifier, independent reviews, and gate
 remain separate requirements. P12/1 saved-run behavior was not modified.
 
 The current candidate also rejects a non-contiguous five-minute schedule before
 any later fill can be applied; it does not silently bridge a missing bucket.
 It also rejects an unusable venue/instrument declaration before otherwise valid
-context bars can be accepted.
+context bars can be accepted. It keeps source availability distinct from later
+archival retrieval and refuses a completed bar that was not available at its
+decision time.
 
 `verify-edge-os` was read and applied as the project verification procedure.
 Its feature-map and browser/SQL path are inapplicable to this intentionally

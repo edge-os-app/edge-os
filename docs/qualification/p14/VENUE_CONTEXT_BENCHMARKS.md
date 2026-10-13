@@ -14,7 +14,7 @@ Every later replay result should expose, in a copyable record:
 | Venue, native instrument, product/contract kind | Exact exchange-native identifiers; `SPOT`, `LINEAR_PERPETUAL`, or `INVERSE_PERPETUAL` | A ticker string alone does not define the traded instrument. |
 | Settlement/margin asset and leverage | Named asset and explicit leverage; unknown is unavailable | A USDT-linear perp and an inverse contract have different P&L and fee units. |
 | Execution and context timeframes | UTC durations, decision timestamp, each input candle's completed-at time | Prevents using an unfinished higher-timeframe candle or future data. |
-| Historical ticker/mark/index source | Primary URL/API request, retrieval timestamp, response hash, price kind | Makes data provenance and later reproduction possible. |
+| Historical ticker/mark/index source | Primary URL/API request, bar-end timestamp, source-availability timestamp, retrieval timestamp, response hash, price kind | Separates decision-time availability from later archival retrieval and makes data provenance reproducible. |
 | Fee schedule source | Primary URL/API request, retrieval timestamp, effective UTC interval, snapshot hash | A live fee page is not a historical time series. |
 | Applied fee facts | Maker/taker outcome, account tier, fee asset, discount token/plan, promotion, quoted rate and actual per-fill fee if available | A published base rate is usually not the account's charged rate. |
 | Derivative cash flows | Contract multiplier, funding source/interval, liquidation/insurance/settlement events | They are not spot trading fees and must not disappear from P&L. |
@@ -43,9 +43,10 @@ defaults and should be re-captured into dated snapshots for every replay range.
 2. For each context timeframe (for example 5m and 1h), use only the bar whose
    close is the most recent completed boundary at `t`. At `12:05 UTC`, a 5m bar
    may end at `12:05`; a 1h bar must end at `12:00`, not `13:00`.
-3. Store the source response hash and retrieval time alongside each used bar.
-   Missing data produces a named unavailable state; no forward fill, backward
-   fill, synthetic zero, or silently substituted venue is allowed.
+3. Store the source response hash, source-availability time and retrieval time
+   alongside each used bar. A bar first available after the decision is named
+   unavailable even if it was retrieved later from an archive; no forward fill,
+   backward fill, synthetic zero, or silently substituted venue is allowed.
 4. Never aggregate P&L across venues/products until all cash flows are converted
    using an identified FX/mark source at an identified timestamp. This P14
    proposal does not implement cross-venue portfolio valuation.

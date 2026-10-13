@@ -20,7 +20,7 @@ extension, qualify a dataset/fill/cost source, or establish a saved runtime.
 | Schedule integrity | Empty, naïve, non-UTC, off-grid, non-increasing, or non-contiguous ticks | The proposal refuses them before replay; a later fill cannot bridge a missing bucket. |
 | Determinism | Run identical proposed inputs twice | Samples, events, and positions compare identically. |
 | Starting capital | Negative initial cash | Replay construction rejects it. |
-| Multi-timeframe context | 5m and 1h source-stamped bars at one decision time | Only fully completed UTC bars are accepted; missing/future/in-progress context cannot become a price. |
+| Multi-timeframe context | 5m and 1h source-stamped bars at one decision time; a completed but late-available bar | Only fully completed UTC bars available by the decision are accepted; missing/future/in-progress/late context cannot become a price. |
 | Venue/product facts | Spot versus linear/inverse declaration; invalid instrument with otherwise valid bars | Settlement procedure/asset, contract kind, multiplier, funding source and derivative leverage are explicit; an unusable instrument returns `MARKET_CONTEXT_UNAVAILABLE` before any bar is accepted. |
 | Fee provenance | Dated schedule selection | Exactly one applicable source/tier/fee-asset schedule is required; gaps and overlaps have named failures. |
 | Fee role/asset/contract boundary | Maker versus taker, quote asset versus other fee asset, spot versus derivative | The spot ledger refuses an unsupported fee unit, rebate, or contract instead of emitting false P&L. |
