@@ -174,6 +174,17 @@ def test_proposed_replay_rejects_non_schedule_timestamps(ticks: tuple[ProposedRe
         run_proposed_accounting_replay(ticks, Decimal("1000"), _costs())
 
 
+def test_proposed_replay_rejects_a_missing_bucket_before_a_later_fill() -> None:
+    start = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+    ticks = (
+        ProposedReplayTick(start, entry_requests=(ProposedEntryRequest("entry-1", "position-a", Decimal("400")),)),
+        ProposedReplayTick(start + timedelta(minutes=10), {"entry-1": Decimal("8")}),
+    )
+
+    with pytest.raises(ValueError, match="contiguous"):
+        run_proposed_accounting_replay(ticks, Decimal("1000"), _costs())
+
+
 def test_replay_with_no_saved_costs_has_no_reservation_or_later_fill() -> None:
     start = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
     ticks = (

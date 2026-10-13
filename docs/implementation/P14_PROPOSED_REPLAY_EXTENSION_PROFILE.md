@@ -36,8 +36,10 @@ The cash balance is shared by every position.
   entries settle, the account is marked, and current requests reserve for the
   next tick. Exit reservations take priority over an add for the same position
   (`EXIT_PRIORITY`); different positions then compete for free shared cash.
-  Ticks must be strictly ordered UTC five-minute boundaries. The final tick
-  records `NO_NEXT_BUCKET` without reserving a new request.
+  Ticks must be contiguous, strictly ordered UTC five-minute boundaries. A
+  missing bucket rejects the replay rather than allowing a later tick to settle
+  an order silently. The final tick records `NO_NEXT_BUCKET` without reserving
+  a new request.
 - A missing or unusable cost tuple returns `COST_UNAVAILABLE`; a missing fill
   returns `FILL_UNAVAILABLE` and releases the reservation without a fee. A
   missing mark returns no account value and `MISSING_MARK:<position_id>` while

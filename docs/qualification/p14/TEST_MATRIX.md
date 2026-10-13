@@ -17,7 +17,7 @@ extension, qualify a dataset/fill/cost source, or establish a saved runtime.
 | Unknown valuation | One of two open positions has no mark | Cash/inventory/basis stay known; aggregate value is unavailable with the named missing-mark reason. |
 | Timing/order | Scheduled driver test | Prior exits settle, then prior entries settle, mark, reserve current actions; same-position exit wins over add. |
 | Terminal boundary | Terminal entry request | `NO_NEXT_BUCKET`; no new reservation or fill. |
-| Schedule integrity | Empty, naïve, non-UTC, off-grid, and non-increasing ticks | The proposal refuses them before replay. |
+| Schedule integrity | Empty, naïve, non-UTC, off-grid, non-increasing, or non-contiguous ticks | The proposal refuses them before replay; a later fill cannot bridge a missing bucket. |
 | Determinism | Run identical proposed inputs twice | Samples, events, and positions compare identically. |
 | Starting capital | Negative initial cash | Replay construction rejects it. |
 | Multi-timeframe context | 5m and 1h source-stamped bars at one decision time | Only fully completed UTC bars are accepted; missing/future/in-progress context cannot become a price. |

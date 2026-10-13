@@ -371,9 +371,10 @@ def run_proposed_accounting_replay(
     """
     if (not ticks
             or any(current.at >= following.at for current, following in zip(ticks, ticks[1:]))
+            or any(following.at - current.at != timedelta(minutes=5) for current, following in zip(ticks, ticks[1:]))
             or any(tick.at.tzinfo is None or tick.at.utcoffset() != timedelta(0)
                    or tick.at.minute % 5 or tick.at.second or tick.at.microsecond for tick in ticks)):
-        raise ValueError("Proposed replay ticks must be ordered UTC five-minute boundaries.")
+        raise ValueError("Proposed replay ticks must be contiguous ordered UTC five-minute boundaries.")
     ledger = ProposedSharedCapitalLedger(initial_cash_quote)
     pending_entries: tuple[str, ...] = ()
     pending_exits: tuple[str, ...] = ()
