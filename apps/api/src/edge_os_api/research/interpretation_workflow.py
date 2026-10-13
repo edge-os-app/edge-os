@@ -114,6 +114,7 @@ def public_attempt(view: AttemptView) -> dict[str, Any]:
     """Structured values, hashes and sanitized codes. The generated text and the user's reply are not included."""
     start, settled, identity = view.start, view.settlement, view.start.identity
     usage = settled.usage if settled else None
+    observed = settled.runtime_observed if settled else {}  # spend, as the guarded runner saved it; none after a crash
     return {
         "attempt_id": start.attempt_id, "sequence": start.sequence, "retry_of": start.retry_of,
         "purpose": identity.purpose, "status": view.status, "completion": view.completion,
@@ -127,6 +128,7 @@ def public_attempt(view: AttemptView) -> dict[str, Any]:
         "response_sha256": settled.response_sha256 if settled else None,
         "parse_result": settled.parse_result if settled else None,
         "error_class": settled.error_class if settled else None, "revision_id": view.revision_id,
+        "spend": {"state": observed.get("spend_state"), "charge_usd": observed.get("spend_charge_usd")},
         "identity": {
             "prompt_version": identity.prompt_version, "system_prompt_sha256": identity.system_prompt_sha256,
             "task_sha256": identity.task_sha256, "response_shape_sha256": identity.response_shape_sha256,
