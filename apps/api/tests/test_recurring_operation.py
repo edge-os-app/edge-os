@@ -1068,3 +1068,143 @@ def test_simultaneous_ends_both_reply_with_the_saved_ended_state(journey, owner_
     assert (again.status_code, again.json()["state"], again.json()["ended_at"]) == (
         200, "ENDED", replies[0]["ended_at"])
     assert projection(journey, owner_a, agent)["deployment"]["state"] == "ENDED"
+
+
+# ------------------------------------------------------------------------- gate REVISE 3/3 (R1-C, D4)
+
+def end_after_initial_empty_read(client: TestClient, headers: dict[str, str], agent: str, state: dict[str, Any],
+                                 monkeypatch, *, wait_for: Any = None) -> dict[str, Any]:
+    """Run End in its own thread. Its first real SELECT finds no deployment; then, before End reads again, a real
+    authenticated activation commits and the original occurrence is decided and admitted through the unchanged
+    worker stages. `wait_for` (an Event) holds End there until the test lets it continue. No row is fabricated."""
+    import threading
+
+    recurring, connected = client.app.state.financial.recurring, client.app.state.financial.connected
+    real_factory = recurring._factory
+    record: dict[str, Any] = {"trace": [], "replies": [], "errors": [], "deployment": None}
+    admitted, committed = threading.Event(), threading.Event()
+    hooked: list[bool] = []
+
+    def factory(*args, **kwargs):
+        session = real_factory(*args, **kwargs)
+        if threading.current_thread().name != "end-after-empty-read" or hooked:
+            return session
+        hooked.append(True)
+        real_execute, real_commit = session.execute, session.commit
+        calls: list[str] = []
+
+        def execute(statement, *a, **k):
+            if "pg_advisory_xact_lock" in str(statement):
+                record["trace"].append("END_WAITS_FOR_WALLET_LOCK")
+            result = real_execute(statement, *a, **k)
+            calls.append(str(statement))
+            if "pg_advisory_xact_lock" in str(statement):
+                record["trace"].append("END_HOLDS_WALLET_LOCK")
+            if len(calls) == 1:
+                record["trace"].append("END_INITIAL_READ_EMPTY")
+                response = activate(client, headers, agent, state["consent"]["consent_hash"])
+                assert response.status_code == 201, response.text
+                record["deployment"] = response.json()
+                with at(client, 0):
+                    recurring.tick(only=[uuid.UUID(record["deployment"]["deployment_id"])])
+                    [job] = occurrences(client, record["deployment"])
+                    connected._advance(job)
+                    connected._advance(connected._load(job.job_id))
+                [job] = occurrences(client, record["deployment"])
+                assert job.state == "ENQUEUED" and job.action_id is not None
+                record["trace"].append("ACTIVATED_AND_ORIGINAL_ADMITTED")
+                admitted.set()
+                if wait_for is not None:
+                    assert wait_for.wait(30), "the test did not release End"
+            return result
+
+        def commit():
+            real_commit()
+            if record["deployment"] is not None and not committed.is_set():
+                record["trace"].append("END_COMMITTED")
+                committed.set()
+
+        session.execute, session.commit = execute, commit
+        return session
+
+    monkeypatch.setattr(recurring, "_factory", factory)
+    owner_id = uuid.UUID(client.get("/v1/me", headers=headers).json()["user_id"])
+
+    def run_end():
+        try:
+            record["replies"].append(recurring.end(owner_id, agent))
+        except BaseException as error:  # noqa: BLE001 - reported to the test thread
+            record["errors"].append(repr(error))
+            admitted.set()
+
+    thread = threading.Thread(target=run_end, name="end-after-empty-read")
+    record.update(thread=thread, admitted=admitted, committed=committed, owner_id=owner_id)
+    thread.start()
+    return record
+
+
+def test_an_end_whose_first_read_was_empty_waits_for_ownership_held_on_the_wallet(journey, owner_a, monkeypatch):
+    """R1-C, ownership first: a deployment activated after End's empty first read is ended only under its wallet lock,
+    so End cannot commit while submission ownership holds that lock; the original then proceeds and stays owned."""
+    import threading
+
+    agent = "rec-r1c-ownership-first"
+    state = ready(journey, owner_a, agent)
+    release_end = threading.Event()
+    observed: dict[str, Any] = {}
+    record = end_after_initial_empty_read(journey, owner_a, agent, state, monkeypatch, wait_for=release_end)
+    try:
+        assert record["admitted"].wait(30) and not record["errors"], record["errors"]
+        admission = journey.app.state.financial.admission
+        real_guard = admission._stop_denial_for_row
+
+        def guard(session, owner, row):
+            result = real_guard(session, owner, row)  # the real control read, under the real admission wallet lock
+            observed["control"] = result
+            release_end.set()  # End now continues and needs this same wallet lock
+            observed["end_committed_while_ownership_held"] = record["committed"].wait(2)
+            return result
+
+        monkeypatch.setattr(admission, "_stop_denial_for_row", guard)
+        [job] = occurrences(journey, record["deployment"])
+        with at(journey, 0):
+            journey.app.state.financial.connected.run_job(job.job_id)
+        record["thread"].join(timeout=30)
+    finally:
+        release_end.set()
+        record["thread"].join(timeout=35)
+    assert not record["thread"].is_alive() and not record["errors"], record["errors"]
+    assert observed == {"control": None, "end_committed_while_ownership_held": False}, observed
+    assert "END_HOLDS_WALLET_LOCK" in record["trace"]
+    assert record["trace"].index("END_HOLDS_WALLET_LOCK") < record["trace"].index("END_COMMITTED")
+    [job] = occurrences(journey, record["deployment"])
+    assert job.outcome == "SUBMITTED_CONFIRMED" and len(ff.effects(journey)) == 1  # owned first: the original
+    assert record["replies"][0]["state"] == "ENDED"
+    assert projection(journey, owner_a, agent)["deployment"]["state"] == "ENDED"
+
+
+def test_an_end_whose_first_read_was_empty_ends_under_the_lock_before_ownership(journey, owner_a, monkeypatch):
+    """R1-C, end first: End retries after its empty read, locks the newly active deployment's wallet and ends it; the
+    admitted original is then refused ownership with no effect and its reservations are released."""
+    agent = "rec-r1c-end-first"
+    state = ready(journey, owner_a, agent)
+    record = end_after_initial_empty_read(journey, owner_a, agent, state, monkeypatch)
+    record["thread"].join(timeout=35)
+    assert not record["thread"].is_alive() and not record["errors"], record["errors"]
+    assert record["trace"].index("END_HOLDS_WALLET_LOCK") < record["trace"].index("END_COMMITTED")
+    assert record["replies"][0]["state"] == "ENDED"
+    [job] = occurrences(journey, record["deployment"])
+    with at(journey, 0):
+        journey.app.state.financial.connected.run_job(job.job_id)
+    [job] = occurrences(journey, record["deployment"])
+    assert ff.effects(journey) == []
+    assert job.state == "COMPLETED" and job.outcome in ("DEPLOYMENT_ENDED", "REVALIDATION_DENIED",
+                                                         "SUBMISSION_NOT_OWNED")
+    view = admission_view(journey, owner_a, job.action_id)
+    assert view["reservations"] == ["RELEASED"] and "CANCELLED" in view["admission"]
+
+
+def test_an_end_with_no_deployment_at_all_ends_nothing(journey, owner_a):
+    ready(journey, owner_a, "rec-r1c-none")
+    response = journey.post("/v1/agents/rec-r1c-none/deployment/end", headers=owner_a)
+    assert response.status_code == 404

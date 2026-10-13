@@ -42,6 +42,8 @@ OCCURRENCES_SHOWN = 20
 UNSETTLED_QUEUE = ("CLAIMED", "SUBMITTED_UNKNOWN", "BREACHED", "RECONCILE_MISMATCH")
 # A producer not seen for two slots is reported, never assumed alive.
 PRODUCER_SILENCE = 2 * SLOT
+# An end re-reads at most this many times when deployments are activated or rebound while it runs.
+END_ATTEMPTS = 5
 
 
 class DeploymentRefused(Exception):
@@ -143,26 +145,39 @@ class RecurringOperation:
         receipt-only recovery."""
         now = self._clock()
         with self._factory() as session:
-            current = session.execute(select(RecurringDeploymentRow).where(
-                RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id,
-                RecurringDeploymentRow.state == "ACTIVE")).scalar_one_or_none()
-            if current is not None:
-                acquire_wallet_lock(session, owner_id, agent_id, current.wallet_id, current.network_id)
+            # Only a deployment found ACTIVE again while its own wallet lock is held is ever ended. An empty read never
+            # authorizes a later unlocked end: if a deployment was activated meanwhile, the loop starts again and
+            # takes that deployment's lock first. Each retry rolls back, which also releases the transaction lock.
+            for _ in range(END_ATTEMPTS):
+                current = self._active(session, owner_id, agent_id)
+                if current is None:
+                    latest = self._latest(session, owner_id, agent_id)
+                    if latest is None:
+                        raise DeploymentRefused("deployment_not_found")
+                    if latest.state != "ACTIVE":
+                        return deployment_view(latest)
+                    session.rollback()  # activated after the first read: start again and lock it first
+                    continue
+                binding = (current.wallet_id, current.network_id)
+                acquire_wallet_lock(session, owner_id, agent_id, *binding)
                 # Another end may have committed while this one waited for the lock. The session factory keeps loaded
                 # rows across commits, so everything read before the wait is discarded and read again from the
                 # database; the reply then states the saved state, never the state seen before the wait.
                 session.expire_all()
-            row = session.execute(select(RecurringDeploymentRow).where(
-                RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id,
-                RecurringDeploymentRow.state == "ACTIVE").with_for_update()).scalar_one_or_none()
-            if row is not None:
-                self._end(row, "OWNER_ENDED", now)
-                session.commit()
-                return deployment_view(row)
-            latest = self._latest(session, owner_id, agent_id)
-            if latest is None:
-                raise DeploymentRefused("deployment_not_found")
-            return deployment_view(latest)
+                row = session.execute(select(RecurringDeploymentRow).where(
+                    RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id,
+                    RecurringDeploymentRow.state == "ACTIVE").with_for_update()).scalar_one_or_none()
+                if row is not None and (row.wallet_id, row.network_id) == binding:
+                    self._end(row, "OWNER_ENDED", now)
+                    session.commit()
+                    return deployment_view(row)
+                if row is None:
+                    latest = self._latest(session, owner_id, agent_id)
+                    if latest is not None and latest.state != "ACTIVE":
+                        session.commit()  # nothing to end; the lock is released with this transaction
+                        return deployment_view(latest)
+                session.rollback()  # the ACTIVE deployment now binds another wallet: lock that one instead
+            raise DeploymentRefused("deployment_conflict")
 
     # --------------------------------------------------------------------------------- producer
 
@@ -392,7 +407,7 @@ class RecurringOperation:
     def _active(session: Session, owner_id: uuid.UUID, agent_id: str) -> RecurringDeploymentRow | None:
         return session.execute(select(RecurringDeploymentRow).where(
             RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id,
-            RecurringDeploymentRow.state == "ACTIVE")).scalar_one_or_none()
+            RecurringDeploymentRow.state == "ACTIVE").execution_options(populate_existing=True)).scalar_one_or_none()
 
     @staticmethod
     def _latest(session: Session, owner_id: uuid.UUID, agent_id: str) -> RecurringDeploymentRow | None:
