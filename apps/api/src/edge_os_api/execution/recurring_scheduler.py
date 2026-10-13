@@ -148,6 +148,10 @@ class RecurringOperation:
                 RecurringDeploymentRow.state == "ACTIVE")).scalar_one_or_none()
             if current is not None:
                 acquire_wallet_lock(session, owner_id, agent_id, current.wallet_id, current.network_id)
+                # Another end may have committed while this one waited for the lock. The session factory keeps loaded
+                # rows across commits, so everything read before the wait is discarded and read again from the
+                # database; the reply then states the saved state, never the state seen before the wait.
+                session.expire_all()
             row = session.execute(select(RecurringDeploymentRow).where(
                 RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id,
                 RecurringDeploymentRow.state == "ACTIVE").with_for_update()).scalar_one_or_none()
@@ -395,7 +399,7 @@ class RecurringOperation:
         return session.execute(select(RecurringDeploymentRow).where(
             RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id)
             .order_by(RecurringDeploymentRow.activated_at.desc(), RecurringDeploymentRow.deployment_id.desc())
-            .limit(1)).scalar_one_or_none()
+            .limit(1).execution_options(populate_existing=True)).scalar_one_or_none()  # always the saved state
 
 
 class DeploymentEndControl:

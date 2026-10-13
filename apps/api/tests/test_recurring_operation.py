@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 
 import financial_flows as ff
@@ -1022,3 +1022,49 @@ def test_a_submission_owned_original_is_never_released_by_an_end(journey, owner_
     produce(journey, state["deployment"], 5)
     assert occurrences(journey, state["deployment"])[0].outcome == "SUBMITTED_CONFIRMED"
     assert len(ff.effects(journey)) == 1
+
+
+# ------------------------------------------------------------------------------------- gate REVISE 2/3 (R4)
+
+def test_simultaneous_ends_both_reply_with_the_saved_ended_state(journey, owner_a):
+    """R4: two ends wait on the same wallet lock; after the first commits, the second replies ENDED, not stale ACTIVE."""
+    import threading
+
+    from edge_os_api.admission.service import acquire_wallet_lock
+
+    agent = "rec-double-end"
+    state = deployed(journey, owner_a, agent)
+    identity = state["deployment"]["identity"]
+    owner_id = occurrences_owner(journey, state)
+    recurring = journey.app.state.financial.recurring
+    holder = journey.app.state.session_factory()
+    acquire_wallet_lock(holder, owner_id, agent, identity["wallet_id"], identity["network_id"])
+    replies: list[dict[str, Any]] = []
+    workers = [threading.Thread(target=lambda: replies.append(recurring.end(owner_id, agent))) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    try:
+        # Both ends have read the ACTIVE row and now wait behind the held wallet lock (bounded wait, 10 s).
+        import time
+
+        deadline, waiting = time.monotonic() + 10, 0
+        while time.monotonic() < deadline:
+            with journey.app.state.session_factory() as session:
+                waiting = session.execute(text(
+                    "select count(*) from pg_stat_activity where wait_event_type = 'Lock' "
+                    "and wait_event = 'advisory' and datname = current_database()")).scalar_one()
+            if waiting >= 2:
+                break
+            time.sleep(0.05)
+        assert waiting >= 2
+    finally:
+        holder.rollback()
+        holder.close()
+    for worker in workers:
+        worker.join(timeout=30)
+    assert [reply["state"] for reply in replies] == ["ENDED", "ENDED"]
+    assert {reply["end_reason"] for reply in replies} == {"OWNER_ENDED"}
+    again = journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a)  # idempotent: the saved end, unchanged
+    assert (again.status_code, again.json()["state"], again.json()["ended_at"]) == (
+        200, "ENDED", replies[0]["ended_at"])
+    assert projection(journey, owner_a, agent)["deployment"]["state"] == "ENDED"
