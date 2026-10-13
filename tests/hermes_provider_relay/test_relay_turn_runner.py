@@ -111,7 +111,8 @@ def test_construction_does_no_io_and_refuses_an_actual_route_or_a_mismatched_rel
 
 def test_a_counted_request_the_relay_started_and_answered_with_the_same_usage_is_settled_exactly(tmp_path) -> None:
     rig = Rig(tmp_path, counted(), records={"started": True, "finished": {
-        "outcome": "reply", "usage": {"prompt_tokens": 1423, "completion_tokens": 611, "total_tokens": 2034}}})
+        "outcome": "reply", "status": 200, "usage": {"prompt_tokens": 1423, "completion_tokens": 611,
+                                                     "total_tokens": 2034}}})
 
     result = rig.job.runner.run_turn(TURN)
 
@@ -136,6 +137,12 @@ def test_a_zero_request_result_is_released_only_when_the_relay_recorded_it_close
     ({"started": True, "finished": {"outcome": "reply", "usage": {"prompt_tokens": 1, "completion_tokens": 1,
                                                                    "total_tokens": 2}}}, counted()),  # other usage
     ({"started": True, "finished": {"outcome": "lost"}}, counted()),  # the relay lost what the job claims it got
+    ({"started": True, "finished": {"outcome": "reply", "status": 500, "usage": {
+        "prompt_tokens": 1423, "completion_tokens": 611, "total_tokens": 2034}}}, counted()),  # a provider error
+    ({"started": True, "finished": {"outcome": "reply", "status": 429, "usage": {
+        "prompt_tokens": 1423, "completion_tokens": 611, "total_tokens": 2034}}}, counted()),
+    ({"started": True, "finished": {"outcome": "reply", "usage": {
+        "prompt_tokens": 1423, "completion_tokens": 611, "total_tokens": 2034}}}, counted()),  # no status recorded
     (None, unsent()),  # the relay never confirmed a close
     (None, counted()),
 ])
@@ -207,3 +214,10 @@ def test_the_grant_expires_no_later_than_the_job_timeout(tmp_path) -> None:
     rig.job.runner.run_turn(TURN)
     grant = rig.grant()
     assert before <= grant["issued_at"] and grant["expires_at"] - grant["issued_at"] == 90
+
+
+def test_a_relay_clock_slightly_ahead_of_the_host_still_counts_as_live(tmp_path) -> None:
+    rig = Rig(tmp_path, unsent(), records={"started": False})
+    rig.relay.beat(at=time.time() + 1.0)  # within the grant clock allowance
+    result = rig.job.runner.run_turn(TURN)
+    assert result.error_class != "RelayUnavailable" and rig.calls == 1

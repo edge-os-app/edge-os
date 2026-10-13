@@ -31,7 +31,7 @@ from guarded_docker_runner import GuardedDockerTurnRunner, JobEntry
 from guarded_turn_runner import GuardedTurnRunner
 from provider_guard import GuardPolicy
 from provider_transport import HERMES_CLIENT_URL, ActualProviderUnavailable, TransportRoute
-from relay_admission import RelayRelease, RelaySubject, issue_grant
+from relay_admission import CLOCK_SKEW_SECONDS, RelayRelease, RelaySubject, issue_grant
 from spend_ledger import SpendLedger
 from transport_turn_runner import TransportTurnRunner
 
@@ -151,7 +151,8 @@ class RelayTurnRunner:
         if beat is None or beat.get("release") != self._release.settings():
             return False
         at = beat.get("at")
-        return isinstance(at, (int, float)) and 0 <= time.time() - at <= self._endpoint.heartbeat_max_age_seconds
+        age = time.time() - at if isinstance(at, (int, float)) else math.inf
+        return -CLOCK_SKEW_SECONDS <= age <= self._endpoint.heartbeat_max_age_seconds  # the relay's clock may run ahead
 
     @staticmethod
     def _write_once(path: Path, value: dict[str, Any]) -> bool:
@@ -198,7 +199,9 @@ class RelayTurnRunner:
             return self._withheld(result, "RelayStateUnknown")
         if result.status in COUNTED:
             usage = finished.get("usage") if finished is not None else None
-            same = (outcome == "reply" and result.request_count == 1 and isinstance(usage, dict)
+            status = finished.get("status") if finished is not None else None
+            same = (outcome == "reply" and type(status) is int and 200 <= status < 300  # noqa: E721
+                    and result.request_count == 1 and isinstance(usage, dict)
                     and result.usage.source == "PROVIDER_REPORTED"
                     and (usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"))
                     == (result.usage.input_tokens, result.usage.output_tokens, result.usage.total_tokens))

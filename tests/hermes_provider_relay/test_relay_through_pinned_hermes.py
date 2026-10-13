@@ -201,6 +201,7 @@ def test_a_hostile_job_finds_no_key_and_no_network_path(relay, pinned_hermes_ima
     ("hostile-header", {"message": {"authorization": "Bearer sk-attacker-supplied"}}, "channel_field_not_permitted"),
     ("hostile-url", {"message": {"url": "https://exfiltrate.invalid/v1"}}, "channel_field_not_permitted"),
     ("hostile-big", {"message": {}, "body_changes": {"padding": "x" * 13_000}}, "request_too_large"),
+    ("hostile-session", {"message": {}, "body_changes": {"session_id": "p05-valid-1"}}, "body_attempt_mismatch"),
 ])
 def test_a_hostile_channel_message_is_refused_by_the_relay_before_any_request(
         relay, pinned_hermes_image, evidence_root, name, actions, refusal) -> None:
@@ -231,6 +232,8 @@ def test_the_relay_has_only_the_internal_network_and_only_its_own_mounts(relay) 
     probe = {(p["host"], p["port"]): p["reached"] for p in relay.heartbeat()["egress_probe"]}
     assert probe[("authored-provider", 8443)] is True and probe[("1.1.1.1", 53)] is False
     assert probe[("host.docker.internal", 80)] is False and list(probe.values()).count(True) == 1
+    gateway = json.loads(relay.inspect_network())["IPAM"]["Config"][0]["Gateway"]
+    assert probe[(gateway, 53)] is False and probe[(gateway, 80)] is False  # the Docker host's side of the network
 
 
 def test_a_host_killed_mid_turn_is_recovered_its_grant_closes_at_expiry_and_its_reservation_stays(

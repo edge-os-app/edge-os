@@ -9,7 +9,9 @@ the provider, so every failure after that point raises `ReplyLost`: the caller k
 from __future__ import annotations
 
 import http.client
+import socket
 import ssl
+import threading
 import time
 from dataclasses import dataclass
 
@@ -33,12 +35,30 @@ class SentReply:
 
 def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body: bytes, deadline: float,
               max_reply_bytes: int) -> SentReply:
-    """One request; `deadline` is a `time.time()` value it never passes by more than one socket operation."""
+    """One request with ONE total deadline (a `time.time()` value) for connecting, sending and reading.
+
+    A watchdog shuts the socket down when the deadline comes, so a provider that drips its headers or body byte by
+    byte cannot hold the request longer: a per-call socket timeout alone would restart for every byte.
+    """
     left = deadline - time.time()
     if left <= 0:
         raise ReplyLost("no time was left for the request")
     context = ssl.create_default_context(cafile=ca_file)  # verified certificate and host name; no system CA store
     connection = http.client.HTTPSConnection(destination.host, destination.port, timeout=left, context=context)
+    expired = threading.Event()
+
+    def cut() -> None:
+        expired.set()
+        sock = connection.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    watchdog = threading.Timer(left, cut)
+    watchdog.daemon = True
+    watchdog.start()
     try:
         connection.putrequest("POST", destination.path, skip_host=True, skip_accept_encoding=True)
         for name, value in (("host", f"{destination.host}:{destination.port}"), ("accept", "application/json"),
@@ -46,20 +66,18 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
                             ("authorization", f"Bearer {key}"), ("connection", "close")):
             connection.putheader(name, value)
         connection.endheaders(body)
-        sock = connection.sock  # the response may detach it from the connection; its timeout still applies
-        sock.settimeout(max(0.001, deadline - time.time()))
         response = connection.getresponse()
         data = bytearray()
         while len(data) <= max_reply_bytes:
-            if time.time() >= deadline:
-                raise ReplyLost("the deadline passed while reading the reply")
-            sock.settimeout(max(0.001, deadline - time.time()))
             chunk = response.read(min(READ_CHUNK, max_reply_bytes + 1 - len(data)))
             if not chunk:
                 break
             data += chunk
+        if expired.is_set() or time.time() >= deadline:
+            raise ReplyLost("the deadline passed before the reply was complete")
         return SentReply(response.status, response.getheader("content-type") or "", bytes(data))
-    except (OSError, http.client.HTTPException) as error:
+    except (OSError, ValueError, http.client.HTTPException) as error:
         raise ReplyLost(type(error).__name__) from None
     finally:
+        watchdog.cancel()
         connection.close()

@@ -46,6 +46,7 @@ MAX_GRANTS = 1024
 MAX_GRANT_BYTES = 256 * 1024
 MAX_EVENTS = 10_000
 MAX_RECOVERED = 10_000
+RECOVERY_SECONDS = 5.0  # budget C of the relay's own start-up recovery; what it cannot reach stays unknown, never resent
 MAX_HANDLERS = 16
 CHANNEL = ("output", "relay-channel")
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -67,12 +68,10 @@ def _write_new(folder: int, name: str, value: dict[str, Any]) -> bool:
             stream.write(json.dumps(value, sort_keys=True))
             stream.flush()
             os.fsync(stream.fileno())
-        try:
-            os.stat(name, dir_fd=folder, follow_symlinks=False)
-            return False  # exists already: the first one stands
-        except FileNotFoundError:
-            pass
-        os.rename(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
+        try:  # a link never replaces an existing name: the first record stands, whatever else writes here
+            os.link(temporary, name, src_dir_fd=folder, dst_dir_fd=folder, follow_symlinks=False)
+        except FileExistsError:
+            return False
         os.fsync(folder)
         return True
     finally:
@@ -133,6 +132,7 @@ class Relay:
         self.event_lock = threading.Lock()
         self.handling: set[str] = set()
         self.closed: set[str] = set()  # a closed attempt stays closed; it is never looked at again
+        self.ignored: set[str] = set()  # grants that could not be served, reported once
         self.handlers = threading.BoundedSemaphore(MAX_HANDLERS)
         self.events = 0
         self.started_at = time.time()
@@ -174,8 +174,10 @@ class Relay:
 
     def recover(self) -> None:
         """Before serving: every attempt that started and never finished is unknown, and is never sent again."""
+        until = time.monotonic() + RECOVERY_SECONDS
         for count, folder in enumerate(sorted(p for p in self.state.iterdir() if p.is_dir())):
-            if count >= MAX_RECOVERED:
+            if count >= MAX_RECOVERED or time.monotonic() >= until:
+                self.event(None, "recovery_budget_reached", entries=count)
                 break
             attempt = folder.name
             if not IDENTIFIER.fullmatch(attempt):
@@ -237,6 +239,9 @@ class Relay:
             os.close(root)
 
     def _reply(self, grant: dict[str, Any], value: dict[str, Any]) -> None:
+        if (self.revocations / f"{grant['attempt_id']}.json").exists():  # the job is over and its output sealed
+            self.event(grant["attempt_id"], "late_reply_not_written", outcome=value.get("outcome"))
+            return
         channel = self._channel(grant)
         if isinstance(channel, str):
             return
@@ -257,31 +262,42 @@ class Relay:
                 continue
             open_names.append(name)
         for name in open_names[:MAX_GRANTS]:  # at most this many open grants are served per pass
-            attempt = name[:-5]
-            grant = self._grant(attempt)
-            if grant is None:
-                continue
-            if (self.revocations / name).exists():
-                self.close(attempt, "revoked")
-                continue
-            if grant_refusal(grant, self.admission_key, self.release, now=time.time()) == "grant_expired":
-                self.close(attempt, "expired")
-                continue
-            if attempt in self.handling:  # one handling per attempt; a restarted relay finds its start record
-                continue
-            channel = self._channel(grant)
-            if isinstance(channel, str):
-                continue
             try:
-                os.stat("request.json", dir_fd=channel, follow_symlinks=False)
-                present = True
-            except OSError:
-                present = False
-            finally:
-                os.close(channel)
-            if present and self.handlers.acquire(blocking=False):
-                self.handling.add(attempt)
-                threading.Thread(target=self._handle, args=(attempt, grant), daemon=True).start()
+                self._serve_grant(name)
+            except Exception as error:  # noqa: BLE001 - one bad grant must not stop the others; nothing was sent
+                if name not in self.ignored:
+                    self.ignored.add(name)
+                    self.event(name[:-5], "grant_not_served", error_class=type(error).__name__)
+
+    def _serve_grant(self, name: str) -> None:
+        attempt = name[:-5]
+        grant = self._grant(attempt)
+        if grant is None:
+            return
+        if (self.revocations / name).exists():
+            self.close(attempt, "revoked")
+            return
+        refusal = grant_refusal(grant, self.admission_key, self.release, now=time.time())
+        if refusal == "grant_expired":
+            self.close(attempt, "expired")
+            return
+        if refusal == "grant_fields_invalid":  # not a grant this host issued; a request under it is never served
+            raise ValueError("grant fields invalid")
+        if attempt in self.handling:  # one handling per attempt; a restarted relay finds its start record
+            return
+        channel = self._channel(grant)
+        if isinstance(channel, str):
+            return
+        try:
+            os.stat("request.json", dir_fd=channel, follow_symlinks=False)
+            present = True
+        except OSError:
+            present = False
+        finally:
+            os.close(channel)
+        if present and self.handlers.acquire(blocking=False):
+            self.handling.add(attempt)
+            threading.Thread(target=self._handle, args=(attempt, grant), daemon=True).start()
 
     def _handle(self, attempt: str, grant: dict[str, Any]) -> None:
         try:
@@ -311,6 +327,10 @@ class Relay:
         if refusal is None:
             refusal = channel_refusal(message, grant, self.release)
         body = base64.b64decode(message["body_b64"]) if refusal is None else b""
+        if refusal is None:  # the body itself must name this attempt, as the job's physical admission requires
+            parsed = parse_channel_message(body)
+            if parsed is None or parsed.get("session_id") != f"p05-{grant['attempt_id']}":
+                refusal = "body_attempt_mismatch"
         if refusal is None:
             policy = GuardPolicy(**grant["policy"])
             logical = LogicalRequest(grant["logical"]["system_prompt"], grant["logical"]["user_message"])

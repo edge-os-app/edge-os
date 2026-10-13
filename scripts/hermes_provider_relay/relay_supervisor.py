@@ -103,6 +103,8 @@ class RelaySupervisor:
         destination = ProviderDestination(PROVIDER_HOST, PROVIDER_PORT, PROVIDER_PATH)
         gateway = docker("network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}",
                          check=False).stdout.strip() or "172.17.0.1"
+        own_gateway = docker("network", "inspect", self.names["network"], "--format",
+                             "{{(index .IPAM.Config 0).Gateway}}").stdout.strip()  # the Docker host's side of it
         relay_config = {
             "release": self.release.settings(), "destination": vars(destination),
             "channel_roots": {name: f"/relay/channels/{name}" for name in self.channel_roots},
@@ -113,6 +115,8 @@ class RelaySupervisor:
             "egress_probes": [{"host": PROVIDER_HOST, "port": PROVIDER_PORT, "expect": "reachable"},
                               {"host": "1.1.1.1", "port": 53, "expect": "blocked"},
                               {"host": gateway, "port": 53, "expect": "blocked"},
+                              {"host": own_gateway, "port": 53, "expect": "blocked"},
+                              {"host": own_gateway, "port": 80, "expect": "blocked"},
                               {"host": "host.docker.internal", "port": 80, "expect": "blocked"}]}
         provider_config = {"bind": "0.0.0.0", "port": PROVIDER_PORT, "path": PROVIDER_PATH,
                            "cert": "/provider/tls/server.pem", "key": "/provider/tls/server.key",
@@ -176,8 +180,8 @@ class RelaySupervisor:
             time.sleep(0.1)
 
     def start(self) -> None:
-        self._prepare()
         docker("network", "create", "--internal", "--label", f"{LABEL}={self.run_id}", self.names["network"])
+        self._prepare()
         self._start_provider()
         self.start_relay()
 
@@ -202,6 +206,9 @@ class RelaySupervisor:
                 "relay_mounts": sorted(m["Destination"] for m in relay["Mounts"]),
                 "network_internal": network["Internal"],
                 "network_members": sorted(c["Name"] for c in network["Containers"].values())}
+
+    def inspect_network(self) -> str:
+        return json.dumps(json.loads(docker("network", "inspect", self.names["network"]).stdout)[0])
 
     def logs(self) -> str:
         logs = [docker("logs", name, check=False) for name in (self.names["relay"], self.names["provider"])]

@@ -109,7 +109,7 @@ def test_cancellation_after_a_possible_request_records_it_as_started_and_its_los
     host.revoke("a7")
     assert host.record("a7", "closed", 5)["started"] is True
     assert host.record("a7", "finished", 5)["outcome"] == "lost"  # the relay stopped waiting at the grant's expiry
-    assert host.reply("a7")["outcome"] == "lost" and len(host.receipts("a7")) == 1
+    assert len(host.receipts("a7")) == 1  # one request; its job is over, so no late reply enters the sealed output
 
 
 @pytest.mark.parametrize("message, reason", [
@@ -122,6 +122,8 @@ def test_cancellation_after_a_possible_request_records_it_as_started_and_its_los
     ({"body_b64": "not base64!"}, "body_not_base64"),
     ({"body_b64": base64.b64encode(b"x" * 12_001).decode()}, "request_too_large"),
     ({"body_b64": base64.b64encode(body("a8", model="other-model/9")).decode()}, "guard:model_not_as_configured"),
+    ({"body_b64": base64.b64encode(body("a8", session_id="p05-victim")).decode()}, "body_attempt_mismatch"),
+    ({"body_b64": base64.b64encode(body("a8", session_id=None)).decode()}, "body_attempt_mismatch"),
     ({"body_b64": base64.b64encode(body("a8", stream=True)).decode()}, "guard:unpermitted_field"),
     ({"body_b64": base64.b64encode(body("a8", max_tokens=99_999)).decode()}, "guard:output_limit_not_as_configured"),
     ({"body_b64": base64.b64encode(body("a8", provider={"order": ["x"]})).decode()}, "guard:unpermitted_field"),
@@ -236,3 +238,25 @@ def test_a_new_grant_is_served_however_many_earlier_attempts_are_closed(host) ->
     host.grant("zz-new")
     host.request("zz-new")
     assert host.reply("zz-new", 15)["outcome"] == "reply" and len(host.receipts("zz-new")) == 1
+
+
+def test_a_malformed_grant_does_not_stop_the_relay_for_other_attempts(host) -> None:
+    (host.root / "grants" / "bad-1.json").write_text(json.dumps({"attempt_id": "bad-1"}))  # no other field
+    host.request("bad-1")
+    host.script("a18", CONTENT)
+    host.grant("a18")
+    host.request("a18")
+    assert host.reply("a18")["outcome"] == "reply" and host.relay.poll() is None
+    assert nothing_sent(host, "bad-1")
+
+
+def test_no_reply_is_written_into_a_channel_after_its_grant_was_revoked(host) -> None:
+    host.script("a19", {"kind": "hang"})
+    host.grant("a19", timeout_seconds=1.5)
+    host.request("a19")
+    host.record("a19", "started", 5)
+    host.revoke("a19")  # the job is over and its output sealed
+    assert host.record("a19", "finished", 5)["outcome"] == "lost"
+    time.sleep(0.3)
+    assert not (host.channel("a19") / "reply.json").exists()
+    assert "late_reply_not_written" in [e["kind"] for e in host.events("a19")]
