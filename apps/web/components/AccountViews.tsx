@@ -5,6 +5,7 @@ import { getAccountView, loadAccountViews, type AccountViewRecord, type Position
 import { AgentActions } from "./AgentActions";
 import { AgentAuthority } from "./AgentAuthority";
 import { AgentFunding } from "./AgentFunding";
+import { AgentHealthPanel } from "./AgentHealthConversation";
 import { AgentRecords } from "./AgentRecords";
 import { AgentRecurring } from "./AgentRecurring";
 import { FundRecords } from "./FundRecords";
@@ -88,6 +89,7 @@ function ConnectedAgent({ view, agentId }: { view: AccountViewName; agentId?: st
           aria-invalid={draft !== "" && !AGENT_ID.test(draft)} onChange={(event) => setDraft(event.target.value)} />
         <button className="btn btn-secondary" style={{ minHeight: 44 }} type="submit" disabled={!AGENT_ID.test(draft)}>Open agent</button>
       </form>
+      {selected && view === "Agents" && <AgentHealthPanel key={`health-${selected}`} agentId={selected} />}
       {selected && view === "Agents" && <AgentAuthority key={selected} agentId={selected} />}
       {selected && view === "Funds" && <AgentFunding key={selected} agentId={selected} />}
       {selected && view === "Positions" && <AgentRecurring key={`recurring-${selected}`} agentId={selected} />}
