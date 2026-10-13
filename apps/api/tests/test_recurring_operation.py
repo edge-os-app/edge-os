@@ -11,6 +11,7 @@ separate-process producers and the downgrade check touch nothing another module 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime as dt
 import os
 import subprocess
@@ -107,6 +108,16 @@ def at(client: TestClient, minutes: float):
 def produce(client: TestClient, deployment: dict[str, Any], minutes: float) -> list[dict[str, Any]]:
     with at(client, minutes):
         return client.app.state.financial.recurring.producer_pass(only=[uuid.UUID(deployment["deployment_id"])])
+
+
+def produce_restarted(client: TestClient, deployment: dict[str, Any], minutes: float) -> list[dict[str, Any]]:
+    """A pass by a new producer: fresh objects over the same saved state and ports, nothing carried in memory."""
+    financial = client.app.state.financial
+    with at(client, minutes) as clock:
+        connected = ConnectedExecution(client.app.state.session_factory, financial, financial.ports,
+                                       qualification=financial.ports.mode, clock=clock)
+        restarted = RecurringOperation(client.app.state.session_factory, financial, connected, clock=clock)
+        return restarted.producer_pass(only=[uuid.UUID(deployment["deployment_id"])])
 
 
 def projection(client: TestClient, headers: dict[str, str], agent: str) -> dict[str, Any]:
@@ -272,6 +283,7 @@ def test_a_restarted_producer_resumes_from_the_saved_cursor(journey, owner_a, se
     ({"finality": None}, "OBSERVATIONS_PROVENANCE_INCOMPLETE"),
     ({"collected_at": "2000-01-01T00:00:00+00:00"}, "OBSERVATIONS_STALE"),
     ({"market_binding_id": "other-market"}, "OBSERVATIONS_WRONG_MARKET"),
+    ("wrong-time", "OBSERVATIONS_WRONG_TIME"),
     (None, "OBSERVATIONS_UNAVAILABLE")])
 def test_unusable_observations_save_an_unavailable_outcome_and_no_intent(journey, owner_a, change, reason):
     agent = f"rec-obs-{uuid.uuid4().hex[:6]}"
@@ -282,6 +294,8 @@ def test_unusable_observations_save_an_unavailable_outcome_and_no_intent(journey
     def altered(request):
         if change is None:
             raise ProviderUnavailable("observations")
+        if change == "wrong-time":  # observations for the previous slot, answered for this one
+            return real(dataclasses.replace(request, decision_time=request.decision_time - SLOT))
         observed = real(request)
         return MarketObservations(inputs=observed.inputs, provenance={**observed.provenance, **change})
 
@@ -313,7 +327,8 @@ def test_a_late_evaluation_of_an_earlier_slot_is_stale_and_creates_no_intent(jou
     assert ff.effects(journey) == []
 
 
-@pytest.mark.parametrize("terms,reason", [({"quote_cap": "200000000"}, None), ({"attempts": 2}, "ATTEMPT_BUDGET_EXHAUSTED")])
+@pytest.mark.parametrize("terms,reason", [({"quote_cap": "200000000"}, "CAPACITY_UNAVAILABLE"),
+                                          ({"attempts": 2}, "ATTEMPT_BUDGET_EXHAUSTED")])
 def test_cumulative_limits_stop_later_entries_and_survive_a_restart(journey, owner_a, terms, reason):
     agent = f"rec-limit-{uuid.uuid4().hex[:6]}"
     state = deployed(journey, owner_a, agent, **terms)
@@ -324,11 +339,10 @@ def test_cumulative_limits_stop_later_entries_and_survive_a_restart(journey, own
     assert [job.outcome for job in jobs[:produced]] == ["SUBMITTED_CONFIRMED"] * produced
     denied = jobs[produced]
     assert denied.outcome == "ADMISSION_DENIED" and denied.action_id is not None
-    if reason is not None:
-        assert denied.reason == reason
+    assert denied.reason == reason
     assert len(ff.effects(journey)) == produced
-    # A new producer process (a restart) does not reset the counters: the next entry is denied again.
-    produce(journey, state["deployment"], 5 * (produced + 2))
+    # A new producer (a restart) does not reset the counters: the next entry is denied again.
+    produce_restarted(journey, state["deployment"], 5 * (produced + 2))
     assert occurrences(journey, state["deployment"])[-1].outcome == "ADMISSION_DENIED"
     assert len(ff.effects(journey)) == produced
 
@@ -393,7 +407,7 @@ def test_stop_new_entries_allows_the_exit_denies_later_entries_and_survives_a_re
     assert operations(journey, owner_a, jobs) == ["ENTRY", "EXIT", "ENTRY"]
     assert [job.outcome for job in jobs] == ["SUBMITTED_CONFIRMED", "SUBMITTED_CONFIRMED", "ADMISSION_DENIED"]
     assert jobs[2].reason == "STOPPED_NEW_ENTRIES"
-    produce(journey, state["deployment"], 15)  # still denied on a later slot
+    produce_restarted(journey, state["deployment"], 15)  # a new producer: the stop is still saved and still denies
     assert occurrences(journey, state["deployment"])[-1].outcome == "ADMISSION_DENIED"
     assert len(ff.effects(journey)) == 2
     assert projection(journey, owner_a, agent)["wait_reason"] == "STOPPED:STOP_NEW_ENTRIES"
@@ -469,8 +483,12 @@ def test_two_producer_processes_in_one_slot_save_one_occurrence(journey, owner_a
     codes = [proc.wait(timeout=180) for proc in procs]
     assert codes == [0, 0], [proc.stdout.read().decode()[-800:] for proc in procs]
     jobs = occurrences(journey, state["deployment"])
-    assert len(jobs) == 1 and jobs[0].outcome == "SUBMITTED_CONFIRMED"
-    assert [effect.action_id for effect in ff.effects(journey)].count(jobs[0].action_id) == 1
+    # One occurrence per slot. Both processes read the real clock, so a run that crosses a slot boundary may save
+    # the next slot too, but never a second job for one slot or a second effect for one action.
+    assert 1 <= len(jobs) <= 2 and len({job.decision_slot for job in jobs}) == len(jobs)
+    assert jobs[0].outcome == "SUBMITTED_CONFIRMED"
+    for job in jobs:
+        assert [effect.action_id for effect in ff.effects(journey)].count(job.action_id) <= 1
 
 
 def test_the_persistent_producer_runs_bounded_passes_then_exits(journey, owner_a, env, tmp_path):
@@ -481,7 +499,8 @@ def test_the_persistent_producer_runs_bounded_passes_then_exits(journey, owner_a
                             capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stderr[-800:]
     assert result.stderr.count("recurring producer pass") == 3
-    assert len(occurrences(journey, state["deployment"])) == 1
+    jobs = occurrences(journey, state["deployment"])
+    assert 1 <= len(jobs) <= 2 and len({job.decision_slot for job in jobs}) == len(jobs)  # see the contention test
 
 
 def test_a_clock_offset_is_refused_outside_local_fixture_mode(settings, env):
@@ -506,3 +525,253 @@ def test_a_downgrade_below_0012_is_refused_while_deployments_exist(journey, owne
 def test_the_due_slot_is_the_five_minute_grid_point():
     moment = dt.datetime(2026, 10, 13, 9, 44, 59, tzinfo=dt.timezone.utc)
     assert decision_slot(moment) == dt.datetime(2026, 10, 13, 9, 40, tzinfo=dt.timezone.utc)
+
+
+# ------------------------------------------------------------------------------------ repair round 1
+
+def test_slots_missed_between_activation_and_the_first_pass_are_counted(journey, owner_a):
+    agent = "rec-first-gap"
+    state = deployed(journey, owner_a, agent)
+    produce(journey, state["deployment"], 20)  # no producer ran in the activation slot or the three after it
+    [job] = occurrences(journey, state["deployment"])
+    activated = dt.datetime.fromisoformat(state["deployment"]["activated_at"].replace("Z", "+00:00"))
+    expected = int((job.decision_slot - decision_slot(activated)) / SLOT)
+    producer = projection(journey, owner_a, agent)["producer"]
+    assert expected >= 1 and producer["missed_slots"] == expected
+    [interval] = producer["missed_intervals"]
+    assert (interval["count"], interval["reason"]) == (expected, "PRODUCER_ABSENT")
+    assert interval["from"] == decision_slot(activated).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_bounded_ticks_rotate_through_every_deployment(journey, owner_a):
+    ids = [uuid.UUID(deployed(journey, owner_a, f"rec-fair-{index}")["deployment"]["deployment_id"])
+           for index in range(3)]
+    recurring = journey.app.state.financial.recurring
+    with at(journey, 0):
+        first = recurring.tick(ids, limit=2)
+        second = recurring.tick(ids, limit=2)
+    ticked = {item["deployment_id"] for item in first + second}
+    assert ticked == {str(item) for item in ids}  # the third was not starved by a fixed window
+
+
+def test_one_failing_deployment_or_receipt_does_not_stop_other_owners(journey, owner_a, owner_b, monkeypatch):
+    broken = deployed(journey, owner_a, "rec-broken-fx-lost-ack")
+    healthy = deployed(journey, owner_b, "rec-healthy-fx-lost-ack")
+    both = [uuid.UUID(broken["deployment"]["deployment_id"]), uuid.UUID(healthy["deployment"]["deployment_id"])]
+    recurring = journey.app.state.financial.recurring
+    with at(journey, 0):
+        recurring.producer_pass(both)  # both originals are now unknown
+    connected = journey.app.state.financial.connected
+    real = connected.reconcile_action
+
+    def failing(owner_id, action_id):
+        if owner_id == occurrences(journey, broken["deployment"])[0].owner_id:
+            raise ValueError("authored receipt parsing failure")
+        return real(owner_id, action_id)
+
+    monkeypatch.setattr(connected, "reconcile_action", failing)
+    real_authority = recurring._authority_problem
+
+    def tick_failure(session, row, now):
+        if row.deployment_id == both[0]:
+            raise RuntimeError("authored tick failure")
+        return real_authority(session, row, now)
+
+    monkeypatch.setattr(recurring, "_authority_problem", tick_failure)
+    with at(journey, 5):
+        results = recurring.producer_pass(both)
+    assert {"deployment_id": str(both[0]), "failed": "RuntimeError"} in results
+    healthy_jobs = occurrences(journey, healthy["deployment"])
+    assert healthy_jobs[0].outcome == "SUBMITTED_CONFIRMED"  # owner B's original reconciled from its receipt
+    assert len(healthy_jobs) == 2  # and owner B's next slot was produced and advanced
+    assert occurrences(journey, broken["deployment"])[0].state == "SUBMITTED"  # owner A's stays unknown, held
+
+
+def test_a_stuck_original_does_not_hold_the_reconciliation_window(journey, owner_a, owner_b):
+    stuck = deployed(journey, owner_a, "rec-stuck-fx-lost-ack")
+    other = deployed(journey, owner_b, "rec-later-fx-lost-ack")
+    ids = [uuid.UUID(stuck["deployment"]["deployment_id"]), uuid.UUID(other["deployment"]["deployment_id"])]
+    recurring = journey.app.state.financial.recurring
+    with at(journey, 0):
+        recurring.producer_pass(ids)
+    receipts = journey.app.state.financial.ports.receipts
+    real = receipts.observe
+    stuck_action = occurrences(journey, stuck["deployment"])[0].action_id
+    receipts.observe = lambda **kwargs: (
+        (_ for _ in ()).throw(ProviderUnavailable("receipt")) if kwargs["action_id"] == stuck_action else real(**kwargs))
+    try:
+        with at(journey, 0):
+            tried = [recurring.reconcile_pending(ids, limit=1) for _ in range(2)]
+    finally:
+        receipts.observe = real
+    assert {item["action_id"] for batch in tried for item in batch} == {
+        stuck_action, occurrences(journey, other["deployment"])[0].action_id}
+    assert occurrences(journey, other["deployment"])[0].outcome == "SUBMITTED_CONFIRMED"
+
+
+def test_ending_releases_an_admitted_unsent_occurrence_without_any_effect(journey, owner_a):
+    agent = "rec-end-enqueued"
+    state = deployed(journey, owner_a, agent)
+    connected = journey.app.state.financial.connected
+    real_submit = connected._submit
+    connected._submit = lambda *args, **kwargs: None  # admitted, then the worker stops before submission
+    try:
+        produce(journey, state["deployment"], 0)
+    finally:
+        connected._submit = real_submit
+    [job] = occurrences(journey, state["deployment"])
+    assert job.state == "ENQUEUED"
+    assert journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a).status_code == 200
+    produce(journey, state["deployment"], 0)  # the same slot: the producer's worker pass reaches the occurrence
+    [job] = occurrences(journey, state["deployment"])
+    assert (job.state, job.outcome, job.reason) == ("COMPLETED", "DEPLOYMENT_ENDED", "DEPLOYMENT_ENDED:OWNER_ENDED")
+    action = journey.get(f"/v1/actions/{job.action_id}", headers=owner_a).json()
+    assert {reservation["state"] for reservation in action["reservations"]} == {"RELEASED"}
+    assert ff.effects(journey) == []
+
+
+def test_ending_denies_a_saved_occurrence_that_was_never_evaluated(journey, owner_a):
+    agent = "rec-end-queued"
+    state = deployed(journey, owner_a, agent)
+    with at(journey, 0):
+        journey.app.state.financial.recurring.tick([uuid.UUID(state["deployment"]["deployment_id"])])
+    journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a)
+    produce(journey, state["deployment"], 0)
+    [job] = occurrences(journey, state["deployment"])
+    assert (job.state, job.outcome, job.reason, job.decision_id) == (
+        "COMPLETED", "DENIED", "DEPLOYMENT_ENDED:OWNER_ENDED", None)
+    assert outcome_rows(journey, state["deployment"]) == [] and ff.effects(journey) == []
+
+
+def test_an_unknown_original_is_still_reconciled_after_the_owner_ends(journey, owner_a):
+    agent = "rec-end-unknown-fx-lost-ack"
+    state = deployed(journey, owner_a, agent)
+    produce(journey, state["deployment"], 0)
+    assert occurrences(journey, state["deployment"])[0].state == "SUBMITTED"
+    journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a)
+    produce(journey, state["deployment"], 5)
+    jobs = occurrences(journey, state["deployment"])
+    assert len(jobs) == 1 and jobs[0].outcome == "SUBMITTED_CONFIRMED"  # receipt read; no new occurrence
+    assert projection(journey, owner_a, agent)["pending_reconciliation"] == []
+    assert len(ff.effects(journey)) == 1
+
+
+@pytest.mark.parametrize("agent,outcome", [("rec-out-fx-nosignal", "NO_SIGNAL"),
+                                           ("rec-out-fx-ineligible", "INELIGIBLE")])
+def test_no_signal_and_ineligible_occurrences_save_their_outcome_rows(journey, owner_a, agent, outcome):
+    state = deployed(journey, owner_a, agent)
+    produce(journey, state["deployment"], 0)
+    [job] = occurrences(journey, state["deployment"])
+    [row] = outcome_rows(journey, state["deployment"])
+    assert (job.outcome, job.action_id) == (outcome, None)
+    assert (row.outcome, row.reason, row.decision_id) == (outcome, None, job.decision_id)
+    assert row.inputs_collected_at == job.decision_slot and ff.effects(journey) == []
+
+
+def test_halt_all_swaps_denies_the_exit_and_keeps_the_residual_position(journey, owner_a):
+    agent = "rec-halt"
+    state = deployed(journey, owner_a, agent)
+    produce(journey, state["deployment"], 0)
+    halt = journey.post(f"/v1/agents/{agent}/stops", headers=owner_a,
+                        json={"mode": "HALT_ALL_SWAPS", "scope": "AGENT_WALLET_NETWORK"})
+    assert halt.status_code == 200, halt.text
+    produce_restarted(journey, state["deployment"], 5)
+    jobs = occurrences(journey, state["deployment"])
+    assert operations(journey, owner_a, jobs) == ["ENTRY", "EXIT"]
+    assert (jobs[1].outcome, jobs[1].reason) == ("ADMISSION_DENIED", "STOPPED_HALT_ALL_SWAPS")
+    positions = journey.get(f"/v1/agents/{agent}/actions", headers=owner_a).json()["positions"]
+    assert [position["inventory_raw"] for position in positions] == [ff.ENTRY_BASE_OUTPUT]
+    assert len(ff.effects(journey)) == 1
+    assert projection(journey, owner_a, agent)["wait_reason"] == "STOPPED:HALT_ALL_SWAPS"
+
+
+def test_a_stop_after_the_decision_and_before_the_outcome_row_recovers_with_the_saved_time(journey, owner_a):
+    agent = "rec-crash-outcome"
+    state = deployed(journey, owner_a, agent)
+    connected = journey.app.state.financial.connected
+    real_save = connected._save_outcome
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("authored stop after the decision was saved")
+
+    connected._save_outcome = crash
+    try:
+        produce(journey, state["deployment"], 0)  # the decision commits, then the worker stops
+    finally:
+        connected._save_outcome = real_save
+    [job] = occurrences(journey, state["deployment"])
+    assert job.state == "QUEUED" and job.reason == "WORKER_ERROR:RuntimeError" and outcome_rows(journey, state["deployment"]) == []
+    produce(journey, state["deployment"], 0)  # the restarted worker in the same slot
+    [job] = occurrences(journey, state["deployment"])
+    [row] = outcome_rows(journey, state["deployment"])
+    with journey.app.state.session_factory() as session:
+        decision = session.get(DecisionRow, row.decision_id)
+    assert row.outcome == "SIGNAL" and row.evaluated_at == decision.created_at
+    assert row.provenance["recovered_after_restart"] is True
+    assert job.outcome == "SUBMITTED_CONFIRMED" and len(ff.effects(journey)) == 1  # one decision, one action
+
+
+def test_a_saved_unavailable_outcome_stays_final_on_retry(journey, owner_a):
+    agent = "rec-unavailable-final"
+    state = deployed(journey, owner_a, agent)
+    recurring = journey.app.state.financial.recurring
+    with at(journey, 0):
+        recurring.tick([uuid.UUID(state["deployment"]["deployment_id"])])
+    [job] = occurrences(journey, state["deployment"])
+    connected = journey.app.state.financial.connected
+    with journey.app.state.session_factory() as session:  # the outcome was saved; the stop came before the job ended
+        session.execute(connected._outcome_insert(job, "UNAVAILABLE", "OBSERVATIONS_STALE", None, None, None,
+                                                  job.decision_slot, {}))
+        session.commit()
+    calls = []
+    market = journey.app.state.financial.ports.market
+    real = market.observe
+    market.observe = lambda request: calls.append(request) or real(request)
+    try:
+        produce(journey, state["deployment"], 0)
+    finally:
+        market.observe = real
+    [job] = occurrences(journey, state["deployment"])
+    assert (job.state, job.reason, calls) == ("UNAVAILABLE", "OBSERVATIONS_STALE", [])
+    assert ff.effects(journey) == []
+
+
+def test_a_failed_tick_commits_nothing(journey, owner_a, monkeypatch):
+    from edge_os_api.execution import recurring_scheduler
+
+    state = deployed(journey, owner_a, "rec-tick-crash")
+
+    def failing_insert(*args, **kwargs):
+        raise RuntimeError("authored failure inside the tick")
+
+    monkeypatch.setattr(recurring_scheduler, "pg_insert", failing_insert)
+    with at(journey, 0):
+        result = journey.app.state.financial.recurring.tick([uuid.UUID(state["deployment"]["deployment_id"])])
+    assert result == [{"deployment_id": state["deployment"]["deployment_id"], "failed": "RuntimeError"}]
+    with journey.app.state.session_factory() as session:
+        row = session.get(RecurringDeploymentRow, uuid.UUID(state["deployment"]["deployment_id"]))
+    assert (row.cursor_slot, row.last_tick_at, int(row.occurrences)) == (None, None, 0)
+    assert occurrences(journey, state["deployment"]) == []
+
+
+def test_activation_is_refused_after_removal_was_requested(journey, owner_a):
+    agent = "rec-removed-first"
+    state = ready(journey, owner_a, agent)
+    journey.post(f"/v1/agents/{agent}/removal", headers=owner_a,
+                 json={"request_key": "remove", "reason": "owner removes the agent"})
+    refused = activate(journey, owner_a, agent, state["consent"]["consent_hash"])
+    assert (refused.status_code, refused.json()["code"]) == (409, "agent_removed")
+
+
+def test_manual_evaluations_cannot_use_the_reserved_occurrence_key(journey, owner_a):
+    ready(journey, owner_a, "rec-reserved-key")
+    response = ff.schedule(journey, owner_a, "rec-reserved-key", "recurring:anything")
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("flags", [["--interval", "0"], ["--max-passes", "0"]])
+def test_the_producer_refuses_an_unbounded_or_empty_run(env, flags):
+    result = subprocess.run([sys.executable, "-m", "edge_os_api.execution.recurring_producer", *flags],
+                            cwd=harness.API_DIR, env=producer_env(env, "unused.jsonl"), capture_output=True, text=True,
+                            timeout=120)
+    assert result.returncode == 2 and "--interval must be positive" in result.stderr

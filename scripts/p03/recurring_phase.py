@@ -6,7 +6,8 @@ caller, separate `edge_os_api.execution.recurring_producer` processes run passes
 offsets from one anchor (`--clock-offset-minutes`, accepted in local fixture mode only):
 
 - slot 0 twice at once (two processes: one occurrence), then slots 5, 10 and 25 (15 and 20 are missed);
-- slot 30 after the desktop owner stopped new entries, slot 35 after removal and the other owner's end;
+- slot 30 after the desktop owner stopped new entries and the other owner ended with an action still unknown;
+- slot 35 after the desktop owner's removal;
 - after the shared API restart, slot 40 (nothing may change).
 
 The producers record their authored fixture effects in their own `recurring-effects.jsonl`, apart from the
@@ -35,6 +36,14 @@ def _rows(pg: harness.Postgres, sql: str) -> list[dict[str, Any]]:
 
 def _effects(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line] if path.exists() else []
+
+
+def _slot_index(value: str | None) -> int:
+    """Five-minute slots since the epoch for a database timestamp."""
+    if value is None:
+        return 0
+    moment = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return int(moment.timestamp() // (SLOT_MINUTES * 60))
 
 
 def anchor_now() -> dt.datetime:
@@ -81,8 +90,10 @@ def inspect(pg: harness.Postgres, evidence: Path, results: dict[str, Any]) -> di
     for project in PROJECTS:
         agent = results.get(project, {}).get("agentId")
         deployment = _rows(pg, "select deployment_id::text, state, end_reason, missed_slots, occurrences, "
-                               "missed_intervals, cursor_slot, consent_hash from execution_local.execution_recurring_deployments "
-                               f"where agent_id = '{agent}'")
+                               "missed_intervals, cursor_slot, consent_hash, activated_at, "
+                               "(select min(decision_slot) from execution_local.execution_evaluation_jobs j "
+                               "where j.deployment_id = d.deployment_id) first_slot "
+                               f"from execution_local.execution_recurring_deployments d where agent_id = '{agent}'")
         jobs = _rows(pg, "select j.job_id::text, j.decision_slot, j.state, j.outcome, j.reason, j.action_id from "
                          "execution_local.execution_evaluation_jobs j join execution_local.execution_recurring_deployments d "
                          f"using (deployment_id) where d.agent_id = '{agent}' order by j.decision_slot")
@@ -101,13 +112,18 @@ def inspect(pg: harness.Postgres, evidence: Path, results: dict[str, Any]) -> di
                            "intents": intents, "effects_per_action": per_action}
         row = deployment[0] if len(deployment) == 1 else {}
         admitted = [i for i in intents if i["admission_status"] == "ADMITTED"]
+        expected_jobs = 5 if project == "desktop" else 4
+        # Slots 15 and 20, plus every slot from the activation slot to before the first pass (usually none).
+        expected_missed = 2 + (_slot_index(row["first_slot"]) - _slot_index(row["activated_at"]) if row else 0)
         expectations.update({
             f"{project}: one deployment, ended as the owner directed": len(deployment) == 1 and row.get("state") == "ENDED"
             and row.get("end_reason") == ("REMOVAL_REQUESTED" if project == "desktop" else "OWNER_ENDED"),
-            f"{project}: five occurrences on five distinct slots; two missed slots counted, none replayed":
-            len(jobs) == 5 and not slots and row.get("missed_slots") == 2 and row.get("occurrences") == 5,
+            f"{project}: {expected_jobs} occurrences on distinct slots; missed slots counted with a reason, none "
+            "replayed": len(jobs) == expected_jobs and not slots and row.get("missed_slots") == expected_missed
+            and row.get("occurrences") == expected_jobs
+            and all(item.get("reason") == "PRODUCER_ABSENT" for item in row.get("missed_intervals") or []),
             f"{project}: one saved outcome per occurrence, forward fixture inputs, input time = slot":
-            len(outcomes) == 5 and all(o["outcome"] == "SIGNAL" and o["decided"] and o["observed_at_slot"]
+            len(outcomes) == expected_jobs and all(o["outcome"] == "SIGNAL" and o["decided"] and o["observed_at_slot"]
                                        and o["collected"] and o["evidence"] == "SYNTHETIC_FIXTURE" for o in outcomes),
             f"{project}: every admitted action reached the fixture exactly once": bool(admitted)
             and all(per_action.get(i["action_id"]) == 1 for i in admitted),
@@ -122,11 +138,10 @@ def inspect(pg: harness.Postgres, evidence: Path, results: dict[str, Any]) -> di
             })
         else:
             expectations.update({
-                "mobile-390: each unknown action reconciled from its receipt before the next traded; the attempt "
-                "budget then denied the fifth entry before any effect":
-                [j["outcome"] for j in jobs] == ["SUBMITTED_CONFIRMED"] * 4 + ["ADMISSION_DENIED"]
-                and jobs[4]["reason"] == "ATTEMPT_BUDGET_EXHAUSTED" and len(mine) == 4
-                and operations == ["ENTRY", "EXIT", "ENTRY", "EXIT", "ENTRY"],
+                "mobile-390: each unknown action reconciled from its receipt before the next traded, the last one "
+                "after the owner ended recurring operation; no occurrence after the end":
+                [j["outcome"] for j in jobs] == ["SUBMITTED_CONFIRMED"] * 4 and len(mine) == 4
+                and operations == ["ENTRY", "EXIT", "ENTRY", "EXIT"],
             })
     return {"checks": checks, "expectations": expectations, "effects_lines": len(effects),
             "all_checks_pass": bool(checks) and all(expectations.values())}
@@ -149,16 +164,16 @@ def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, u
                    all(value == [0] for value in passes.values()), passes)
     code = run_playwright(["recurring-report.spec.mjs", "--grep", "stage A"], ui_env, evidence / "ui-recurring-a.log")
     ok &= rec.step("reopened: entry, full exit and re-entry traded; unknown actions reconciled from receipts; missed "
-                   "slots shown; other owner denied; desktop stops new entries (desktop and 390px)", code == 0,
-                   {"exit": code})
-    ok &= rec.step("producer pass at slot 30 after the stop", producer.run(30) == [0])
+                   "slots shown with their reason; other owner denied; desktop stops new entries; the 390px owner ends "
+                   "recurring operation with an action still unknown (desktop and 390px)", code == 0, {"exit": code})
+    ok &= rec.step("producer pass at slot 30 after the stop and the end", producer.run(30) == [0])
     code = run_playwright(["recurring-report.spec.mjs", "--grep", "stage B"], ui_env, evidence / "ui-recurring-b.log")
-    ok &= rec.step("stop denied the next entry; desktop requests removal; the other owner ends recurring operation",
-                   code == 0, {"exit": code})
-    ok &= rec.step("producer pass at slot 35 after removal and end", producer.run(35) == [0])
+    ok &= rec.step("stop denied the next entry; desktop requests removal; the ended deployment produced nothing new "
+                   "and its unknown action was reconciled from its receipt", code == 0, {"exit": code})
+    ok &= rec.step("producer pass at slot 35 after the removal", producer.run(35) == [0])
     code = run_playwright(["recurring-report.spec.mjs", "--grep", "stage C"], ui_env, evidence / "ui-recurring-c.log")
-    ok &= rec.step("both deployments ended; the last unknown action reconciled; residual holdings readable",
-                   code == 0, {"exit": code})
+    ok &= rec.step("both deployments ended (removal; owner end); no occurrence after either; residual holdings "
+                   "readable", code == 0, {"exit": code})
     results_path = evidence / "ui" / "recurring-results.json"
     results = json.loads(results_path.read_text()) if results_path.exists() else {}
     inspection = inspect(pg, evidence, results)

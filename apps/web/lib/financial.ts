@@ -115,8 +115,8 @@ export interface RecurringOccurrence extends EvaluationJob {
 
 export interface RecurringProjection {
   deployment: RecurringDeployment | null;
-  producer?: { last_tick_at: string | null; cursor_slot: string | null; next_due_slot: string | null; no_next_reason: string | null;
-    occurrences: number; missed_slots: number; missed_intervals: { from: string; to: string; count: number; recorded_at: string }[] };
+  producer?: { last_tick_at: string | null; cursor_slot: string | null; producer_silent: boolean; next_due_slot: string | null; no_next_reason: string | null;
+    occurrences: number; missed_slots: number; missed_intervals: { from: string; to: string; count: number; reason: string; recorded_at: string }[] };
   occurrences?: RecurringOccurrence[]; pending_reconciliation?: string[]; stops?: string[]; removal?: string[];
   wait_reason?: string | null; read_at?: string;
 }

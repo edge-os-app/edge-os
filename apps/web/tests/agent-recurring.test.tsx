@@ -29,9 +29,9 @@ const occurrence = { job_id: "job-1", agent_id: "agent-a", request_key: "recurri
     completed_at: "2026-10-13T09:06:12Z" } };
 
 function projection(over: Record<string, unknown> = {}) {
-  return { deployment, producer: { last_tick_at: "2026-10-13T09:06:00Z", cursor_slot: "2026-10-13T09:05:00Z",
+  return { deployment, producer: { last_tick_at: "2026-10-13T09:06:00Z", cursor_slot: "2026-10-13T09:05:00Z", producer_silent: false,
     next_due_slot: "2026-10-13T09:10:00Z", no_next_reason: null, occurrences: 1, missed_slots: 3,
-    missed_intervals: [{ from: "2026-10-13T08:50:00Z", to: "2026-10-13T09:00:00Z", count: 3, recorded_at: "z" }] },
+    missed_intervals: [{ from: "2026-10-13T08:50:00Z", to: "2026-10-13T09:00:00Z", count: 3, reason: "PRODUCER_ABSENT", recorded_at: "z" }] },
     occurrences: [occurrence], pending_reconciliation: [], stops: [], removal: [], wait_reason: null, ...over };
 }
 
@@ -91,6 +91,16 @@ describe("recurring operation", () => {
     expect(await screen.findByTestId("recurring-wait")).toHaveTextContent("Ended: You ended recurring operation.");
     expect(screen.getByTestId("recurring-next")).toHaveTextContent("None (OWNER_ENDED)");
     expect(screen.queryByRole("button", { name: "End recurring operation" })).toBeNull();
+  });
+
+  it("says a silent producer has no next slot and a job that ended unevaluated was not evaluated", async () => {
+    mocks.deployment.mockResolvedValue(projection({ wait_reason: "PRODUCER_NOT_SEEN",
+      producer: { ...projection().producer, producer_silent: true, next_due_slot: null, no_next_reason: "PRODUCER_NOT_SEEN" },
+      occurrences: [{ ...occurrence, state: "COMPLETED", outcome: "DENIED", reason: "DEPLOYMENT_ENDED:OWNER_ENDED",
+        action_id: null, evaluation: null, submission: null }] }));
+    render(<AgentRecurring agentId="agent-a" />);
+    expect(await screen.findByTestId("recurring-next")).toHaveTextContent("None (PRODUCER_NOT_SEEN)");
+    expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent("Ended without an evaluation · DENIED · DEPLOYMENT_ENDED:OWNER_ENDED");
   });
 
   it("refuses to offer activation when the terms are not qualified", async () => {

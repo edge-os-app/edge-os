@@ -7,8 +7,9 @@ Revises: 0011
 producer's slot cursor and missed-slot record. `execution_evaluation_outcomes` saves every evaluation outcome
 (SIGNAL, NO_SIGNAL, INELIGIBLE or UNAVAILABLE) with its input and evaluation times before any intent.
 `execution_evaluation_jobs.deployment_id` links an occurrence to its deployment; existing jobs keep NULL. No
-existing row changes. The downgrade refuses while any deployment exists, because it would lose durable recurring
-work and its occurrence lineage.
+existing row changes. The downgrade refuses while any deployment exists, because it would lose durable recurring work
+and its occurrence lineage. Without deployments, a downgrade drops the saved outcome rows of manual evaluations
+(their input and evaluation times); each job keeps its own outcome and reason, and no liability is held there.
 """
 from alembic import op
 import sqlalchemy as sa

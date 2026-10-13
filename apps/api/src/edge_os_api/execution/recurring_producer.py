@@ -31,6 +31,7 @@ from edge_os_api.execution.worker import ConnectedExecution
 log = logging.getLogger("edge_os.recurring")
 DRIFT_EXIT_CODE = 3
 REFUSED_EXIT_CODE = 2
+SKIPPED_EXIT_CODE = 4
 
 
 class ClockOffsetRefused(RuntimeError):
@@ -68,6 +69,8 @@ def run_passes(engine: Engine, producer: RecurringOperation, *, once: bool, inte
             return DRIFT_EXIT_CODE
         except SQLAlchemyError as error:
             log.error("recurring producer skipped a pass: database unavailable (%s)", type(error).__name__)
+            if once:
+                return SKIPPED_EXIT_CODE  # a single requested pass that did not run is not a success
         else:
             try:
                 results = producer.producer_pass()
@@ -99,6 +102,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--clock-offset-minutes", type=float, default=0.0,
                         help="LOCAL fixture verification only: shift this process's clock")
     args = parser.parse_args(argv)
+    if args.interval <= 0 or (args.max_passes is not None and args.max_passes < 1):
+        parser.error("--interval must be positive and --max-passes at least 1")
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
     try:

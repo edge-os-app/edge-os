@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, heldKey, releaseKey, type ConsentState, type RecurringProjection } from "../lib/financial";
 
+const RUNNABLE = new Set(["QUEUED", "DECIDED", "ENQUEUED"]);
+
 const WAIT_COPY: Record<string, string> = {
   WAITING_RECONCILIATION: "Waiting: an earlier action's outcome is unknown. Its receipt is read before anything new runs for this wallet.",
   PRODUCER_NOT_SEEN: "Waiting: no scheduler pass was recorded in the last two slots. Nothing runs until one is.",
@@ -131,7 +133,8 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
           <h3>Saved slots</h3>
           {!view?.occurrences?.length && <p className="muted">No slot evaluated yet.</p>}
           <ul data-testid="recurring-occurrences">{(view?.occurrences ?? []).map((item) => <li key={item.job_id}>
-            <strong>{item.decision_slot}</strong> · {item.evaluation ? `${item.evaluation.outcome}${item.evaluation.reason ? ` (${item.evaluation.reason})` : ""}` : "Not evaluated yet"}
+            <strong>{item.decision_slot}</strong> · {item.evaluation ? `${item.evaluation.outcome}${item.evaluation.reason ? ` (${item.evaluation.reason})` : ""}`
+              : RUNNABLE.has(item.state) ? "Not evaluated yet" : "Ended without an evaluation"}
             {item.outcome ? ` · ${item.outcome}` : ""}{item.reason ? ` · ${item.reason}` : ""}
             <p className="muted">
               {item.evaluation ? `Inputs observed ${item.evaluation.inputs_observed_at ?? "unknown"}, collected ${item.evaluation.inputs_collected_at ?? "unknown"}, evaluated ${item.evaluation.evaluated_at} (${item.evaluation.evidence_class ?? "no evidence class"}). ` : ""}
@@ -140,9 +143,9 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
           </li>)}</ul>
           {deployment.state === "ACTIVE" && <div className="btn-row">
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy || uncertain}
-              onClick={() => void write(() => financial.endDeployment(agentId), "Recurring operation ended. Sent actions and held amounts stay as saved.")}>
+              onClick={() => void write(() => financial.endDeployment(agentId), "Recurring operation ended. Unsent work is released; a sent action and its held amounts stay as saved.")}>
               End recurring operation</button>
-            <span className="muted">Ending does not sell, cancel a sent action or release unknown liability.</span>
+            <span className="muted">Ending stops new slots and releases unsent work. It does not sell, cancel a sent action or release unknown liability.</span>
           </div>}
           <div className="btn-row">
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy} onClick={() => void load()}>Refresh</button>

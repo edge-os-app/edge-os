@@ -41,7 +41,7 @@ from edge_os_api.execution.connected_identity import (AdoptedConsent, ConnectedA
                                                       derive_approval, resolve_agent)
 from edge_os_api.execution.current_holdings import HoldingsUnavailable
 from edge_os_api.execution.models import (DecisionRow, EvaluationJobRow, EvaluationOutcomeRow, IntentRow, QueueRow,
-                                          SubmissionAttemptRow)
+                                          RecurringDeploymentRow, SubmissionAttemptRow)
 from edge_os_api.execution.original_transaction import (TRANSPORT_ID as ORIGINAL_TRANSPORT_ID,
                                                         Leg, OriginalClients, OriginalContext,
                                                         OriginalTransactionTransport, RouteProfile,
@@ -273,7 +273,32 @@ class ConnectedExecution:
             return None, None, "CONSENT_CHANGED"
         return agent, consent, None
 
+    def touch(self, job_id: uuid.UUID) -> None:
+        """Record that a pass looked at this job (its `updated_at`), without changing its state."""
+        self._update(job_id)
+
+    def _ended_deployment(self, job: EvaluationJobRow) -> str | None:
+        """The end reason of the job's recurring deployment, if it has ended. Manual jobs have none."""
+        if job.deployment_id is None:
+            return None
+        with self._factory() as session:
+            row = session.execute(select(RecurringDeploymentRow.state, RecurringDeploymentRow.end_reason).where(
+                RecurringDeploymentRow.deployment_id == job.deployment_id,
+                RecurringDeploymentRow.owner_id == job.owner_id)).one_or_none()
+        return None if row is None or row.state != "ENDED" else str(row.end_reason)
+
     def _advance(self, job: EvaluationJobRow) -> None:
+        ended = self._ended_deployment(job)
+        if ended is not None:
+            # An ended deployment authorizes no further work: an occurrence not yet decided or admitted ends here, and
+            # an admitted, unsent one is released through the accepted cancellation. A submission-owned action is
+            # never cancelled; it keeps its reservations and stays reconcilable.
+            reason = f"DEPLOYMENT_ENDED:{ended}"
+            if job.state == "ENQUEUED" and job.action_id is not None:
+                self._release_unsent(job, "DEPLOYMENT_ENDED", reason)
+            else:
+                self._update(job.job_id, state="COMPLETED", outcome="DENIED", reason=reason)
+            return
         agent, consent, problem = self._context_for(job)
         if problem is not None:
             self._update(job.job_id, state="COMPLETED", outcome="DENIED", reason=problem)
@@ -315,6 +340,13 @@ class ConnectedExecution:
                 DecisionRow.revision_id == job.execution_revision_id,
                 DecisionRow.decision_at == job.decision_slot)).scalars().first()
             decision_id, status = (existing.decision_id, existing.status) if existing is not None else (None, None)
+            decided_at = existing.created_at if existing is not None else None
+            saved = session.get(EvaluationOutcomeRow, job.job_id)
+        if decision_id is None and saved is not None and saved.outcome == "UNAVAILABLE":
+            # The UNAVAILABLE outcome was saved and the worker stopped before the job ended: it stays final, and
+            # nothing is observed or decided again for this slot.
+            self._finish_unavailable(job, saved.reason or "OBSERVATIONS_UNAVAILABLE")
+            return
         if decision_id is None:
             position_open = self._position(agent) is not None
             now = self._clock()
@@ -344,10 +376,14 @@ class ConnectedExecution:
                                observed.provenance)
         else:
             provenance = job.provenance
-            # A restart after the decision was saved: the outcome row is written once from the saved decision.
+            # A restart after the decision was saved: the outcome row is written once from the saved decision. Its
+            # evaluation time is the decision's own time; an input collection time not saved before the stop stays
+            # unknown, and the row says it was recovered.
             observations = provenance.get("observations") or {}
+            assert decided_at is not None
             self._save_outcome(job, status, None, decision_id, job.decision_slot,
-                               _parse_time(observations.get("collected_at")), self._clock(), observations)
+                               _parse_time(observations.get("collected_at")), decided_at,
+                               {**observations, "recovered_after_restart": True})
         if status != "SIGNAL":
             self._update(job.job_id, state="COMPLETED", decision_id=decision_id, outcome=status,
                          reason=None, provenance=provenance)
@@ -366,7 +402,17 @@ class ConnectedExecution:
                 observed_at = None
         if collected is None and observed is not None:
             collected = _parse_time(provenance.get("collected_at"))
-        self._save_outcome(job, "UNAVAILABLE", reason, None, observed_at, collected, now, provenance)
+        # The outcome row and the job's end commit together, so a stop between them cannot leave a saved
+        # UNAVAILABLE outcome beside a job that later decides and trades.
+        with self._factory() as session:
+            session.execute(self._outcome_insert(job, "UNAVAILABLE", reason, None, observed_at, collected, now,
+                                                 provenance))
+            row = session.execute(select(EvaluationJobRow).where(EvaluationJobRow.job_id == job.job_id)
+                                  .with_for_update()).scalar_one()
+            row.state, row.outcome, row.reason, row.updated_at = "UNAVAILABLE", "UNAVAILABLE", reason, self._clock()
+            session.commit()
+
+    def _finish_unavailable(self, job: EvaluationJobRow, reason: str) -> None:
         self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason=reason)
 
     def _save_outcome(self, job: EvaluationJobRow, outcome: str, reason: str | None, decision_id: uuid.UUID | None,
@@ -374,12 +420,19 @@ class ConnectedExecution:
                       provenance: dict[str, Any]) -> None:
         """One outcome row per job, written before any intent. A repeat keeps the first row."""
         with self._factory() as session:
-            session.execute(pg_insert(EvaluationOutcomeRow).values(
-                job_id=job.job_id, owner_id=job.owner_id, agent_id=job.agent_id, deployment_id=job.deployment_id,
-                decision_slot=job.decision_slot, outcome=outcome, reason=reason, decision_id=decision_id,
-                inputs_observed_at=observed_at, inputs_collected_at=collected_at, evaluated_at=evaluated_at,
-                provenance=dict(provenance)).on_conflict_do_nothing(index_elements=["job_id"]))
+            session.execute(self._outcome_insert(job, outcome, reason, decision_id, observed_at, collected_at,
+                                                 evaluated_at, provenance))
             session.commit()
+
+    @staticmethod
+    def _outcome_insert(job: EvaluationJobRow, outcome: str, reason: str | None, decision_id: uuid.UUID | None,
+                        observed_at: dt.datetime | None, collected_at: dt.datetime | None,
+                        evaluated_at: dt.datetime, provenance: dict[str, Any]) -> Any:
+        return pg_insert(EvaluationOutcomeRow).values(
+            job_id=job.job_id, owner_id=job.owner_id, agent_id=job.agent_id, deployment_id=job.deployment_id,
+            decision_slot=job.decision_slot, outcome=outcome, reason=reason, decision_id=decision_id,
+            inputs_observed_at=observed_at, inputs_collected_at=collected_at, evaluated_at=evaluated_at,
+            provenance=dict(provenance)).on_conflict_do_nothing(index_elements=["job_id"])
 
     def _holdings(self, agent: ConnectedAgent, now: dt.datetime) -> AdmissionContext:
         """Current holdings as observed. `checked_at` is the observation time, so stale readings stay stale."""
@@ -551,6 +604,10 @@ class ConnectedExecution:
                 transport = self._ports.transport(agent_id=agent.agent_id, plan=plan, operation=intent.operation)
         except ProviderUnavailable:
             self._update(job.job_id, reason="WAITING:TRANSPORT_UNAVAILABLE")
+            return
+        ended = self._ended_deployment(job)
+        if ended is not None:  # rechecked immediately before submission ownership, like the stops and removal
+            self._release_unsent(job, "DEPLOYMENT_ENDED", f"DEPLOYMENT_ENDED:{ended}")
             return
         tick = self._services.execution.tick(
             job.owner_id, agent_id=agent.agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id,

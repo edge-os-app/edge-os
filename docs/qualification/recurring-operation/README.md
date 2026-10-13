@@ -11,7 +11,7 @@ Status: **LOCAL composition only.** #58 milestone `RELEASE-E2E-L2-20261013-P27-L
 2. Open the agent's Positions view and start recurring operation with an explicit authorization bound to the adopted terms hash.
 3. Close the browser. The producer process saves one evaluation per due five-minute slot, reconciles unknown originals from receipts, and advances its occurrences through the existing worker stages.
 4. Reopen and read the durable record: the last scheduler pass, the saved and next due slot, missed slots (never replayed), each slot's saved outcome with input and evaluation times, submissions, pending reconciliation and one wait reason.
-5. Stop new entries, halt all swaps, request removal or end recurring operation. These controls persist across restarts and never sell, cancel a sent action or release unknown liability.
+5. Stop new entries, halt all swaps, request removal or end recurring operation. These controls persist across restarts. Ending also releases admitted, unsent work; none of them sells, cancels a sent action or releases unknown liability, and an unknown action is still reconciled from its receipt after an end.
 
 ## Processes
 

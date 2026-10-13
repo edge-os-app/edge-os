@@ -3,9 +3,10 @@
  * selects each stage with --grep; every stage opens a new browser context, so nothing carries over from a page.
  *
  * - "stage A": after passes at slots 0, 5, 10 and 25 (15 and 20 missed). The desktop owner traded entry, full exit,
- *   re-entry and exit; the 390px owner's unknown actions were reconciled one by one. Desktop stops new entries.
- * - "stage B": after the pass at slot 30. The desktop entry was denied by the stop; desktop requests removal and the
- *   390px owner ends recurring operation.
+ *   re-entry and exit; the 390px owner's unknown actions were reconciled one by one. Desktop stops new entries; the
+ *   390px owner ends recurring operation while its latest action is still unknown.
+ * - "stage B": after the pass at slot 30. The desktop entry was denied by the stop and desktop requests removal; the
+ *   390px deployment produced nothing new, and its unknown action was reconciled after the end.
  * - "stage C": after the pass at slot 35. Both deployments ended; residual holdings and reads remain.
  * - "after restart": the same durable record reopens after the API restart and one more producer pass.
  */
@@ -70,8 +71,9 @@ test("stage A: repeated slots ran while the browser was closed", async ({ page }
   const project = info.project.name;
   const { agentId, recurring, actions } = await openRecurring(page, project);
   const view = await projection(page, project);
-  expect(view.producer.missed_slots).toBe(2);
-  await expect(recurring.getByTestId("recurring-missed")).toContainText("2 · latest");
+  // Slots 15 and 20, plus any slot between activation and the first pass (counted from the activation slot).
+  expect(view.producer.missed_slots).toBeGreaterThanOrEqual(2);
+  expect(view.producer.missed_intervals.every((item) => item.reason === "PRODUCER_ABSENT")).toBe(true);
   await expect(recurring.getByTestId("recurring-missed")).toContainText("not replayed");
   const items = recurring.getByTestId("recurring-occurrences").locator("li");
   await expect(items).toHaveCount(4);
@@ -90,6 +92,10 @@ test("stage A: repeated slots ran while the browser was closed", async ({ page }
     expect(view.occurrences[0].outcome).toBe("SUBMITTED_UNKNOWN");
     await expect(recurring.getByTestId("recurring-wait")).toContainText("an earlier action's outcome is unknown");
     await expect(recurring.getByTestId("recurring-pending")).toHaveText(view.occurrences[0].action_id);
+    // The owner ends recurring operation while that action is still unknown; its receipt is read later anyway.
+    await recurring.getByRole("button", { name: "End recurring operation" }).click();
+    await expect(recurring.getByTestId("recurring-wait")).toContainText("Ended: You ended recurring operation.");
+    await expect(recurring.getByTestId("recurring-pending")).toHaveText(view.occurrences[0].action_id);
   }
   // Another owner sees no deployment of this agent.
   const foreign = await page.request.get(`${api}/v1/agents/${encodeURIComponent(agentId)}/deployment`,
@@ -101,7 +107,7 @@ test("stage A: repeated slots ran while the browser was closed", async ({ page }
   record(project, { stageA: view });
 });
 
-test("stage B: the stop denied the next entry; removal and ending recurring operation", async ({ page }, info) => {
+test("stage B: the stop denied the next entry; removal; the ended deployment's unknown action reconciled", async ({ page }, info) => {
   const project = info.project.name;
   const { recurring, actions } = await openRecurring(page, project);
   const view = await projection(page, project);
@@ -112,8 +118,13 @@ test("stage B: the stop denied the next entry; removal and ending recurring oper
     await actions.getByRole("button", { name: "Request removal" }).click();
     await expect(actions.getByTestId("actions-removal")).toContainText("Removal REQUESTED");
   } else {
-    await recurring.getByRole("button", { name: "End recurring operation" }).click();
-    await expect(recurring.getByTestId("recurring-wait")).toContainText("Ended: You ended recurring operation.");
+    // The pass at slot 30 created no occurrence for the ended deployment and still reconciled its unknown action.
+    const before = saved(project).stageA;
+    expect(view.deployment.state).toBe("ENDED");
+    expect(view.occurrences.map((item) => item.job_id)).toEqual(before.occurrences.map((item) => item.job_id));
+    expect(view.occurrences.every((item) => item.outcome === "SUBMITTED_CONFIRMED")).toBe(true);
+    expect(view.pending_reconciliation).toEqual([]);
+    await expect(recurring.getByTestId("recurring-pending")).toHaveText("None");
     await expect(recurring.getByTestId("recurring-next")).toContainText("None (OWNER_ENDED)");
   }
   await shot(page, project, "03-controls");
@@ -133,12 +144,8 @@ test("stage C: both deployments ended; holdings and reads remain", async ({ page
     await expect(recurring.getByTestId("recurring-wait")).toContainText("Ended: Agent removal was requested.");
   } else {
     expect(view.deployment.end_reason).toBe("OWNER_ENDED");
-    expect(view.pending_reconciliation).toEqual([]);  // the producer still reconciled the last unknown action
-    // The terms allow five attempts. Each entry reserves its own attempt and one held for its later exit, so after
-    // entry, exit, entry, exit (four used) the fifth entry needs two and is denied before any effect.
-    expect(view.occurrences.map((item) => item.outcome)).toEqual(
-      ["ADMISSION_DENIED", "SUBMITTED_CONFIRMED", "SUBMITTED_CONFIRMED", "SUBMITTED_CONFIRMED", "SUBMITTED_CONFIRMED"]);
-    expect(view.occurrences[0].reason).toBe("ATTEMPT_BUDGET_EXHAUSTED");
+    expect(view.occurrences.length).toBe(4);  // no occurrence after the end
+    expect(view.pending_reconciliation).toEqual([]);
   }
   await expect(actions.getByTestId("actions-positions")).toBeVisible();  // residual holdings stay readable
   await shot(page, project, "04-ended");

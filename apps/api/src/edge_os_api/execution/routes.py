@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import Field
+from pydantic import Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,8 +32,18 @@ from edge_os_api.records import contract_adapter as record_contract
 router = APIRouter(prefix="/v1", tags=["actions"], dependencies=[Depends(require_principal)])
 
 
+RESERVED_KEY_PREFIX = "recurring:"  # occurrence keys the recurring producer saves; never an owner's manual key
+
+
 class ScheduleBody(StrictModel):
     request_key: str = Field(min_length=1, max_length=200)
+
+    @field_validator("request_key")
+    @classmethod
+    def not_reserved(cls, value: str) -> str:
+        if value.startswith(RESERVED_KEY_PREFIX):
+            raise ValueError("this key prefix is reserved for recurring occurrences")
+        return value
 
 
 class DeploymentBody(StrictModel):
@@ -122,6 +132,7 @@ DEPLOYMENT_DETAIL = {
     "deployment_not_found": "No recurring operation is saved for this agent.",
     "activation_unavailable": "No qualified execution route exists in this build. Nothing was activated.",
     "consent_expired": "The adopted terms have expired. Nothing was activated.",
+    "agent_removed": "Agent removal was requested. Recurring operation cannot start for this agent.",
 }
 
 

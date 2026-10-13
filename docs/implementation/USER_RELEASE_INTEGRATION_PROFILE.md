@@ -416,24 +416,27 @@ Milestone `RELEASE-E2E-L2-20261013-P27-LOCAL-v1`, base `ed228f7`. The full typed
 
 | Case | Expected |
 |---|---|
-| Activation: exact binding, replay, other key, wrong consent hash, ended consent, production | one deployment; 200 replay; 409 `deployment_consent_mismatch`/`deployment_ended`; 503 `activation_unavailable` |
-| Repeated slots with the browser closed: entry → full exit → re-entry | three occurrences on three slots; ENTRY confirmed, EXIT closes the position, a later ENTRY opens a new one; three fixture effects |
-| Duplicate ticks in one slot and two producer processes at once | one job per slot; one effect |
-| Producer absent for several slots | `missed_slots` counted, one interval saved; one job for the current slot; no stale trade |
-| Restart of the producer between passes | resumes from the saved cursor; no duplicate |
-| Stale, missing, wrong-market, wrong-time, incomplete-provenance or non-forward observations | UNAVAILABLE outcome saved with its reason; no decision, no intent, no effect |
-| Cumulative quote allowance or attempt budget exhausted | ADMISSION_DENIED with the accepted reason; no effect; counters not reset by a new tick or a restart |
-| Consent expired after activation | deployment ENDED `CONSENT_EXPIRED`; no further occurrence |
-| Unknown original (lost acknowledgement) | the later occurrence waits on the wallet claim; the producer reconciles from the receipt; then later occurrences trade; one effect per action |
-| Other owner with an unknown action | the first owner's deployment keeps trading |
-| Stop new entries / halt all swaps during recurrence | entries denied (exit still allowed under STOP_NEW_ENTRIES); sticky after restart |
-| Removal requested during recurrence | deployment ENDED `REMOVAL_REQUESTED`; no new submission; residual inventory and owner reads kept |
-| Owner ends the deployment | ENDED `OWNER_ENDED`; no new occurrence; the same terms cannot restart it |
-| Projection | matches the saved rows: cursor, next due slot, missed slots, occurrences, outcome times, pending reconciliation, wait reason |
-| Migration 0012 downgrade with deployments | refused |
-| Producer clock offset outside fixture/local | refused |
+| Activation: exact binding, replay, other key, wrong consent hash, ended consent, removal requested, production | one deployment; 200 replay; 409 `deployment_consent_mismatch`/`deployment_ended`/`agent_removed`; 503 `activation_unavailable` (`test_activation_binds_the_exact_adopted_consent_once`, `test_activation_is_refused_after_removal_was_requested`, `test_unavailable_execution_mode_refuses_activation`) |
+| Repeated slots with the browser closed: entry → full exit → re-entry | three occurrences on three slots; ENTRY confirmed, EXIT closes the position, a later ENTRY opens a new one; three fixture effects (`test_repeated_slots_run_entry_full_exit_and_re_entry_without_any_caller`) |
+| Duplicate ticks in one slot, a manual run in the same slot, and two producer processes at once | one job per slot; one effect (`test_duplicate_ticks_…`, `test_a_manual_run_and_the_producer_share_…`, `test_two_producer_processes_…`); the producer leaves manual jobs to the worker (`test_the_producer_leaves_manual_evaluations_…`); manual keys cannot use `recurring:` (`test_manual_evaluations_cannot_use_the_reserved_occurrence_key`) |
+| Producer absent for several slots, including from activation to the first pass | `missed_slots` counted with reason `PRODUCER_ABSENT`; one job for the current slot; no stale trade (`test_missed_slots_are_counted_and_never_replayed`, `test_slots_missed_between_activation_and_the_first_pass_are_counted`) |
+| Restart of the producer between passes (new objects over the same saved state) | resumes from the saved cursor; no duplicate (`test_a_restarted_producer_resumes_from_the_saved_cursor`; the stop, halt and limit tests also pass through a new producer) |
+| Fair bounded windows; one failing deployment or receipt | every deployment ticked across passes; a stuck original does not hold the reconciliation window; one failure does not stop other owners (`test_bounded_ticks_rotate_…`, `test_a_stuck_original_does_not_hold_…`, `test_one_failing_deployment_or_receipt_…`) |
+| Failed tick; stop between decision and outcome row; saved UNAVAILABLE outcome on retry | nothing committed; outcome recovered with the decision's time and `recovered_after_restart`; one action; UNAVAILABLE stays final with no new observation (`test_a_failed_tick_commits_nothing`, `test_a_stop_after_the_decision_and_before_the_outcome_row_…`, `test_a_saved_unavailable_outcome_stays_final_on_retry`) |
+| Stale, wrong-market, wrong-time, incomplete-provenance, non-forward or unavailable observations; late evaluation | UNAVAILABLE outcome saved with its reason; no decision, no intent, no effect (`test_unusable_observations_…`, `test_a_late_evaluation_…`) |
+| No-signal and missing-data (ineligible) evaluations | NO_SIGNAL / INELIGIBLE outcome rows with their decision; no intent (`test_no_signal_and_ineligible_occurrences_save_their_outcome_rows`) |
+| Cumulative quote allowance or attempt budget exhausted | ADMISSION_DENIED `CAPACITY_UNAVAILABLE` / `ATTEMPT_BUDGET_EXHAUSTED`; no effect; counters not reset by a new producer (`test_cumulative_limits_…`) |
+| Consent expired after activation | deployment ENDED `CONSENT_EXPIRED`; no further occurrence (`test_consent_expiry_…`) |
+| Unknown original (lost acknowledgement) | the later occurrence waits on the wallet claim; the producer reconciles from the receipt; then later occurrences trade; one effect per action; still reconciled after the owner ends (`test_an_unknown_original_waits_…`, `test_an_unknown_original_is_still_reconciled_after_the_owner_ends`) |
+| Other owner with an unknown action | the first owner's deployment keeps trading (`test_another_owners_unknown_action_…`) |
+| Stop new entries / halt all swaps during recurrence | STOP_NEW_ENTRIES denies entries and allows the exit; HALT_ALL_SWAPS denies the exit and keeps the residual position; both still deny for a new producer (`test_stop_new_entries_…`, `test_halt_all_swaps_…`) |
+| Removal requested during recurrence | deployment ENDED `REMOVAL_REQUESTED`; no new submission; residual inventory and owner reads kept (`test_removal_ends_the_deployment_…`) |
+| Owner ends the deployment, including with work already saved or admitted | ENDED `OWNER_ENDED`; no new occurrence; a saved occurrence ends `DENIED DEPLOYMENT_ENDED:…`; an admitted, unsent one is released with no effect; the same terms cannot restart it (`test_the_owner_ends_…`, `test_ending_denies_a_saved_occurrence_…`, `test_ending_releases_an_admitted_unsent_occurrence_…`) |
+| Projection | matches the saved rows: cursor, next due slot (null while the producer is silent), missed slots, occurrences, outcome times, pending reconciliation, wait reason (`test_the_projection_matches_the_saved_rows`) |
+| Migration 0012 downgrade with deployments | refused (`test_a_downgrade_below_0012_is_refused_while_deployments_exist`) |
+| Producer clock offset outside fixture/local; zero interval or passes | refused (`test_a_clock_offset_is_refused_…`, `test_the_producer_refuses_an_unbounded_or_empty_run`) |
 | Web panel (`apps/web/tests/agent-recurring.test.tsx`) | activation with the exact consent hash, projection, wait reasons, end control |
-| Mapped verifier (`tests/p03/recurring-*.spec.mjs`, `scripts/p03/recurring_phase.py`) | browser closed during producer passes; reopen; SQL; contention; two owners; stop/removal; restart |
+| Mapped verifier (`tests/p03/recurring-*.spec.mjs`, `scripts/p03/recurring_phase.py`) | browser closed during producer passes; reopen; SQL; contention; two owners; missed slots with reason; stop; removal; an owner end with an unknown action later reconciled; restart and a later pass |
 
 ## Decisions for the builder
 

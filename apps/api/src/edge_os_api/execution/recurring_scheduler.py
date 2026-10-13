@@ -18,6 +18,7 @@ producer (`RecurringOperation.producer_pass`) does three bounded things per pass
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -31,6 +32,8 @@ from edge_os_api.execution.models import (MISSED_INTERVALS_KEPT, EvaluationJobRo
                                           RecurringDeploymentRow, SubmissionAttemptRow)
 from edge_os_api.execution.types import utc_iso
 from edge_os_api.execution.worker import RUNNABLE, SLOT, ConnectedExecution, JobRefused, decision_slot, job_view
+
+log = logging.getLogger("edge_os.recurring")
 
 PRODUCER_LABEL = "recurring-producer/1"
 OCCURRENCES_SHOWN = 20
@@ -96,6 +99,9 @@ class RecurringOperation:
                 if existing.state == "ENDED":
                     raise DeploymentRefused("deployment_ended")
                 return False, deployment_view(existing)
+            if self._services.removals.submission_denial(session, owner_id, agent_id=agent_id,
+                                                         wallet_id=agent.wallet_id, network_id=agent.network_id):
+                raise DeploymentRefused("agent_removed")
             approval, reason = derive_approval(agent, consent, qualification=self._connected.qualification, now=now)
             if approval is None:
                 raise DeploymentRefused("activation_unavailable" if reason == "ACTIVATION_UNAVAILABLE"
@@ -151,11 +157,19 @@ class RecurringOperation:
             statement = select(RecurringDeploymentRow.deployment_id).where(RecurringDeploymentRow.state == "ACTIVE")
             if only is not None:
                 statement = statement.where(RecurringDeploymentRow.deployment_id.in_(list(only)))
-            ids = list(session.execute(statement.order_by(RecurringDeploymentRow.deployment_id).limit(limit))
-                       .scalars().all())
+            # Least recently ticked first, so a bounded window rotates through every ACTIVE deployment.
+            ids = list(session.execute(statement.order_by(
+                RecurringDeploymentRow.last_tick_at.asc().nulls_first(), RecurringDeploymentRow.deployment_id)
+                .limit(limit)).scalars().all())
         results = []
         for deployment_id in ids:
-            result = self._tick_one(deployment_id)
+            try:
+                result = self._tick_one(deployment_id)
+            except Exception as error:  # noqa: BLE001 - one deployment's failure must not stop other owners' work
+                # Nothing of the failed tick committed; the class only, never a message with private detail.
+                log.error("recurring tick %s failed: %s", deployment_id, type(error).__name__)
+                results.append({"deployment_id": str(deployment_id), "failed": type(error).__name__})
+                continue
             if result is not None:
                 results.append(result)
         return results
@@ -178,12 +192,15 @@ class RecurringOperation:
             if row.cursor_slot is not None and due <= row.cursor_slot:
                 session.commit()
                 return {"deployment_id": str(deployment_id), "slot": _iso(due), "created": False}
-            if row.cursor_slot is not None and due - row.cursor_slot > SLOT:
-                # Slots strictly between the saved cursor and now were missed. They are counted, never replayed.
-                missed = int((due - row.cursor_slot) / SLOT) - 1
+            # The first slot this deployment owes work for is the slot after the saved cursor, or, before any tick,
+            # the slot in which the owner activated it. Every owed slot before the current one was missed: it is
+            # counted with its reason and never replayed.
+            first_owed = row.cursor_slot + SLOT if row.cursor_slot is not None else decision_slot(row.activated_at)
+            if due > first_owed:
+                missed = int((due - first_owed) / SLOT)
                 row.missed_slots = int(row.missed_slots) + missed
-                interval = {"from": _iso(row.cursor_slot + SLOT), "to": _iso(due - SLOT), "count": missed,
-                            "recorded_at": _iso(now)}
+                interval = {"from": _iso(first_owed), "to": _iso(due - SLOT), "count": missed,
+                            "reason": "PRODUCER_ABSENT", "recorded_at": _iso(now)}
                 row.missed_intervals = [*row.missed_intervals, interval][-MISSED_INTERVALS_KEPT:]
             inserted = session.execute(pg_insert(EvaluationJobRow).values(
                 job_id=uuid.uuid4(), owner_id=row.owner_id, agent_id=row.agent_id, wallet_id=row.wallet_id,
@@ -223,19 +240,26 @@ class RecurringOperation:
     def reconcile_pending(self, only: Iterable[uuid.UUID] | None = None, limit: int = 20) -> list[dict[str, Any]]:
         """Settle SUBMITTED occurrences from their receipts. A missing receipt leaves the original waiting."""
         with self._factory() as session:
-            statement = select(EvaluationJobRow.owner_id, EvaluationJobRow.action_id).where(
+            statement = select(EvaluationJobRow.job_id, EvaluationJobRow.owner_id, EvaluationJobRow.action_id).where(
                 EvaluationJobRow.deployment_id.is_not(None), EvaluationJobRow.state == "SUBMITTED",
                 EvaluationJobRow.action_id.is_not(None))
             if only is not None:
                 statement = statement.where(EvaluationJobRow.deployment_id.in_(list(only)))
-            pending = session.execute(statement.order_by(EvaluationJobRow.created_at).limit(limit)).all()
+            # Least recently tried first: an original that never settles moves to the back after each try, so it
+            # cannot hold the window for another action or another owner.
+            pending = session.execute(statement.order_by(EvaluationJobRow.updated_at, EvaluationJobRow.job_id)
+                                      .limit(limit)).all()
         results = []
-        for owner_id, action_id in pending:
+        for job_id, owner_id, action_id in pending:
             try:
                 view = self._connected.reconcile_action(owner_id, action_id)
                 results.append({"action_id": action_id, "case_state": view.case_state, "applied": view.applied})
             except JobRefused as refused:
                 results.append({"action_id": action_id, "waiting": refused.code})
+            except Exception as error:  # noqa: BLE001 - one owner's receipt failure must not stop other owners
+                log.error("recurring reconciliation of %s failed: %s", action_id, type(error).__name__)
+                results.append({"action_id": action_id, "failed": type(error).__name__})
+            self._connected.touch(job_id)  # the try is recorded on the job, which rotates the window
         return results
 
     def producer_pass(self, only: Iterable[uuid.UUID] | None = None, worker_limit: int = 20) -> list[dict[str, Any]]:
@@ -301,10 +325,11 @@ class RecurringOperation:
             wait = "WAITING_RECONCILIATION"
         elif stops:
             wait = f"STOPPED:{','.join(stops)}"
-        elif row.last_tick_at is None or now - row.last_tick_at > PRODUCER_SILENCE:
-            wait = "PRODUCER_NOT_SEEN"
         else:
             wait = None
+        silent = active and (row.last_tick_at is None or now - row.last_tick_at > PRODUCER_SILENCE)
+        if wait is None and silent:
+            wait = "PRODUCER_NOT_SEEN"
 
         def occurrence(job: EvaluationJobRow) -> dict[str, Any]:
             outcome = outcomes.get(job.job_id)
@@ -322,9 +347,13 @@ class RecurringOperation:
                         "started_at": _iso(attempt.started_at), "completed_at": _iso(attempt.completed_at)}}
 
         return {"deployment": deployment_view(row),
+                # The next due slot is shown only while a producer is seen; a silent producer has no next work.
                 "producer": {"last_tick_at": _iso(row.last_tick_at), "cursor_slot": _iso(row.cursor_slot),
-                             "next_due_slot": _iso(row.cursor_slot + SLOT) if active and row.cursor_slot else None,
-                             "no_next_reason": None if active else row.end_reason,
+                             "producer_silent": silent,
+                             "next_due_slot": _iso(row.cursor_slot + SLOT)
+                             if active and row.cursor_slot and not silent else None,
+                             "no_next_reason": row.end_reason if not active else (
+                                 "PRODUCER_NOT_SEEN" if silent else None),
                              "occurrences": int(row.occurrences), "missed_slots": int(row.missed_slots),
                              "missed_intervals": list(row.missed_intervals)},
                 "occurrences": [occurrence(job) for job in jobs],

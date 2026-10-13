@@ -18,7 +18,9 @@ Task `RELEASE-E2E-L2-20261013-P27-LOCAL-v1`, issue #41 under #58 (AUT01–AUT08)
 - One deployment per adopted consent, ever. Same `request_key` → the original (200 replay). Another key while that consent's deployment exists → the same deployment (200 replay), never a second one. An ENDED deployment is terminal for its consent: activation for it returns 409 `deployment_ended`. Recurring operation restarts only through a newly reviewed and adopted consent (a new mandate with its own reviewed counters); under the accepted consent rules (one review per agent and revision), that needs a new agent setup.
 - At most one ACTIVE deployment per `(owner, agent, wallet, network)`.
 
-`POST /v1/agents/{agent_id}/deployment/end` ends the ACTIVE deployment (`OWNER_ENDED`). It does not sell, cancel a sent action or release unknown liability.
+`POST /v1/agents/{agent_id}/deployment/end` ends the ACTIVE deployment (`OWNER_ENDED`). Every ended deployment (any reason) authorizes no further work. The worker checks the deployment before each stage and again immediately before submission ownership: a not yet decided or admitted occurrence ends `DENIED DEPLOYMENT_ENDED:<reason>`, and an admitted, unsent one is released through the accepted cancellation (`DEPLOYMENT_ENDED`). A submission-owned action is never cancelled; it keeps its reservations, and the producer still reconciles it from its receipt. Ending does not sell or release unknown liability.
+
+Activation is also refused (409 `agent_removed`) while a removal is requested or confirmed for the agent wallet. Another owner's activation for an agent gets 409 `agent_not_ready`, the same as an unknown agent and as the existing manual `POST /actions`; reads and `end` get 404.
 
 `GET /v1/agents/{agent_id}/deployment` returns the durable projection (section 6), or `{"deployment": null}`.
 
@@ -26,16 +28,16 @@ A chart visit, a consent adoption or a manual evaluation never activates a deplo
 
 ## 3. Scheduler tick and missed slots (producer)
 
-`RecurringScheduler.tick(now)` runs over ACTIVE deployments (at most `limit` per pass), each in its own transaction with the deployment row locked (`FOR UPDATE SKIP LOCKED`, so a second producer skips it):
+`RecurringScheduler.tick(now)` runs over ACTIVE deployments, at most `limit` per pass, least recently ticked first (`last_tick_at` NULLS FIRST), so a bounded window rotates through every deployment. Each runs in its own transaction with the deployment row locked (`FOR UPDATE SKIP LOCKED`, so a second producer skips it), and a failure of one deployment is logged by error class and never stops the others:
 
 1. Re-resolve identity and authority. A changed agent/revision → `ENDED IDENTITY_CHANGED`; a different or no adopted consent → `ENDED CONSENT_CHANGED`; no approval now → `ENDED` with the approval denial (`CONSENT_EXPIRED`, `ACTIVATION_UNAVAILABLE`, `TERMS_*`); a requested or confirmed removal → `ENDED REMOVAL_REQUESTED`. An ended deployment creates nothing.
 2. `due = decision_slot(now)` on the UTC five-minute grid. If the saved cursor equals `due`, nothing is created.
-3. If the cursor is earlier than `due - SLOT`, the slots strictly between are **missed**: the count is added to `missed_slots` and one interval `{from, to, count, recorded_at}` is appended to `missed_intervals`, which keeps the latest 20 intervals. No job is created for a missed slot; no stale trade is replayed, and no old observation or decision time is invented.
+3. The first owed slot is the slot after the saved cursor or, before any tick, the slot in which the owner activated. Every owed slot before `due` is **missed**: the count is added to `missed_slots` and one interval `{from, to, count, reason: "PRODUCER_ABSENT", recorded_at}` is appended to `missed_intervals`, which keeps the latest 20 intervals. No job is created for a missed slot; no stale trade is replayed, and no old observation or decision time is invented.
 4. One occurrence job is inserted for `due` (`request_key = recurring:<deployment_id>:<slot>`), the cursor advances to `due`, and `last_tick_at` is saved, all in one transaction.
 
-A first tick after activation starts at the current due slot (no missed slots before activation). A restarted producer resumes from the saved cursor; a crashed tick commits nothing. Two producers on one deployment create one job per slot (row lock, then the existing unique slot constraint).
+A restarted producer resumes from the saved cursor; a failed tick commits nothing (cursor, tick time and counts unchanged). Two producers on one deployment create one job per slot (row lock, then the existing unique slot constraint).
 
-After the tick, the producer pass reconciles each `SUBMITTED` occurrence of an ACTIVE or ENDED deployment through `reconcile_action` (receipt only; idempotent; `receipt_unavailable` leaves it waiting). Then it runs one bounded worker pass over runnable occurrence jobs (manual evaluations stay with the existing bounded worker process; either process may advance an occurrence, and the per-job advisory lock lets only one hold it).
+After the tick, the producer pass reconciles `SUBMITTED` occurrences of ACTIVE or ENDED deployments through `reconcile_action` (receipt only; idempotent; `receipt_unavailable` leaves it waiting), least recently tried first: each try updates the job's `updated_at`, so an original that never settles cannot hold the window for another action or owner, and a failure of one is isolated. Then it runs one bounded worker pass over runnable occurrence jobs (manual evaluations stay with the existing bounded worker process; either process may advance an occurrence, and the per-job advisory lock lets only one hold it).
 
 ## 4. Observations and the saved evaluation outcome
 
@@ -52,7 +54,9 @@ After the tick, the producer pass reconciles each `SUBMITTED` occurrence of an A
 
 Warm-up and missingness stay inside `EvaluationInputs`; a missing essential bucket evaluates `INELIGIBLE` through the accepted evaluator.
 
-Every evaluation saves one row in `execution_evaluation_outcomes` before any intent: `outcome ∈ {SIGNAL, NO_SIGNAL, INELIGIBLE, UNAVAILABLE}`, `reason`, `decision_id` (null for UNAVAILABLE), `inputs_observed_at` (the decision input time), `inputs_collected_at` (the provenance collection time), `evaluated_at` (the worker's time), and the observation provenance. `execution_decisions` keeps its three statuses and all existing consumers. An UNAVAILABLE outcome creates no decision and no intent.
+Every evaluation (recurring or manual) saves one row in `execution_evaluation_outcomes` before any intent: `outcome ∈ {SIGNAL, NO_SIGNAL, INELIGIBLE, UNAVAILABLE}`, `reason`, `decision_id` (null for UNAVAILABLE), `inputs_observed_at` (the decision input time), `inputs_collected_at` (the provenance collection time), `evaluated_at` (the worker's time), and the observation provenance. `execution_decisions` keeps its three statuses and all existing consumers. An UNAVAILABLE outcome creates no decision and no intent; its outcome row and the job's end commit in one transaction, and a saved UNAVAILABLE outcome stays final on a retry. If the worker stops after the decision and before the outcome row, the restart writes the row from the saved decision: `evaluated_at` is the decision's own time, an unsaved collection time stays null, and the provenance says `recovered_after_restart`.
+
+The current-slot rule applies to manual evaluations too: a manual job evaluated after its slot now ends `UNAVAILABLE OBSERVATIONS_STALE` with no decision row (before, it saved a decision and later expired at enqueue or submission). No effect was possible either way.
 
 ## 5. Actions, limits and recovery
 
@@ -63,7 +67,7 @@ Every evaluation saves one row in `execution_evaluation_outcomes` before any int
 ## 6. Durable projection (`GET …/deployment`)
 
 `deployment`: id, state, end reason, activated/ended times, exact identity (agent, wallet, network, strategy, publication revision, execution revision, content/manifest hashes, consent adoption and hash).
-`producer`: `last_tick_at`, `cursor_slot`, `next_due_slot` (cursor + SLOT, only while ACTIVE; null with `no_next_reason` when ended), `missed_slots`, `missed_intervals`.
+`producer`: `last_tick_at`, `cursor_slot`, `producer_silent` (no tick within two slots), `next_due_slot` (cursor + SLOT, only while ACTIVE and a producer is seen; otherwise null with `no_next_reason` = the end reason or `PRODUCER_NOT_SEEN`), `missed_slots`, `missed_intervals`.
 `occurrences` (latest 20): slot, job state/outcome/reason, evaluation runs and times (`created_at`, `updated_at`, `runs`), the saved evaluation outcome with `inputs_observed_at`, `inputs_collected_at`, `evaluated_at`, and the submission attempt (`started_at`, `completed_at`, outcome) when one exists.
 `pending_reconciliation`: action ids whose queue state is unsettled.
 `wait_reason`: the first that applies — `ENDED:<reason>`, `REMOVAL:<state>`, `WAITING_RECONCILIATION`, `STOPPED:<modes>`, `PRODUCER_NOT_SEEN` (no tick within two slots), else null.
@@ -72,11 +76,13 @@ The direct account view reads this projection. P31 may read the same projection 
 
 ## 7. Producer process
 
-`python -m edge_os_api.execution.recurring_producer` runs passes (tick → reconcile → bounded occurrence worker pass): `--once`, or `--interval S` with optional `--max-passes N`. It checks the migration head before each pass (schema drift exits 3, as the worker loop does) and finishes the current pass on SIGTERM/SIGINT. `--clock-offset-minutes M` exists for LOCAL verification only. It is refused unless the execution mode is `fixture` and the environment is not production, and it never changes a saved decision time.
+`python -m edge_os_api.execution.recurring_producer` runs passes (tick → reconcile → bounded occurrence worker pass): `--once`, or `--interval S` (positive) with optional `--max-passes N` (at least 1). It checks the migration head before each pass (schema drift exits 3, as the worker loop does; a `--once` pass skipped because the database is unavailable exits 4) and finishes the current pass on SIGTERM/SIGINT. `--clock-offset-minutes M` exists for LOCAL verification only. It is refused unless the execution mode is `fixture` and the environment is not production, and it never changes a saved decision time.
 
 ## 8. Migration 0012
 
-Adds `execution_recurring_deployments`, `execution_evaluation_outcomes` and `execution_evaluation_jobs.deployment_id`. The downgrade refuses while any deployment exists, because removing it would lose durable recurring work and its occurrence lineage.
+Adds `execution_recurring_deployments`, `execution_evaluation_outcomes` and `execution_evaluation_jobs.deployment_id`. The downgrade refuses while any deployment exists, because removing it would lose durable recurring work and its occurrence lineage. Without deployments, it drops the outcome rows of manual evaluations (their saved input and evaluation times); each job keeps its own outcome and reason, and no liability is held there.
+
+Manual evaluation keys must not start with the reserved `recurring:` prefix (422), so an owner cannot occupy an occurrence key.
 
 ## 9. Not proved here
 
