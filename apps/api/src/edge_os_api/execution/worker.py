@@ -298,15 +298,11 @@ class ConnectedExecution:
             # An ended deployment authorizes no further work: an occurrence not yet decided or admitted ends here, and
             # an admitted, unsent one is released through the accepted cancellation. A submission-owned action is
             # never cancelled; it keeps its reservations and stays reconcilable.
-            reason = f"DEPLOYMENT_ENDED:{ended}"
-            if job.state == "ENQUEUED" and job.action_id is not None:
-                self._release_unsent(job, "DEPLOYMENT_ENDED", reason)
-            else:
-                self._update(job.job_id, state="COMPLETED", outcome="DENIED", reason=reason)
+            self._terminate(job, "DEPLOYMENT_ENDED", f"DEPLOYMENT_ENDED:{ended}")
             return
         agent, consent, problem = self._context_for(job)
         if problem is not None:
-            self._update(job.job_id, state="COMPLETED", outcome="DENIED", reason=problem)
+            self._terminate(job, "DENIED", problem)
             return
         assert agent is not None and consent is not None
         if job.state == "QUEUED":
@@ -315,6 +311,28 @@ class ConnectedExecution:
             self._enqueue(job, agent, consent)
         elif job.state == "ENQUEUED":
             self._submit(job, agent, consent)
+
+    def _terminate(self, job: EvaluationJobRow, outcome: str, reason: str) -> None:
+        """End a job that may no longer proceed, without stranding an admitted original.
+
+        A worker can stop after `enqueue` saved the intent and before the job recorded its action. The saved intent is
+        found again by the job's decision and linked before anything ends, so its admitted, unsent action is released
+        through the accepted guarded cancellation (which refuses anything submission-owned; such an action keeps its
+        reservations and stays reconcilable). Without a saved intent the job simply ends denied.
+        """
+        action_id = job.action_id
+        if action_id is None and job.decision_id is not None:
+            with self._factory() as session:
+                saved = session.execute(select(IntentRow.action_id).where(
+                    IntentRow.owner_id == job.owner_id, IntentRow.decision_id == job.decision_id)).scalar_one_or_none()
+            if saved is not None:
+                self._update(job.job_id, action_id=saved)
+                job = self._load(job.job_id)
+                action_id = saved
+        if action_id is not None:
+            self._release_unsent(job, outcome, reason)
+            return
+        self._update(job.job_id, state="COMPLETED", outcome="DENIED", reason=reason)
 
     # ---------------------------------------------------------------------------- stages
 
@@ -516,18 +534,20 @@ class ConnectedExecution:
     def _enqueue(self, job: EvaluationJobRow, agent: ConnectedAgent, consent: AdoptedConsent) -> None:
         assert job.decision_id is not None
         now = self._clock()
-        approval, reason = derive_approval(agent, consent, qualification=self._qualification, now=now)
-        if approval is None:
-            self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason=reason)
-            return
         with self._factory() as session:
             decision = session.execute(select(DecisionRow).where(
                 DecisionRow.owner_id == job.owner_id, DecisionRow.decision_id == job.decision_id)).scalar_one()
             saved_intent = session.execute(select(IntentRow).where(
                 IntentRow.owner_id == job.owner_id, IntentRow.decision_id == job.decision_id)).scalar_one_or_none()
-        if saved_intent is not None:  # a restart after enqueue: reuse the one saved intent, never rebuild it
+        if saved_intent is not None:
+            # A restart after enqueue: reuse the one saved intent, never rebuild it. This runs before the authority
+            # check, so an admitted action is linked first and a later denial releases it through `_submit`.
             self._after_enqueue(job, saved_intent.action_id, saved_intent.admission_status,
                                 saved_intent.admission_reason)
+            return
+        approval, reason = derive_approval(agent, consent, qualification=self._qualification, now=now)
+        if approval is None:
+            self._update(job.job_id, state="UNAVAILABLE", outcome="UNAVAILABLE", reason=reason)
             return
         try:
             terms, _ = self._terms(agent, consent, str(decision.operation), now, job.decision_id)
@@ -585,6 +605,24 @@ class ConnectedExecution:
             return
         except HoldingsUnavailable as refused:
             self._update(job.job_id, reason=f"WAITING:{refused.reason}")
+            return
+        # The observations read at submission meet the same boundary as the decision's: exact market and slot, complete
+        # provenance, a forward class and collection inside the current slot. A saved decision never qualifies a
+        # degraded later reading. The action stays saved and unsent; the reason is kept, and a later pass in the slot
+        # may read again (the intent expires at the next slot and is then released).
+        problem = None
+        if observed.provenance.get("market_binding_id") != agent.revision.market_binding_id:
+            problem = "OBSERVATIONS_WRONG_MARKET"
+        elif observed.inputs.observed_at() != job.decision_slot:
+            problem = "OBSERVATIONS_WRONG_TIME"
+        else:
+            problem, _ = observation_problem(observed.provenance, job.decision_slot, now, self._qualification)
+        if problem is not None:
+            self._update(job.job_id, reason=f"WAITING:SUBMISSION_{problem}",
+                         provenance={**job.provenance, "submission_observations": {
+                             "problem": problem, "checked_at": now.isoformat(),
+                             "evidence_class": observed.provenance.get("evidence_class"),
+                             "collected_at": observed.provenance.get("collected_at")}})
             return
         if intent.operation == "ENTRY":
             # The quote cost of the saved quantity at the fresh price. Unchanged prices reproduce the saved input;

@@ -27,9 +27,11 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
+from edge_os_api.admission.models import DecisionRow as AdmissionDecisionRow
+from edge_os_api.admission.service import acquire_wallet_lock
 from edge_os_api.execution.connected_identity import adopted_consent, derive_approval, resolve_agent
-from edge_os_api.execution.models import (MISSED_INTERVALS_KEPT, EvaluationJobRow, EvaluationOutcomeRow, QueueRow,
-                                          RecurringDeploymentRow, SubmissionAttemptRow)
+from edge_os_api.execution.models import (MISSED_INTERVALS_KEPT, EvaluationJobRow, EvaluationOutcomeRow, IntentRow,
+                                          QueueRow, RecurringDeploymentRow, SubmissionAttemptRow)
 from edge_os_api.execution.types import utc_iso
 from edge_os_api.execution.worker import RUNNABLE, SLOT, ConnectedExecution, JobRefused, decision_slot, job_view
 
@@ -133,9 +135,19 @@ class RecurringOperation:
             return inserted is not None, deployment_view(row)
 
     def end(self, owner_id: uuid.UUID, agent_id: str) -> dict[str, Any]:
-        """End the agent's ACTIVE deployment. Already sent actions and their liability stay as saved."""
+        """End the agent's ACTIVE deployment. Already sent actions and their liability stay as saved.
+
+        The end commits under the accepted per-wallet admission lock, the same lock `acquire_submission` holds while
+        it consults `DeploymentEndControl`. So either the end commits first and the action's submission ownership is
+        refused (no effect), or ownership commits first and the action stays an owned original with its liability and
+        receipt-only recovery."""
         now = self._clock()
         with self._factory() as session:
+            current = session.execute(select(RecurringDeploymentRow).where(
+                RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id,
+                RecurringDeploymentRow.state == "ACTIVE")).scalar_one_or_none()
+            if current is not None:
+                acquire_wallet_lock(session, owner_id, agent_id, current.wallet_id, current.network_id)
             row = session.execute(select(RecurringDeploymentRow).where(
                 RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id,
                 RecurringDeploymentRow.state == "ACTIVE").with_for_update()).scalar_one_or_none()
@@ -384,3 +396,30 @@ class RecurringOperation:
             RecurringDeploymentRow.owner_id == owner_id, RecurringDeploymentRow.agent_id == agent_id)
             .order_by(RecurringDeploymentRow.activated_at.desc(), RecurringDeploymentRow.deployment_id.desc())
             .limit(1)).scalar_one_or_none()
+
+
+class DeploymentEndControl:
+    """A submission control behind the accepted `StopReader` seam: an ended deployment owns no new submission.
+
+    Admission consults it inside `acquire_submission` under the per-wallet lock that `RecurringOperation.end` also
+    takes, so the end and the ownership transition are serialized. It denies only the exact ADMITTED action of an
+    occurrence whose deployment has ended, found through the saved admission decision (position and operation), the
+    saved intent and its job. Manual evaluations and other deployments are unaffected; an already owned action is
+    never reached here, so its original liability and reconciliation stay.
+    """
+
+    def denial_reasons(self, session: Session, verified_owner_id: uuid.UUID, *, agent_id: str, wallet_id: str,
+                       network_id: str, position_id: str, operation: str) -> list[str]:
+        ended = session.execute(
+            select(RecurringDeploymentRow.deployment_id)
+            .join(EvaluationJobRow, EvaluationJobRow.deployment_id == RecurringDeploymentRow.deployment_id)
+            .join(IntentRow, (IntentRow.owner_id == EvaluationJobRow.owner_id)
+                  & (IntentRow.decision_id == EvaluationJobRow.decision_id))
+            .join(AdmissionDecisionRow, (AdmissionDecisionRow.owner_id == IntentRow.owner_id)
+                  & (AdmissionDecisionRow.action_id == IntentRow.action_id))
+            .where(RecurringDeploymentRow.owner_id == verified_owner_id, RecurringDeploymentRow.state == "ENDED",
+                   EvaluationJobRow.agent_id == agent_id, EvaluationJobRow.wallet_id == wallet_id,
+                   EvaluationJobRow.network_id == network_id, IntentRow.position_id == position_id,
+                   IntentRow.operation == operation, AdmissionDecisionRow.status == "ADMITTED")
+            .limit(1)).scalar_one_or_none()
+        return ["DEPLOYMENT_ENDED"] if ended is not None else []

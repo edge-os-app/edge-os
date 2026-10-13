@@ -28,7 +28,7 @@ import financial_flows as ff
 import harness
 from edge_os_api.core.provider_ports import MarketObservations, ProviderUnavailable
 from edge_os_api.core.settings import load_settings
-from edge_os_api.execution.models import (DecisionRow, EvaluationJobRow, EvaluationOutcomeRow,
+from edge_os_api.execution.models import (DecisionRow, EvaluationJobRow, EvaluationOutcomeRow, IntentRow,
                                           RecurringDeploymentRow)
 from edge_os_api.execution.recurring_producer import ClockOffsetRefused, producer_clock
 from edge_os_api.execution.recurring_scheduler import RecurringOperation
@@ -775,3 +775,250 @@ def test_the_producer_refuses_an_unbounded_or_empty_run(env, flags):
                             cwd=harness.API_DIR, env=producer_env(env, "unused.jsonl"), capture_output=True, text=True,
                             timeout=120)
     assert result.returncode == 2 and "--interval must be positive" in result.stderr
+
+
+# ------------------------------------------------------------------------------- gate REVISE 1/3 (R1–R3)
+
+def admission_view(client: TestClient, headers: dict[str, str], action_id: str) -> dict[str, Any]:
+    action = client.get(f"/v1/actions/{action_id}", headers=headers).json()
+    return {"admission": [item["status"] for item in action["admission"]],
+            "reservations": sorted({item["state"] for item in action["reservations"]}),
+            "queue": (action["queue"] or {}).get("state"), "attempts": len(action["attempts"])}
+
+
+def test_an_end_committed_before_submission_ownership_wins_and_nothing_is_sent(journey, owner_a):
+    """R1, end first: the end commits after the worker's last outer check and before ownership is acquired."""
+    agent = "rec-race-end-first"
+    state = deployed(journey, owner_a, agent)
+    execution = journey.app.state.financial.execution
+    real_tick = execution.tick
+
+    def end_then_tick(*args, **kwargs):
+        ended = journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a)
+        assert ended.json()["end_reason"] == "OWNER_ENDED"
+        return real_tick(*args, **kwargs)
+
+    execution.tick = end_then_tick
+    try:
+        produce(journey, state["deployment"], 0)
+    finally:
+        execution.tick = real_tick
+    [job] = occurrences(journey, state["deployment"])
+    view = admission_view(journey, owner_a, job.action_id)
+    assert ff.effects(journey) == []
+    # The shared control denies at revalidation (execution lock) or, at the latest, at ownership (admission lock).
+    assert job.state == "COMPLETED" and job.outcome in ("REVALIDATION_DENIED", "SUBMISSION_NOT_OWNED")
+    assert view["reservations"] == ["RELEASED"] and "CANCELLED" in view["admission"]
+
+
+def test_an_end_committed_after_revalidation_is_still_refused_at_ownership(journey, owner_a):
+    """R1, the last point: revalidation passed, then the end commits, then `acquire_submission` runs under the lock."""
+    agent = "rec-race-end-at-ownership"
+    state = deployed(journey, owner_a, agent)
+    admission = journey.app.state.financial.admission
+    real_acquire = admission.acquire_submission
+    seen = []
+
+    def end_then_acquire(owner, action_id):
+        assert journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a).status_code == 200
+        status = real_acquire(owner, action_id)
+        seen.append(status)
+        return status
+
+    admission.acquire_submission = end_then_acquire
+    try:
+        produce(journey, state["deployment"], 0)
+    finally:
+        admission.acquire_submission = real_acquire
+    [job] = occurrences(journey, state["deployment"])
+    assert seen == ["STOPPED_SCOPE"] and ff.effects(journey) == []
+    assert (job.state, job.outcome) == ("COMPLETED", "SUBMISSION_NOT_OWNED")
+    view = admission_view(journey, owner_a, job.action_id)
+    assert view["reservations"] == ["RELEASED"] and "CANCELLED" in view["admission"]
+
+
+def test_ownership_acquired_before_the_end_keeps_the_original_and_its_recovery(journey, owner_a):
+    """R1, ownership first: the end commits after the action became submission-owned; the original proceeds."""
+    agent = "rec-race-owned-first"
+    state = deployed(journey, owner_a, agent)
+    admission = journey.app.state.financial.admission
+    real_acquire = admission.acquire_submission
+
+    def acquire_then_end(owner, action_id):
+        status = real_acquire(owner, action_id)
+        assert status == "ACQUIRED"
+        assert journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a).status_code == 200
+        return status
+
+    admission.acquire_submission = acquire_then_end
+    try:
+        produce(journey, state["deployment"], 0)
+    finally:
+        admission.acquire_submission = real_acquire
+    [job] = occurrences(journey, state["deployment"])
+    assert job.outcome == "SUBMITTED_CONFIRMED" and len(ff.effects(journey)) == 1
+    assert projection(journey, owner_a, agent)["deployment"]["end_reason"] == "OWNER_ENDED"
+
+
+def test_the_end_waits_for_the_wallet_lock_that_submission_ownership_holds(journey, owner_a):
+    """R1, serialization: while the per-wallet admission lock is held, the end cannot commit."""
+    import threading
+
+    from edge_os_api.admission.service import acquire_wallet_lock
+
+    agent = "rec-race-lock"
+    state = deployed(journey, owner_a, agent)
+    identity = state["deployment"]["identity"]
+    owner_id = occurrences_owner(journey, state)
+    holder = journey.app.state.session_factory()
+    acquire_wallet_lock(holder, owner_id, agent, identity["wallet_id"], identity["network_id"])
+    finished = threading.Event()
+    worker = threading.Thread(target=lambda: (journey.app.state.financial.recurring.end(owner_id, agent),
+                                              finished.set()))
+    worker.start()
+    try:
+        assert not finished.wait(1.0)  # blocked behind the lock
+        assert projection(journey, owner_a, agent)["deployment"]["state"] == "ACTIVE"
+    finally:
+        holder.rollback()  # releases the lock, as acquire_submission's commit does
+        holder.close()
+    worker.join(timeout=30)
+    assert finished.is_set() and projection(journey, owner_a, agent)["deployment"]["state"] == "ENDED"
+
+
+def occurrences_owner(client: TestClient, state: dict[str, Any]) -> uuid.UUID:
+    with client.app.state.session_factory() as session:
+        return session.get(RecurringDeploymentRow, uuid.UUID(state["deployment"]["deployment_id"])).owner_id
+
+
+def test_an_ended_deployment_never_blocks_a_manual_run_or_another_owner(journey, owner_a, owner_b):
+    """R1 scope: the end control denies only that deployment's admitted action."""
+    mine = deployed(journey, owner_a, "rec-scope-ended")
+    other = deployed(journey, owner_b, "rec-scope-other")
+    journey.post("/v1/agents/rec-scope-ended/deployment/end", headers=owner_a)
+    with at(journey, 0):
+        manual = ff.run_job(journey, ff.schedule(journey, owner_a, "rec-scope-ended", "manual").json())
+    produce(journey, other["deployment"], 0)
+    assert manual["outcome"] == "SUBMITTED_CONFIRMED"
+    assert occurrences(journey, other["deployment"])[0].outcome == "SUBMITTED_CONFIRMED"
+    assert occurrences(journey, mine["deployment"]) == []
+    assert len(ff.effects(journey)) == 2
+
+
+@pytest.mark.parametrize("change,reason", [
+    ({"finality": None}, "OBSERVATIONS_PROVENANCE_INCOMPLETE"),
+    ({"evidence_class": "RECORDED_RESPONSE"}, "OBSERVATIONS_NOT_FORWARD"),
+    ({"collected_at": "2000-01-01T00:00:00+00:00"}, "OBSERVATIONS_STALE"),
+    ({"market_binding_id": "other-market"}, "OBSERVATIONS_WRONG_MARKET"),
+    ("wrong-time", "OBSERVATIONS_WRONG_TIME")])
+def test_a_degraded_submission_observation_waits_and_sends_nothing(journey, owner_a, change, reason):
+    """R2: the decision's valid reading never qualifies a degraded reading at submission."""
+    agent = f"rec-sub-obs-{uuid.uuid4().hex[:6]}"
+    state = deployed(journey, owner_a, agent)
+    market = journey.app.state.financial.ports.market
+    real = market.observe
+    calls = []
+
+    def second_degraded(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return real(request)
+        if change == "wrong-time":
+            return real(dataclasses.replace(request, decision_time=request.decision_time - SLOT))
+        observed = real(request)
+        return MarketObservations(inputs=observed.inputs, provenance={**observed.provenance, **change})
+
+    market.observe = second_degraded
+    try:
+        produce(journey, state["deployment"], 0)
+    finally:
+        market.observe = real
+    [job] = occurrences(journey, state["deployment"])
+    assert len(calls) >= 2 and ff.effects(journey) == []  # the run loop may read again while waiting
+    assert (job.state, job.reason) == ("ENQUEUED", f"WAITING:SUBMISSION_{reason}")
+    assert job.provenance["submission_observations"]["problem"] == reason
+    [outcome] = outcome_rows(journey, state["deployment"])
+    assert outcome.outcome == "SIGNAL"  # the saved decision evidence is kept
+    view = admission_view(journey, owner_a, job.action_id)
+    assert view["admission"] == ["ADMITTED"] and view["attempts"] == 0
+    # Past its slot the unsent action is released through the accepted cancellation; it was never sent. (The next
+    # slot's own occurrence may trade on fresh observations; that is a different action.)
+    produce(journey, state["deployment"], 6)
+    view = admission_view(journey, owner_a, job.action_id)
+    assert view["reservations"] == ["RELEASED"] and view["attempts"] == 0
+    assert job.action_id not in {effect.action_id for effect in ff.effects(journey)}
+
+
+def crash_after_enqueue(client: TestClient, deployment: dict[str, Any]) -> EvaluationJobRow:
+    connected = client.app.state.financial.connected
+    real = connected._after_enqueue
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("authored stop after the intent was saved")
+
+    connected._after_enqueue = crash
+    try:
+        produce(client, deployment, 0)
+    finally:
+        connected._after_enqueue = real
+    [job] = occurrences(client, deployment)
+    return job
+
+
+def test_an_admitted_intent_saved_before_a_crash_is_released_when_the_owner_ends(journey, owner_a):
+    """R3: the saved intent is reconnected by its decision and released; no replacement and no effect."""
+    agent = "rec-orphan-end"
+    state = deployed(journey, owner_a, agent)
+    job = crash_after_enqueue(journey, state["deployment"])
+    assert (job.state, job.action_id) == ("DECIDED", None)
+    with journey.app.state.session_factory() as session:
+        [intent] = session.execute(select(IntentRow).where(IntentRow.decision_id == job.decision_id)).scalars().all()
+    journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a)
+    produce(journey, state["deployment"], 0)
+    [job] = occurrences(journey, state["deployment"])
+    assert (job.state, job.outcome, job.action_id) == ("COMPLETED", "DEPLOYMENT_ENDED", intent.action_id)
+    view = admission_view(journey, owner_a, intent.action_id)
+    assert view == {"admission": view["admission"], "reservations": ["RELEASED"], "queue": "DENIED_UNSENT",
+                    "attempts": 0} and "CANCELLED" in view["admission"]
+    with journey.app.state.session_factory() as session:
+        assert len(session.execute(select(IntentRow).where(IntentRow.agent_id == agent)).all()) == 1
+    assert ff.effects(journey) == []
+
+
+def test_an_admitted_intent_saved_before_a_crash_is_released_when_authority_changes(journey, owner_a, monkeypatch):
+    """R3 adjacent: a changed identity or consent also reconnects and releases the saved intent."""
+    agent = "rec-orphan-drift"
+    state = deployed(journey, owner_a, agent)
+    job = crash_after_enqueue(journey, state["deployment"])
+    connected = journey.app.state.financial.connected
+    monkeypatch.setattr(connected, "_context_for", lambda job: (None, None, "CONSENT_CHANGED"))
+    produce(journey, state["deployment"], 0)
+    [job] = occurrences(journey, state["deployment"])
+    assert (job.outcome, job.reason) == ("DENIED", "CONSENT_CHANGED") and job.action_id is not None
+    assert admission_view(journey, owner_a, job.action_id)["reservations"] == ["RELEASED"]
+    assert ff.effects(journey) == []
+
+
+def test_an_admitted_intent_saved_before_a_crash_resumes_once_when_nothing_changed(journey, owner_a):
+    """R3 control: without an end or a change, the saved intent is reused and sent exactly once."""
+    state = deployed(journey, owner_a, "rec-orphan-resume")
+    crash_after_enqueue(journey, state["deployment"])
+    produce(journey, state["deployment"], 0)
+    [job] = occurrences(journey, state["deployment"])
+    assert job.outcome == "SUBMITTED_CONFIRMED" and len(ff.effects(journey)) == 1
+    with journey.app.state.session_factory() as session:
+        assert len(session.execute(select(IntentRow).where(IntentRow.agent_id == "rec-orphan-resume")).all()) == 1
+
+
+def test_a_submission_owned_original_is_never_released_by_an_end(journey, owner_a):
+    """R1/R3 invariant: an unknown, owned original keeps its reservations after an end and settles from its receipt."""
+    agent = "rec-owned-end-fx-lost-ack"
+    state = deployed(journey, owner_a, agent)
+    produce(journey, state["deployment"], 0)
+    [job] = occurrences(journey, state["deployment"])
+    assert job.state == "SUBMITTED"
+    journey.post(f"/v1/agents/{agent}/deployment/end", headers=owner_a)
+    assert admission_view(journey, owner_a, job.action_id)["reservations"] != ["RELEASED"]
+    produce(journey, state["deployment"], 5)
+    assert occurrences(journey, state["deployment"])[0].outcome == "SUBMITTED_CONFIRMED"
+    assert len(ff.effects(journey)) == 1
