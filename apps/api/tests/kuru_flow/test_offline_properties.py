@@ -62,16 +62,34 @@ def test_no_sha3_substitution_for_ethereum_keccak():
     assert "Keccak" in combined
 
 
-def test_application_composition_does_not_reference_the_package():
-    import edge_os_api
+# The one authorized read-only application consumer (#58 ORIGINAL-LOCAL amendment A1, 2026-10-12), compared by
+# its full package-relative path. The offline-stage property (no application reference at all) held until then.
+AUTHORIZED_CONSUMERS = {"execution/original_transaction.py"}
 
-    app_root = Path(edge_os_api.__file__).parent
-    offenders = [
-        str(path.relative_to(app_root))
+
+def _application_references(app_root: Path) -> list[str]:
+    return [
+        path.relative_to(app_root).as_posix()
         for path in app_root.rglob("*.py")
         if path.parent != PACKAGE_DIR and "kuru_flow" in path.read_text(encoding="utf-8")
     ]
+
+
+def test_application_composition_references_the_package_only_from_its_authorized_consumer():
+    import edge_os_api
+
+    app_root = Path(edge_os_api.__file__).parent
+    offenders = [path for path in _application_references(app_root) if path not in AUTHORIZED_CONSUMERS]
     assert offenders == []
+
+
+def test_the_consumer_exception_does_not_cover_another_path(tmp_path):
+    app_root = tmp_path / "edge_os_api"
+    for relative in ("execution/original_transaction.py", "research/original_transaction.py", "worker.py"):
+        (app_root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (app_root / relative).write_text("from edge_os_api.kuru_flow import normalize_observation\n")
+    offenders = [path for path in _application_references(app_root) if path not in AUTHORIZED_CONSUMERS]
+    assert sorted(offenders) == ["research/original_transaction.py", "worker.py"]
 
 
 def test_candidate_is_frozen_and_immutable():

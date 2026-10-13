@@ -54,13 +54,33 @@ class Settings(BaseSettings):
     # application database, so a restarted process reconciles the original action and a verifier counts effects
     # independently. Without it the fixture keeps effects in process memory.
     fixture_effects_path: str | None = None
+    # Local and test only: a directory with the AUTHORED original-transaction recordings. Fixture agents carrying
+    # the reserved `fx-original` marker then use the recorded original-transaction clients. Production refuses it.
+    original_recordings_dir: str | None = None
     # `recorded` serves the authored SYNTHETIC recorded-response history bundle to owner investigation jobs. Production
     # refuses it. `unavailable` refuses every history collection. No setting selects an actual provider source.
     research_history_mode: Literal["recorded", "unavailable"] = "unavailable"
+    # Local and test only (#58 RESEARCH-PORTS-LOCAL). `authored_http` runs the native-shaped HTTP source through the
+    # accepted P07 HTTP clients over the application's AUTHORED transport; `recorded` keeps the recorded clients.
+    # `authored_fixture` runs Nansen report jobs over the AUTHORED Nansen transport. No setting names an endpoint,
+    # a credential or a transport; production refuses both local modes.
+    research_source_clients: Literal["recorded", "authored_http"] = "recorded"
+    nansen_research_mode: Literal["unavailable", "authored_fixture"] = "unavailable"
     # Per-owner research capacity. A job reserves its declared bounds before any adapter effect; unknown usage keeps
     # its whole reservation as liability.
     research_budget_provider_requests: int = Field(default=16, ge=0, le=10000)
     research_budget_compute_seconds: int = Field(default=900, ge=0, le=86400)
+    research_budget_nansen_credits: int = Field(default=50, ge=0, le=100000)
+    # Global capacity shared by every owner. Owner and global caps are frozen in `usage_local` at first use; a
+    # different value here later pauses new reservations (`quota_cap_mismatch`) until an operator records a change.
+    usage_global_provider_requests: int = Field(default=100000, ge=0, le=10_000_000)
+    usage_global_compute_seconds: int = Field(default=10_000_000, ge=0, le=1_000_000_000)
+    usage_global_nansen_credits: int = Field(default=10_000, ge=0, le=10_000_000)
+    # Runtime bounds shared by every API process: writes per owner per minute (PostgreSQL windows), research jobs an
+    # owner may have waiting or running at once, and the longest single SQL statement.
+    write_rate_per_minute: int = Field(default=600, ge=1, le=100_000)
+    research_max_active_jobs: int = Field(default=10, ge=1, le=1000)
+    database_statement_timeout_ms: int = Field(default=30_000, ge=1000, le=600_000)
 
     @field_validator("privy_app_id")
     @classmethod
@@ -128,6 +148,16 @@ class Settings(BaseSettings):
                 problems.append("database_url: test host must be loopback")
             if not (url.database or "").startswith("edge_os_test_"):
                 problems.append("database_url: test database name must start with edge_os_test_")
+        if self.env == "production":
+            # Names only: no message repeats a configured value, key or token.
+            if not (self.build_sha or "").strip():
+                problems.append("build_sha: production needs the exact build identity")
+            if url.host in {"127.0.0.1", "localhost", None}:
+                problems.append("database_url: production needs a hosted database, not a loopback host")
+            if url.query.get("sslmode") not in {"require", "verify-ca", "verify-full"}:
+                problems.append("database_url: production needs sslmode=require or stricter")
+            if self.fixture_effects_path is not None:
+                problems.append("fixture_effects_path: fixture effects are refused in production")
         if self.env == "production" and self.interpreter != "fixture":
             problems.append("interpreter: only the fixture interpreter is available in production")
         if self.env == "production" and self.wallet_provider != "unavailable":
@@ -136,8 +166,14 @@ class Settings(BaseSettings):
             problems.append("execution_mode: only the unavailable execution mode is allowed in production")
         if self.env == "production" and self.research_history_mode != "unavailable":
             problems.append("research_history_mode: recorded synthetic history is refused in production")
+        if self.env == "production" and self.research_source_clients != "recorded":
+            problems.append("research_source_clients: the authored HTTP transport is refused in production")
+        if self.env == "production" and self.nansen_research_mode != "unavailable":
+            problems.append("nansen_research_mode: the authored Nansen transport is refused in production")
         if self.fixture_effects_path is not None and self.execution_mode != "fixture":
             problems.append("fixture_effects_path: only the fixture execution mode records fixture effects")
+        if self.original_recordings_dir is not None and (self.env == "production" or self.execution_mode != "fixture"):
+            problems.append("original_recordings_dir: authored original recordings are local fixture mode only")
         if self.env == "production" and self.privy_app_id == TEST_APP_ID:
             problems.append("privy_app_id: the test app id is refused in production")
         if problems:

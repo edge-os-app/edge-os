@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
-import type { HistoryDeclaration, HistorySource, InvestigationJob, InvestigationReport, ResearchBudget } from "../lib/api";
+import type { HistoryDeclaration, HistorySource, InvestigationJob, InvestigationReport, ResearchBudget, TransportSummary } from "../lib/api";
 import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationProposal, InvestigationSaveResult } from "../lib/types";
 import { EffectComparisonPanel } from "./EffectComparisonPanel";
+import { ResearchNansenReport } from "./ResearchNansenReport";
 
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
@@ -457,6 +458,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
         </div>
       ) : null}
       <HistoryInvestigation intakeId={intakeId} interpretationRevisionId={interpretationRevisionId} />
+      <ResearchNansenReport intakeId={intakeId} />
     </section>
   );
 }
@@ -533,6 +535,18 @@ function JobReport({ report }: { report: InvestigationReport }) {
       {content.contrary_findings.length ? <p className="status stop">Contrary findings kept: {content.contrary_findings.map((item) => `${item.variant_id} ${item.finding}`).join("; ")}</p> : null}
       {content.protected_partitions?.length ? <p className="muted">Not read: {content.protected_partitions.map((item) => `${item.role} partition`).join(", ")}.</p> : null}
     </div>
+  );
+}
+
+/** What the P07 transport computed from a native recording, apart from what the recording only declares. */
+function TransportFacts({ transport }: { transport: TransportSummary }) {
+  const corroboration = transport.corroboration;
+  return (
+    <p className="muted" data-testid="history-transport">
+      {transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+        ? `Authored HTTP responses served on this server through the accepted P07 HTTP clients (${Object.values(transport.client_classes ?? {}).join(", ")}), no network. Not provider data: `
+        : "Native recording, replayed locally: "}{transport.envio_pages_framed} Envio pages framed; chain id checked against recorded responses: {transport.chain_id === null ? "not read" : `${transport.chain_id}${transport.chain_network ? ` (${transport.chain_network})` : " (not Monad)"}`}; receipt corroboration {corroboration.class}, {corroboration.sample_size} of {corroboration.population_size} checked, {corroboration.mismatches} mismatches{transport.corroboration_reason ? ` (${transport.corroboration_reason})` : ""}. Client calls: {Object.entries(transport.client_calls).map(([name, count]) => `${name} ${count}`).join(", ")}. Recorded declarations, not read by the application: {transport.recorded_declarations.join(", ").replaceAll("_", " ")}.
+    </p>
   );
 }
 
@@ -617,7 +631,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         alternatives: ["Short-term noise explains any difference."],
         unknowns: ["Recorded responses are synthetic; no real pool behaviour is measured."] },
       configuration: {
-        question, source: { source_id: source.source_id, profile_sha256: source.profile_sha256, evidence_class: "RECORDED_RESPONSE" },
+        question, source: { source_id: source.source_id, profile_sha256: source.profile_sha256, evidence_class: source.evidence_class },
         market: source.market, window: source.window,
         variants: variants.map((variant_id, index) => ({ variant_id, hypothesis: `Adopted rule ${index + 1}` })),
         direction, horizons: [{ value: 5, unit: "MINUTES" }], partitions,
@@ -633,7 +647,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         resource_bounds: { provider_requests: Number(bounds.provider_requests), compute_seconds: Number(bounds.compute_seconds),
           max_pages: Math.min(Number(bounds.provider_requests), source.page_requests_recorded + 1) || 1, max_rows: 2000,
           max_bytes: 1_048_576, deadline_seconds: Number(bounds.deadline_seconds) },
-        permitted_access: ["RECORDED_RESPONSE"], stopping_rule: "Stop after the declared evaluations on the declared window.",
+        permitted_access: [source.evidence_class], stopping_rule: "Stop after the declared evaluations on the declared window.",
         budget_version: "edge-os.research-budget/1",
       },
       field_origins: Object.fromEntries(HISTORY_FIELDS.map((name) => [name, name === "question"
@@ -743,6 +757,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               <p role="status">{STATE_COPY[job.state] ?? job.state}{job.terminal_reason ? ` (${job.terminal_reason})` : ""}</p>
               <p className="muted">Attempts and events: {job.events.map((event) => event.kind).join(" → ")}</p>
               <p className="muted">Provider requests: reserved {job.budget.reserved?.provider_requests ?? 0}, consumed {job.budget.consumed?.provider_requests ?? 0}, released {job.budget.released?.provider_requests ?? 0}, unknown liability {job.budget.unknown_liability?.provider_requests ?? 0}.</p>
+              {job.dataset?.transport ? <TransportFacts transport={job.dataset.transport} /> : null}
               {job.dataset ? <p>Dataset <span className="mono">{job.dataset.dataset_id}</span>: {job.dataset.summary.status}, {job.dataset.summary.verdict.overall}, {job.dataset.summary.binding_state}{job.dataset.summary.unavailable_states.length ? `; ${job.dataset.summary.unavailable_states.join(", ")}` : ""}; provider usage {job.dataset.summary.provider_requests_state}.</p> : null}
               {RUNNING.has(job.state) && !job.cancel_requested_at ? <button className="btn btn-secondary" type="button" onClick={() => void cancel(job)} disabled={busy}>Cancel this job</button> : null}
               {!RUNNING.has(job.state) && job.state !== "REPORTED" ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(true)} disabled={busy}>Retry as a new job</button> : null}
@@ -757,12 +772,22 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         <div className="stack">
           <div className="field">
             <label htmlFor="history-source">Recorded source</label>
-            <select id="history-source" className="input" value={sourceId} onChange={(event) => { setSourceId(event.target.value); setAdopted(false); }}>
+            <select id="history-source" className="input" value={sourceId} onChange={(event) => {
+              const next = sources.find((item) => item.source_id === event.target.value);
+              setSourceId(event.target.value); setAdopted(false);
+              // A native recording also needs one chain read and one receipt per corroborated swap.
+              if (next) setBounds((current) => ({ ...current,
+                provider_requests: String(next.transport ? next.transport.provider_requests_needed : next.page_requests_recorded) }));
+            }}>
               <option value="">Choose a recorded source</option>
-              {sources.map((item) => <option key={item.source_id} value={item.source_id}>{item.title}</option>)}
+              {sources.map((item) => <option key={item.source_id} value={item.source_id} disabled={item.available === false}>
+                {item.title}{item.available === false ? " (not available on this server)" : ""}</option>)}
             </select>
           </div>
           {source ? <p className="muted">{source.evidence_class}, {source.content_label}. Pool <span className="mono">{source.market.pool_address}</span>; window {source.window.start} to {source.window.end}.</p> : null}
+          {source?.transport ? <p className="muted" data-testid="history-source-transport">{source.transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+            ? "Served through the accepted P07 HTTP clients over authored responses on this server, with no network and no credential."
+            : "Replayed through the accepted Envio HyperSync transport with QuickNode receipt checks, against recorded responses only."} It needs {source.transport.provider_requests_needed} provider requests: {source.page_requests_recorded} pages, one chain read and {source.transport.corroboration_sample_size} receipts.</p> : null}
           <div className="field">
             <label htmlFor="history-hypothesis">Your hypothesis in your own words</label>
             <textarea id="history-hypothesis" className="input" value={hypothesis} onChange={(event) => { setHypothesis(event.target.value); setAdopted(false); }} />

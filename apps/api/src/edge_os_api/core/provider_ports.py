@@ -22,11 +22,16 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from edge_os_api.execution.current_holdings import HoldingsObservation, HoldingsUnavailable, read_rpc_holdings
+from edge_os_api.execution.original_recordings import OriginalRecordings
+from edge_os_api.execution.original_transaction import (EVIDENCE_CLASS, OriginalClients, RouteProfile,
+                                                        wallet_address)
 from edge_os_api.execution.transport import FixtureAcknowledgementLost, PreparedSubmission, TransportOutcome
 from edge_os_api.execution.types import AssetAmount, EvaluationInputs, InputObservation
 from edge_os_api.funding.observation import DepositObservation, ObservationUnavailable
@@ -46,6 +51,8 @@ MARKER_REVERT = "fx-revert"
 MARKER_DENY = "fx-deny"
 MARKER_DEPOSIT_PENDING = "fx-deposit-pending"
 MARKER_REMOVAL_PENDING = "fx-removal-pending"
+# Selects the recorded original-transaction path (only with local `original_recordings_dir`).
+MARKER_ORIGINAL = "fx-original"
 
 FIXTURE_PRICE_QUOTE_PER_BASE = 2  # one authored constant price; never a market fact
 
@@ -324,7 +331,7 @@ class FixtureReceipts:
 
 class HoldingsPort(Protocol):
     def observe(self, *, owner_id: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
-                assets: list[tuple[str, int]]) -> dict[str, AssetAmount]: ...
+                assets: list[tuple[str, int]]) -> HoldingsObservation: ...
 
 
 class FixtureHoldings:
@@ -340,7 +347,7 @@ class FixtureHoldings:
         self._factory, self._chain = factory, chain
 
     def observe(self, *, owner_id: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
-                assets: list[tuple[str, int]]) -> dict[str, AssetAmount]:
+                assets: list[tuple[str, int]]) -> HoldingsObservation:
         totals = {asset_id: 0 for asset_id, _ in assets}
         with self._factory() as session:
             for row in session.execute(select(FundingCreditRow).where(
@@ -359,8 +366,36 @@ class FixtureHoldings:
             for amount in spent:
                 if amount and amount["asset_id"] in totals:
                     totals[amount["asset_id"]] -= int(amount["raw"])
-        return {asset_id: AssetAmount(asset_id=asset_id, raw=str(max(totals[asset_id], 0)), decimals=decimals)
-                for asset_id, decimals in assets}
+        # The authored account is computed at the caller's read; it carries no supplied observation time.
+        return HoldingsObservation(
+            assets={asset_id: AssetAmount(asset_id=asset_id, raw=str(max(totals[asset_id], 0)), decimals=decimals)
+                    for asset_id, decimals in assets},
+            observed_at=None, source=self.source_id, evidence_class=FIXTURE_EVIDENCE, finality="AUTHORED")
+
+
+class RecordedOriginalHoldings:
+    """Holdings for `fx-original` agents, read through the recorded observation RPC at the bound wallet address."""
+
+    source_id = "recorded-holdings/1"
+
+    def __init__(self, factory: sessionmaker[Session], recordings: OriginalRecordings, fallback: Any,
+                 clock: Callable[[], dt.datetime]) -> None:
+        self._factory, self._recordings, self._fallback, self._clock = factory, recordings, fallback, clock
+
+    def observe(self, *, owner_id: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
+                assets: list[tuple[str, int]]) -> HoldingsObservation:
+        if MARKER_ORIGINAL not in agent_id:
+            return self._fallback.observe(owner_id=owner_id, agent_id=agent_id, wallet_id=wallet_id,
+                                          network_id=network_id, assets=assets)
+        with self._factory() as session:
+            address = wallet_address(session, owner_id, agent_id, wallet_id)
+        if address is None:
+            raise ProviderUnavailable("holdings")
+        try:
+            return read_rpc_holdings(self._recordings.clients(self._clock).observer, wallet_address=address,
+                                     assets=assets, source=self.source_id, evidence_class=EVIDENCE_CLASS)
+        except HoldingsUnavailable:
+            raise ProviderUnavailable("holdings") from None
 
 
 # --------------------------------------------------------------------- deposits and removal
@@ -444,24 +479,38 @@ class ProviderPorts:
     removals: Any
     chain: FixtureChain | None = None
     labels: dict[str, str] = field(default_factory=dict)
+    original: OriginalRecordings | None = None
+    clock: Callable[[], dt.datetime] = utc_now  # the recorded original clients' replay clock
 
     def transport(self, *, agent_id: str, plan: PlannedFixtureEffect, operation: str) -> Any:
         if self.chain is None:
             raise ProviderUnavailable("transport")
         return FixtureSubmissionTransport(self.chain, agent_id, plan, operation)
 
+    def original_clients(self, agent_id: str) -> tuple[OriginalClients, RouteProfile] | None:
+        """The injected original-transaction clients for a reserved `fx-original` agent, else None."""
+        if self.original is None or MARKER_ORIGINAL not in agent_id:
+            return None
+        return self.original.clients(self.clock), self.original.profile
+
     def describe(self) -> dict[str, Any]:
         return {"mode": self.mode, "evidence_class": FIXTURE_EVIDENCE if self.mode == FIXTURE_MODE else None,
                 "fixture_effects": len(self.chain.effects()) if self.chain is not None else None}
 
 
-def build_provider_ports(mode: str, factory: sessionmaker[Session], effects_path: str | None = None) -> ProviderPorts:
+def build_provider_ports(mode: str, factory: sessionmaker[Session], effects_path: str | None = None,
+                         original_dir: str | None = None) -> ProviderPorts:
     if mode == FIXTURE_MODE:
         chain = FixtureChain(effects_path)
-        return ProviderPorts(mode=FIXTURE_MODE, market=FixtureMarketObservations(), quotes=FixtureQuotes(),
-                             holdings=FixtureHoldings(factory, chain), receipts=FixtureReceipts(chain),
-                             deposits=FixtureDepositObserver(factory), removals=FixtureRemovalObserver(),
-                             chain=chain)
+        holdings: Any = FixtureHoldings(factory, chain)
+        original = OriginalRecordings.load(original_dir) if original_dir else None
+        ports = ProviderPorts(mode=FIXTURE_MODE, market=FixtureMarketObservations(), quotes=FixtureQuotes(),
+                              holdings=holdings, receipts=FixtureReceipts(chain),
+                              deposits=FixtureDepositObserver(factory), removals=FixtureRemovalObserver(),
+                              chain=chain, original=original)
+        if original is not None:  # the recorded holdings follow the ports' replay clock
+            ports.holdings = RecordedOriginalHoldings(factory, original, holdings, lambda: ports.clock())
+        return ports
     return ProviderPorts(mode=UNAVAILABLE_MODE, market=_Unavailable("observations"), quotes=_Unavailable("quote"),
                          holdings=_Unavailable("holdings"), receipts=_Unavailable("receipt"),
                          deposits=UnavailableDepositObserver(), removals=_Unavailable("removal"))

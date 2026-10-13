@@ -31,6 +31,7 @@ from tokens import OWNER_A, OWNER_B, OWNER_C, TestSigner  # noqa: E402
 from p05_phase import run_p05_phase  # noqa: E402
 import financial_phase  # noqa: E402
 import research_phase  # noqa: E402
+import runtime_phase  # noqa: E402
 
 THESIS = ("Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
           "Spot only.")
@@ -385,6 +386,10 @@ def main() -> int:
         ok &= rec.step("web health", True, {"url": web_url})
 
         token_a, token_b, token_c = signer.token(OWNER_A), signer.token(OWNER_B), signer.token(OWNER_C)
+        # SOURCE-LOCAL native journey: one owner per browser width, each inside its own research budget.
+        native_tokens = {name: signer.token(f"did:privy:test-native-{name}") for name in ("desktop", "mobile-390")}
+        # RESEARCH-PORTS-LOCAL journey: one more owner per width for the HTTP-client job and the Nansen report.
+        native_tokens.update({f"ports-{name}": signer.token(f"did:privy:test-ports-{name}") for name in ("desktop", "mobile-390")})
         token_bad = TestSigner().token(OWNER_A)
         p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
         rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
@@ -398,6 +403,10 @@ def main() -> int:
 
         if not args.skip_ui:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
+                      "P03_TOKEN_NATIVE_DESKTOP": native_tokens["desktop"],
+                      "P03_TOKEN_NATIVE_MOBILE_390": native_tokens["mobile-390"],
+                      "P03_TOKEN_PORTS_DESKTOP": native_tokens["ports-desktop"],
+                      "P03_TOKEN_PORTS_MOBILE_390": native_tokens["ports-mobile-390"],
                       "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
                       "P19_AGENT_B_RECORD_ID": p19_fixtures["agent_record_ids"]["agent-b"],
                       "P19_LONG_MONITORING_RECORD_ID": p19_fixtures["long_monitoring_record_id"],
@@ -481,6 +490,8 @@ def main() -> int:
                                storage_after_restart == storage_before_restart,
                                {"spot_replay_runs": len(storage_before_restart["spot_replay_runs"]),
                                 "spot_replay_configurations": len(storage_before_restart["spot_replay_configurations"])})
+                # After every restart comparison, so its writes cannot change them.
+                ok &= runtime_phase.drive(rec, pg, env, evidence, ui_env, run_playwright, processes, signer)
 
         if not args.skip_ui and not args.skip_p05:
             ok &= run_p05_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,
@@ -494,8 +505,18 @@ def main() -> int:
             time.sleep(args.hold_seconds)
 
         logs = [p for p in (evidence / "logs").glob("*.log")]
-        secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_c, token_bad, signer.private_pem))]
+        secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_c, token_bad, *native_tokens.values(), signer.private_pem))]
         ok &= rec.step("logs contain no token or private key", not secrets_seen, secrets_seen)
+        signed = financial_phase.authored_signed_bytes(evidence)
+        texts = [*logs, *(evidence / "ui").glob("*.json"), *evidence.glob("ui-*.log")]
+        signed_seen = [str(p.name) for p in texts if any(raw in p.read_text(errors="ignore") for raw in signed)]
+        ok &= rec.step("logs and browser results contain no raw signed transaction bytes", bool(signed) and not signed_seen,
+                       {"signed_vectors": len(signed), "found_in": signed_seen})
+        # RESEARCH-PORTS-LOCAL: the authored bearer value and authored credit headers stay inside the server process.
+        authored = ("authored-local-fixture", "x-nansen-credits-remaining")
+        authored_seen = [str(p.name) for p in texts if any(value in p.read_text(errors="ignore") for value in authored)]
+        ok &= rec.step("logs and browser results contain no authored bearer value or provider header",
+                       not authored_seen, authored_seen)
     except Exception as error:  # noqa: BLE001
         rec.step("run aborted", False, f"{type(error).__name__}: {error}")
         ok = False

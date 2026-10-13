@@ -13,10 +13,14 @@ from sqlalchemy.orm import Session, sessionmaker
 API_ROOT = Path(__file__).resolve().parents[3]
 
 
-def make_engine(url: str) -> Engine:
+def make_engine(url: str, statement_timeout_ms: int | None = None) -> Engine:
+    """`statement_timeout_ms` bounds every SQL statement on these connections; None keeps the server default."""
+    connect_args: dict[str, object] = {"connect_timeout": 5}
+    if statement_timeout_ms is not None:
+        connect_args["options"] = f"-c statement_timeout={int(statement_timeout_ms)}"
     return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=10, pool_timeout=10,
                          hide_parameters=True,  # SQL errors must not write the user's saved words to the log
-                         connect_args={"connect_timeout": 5})
+                         connect_args=connect_args)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

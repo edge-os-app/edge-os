@@ -38,6 +38,11 @@ class FixtureWalletProvider:
     """
 
     LOSE_RESPONSE_SUFFIX = "fixture-lost-response"
+    # Reserved marker (#58 ORIGINAL-LOCAL amendment A1): an agent id containing it gets the AUTHORED public
+    # test-signer address that the frozen original-transaction fixtures were signed for. The address is the
+    # eth-account documentation example key's sender; this process never holds that key.
+    ORIGINAL_SIGNER_MARKER = "fx-original"
+    AUTHORED_TEST_SIGNER_ADDRESS = "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23"
 
     def __init__(self) -> None:
         self.create_calls = 0
@@ -70,6 +75,9 @@ class FixtureWalletProvider:
         owner_id = self._owner_of(wallet_id)
         if owner_id is None:
             raise WalletProviderUnavailable()
+        if self.ORIGINAL_SIGNER_MARKER in wallet_id.split(":", 2)[2]:
+            return WalletEvidence(wallet_id=wallet_id, owner_id=owner_id, chain_type="ethereum",
+                                  address=self.AUTHORED_TEST_SIGNER_ADDRESS)
         digest = hashlib.sha256(wallet_id.encode("utf-8")).hexdigest()
         return WalletEvidence(wallet_id=wallet_id, owner_id=owner_id, chain_type="ethereum",
                               address="0x" + digest[:40])

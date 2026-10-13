@@ -20,6 +20,7 @@ from edge_os_api.core.errors import not_found
 from edge_os_api.core.provider_ports import ProviderUnavailable
 from edge_os_api.core.request_schemas import StrictModel
 from edge_os_api.execution.connected_identity import resolve_agent
+from edge_os_api.execution.original_transaction import wallet_address
 from edge_os_api.funding import service
 from edge_os_api.funding.persistence import load_profile, to_profile
 from edge_os_api.funding.types import AssetAmount, FundingBalance, FundingFlowRecord, ReconciliationResult
@@ -97,10 +98,12 @@ def read_funding(agent_id: str, request: Request, principal: Principal = Depends
             owner_id=principal.user_id, agent_id=agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id,
             assets=[(agent.quote.asset_id, agent.quote.decimals), (agent.base.asset_id, agent.base.decimals),
                     (agent.gas.asset_id, agent.gas.decimals)])
-        holdings = {"state": "OBSERVED", "evidence_class": ports.describe()["evidence_class"],
-                    "assets": [amount(value) for value in observed.values()]}
+        address = (wallet_address(session, principal.user_id, agent_id, agent.wallet_id)
+                   if observed.wallet_address is not None else None)
+        holdings = observed.view(observed.refusal(wallet_address=address, chain_id=agent.network_number,
+                                                  now=ports.clock()))
     except ProviderUnavailable:
-        holdings = {"state": "UNAVAILABLE", "evidence_class": None, "assets": []}
+        holdings = {"state": "UNAVAILABLE", "reason": "HOLDINGS_UNAVAILABLE", "evidence_class": None, "assets": []}
     allowances = [summary.model_dump(mode="json") for summary in request.app.state.financial.admission.balances(
         principal.user_id, agent_id=agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id)]
     return {"agent_id": agent_id, "wallet_id": agent.wallet_id, "network_id": agent.network_number,

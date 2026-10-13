@@ -106,3 +106,51 @@ Next blockers, each with its owner:
 6. **Opaque `program` enforcement.** A demonstrated bound on the opaque route bytes, or a recorded material architecture decision (builder).
 
 Bounded release request: approve **one** exact live packet with the six setup rows and the one controlled swap, on one network, with the ceilings above. Once approved, ordinary in-scope tests need no repeated permission. Authority, capacity or anti-abuse failures escalate with evidence. No automatic fallback to another route, funded mainnet or weaker policy.
+
+## 9. Independent policy binding (added 2026-10-12)
+
+This section extends the packet. Sections 1 to 8 stay intact. The feasibility check is in [PRIVY_POLICY_BINDING_FEASIBILITY.md](PRIVY_POLICY_BINDING_FEASIBILITY.md). It grants no provider or policy authority.
+
+### 9.1 Exact proposed method and configuration
+
+| Field | Proposed value | Class |
+|---|---|---|
+| Provider policy method | a Privy policy rule on `eth_signTransaction` | `DOCUMENTED` (P1, P3) |
+| Chain condition | `ethereum_transaction.chain_id` `eq` the selected chain id | `DOCUMENTED` (P3) |
+| Entrypoint condition | `ethereum_transaction.to` `eq` the selected entrypoint | `DOCUMENTED` (P3) |
+| Transaction value condition | `ethereum_transaction.value` `eq` the approved input raw for a native input, or `0` for an ERC-20 input | `DOCUMENTED` (P3) |
+| Function condition | `ethereum_calldata.function_name` `eq` `executeSwap` or `executeSwapWithReceiver`, with the pinned ABI | `DOCUMENTED` (P3, P4) |
+| Argument conditions | `ethereum_calldata` `eq` on the intent, fee and `program` arguments | **`UNKNOWN`** (no `bytes` or tuple-component example) |
+| Policy owner | an explicitly bound policy-resource owner outside executor control (a Privy policy `owner_id`) | design requirement (P8, P10) |
+| Executor key | an additional signer with a restrictive override policy | design requirement (P7, P9) |
+
+### 9.2 Positive control
+
+One offline permitted preparation with **no second signature**, then one provider-signed positive control the policy must allow. Persist the decision, input, mandate, intent, reservations and provider references. Reuse the preserved acceptance sequence in section 6.
+
+### 9.3 Independent denial evidence
+
+A dedicated, isolated request the provider must deny, separate from any exhausted local counter. Candidate denials: changed `program` bytes, changed input or output asset, changed amount, changed minimum output, changed recipient, changed fee, changed chain, changed entrypoint and changed function. A malformed encoding, a local denial or an insufficient-funds simulation is **not** policy-denial evidence.
+
+### 9.4 Authority separation
+
+The application authorization key must not be a member of the wallet-owning key quorum. If it is, a satisfying member of that quorum can unilaterally update the wallet policy and signers (P10).
+
+Wallet ownership and policy-resource ownership are different. A Privy policy owner is optional; an **ownerless policy is updatable with the application secret alone** (P8). A user-owned wallet with the application key only as an additional signer therefore does **not** by itself separate policy administration. Require an explicitly bound policy-resource owner outside executor control before any future attachment or signing release. Prove the executor cannot loosen the policy before any real action. Missing ownership evidence keeps the action closed.
+
+### 9.5 Finite request, gas and action limits
+
+The exact request cap, provider-request cap, gas budget and action/attempt ceiling stay `UNSET` (sections 3 and 5). An unknown limit is not zero and does not release the action. The local parse and simulation bounds are finite: `MAX_RULES`, `MAX_CONDITIONS_PER_RULE` and `MAX_CONDITION_VALUE_ITEMS`.
+
+### 9.6 Stop conditions
+
+- Any unexpected authorization of an ostensibly denied request: halt, retain the breach and residual exposure, stop new work.
+- Any policy mismatch or provider refusal: stop the affected capability and do not weaken the policy.
+- Any CAPTCHA, consent or payment boundary: stop.
+
+### 9.7 Unresolved fields
+
+- Exact `program` byte equality at the provider: `UNKNOWN`.
+- Tuple-component calldata path support: `UNKNOWN`.
+- Deployed mainnet bytecode identity: `UNKNOWN`.
+- Policy-resource owner and administration separation: `UNRESOLVED` (the prepared request carries no policy owner; `validate_binding` returns `POLICY_ADMIN_OWNER_MISSING` and `POLICY_ADMIN_NOT_SEPARATED`).

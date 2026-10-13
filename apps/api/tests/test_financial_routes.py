@@ -147,11 +147,12 @@ def test_unknown_agent_and_action_are_not_found(journey, owner_a):
 
 def test_production_refuses_fixture_execution_and_fixture_effects(env):
     from edge_os_api.core.settings import ConfigError, load_settings
+    hosted = "postgresql+psycopg://u:p@db.internal/edge?sslmode=require"  # Stage 2: hosted, TLS, build identity
     production = {**env, "EDGE_OS_ENV": "production", "EDGE_OS_PRIVY_APP_ID": "real-app",
-                  "EDGE_OS_CORS_ALLOWED_ORIGINS": "https://app.example"}
+                  "EDGE_OS_CORS_ALLOWED_ORIGINS": "https://app.example", "EDGE_OS_BUILD_SHA": "0" * 40}
     load_settings({key: value for key, value in production.items() if not key.startswith("EDGE_OS_DATABASE")}
-                  | {"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@db.internal/edge"})
+                  | {"EDGE_OS_DATABASE_URL": hosted})
     for extra in ({"EDGE_OS_EXECUTION_MODE": "fixture"}, {"EDGE_OS_FIXTURE_EFFECTS_PATH": "/tmp/x"}):
         with pytest.raises(ConfigError) as refused:
-            load_settings({**production, "EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@db.internal/edge", **extra})
+            load_settings({**production, "EDGE_OS_DATABASE_URL": hosted, **extra})
         assert "execution_mode" in str(refused.value) or "fixture_effects_path" in str(refused.value)

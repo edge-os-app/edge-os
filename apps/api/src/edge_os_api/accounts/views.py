@@ -82,7 +82,9 @@ class ApprovalTerms(StrictModel):
 
 class AccountViewContent(StrictModel):
     owner_id: str
-    evidence_class: Literal["SYNTHETIC_AUTHORED"]
+    # SYNTHETIC_AUTHORED: saved P19 records. SERVICE_PROJECTION: read-only projections of the connected financial
+    # rows (`accounts/service_projection.py`); they are never stored as account records.
+    evidence_class: Literal["SYNTHETIC_AUTHORED", "SERVICE_PROJECTION"]
     record_kind: Literal["AGENT", "POSITION", "ACTION", "CAPITAL_FLOW", "MONITORING", "EDGE_EVIDENCE", "PERMISSION_SNAPSHOT"]
     agent_id: str = Field(min_length=1, max_length=200)
     wallet_id: str | None = None
@@ -307,6 +309,30 @@ def list_account_records(
         "record_kind": record_kind,
     }, limit, offset)
     return {"records": records, "next_offset": next_offset}
+
+
+@router.get("/service")
+def list_service_projection(
+    request: Request,
+    agent_id: str | None = Query(default=None, max_length=200),
+    principal: Principal = Depends(require_principal),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Read-only projections of the owner's connected funding, admission, execution, recovery and removal rows."""
+    from edge_os_api.accounts.service_projection import PROJECTION_VERSION, project
+
+    settings = request.app.state.settings
+    try:
+        records = project(session, principal.user_id, agent_id)
+    except SQLAlchemyError:
+        session.rollback()
+        raise service_unavailable() from None
+    return {"schema_version": PROJECTION_VERSION, "source": "SERVICE_PROJECTION",
+            "ports": "FIXTURE" if settings.execution_mode == "fixture" else "UNAVAILABLE",
+            "notice": ("Projected from the saved connected-service rows; nothing is written. Fixture ports are "
+                       "authored test providers, not chain evidence.") if settings.execution_mode == "fixture"
+                      else "Projected from the saved connected-service rows; nothing is written.",
+            "records": records}
 
 
 @router.get("/source/{record_id}")

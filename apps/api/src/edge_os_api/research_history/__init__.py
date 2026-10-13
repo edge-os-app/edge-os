@@ -32,25 +32,43 @@ from edge_os_api.research_history.provider_transport import (
     SourceFailure,
     SourceTimeout,
 )
+from edge_os_api.research_history.quicknode_corroboration import (
+    QuickNodeRpcClient,
+    corroborate_records,
+    read_chain_id,
+)
+from edge_os_api.research_history.source_transport import (
+    EnvioHypersyncSource,
+    EnvioQueryClient,
+    SourceContext,
+    SourceContractError,
+)
 
 __all__ = [
     "AdapterInputError",
     "CollectionLimits",
+    "EnvioHypersyncSource",
+    "EnvioQueryClient",
     "HistoryRequest",
     "InvalidLimits",
     "MANIFEST_SCHEMA",
+    "QuickNodeRpcClient",
     "RecordedResponseSource",
     "ResponseSource",
     "SourceCancelled",
+    "SourceContext",
+    "SourceContractError",
     "SourceFailure",
     "SourceTimeout",
     "build_manifest",
     "collect",
+    "corroborate_records",
     "load_manifest",
     "load_raw_artifact",
     "manifest_sha256",
     "normalize",
     "project_binding",
+    "read_chain_id",
     "save_manifest",
     "save_raw_artifact",
     "verify_manifest",

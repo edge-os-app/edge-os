@@ -21,6 +21,7 @@ from edge_os_api.agent_context import controls as agent_context
 from edge_os_api.research import comparison_runs as effect_run
 from edge_os_api.research import investigation_adoption as investigation_adoption
 from edge_os_api.research import history_dataset, investigation_jobs, market_adoption
+from edge_os_api.usage import quota, rate_limit
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service as service
 from edge_os_api.research.attempt_store import AdvisoryLockGuard
@@ -31,7 +32,7 @@ from edge_os_api.core.authentication import Principal, Verifier, require_princip
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
 from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
 from edge_os_api.research.fixture_interpreter import samples
-from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, PublicationBody, RetryBody, SpotReplayBody
+from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, NansenReportBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
 from edge_os_api.wallet_setup import router as wallet_setup
 from edge_os_api.wallet_setup.adapter import build_wallet_provider
@@ -110,7 +111,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     settings = settings or load_settings()
     if settings.interpreter == "hermes_local" and hermes_runner is None:
         raise ConfigError("invalid configuration: interpreter: hermes_local needs a Hermes runner")
-    engine = make_engine(settings.database_url)
+    engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     try:
         require_head(engine)
     except SQLAlchemyError:
@@ -163,13 +164,37 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
             revision, head = current_revision(engine), script_head()
             with engine.connect() as connection:
                 connection.execute(text("select 1"))
+            with session_factory() as session:
+                mismatches = quota.cap_mismatches(session, investigation_jobs.caps(settings))
         except SQLAlchemyError:
-            return JSONResponse({"status": "unavailable"}, status_code=503)
-        if revision != head or not verifier.keys:
-            return JSONResponse({"status": "unavailable"}, status_code=503)
-        return JSONResponse({"status": "ready", "schema_revision": revision})
+            return JSONResponse({"status": "unavailable", "reason": "database_unavailable"}, status_code=503)
+        # Reason codes only; no value from configuration or the database is echoed.
+        if revision != head:
+            return JSONResponse({"status": "unavailable", "reason": "schema_drift"}, status_code=503)
+        if not verifier.keys:
+            return JSONResponse({"status": "unavailable", "reason": "verification_keys_missing"}, status_code=503)
+        shared = [item for item in mismatches if item["scope"] == "GLOBAL"]
+        if shared:  # the shared cap affects every owner
+            return JSONResponse({"status": "unavailable", "reason": "quota_cap_mismatch",
+                                 "resources": sorted(item["resource"] for item in shared)}, status_code=503)
+        ready: dict[str, Any] = {"status": "ready", "schema_revision": revision}
+        owners = {item["resource"]: item["allocations"] for item in mismatches if item["scope"] == "OWNER"}
+        if owners:  # only those owners' new research starts pause; counts only, no owner id or value
+            ready["attention"] = {"owner_quota_cap_mismatch": owners}
+        return JSONResponse(ready)
 
-    private = APIRouter(prefix="/v1", dependencies=[Depends(require_principal)])
+    def limit_writes(request: Request, principal: Principal = Depends(require_principal)) -> None:
+        """Count every authenticated write in the owner's shared PostgreSQL window; reads are not limited."""
+        if request.method in {"GET", "HEAD", "OPTIONS"}:
+            return
+        with session_factory() as session:
+            try:
+                rate_limit.count_write(session, principal.user_id, settings.write_rate_per_minute)
+            except SQLAlchemyError:
+                session.rollback()
+                raise service_unavailable("SAFE_SAME_KEY") from None
+
+    private = APIRouter(prefix="/v1", dependencies=[Depends(require_principal), Depends(limit_writes)])
 
     def run(session: Session, call: Callable[[], Any], retry: str = "SAFE_SAME_KEY") -> Any:
         try:
@@ -248,7 +273,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/research/history-sources")
     def history_sources() -> dict[str, Any]:
         """The declared recorded sources. All are SYNTHETIC recordings; none is observed market history."""
-        return {**history_dataset.catalog(), "mode": settings.research_history_mode}
+        return {**history_dataset.catalog(settings.research_source_clients == "authored_http"),
+                "mode": settings.research_history_mode, "source_clients": settings.research_source_clients}
 
     @private.post("/research/requests/{intake_id}/history-investigations")
     def save_history_investigation(intake_id: str, data: Any = Depends(read_json),
@@ -301,6 +327,26 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     def get_investigation_report(report_id: str, principal: Principal = Depends(require_principal),
                                  session: Session = Depends(get_session)) -> Any:
         return run(session, lambda: investigation_jobs.get_report(session, principal, report_id))
+
+    @private.post("/research/requests/{intake_id}/nansen-reports")
+    def start_nansen_report(intake_id: str, data: Any = Depends(read_json),
+                            principal: Principal = Depends(require_principal),
+                            session: Session = Depends(get_session)) -> JSONResponse:
+        body = parse_body(NansenReportBody, data)
+        status, result = run(session, lambda: investigation_jobs.start_nansen_job(
+            session, principal, settings, intake_id, body), retry="RECONCILE")
+        return JSONResponse(result, status_code=status)
+
+    @private.get("/research/requests/{intake_id}/nansen-reports")
+    def list_nansen_reports(intake_id: str, principal: Principal = Depends(require_principal),
+                            session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.list_nansen_jobs(session, principal, settings,
+                                                                                 intake_id))
+
+    @private.get("/research/nansen-reports/{report_id}")
+    def get_nansen_report(report_id: str, principal: Principal = Depends(require_principal),
+                          session: Session = Depends(get_session)) -> Any:
+        return run(session, lambda: investigation_jobs.get_nansen_report(session, principal, report_id))
 
     @private.get("/research/history-datasets")
     def list_history_datasets(principal: Principal = Depends(require_principal),
@@ -410,10 +456,11 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
 
     app.include_router(public)
     app.include_router(private)
-    app.include_router(account_views.router)
-    app.include_router(agent_context.router)
-    app.include_router(wallet_setup.router)
+    write_limited = [Depends(limit_writes)]
+    app.include_router(account_views.router, dependencies=write_limited)
+    app.include_router(agent_context.router, dependencies=write_limited)
+    app.include_router(wallet_setup.router, dependencies=write_limited)
     for financial_router in (funding_routes.router, consent_routes.router, action_routes.router,
                              recovery_routes.router, stop_routes.router, removal_routes.router):
-        app.include_router(financial_router)
+        app.include_router(financial_router, dependencies=write_limited)
     return app

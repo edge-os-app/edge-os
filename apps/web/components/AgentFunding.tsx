@@ -24,7 +24,7 @@ export function AgentFunding({ agentId }: { agentId: string }) {
     const current = (seq.current += 1);
     try {
       const saved = await financial.funding(agentId);
-      if (current !== seq.current) return;
+      if (current !== seq.current) return false;
       // A reference the server already saved (for example after a lost reply) is released, so the next
       // reviewed deposit uses a fresh reference instead of colliding with the saved one.
       for (const kind of ["TRADING", "NATIVE_GAS"]) {
@@ -32,10 +32,12 @@ export function AgentFunding({ agentId }: { agentId: string }) {
         if (held && saved.flows.some((flow) => flow.reference === held)) releaseKey(`deposit-${kind}`, agentId);
       }
       setView(saved); setPhase("loaded"); setUncertain(false); setError("");
+      return true;
     } catch (failure) {
-      if (current !== seq.current) return;
+      if (current !== seq.current) return false;
       if (failure instanceof ApiError && failure.status === 404) { setView(null); setPhase("missing"); }
       else { setPhase("error"); setError(failure instanceof ApiError ? failure.detail : "Funding could not be loaded."); }
+      return false;
     }
   }, [agentId]);
 
@@ -48,7 +50,11 @@ export function AgentFunding({ agentId }: { agentId: string }) {
     try {
       await action();
       after?.();
-      await load();
+      if (!(await load())) {
+        // Saved, but not read back: keep every write blocked until a read shows the current saved state.
+        setUncertain(true); setPhase("loaded"); // keep the last saved view on screen, clearly marked unconfirmed
+        setError("The change was saved, but the current funding could not be read. Check the saved funding before you continue.");
+      }
     } catch (failure) {
       if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) {
         setError(failure.detail);
@@ -140,12 +146,18 @@ export function AgentFunding({ agentId }: { agentId: string }) {
 
         <h3>Current holdings</h3>
         {view.current_holdings.state === "UNAVAILABLE"
-          ? <p data-testid="funding-holdings">Current holdings are unavailable. No balance is shown or assumed.</p>
-          : <dl className="kv" data-testid="funding-holdings">{view.current_holdings.assets.map((asset) => <Fragment key={asset.asset_id}>
+          ? <p data-testid="funding-holdings">Current holdings are unavailable{view.current_holdings.reason && view.current_holdings.reason !== "HOLDINGS_UNAVAILABLE" ? ` (${view.current_holdings.reason})` : ""}. No balance is shown or assumed.</p>
+          : <>{view.current_holdings.observed_at && <p className="muted" data-testid="funding-holdings-observation">
+              Observed <time dateTime={view.current_holdings.observed_at}>{view.current_holdings.observed_at}</time>
+              {view.current_holdings.block_number != null && ` at block ${view.current_holdings.block_number}`}
+              {view.current_holdings.finality && ` (${view.current_holdings.finality})`}
+              {view.current_holdings.wallet_address && <> for <span className="mono">{view.current_holdings.wallet_address}</span></>}
+              {view.current_holdings.source && ` · ${view.current_holdings.source}`}</p>}
+            <dl className="kv" data-testid="funding-holdings">{view.current_holdings.assets.map((asset) => <Fragment key={asset.asset_id}>
               <dt>{asset.asset_id === view.declaration?.trading_asset.asset_id ? "Trading asset"
                 : asset.asset_id === view.declaration?.gas_asset.asset_id ? "Native gas" : "Acquired asset"}</dt>
               <dd>{formatRaw(asset.raw, asset.decimals)} <span className="mono">{asset.asset_id}</span> ({view.current_holdings.evidence_class})</dd>
-            </Fragment>)}</dl>}
+            </Fragment>)}</dl></>}
         {view.allowances.length > 0 && <>
           <h3>Authority used</h3>
           <ul>{view.allowances.map((item) => <li key={item.asset_id}>

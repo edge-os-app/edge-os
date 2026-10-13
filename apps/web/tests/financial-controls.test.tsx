@@ -238,3 +238,115 @@ describe("deposit reference recovery", () => {
     expect(mocks.prepareDeposit.mock.calls[1][1].reference).not.toBe(saved);
   });
 });
+
+describe("committed change with a failed read-back (F2)", () => {
+  it("actions: no success notice and every write blocked until a read succeeds", async () => {
+    mocks.actions.mockResolvedValueOnce(actions()).mockRejectedValueOnce(new ApiError(503, "service_unavailable", "down"))
+      .mockResolvedValue(actions());
+    mocks.schedule.mockResolvedValueOnce({ job_id: "j" });
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run one bounded evaluation" }));
+    expect(await screen.findByText(/was saved, but the current actions could not be read/)).toBeInTheDocument();
+    expect(screen.queryByText(/Evaluation saved/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Run one bounded evaluation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Halt all swaps" })).toBeDisabled();
+    expect(mocks.schedule).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Check saved actions" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run one bounded evaluation" })).toBeEnabled());
+    expect(mocks.schedule).toHaveBeenCalledTimes(1); // nothing was repeated automatically
+  });
+
+  it("funding: a saved deposit whose read-back fails keeps changes paused", async () => {
+    mocks.funding.mockResolvedValueOnce(funding()).mockRejectedValueOnce(new ApiError(503, "service_unavailable", "down"))
+      .mockResolvedValue(funding());
+    mocks.reconcileDeposits.mockResolvedValueOnce({});
+    render(<AgentFunding agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Check deposits" }));
+    expect(await screen.findByText(/was saved, but the current funding could not be read/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check deposits" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Check saved funding" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check deposits" })).toBeEnabled());
+    expect(mocks.reconcileDeposits).toHaveBeenCalledTimes(1);
+  });
+
+  it("authority: a saved review whose read-back fails keeps adoption paused", async () => {
+    mocks.consent.mockResolvedValueOnce(consent()).mockRejectedValueOnce(new ApiError(503, "service_unavailable", "down"))
+      .mockResolvedValue(consent());
+    mocks.review.mockResolvedValueOnce({ review_id: "r-2", review_hash: "sha256:" + "b".repeat(64), status: "INACTIVE",
+      content: { terms: { terms_version: "connected-spot/1", operating_purpose: "TRIAL", trial_objective: "x",
+        allocation: [{ ...QUOTE, raw: "500000000" }], allowances: [{ name: "quote_input", amount: { ...QUOTE, raw: "500000000" } }],
+        attempt_budget: 5, gas_budget: { ...GAS, raw: "1" }, expiry: "2030-01-01T00:00:00Z", supported_actions: ["ENTRY", "EXIT"],
+        supported_assets: [], supported_routes: [], route: { adapter: "KURU_FLOW_FIXED_INPUT" },
+        evidence: { status: "HYPOTHESIS", source: "s" }, stop_effects: ["stop"] } } });
+    render(<AgentAuthority agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Review exact terms/ }));
+    expect(await screen.findByText(/was saved, but the current consent could not be read/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Adopt these exact terms (inactive)" })).toBeDisabled();
+    expect(mocks.adopt).not.toHaveBeenCalled();
+  });
+});
+
+describe("original transaction and observed holdings (ORIGINAL-LOCAL)", () => {
+  const ORIGINAL = { stage: "BROADCAST_RETURNED", reason: "BROADCAST_RETURNED", evidence_class: "AUTHORED_RECORDING",
+    chain_id: 143, wallet_address: "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23", candidate_hash: "sha256:" + "a".repeat(64),
+    transaction_hash: "0x7067b4c886f172b32b1c2839bcd70a45186817e3ade5648bb34fc0d6ea7aa28d", nonce: 0,
+    fee_envelope: { gas_limit: 300000, max_fee_per_gas: 3000000000, max_priority_fee_per_gas: 1000000000 },
+    signing_request_id: "attempt-1", signed_bytes_sha256: "sha256:" + "b".repeat(64), signed_bytes_length: 300,
+    broadcast_returned: "0x7067b4c886f172b32b1c2839bcd70a45186817e3ade5648bb34fc0d6ea7aa28d",
+    stages: [{ stage: "PREPARED", at: "t" }, { stage: "BROADCAST_RETURNED", at: "t" }] };
+
+  it("shows the saved original identities and an unknown effect, never a success or a live claim", async () => {
+    mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
+      decision_slot: "2026-10-12T01:05:00Z", state: "SUBMITTED", publication_revision_id: "r", execution_revision_id: "s:abc",
+      consent_adoption_id: "m-1", decision_id: "d", action_id: "p23:d:ENTRY", outcome: "SUBMITTED_UNKNOWN",
+      reason: "BROADCAST_RETURNED", runs: 1, created_at: "t", updated_at: "t" }], blocking_reason: "SUBMISSION_UNKNOWN" }));
+    const base = detail();
+    mocks.action.mockResolvedValue(detail({ attempts: [{ ...base.attempts[0],
+      content: { original_references: base.attempts[0].content.original_references, original_transaction: ORIGINAL } }] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    const original = await screen.findByTestId("action-original");
+    expect(within(original).getByTestId("action-original-hash")).toHaveTextContent(ORIGINAL.transaction_hash);
+    expect(within(original).getByTestId("action-original-stage")).toHaveTextContent("Its effect is unknown until its own receipt is reconciled");
+    expect(original).toHaveTextContent("not a live provider or chain");
+    expect(original).not.toHaveTextContent("CONFIRMED");
+    expect(screen.getByRole("button", { name: "Reconcile original action" })).toBeEnabled();
+  });
+
+  it("says an explicit signer refusal signed and sent nothing, and an unusable reply keeps the amounts held", async () => {
+    mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
+      decision_slot: "2026-10-12T01:05:00Z", state: "COMPLETED", publication_revision_id: "r", execution_revision_id: "s:abc",
+      consent_adoption_id: "m-1", decision_id: "d", action_id: "p23:d:ENTRY", outcome: "DENIED_UNSENT",
+      reason: "SIGNER_REFUSED", runs: 1, created_at: "t", updated_at: "t" }] }));
+    const base = detail();
+    const refused = { ...ORIGINAL, stage: "REFUSED_UNSENT", reason: "SIGNER_REFUSED", transaction_hash: undefined };
+    mocks.action.mockResolvedValue(detail({ attempts: [{ ...base.attempts[0], content: { original_transaction: refused } }] }));
+    const { unmount } = render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    expect(await screen.findByTestId("action-original-stage")).toHaveTextContent("The signer refused. Nothing was signed or sent.");
+    unmount();
+    const unusable = { ...ORIGINAL, stage: "SIGNED_RESPONSE_REJECTED", reason: "SIGNED_RESPONSE_REJECTED",
+      reasons: ["SIGNER_REPLY_UNRECOGNIZED"], transaction_hash: undefined };
+    mocks.action.mockResolvedValue(detail({ attempts: [{ ...base.attempts[0], content: { original_transaction: unusable } }] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    expect(await screen.findByTestId("action-original-stage")).toHaveTextContent("Nothing was sent; the reserved amounts stay held.");
+    expect(screen.getByTestId("action-original-hash")).toHaveTextContent("None saved");
+  });
+
+  it("shows the observation identity of current holdings and names a stale observation as unavailable", async () => {
+    mocks.funding.mockResolvedValue(funding({ current_holdings: { state: "OBSERVED", evidence_class: "AUTHORED_RECORDING",
+      assets: [{ ...QUOTE, raw: "1000000000" }], source: "recorded-holdings/1", finality: "FINALIZED",
+      observed_at: "2026-10-12T16:00:00+00:00", wallet_address: "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23",
+      chain_id: 143, block_number: 2000000, missing: [] } }));
+    const { unmount } = render(<AgentFunding agentId="agent-a" />);
+    expect(await screen.findByTestId("funding-holdings-observation")).toHaveTextContent(
+      "Observed 2026-10-12T16:00:00+00:00 at block 2000000 (FINALIZED) for 0x2c7536E3605D9C16a7a3D7b1898e529396a65c23 · recorded-holdings/1");
+    unmount();
+    mocks.funding.mockResolvedValue(funding({ current_holdings: { state: "UNAVAILABLE", reason: "HOLDINGS_STALE",
+      evidence_class: "AUTHORED_RECORDING", assets: [] } }));
+    render(<AgentFunding agentId="agent-a" />);
+    expect(await screen.findByTestId("funding-holdings")).toHaveTextContent(
+      "Current holdings are unavailable (HOLDINGS_STALE). No balance is shown or assumed.");
+  });
+});

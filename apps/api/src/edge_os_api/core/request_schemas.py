@@ -423,7 +423,7 @@ class HistorySourceBinding(StrictModel):
 
     source_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,62}/[0-9]{1,4}$")]
     profile_sha256: Sha256Hex
-    evidence_class: Literal["RECORDED_RESPONSE", "PROVIDER_ACTUAL"]
+    evidence_class: Literal["RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE", "AUTHORED_HTTP_RESPONSE", "PROVIDER_ACTUAL"]
 
 
 class HistoryMarket(StrictModel):
@@ -498,7 +498,8 @@ class HistoryInvestigationConfiguration(StrictModel):
     schedule: EffectRunSchedule
     rule_map: HypothesisRuleMap
     resource_bounds: HistoryResourceBounds
-    permitted_access: list[Literal["RECORDED_RESPONSE", "PROVIDER_ACTUAL"]] = Field(min_length=1, max_length=1)
+    permitted_access: list[Literal["RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE", "AUTHORED_HTTP_RESPONSE", "PROVIDER_ACTUAL"]] = Field(
+        min_length=1, max_length=1)
     stopping_rule: ReviewText
     budget_version: Literal["edge-os.research-budget/1"]
 
@@ -606,6 +607,48 @@ class InvestigationJobBody(StrictModel):
 
 
 DecimalText = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$")]
+
+
+class NansenWindowBody(StrictModel):
+    start_utc: Annotated[str, StringConstraints(min_length=1, max_length=40)]
+    end_utc: Annotated[str, StringConstraints(min_length=1, max_length=40)]
+
+
+class NansenHolderQueryBody(StrictModel):
+    label_type: Annotated[str, StringConstraints(min_length=1, max_length=40)] = "all_holders"
+    aggregate_by_entity: bool = False
+    order_field: Annotated[str, StringConstraints(min_length=1, max_length=40)] = "token_amount"
+    value_usd_min: int | None = None
+
+
+class NansenFlowQueryBody(StrictModel):
+    label: Annotated[str, StringConstraints(min_length=1, max_length=40)] = "top_100_holders"
+
+
+class NansenLimitsBody(StrictModel):
+    """Finite local caps for one run. Never a provider allowance."""
+
+    max_requests: int = Field(ge=1, le=20)
+    max_pages: int = Field(ge=1, le=10)
+    max_bytes: int = Field(ge=1, le=5_000_000)
+    max_credits: DecimalText
+    per_page: int = Field(default=100, ge=1, le=1000)
+
+
+class NansenReportBody(StrictModel):
+    """Start one original Nansen report job for the owner's saved request. The question is the request's own text."""
+
+    operation_id: Uuid4Text
+    request_key: Annotated[str, StringConstraints(min_length=1, max_length=200), AfterValidator(_nfc_text)]
+    token_address: Annotated[str, StringConstraints(pattern=r"^0x[0-9a-fA-F]{40}$")]
+    token_symbol: Annotated[str, StringConstraints(min_length=1, max_length=20)]
+    window: NansenWindowBody
+    operations: Annotated[list[Literal["holders", "flows"]], Field(min_length=1, max_length=2)]
+    holder_query: NansenHolderQueryBody = NansenHolderQueryBody()
+    flow_query: NansenFlowQueryBody = NansenFlowQueryBody()
+    limits: NansenLimitsBody
+    deadline_seconds: int = Field(ge=1, le=3600)
+    compute_seconds: int = Field(ge=1, le=3600)
 
 
 class MarketAdoptionBody(StrictModel):

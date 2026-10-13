@@ -10,7 +10,7 @@ from edge_os_api.admission.service import AdmissionService
 from edge_os_api.admission.types import ActionReceipt, AssetAmount
 from edge_os_api.execution.models import ClaimRow, SubmissionAttemptRow
 from edge_os_api.execution.service import ExecutionService
-from edge_os_api.execution.transport import TransportOutcome
+from edge_os_api.execution.transport import LocalFixtureTransport, TransportOutcome
 
 from admission._builders import AGENT_A, BASE, NETWORK, WALLET_A, approval_a, context_a, intent_entry
 from execution._builders import frozen_entry_exit
@@ -166,6 +166,8 @@ def test_claim_wins_cancellation_is_refused_and_capital_is_not_reused(
         """A concurrent P22 cancellation lands after the durable P23 ownership transition."""
 
         transport_id = "test-cancel-before-effect/1"
+        # Its effect is authored: the planned amounts are named explicitly (no generic planned fallback).
+        authored_actuals = staticmethod(LocalFixtureTransport.authored_actuals)
 
         def submit(self, prepared):
             refused = admission_service.cancel(fresh_owner, prepared.action_id)

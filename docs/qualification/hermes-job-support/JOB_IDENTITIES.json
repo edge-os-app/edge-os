@@ -1,0 +1,22 @@
+{
+ "accepted_files_sha256": {
+  "Dockerfile": "f1d0b5ee429cb2c66911645a5d1034dce9ec0e6c2ab82b72304cb0a2491e37b3",
+  "docker_turn_runner.py": "03cde6e8f9e37c67b67239647b5129bd3ec01b0ecbbe9f24eb1b756e041da7bb",
+  "guarded_docker_runner.py": "4b4a7e0f9642cb2bf39513e612e749228dff5d24c11276693d12fe7ce31fae71",
+  "guarded_turn_runner.py": "281d3c2e57f87247abfeac792c54da1df0478dcc6eea3ca8fa107e910e270a73",
+  "hermes_turn_job.py": "3186380733669cb5f7c2d48198ec67117415aa41b90ef1f475033373ee03870d",
+  "provider_guard.py": "d8a1c89cad28c029d4d4dd95c3e34e2d8721f1c0fe641d81eb15cbe61f1a1327",
+  "spend_ledger.py": "aaaae6c01c7f62fd0266660fb52fce107849d12bdd237ad5c085fae437505a08"
+ },
+ "base_commit": "c9a6ac83dbb686dd744ca093c05f6932639df54c",
+ "hermes_commit": "54bc5e509c985f37265c3d416bd2c64b10fc77ba",
+ "hermes_uv_lock_sha256": "de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01",
+ "job_files_sha256": {
+  "authored_transport.py": "593f73885b2794fc649a4431dd215a745cb6591df377fd8ae5ade8f1ff5daf6a",
+  "job_identities.py": "85fa3fd01cf1093c6d3e6386a7d73f350b0fc502a0cd36932c550d7cd620b26a",
+  "provider_transport.py": "562ff259ee11d24d4ecfdb2be84213471ee89327eebfc6688cecf2283f834968",
+  "transport_turn_job.py": "d702b39d5b0ab5e94064d47f1b26cac55d5e0d6f308754ff72f205c37f00dd9b",
+  "transport_turn_runner.py": "cb948952e592d047f235d7da93be39ee71655c794e7ec2e17d849ef17a94494d"
+ },
+ "label": "LOCAL_AUTHORED_TRANSPORT_ACTUAL_NOT_RUN"
+}

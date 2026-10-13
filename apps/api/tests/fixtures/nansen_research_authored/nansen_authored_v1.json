@@ -1,0 +1,430 @@
+{
+ "label": "AUTHORED",
+ "notice": "Authored Nansen-shaped replies for local application tests. Not provider data. Token MOE 0xd8e004acba279417c04c0633cb5a21ceca207777; window 2026-10-06T09:44:14Z to 2026-10-07T09:44:14Z.",
+ "schema_version": "edge-os.nansen-authored-fixture/1",
+ "tokens": {
+  "0xd8e004acba279417c04c0633cb5a21ceca207777": {
+   "flows": {
+    "1": {
+     "headers": {
+      "x-nansen-credits-cost": "1",
+      "x-nansen-credits-remaining": "975",
+      "x-nansen-credits-used": "1",
+      "x-request-id": "authored-flows-1"
+     },
+     "payload": {
+      "data": [
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T10:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T11:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T12:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T13:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T14:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T15:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T16:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T17:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T18:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T19:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T20:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T21:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T22:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-06T23:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T00:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T01:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T02:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T03:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T04:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T05:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T06:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T07:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T08:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       },
+       {
+        "bucket_end": null,
+        "date": "2026-10-07T09:00:00Z",
+        "holders_count": 100,
+        "is_complete": true,
+        "price_usd": 0.01,
+        "token_amount": 5.0,
+        "total_inflows_cex": null,
+        "total_inflows_count": 1.5,
+        "total_inflows_dex": null,
+        "total_outflows_cex": null,
+        "total_outflows_count": -2,
+        "total_outflows_dex": null,
+        "value_usd": 0.05
+       }
+      ],
+      "pagination": {
+       "is_last_page": true,
+       "page": 1,
+       "per_page": 100
+      }
+     },
+     "status": 200
+    }
+   },
+   "holders": {
+    "1": {
+     "headers": {
+      "x-nansen-credits-cost": "5",
+      "x-nansen-credits-remaining": "975",
+      "x-nansen-credits-used": "5",
+      "x-request-id": "authored-holders-1"
+     },
+     "payload": {
+      "data": [
+       {
+        "address": "0x1000000000000000000000000000000000000001",
+        "address_label": "Authored exchange wallet",
+        "ownership_percentage": "0.25",
+        "token_amount": "5000000",
+        "value_usd": null
+       },
+       {
+        "address": "0x1000000000000000000000000000000000000002",
+        "address_label": null,
+        "ownership_percentage": "0.15",
+        "token_amount": "3000000",
+        "value_usd": null
+       },
+       {
+        "address": "0x1000000000000000000000000000000000000003",
+        "address_label": "Authored contract",
+        "ownership_percentage": "0.075",
+        "token_amount": "1500000",
+        "value_usd": null
+       }
+      ],
+      "pagination": {
+       "is_last_page": true,
+       "page": 1,
+       "per_page": 100
+      }
+     },
+     "status": 200
+    }
+   }
+  }
+ }
+}

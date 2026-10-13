@@ -61,6 +61,8 @@ This environment has no Ethereum Keccak-256 and no installed Keccak library. The
 
 The accepted P23 local submission carries identities and a `payload_hash`, not full chain bytes (`execution/transport.py`). A future live stage must carry the exact unsigned candidate bytes and later the signed bytes and their locally derived Keccak transaction hash. That wiring is not part of this stage and is not changed here.
 
+Dated note (2026-10-12, #58 ORIGINAL-LOCAL amendment A1): the package itself stays offline and pure. Its one authorized read-only consumer, `execution/original_transaction.py`, uses `prepare_unsigned_transaction` and `normalize_observation` over AUTHORED injected responses; `test_offline_properties.py` permits that exact path only. Deployment, provider and policy qualification remain `NOT_RUN`.
+
 ## Evidence classification
 
 All results here are `LOCAL_TESTED` at most, over authored and documented fixtures. They are not provider enforcement and not live wallet inventory. Provider and chain results stay `NOT_RUN`.

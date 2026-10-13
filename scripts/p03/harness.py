@@ -19,6 +19,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
@@ -232,6 +233,13 @@ def wait_http(url: str, *, timeout: float = 60.0, ok: tuple[int, ...] = (200,)) 
             with urllib.request.urlopen(url, timeout=3) as response:  # noqa: S310 - loopback only
                 if response.status in ok:
                     return
+        except urllib.error.HTTPError as error:
+            # Status and the readiness reason code only (the API never echoes configuration values).
+            try:
+                reason = json.loads(error.read() or b"{}").get("reason", "")
+            except ValueError:
+                reason = ""
+            last = f"HTTP {error.code} {reason}".strip()
         except Exception as error:  # noqa: BLE001
             last = type(error).__name__
         time.sleep(0.3)

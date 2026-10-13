@@ -83,7 +83,7 @@ The API runs with `EDGE_OS_RESEARCH_HISTORY_MODE=recorded` and a 40-request owne
 | Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
 |---|---|---|---|---|---|---|
 | Declare before data | Research request (no thesis) → Recorded-history investigation → source, own hypothesis, own rules, bounds → adopt → Save | `GET /v1/research/history-sources`, `POST /v1/research/requests/{id}/history-investigations` | `investigation_declarations` (v3), `investigation_access_events` | `PRE_OUTCOME_DECLARED`, frozen hashes, zero provider queries | unchanged | `research-inspection.json`, `*-rg-01-declared.png` |
-| Waiting job | Start investigation job | `POST …/history-investigations/{d}/jobs` | `research_local.investigation_jobs`, `investigation_events`, `research_budgets` | `RESERVED` before any attempt | — | `*-rg-02-waiting.png` |
+| Waiting job | Start investigation job | `POST …/history-investigations/{d}/jobs` | `research_local.investigation_jobs`, `investigation_events`, `usage_local.usage_allocations`/`usage_reservations` | `RESERVED` before any attempt | — | `*-rg-02-waiting.png` |
 | Cancel and retry | Cancel this job → Retry as a new job | `POST /v1/research/investigation-jobs/{job}/cancel` | same | `CANCELLED`, reservation released; new job `RESERVED` | kept | `*-rg-03-cancel-retry.png` |
 | Budget denial | Declaration with 64 provider requests → Start | same | job `BUDGET_EXHAUSTED`, nothing reserved | alert, nothing collected | kept | `*-rg-04-budget-denied.png` |
 | Killed worker | none (verifier fault injection) | — | `ATTEMPT_STARTED` then `ATTEMPT_RECONCILED OUTCOME_UNKNOWN` | `UNAVAILABLE`, unknown liability kept, never collected again; retry is a new job | retried job reported | `research-inspection*.json` |
@@ -99,8 +99,86 @@ select declaration_id, state, terminal_reason, budget->'unknown_liability' from 
 select job_id, kind, attempt_id from research_local.investigation_events order by seq;
 select dataset_id, content->'verdict'->>'overall', content->>'binding_state', content->>'stop_reason' from research_local.history_datasets;
 select report_id, content->>'outcome' from research_local.investigation_reports;
-select * from research_local.research_budgets;
+select scope, owner_key, resource, cap, reserved, consumed, unknown, overrun from usage_local.usage_allocations order by resource, scope;
+select subject_kind, subject_id, amounts, settled from usage_local.usage_reservations;
 ```
+
+## Native recorded source through the P07 transport (#58 SOURCE-LOCAL)
+
+The verifier mints one owner per browser width (`did:privy:test-native-desktop`, `did:privy:test-native-mobile-390`), so each native job (27 provider requests) fits that owner's 40-request research budget. The source `native-syn-qualified/1` is a SYNTHETIC native-shaped recording, `RECORDED_NATIVE_RESPONSE`. The worker replays it through `EnvioHypersyncSource`, `collect`, `read_chain_id`, `corroborate_records` and `normalize` with offline recorded clients.
+
+| Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
+|---|---|---|---|---|---|---|
+| Declare on a native recording | Research request → Recorded source = "Native recording, full corroboration (qualifies)" → own rule → adopt → Save | `GET /v1/research/history-sources`, `POST …/history-investigations` | `investigation_declarations` | source class `RECORDED_NATIVE_RESPONSE`, reserved provider requests 27 (pages + chain read + 24 receipts), zero provider queries | — | `*-rg-n1-native-declared.png` |
+| Original job through the transport | Start investigation job; the verifier runs one worker pass | `POST …/jobs` | `investigation_jobs`, `investigation_events`, `history_datasets` | `REPORTED`; dataset `transport.client_calls` = Envio 2, QuickNode 25; chain 143; corroboration COMPLETE 24/0; usage `MEASURED_CLIENT_CALLS`; 27 consumed | unchanged | `research-native-inspection.json`, `*-rg-n2-native-report.png` |
+| Computed vs declared facts | Open the declaration | `GET /v1/research/investigation-jobs/{id}` | — | "chain id checked against recorded responses: 143 (MONAD)"; recorded declarations listed apart | reopens | `*-rg-n2-native-report.png`, `*-rg-n4-native-reopened.png` |
+| Native market and replay | Strategy request → adopt the native dataset market → Save → replay on the dataset | `POST …/market-adoptions`, `POST /v1/strategies/{id}/revisions`, `POST /v1/spot-replays` | `strategy_revisions`, `spot_replay_runs` | pool `0xd1…`, unit `QUOTE:0xd2…`; replay COMPLETE, `source_evidence_class` `RECORDED_NATIVE_RESPONSE`, "simulated fills" | unchanged | `*-rg-n3-native-replay.png` |
+| Other owner | Owner B reads the native dataset/replay | `GET` → 404 | none | not found | — | `ui-research-native-report.log` |
+
+```sql
+select j.state, j.budget->'consumed', d.content->'transport'->'client_calls', d.content->'transport'->'corroboration'->>'class',
+       d.content->>'provider_requests_state', d.content->'evidence_basis'
+from research_local.investigation_jobs j join research_local.history_datasets d using (dataset_id)
+where d.content->>'evidence_class' = 'RECORDED_NATIVE_RESPONSE';
+```
+
+Native fault cases (malformed page, wrong chain echo, provider failure, receipt mismatch, RPC failure, RPC on another chain, sampled corroboration, too few requests, cancellation, deadline, killed worker, other owner) are proved by `apps/api/tests/test_native_source_journey.py`, not by the mapped run.
+
+## P07 HTTP clients and Nansen reports in the application (#58 RESEARCH-PORTS-LOCAL)
+
+The research phase sets `EDGE_OS_RESEARCH_SOURCE_CLIENTS=authored_http` and `EDGE_OS_NANSEN_RESEARCH_MODE=authored_fixture` for this isolated run (production refuses both). Every reply is AUTHORED and served inside the API process at `.invalid` endpoints; nothing reaches a network or a provider. The verifier mints one more owner per width (`did:privy:test-ports-desktop`, `did:privy:test-ports-mobile-390`), so the HTTP-client job (27 requests) and the Nansen report (4 requests, 12 credits) fit that owner's budget.
+
+| Feature | Screen path | API | Tables | Expected | After restart | Evidence |
+|---|---|---|---|---|---|---|
+| Declare on the HTTP-client source | Research request → Recorded source = "Native recording through the HTTP clients (authored transport, qualifies)" → own rule → adopt → Save → Start investigation job | `GET /v1/research/history-sources` (`source_clients` `authored_http`, `available: true`), `POST …/history-investigations`, `POST …/jobs` | `investigation_declarations`, `investigation_jobs` (`kind` `HISTORY_INVESTIGATION`) | source class `AUTHORED_HTTP_RESPONSE`; "accepted P07 HTTP clients over authored responses"; reserved 27 | — | `*-rg-p1-http-declared.png` |
+| HTTP-client dataset | One worker pass, open the declaration | `GET /v1/research/investigation-jobs/{id}`, `GET /v1/research/history-datasets/{id}` | `history_datasets` | REPORTED, QUALIFIED; `transport.clients` `P07_HTTP_CLIENTS_AUTHORED_TRANSPORT`, classes `HttpEnvioQueryClient`/`HttpQuickNodeRpcClient`, label `AUTHORED_HTTP_TRANSPORT`, 27 response hashes, accounting unknown 0; usage MEASURED 27; no bearer value | byte-equal | `research-ports-inspection.json`, `*-rg-p3-http-report.png` |
+| Save a Nansen report | Same request → "Token holder and flow report" → token, symbol, records, credit limit → Save and reserve this report | `POST /v1/research/requests/{intake}/nansen-reports` | `nansen_requests`, `investigation_jobs` (`kind` `NANSEN_REPORT`), `usage_local.usage_reservations` | RESERVED, "No report yet."; reserved `nansen_credits` 12 | — | `*-rg-p2-nansen-reserved.png` |
+| Open the saved Nansen report | One worker pass → Open saved report | `GET …/nansen-reports`, `GET /v1/research/nansen-reports/{id}` | `nansen_reports`, `usage_local.usage_allocations` | question = the saved request text; "requests KNOWN 2 · credits KNOWN 6"; findings incl. Unresolved; "3 holder address records (not people, not amounts)"; "24 of 25 flow periods · 1 missing" (the inclusive window spans 25 hours; the authored fixture has 24); hashes recomputed; `AUTHORED_FIXTURE`; global credit ledger consumed 12, unknown 0 | reopens equal, one `ATTEMPT_STARTED` | `research-ports-inspection.json`, `*-rg-p4-nansen-report.png`, `*-rg-p5-ports-reopened.png` |
+| Other owner | Owner B reads the report, job, report list and dataset | `GET` → 404 | none | not found | 404 | `ui-research-ports-report.log` |
+| Leak scan | — | — | — | no `authored-local-fixture` or `x-nansen-credits-remaining` in logs or browser results | — | `steps.json` |
+
+```sql
+select j.kind, j.state, j.budget->'consumed', r.content->'report'->>'question', r.content->'settlement'
+from research_local.investigation_jobs j join research_local.nansen_reports r on r.job_id = j.job_id;
+select scope, reserved, consumed, unknown from usage_local.usage_allocations where resource = 'nansen_credits';
+```
+
+Fault cases (401/402/403/429, malformed and oversized replies, wrong-token echo, HTTP receipt mismatch, lost replies, missing credit header, package request/credit limit refusals, cancel and deadline, killed worker, failed report save, composition fault, invalid request, budget refusal, repeated key, other owner, removed composition, production refusal, rollback refusal below 0011, HTTP dataset adoption and replay) are proved by `apps/api/tests/test_research_ports_journey.py` on its own database, not by the mapped run.
+
+## Original transaction, receipts and current holdings (#58 ORIGINAL-LOCAL)
+
+The verifier copies the AUTHORED recordings `apps/api/tests/fixtures/original_transaction/original_transaction_v1.json` into `<evidence>/original-recordings/` and sets `EDGE_OS_ORIGINAL_RECORDINGS_DIR` (local fixture mode only; production refuses it). Agents whose id contains `fx-original` get the fixture wallet's authored public test-signer address `0x2c7536E3605D9C16a7a3D7b1898e529396a65c23` and use offline recorded clients (route quote, `eth_signTransaction` reply, JSON-RPC). The clients append every call to `calls.jsonl` and every accepted send to `broadcasts.jsonl` in that folder. Nothing signs with a real key, sends a transaction or reads a chain.
+
+| Control | UI action | HTTP | Saved tables | Expected state | Restart | Evidence |
+|---|---|---|---|---|---|---|
+| Recorded current holdings | Wallet setup on "Monad mainnet (143)" → Funds | `GET /v1/agents/{id}/funding` | none (read) | `current_holdings` OBSERVED: block, observation time, `FINALIZED`, wallet address, `recorded-holdings/1`, apart from credited deposits | — | `*-orig-*-holdings.png` |
+| Original transaction saved before each effect | Positions → Run one bounded evaluation → Open action | `POST …/actions`, `GET /v1/actions/{action}` | `execution_submission_attempts.content.original_transaction` (private signed bytes, Keccak hash, nonce, fee envelope, signing request) | job `SUBMITTED_UNKNOWN`; stage `BROADCAST_RETURNED`; one signer call, one send; signed bytes never in the response | reopens; no second sign or send | `*-orig-unknown.png`, `financial-inspection.json` `originals` |
+| Reconcile from its own receipt | Reconcile original action | `POST /v1/actions/{action}/reconcile` | `admission_receipts`, `recovery_local.*` | `SUBMISSION_UNKNOWN → CONFIRMED`; the hash unchanged | reopens with the same hash | `*-orig-confirmed.png` |
+| Lost signer reply | agent id with `fx-original-fx-lost-sign` → Run → Open → Reconcile | same | attempt stage `SIGNING_UNKNOWN`, reservations `RESERVED` | unknown kept; no hash; never sent | — | `*-orig-lost-sign.png`, `original-lost-*` checks |
+| Other owner | Owner B reads or reconciles the action | `GET`/`POST` → 404 | none | no call | — | `ui-financial-original.log` |
+| Raw signed bytes | none | — | — | absent from logs and browser results | — | verifier step "no raw signed transaction bytes" |
+
+```sql
+select action_id, state, outcome, content->'original_transaction'->>'stage', content->'original_transaction'->>'transaction_hash',
+       content->'original_transaction'->>'nonce' from execution_local.execution_submission_attempts
+where transport_id = 'original-transaction/1';
+```
+
+Signer refusal, rejected bytes (type, field, nonce, sender, size, tamper), save failures before signing and before sending, lost or mismatched send replies, a stop after signing, a crash before sending, wrong receipt hash/wallet/chain, receipts without every actual (P22 `BREACHED`), changed evidence, stale or incomplete holdings and the exit's next nonce are proved by `apps/api/tests/test_original_transaction_journey.py` and `apps/api/tests/execution/test_original_signed_bytes.py`, not by the mapped run.
+
+## Public-runtime preparation (#58 Stage 2, local)
+
+`scripts/p03/runtime_phase.py` runs after every restart comparison, so its writes cannot change them. It needs the financial phase's saved agents.
+
+| Check | How | Expected | Evidence |
+|---|---|---|---|
+| F1 projection (API) | `GET /v1/account-views/service?agent_id=fin-desktop` as owner A and owner B | owner A: every record `SERVICE_PROJECTION`, AGENT/CAPITAL_FLOW/POSITION/ACTION/MONITORING present, unrealized result and mark `UNKNOWN`, flows not in realized result; owner B: no records | `runtime-projection.json` |
+| Shared quotas (SQL) | `usage_local.usage_allocations` grouped by resource; `usage_reservations` | GLOBAL reserved/consumed/unknown/overrun equal the sum of OWNER rows; one reservation per reserving job | `runtime-quotas.json` |
+| Frozen cap and write rate | a second API process on the same database with `EDGE_OS_USAGE_GLOBAL_COMPUTE_SECONDS` + 1 and `EDGE_OS_WRITE_RATE_PER_MINUTE=2`; three writes by a new owner | `/readyz` 503 `quota_cap_mismatch` naming `compute_seconds`; writes 422, 422, then 429 with `Retry-After` | `runtime-limits.json`, `logs/api-runtime-limits.log` |
+| Worker drift stop | a run-owned database at revision 0009; both workers `--once` | exit code 3, no rows written; database dropped | `runtime-drift.json`, `logs/worker-drift-*.log` |
+| F1 panel, F2 read-back, F5 keyboard (browser) | `runtime.spec.mjs` at desktop and 390px | "Saved connected state" lists projections, owner B sees none; a failed `GET …/funding` after "Check deposits" shows "The change was saved, but…" and pauses every change control until "Check saved funding" succeeds; Tab reaches every control with a visible focus outline and Enter activates "Check deposits" | `*-runtime-*.png`, `ui/keyboard-qa.json`, `ui-runtime.log` |
+
+Restore and rollback are rehearsed by `apps/api/tests/test_restore_rehearsal.py` (pytest), not by the mapped run.
 
 ## SQL checks
 

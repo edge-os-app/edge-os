@@ -1,0 +1,301 @@
+"""Owned-loopback and fake-connection tests for the bounded HTTP transport.
+
+These exercise the shipped ``StdlibHttpTransport`` over a real ``127.0.0.1`` socket
+for the socket-bound cases (timeout, oversized body, redirect) and over a fake
+connection for the deterministic clock/cancellation cases. No external host,
+credential or provider is touched.
+"""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+import _http_support as http
+
+from edge_os_api.research_history.http_clients import (
+    ClientConfigError,
+    HttpProviderError,
+    StdlibHttpTransport,
+)
+from edge_os_api.research_history.provider_transport import SourceCancelled, SourceTimeout
+
+
+def _request(transport: StdlibHttpTransport, url: str, *, deadline: float | None = None,
+             timeout: float = 2.0, max_response_bytes: int = 4096, cancel=None):
+    if deadline is None:
+        deadline = time.monotonic() + 30.0
+    return transport.request(method="POST", url=url, headers={"accept": "application/json"},
+                             body=b"{}", timeout=timeout, deadline=deadline,
+                             max_response_bytes=max_response_bytes, cancel=cancel)
+
+
+def test_transport_returns_a_reply_over_loopback() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(body=b'{"next_block":104}')) as server:
+        transport = StdlibHttpTransport()
+        response = _request(transport, server.base_url + "/query")
+    assert response.status == 200
+    assert response.body == b'{"next_block":104}'
+
+
+def test_transport_refuses_an_oversized_reply() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(body=b"x" * 5000)) as server:
+        transport = StdlibHttpTransport()
+        with pytest.raises(HttpProviderError) as raised:
+            _request(transport, server.base_url + "/query", max_response_bytes=100)
+    assert raised.value.code == "OVERSIZED_RESPONSE"
+
+
+def test_transport_does_not_follow_a_redirect() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(status=302, headers={"Location": "http://example.test/"})) as server:
+        transport = StdlibHttpTransport()
+        response = _request(transport, server.base_url + "/query")
+    assert response.status == 302
+
+
+def test_transport_times_out_on_a_slow_reply() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(body=b"{}", delay_before_headers=0.5)) as server:
+        transport = StdlibHttpTransport()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=0.15)
+
+
+def test_transport_applies_the_deadline_to_the_header_phase() -> None:
+    with http.LoopbackServer(lambda *_: http.Reply(body=b"{}", delay_before_headers=0.3)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0,
+                     deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.25
+
+
+def test_transport_bounds_a_paced_header_drip_by_the_deadline() -> None:
+    raw = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0,
+                     deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_deadline_race_is_a_timeout_not_a_value_error() -> None:
+    values = iter([0.0, 2.0])
+    transport = StdlibHttpTransport(clock=lambda: next(values))
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", deadline=1.0)
+
+
+def test_transport_refuses_a_pre_expired_deadline() -> None:
+    transport = StdlibHttpTransport(clock=lambda: 5.0)
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", deadline=1.0)
+
+
+def test_transport_bounds_a_paced_fixed_length_body_by_the_deadline() -> None:
+    raw = b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n" + b"x" * 40
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0,
+                     deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_watchdog_is_armed_before_the_connection() -> None:
+    called = {"request": False}
+
+    class Conn:
+        def __init__(self) -> None:
+            self.sock = None
+
+        def request(self, *_args, **_kwargs) -> None:
+            called["request"] = True
+            raise AssertionError("the deadline already passed, request must not run")
+
+        def close(self) -> None:
+            return
+
+    def connect(*_args):
+        time.sleep(0.2)  # a slow connect the watchdog cannot interrupt (no socket yet)
+        return Conn()
+
+    transport = StdlibHttpTransport(connect=connect, clock=time.monotonic)
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+    assert called["request"] is False
+
+
+def test_transport_watchdog_covers_the_request_phase() -> None:
+    class FakeSock:
+        def __init__(self) -> None:
+            self.shut = False
+
+        def shutdown(self, _how: int) -> None:
+            self.shut = True
+
+    class SlowRequest:
+        def __init__(self) -> None:
+            self.sock = FakeSock()
+
+        def request(self, *_args, **_kwargs) -> None:
+            end = time.monotonic() + 5.0
+            while time.monotonic() < end:
+                if self.sock.shut:
+                    raise OSError("socket shut down at the deadline")
+                time.sleep(0.005)
+
+        def getresponse(self):
+            raise AssertionError("must not reach the response phase")
+
+        def close(self) -> None:
+            return
+
+    connection = SlowRequest()
+    transport = StdlibHttpTransport(connect=lambda *_args: connection, clock=time.monotonic)
+    start = time.monotonic()
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+    assert time.monotonic() - start < 0.3
+    assert connection.sock.shut is True
+
+
+def _paced(prefix: bytes) -> bytes:
+    return prefix + b"Content-Length: 40\r\n\r\n" + b"x" * 40
+
+
+def test_transport_bounds_a_close_on_response_body() -> None:
+    raw = _paced(b"HTTP/1.1 200 OK\r\nConnection: close\r\n")
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_bounds_an_http10_response_body() -> None:
+    raw = _paced(b"HTTP/1.0 200 OK\r\n")
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_bounds_a_keep_alive_paced_body() -> None:
+    raw = _paced(b"HTTP/1.1 200 OK\r\n")
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        transport = StdlibHttpTransport()
+        start = time.monotonic()
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+        assert time.monotonic() - start < 0.3
+
+
+def test_transport_reuses_cleanly_after_a_timed_out_call() -> None:
+    raw = _paced(b"HTTP/1.1 200 OK\r\nConnection: close\r\n")
+    transport = StdlibHttpTransport()
+    with http.LoopbackServer(lambda *_: http.Reply(raw_http=raw, pause_between_chunks=0.01)) as server:
+        with pytest.raises(SourceTimeout):
+            _request(transport, server.base_url + "/query", timeout=1.0, deadline=time.monotonic() + 0.05)
+    with http.LoopbackServer(lambda *_: http.Reply(body=b'{"ok":1}')) as server:
+        response = _request(transport, server.base_url + "/query")
+    assert response.status == 200
+    assert response.body == b'{"ok":1}'
+
+
+def test_transport_cancels_before_opening_a_socket() -> None:
+    called = {"connect": False}
+
+    def connect(*_args):
+        called["connect"] = True
+        raise AssertionError("connect must not run when already cancelled")
+
+    transport = StdlibHttpTransport(connect=connect)
+    with pytest.raises(SourceCancelled):
+        _request(transport, "http://127.0.0.1:1/query", cancel=lambda: True)
+    assert called["connect"] is False
+
+
+def test_transport_cancels_during_a_stream() -> None:
+    state = {"cancel": False}
+
+    def hook(_response: http.FakeResponse) -> None:
+        state["cancel"] = True
+
+    connection = http.FakeConnection(http.FakeResponse(body=b"x" * 10, read_hook=hook))
+    transport = StdlibHttpTransport(connect=lambda *_args: connection, clock=lambda: 0.0)
+    with pytest.raises(SourceCancelled):
+        _request(transport, "http://127.0.0.1:1/query", cancel=lambda: state["cancel"])
+    assert connection.closed == 1
+
+
+def test_transport_enforces_the_deadline_between_reads() -> None:
+    state = {"now": 0.0}
+
+    def hook(_response: http.FakeResponse) -> None:
+        state["now"] = 2.0
+
+    connection = http.FakeConnection(http.FakeResponse(body=b"x" * 10, read_hook=hook))
+    transport = StdlibHttpTransport(connect=lambda *_args: connection, clock=lambda: state["now"])
+    with pytest.raises(SourceTimeout):
+        _request(transport, "http://127.0.0.1:1/query", deadline=1.0)
+
+
+def test_transport_closes_the_connection_on_success_and_failure() -> None:
+    good = http.FakeConnection(http.FakeResponse(body=b"ok"))
+    transport = StdlibHttpTransport(connect=lambda *_args: good, clock=lambda: 0.0)
+    assert _request(transport, "http://127.0.0.1:1/query").body == b"ok"
+    assert good.closed == 1
+
+    big = http.FakeConnection(http.FakeResponse(body=b"x" * 50))
+    transport = StdlibHttpTransport(connect=lambda *_args: big, clock=lambda: 0.0)
+    with pytest.raises(HttpProviderError):
+        _request(transport, "http://127.0.0.1:1/query", max_response_bytes=1)
+    assert big.closed == 1
+
+
+def test_transport_refuses_an_unsafe_url_and_scheme() -> None:
+    transport = StdlibHttpTransport()
+    with pytest.raises(ClientConfigError):
+        _request(transport, "ftp://example.test/query")
+
+
+def test_transport_refuses_malformed_http_framing() -> None:
+    from http.client import BadStatusLine, IncompleteRead
+
+    class BadStatus:
+        def __init__(self) -> None:
+            self.closed = 0
+
+        def request(self, *_args, **_kwargs) -> None:
+            return
+
+        def getresponse(self):
+            raise BadStatusLine("garbage")
+
+        def close(self) -> None:
+            self.closed += 1
+
+    bad_status = BadStatus()
+    transport = StdlibHttpTransport(connect=lambda *_args: bad_status, clock=lambda: 0.0)
+    with pytest.raises(HttpProviderError) as raised:
+        _request(transport, "http://127.0.0.1:1/query")
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+    assert bad_status.closed == 1
+
+    def incomplete(_response: http.FakeResponse) -> None:
+        raise IncompleteRead(b"partial")
+
+    short = http.FakeConnection(http.FakeResponse(body=b"x", read_hook=incomplete))
+    transport = StdlibHttpTransport(connect=lambda *_args: short, clock=lambda: 0.0)
+    with pytest.raises(HttpProviderError) as raised:
+        _request(transport, "http://127.0.0.1:1/query")
+    assert raised.value.code == "MALFORMED_PROVIDER_RESPONSE"
+    assert short.closed == 1

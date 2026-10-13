@@ -11,7 +11,7 @@ Compose the accepted funding (P18), admission (P22), execution (P23), recovery (
 | File | Responsibility |
 |---|---|
 | `apps/api/migrations/versions/0008_financial_state.py`, `migrations/env.py` | Create the seven `*_local` schemas, their accepted tables and the evaluation jobs table. `alembic check` covers every metadata. |
-| `core/settings.py` | `execution_mode` (`fixture`/`unavailable`, production refuses `fixture`) and `fixture_effects_path`. |
+| `core/settings.py` | `execution_mode` (`fixture`/`unavailable`, production refuses `fixture`) and `fixture_effects_path`; Stage 2 quota, rate, job and timeout settings and production startup checks. |
 | `core/provider_ports.py` | Trusted provider ports and their fixture/unavailable adapters. |
 | `core/financial_services.py` | One composition of the services over the app's session factory. |
 | `execution/connected_identity.py` | IC01 revision resolver, consent lookup and IC05 approval derivation. |
@@ -138,14 +138,14 @@ Milestone `RELEASE-E2E-L2-20261012-RG-LOCAL`. Every history source is the author
 |---|---|---|---|
 | RG01 | `POST/GET /v1/research/requests/{id}/history-investigations[/{declaration}]` save `p08.investigation-declaration/3` before any collection with frozen configuration, rule-map and source-profile hashes; the hypothesis rule map `edge-os.hypothesis-rule-map/1` accepts only `USER_ADOPTED` rules and refuses the worked-example rules (fixture strategy entry/exit, fixture interpreter choices, P09 example); `PROVIDER_ACTUAL` access is refused (`actual_data_not_authorized`). v2 reads and the P09 fixture run ignore v3 declarations. | `core/request_schemas.py`, `research/investigation_adoption.py` | Local PASS candidate |
 | RG02 | `edge-os.history-dataset/1` rows in `research_local.history_datasets`, saved verbatim from P07 `collect`/`normalize` with raw records, recomputable hashes, verdicts, measured invocations, evidenced or unknown provider usage, binding state and unavailable states. Only overall QUALIFIED and complete data project to a market binding. | `research/history_dataset.py`, migration `0009` | Local recorded PASS candidate; actual data NOT RUN |
-| RG03 | `edge-os.investigation-job/1` jobs, append-only `investigation_events`, per-owner `research_budgets`; reservation before any adapter effect; duplicate start, last-slot competition, cancel, deadline, killed worker (OUTCOME_UNKNOWN, never collected again), lost reply after a saved result, missing/invalid usage, provider failure, budget exhaustion and restart. Tools `edge-os.investigation-tool/1` are deterministic and import no financial or network module. Worker: `python -m edge_os_api.research.investigation_jobs`. | `research/investigation_jobs.py`, `research/investigation_tools.py` | Local PASS candidate; no Hermes tool isolation is proved |
+| RG03 | `edge-os.investigation-job/1` jobs, append-only `investigation_events`, per-owner `research_budgets` (moved to `usage_local` shared quotas by Stage 2 migration 0010); reservation before any adapter effect; duplicate start, last-slot competition, cancel, deadline, killed worker (OUTCOME_UNKNOWN, never collected again), lost reply after a saved result, missing/invalid usage, provider failure, budget exhaustion and restart. Tools `edge-os.investigation-tool/1` are deterministic and import no financial or network module. Worker: `python -m edge_os_api.research.investigation_jobs`. | `research/investigation_jobs.py`, `research/investigation_tools.py` | Local PASS candidate; no Hermes tool isolation is proved |
 | RG04 | `edge-os.investigation-report/1` reports from the accepted P09 engine on the saved dataset: DESCRIBED, CONTRADICTORY, INSUFFICIENT_DATA, UNSUPPORTED, SOURCE_LOSS, LIMITED_DATA; validation and holdout partitions are never read; no significance, capital or execution claim. | `research/comparison_runs.py` `compare_history` | Local PASS candidate |
 | RG05 | `edge-os.history-replay-input/1`: `POST /v1/spot-replays` with `history_dataset_id` feeds the unchanged P13 runtime; buckets, availability and verdicts pass through unchanged; lineage, both market binding ids and "simulated fills" are saved. A strategy reaches the dataset market only through pre-publication adoption (`POST /v1/research/requests/{id}/market-adoptions`, amendment RG05-MARKET-ADOPTION-v1): a NEW interpretation, clarification, outcome and draft built from the owner's hash-verified QUALIFIED dataset; the entry becomes exactly one `USER_ADOPTED` rule of that dataset's own declaration (price and volume conditions joined by `and`), the exit is restated by the owner and refused when it is a worked-example rule, and amounts are restated in the new quote unit; replays record whether the entry is that declared rule; earlier drafts and revisions never change and the fixture revision still fails `MARKET_BINDING_MISMATCH`. | `replay/history_inputs.py`, `replay/saved_runs.py`, `research/market_adoption.py` | Local recorded PASS candidate; actual-source replay blocked by the runtime evidence-class check (proposal recorded, simulator unchanged) |
 | RG06 | Verifier research phase (`scripts/p03/research_phase.py`, three specs `research-history-*.spec.mjs`); `--actual-data PACKET` refuses without a recorded approval and, even with one, until an actual adapter exists. | `scripts/p03/`, `.agents/skills/verify-edge-os/` | Default run spends nothing |
 
 Retained limits: the recorded bundle is synthetic; actual collection, inference and actual-history replay need the separate authorization packet and the runtime change; LIMITED representation (G05) stays open; a local fake runner proves no real Hermes tool isolation.
 
-### Pre-public and live follow-ups (tracked, not repaired here)
+### Pre-public and live follow-ups (tracked; Stage 2 status in the next section)
 
 | ID | Follow-up | Proposed repair (summary) |
 |---|---|---|
@@ -155,6 +155,251 @@ Retained limits: the recorded bundle is synthetic; actual collection, inference 
 | F4 | Hosted schema drift and recovery | Workers re-check the schema head each pass; host runbook for migrate, restore and rollback with rehearsals |
 | F5 | Manual accessibility | Keyboard-only and screen-reader pass over the new research, adoption and replay surfaces |
 | F6 | Dependency advisories and runtime reachability | Read-only advisory review with reachability per advisory; upgrades as separate leased changes |
+
+## Stage 2 local public-runtime preparation
+
+Milestone `RELEASE-E2E-L2-20261012-RUNTIME-LOCAL`, base `6fab6f2`. Local only: no host, provider, credential, deployment or financial action. Details and proposals: `docs/qualification/public-runtime/`.
+
+| Area | Implementation | Files | Status |
+|---|---|---|---|
+| Shared quotas | Owner and GLOBAL allocations per resource with frozen caps, one reservation per original subject (locks GLOBAL then OWNER, both caps checked before any adapter call), idempotent KNOWN/UNKNOWN settlement with overrun, append-only events, operator-only `set-cap`. Migration 0010 moves `research_budgets` into OWNER allocations. | `usage/quota.py`, `migrations/versions/0010_shared_usage_quotas.py`, `research/investigation_jobs.py` | Local PASS candidate |
+| G-N2, N4, G-N1 | Interrupted compute stays unknown liability; compute is measured in milliseconds and settled as whole seconds with overrun booked; corrected actual-data bounds recorded. | `research/investigation_jobs.py`, `research/investigation_tools.py`, `RUNTIME_GUARDS.md` | Local PASS candidate |
+| Runtime guards | Production startup refusals (names only), `/readyz` reason codes including `quota_cap_mismatch`, shared per-owner write rate (429 + `Retry-After`), active research job limit, SQL statement timeout. | `core/settings.py`, `core/database.py`, `main.py`, `usage/rate_limit.py` | Local PASS candidate |
+| F1 | Read-only `GET /v1/account-views/service[?agent_id=]` projects the owner's funding, admission, execution, recovery and removal rows as `evidence_class = SERVICE_PROJECTION` through `AccountViewContent`; unknown marks and unrealized results stay UNKNOWN; deposits are flows, not results. Shown in the "Saved connected state" panel. | `accounts/service_projection.py`, `accounts/views.py`, `components/ServiceAccountState.tsx`, `lib/account-views.ts` | Local PASS candidate |
+| F2 | A saved change whose read-back fails keeps the last view marked unconfirmed and every change control paused until a read succeeds; no success notice. | `AgentActions.tsx`, `AgentFunding.tsx`, `AgentAuthority.tsx` | Local PASS candidate |
+| F3 | Not changed. The signing/adapter seam is reserved for Stage 3. | — | Open (Stage 3) |
+| F4 | Workers check the schema head before every pass and stop with exit code 3 before any effect; runbook rehearsed locally (dump, restore, check, downgrade/upgrade). | `core/worker_loop.py`, `execution/worker.py`, `tests/test_restore_rehearsal.py`, `RESTORE_ROLLBACK_RUNBOOK.md` | Local PASS candidate; hosted rehearsal open |
+| F5 | Keyboard-only pass over the owned connected-agent, funding and projection surfaces at desktop and 390px (`runtime.spec.mjs`). Screen reader: NOT_RUN. | `tests/p03/runtime.spec.mjs`, `KEYBOARD_QA.md` | Partial |
+| F6 | Read-only advisory and reachability record; no lockfile change. | `ADVISORY_ASSESSMENT.md` | Needs controller disposition |
+
+## SOURCE-LOCAL: accepted P07 transport in the application (frozen interfaces)
+
+Milestone `RELEASE-E2E-L2-20261012-SOURCE-LOCAL`, base `a7864a7`. Local only. Every source is a SYNTHETIC recording, no client reaches a network, and RG02/RG05 actual-data evidence stays NOT_RUN.
+
+**Evidence class `RECORDED_NATIVE_RESPONSE` (additive).**
+- What it is: native-shaped Envio HyperSync `QueryResponse` pages and QuickNode JSON-RPC results. Offline recorded clients replay them through the accepted P07 seams, unchanged:
+  - `EnvioHypersyncSource` → `collect`;
+  - `read_chain_id` → `corroborate_records`;
+  - `normalize` → `project_binding`.
+- Labels: `content_label` and the profile `evidence_class` stay `SYNTHETIC_FIXTURE`.
+- Other classes: `RECORDED_RESPONSE` keeps its meaning. `PROVIDER_ACTUAL` is still refused (`actual_data_not_authorized`).
+
+**Catalog.**
+- Source: `tests/fixtures/research_history_native/native_history_v1.json` (`edge-os.recorded-native-bundle/1`). Its only writer is `tests/native_history_recordings.py`.
+- Market: the pool and assets are 0xd1…/0xd2…/0xd3…, so the source has its own market, apart from the sample bundle.
+- Response: `GET /v1/research/history-sources` lists both bundles. Each entry adds `transport` (null for bundle sources): provider, version, corroboration provider, `corroboration_sample_size` and `provider_requests_needed` (pages + 1 chain read + 1 receipt per sample). The response also adds `native_label`.
+
+**Declaration.**
+- `configuration.source.evidence_class` and `permitted_access` accept `RECORDED_NATIVE_RESPONSE`. The class must equal the listed source's class (`history_source_class_mismatch`).
+- `resource_bounds.provider_requests` must cover the pages, the chain read and the receipts (`resource_bounds_too_small` at `/configuration/resource_bounds/provider_requests`).
+- The user's own rules, market unit and adoption rules are unchanged.
+
+**Collection** (`research/native_history_collection.py`). One `RequestBudget` equal to the declared `provider_requests` guards every injected client call:
+- Before each call it checks cancellation, the job deadline and the remaining requests.
+- A refused call is never made or counted. A made call counts even when it fails. Nothing is retried.
+- The guard sits in `GuardedEnvioClient` and `GuardedQuickNodeClient`, which wrap any client. A refused Envio call becomes the accepted P07 stop (`CANCELLED`, `TIMEOUT` or `PROVIDER_ERROR`).
+- A refused RPC call raises the application-owned `Refused`, which P07 does not catch. Corroboration then ends as `NONE`, `STOPPED_CANCELLED`, `STOPPED_DEADLINE` or `STOPPED_REQUEST_BUDGET_EXHAUSTED`, with `receipts_fetched`. No refused call is ever recorded as a mismatch.
+- Corroboration samples min(declared, remaining requests) records. It is skipped as `NONE` when no record was kept (`NO_RECORDS`), fewer than 2 requests remain (`REQUEST_BUDGET_EXHAUSTED`) or the chain read failed (`CHAIN_READ_FAILED`).
+- `chain_id_source` is `PROVIDER_READ` only when the recorded RPC answered 143, else `UNKNOWN`.
+- `provider_facts` (decimals, pool tokens, venue, fee semantics, finality, delivery records, feasibility claim) are recorded declarations, labelled `RECORDED_DECLARATION` in `evidence_basis`.
+
+**Usage.**
+- The tool name stays `collect_recorded_history`.
+- Native usage is `provider_requests_state = MEASURED_CLIENT_CALLS` with `{ENVIO_HYPERSYNC: n, QUICKNODE_JSON_RPC: m}`. It is known only while the total stays within the job's reservation; otherwise it is `INVALID` and stays liability.
+- Settlement consumes the measured calls and releases the rest. A killed collection keeps unknown liability and is never collected again (Stage 2 rules unchanged).
+
+**Dataset** (`edge-os.history-dataset/1`, additive keys on native datasets only).
+- `transport`:
+  - `envio`: P07 `transport_record()`;
+  - `chain_read`;
+  - `corroboration`: full entries with reasons;
+  - `client_calls`;
+  - `request_budget`;
+  - `clients`.
+- `evidence_basis` and a native `notice`: chain id and receipts were checked against recorded responses, not a network.
+- Bundle-source content and saved hashes are unchanged.
+- The job view adds `dataset.transport` (null for bundle sources): pages framed, calls, chain id/network, corroboration counts and reason, recorded declarations.
+
+**Web.**
+- `InvestigationReview` declares with the chosen source's class.
+- Choosing a native source sets the reserved provider requests to its needed count and explains the count.
+- Jobs show the computed transport facts apart from the recorded declarations.
+
+**Unchanged.**
+- The P07 library, P12/P14 numerical replay, P02 contracts and saved-run semantics.
+- A LIMITED/UNRESOLVED native dataset stays unbound (`dataset_not_qualified`).
+- Replay labels stay `SYNTHETIC_FIXTURE` and "simulated fills".
+
+| Fault (native recording) | Result | Test |
+|---|---|---|
+| Page omits its end block fact | PARTIAL `PROVIDER_ERROR`, page 1 kept, report `SOURCE_LOSS` | `test_a_page_without_its_end_block_fact…` |
+| Response echoes another chain | nothing kept, corroboration `NO_RECORDS` | `test_a_response_echoing_another_chain…` |
+| Provider failure on page 2 | failed call counted, no retry | `test_a_provider_failure_counts…` |
+| Receipt names another block / RPC failure | mismatch counted, no binding | `test_a_corroboration_mismatch…` |
+| RPC reports another chain | `CHAIN_NOT_MONAD`, no receipt call | `test_another_chain_from_the_rpc…` |
+| Sampled corroboration | `LIMITED`, unbound | `test_sampled_corroboration…` |
+| Too few requests declared | 422 before any job | `test_a_declaration_without_requests…` |
+| Cancellation after page 1 | later calls refused, 1 consumed, 26 released | `test_cancellation_after_the_first_page…` |
+| Cancellation / deadline during receipts | corroboration `NONE` `STOPPED_*`, 4 receipts fetched, 0 mismatches, 7 consumed | `test_cancellation_during_receipts…`, `test_a_deadline_during_receipts…` |
+| Deadline before / after the pages | no call / chain read refused | `test_a_passed_deadline…`, `test_a_deadline_passing_after…` |
+| Worker killed in collection | unknown liability, never collected again | `test_a_worker_killed_during_collection…` |
+| Other owner | 404, no client call | `test_another_owner_cannot_start…` |
+
+## ORIGINAL-LOCAL: original transaction identity, receipts and current holdings (frozen interfaces)
+
+Milestone `RELEASE-E2E-L2-20261012-ORIGINAL-LOCAL-v1`, base `70ca3bd`. Local only. Every provider response is an AUTHORED native-shaped recording replayed by an offline client; nothing here signs with a real key, broadcasts, reads a balance or reaches a network. Production keeps `execution_mode=unavailable`.
+
+**Selection.** The original-transaction path is used only when the server is in `fixture` mode with a local `original_recordings_path` (refused in production) and the agent id carries the reserved marker `fx-original`. Every other fixture agent keeps the `FixtureChain` transport unchanged. No caller field selects it.
+
+**Authored test signer (amendment A1).** The fixture wallet provider (`wallet_setup/adapter.py`, refused in production) returns the AUTHORED public test-signer address `0x2c7536E3605D9C16a7a3D7b1898e529396a65c23` for a fixture wallet whose agent id contains the reserved marker `fx-original`; every other fixture wallet keeps its SHA-256 placeholder address. The address is the eth-account documentation example key's sender. The application holds the address only, never a key; the signed bytes are frozen AUTHORED fixtures from the single offline writer `tests/original_transaction_recordings.py`. One public test address is not evidence of separate user wallets (PU06).
+
+**Original envelope** (`edge-os.original-transaction/1`), saved privately in the attempt `content.original_transaction` and advanced only forward:
+
+| Field | Source |
+|---|---|
+| `owner_id`, `agent_id`, `wallet_id`, `wallet_address`, `network_id`, `chain_id` | Verified owner, confirmed wallet setup and its provider evidence address, `NETWORK_NAMES`. |
+| `strategy_id`, `publication_revision_id`, `execution_revision_id`, `content_hash`, `consent_adoption_id`, `consent_hash`, `policy_binding` | The saved evaluation job and intent. |
+| `action_id`, `payload_hash`, `operation`, `attempt_id`, `claim` (the existing ACTIVE claim), reservations | The saved intent, queue claim and P22 decision. |
+| `candidate` (`candidate_hash`, to, value, data, selector, intent, fees, program) | P20 `prepare_unsigned_transaction` over the recorded route response and a server-built `ApprovedAdapterConfiguration` (input = the saved intent input, minimum output from the saved expected output). |
+| `nonce` | One recorded `eth_getTransactionCount(wallet_address, "pending")`. |
+| `fee_envelope` (`gas_limit`, `max_fee_per_gas`, `max_priority_fee_per_gas`) | The recorded route profile. `gas_limit × max_fee_per_gas` must not exceed the reserved per-action (entry) or per-exit gas cap. |
+| `unsigned` (EIP-1559 type 2 fields) | Built from the candidate, nonce, fee envelope and `chain_id`. |
+| `signing_request` (`request_id`, Privy `POST /v1/wallets/{wallet_id}/rpc`, `eth_signTransaction` body) | Built by the server; `request_id` = attempt id. |
+| `signed_bytes` (private), `transaction_hash` | `data.signed_transaction` of the signer reply; hash = Keccak-256 of the entire signed serialization (`eth_utils.keccak`). Never `TypedTransaction.hash()` (signing preimage), never SHA-256. |
+| `broadcast` | One `eth_sendRawTransaction`; the returned hash must equal `transaction_hash`. |
+| `stage` | `PREPARED` → `SIGN_REQUESTED` → `SIGNED` → `BROADCAST_REQUESTED` → `BROADCAST_RETURNED`, or a terminal refusal stage. |
+
+Three identities stay distinct: `candidate_hash` (application SHA-256), `transaction_hash` (Keccak of the signed bytes) and `provider_reference` (the signer request id and broadcast reply).
+
+**Order.** IN_FLIGHT attempt commit → P22 `acquire_submission` → route quote + nonce read (no SQL lock held) → `PREPARED` saved → `SIGN_REQUESTED` saved → recheck of durable stop/removal, intent expiry and the saved mandate's expiry against the current clock → signer call → signed bytes validated → `SIGNED` saved with bytes and hash → `BROADCAST_REQUESTED` saved → the same recheck → one broadcast → `BROADCAST_RETURNED` saved. Each recheck runs after its stage save and immediately before the effect, so a slow save grants no grace interval (A3). A save that fails stops the sequence: no later call is made.
+
+**Signed-byte validation.** Only type 2 (EIP-1559) is supported; any other type is refused. The decoded `chainId`, `nonce`, `to`, `value`, `data`, `gas`, `maxFeePerGas`, `maxPriorityFeePerGas` and an empty access list must equal the frozen unsigned transaction, and the recovered sender must equal `wallet_address`. Size limit 8 KiB.
+
+**Outcomes** (transport vocabulary reused; nothing is retried, re-quoted, re-nonced, re-fee'd or re-signed, and no second action exists):
+
+| Event | Outcome | Liability |
+|---|---|---|
+| Unsupported network/route/asset, quote blocked or unknown, fee over the gas reservation, stop/removal, intent expiry or saved-mandate expiry before signing, persistence failure before signing | `DEFINITELY_UNSENT` | Released by the accepted P22 path. |
+| Signer refusal: an explicit error envelope (`error` object, no `data`) | `DEFINITELY_UNSENT` | Released. |
+| Signer reply without usable `data.signed_transaction` that is not an explicit refusal (another spelling, field missing, not an object), or a JSON-RPC error | `SUBMISSION_POSSIBLE` (`SIGNED_RESPONSE_REJECTED`: `SIGNER_REPLY_UNRECOGNIZED`, or `SIGNING_UNKNOWN`); never broadcast | Kept: a signature may exist outside the application. |
+| Signer reply lost or timed out | `SUBMISSION_POSSIBLE` (`SIGNING_UNKNOWN`) | Kept. |
+| Signed bytes malformed, wrong type, field or sender mismatch | `SUBMISSION_POSSIBLE` (`SIGNED_RESPONSE_REJECTED`); never broadcast | Kept: a signature may exist outside the application. |
+| Stop/removal, intent or mandate expiry, or persistence failure after signing | `SUBMISSION_POSSIBLE`; never broadcast | Kept. |
+| Broadcast reply lost, error or hash mismatch | `SUBMISSION_POSSIBLE`; provider error text and any reply other than the saved hash are never kept; the worker log records only an error class | Kept. |
+| Broadcast returned the same hash | `SUBMISSION_POSSIBLE` (`BROADCAST_RETURNED`) | Kept until an independent receipt reconciles. |
+
+Byte-identical resend is disabled in this milestone. A restart finds the IN_FLIGHT attempt or the retained claim and makes no second call.
+
+**Receipts.** `POST /v1/actions/{id}/reconcile` reads one recorded `eth_getTransactionReceipt(transaction_hash)` from an observation client separate from the broadcast client, and passes it through P20 `normalize_observation` with the saved `candidate_hash`, `chain_id`, `wallet_address` and `transaction_hash`. The candidate identity is supplied only when the receipt's `transactionHash`, `from` and `to` equal the saved values. Actual input and output come only from ERC-20 `Transfer` logs of the saved sell and buy tokens to or from the wallet, whose `data` is read as one exact 32-byte ABI word (JSON-RPC `DATA`; a `QUANTITY`-form value is not read) and whose indexed addresses must be exact zero-padded 32-byte words. Every log in the receipt must have a 20-byte address and 32-byte topics; one malformed log (it could be a skipped part of a leg) makes both amounts unknown; gas is `gasUsed × effectiveGasPrice` in native MON. A missing value stays `null`. Mapping: proven `CONFIRMED` → `CONFIRMED` with all actuals; `CONFIRMED` without all actuals → `CONFIRMED` with the missing values `null`, which the accepted P22 settlement records as a `BREACHED` `MISSING_RECONCILED_*` case keeping every reservation; `REVERTED` → `REVERTED` (missing gas: same breach); `PENDING`, `TIMEOUT`, `SUBMISSION_UNKNOWN`, `ACKNOWLEDGEMENT_LOST` → `SUBMISSION_UNKNOWN`; `REJECTED` (wrong hash, wallet, chain or binding) → nothing applied, reasons returned. Recovery fingerprints keep a repeat a no-op and changed evidence a discrepancy. A reconcile while the attempt is still in flight without a saved hash, or on an original refused before signing, adds no evidence (`NOT_OBSERVED`, `ORIGINAL_IN_FLIGHT` / `ORIGINAL_REFUSED_UNSENT`); a late submission reply never rewrites an attempt a reconciliation already settled. Planned amounts are never substituted: the generic settlement no longer falls back to them; the labelled `FixtureChain`/`LocalFixtureTransport` adapters supply their authored amounts explicitly.
+
+**Current holdings** (`edge-os.current-holdings/1`). The holdings port returns, per requested asset, `raw`, `decimals`, and for the observation `wallet_address`, `chain_id`, `block_number`, `observed_at` (the block time), `finality`, `source`, `evidence_class` and `missing` assets. Admission and revalidation use `observed_at` as `checked_at`, so a stale observation is refused by the existing freshness check (`STALE_CONTEXT`); the current clock is never stamped onto supplied holdings. `eth_call` results (`balanceOf`, `decimals()`) are read as exact 32-byte ABI words; `eth_getBalance` and block fields as `QUANTITY`. An unreadable `eth_chainId` refuses the whole observation. A wrong wallet or chain, an unknown or mismatched decimals value, a missing asset or a future/stale time is `HOLDINGS_UNAVAILABLE` with the reason, and no action is admitted. Native MON is gas only; a native trading asset is refused. Limit: the recorded holdings client reads at the saved wallet address, so `HOLDINGS_WRONG_WALLET` can only fire for a port that reports another address; it is a guard for future ports, not a proven check here. Funding shows these fields apart from deposit history, attributed positions and reservations. The fixture holdings adapter stays authored: it is computed at the caller's read, so it carries `observed_at: null` and `finality: AUTHORED`, and admission uses that step's own time.
+
+**Owner projection.** `GET /v1/actions/{id}` shows `original_transaction` through an allow-list (`OWNER_FIELDS`), never `signed_bytes`, unsigned bytes, the signing request body or any provider reply text: stage, `candidate_hash`, `transaction_hash`, `nonce`, fee envelope, `signing_request_id`, `signed_bytes_sha256`, `signed_bytes_length`, broadcast result and `evidence_class`. Another owner gets `404` and no client call.
+
+**Worked fixture** (AUTHORED, `tests/fixtures/original_transaction/original_transaction_v1.json`, writer `tests/original_transaction_recordings.py`): ENTRY selling `100000000` of `0x2222…2222` (6 decimals) for `50000000000000000000` of `0x1111…1111`, minimum output 99 % (`49500000000000000000`), chain `143`, nonce `0`, `to` `0x00000000000000000000000000000000000f1007` (authored), value `0`, gas limit `300000`, max fee `3000000000`, priority fee `1000000000`, empty access list, sender `0x2c7536E3605D9C16a7a3D7b1898e529396a65c23`. Transaction hash (Keccak-256 of the full signed bytes) `0x7067b4c886f172b32b1c2839bcd70a45186817e3ade5648bb34fc0d6ea7aa28d`; the EXIT at nonce `1` is `0x55b5277b4b8fcd0c3f23b2f05b23f78bc0c37934a7bcbf509e1805872045dcc7`. The authored receipt moves the sell amount out and the expected output in, `gasUsed 150000 × effectiveGasPrice 2000000000` = `300000000000000` native.
+
+**Time limits.** Each injected client is called at most once per stage, and the stage rechecks (stop, removal, intent expiry) run before signing and before sending. A per-call timeout for a real signer or RPC client is not set by the recorded clients; it is a required property of any actual adapter (`docs/qualification/original-transaction/ACTUAL_ORIGINAL_TRANSACTION_QUALIFICATION_PACKET.md`). The worker's per-job advisory transaction stays open across the calls; it blocks no stop, admission or other owner.
+
+**Fault matrix** (each row names its test in `apps/api/tests/test_original_transaction_journey.py` unless stated; SQL is independent evidence, the public route is the assertion):
+
+| Case | Expected | Test |
+|---|---|---|
+| Happy path, then reconcile a proven receipt | 1 quote, 1 nonce, 1 sign, 1 broadcast; hash equals the worked literal; CONFIRMED once; repeat is a no-op | `test_the_original_transaction_is_saved_before_each_effect_and_settles_once` |
+| Exit after entry | next nonce `1`, its own hash | `test_the_exit_is_one_more_original_transaction_with_the_next_nonce` |
+| Explicit signer refusal | 0 broadcast; DEFINITELY_UNSENT; reservations released | `test_a_signer_refusal_sends_nothing_and_releases_the_reservations` |
+| Unrecognized signer reply (another spelling, field missing, not an object) | 0 broadcast; `SIGNER_REPLY_UNRECOGNIZED`; reservations kept | `test_an_unrecognized_signer_reply_keeps_the_liability_and_is_never_sent` |
+| Signer reply lost | 0 broadcast; unknown kept; rerun makes no call | `test_a_lost_signer_reply_keeps_the_liability_and_a_restart_makes_no_second_call` |
+| Signed bytes: wrong type, malformed, oversize; another nonce | 0 broadcast; `SIGNED_RESPONSE_REJECTED` with the reason | `test_rejected_signed_bytes_are_never_broadcast_and_keep_the_liability`, `test_signed_bytes_for_another_nonce_are_rejected` |
+| Signed bytes: each field, another signer, tampered byte; public vectors | refused with the field reason | `tests/execution/test_original_signed_bytes.py` |
+| Unmarked placeholder wallet on the original path (A1) | `SIGNED_SENDER_MISMATCH`; 0 broadcast; reservations kept | `test_an_unmarked_placeholder_wallet_is_refused_as_another_signer_and_never_sent` |
+| Save failure at `PREPARED`, `SIGN_REQUESTED` / `SIGNED`, `BROADCAST_REQUESTED` | 0 sign / 0 broadcast | `test_a_failed_save_stops_before_the_next_effect` |
+| Broadcast reply lost; another hash returned | unknown kept; 1 broadcast; the lost one reconciles CONFIRMED | `test_a_lost_broadcast_reply_reconciles_the_original_from_its_receipt`, `test_a_broadcast_reply_with_another_hash_is_kept_unknown` |
+| Stop or removal after signing | 0 broadcast; unknown kept | `test_a_stop_recorded_after_signing_prevents_the_broadcast`, `test_a_removal_recorded_after_signing_prevents_the_broadcast` |
+| Expiry, stop or removal landing during the `SIGN_REQUESTED` save and during the `BROADCAST_REQUESTED` save (six cases); no change (control) | before signing: DENIED_UNSENT, 0 sign, released; after signing: unknown kept, 0 broadcast; control sends once | `test_an_authority_change_during_a_stage_save_allows_no_next_effect` |
+| Mandate expiry after the route, after the nonce, after the signer | before signing: DENIED_UNSENT, 0 sign; after signing: unknown kept; 0 broadcast | `test_a_mandate_that_expires_during_the_lifecycle_allows_no_next_effect` |
+| Broadcast reply or error echoing signed bytes or a credential | nothing saved or shown beyond the private bytes; owner GET and logs clean | `test_a_broadcast_reply_that_echoes_bytes_or_secrets_is_never_saved_or_shown` |
+| A hash-shaped slice of the signed bytes as the reply; an unexpected client error carrying the bytes | not saved or shown; the log names only the error class | `test_a_hash_shaped_slice_of_the_signed_bytes_is_never_saved_or_shown`, `test_an_unexpected_client_error_reaches_the_log_without_its_text` |
+| Crash before sending, then restart | no second quote, sign or send | `test_a_crash_after_signing_leaves_one_original_that_a_restart_never_resends` |
+| Duplicate and concurrent runs of one job | 1 sign, 1 send | `test_concurrent_runs_of_one_job_sign_and_send_once` |
+| Reconcile during signing; reconcile of a refused original | no evidence added; the original continues | `test_a_reconcile_during_signing_observes_nothing_and_never_interrupts_the_original`, `test_reconciling_a_refused_original_adds_no_evidence` |
+| Receipt wrong hash, wallet or chain | nothing applied | `test_a_receipt_for_another_transaction_or_wallet_applies_nothing`, `test_a_receipt_on_another_chain_applies_nothing` |
+| CONFIRMED missing output, input or gas; REVERTED missing gas; `QUANTITY`-form log data | BREACHED `MISSING_RECONCILED_*`; reservations kept | `test_a_receipt_without_every_actual_never_releases_the_liability` |
+| Transfer topics short, wrong prefix or non-zero padding | BREACHED `MISSING_RECONCILED_*`; reservations kept | `test_malformed_indexed_transfer_addresses_prove_no_amount` |
+| One malformed log (topic0, address or topic width) in a split leg; a well-formed split | BREACHED, reservations kept; the clean split sums to the whole amount | `test_a_malformed_log_anywhere_in_the_receipt_proves_no_amount`, `test_a_well_formed_split_leg_sums_to_the_whole_amount` |
+| Changed evidence after settlement | discrepancy; original truth unchanged | `test_changed_evidence_after_settlement_cannot_rewrite_the_original_outcome` |
+| Holdings stale, wrong decimals, missing asset, `QUANTITY`-form balance, another chain, unreadable chain | admission denied; funding shows the reason | `test_unusable_holdings_admit_nothing_and_show_unavailable`, `test_holdings_observed_on_another_chain_admit_nothing`, `test_holdings_whose_chain_cannot_be_read_admit_nothing` |
+| Route the recording does not hold | `ROUTE_BLOCKED` before signing | `test_a_route_the_recording_does_not_hold_is_blocked_before_signing` |
+| Two owners | 404; 0 injected calls | `test_another_owner_cannot_read_or_reconcile_and_makes_no_call` |
+| Holdings identity shown apart from deposits | block, time, finality, wallet, source | `test_recorded_holdings_carry_their_observation_identity_apart_from_deposits` |
+
+## RESEARCH-PORTS-LOCAL: accepted P07 HTTP clients and Nansen reports in the application (frozen interfaces)
+
+Milestone `RELEASE-E2E-L2-20261012-RESEARCH-PORTS-LOCAL-v1`, base `f84ef41`. Local only. Every provider reply is AUTHORED and replayed by an application-owned transport; no client reaches a network, reads a credential or claims `ACTUAL_PROVIDER`. Production keeps both paths unavailable.
+
+**Configuration (local and test only; production refuses both).**
+- `research_source_clients`: `recorded` (default; the SOURCE-LOCAL recorded clients, unchanged) or `authored_http`.
+- `nansen_research_mode`: `unavailable` (default) or `authored_fixture`.
+- New caps: `research_budget_nansen_credits` (owner) and `usage_global_nansen_credits` (global), in whole credits. Only Nansen jobs reserve, settle or create `nansen_credits` rows; history jobs touch only `provider_requests` and `compute_seconds`. Readiness checks every resource, so a changed Nansen cap with existing Nansen rows reports `quota_cap_mismatch` for the whole research capacity, as for the other caps.
+- `GET …/nansen-reports` returns `available` (whether this server composes the Nansen transport); saved reports reopen either way and the panel disables new requests when it is false.
+- No setting accepts an endpoint, a token or a transport. The composition module `core/research/provider_composition.py` holds the only endpoints (`https://hypersync.authored.invalid`, `https://quicknode.authored.invalid/authored`) and an authored, non-secret bearer value, and builds a fresh client per job.
+
+**P07 HTTP source (`AUTHORED_HTTP_RESPONSE`).**
+- The catalog always lists `native-http-qualified/1`, with `available: true` only when `research_source_clients = authored_http`; otherwise a job on it is refused 409 `history_source_unavailable` before any reservation, and a saved job whose composition was later removed ends `UNAVAILABLE` (`history_source_unavailable`) before any client exists. The same worker-time refusal applies to a saved Nansen job (`nansen_research_unavailable`). It reuses the SOURCE-LOCAL native recording's profile, scan and declared `provider_facts`; `content_label` stays `SYNTHETIC_FIXTURE`. Existing sources keep their classes and meaning.
+- The job runs `collect_native` with the accepted `HttpEnvioQueryClient` and `HttpQuickNodeRpcClient` over `AuthoredHttpTransport`, an `HttpTransport` that answers `POST /query` with the recorded native HyperSync pages and JSON-RPC 2.0 posts with the recorded `eth_chainId` and receipts. The SOURCE-LOCAL `RequestBudget` guard still wraps both clients, so cancellation, the deadline and the declared request budget are checked before every client call, and a made call counts even when it fails. No retry.
+- `ClientBounds` come from the declaration: `deadline_seconds` = the declared deadline, `max_response_bytes` = declared `max_bytes`, `max_request_bytes` = 65536, `max_blocks_per_page` = the scan span, `connect_timeout_seconds` = min(10, deadline).
+- The dataset's `transport` adds `client_classes` (`HttpEnvioQueryClient`, `HttpQuickNodeRpcClient`), `http_accounting` (each client's `attempted_requests`, `completed_requests`, `unknown_liability`), `response_sha256` per reply and `transport_label` `AUTHORED_HTTP_TRANSPORT`. Usage is `MEASURED_CLIENT_CALLS` only when every made call completed; any client `unknown_liability` makes it `UNKNOWN` (whole reservation kept).
+- Provider failures (401, 402, 403, 429, malformed or oversized pages) stop through the accepted P07 stop path, which saves the dataset `PARTIAL` with stop reason `PROVIDER_ERROR`; no provider text, endpoint path or token reaches the dataset, API, browser or log. DNS/connect containment limits stay as the P07 note records (not exercised: the authored transport opens no socket).
+
+**Nansen report job (`NANSEN_REPORT`).**
+- `POST /v1/research/requests/{intake_id}/nansen-reports` with `{request_key, operation_id, token_address, token_symbol, window {start_utc, end_utc}, operations [holders|flows], holder_query?, flow_query?, limits {max_requests, max_pages, max_bytes, max_credits, per_page}, deadline_seconds, compute_seconds}`. The question is the saved request's exact text; the owner is the verified principal. Body fields outside the model are 422. `NansenRequest.validate()` errors are 422 with their stable code, before any reservation.
+- One original job per owner, request and `request_key` (same body → the original job; changed body → 409 `request_key_reused`). The job is an `investigation_jobs` row with `kind = NANSEN_REPORT` and `declaration_id` = the saved `nansen_requests` row (migration 0011 adds `kind`, `nansen_requests` and `nansen_reports`). Existing rows read as `HISTORY_INVESTIGATION`.
+- Before any provider effect the owner and global quotas reserve `provider_requests = max_requests`, `compute_seconds`, `nansen_credits = ceil(max_credits)`; a refusal saves the job `BUDGET_EXHAUSTED`.
+- The worker saves `ATTEMPT_STARTED` (tool `run_nansen_research`) before `run_research` runs, over `AuthoredNansenTransport` behind a guard that refuses before the next request on cancellation (`NansenCancelled`) or the job deadline (`NansenTimeout`). Nothing is retried.
+- Saved `nansen_reports` row: `request` (`nansen-research-request/1`), `evidence` (`nansen-research-evidence/1`), `report` (`nansen-research-report/1`), their package SHA-256 values (`canonical_sha256`), the record-contract `content_sha256`, `evidence_class` `AUTHORED_FIXTURE` and the transport label. Reopening reads this row; it never calls the transport or charges again.
+- Settlement uses the number of requests handed to the transport (`GuardedNansenTransport.sent`), not error codes. A refusal before sending (the package's `REQUEST_LIMIT`, `CREDIT_LIMIT` or deadline check, or the application guard's cancel/deadline) is not a made call. `provider_requests` KNOWN = the sent requests, only when every sent request has a recorded reply; otherwise UNKNOWN (whole reservation). `nansen_credits` KNOWN = ceil(sum of deducted credits) only when nothing was lost and every reply carried a valid deducted-credit header; otherwise UNKNOWN (whole credit reservation kept; never zero). Compute settles as for history jobs.
+- The transport is composed before `ATTEMPT_STARTED`; a composition fault ends the job `FAILED` (`nansen_composition_failed`) with everything released. A worker stopped during the attempt, or a failed report save, resumes as `OUTCOME_UNKNOWN`: provider and credit reservations stay unknown liability, no second run. The success path re-locks the job row before it saves the report and settles.
+- Migration 0011's downgrade refuses while any Nansen job or nonzero `nansen_credits` allocation exists (revision 0010 cannot hold them); otherwise it removes the zero credit rows. The Stage 2 rollback rehearsal therefore applies to a database without Nansen jobs; a database with them needs an operator decision first.
+- The report view shows the exact question, `answer_state`, findings with verdicts and source references, limitations, coverage, unknowns, credit and request accounting and the labels `AUTHORED_FIXTURE` and "not provider data". Address counts are record counts; amounts keep raw text and unresolved verdicts. Nansen facts never enter a P07 dataset, a market adoption, a rule revision or a replay.
+
+**P27 forward observation (types only).** `research/forward_observation.py` freezes `ForwardObservation` (network, market binding, base/quote assets and units, event, collected_at, observed_at, finality, coverage, evidence_class, age_seconds, availability) and `forward_observation_from(source)`, which returns `UNAVAILABLE` with a reason for every historical, recorded, authored or Nansen source. No forward polling or scheduler is added.
+
+**Retained limits.** One admitted HTTP client call may run up to the declared `deadline_seconds` after its start (the accepted clients take a per-call deadline; the job guard refuses the next call after the job deadline). A cancel seen between the job guard and the client's own check bills an unmade call as consumed, and a cancel seen after a reply makes the client's `unknown_liability` 1; both directions are conservative (never zero) and follow the accepted library semantics. DNS/connect containment stays unexercised.
+
+**Fault matrix.** Tests are in `apps/api/tests/test_research_ports_journey.py` (its own database in the session container) unless marked; the public route is the assertion and the mapped verifier adds direct SQL (`research-ports-inspection.json`).
+
+| Case | Expected | Test |
+|---|---|---|
+| HTTP source job, happy path | REPORTED; `client_classes` HTTP; calls Envio 2 / QuickNode 25; corroboration COMPLETE; usage MEASURED_CLIENT_CALLS; job summary labels the clients | `test_http_source_job_runs_through_the_accepted_p07_http_clients`; verifier `research-ports-journey`/`-report` specs |
+| HTTP dataset → market adoption → new revision → replay | COMPLETE replay with lineage `AUTHORED_HTTP_RESPONSE`, `SYNTHETIC_FIXTURE`, simulated fills | `test_the_http_dataset_feeds_adoption_and_a_replay_with_simulated_fills` |
+| HTTP 401/402/403/429 page | PARTIAL, `PROVIDER_ERROR`; no retry; no provider text saved | `test_a_refused_http_page_stops_with_a_stable_code_and_no_provider_text` |
+| HTTP receipt mismatch | corroboration COMPLETE with 1 mismatch (`BLOCK_MISMATCH`); not QUALIFIED; no market binding | `test_an_http_receipt_mismatch_is_counted_and_blocks_qualification` |
+| HTTP malformed page | PARTIAL, `PROVIDER_ERROR`; one request; no retry | `test_a_malformed_http_page_stops_without_a_retry` |
+| HTTP oversized page | PARTIAL inside the declared byte bound | `test_an_oversized_http_page_is_refused_within_the_declared_byte_bound` |
+| HTTP lost reply (transport raises after send) | client unknown_liability 1 → usage UNKNOWN, whole reservation (27) kept | `test_a_lost_http_reply_keeps_the_whole_reservation_unknown` |
+| Cancel / deadline before a client call | refused before any client exists; nothing consumed | `test_a_cancelled_http_job_makes_no_client_call`, `test_an_http_job_past_its_deadline_makes_no_client_call` |
+| Configuration `recorded` | source listed `available: false`; job 409 `history_source_unavailable`; nothing reserved | `test_without_the_http_composition_the_source_is_listed_unavailable_and_refused` |
+| Composition removed after a job was saved | HTTP and Nansen jobs end UNAVAILABLE before any attempt; nothing consumed or unknown | `test_a_saved_job_is_refused_before_effect_when_the_composition_is_removed` |
+| Production with either new mode | settings refuse to load | `test_production_refuses_the_authored_transports` |
+| Nansen job, happy path | REPORTED; 2 transport calls; credits KNOWN 6; reopen after restart equal with no new call; owner B 404 | `test_a_nansen_report_job_saves_and_reopens_the_same_report`; verifier specs and restart reopen |
+| Nansen 401/402/403/429 | PARTIAL report with stable stop code; one call; no retry; no provider text; request KNOWN 1, credits UNKNOWN (no deducted header) | `test_a_refused_nansen_call_keeps_a_partial_report_with_a_stable_code` |
+| Nansen malformed reply | operation FAILED; one call; PARTIAL answer | `test_a_malformed_nansen_reply_keeps_a_partial_report_and_stops` |
+| Nansen wrong-token echo | operation FAILED `WRONG_TOKEN`; no row kept; one known request | `test_a_wrong_token_echo_keeps_no_row_and_stops` |
+| Package request/credit limit refusal before dispatch | not a made call: credit cap below the first call → 0 calls, all KNOWN 0, nothing unknown; request or credit cap before the second operation → 1 known request, 5 known credits | `test_a_package_limit_refusal_is_not_a_made_call` |
+| Nansen transport composition fails | FAILED `nansen_composition_failed` before any attempt; everything released | `test_a_composition_fault_fails_before_any_attempt_and_releases_everything` |
+| Rollback below 0011 with Nansen liability | downgrade refused; job and reservation kept; readiness unchanged | `test_a_rollback_below_0011_is_refused_while_nansen_liability_exists`; history-only rollback `tests/test_restore_rehearsal.py` |
+| Nansen missing credit header | credits UNKNOWN, whole credit reservation (12) kept | `test_a_missing_credit_charge_keeps_the_whole_credit_reservation_unknown` |
+| Nansen lost reply | requests and credits UNKNOWN, whole reservations kept | `test_a_lost_nansen_reply_keeps_requests_and_credits_unknown` |
+| Nansen cancel / deadline between operations | stop before the next request; partial report; one request KNOWN | `test_a_cancel_between_operations_stops_before_the_next_request`, `test_a_nansen_deadline_between_operations_stops_before_the_next_request` |
+| Nansen report save fails after the calls | job stays COLLECTING; next pass OUTCOME_UNKNOWN; no second call; requests 4 and credits 12 unknown | `test_a_failed_report_save_keeps_liability_and_is_never_run_again` |
+| Nansen worker killed in the attempt | OUTCOME_UNKNOWN; no second run; reservations unknown | `test_a_worker_killed_during_the_run_is_never_run_again` |
+| Nansen invalid request (window order, duplicate operation, bad token, owner field, limits) | 422 before any reservation | `test_an_invalid_nansen_request_is_refused_before_any_reservation` |
+| Nansen budget refusal | BUDGET_EXHAUSTED; zero transport calls | `test_a_nansen_job_over_the_credit_budget_is_refused_and_calls_nothing` |
+| Repeat / changed `request_key` | original job / 409 `request_key_reused` | `test_a_repeated_key_returns_the_original_job_and_a_changed_body_is_refused` |
+| Other owner | 404 on start, request list, job and report | `test_another_owner_cannot_start_a_report_on_this_request`, happy-path test |
+| Unsupported question clause (buying) | finding UNRESOLVED, `answer_state` PARTIAL | `test_an_unsupported_question_clause_stays_unresolved` |
+| Nansen not configured | 409 `nansen_research_unavailable`; list says `available: false` | `test_without_the_nansen_composition_nothing_starts` |
+| Forward observation from any current source | UNAVAILABLE with reason | `test_no_current_source_is_a_forward_observation` |
+| Web panel and labels | exact question, findings, gaps, recomputed hashes, held credits, keyed retry, unavailable server, released refusal text; HTTP facts labelled authored | `apps/web/tests/research-nansen-report.test.tsx`, `apps/web/tests/investigation-review.test.tsx` |
 
 ## Decisions for the builder
 
