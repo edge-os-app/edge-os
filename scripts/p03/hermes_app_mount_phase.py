@@ -169,7 +169,7 @@ def drive_mount(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port: i
         processes.append(process)
         harness.wait_http(f"{api_url}/readyz", timeout=120)
         restart = json.loads((workdir / "startup-2.json").read_text())
-        code = run_playwright(["hermes-transport-mount-reopen.spec.mjs"], mount_env, evidence / "ui-hermes-transport-mount-reopen.log")
+        code = run_playwright(["hermes-transport-mount-restart.spec.mjs"], mount_env, evidence / "ui-hermes-transport-mount-restart.log")
         ok &= rec.step("HERMES-MOUNT: after a restart with the same run id the saved attempts reopen unchanged (new "
                        "browser context, no write)", code == 0 and restart["startup_recovery"] == [],
                        {"exit": code, "startup": restart})
