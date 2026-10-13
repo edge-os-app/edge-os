@@ -44,7 +44,7 @@ function snapshot(over: Partial<AgentHealth> = {}): AgentHealth {
     controls: { stops: [{ stop_id: "s1", mode: "STOP_NEW_ENTRIES", scope: "AGENT_WALLET_NETWORK", position_id: null,
       created_at: "2026-10-13T09:07:00Z" }], removals: [], control_state_basis: unknown("PRODUCER_INPUT_MISSING") },
     residual_inventory: [{ position_id: "pos-1", asset_id: "monad-testnet/0x11", quantity: { asset_id: "monad-testnet/0x11",
-      raw: "50000000000000000000", decimals: 18 }, position_state: "OPEN", updated_at: "2026-10-13T09:06:12Z" }],
+      raw: "50000000000000000000", decimals: 18 }, position_state: "OPEN", updated_at: known("2026-10-13T09:06:12Z") }],
     unknown_inputs: [{ field: "native_gas_aggregate", state: "UNKNOWN", reason: "PRODUCER_INPUT_MISSING: only per-receipt gas" }],
     record_refs: [],
     ...over,
@@ -76,6 +76,7 @@ describe("direct agent health", () => {
     expect(facts.getByTestId("health-warnings")).toHaveTextContent("ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN");
     expect(facts.getByTestId("health-controls")).toHaveTextContent("STOP_NEW_ENTRIES");
     expect(facts.getByTestId("health-inventory")).toHaveTextContent("50000000000000000000");
+    expect(facts.getByTestId("health-inventory")).toHaveTextContent("last saved 2026-10-13T09:06:12Z");
     expect(facts.getByTestId("health-unknowns")).toHaveTextContent("native_gas_aggregate");
     expect(facts.getByTestId("health-digest")).toHaveTextContent("sha256:first");
     expect(mocks.read).toHaveBeenCalledWith("agent-a");

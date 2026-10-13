@@ -139,12 +139,14 @@ def sql_inspection(pg: harness.Postgres, snapshots: dict[str, dict[str, Any]],
                             "join execution_local.execution_evaluation_jobs j using (job_id) where "
                             f"o.deployment_id = '{deployment}' order by o.decision_slot desc")
         newest = times[0]
+        # One tick writes several rows with the same time: any row holding the newest time names it correctly.
+        tied = {(row["tab"], row["id"], row["f"]) for row in times if row["a"] == newest["a"]}
         checks[project] = {"times": times, "cursor_next": cursor, "unsettled": unsettled, "stops": stops,
                            "positions": positions, "outcomes": outcomes}
         as_of = health["as_of"] or {}
         expectations.update({
             f"{project}: as_of names the newest stored write (table, id, field)":
-            (as_of.get("table"), as_of.get("id"), as_of.get("field")) == (newest["tab"], newest["id"], newest["f"]),
+            (as_of.get("table"), as_of.get("id"), as_of.get("field")) in tied,
             f"{project}: next due slot equals the producer cursor + 5 minutes":
             health["producer"]["next_due_slot"].get("value") == cursor["n"],
             f"{project}: canonical pending reconciliation equals the unsettled queue rows":

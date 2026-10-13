@@ -62,8 +62,11 @@ def journey(settings, tmp_path):
 
 def deployed(client: TestClient, headers: dict[str, str], agent: str) -> dict[str, Any]:
     state = ff.ready_for_action(client, headers, agent)
-    response = client.post(f"/v1/agents/{agent}/deployment", headers=headers,
-                           json={"request_key": "activate", "expected_consent_hash": state["consent"]["consent_hash"]})
+    # Activation is saved one minute before the producer's first pass (same slot), so its stored time can never tie
+    # with the pass's writes in one whole second.
+    with at(client, -1):
+        response = client.post(f"/v1/agents/{agent}/deployment", headers=headers, json={
+            "request_key": "activate", "expected_consent_hash": state["consent"]["consent_hash"]})
     assert response.status_code == 201, response.text
     return {**state, "deployment": response.json()}
 
@@ -148,30 +151,31 @@ def iso(value: dt.datetime) -> str:
     return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def newest_write(client: TestClient, deployment_id: str) -> tuple[str, str, str]:
-    """Independent SQL: the newest stored time among the deployment's named rows."""
+def newest_writes(client: TestClient, deployment_id: str) -> tuple[str, set[tuple[str, str, str]]]:
+    """Independent SQL: the newest stored time among the deployment's named rows, and every row that has it."""
     candidates = rows(client, """
         select 'execution_local.execution_recurring_deployments' t, deployment_id::text id, 'updated_at' f,
-               updated_at at time zone 'utc' at_ from execution_local.execution_recurring_deployments
+               updated_at at_ from execution_local.execution_recurring_deployments
          where deployment_id = cast(:d as uuid)
         union all select 'execution_local.execution_evaluation_jobs', job_id::text, 'updated_at',
-               updated_at at time zone 'utc' from execution_local.execution_evaluation_jobs
+               updated_at from execution_local.execution_evaluation_jobs
          where deployment_id = cast(:d as uuid)
         union all select 'execution_local.execution_evaluation_outcomes', job_id::text, 'evaluated_at',
-               evaluated_at at time zone 'utc' from execution_local.execution_evaluation_outcomes
+               evaluated_at from execution_local.execution_evaluation_outcomes
          where deployment_id = cast(:d as uuid)
         union all select 'execution_local.execution_submission_attempts', a.attempt_id::text, f.f,
-               case f.f when 'started_at' then a.started_at else a.completed_at end at time zone 'utc'
+               case f.f when 'started_at' then a.started_at else a.completed_at end
           from execution_local.execution_submission_attempts a
           cross join (values ('started_at'), ('completed_at')) f(f)
          where a.action_id in (select action_id from execution_local.execution_evaluation_jobs
                                 where deployment_id = cast(:d as uuid))
-        union all select 'execution_local.execution_queue', queue_id::text, 'updated_at', updated_at at time zone 'utc'
+        union all select 'execution_local.execution_queue', queue_id::text, 'updated_at', updated_at
           from execution_local.execution_queue where action_id in (
                select action_id from execution_local.execution_evaluation_jobs where deployment_id = cast(:d as uuid))
     """, d=deployment_id)
-    best = max((row for row in candidates if row["at_"] is not None), key=lambda row: row["at_"])
-    return best["t"], best["id"], best["f"]
+    times = [row for row in candidates if row["at_"] is not None]
+    newest = max(row["at_"] for row in times)
+    return iso(newest), {(row["t"], row["id"], row["f"]) for row in times if row["at_"] == newest}
 
 
 # ------------------------------------------------------------------------------------------------ cases
@@ -206,14 +210,21 @@ def test_signal_slot_is_dated_sourced_and_the_conversation_quotes_the_same_snaps
                                                    "source": "producer.next_due_slot"}
     assert health["bounded_pipeline"]["next_scheduled_at"]["state"] == "UNKNOWN"
     assert health["wait_reason"]["value"] is None and health["read_at"] == iso(journey.producer_base)
-    table, row_id, field = newest_write(journey, state["deployment"]["deployment_id"])
-    assert (health["as_of"]["table"], health["as_of"]["id"], health["as_of"]["field"]) == (table, row_id, field)
+    newest, tied = newest_writes(journey, state["deployment"]["deployment_id"])
+    assert health["as_of"]["time"] == newest
+    assert (health["as_of"]["table"], health["as_of"]["id"], health["as_of"]["field"]) in tied
     assert health["pending_reconciliation"]["canonical"]["action_ids"] == []
     assert {item["field"] for item in health["unknown_inputs"]} == {
         "native_gas_aggregate", "dataset_qualification", "revision_edge_evidence", "control_state_basis",
         "selected_completion_outcome", "job_manifest_hash"}
     assert all(item["state"] == "UNKNOWN" for item in health["unknown_inputs"])
     assert [p["quantity"]["raw"] for p in health["residual_inventory"]] == [ff.ENTRY_BASE_OUTPUT]
+    # The position time is derived from its latest saved receipt (or intent), at whole-second precision.
+    [derived] = rows(journey, "select coalesce(max(r.created_at), max(i.created_at)) t from "
+                              "execution_local.execution_intents i left join admission_local.admission_receipts r "
+                              "on r.action_id = i.action_id where i.action_id = :a", a=job["action_id"])
+    assert health["residual_inventory"][0]["updated_at"] == {
+        "state": "KNOWN", "value": iso(derived["t"]), "source": "derived: latest saved intent or receipt of the position"}
 
     answer = ask(journey, owner_a, agent, "What did the agent last do?")
     assert answer["topic"] == "last" and answer["snapshot"] == health
@@ -310,7 +321,16 @@ def test_an_unknown_original_is_the_canonical_pending_item_and_account_warnings_
     [job] = rows(journey, "select action_id, outcome from execution_local.execution_evaluation_jobs where "
                           "deployment_id = cast(:d as uuid)", d=state["deployment"]["deployment_id"])
     assert job["outcome"] == "SUBMITTED_UNKNOWN"
-    health = read(journey, owner_a, agent)
+    # Authored fault: the next pass reads a receipt whose outcome is still unknown, so recovery records an open case
+    # and the original keeps waiting.
+    receipts = journey.app.state.financial.ports.receipts
+    real = receipts.observe
+    receipts.observe = lambda **kwargs: dataclasses.replace(real(**kwargs), outcome="SUBMISSION_UNKNOWN")
+    try:
+        produce(journey, state, 5)
+    finally:
+        receipts.observe = real
+    health = read(journey, owner_a, agent, minutes=5)
     pending = health["pending_reconciliation"]
     assert pending["canonical"]["rule"] == "PRODUCER_UNSETTLED_QUEUE"
     assert pending["canonical"]["action_ids"] == [job["action_id"]]
@@ -319,10 +339,11 @@ def test_an_unknown_original_is_the_canonical_pending_item_and_account_warnings_
                                                         "action_id = :a and state in ('OPEN','UNKNOWN')",
                                                a=job["action_id"])]
     assert recovery["kind"] == "ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN" and recovery["action_ids"] == open_cases
+    assert open_cases == [job["action_id"]]  # the lost acknowledgement opened a recovery case: the warning is real
     assert monitoring == {"kind": "MONITORING_SUBMITTED_UNKNOWN", "pending": True,
                           "source": monitoring["source"]}
     assert health["wait_reason"]["value"] == "WAITING_RECONCILIATION"
-    answer = ask(journey, owner_a, agent, "is anything pending reconciliation?")
+    answer = ask(journey, owner_a, agent, "is anything pending reconciliation?", minutes=5)
     assert answer["topic"] == "reconciliation" and job["action_id"] in answer["answer"][0]["text"]
     assert "not merged" in answer["answer"][1]["text"]
 
@@ -456,3 +477,10 @@ def test_a_restarted_application_returns_the_same_snapshot_identity(journey, own
         restarted.producer_base = journey.producer_base
         after = read(restarted, owner_a, agent)
     assert after == before
+
+
+def test_a_position_without_a_saved_action_time_is_unknown_not_the_epoch():
+    from edge_os_api.agent_health.snapshot import _position_time
+    assert _position_time("1970-01-01T00:00:00.000000Z") == {
+        "state": "UNKNOWN", "reason": "POSITION_HAS_NO_SAVED_INTENT_OR_RECEIPT"}
+    assert _position_time("2026-10-13T17:47:14.131066Z")["value"] == "2026-10-13T17:47:14Z"

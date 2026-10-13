@@ -95,8 +95,8 @@ export function Shell() {
             openConversation={openSheet} />
         )}
         {route.name === "later" && <Later area={route.area} />}
-        {conversationAgent && <div className="btn-row">
-          <button className="btn btn-secondary convo-button" style={{ minHeight: 44 }} type="button" onClick={openSheet}>Conversation</button>
+        {conversationAgent && <div className="btn-row convo-button">
+          <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={openSheet}>Conversation</button>
         </div>}
         {route.name === "account" && <AccountViews key={`${route.area}:${route.recordId ?? ""}:${route.agentId ?? ""}`}
           initialView={route.area} sourceRecordId={route.recordId} agentId={route.agentId} />}

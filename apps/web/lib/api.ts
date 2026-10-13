@@ -299,7 +299,7 @@ export interface AgentHealth {
     control_state_basis: HealthField;
   };
   residual_inventory: { position_id: string; asset_id: string; quantity: { asset_id: string; raw: string; decimals: number };
-    position_state: string; updated_at: string }[];
+    position_state: string; updated_at: HealthField<string> }[];
   unknown_inputs: { field: string; state: "UNKNOWN"; reason: string }[];
   record_refs: HealthSourceRef[];
 }

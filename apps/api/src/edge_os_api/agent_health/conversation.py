@@ -15,9 +15,9 @@ QUESTION_LIMIT = 500
 TOPICS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("reconciliation", ("reconcil", "pending", "unknown outcome", "unsettled")),
     ("controls", ("stop", "removal", "remove", "ended", "end ", "halt", "pause")),
+    ("waiting", ("wait", "fault", "blocked", "silent", "stuck")),
     ("inventory", ("inventory", "holding", "position", "residual", "left")),
     ("identity", ("revision", "identity", "changed", "version")),
-    ("waiting", ("wait", "why", "fault", "blocked", "silent", "stuck")),
     ("next", ("next", "when", "schedule", "due")),
     ("last", ("last", "did", "latest", "recent", "evaluat", "trade", "attempt")),
     ("unknowns", ("missing", "unknown", "gas", "qualif", "edge")),
@@ -120,7 +120,7 @@ def _inventory(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     if not held:
         return [_line("No saved position for this agent wallet.", "residual_inventory")]
     return [_line(f"Position {p['position_id']} ({p['position_state']}): {p['quantity']['raw']} raw units of "
-                  f"{p['quantity']['asset_id']}, last saved {p['updated_at']}.", "residual_inventory")
+                  f"{p['quantity']['asset_id']}, last saved {_value(p['updated_at'])}.", "residual_inventory")
             for p in held]
 
 

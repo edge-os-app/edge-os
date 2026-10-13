@@ -27,7 +27,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from edge_os_api.accounts.service_projection import project as account_projection
+from edge_os_api.accounts.service_projection import PROJECTION_EPOCH, project as account_projection
 from edge_os_api.agent_health.source_times import deployment_source_times
 from edge_os_api.execution.connected_identity import resolve_agent
 from edge_os_api.execution.recurring_scheduler import OCCURRENCES_SHOWN, UNSETTLED_QUEUE
@@ -72,8 +72,18 @@ def _time(value: str | None, source: str, missing: str) -> dict[str, Any]:
     return unknown(missing) if value is None else known(_second(value), source)
 
 
+def _position_time(value: str) -> dict[str, Any]:
+    """A position has no time column: the account projection derives it from its latest saved intent or receipt,
+    and uses the epoch when none exists. That placeholder is not a fact, so it stays UNKNOWN."""
+    moment = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if moment == PROJECTION_EPOCH:
+        return unknown("POSITION_HAS_NO_SAVED_INTENT_OR_RECEIPT")
+    return known(utc_iso(moment), "derived: latest saved intent or receipt of the position")
+
+
 def digest(snapshot: dict[str, Any]) -> str:
-    """A stable identity of the snapshot's saved content; the read clock is excluded."""
+    """The snapshot's identity without `read_at`. Read-clock values (`producer_silent`, a PRODUCER_NOT_SEEN wait and
+    the next slot it hides) stay in, so a read across the silence boundary changes it; unchanged rows do not."""
     body = {key: value for key, value in snapshot.items() if key not in DIGEST_EXCLUDED}
     return "sha256:" + hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -173,7 +183,7 @@ def read_health(factory: sessionmaker[Session], financial: Any, owner_id: uuid.U
     else:
         producer_view = {
             "next_due_slot": known(producer["next_due_slot"], "producer.next_due_slot")
-            if producer["next_due_slot"] else unknown(producer["no_next_reason"] or "NO_NEXT_SLOT"),
+            if producer["next_due_slot"] else unknown(producer["no_next_reason"] or "PRODUCER_GAVE_NO_REASON"),
             "producer_silent": known(producer["producer_silent"], "producer.producer_silent at read_at"),
             "last_tick_at": _time(producer["last_tick_at"], "producer.last_tick_at", "PRODUCER_NEVER_TICKED"),
             "cursor_slot": _time(producer["cursor_slot"], "producer.cursor_slot", "NO_SLOT_SAVED"),
@@ -225,7 +235,7 @@ def read_health(factory: sessionmaker[Session], financial: Any, owner_id: uuid.U
         "residual_inventory": [{
             "position_id": item["content"]["position_id"], "asset_id": item["content"]["asset_id"],
             "quantity": item["content"]["quantity"], "position_state": item["content"]["position_state"],
-            "updated_at": item["content"]["updated_at"], "time_field": "derived",
+            "updated_at": _position_time(item["content"]["updated_at"]),
             "source": "admission_local.admission_positions (POSITION record)"} for item in scoped("POSITION")],
         "bounded_pipeline": {
             "scope": "agent wallet: manual and recurring evaluations",

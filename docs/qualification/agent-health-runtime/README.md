@@ -42,7 +42,9 @@ An agent with a confirmed wallet and no deployment returns a snapshot whose prod
   separately sourced `warnings`, never merged.
 - **Controls:** stop rows (`StopService.retrieve_stops`) and removal rows (`RemovalService.read_removal`) with their
   times; the deployment state, end reason and end time. `control_state_basis` stays `UNKNOWN`.
-- **Residual inventory:** the account POSITION projection for the exact wallet/network.
+- **Residual inventory:** the account POSITION projection for the exact wallet/network (open and closed positions).
+  A position has no time column: its time is derived from its latest saved intent or receipt, and the projection's
+  epoch placeholder becomes `UNKNOWN (POSITION_HAS_NO_SAVED_INTENT_OR_RECEIPT)`.
 - **Identity:** the saved deployment identity, the current resolution (`resolve_agent`) and `changed`, using the
   producer's own comparison. Historical occurrences keep their saved revision.
 - **Missing producer inputs (explicit `UNKNOWN`):** native-gas aggregate, `dataset_qualification`, revision-linked edge
@@ -87,4 +89,9 @@ question reads the current snapshot. Replies live in the open page only; they ar
 - Every observation, quote, transport and receipt is an authored fixture. The LOCAL producer recipe runs with
   `--clock-offset-minutes`, so stored producer times can be later than the API's real read clock.
 - No live user, provider, model, hosted worker or chain action was used. No full P31/AUT06 claim.
+- The snapshot is composed from separate read transactions (the producer projection opens its own session). A
+  producer tick, end or stop committed between them can give one transient mixed snapshot; the next read corrects it,
+  and each reply carries its own digest. With no deployment, `read_at` is the API's own clock.
+- Questions travel in the query string (at most 500 characters), so they can appear in access logs.
+- The side panel and the 390px sheet keep separate reply histories in the open page.
 - The bounded pipeline section (`ExecutionService.status`) covers the agent wallet, manual and recurring jobs together.

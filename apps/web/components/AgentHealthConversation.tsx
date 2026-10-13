@@ -53,7 +53,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dd data-testid="health-controls">{[...health.controls.stops.map((s) => `${s.mode} on ${s.scope} since ${s.created_at}`),
         ...health.controls.removals.map((r) => `Removal ${r.state} (requested ${r.requested_at}, updated ${r.updated_at})`)].join("; ") || "None"}</dd>
       <dt>Residual inventory</dt>
-      <dd data-testid="health-inventory">{health.residual_inventory.map((p) => `${p.position_id} ${p.position_state}: ${p.quantity.raw} raw ${p.quantity.asset_id}`).join("; ") || "No saved position"}</dd>
+      <dd data-testid="health-inventory">{health.residual_inventory.map((p) => `${p.position_id} ${p.position_state}: ${p.quantity.raw} raw ${p.quantity.asset_id}, last saved ${show(p.updated_at)}`).join("; ") || "No saved position"}</dd>
       <dt>Revision changed</dt><dd>{show(health.identity.changed)}</dd>
       <dt>Unknown inputs</dt>
       <dd data-testid="health-unknowns">{health.unknown_inputs.map((u) => `${u.field}: ${u.reason}`).join("; ")}</dd>
