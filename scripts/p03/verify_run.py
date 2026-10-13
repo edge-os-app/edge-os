@@ -33,6 +33,7 @@ import financial_phase  # noqa: E402
 import recurring_phase  # noqa: E402
 import research_phase  # noqa: E402
 import runtime_phase  # noqa: E402
+from hermes_app_mount_phase import run_hermes_app_mount_phase  # noqa: E402
 
 THESIS = ("Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
           "Spot only.")
@@ -505,6 +506,10 @@ def main() -> int:
         if not args.skip_ui and not args.skip_p05:
             ok &= run_p05_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,
                                 run_playwright, api, processes)
+            # The same Research journey over the LOCAL Hermes transport mount, on the standard API the P05 phase restarted.
+            standard = next((p for p in reversed(processes) if getattr(p, "name", "") == "api-after-p05"), api)
+            ok &= run_hermes_app_mount_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,
+                                             run_playwright, standard, processes)
 
         if args.hold_seconds:
             hold = {"web": web_url, "api": api_url, "token_owner_a": token_a,

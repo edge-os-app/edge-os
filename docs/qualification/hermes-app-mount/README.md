@@ -22,7 +22,7 @@ app = create_app(settings, hermes_runner=mount.runner)   # EDGE_OS_INTERPRETER=h
 - Migration `0013` adds `usage_local.provider_spend_settings`, `provider_spend_reservations` and `provider_spend_events` (append-only). Its downgrade refuses while any reservation or spend event exists.
 - A public attempt gains a read-only `spend` field (`state`, `charge_usd`) from the values the accepted runner saved. The web client is unchanged.
 
-Test support, not product code: `tests/hermes_app_mount/transport_mount_host.py` runs one API process over the mount with an authored script queue. Settings, `main.py`, the accepted `scripts/` code, `usage/`, the investigation job engine and the web client are unchanged.
+Startable LOCAL composition: `scripts/hermes_app_mount/serve_transport_mount.py` runs one API process over the mount with an authored script queue (section 3). The mapped verifier's HERMES-MOUNT phase, right after P05, drives it in the browser (`scripts/p03/hermes_app_mount_phase.py`, `tests/p03/hermes-transport-mount*.spec.mjs`, feature-map row "Hermes transport mount"). Settings, `main.py`, the accepted `scripts/` code, `usage/`, the investigation job engine and the web client are unchanged.
 
 ## 2. What the tests show
 
@@ -52,6 +52,19 @@ uv run --frozen pytest -p no:cacheprovider -q tests/provider_safeguards ../../te
 ```
 
 The second and third commands need Docker. They build the pinned Hermes image from `git archive` of the pinned commit and remove their own image and containers by exact tag and label.
+
+The full mapped verifier (`uv run --frozen python ../../scripts/p03/verify_run.py --run-id <fresh> --evidence-root <private folder>`) runs the HERMES-MOUNT phase after P05: browser save, attempt and usage, reopen in a new context, another owner refused, a lost reply kept unknown, a restart with the same run id and an unchanged reopen, with SQL against attempts, spend rows and the job's request files (`hermes-mount-*.json` in the run's evidence).
+
+To start the mount yourself (LOCAL only, migrated database, a built pinned image, the usual `EDGE_OS_*` environment):
+
+```
+EDGE_OS_INTERPRETER=hermes_local uv run --frozen python ../../scripts/hermes_app_mount/serve_transport_mount.py --port 8000 \
+  --image <pinned image tag> --run-id <stable id for this process> --evidence-dir <private folder>/turns \
+  --script-file <private folder>/script.json --credential-file <private dummy file> --report-file <private folder>/startup.json \
+  --global-cap 0.50 --owner-cap 0.25
+```
+
+The script file is a JSON list of `{"case": "<authored case>"}` items (optionally with `"transport_fault"`), one per model turn.
 
 ## 4. Limits
 

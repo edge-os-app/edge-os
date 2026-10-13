@@ -36,7 +36,7 @@ PRICE = TokenPrice(Decimal("2.00"), Decimal("7.50"))
 LIMITS = SpendLimits(Decimal("0.20"), Decimal("0.12"), PRICE)
 RESERVATION = Decimal("0.054848")  # (12,000 + 64) x 2.00 / 1e6 + 4,096 x 7.50 / 1e6
 EXACT_CHARGE = Decimal("0.0074285")  # concrete-thesis reports 1,423 prompt and 611 completion tokens
-HOST = Path(__file__).with_name("transport_mount_host.py")
+HOST = Path(__file__).resolve().parents[2] / "scripts" / "hermes_app_mount" / "serve_transport_mount.py"
 SPEND_TABLES = "usage_local.provider_spend_events, usage_local.provider_spend_reservations, usage_local.provider_spend_settings"
 
 
@@ -155,6 +155,7 @@ def test_a_lost_reply_is_saved_as_unknown_keeps_the_whole_reservation_and_publis
     assert (attempt["status"], attempt["parse_result"], attempt["revision_id"]) == ("UNKNOWN", "NOT_PARSED", None)
     assert bundle["head"]["interpretation_revision_id"] is None and attempt["response_sha256"] is None
     assert attempt["spend"] == {"state": "UNKNOWN", "charge_usd": str(RESERVATION)}
+    assert attempt["usage"] == {"source": "UNKNOWN", "input_tokens": None, "output_tokens": None, "total_tokens": None}
     assert requests_sent(app.evidence, attempt["attempt_id"]) == 1  # the provider did the work; the reply was lost
     retried = app.client.post(f"/v1/research/requests/{bundle['intake']['record_id']}/interpretation-retries",
                               headers=owner_a, json={"retry_of": attempt["attempt_id"]})

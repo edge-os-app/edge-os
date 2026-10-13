@@ -1,9 +1,11 @@
-"""An API process whose interpreter is the Hermes transport mount over a script queue. Test support only.
+"""Start the API with the LOCAL Hermes transport mount: the startable composition of `open_transport_mount`.
 
-Run it with the API's Python and the usual EDGE_OS_* environment plus EDGE_OS_INTERPRETER=hermes_local. Each model turn
-runs ACTUAL pinned Hermes in a no-network container; the AUTHORED transport plays the next item of `--script-file`, a
-JSON list of `{"case": name}` items with an optional `"transport_fault"`. Spend goes to the shared PostgreSQL ledger. No
-real provider, key or network. `--report-file` receives the startup recovery result.
+Run it from `apps/api` with the API's Python, the usual EDGE_OS_* environment and EDGE_OS_INTERPRETER=hermes_local
+(refused in production). Each model turn runs ACTUAL pinned Hermes in a no-network container; the AUTHORED transport plays
+the next item of `--script-file`, a JSON list of `{"case": name}` items with an optional `"transport_fault"`. Spend goes to
+the shared PostgreSQL ledger. Give each API process its own stable `--run-id`; a restart reuses it to recover its dead
+turns. `--report-file` receives the startup recovery result. No real provider, key or network. Used by the mapped
+verifier's P05 phase and by `tests/hermes_app_mount`.
 """
 
 from __future__ import annotations
