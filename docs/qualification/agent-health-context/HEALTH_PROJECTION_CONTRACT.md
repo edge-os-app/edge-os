@@ -42,12 +42,12 @@ target or conversation turn can set or retarget it. This reuses the accepted bou
 
 | Field | Source | Status |
 |---|---|---|
-| `owner_id` | verified `Principal.user_id` | PRESENT (f84) |
-| `agent_id`, `wallet_id`, `network_id` | `execution_local.execution_evaluation_jobs`, `funding_local.funding_profiles`, `admission_local.admission_positions` | PRESENT (f84) |
-| `strategy_id`, `publication_revision_id`, `execution_revision_id` | `execution_local.execution_evaluation_jobs` (IC01) | PRESENT (f84) |
-| `content_hash`, `manifest_hash` | `execution_local.execution_evaluation_jobs` | PRESENT (f84) |
-| `consent_adoption_id`, `consent_hash` | `execution_local.execution_evaluation_jobs` | PRESENT (f84) |
-| `network_id` treatment | network prefix on asset ids (`docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md`, IC01) | PRESENT (f84) |
+| `owner_id` | verified `Principal.user_id` | EXPOSED (f84) |
+| `agent_id`, `wallet_id`, `network_id` | `ConnectedAgent.identity()` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99`; also the account projection | EXPOSED (f84) |
+| `strategy_id`, `publication_revision_id`, `execution_revision_id` | `ConnectedAgent.identity()` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84) |
+| `content_hash`, `manifest_hash` | `ConnectedAgent.identity()` as `content_sha256`/`manifest_sha256` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84) |
+| `consent_adoption_id`, `consent_hash` | `execution_local.execution_evaluation_jobs`; `identity()` does not carry them | STORED INPUT / PROPOSED (lane2) |
+| `network_id` treatment | network prefix on asset ids (`docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md`, IC01); descriptive, not a separate status row | descriptive |
 | `deployment_id` | no deployment identity column exists | MISSING (P27 producer obligation) |
 
 A record scope is exact. Two positions that hold the same token but differ in agent, wallet or
@@ -147,7 +147,7 @@ Trading results answer: what did this agent's positions gain or lose, and what c
 | `basis` | `admission_positions.cost_basis` (`KNOWN` with amount) | EXPOSED (f84) as the POSITION basis |
 | `estimated_unrealized_result` | no observed mark exists; stays `UNKNOWN` | EXPOSED (f84) as UNKNOWN |
 | `mark` | no mark source exists; stays `UNKNOWN` | EXPOSED (f84) as UNKNOWN |
-| `native_gas` | funding profile gas asset and `admission_local.admission_receipts` actual gas; kept separate from the reported unit | STORED INPUT / PROPOSED (no accepted projection outputs gas) |
+| `native_gas` | per-receipt `actual_gas` is exposed at `GET /v1/actions/{action_id}` (`execution/routes.py:142-143`); the per-agent-wallet aggregate is derived from those receipts and kept separate from the reported unit | per-receipt gas EXPOSED (f84) / aggregate PROPOSED (lane2) |
 | `deposits` / `withdrawals` | `funding_local.funding_flows` and `funding_credits`; `included_in_realized_result = false` | EXPOSED (f84) as CAPITAL_FLOW |
 | `provider_mode` | `core/settings.py` `execution_mode` (`fixture`/`unavailable`) | EXPOSED (f84) (`execution/routes.py`) |
 

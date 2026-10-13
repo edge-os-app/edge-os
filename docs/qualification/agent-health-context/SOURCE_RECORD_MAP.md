@@ -38,11 +38,11 @@ producer must derive and expose it; `MISSING` = no producer.
 | `scope.agent_id` | `execution_evaluation_jobs.agent_id` | `service_projection.py:162-177` | EXPOSED (f84) |
 | `scope.wallet_id` | `execution_evaluation_jobs.wallet_id` | same | EXPOSED (f84) |
 | `scope.network_id` | `execution_evaluation_jobs.network_id` | same | EXPOSED (f84) |
-| `scope.strategy_id` | `execution_evaluation_jobs.strategy_id` | not projected today | STORED INPUT / PROPOSED (lane2) |
-| `scope.publication_revision_id` | `execution_evaluation_jobs.publication_revision_id` | not projected today | STORED INPUT / PROPOSED (lane2) |
-| `scope.execution_revision_id` | `execution_evaluation_jobs.execution_revision_id` | IC01, `connected_identity.py` | EXPOSED (f84) via IC01 identity |
-| `scope.content_hash`, `manifest_hash` | `execution_evaluation_jobs.content_hash`, `manifest_hash` | IC01 | STORED INPUT |
-| `scope.consent_adoption_id`, `consent_hash` | `execution_evaluation_jobs.consent_adoption_id`, `consent_hash` | IC01 | STORED INPUT |
+| `scope.strategy_id` | `execution_evaluation_jobs.strategy_id` | `ConnectedAgent.identity()` (`connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84) |
+| `scope.publication_revision_id` | `execution_evaluation_jobs.publication_revision_id` | same | EXPOSED (f84) |
+| `scope.execution_revision_id` | `execution_evaluation_jobs.execution_revision_id` | same | EXPOSED (f84) |
+| `scope.content_hash`, `manifest_hash` | `execution_evaluation_jobs.content_hash`, `manifest_hash` | same, as `content_sha256`/`manifest_sha256` | EXPOSED (f84) |
+| `scope.consent_adoption_id`, `consent_hash` | `execution_evaluation_jobs.consent_adoption_id`, `consent_hash` | `identity()` does not carry them | STORED INPUT / PROPOSED (lane2) |
 | `scope.deployment_id` | no column exists | - | MISSING (P27) |
 | `worker_health.last_evaluation_activity_at` | `execution_evaluation_jobs.updated_at` | `service_projection.py:173` | EXPOSED (f84) |
 | `worker_health.evaluation_attempts` | count of evaluation-job rows | `service_projection.py:174` | EXPOSED (f84) |
@@ -72,7 +72,7 @@ producer must derive and expose it; `MISSING` = no producer.
 | `trading_results.basis` | `admission_positions.cost_basis` | `service_projection.py:137-138` | EXPOSED (f84) |
 | `trading_results.estimated_unrealized_result` | no mark source; `UNKNOWN` | `service_projection.py:141` | EXPOSED (f84) as UNKNOWN |
 | `trading_results.mark` | no mark source; `UNKNOWN` | `service_projection.py:141` | EXPOSED (f84) as UNKNOWN |
-| `trading_results.native_gas` | funding profile gas asset; `admission_receipts` actual gas | no exposed caller | STORED INPUT / PROPOSED (lane2) |
+| `trading_results.native_gas` | per-receipt `actual_gas` (`admission/service.py:740-760,998-1003`) exposed at `GET /v1/actions/{action_id}` (`execution/routes.py:142-143`); the per-agent-wallet aggregate has no exposed caller | aggregate not projected | per-receipt gas EXPOSED (f84) / aggregate PROPOSED (lane2) |
 | `trading_results.deposits`/`withdrawals` | `funding_flows`, `funding_credits`; `included_in_realized_result=false` | `service_projection.py:93-109`; `views.py:172` | EXPOSED (f84) |
 | `trading_results.provider_mode` | `settings.execution_mode` | `execution/routes.py` | EXPOSED (f84) |
 | percentage return / account value / drawdown | no adopted calculation profile | - | MISSING (product decision) |
@@ -95,7 +95,7 @@ producer must derive and expose it; `MISSING` = no producer.
 | memory state ACTIVE/DISABLED/CLEARED | same | `controls.py:42,238-258` | EXPOSED (f84) |
 | context source ownership check | `records.record_id` owner-scoped | `controls.py:100-113` | EXPOSED (f84) |
 | `action_id` | `execution_intents.action_id`, `execution_queue.action_id` | `execution/routes.py` | EXPOSED (f84) |
-| preview permission/reservation/limit | `admission_allowances`, `admission_reservations`, `admission_decisions` | `admission/service.py` | EXPOSED (f84) |
+| preview permission/reservation/limit | `admission_allowances` (service-level); `admission_reservations`, `admission_decisions` | reservations/decisions exposed at `execution/routes.py:139-141`; allowances in `admission/service.py` | reservations/decisions EXPOSED (f84) / allowances SERVICE VALUE / PROPOSED |
 | consent activation state | `derive_approval` | `connected_identity.py:161-169` | EXPOSED (f84) (fixture only) |
 
 ## Accepted tests that already cover these sources

@@ -31,10 +31,13 @@ P31 remains a P27 dependency. Documentation does not satisfy AUT06 and does not 
 
 The producer must expose the stored-input fields that no accepted projection outputs today:
 `last_evaluation_completion_at`, `last_evaluation_outcome` (null until saved), `last_evaluation_state`,
-`wait_or_fault_reason`, `stop_state`, `native_gas` and the revision/consent identities. The evaluation
-counts and last activity time are already exposed by `accounts/service_projection.py:162-177`. The
-submission timestamps and the decision input time are computed by `ExecutionService.status` but need a
-read surface. A job `state` is never projected as an `outcome`.
+`wait_or_fault_reason`, `stop_state`, `consent_adoption_id`/`consent_hash`, and the per-agent-wallet
+`native_gas` aggregate. The evaluation counts and last activity time are already exposed by
+`accounts/service_projection.py:162-177`; the strategy, publication, execution-revision and hash
+identities are already exposed by `ConnectedAgent.identity()` at `execution/routes.py:99`; per-receipt
+gas is exposed at `GET /v1/actions/{action_id}`; the submission timestamps and the decision input time
+are computed by `ExecutionService.status` but need a read surface. A job `state` is never projected as
+an `outcome`.
 
 ## 3. Cross-lane choice to agree
 
