@@ -1,0 +1,42 @@
+# Build context allow-list for deploy/docker/api.Dockerfile and apps/web/Dockerfile (context: repository root).
+# Everything is excluded first; only the source and runtime assets the images copy are allowed back.
+*
+
+!apps/api/pyproject.toml
+!apps/api/uv.lock
+!apps/api/alembic.ini
+!apps/api/src/
+!apps/api/migrations/
+!apps/api/tests/fixtures/
+!docs/contracts/
+!docs/qualification/p07/
+!docs/implementation/EFFECT_COMPARISON_PROFILE.md
+!docs/implementation/SPOT_REPLAY_RUNTIME_PROFILE.md
+!scripts/hermes_interpretation/*.py
+!scripts/hermes_job_support/
+!deploy/local/public_entry.py
+!deploy/local/http_probe.py
+
+!apps/web/package.json
+!apps/web/package-lock.json
+!apps/web/next.config.ts
+!apps/web/tsconfig.json
+!apps/web/app/
+!apps/web/components/
+!apps/web/lib/
+!apps/web/public/
+
+# Local state never enters a build, even below an allowed folder.
+**/.env
+**/.env.*
+**/.venv
+**/node_modules
+**/.next
+**/.next-*
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.DS_Store
+**/*.tsbuildinfo
+**/next-env.d.ts
+**/tsconfig.next-*.json

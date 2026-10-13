@@ -1,0 +1,194 @@
+# Edge OS LOCAL Docker rehearsal. LOCAL fixture profile only: synthetic test app id and verification key, authored
+# fixture providers, recorded synthetic research history. It is not a production deployment and enables no provider.
+#
+# Every value comes from the caller's environment; no env_file is read and nothing secret is written here.
+#   EDGE_OS_LOCAL_RUN_ID           lowercase run label (image tags and resource labels)
+#   EDGE_OS_LOCAL_PUBLIC_PORT      the one published port, bound to 127.0.0.1
+#   EDGE_OS_LOCAL_DB_NAME          database created by the postgres service on first start
+#   EDGE_OS_LOCAL_DB_PASSWORD      run-generated database password (postgres service and the composed URL only)
+#   EDGE_OS_LOCAL_VERIFICATION_KEY synthetic EC P-256 PUBLIC key PEM (newlines as \n); never a Privy secret
+#   EDGE_OS_LOCAL_BUILD_SHA        source commit of the images
+#
+# Order (see deploy/local/RUNBOOK.md): build -> up postgres -> run --rm migrate (the one explicit migration step)
+# -> up api web entry -> up the worker roles. Nothing migrates on start; the API refuses a schema that is not head.
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: ["/tmp"]
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+
+x-labels: &labels
+  edge-os.rehearsal: "1"
+  edge-os.rehearsal.run: ${EDGE_OS_LOCAL_RUN_ID:?set EDGE_OS_LOCAL_RUN_ID}
+  edge-os.profile: "LOCAL"
+
+x-database-url: &database-url
+  EDGE_OS_DATABASE_URL: postgresql+psycopg://edge_os:${EDGE_OS_LOCAL_DB_PASSWORD:?set EDGE_OS_LOCAL_DB_PASSWORD}@postgres:5432/${EDGE_OS_LOCAL_DB_NAME:?set EDGE_OS_LOCAL_DB_NAME}
+
+# The accepted application settings, named one by one. LOCAL fixture values; production refuses each fixture mode.
+x-application-settings: &application-settings
+  <<: *database-url
+  EDGE_OS_ENV: local
+  EDGE_OS_PRIVY_APP_ID: edge-os-test-app
+  EDGE_OS_PRIVY_VERIFICATION_KEY: ${EDGE_OS_LOCAL_VERIFICATION_KEY:?set EDGE_OS_LOCAL_VERIFICATION_KEY}
+  EDGE_OS_CORS_ALLOWED_ORIGINS: http://127.0.0.1:${EDGE_OS_LOCAL_PUBLIC_PORT:?set EDGE_OS_LOCAL_PUBLIC_PORT}
+  EDGE_OS_BUILD_SHA: ${EDGE_OS_LOCAL_BUILD_SHA:?set EDGE_OS_LOCAL_BUILD_SHA}
+  EDGE_OS_INTERPRETER: fixture
+  EDGE_OS_WALLET_PROVIDER: fixture
+  EDGE_OS_EXECUTION_MODE: fixture
+  EDGE_OS_FIXTURE_EFFECTS_PATH: /var/lib/edge-os/evidence/fixture-effects.jsonl
+  EDGE_OS_RESEARCH_HISTORY_MODE: recorded
+  EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS: "40"
+  EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS: "3600"
+
+# One API image serves every Python role. Only the api service carries the build; the others reuse its tag.
+x-api-image: &api-image
+  image: edge-os-local-api:${EDGE_OS_LOCAL_RUN_ID}
+
+services:
+  postgres:
+    image: postgres:18.6-trixie@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+    environment:
+      POSTGRES_USER: edge_os
+      POSTGRES_PASSWORD: ${EDGE_OS_LOCAL_DB_PASSWORD}
+      POSTGRES_DB: ${EDGE_OS_LOCAL_DB_NAME}
+    volumes: ["database:/var/lib/postgresql"]
+    networks: [private]
+    labels: *labels
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edge_os -d \"$$POSTGRES_DB\""]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # The one explicit migration step: `docker compose run --rm migrate`. No other service depends on it or runs it.
+  migrate:
+    <<: [*api-image, *hardening]
+    profiles: ["migrate"]
+    command: ["sh", "-c", "python -m alembic upgrade head && python -m alembic check"]
+    environment:
+      <<: *database-url
+    networks: [private]
+    labels: *labels
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: [*api-image, *hardening]
+    build:
+      context: .
+      dockerfile: deploy/docker/api.Dockerfile
+      args:
+        EDGE_OS_SOURCE_COMMIT: ${EDGE_OS_LOCAL_BUILD_SHA}
+      labels: *labels
+    environment: *application-settings
+    volumes: ["evidence:/var/lib/edge-os/evidence"]
+    networks: [private]
+    labels: *labels
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "/app/deploy/local/http_probe.py", "http://127.0.0.1:8000/readyz"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  web:
+    image: edge-os-local-web:${EDGE_OS_LOCAL_RUN_ID}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        EDGE_OS_SOURCE_COMMIT: ${EDGE_OS_LOCAL_BUILD_SHA}
+        NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:${EDGE_OS_LOCAL_PUBLIC_PORT}
+        NEXT_PUBLIC_PRIVY_APP_ID: edge-os-test-app
+      labels: *labels
+    read_only: true
+    tmpfs: ["/tmp", "/app/apps/web/.next/cache:uid=1000,gid=1000"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    networks: [private]
+    labels: *labels
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  # The only published port: 127.0.0.1 on the host. Routes /healthz, /readyz and /v1 to the API, the rest to web.
+  entry:
+    <<: [*api-image, *hardening]
+    command: ["python", "/app/deploy/local/public_entry.py"]
+    environment:
+      ENTRY_API_UPSTREAM: api:8000
+      ENTRY_WEB_UPSTREAM: web:3000
+      ENTRY_LISTEN: 0.0.0.0:8080
+    ports: ["127.0.0.1:${EDGE_OS_LOCAL_PUBLIC_PORT}:8080"]
+    networks: [private, entry]
+    labels: *labels
+    restart: "no"
+    depends_on:
+      api: {condition: service_healthy}
+      web: {condition: service_healthy}
+
+  # Worker roles: the existing bounded command loops. No inbound port. Started explicitly, after migration.
+  research-worker:
+    <<: [*api-image, *hardening]
+    profiles: ["workers"]
+    command: ["python", "-m", "edge_os_api.research.investigation_jobs", "--interval", "2"]
+    environment: *application-settings
+    networks: [private]
+    labels: *labels
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  execution-worker:
+    <<: [*api-image, *hardening]
+    profiles: ["workers"]
+    command: ["python", "-m", "edge_os_api.execution.worker", "--interval", "2"]
+    environment: *application-settings
+    volumes: ["evidence:/var/lib/edge-os/evidence"]
+    networks: [private]
+    labels: *labels
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  recurring-producer:
+    <<: [*api-image, *hardening]
+    profiles: ["workers"]
+    command: ["python", "-m", "edge_os_api.execution.recurring_producer", "--interval", "30"]
+    environment:
+      <<: *application-settings
+      EDGE_OS_FIXTURE_EFFECTS_PATH: /var/lib/edge-os/evidence/recurring-effects.jsonl
+    volumes: ["evidence:/var/lib/edge-os/evidence"]
+    networks: [private]
+    labels: *labels
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+networks:
+  # No route out of the host for the application, database and worker containers.
+  private:
+    internal: true
+    labels: *labels
+  # Exists only so the entry can publish its loopback port.
+  entry:
+    labels: *labels
+
+volumes:
+  database:
+    labels: *labels
+  evidence:
+    labels: *labels
