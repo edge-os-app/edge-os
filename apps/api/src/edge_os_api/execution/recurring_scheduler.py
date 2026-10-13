@@ -242,17 +242,24 @@ class RecurringOperation:
         """One bounded producer pass: tick, reconcile, then advance runnable jobs once."""
         scope = None if only is None else list(only)
         results: list[dict[str, Any]] = [*self.tick(scope), *self.reconcile_pending(scope)]
-        if scope is None:
-            results.extend(self._connected.run_pending(worker_limit))
-        else:
-            with self._factory() as session:
-                job_ids = list(session.execute(select(EvaluationJobRow.job_id).where(
-                    EvaluationJobRow.deployment_id.in_(scope), EvaluationJobRow.state.in_(RUNNABLE))
-                    .order_by(EvaluationJobRow.created_at).limit(worker_limit)).scalars().all())
-            for job_id in job_ids:
+        # The producer advances its own occurrences only; manual evaluations stay with the bounded worker process.
+        # Either may advance an occurrence: the per-job advisory lock lets only one hold it at a time.
+        with self._factory() as session:
+            statement = select(EvaluationJobRow.job_id).where(EvaluationJobRow.deployment_id.is_not(None),
+                                                              EvaluationJobRow.state.in_(RUNNABLE))
+            if scope is not None:
+                statement = statement.where(EvaluationJobRow.deployment_id.in_(scope))
+            job_ids = list(session.execute(statement.order_by(EvaluationJobRow.created_at).limit(worker_limit))
+                           .scalars().all())
+        for job_id in job_ids:
+            try:
                 advanced = self._connected.run_job(job_id)
-                if advanced is not None:
-                    results.append(advanced)
+            except Exception as error:  # noqa: BLE001 - one failing occurrence must not stop other owners' work
+                # Saved stage state stays as it was; the class only, never a message that could carry private bytes.
+                self._connected.record_failure(job_id, type(error).__name__)
+                continue
+            if advanced is not None:
+                results.append(advanced)
         return results
 
     # ------------------------------------------------------------------------------ projection

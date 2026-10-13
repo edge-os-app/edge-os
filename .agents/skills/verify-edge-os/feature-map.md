@@ -145,6 +145,27 @@ select scope, reserved, consumed, unknown from usage_local.usage_allocations whe
 
 Fault cases (401/402/403/429, malformed and oversized replies, wrong-token echo, HTTP receipt mismatch, lost replies, missing credit header, package request/credit limit refusals, cancel and deadline, killed worker, failed report save, composition fault, invalid request, budget refusal, repeated key, other owner, removed composition, production refusal, rollback refusal below 0011, HTTP dataset adoption and replay) are proved by `apps/api/tests/test_research_ports_journey.py` on its own database, not by the mapped run.
 
+## Recurring operation with the browser closed (#58 P27 LOCAL)
+
+`scripts/p03/recurring_phase.py` runs after the research phase. Two owners (one per width: `did:privy:test-recurring-desktop` and `did:privy:test-recurring-mobile-390`) each save a revision, set up and fund an agent, adopt exact terms and start recurring operation through the screens. The browser then closes. Separate `edge_os_api.execution.recurring_producer` processes run `--once` at fixed slot offsets from one mid-slot anchor (`--clock-offset-minutes`, LOCAL fixture mode only). They record their authored fixture effects in `<evidence>/recurring-effects.jsonl`, apart from the financial phase's record. The desktop agent trades normally. The 390px agent (`fx-lost-ack`) loses every acknowledgement, so each action stays unknown until the next pass reconciles it from its receipt.
+
+| Feature | Screen path | API | Tables | Expected | After restart | Evidence |
+|---|---|---|---|---|---|---|
+| Start recurring operation | Positions → Recurring operation → tick the authorization → Start | `POST /v1/agents/{id}/deployment` (`expected_consent_hash`) | `execution_recurring_deployments` | ACTIVE, bound to the adopted terms hash; no occurrence until a producer pass; wait "no scheduler pass was recorded" | — | `*-rec-01-activated.png` |
+| Contention | — (browser closed) | two producer processes at slot 0 | `execution_evaluation_jobs` | one occurrence per deployment | — | `recurring-inspection.json`, `logs/recurring-producer-slot0-*.log` |
+| Repeated slots | — (browser closed) | producer passes at slots 5, 10, 25 | jobs, `execution_evaluation_outcomes`, decisions, intents, attempts | desktop: ENTRY, full EXIT, re-ENTRY, EXIT confirmed; 390px: each unknown action reconciled before the next, then its slot-30 entry is `ADMISSION_DENIED ATTEMPT_BUDGET_EXHAUSTED` (five attempts; an entry also holds one for its exit); slots 15 and 20 counted as missed, never replayed | unchanged | `*-rec-02-after-passes.png` |
+| Stop, removal, end | Actions → Stop new entries; Request removal; Recurring → End | stops, removal, `POST …/deployment/end` | stops, removal states, deployments | the slot-30 entry is `ADMISSION_DENIED STOPPED_NEW_ENTRIES`; desktop ENDED `REMOVAL_REQUESTED`; 390px ENDED `OWNER_ENDED` and its last unknown action still reconciled; residual holdings readable | ended stays ended after a slot-40 pass | `*-rec-03-controls.png`, `*-rec-04-ended.png`, `*-rec-05-reopened.png` |
+| Other owner | Owner of the other width reads this agent's deployment | `GET` → 404 | none | not found | — | `ui-recurring-a.log` |
+
+```sql
+select d.agent_id, d.state, d.end_reason, d.missed_slots, d.occurrences, j.decision_slot, j.outcome, j.reason, o.outcome, o.inputs_collected_at
+from execution_local.execution_recurring_deployments d
+join execution_local.execution_evaluation_jobs j using (deployment_id)
+left join execution_local.execution_evaluation_outcomes o using (job_id) order by d.agent_id, j.decision_slot;
+```
+
+Fault cases (activation binding and replay, production refusal, duplicate ticks, manual/occurrence sharing of one slot, missed slots, restart, stale/non-forward/incomplete/wrong-market/unavailable observations, late evaluation, cumulative quote and attempt exhaustion, consent expiry, unknown original with receipts unavailable, other owner, stop, removal, owner end, projection, two producer processes, persistent producer, clock-offset refusal, downgrade refusal) are proved by `apps/api/tests/test_recurring_operation.py`, not by the mapped run.
+
 ## Original transaction, receipts and current holdings (#58 ORIGINAL-LOCAL)
 
 The verifier copies the AUTHORED recordings `apps/api/tests/fixtures/original_transaction/original_transaction_v1.json` into `<evidence>/original-recordings/` and sets `EDGE_OS_ORIGINAL_RECORDINGS_DIR` (local fixture mode only; production refuses it). Agents whose id contains `fx-original` get the fixture wallet's authored public test-signer address `0x2c7536E3605D9C16a7a3D7b1898e529396a65c23` and use offline recorded clients (route quote, `eth_signTransaction` reply, JSON-RPC). The clients append every call to `calls.jsonl` and every accepted send to `broadcasts.jsonl` in that folder. Nothing signs with a real key, sends a transaction or reads a chain.

@@ -35,7 +35,7 @@ A chart visit, a consent adoption or a manual evaluation never activates a deplo
 
 A first tick after activation starts at the current due slot (no missed slots before activation). A restarted producer resumes from the saved cursor; a crashed tick commits nothing. Two producers on one deployment create one job per slot (row lock, then the existing unique slot constraint).
 
-After the tick, the producer pass reconciles each `SUBMITTED` occurrence of an ACTIVE or ENDED deployment through `reconcile_action` (receipt only; idempotent; `receipt_unavailable` leaves it waiting). Then it runs one bounded `run_pending` worker pass.
+After the tick, the producer pass reconciles each `SUBMITTED` occurrence of an ACTIVE or ENDED deployment through `reconcile_action` (receipt only; idempotent; `receipt_unavailable` leaves it waiting). Then it runs one bounded worker pass over runnable occurrence jobs (manual evaluations stay with the existing bounded worker process; either process may advance an occurrence, and the per-job advisory lock lets only one hold it).
 
 ## 4. Observations and the saved evaluation outcome
 
@@ -72,7 +72,7 @@ The direct account view reads this projection. P31 may read the same projection 
 
 ## 7. Producer process
 
-`python -m edge_os_api.execution.recurring_producer` runs passes (tick → reconcile → bounded worker pass): `--once`, or `--interval S` with optional `--max-passes N`. It checks the migration head before each pass (schema drift exits 3, as the worker loop does) and finishes the current pass on SIGTERM/SIGINT. `--clock-offset-minutes M` exists for LOCAL verification only. It is refused unless the execution mode is `fixture` and the environment is not production, and it never changes a saved decision time.
+`python -m edge_os_api.execution.recurring_producer` runs passes (tick → reconcile → bounded occurrence worker pass): `--once`, or `--interval S` with optional `--max-passes N`. It checks the migration head before each pass (schema drift exits 3, as the worker loop does) and finishes the current pass on SIGTERM/SIGINT. `--clock-offset-minutes M` exists for LOCAL verification only. It is refused unless the execution mode is `fixture` and the environment is not production, and it never changes a saved decision time.
 
 ## 8. Migration 0012
 

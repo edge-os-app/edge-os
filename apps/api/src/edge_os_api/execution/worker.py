@@ -210,12 +210,16 @@ class ConnectedExecution:
             except Exception as error:  # noqa: BLE001 - one failing job must not stop other owners' jobs
                 # Saved stage state stays as it was; the failure is recorded on this job only and retried later.
                 # The error class only: an injected client's message or traceback could carry private bytes.
-                log.error("worker job %s failed: %s", job_id, type(error).__name__)
-                self._update(job_id, reason=f"WORKER_ERROR:{type(error).__name__}")
+                self.record_failure(job_id, type(error).__name__)
                 continue
             if result is not None:
                 results.append(result)
         return results
+
+    def record_failure(self, job_id: uuid.UUID, error_class: str) -> None:
+        """Record one job's failure on that job only; its saved stage stays as it was and a later pass retries."""
+        log.error("worker job %s failed: %s", job_id, error_class)
+        self._update(job_id, reason=f"WORKER_ERROR:{error_class}")
 
     def _runnable_ids(self, limit: int) -> list[uuid.UUID]:
         with self._factory() as session:

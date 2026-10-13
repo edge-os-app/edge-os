@@ -228,6 +228,16 @@ def test_a_manual_run_and_the_producer_share_one_job_for_one_slot(journey, owner
     assert projection(journey, owner_a, agent)["producer"]["cursor_slot"] is not None
 
 
+def test_the_producer_leaves_manual_evaluations_to_the_bounded_worker(journey, owner_a):
+    ready(journey, owner_a, "rec-manual-only")
+    with at(journey, 0):
+        manual = ff.schedule(journey, owner_a, "rec-manual-only", "manual").json()
+        journey.app.state.financial.recurring.producer_pass()  # an unscoped pass, as the producer process runs
+    with journey.app.state.session_factory() as session:
+        job = session.get(EvaluationJobRow, uuid.UUID(manual["job_id"]))
+    assert (job.state, job.runs, job.deployment_id) == ("QUEUED", 0, None)
+
+
 def test_missed_slots_are_counted_and_never_replayed(journey, owner_a):
     agent = "rec-missed"
     state = deployed(journey, owner_a, agent)
