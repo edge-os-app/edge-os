@@ -35,14 +35,9 @@ producer must derive and expose it; `MISSING` = no producer.
 | Projected field | Producer source | Caller at f84 | Status |
 |---|---|---|---|
 | `scope.owner_id` | `Principal.user_id` | `core/authentication.py`, `accounts/views.py:273-280` | EXPOSED (f84) |
-| `scope.agent_id` | `execution_evaluation_jobs.agent_id` | `service_projection.py:162-177` | EXPOSED (f84) |
-| `scope.wallet_id` | `execution_evaluation_jobs.wallet_id` | same | EXPOSED (f84) |
-| `scope.network_id` | `execution_evaluation_jobs.network_id` | same | EXPOSED (f84) |
-| `scope.strategy_id` | saved job column `execution_evaluation_jobs.strategy_id` (`execution/models.py:219-223`) | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
-| `scope.publication_revision_id` | saved job column (`execution/models.py:219-223`) | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
-| `scope.execution_revision_id` | saved job column (`execution/models.py:219-223`) | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
-| `scope.content_hash`, `manifest_hash` | saved job columns (`execution/models.py:222-223`) | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
-| `scope.consent_adoption_id`, `consent_hash` | saved job columns | job-bound; not exposed as a job field | STORED INPUT / PROPOSED (lane2) |
+| `scope.agent_id`, `scope.wallet_id`, `scope.network_id` | saved job columns (`execution/models.py:214-216`); the account projection groups by them | `service_projection.py:162-177` | EXPOSED (f84) |
+| `scope.strategy_id`, `scope.publication_revision_id`, `scope.execution_revision_id`, `scope.content_hash`, `scope.consent_adoption_id`, `scope.consent_hash` | saved job columns (`execution/models.py:219-225`), serialized by `job_view` | `execution/worker.py:95-105`; exposed at `execution/routes.py:100` | EXPOSED (f84) as the saved job scope |
+| `scope.manifest_hash` | saved job column (`execution/models.py:223`); `job_view` omits it | no exposed caller for the saved value | STORED INPUT / PROPOSED (lane2) |
 | `current_connected_identity` | `ConnectedAgent.identity()` (`connected_identity.py:72-77`) | exposed at `execution/routes.py:99`; the CURRENT resolution from `resolve_agent` (`connected_identity.py:100-128`), not a saved job's historical scope | EXPOSED (f84) |
 | `scope.deployment_id` | no column exists | - | MISSING (P27) |
 | `worker_health.last_evaluation_activity_at` | `execution_evaluation_jobs.updated_at` | `service_projection.py:173` | EXPOSED (f84) |
@@ -118,11 +113,13 @@ producer must derive and expose it; `MISSING` = no producer.
   exposed (submission timestamps, decision input time and id).
 - `STORED INPUT / PROPOSED (lane2)`: stored columns the P27 producer must derive and expose
   (`last_evaluation_completion_at`, `last_evaluation_outcome`, `last_evaluation_state`,
-  `wait_or_fault_reason`, `stop_state`, the job-bound scope identities and hashes and the consent
-  ids, and the per-agent-wallet `native_gas` aggregate).
-- `EXPOSED (f84)` also covers the per-receipt `actual_gas` at `GET /v1/actions/{action_id}` and the
-  `current_connected_identity` at `GET /v1/agents/{agent_id}/actions`; the current identity is the
-  current resolution, not a saved job's historical scope.
+  `wait_or_fault_reason`, `stop_state`, `scope.manifest_hash`, and the per-agent-wallet `native_gas`
+  aggregate).
+- `EXPOSED (f84)` also covers the saved job scope through the agent route's `jobs` array
+  (`job_view`, `execution/worker.py:95-105`; `execution/routes.py:100`) except `manifest_hash`, the
+  per-receipt `actual_gas` at `GET /v1/actions/{action_id}`, and the `current_connected_identity` at
+  `GET /v1/agents/{agent_id}/actions`; the current identity is the current resolution, not a saved
+  job's historical scope.
 - `MISSING`: `deployment_id`, a normalised per-observation **collection** time,
   `dataset_qualification`, revision-linked real edge evidence, adopted return metrics, and the
   recurring scheduler with its missed-slot policy.

@@ -40,23 +40,25 @@ The owner is the verified principal (`Principal.user_id`). No request body, quer
 target or conversation turn can set or retarget it. This reuses the accepted boundary in
 `core/authentication.py` and the `owner_id`-only reads in `accounts/views.py`.
 
-The projection scope binds the saved evaluation-job identity, not the current resolution.
+The projection scope binds the saved evaluation-job identity, not the current resolution. The saved
+job scope is exposed through the agent route's `jobs` array (`job_view`, `execution/worker.py:95-105`;
+`execution/routes.py:100`); the current connected identity is a separate route value.
 
 | Field | Source | Status |
 |---|---|---|
 | `scope.owner_id` | verified `Principal.user_id` | EXPOSED (f84) |
-| `scope.agent_id`, `scope.wallet_id`, `scope.network_id` | saved job columns `execution_local.execution_evaluation_jobs` (`execution/models.py:219-223`) | STORED INPUT / PROPOSED (lane2) |
-| `scope.strategy_id`, `scope.publication_revision_id`, `scope.execution_revision_id`, `scope.content_hash`, `scope.manifest_hash` | saved job columns `execution_evaluation_jobs` (`execution/models.py:219-223`) | STORED INPUT / PROPOSED (lane2) |
-| `scope.consent_adoption_id`, `scope.consent_hash` | saved job columns `execution_evaluation_jobs` | STORED INPUT / PROPOSED (lane2) |
+| `scope.agent_id`, `scope.wallet_id`, `scope.network_id` | saved job columns `execution_local.execution_evaluation_jobs` (`execution/models.py:214-216`); the account projection groups by them (`accounts/service_projection.py:162-177`) | EXPOSED (f84) |
+| `scope.strategy_id`, `scope.publication_revision_id`, `scope.execution_revision_id`, `scope.content_hash`, `scope.consent_adoption_id`, `scope.consent_hash` | saved job columns (`execution/models.py:219-225`), serialized by `job_view` (`execution/worker.py:95-105`), exposed at `execution/routes.py:100` | EXPOSED (f84) as the saved job scope |
+| `scope.manifest_hash` | saved job column (`execution/models.py:223`); `job_view` omits it | STORED INPUT / PROPOSED (lane2) |
 | `current_connected_identity` (agent/wallet/network, strategy, publication/execution revision, content/manifest digest) | `ConnectedAgent.identity()` (`execution/connected_identity.py:72-77`), exposed at `execution/routes.py:99` | EXPOSED (f84), the CURRENT resolution |
 | `deployment_id` | no deployment identity column exists | MISSING (P27 producer obligation) |
 | `network_id` treatment | network prefix on asset ids (`docs/implementation/USER_RELEASE_INTEGRATION_PROFILE.md`, IC01); descriptive | descriptive |
 
 `resolve_agent` builds `ConnectedAgent` from the current wallet setup and the current `StrategyRevision`
 (`execution/connected_identity.py:100-128`). So `current_connected_identity` is the current resolution;
-it is not proof that any particular saved job's historical revision or hash is exposed. The projection's
-job scope is the saved job columns and must equal the intent and decision identities (IC01), never the
-current resolution. Do not assume equality across revisions.
+it is distinct from a saved job's historical scope, which comes from the job row's own columns. The
+projection's job scope uses the saved job columns and must equal the intent and decision identities
+(IC01), never the current resolution. Do not assume equality across revisions.
 
 A record scope is exact. Two positions that hold the same token but differ in agent, wallet or
 network stay separate. A conversation attaches one record identity; it cannot silently widen that

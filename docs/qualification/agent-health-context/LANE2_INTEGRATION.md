@@ -31,15 +31,17 @@ P31 remains a P27 dependency. Documentation does not satisfy AUT06 and does not 
 
 The producer must expose the stored-input fields that no accepted projection outputs today:
 `last_evaluation_completion_at`, `last_evaluation_outcome` (null until saved), `last_evaluation_state`,
-`wait_or_fault_reason`, `stop_state`, the job-bound scope identities and hashes and the consent ids,
-and the per-agent-wallet `native_gas` aggregate. The evaluation counts and last activity time are
-already exposed by `accounts/service_projection.py:162-177`. The CURRENT connected identity (strategy,
-publication/execution revision and hashes) is exposed by `ConnectedAgent.identity()` at
-`execution/routes.py:99`, but that is the current resolution from `resolve_agent`, not a saved job's
-historical scope; do not treat it as proof that a saved job's scope is exposed. Per-receipt gas is
-exposed at `GET /v1/actions/{action_id}`; the per-agent aggregate is not. The submission timestamps and
-the decision input time are computed by `ExecutionService.status` but need a read surface. A job `state`
-is never projected as an `outcome`.
+`wait_or_fault_reason`, `stop_state`, `scope.manifest_hash`, and the per-agent-wallet `native_gas`
+aggregate. The evaluation counts and last activity time are already exposed by
+`accounts/service_projection.py:162-177`. The saved job scope (strategy, publication/execution
+revision, content hash and consent ids) is already exposed through the agent route's `jobs` array
+(`job_view`, `execution/worker.py:95-105`; `execution/routes.py:100`); `manifest_hash` is not. The
+CURRENT connected identity (strategy, publication/execution revision and hashes) is exposed by
+`ConnectedAgent.identity()` at `execution/routes.py:99`, but that is the current resolution from
+`resolve_agent`, not a saved job's historical scope; do not treat it as proof that a saved job's scope
+is exposed. Per-receipt gas is exposed at `GET /v1/actions/{action_id}`; the per-agent aggregate is not.
+The submission timestamps and the decision input time are computed by `ExecutionService.status` but
+need a read surface. A job `state` is never projected as an `outcome`.
 
 ## 3. Cross-lane choice to agree
 

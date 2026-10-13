@@ -44,8 +44,9 @@ Field classes are labelled in `HEALTH_PROJECTION_CONTRACT.md` §3 and `SOURCE_RE
 (the accepted projection or route outputs it), `SERVICE VALUE` (an accepted service computes it, no
 read surface), `STORED INPUT / PROPOSED` (a stored column the lane2 P27 producer must expose), and
 `MISSING`. The evaluation counts and last activity are exposed today; the evaluation outcome,
-completion time, state and wait reason are stored inputs the lane2 producer must derive. The job-bound
-scope identities and hashes are stored inputs; the current connected identity at
+completion time, state and wait reason are stored inputs the lane2 producer must derive. The saved job
+scope (strategy, publication/execution revision, content hash and consent ids) is exposed through the
+agent route's `jobs` array; `manifest_hash` is not. The current connected identity at
 `GET /v1/agents/{agent_id}/actions` is a separate value that can differ from a saved job's historical
 scope.
 
