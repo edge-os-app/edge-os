@@ -104,7 +104,7 @@ Known limits kept from P05: a killed non-streaming request may still be billed; 
 |---|---|
 | `apps/api/src/edge_os_api/research/provider_spend_ledger.py` | PostgreSQL spend ledger, same rules as `SpendLedger`. |
 | `apps/api/src/edge_os_api/research/hermes_transport_mount.py` | The mount: refusals, composition, intake scope, startup recovery. |
-| `apps/api/migrations/versions/0013_provider_spend_ledger.py` | The three tables. |
+| `apps/api/migrations/versions/0013_provider_spend_ledger.py`, `research/provider_spend_tables.py`, `migrations/env.py` | The three tables, their definitions for `alembic check`, and their registration. |
 | `apps/api/src/edge_os_api/research/interpretation_workflow.py` | The read-only `spend` field of a public attempt. |
 | `apps/api/tests/test_provider_spend_ledger.py`, `test_hermes_transport_mount.py` | Fast tests (PostgreSQL, no Docker). |
 | `apps/api/tests/{test_live,test_package_layout,test_runtime_guards,test_spot_replay_configuration_identity}.py` | Migration head literal `0012` -> `0013` only. |
@@ -112,3 +112,7 @@ Known limits kept from P05: a killed non-streaming request may still be billed; 
 | `docs/qualification/hermes-app-mount/` | This contract and the results and verification recipe. |
 
 Not changed: `scripts/hermes_job_support/`, `scripts/hermes_interpretation/`, `usage/`, `research/investigation_jobs.py`, the web client, settings, dependencies and lockfiles.
+
+## Amendments
+
+A1 (during slice 1): no database foreign key from a reservation to its attempt. No table in this repository declares a foreign key across metadata, and `alembic check` must compare the new tables. Instead `reserve` reads the saved attempt row inside its locked transaction and copies the owner and saved request from it; that row is append-only (an immutability trigger rejects updates and deletes), so the copy cannot drift. An id that is not a saved attempt raises `AttemptNotSaved` and writes nothing. The table definitions live in `research/provider_spend_tables.py` and are registered in `migrations/env.py`.
