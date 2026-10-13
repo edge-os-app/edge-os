@@ -1,7 +1,10 @@
 # P14 proposed replay-accounting extension
 
-Status: **proposal only**, prepared on branch `quant/p14-replay-accounting` from
-`abeedad498fc5aaf027938e099962aee41f7cee8` (`origin/main` on 2026-10-11).
+Status: **proposal only**, prepared on branch `quant/p14-replay-accounting` and
+rebased onto `02827e464e6f9a251bd69d607c1c53c1d028cfa2` (`origin/main` on
+2026-10-13). The original branch creation base,
+`abeedad498fc5aaf027938e099962aee41f7cee8`, is retained in the contributor
+report as historical provenance.
 
 This profile is a numerical experiment for P14, not an adoption of runtime
 behavior. `p12.spot-replay/1` remains the sole adopted profile and continues to

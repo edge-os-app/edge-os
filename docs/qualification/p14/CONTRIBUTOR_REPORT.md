@@ -2,7 +2,8 @@
 
 - Branch: `quant/p14-replay-accounting`
 - Checkout: `/Users/kaluarunsi_1_2/Desktop/edge-os`
-- Starting `origin/main` commit: `abeedad498fc5aaf027938e099962aee41f7cee8`
+- Current rebased `origin/main` base: `02827e464e6f9a251bd69d607c1c53c1d028cfa2`
+- Original branch-creation base: `abeedad498fc5aaf027938e099962aee41f7cee8`
 - Assignment: issue #30's authorized numerical-only contributor PR scope.
 - Owned changes: pure replay accounting helper, focused replay tests, and new
   P14 proposal/qualification documents only.
