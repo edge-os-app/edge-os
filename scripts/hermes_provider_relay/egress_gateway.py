@@ -6,8 +6,13 @@ itself, refuses the whole request if any answer is not globally routable, connec
 copies bytes unchanged both ways: TLS stays end to end between the relay and the provider. The tunnel closes at the
 expiry (at most `MAX_TUNNEL_SECONDS`), at `MAX_TUNNEL_BYTES` in either direction, or when either side closes.
 
-Every connection leaves one fsynced line in `receipts/tunnels.jsonl` (refusals before the refusal is answered). An
-attempt with any receipt is never tunnelled again. No header value is logged except the attempt id and the expiry.
+Every connection leaves fsynced lines in `receipts/tunnels.jsonl`: a refusal before it is answered; an `opening` line
+before the one connect (so a gateway killed during a tunnel still leaves its count) and a `tunnel` line when it closes.
+An attempt with any receipt is never tunnelled again. No header value is logged except the attempt id and the expiry.
+
+Time: the head is read within `HEAD_SECONDS` (the expiry is not known before it). After that, the name lookup, the one
+connect and the copy all share ONE budget that ends at the relay's expiry (at most `MAX_TUNNEL_SECONDS`): no phase
+gets a renewed timeout. The clock is this container's wall clock, which is the Docker VM's, the same as the relay's.
 
 Usage: python egress_gateway.py <config.json>. Config: `socket`, `receipts`; optional `test_resolution` (an address
 used instead of DNS, for AUTHORED tests only; an ACTUAL supervisor refuses it).
@@ -161,6 +166,22 @@ class Receipts:
                 os.close(fd)
 
 
+def _resolve_within(resolve: Callable[..., list[tuple[Any, ...]]], seconds: float) -> list[tuple[Any, ...]] | str:
+    """The name lookup, given at most `seconds`: answers, or `dns_timeout` / `dns_failure`. A late lookup is abandoned."""
+    outcome: list[Any] = []
+
+    def lookup() -> None:
+        try:
+            outcome.append(resolve(ALLOWED_HOST, ALLOWED_PORT, type=socket.SOCK_STREAM))
+        except OSError:
+            outcome.append("dns_failure")
+
+    worker = threading.Thread(target=lookup, daemon=True)
+    worker.start()
+    worker.join(max(0.0, seconds))
+    return outcome[0] if outcome else "dns_timeout"
+
+
 def _pump(client: Any, upstream: Any, until: float, clock: Callable[[], float]) -> tuple[int, int, str]:
     """Copy both ways until `until`, a byte limit or a close. Returns bytes up, bytes down and why it closed."""
     counts = {"up": 0, "down": 0}
@@ -258,19 +279,24 @@ class Gateway:
                 return self._refuse(client, request, None)
             if not self.receipts.admit(request.attempt_id):
                 return self._refuse(client, "attempt_repeated", request.attempt_id)
+            until = min(request.expires_at, self.clock() + MAX_TUNNEL_SECONDS)  # the one budget from here on
             if self.test_resolution is not None:
                 address = self.test_resolution
             else:
+                answers = _resolve_within(self.resolve, until - self.clock())
+                if isinstance(answers, str):
+                    return self._refuse(client, answers, request.attempt_id)
                 try:
-                    address = choose_address(self.resolve(ALLOWED_HOST, ALLOWED_PORT, type=socket.SOCK_STREAM))
+                    address = choose_address(answers)
                 except ValueError as refusal:
                     return self._refuse(client, str(refusal), request.attempt_id)
-                except OSError:
-                    return self._refuse(client, "dns_failure", request.attempt_id)
-            until = min(request.expires_at, self.clock() + MAX_TUNNEL_SECONDS)
+            left = until - self.clock()
+            if left <= 0:
+                return self._refuse(client, "expired", request.attempt_id)
+            self.receipts.write({"attempt_id": request.attempt_id, "outcome": "opening", "reason": None,
+                                 "address": address, "test_resolution": self.test_resolution is not None})
             try:
-                upstream = self.connect((address, ALLOWED_PORT), timeout=max(0.001, min(CONNECT_SECONDS,
-                                                                                          until - self.clock())))
+                upstream = self.connect((address, ALLOWED_PORT), timeout=min(CONNECT_SECONDS, left))
             except OSError:
                 return self._refuse(client, "connect_failed", request.attempt_id)
             opened = self.clock()

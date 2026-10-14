@@ -82,6 +82,37 @@ def relay(pinned_hermes_image: str, run_id: str, evidence_root: Path, synthetic_
         assert cleanup == {"containers_left": [], "networks_left": [], "volumes_left": []}, cleanup
 
 
+@pytest.fixture(scope="session")
+def online_relay(pinned_hermes_image: str, run_id: str, evidence_root: Path, synthetic_key: Path):
+    """The E1 topology for the session (CONTRACT A6): an AUTHORED TLS stand-in for openrouter.ai on an owned bridge, the
+    keyless gateway on that bridge, and the relay with no network whose only way out is the gateway's socket volume.
+
+    The default Docker bridge is recorded before and after (its earlier replacement has an UNKNOWN cause); it is a
+    record, not something this suite changes or repairs."""
+    from relay_harness import RELEASE
+    from relay_supervisor import RelaySupervisor, docker
+
+    root = evidence_root / "online"
+    root.mkdir()
+
+    def bridge(when: str) -> None:
+        seen = docker("network", "inspect", "bridge", "--format", "{{.Id}} {{.Created}} {{json .IPAM.Config}}", check=False)
+        (root / f"default-bridge-{when}.txt").write_text(seen.stdout + seen.stderr, encoding="utf-8")
+
+    bridge("before")
+    supervisor = RelaySupervisor(root / "relay", RELEASE, pinned_hermes_image, f"{run_id}-e1", synthetic_key,
+                                 {"jobs": root / "jobs"}, online=True)
+    try:
+        supervisor.start()
+        yield supervisor
+    finally:
+        (root / "relay-logs.txt").write_text(supervisor.logs(), encoding="utf-8")
+        cleanup = supervisor.stop()
+        (root / "relay-cleanup.json").write_text(json.dumps(cleanup, indent=1) + "\n")
+        bridge("after")
+        assert cleanup == {"containers_left": [], "networks_left": [], "volumes_left": []}, cleanup
+
+
 def _api_fixtures() -> None:
     """Reuse the API test session (PostgreSQL container, signing key, tokens) for the application tests."""
     import importlib.util

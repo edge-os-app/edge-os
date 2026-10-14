@@ -99,7 +99,8 @@ class Handler(BaseHTTPRequestHandler):
         if kind == "oversized_reply":
             completion["padding"] = " " * int(script.get("bytes", 2 * MAX_BODY_BYTES))
         content_type = "text/event-stream" if kind == "stream" else "application/json"
-        return self.reply(200, completion, {"content-type": content_type})
+        encoding = {"content-encoding": "gzip"} if kind == "encoded" else {}  # declared, never applied: never decoded
+        return self.reply(200, completion, {"content-type": content_type, **encoding})
 
     def reply(self, status: int, value: dict[str, Any], headers: dict[str, str] | None = None) -> None:
         data = json.dumps(value).encode()

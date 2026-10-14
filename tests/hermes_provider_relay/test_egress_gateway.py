@@ -159,7 +159,9 @@ def test_an_admitted_connect_is_tunnelled_once_unchanged_and_receipted(tmp_path:
     assert (record["outcome"], record["attempt_id"], record["address"], record["bytes_down"], record["bytes_up"],
             record["close_reason"], record["test_resolution"]) == ("tunnel", "att-1", "104.18.2.115", 17, 12,
                                                                    "provider_closed", False)
-    assert receipts(tmp_path) == [{**record, "at": receipts(tmp_path)[0]["at"]}]
+    opening, closing = receipts(tmp_path)
+    assert (opening["outcome"], opening["attempt_id"], opening["address"]) == ("opening", "att-1", "104.18.2.115")
+    assert closing == {**record, "at": closing["at"]}
     assert client.closed and upstream.closed
     assert stat.S_IMODE((tmp_path / "tunnels.jsonl").stat().st_mode) == 0o600
 
@@ -199,6 +201,8 @@ def test_dns_and_connect_failures_are_refused_with_a_receipt(tmp_path: Path, ans
     assert (record["outcome"], record["reason"], record["attempt_id"]) == ("refused", reason, "att-1")
     assert client.sent == f"HTTP/1.1 403 Forbidden\r\nX-Refusal: {reason}\r\n\r\n".encode()
     assert len(network.connected) == (1 if reason == "connect_failed" else 0)
+    assert [r["outcome"] for r in receipts(tmp_path)] == (["opening", "refused"] if reason == "connect_failed"
+                                                         else ["refused"])  # an attempted connect is always counted
 
 
 def test_an_attempt_is_tunnelled_at_most_once_even_after_a_gateway_restart(tmp_path: Path) -> None:
@@ -243,3 +247,43 @@ def test_the_gateway_has_no_key_no_tcp_listener_and_no_proxy_from_the_environmen
     source = Path(egress_gateway.__file__).read_text(encoding="utf-8")
     for forbidden in ("environ", "AF_INET", "authorization", "ssl", "provider-key", "secrets"):
         assert forbidden not in source.replace("AF_UNIX", "")
+
+
+def test_a_connect_is_counted_by_an_fsynced_opening_receipt_before_it_starts(tmp_path: Path) -> None:
+    """A gateway killed during a tunnel still leaves its count: the opening line exists before any connect."""
+    class Counted(Network):
+        def connect(self, address: tuple[str, int], timeout: float) -> FakeSocket:
+            assert receipts(tmp_path)[-1]["outcome"] == "opening"
+            return super().connect(address, timeout)
+
+    network = Counted([answer("104.18.2.115")], FakeSocket(end=True))
+    gateway(tmp_path, network).handle(FakeSocket([live_head()], end=True))
+    assert len(network.connected) == 1
+
+
+def test_dns_shares_the_relays_expiry_and_a_slow_answer_connects_nothing(tmp_path: Path) -> None:
+    class Slow(Network):
+        def resolve(self, *args: Any, **kwargs: Any) -> list[tuple[Any, ...]]:
+            time.sleep(1.0)
+            return super().resolve(*args, **kwargs)
+
+    network = Slow([answer("104.18.2.115")], FakeSocket(end=True))
+    began = time.monotonic()
+    record = gateway(tmp_path, network).handle(FakeSocket([live_head(seconds=0.3)], end=True))
+    assert (record["outcome"], record["reason"]) == ("refused", "dns_timeout")
+    assert time.monotonic() - began < 1.0 and network.connected == []
+
+
+def test_no_connect_starts_once_the_budget_is_spent(tmp_path: Path) -> None:
+    clock = [time.time()]
+    network = Network([answer("104.18.2.115")], FakeSocket(end=True))
+    resolve = network.resolve
+
+    def late(*args: Any, **kwargs: Any) -> list[tuple[Any, ...]]:
+        clock[0] += 31  # the answer comes after the relay's expiry (wall clock of the gateway's own host)
+        return resolve(*args, **kwargs)
+
+    network.resolve = late  # type: ignore[method-assign]
+    record = gateway(tmp_path, network, clock=lambda: clock[0]).handle(FakeSocket([live_head(seconds=30)], end=True))
+    assert (record["outcome"], record["reason"]) == ("refused", "expired")
+    assert network.connected == []
