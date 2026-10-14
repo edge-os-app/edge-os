@@ -183,7 +183,8 @@ def drive(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence: Path, u
     ok &= rec.step("workers stop with exit 3 before any effect on a database one migration behind",
                    all(drift["checks"].values()), drift["checks"])
 
-    code = run_playwright(["runtime.spec.mjs"], ui_env, evidence / "ui-runtime.log")
+    # Playwright reads a file argument as a regex over the whole path; a bare name also matched agent-health-runtime.
+    code = run_playwright([r"(^|/)runtime\.spec\.mjs$"], ui_env, evidence / "ui-runtime.log")
     ok &= rec.step("projection panel, failed read-back pause and keyboard pass (desktop and 390px)", code == 0,
                    {"exit": code})
     return ok
