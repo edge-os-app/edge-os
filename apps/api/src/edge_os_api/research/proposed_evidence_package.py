@@ -7,6 +7,10 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 
+REFERENCES_PRESENT = "REFERENCES_PRESENT"
+ZERO_CANDIDATE_REFERENCE_UNRESOLVED = "ZERO_CANDIDATE_REFERENCE_UNRESOLVED"
+
+
 @dataclass(frozen=True)
 class ProposedToolAttempt:
     contract_ref: str
@@ -71,6 +75,8 @@ class ProposedNumericalFinding:
 
 @dataclass(frozen=True)
 class ProposedEvidenceAssessment:
+    """A local reference-presence result, never a persisted P10 conclusion."""
+
     status: str
     reasons: tuple[str, ...]
 
@@ -107,14 +113,16 @@ class ProposedEvidencePackage:
                 reasons.append("ZERO_CANDIDATE_WITH_NUMERIC_FINDING")
             if not self.report_ref:
                 reasons.append("PERSISTENCE_UNAVAILABLE")
-            return ProposedEvidenceAssessment("ZERO_CANDIDATE_UNRESOLVED" if not reasons else "UNAVAILABLE", tuple(reasons))
+            return ProposedEvidenceAssessment(
+                ZERO_CANDIDATE_REFERENCE_UNRESOLVED if not reasons else "UNAVAILABLE", tuple(reasons),
+            )
         if self.numerical_finding is None or not self.numerical_finding.is_usable():
             reasons.append("EVALUATION_UNAVAILABLE")
         if not self.contrary_evidence_refs:
             reasons.append("CONTRARY_EVIDENCE_UNAVAILABLE")
         if not self.report_ref:
             reasons.append("PERSISTENCE_UNAVAILABLE")
-        return ProposedEvidenceAssessment("PROPOSED_COMPLETE" if not reasons else "UNAVAILABLE", tuple(reasons))
+        return ProposedEvidenceAssessment(REFERENCES_PRESENT if not reasons else "UNAVAILABLE", tuple(reasons))
 
 
 def _is_utc(value: datetime) -> bool:

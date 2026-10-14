@@ -25,8 +25,8 @@ def _package(**changes: object) -> ProposedEvidencePackage:
     return ProposedEvidencePackage(**values)  # type: ignore[arg-type]
 
 
-def test_complete_proposed_evidence_chain_requires_every_identity() -> None:
-    assert _package().assess().status == "PROPOSED_COMPLETE"
+def test_reference_presence_requires_every_identity_without_claiming_runtime_completion() -> None:
+    assert _package().assess().status == "REFERENCES_PRESENT"
     assessment = _package(declaration_ref="", interpretation_ref=None, report_ref="").assess()
     assert assessment.status == "UNAVAILABLE"
     assert assessment.reasons == ("DECLARATION_UNAVAILABLE", "INTERPRETATION_UNSUPPORTED", "PERSISTENCE_UNAVAILABLE")
@@ -50,10 +50,10 @@ def test_invalid_numeric_finding_is_distinct_from_zero() -> None:
     unavailable = _package(numerical_finding=ProposedNumericalFinding("calc", "USD", None, Decimal("1"), Decimal("1"), "reconcile")).assess()
     zero = _package(numerical_finding=ProposedNumericalFinding("calc", "USD", Decimal("0"), Decimal("1"), Decimal("1"), "reconcile")).assess()
     assert unavailable.reasons == ("EVALUATION_UNAVAILABLE",)
-    assert zero.status == "PROPOSED_COMPLETE"
+    assert zero.status == "REFERENCES_PRESENT"
     assert _package(contrary_evidence_refs=()).assess().reasons == ("CONTRARY_EVIDENCE_UNAVAILABLE",)
 
 
-def test_zero_candidate_is_completed_unresolved_not_a_forced_strategy() -> None:
+def test_zero_candidate_is_reference_unresolved_not_a_forced_strategy() -> None:
     result = _package(zero_candidate=True, numerical_finding=None).assess()
-    assert result == result.__class__("ZERO_CANDIDATE_UNRESOLVED", ())
+    assert result == result.__class__("ZERO_CANDIDATE_REFERENCE_UNRESOLVED", ())

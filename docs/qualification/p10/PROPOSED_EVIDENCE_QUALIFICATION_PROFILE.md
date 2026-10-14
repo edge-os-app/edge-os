@@ -1,8 +1,10 @@
 # P10 proposed source-evidence qualification profile
 
 Status: **preparation only; no Hermes provider call, source collection, or P10
-runtime implementation has occurred.** This document deliberately is not a
-completed research report or an actual `NANSEN_DATA_QUALIFICATION.md` artifact.
+runtime implementation has occurred.** `REFERENCES_PRESENT` is only the pure
+helper's local reference-shape result. It is not a completed research report,
+an owner-bound immutable package, or an actual `NANSEN_DATA_QUALIFICATION.md`
+artifact.
 
 The accompanying pure helper,
 `apps/api/src/edge_os_api/research/proposed_evidence_package.py`, validates the
@@ -29,6 +31,26 @@ finding. A result is source-backed only after the complete chain is present.
 For a successful tool attempt, both the response hash and a non-empty usage/cost
 lineage reference are mandatory. This helper verifies references only; it does
 not itself prove that a referenced source or saved package is immutable.
+
+## Proposed owner-record mapping — not implemented or adopted
+
+The helper must not become a second research runtime. If a future owner adopts
+it, each field must be resolved in one transaction through the existing
+owner-scoped records below, with matching `owner_id` and immutable content hash
+checks. The rows named here are an integration map, not evidence that the
+mapping is already enforced.
+
+| Helper reference | Candidate application record | Required adoption work |
+|---|---|---|
+| `declaration_ref` and `interpretation_ref` | `InvestigationJobRow.declaration_id` and `intake_record_id` | Bind the selected P08/P09 declaration revision and interpretation lineage to the job's authenticated owner. |
+| Tool attempt, response, and `usage_ref` | Append-only `InvestigationEventRow` attempt events, keyed by `owner_id`, `job_id`, and `attempt_id`; the job's frozen `budget` holds resource settlement | Define a stable attempt/usage locator and prove the completed attempt, response hash, and usage settlement describe the same tool effect. |
+| Source observation | `HistoryDatasetRow` (`owner_id`, `declaration_id`, `job_id`, `attempt_id`, `content_sha256`, `raw_records`) or an accepted equivalent source record | Bind source URI, retrieval/coverage facts and content hash to the exact saved dataset; never infer a provider observation from a URL string. |
+| Numerical finding and reconciliation | `InvestigationReportRow` or a separately accepted P09 result record | Bind calculation inputs, units, coverage, reconciliation evidence and contrary findings to the saved source identity. |
+| `report_ref` and reopen lineage | `InvestigationReportRow` / `NansenReportRow`, both scoped by owner, job, report identity and content hash | Define immutable replacement/reopen lineage and owner-authorized retrieval; do not let a later report silently replace an earlier package. |
+
+Until that shared mapping is accepted and tested against durable records, this
+module may return only `REFERENCES_PRESENT` or
+`ZERO_CANDIDATE_REFERENCE_UNRESOLVED`; neither is a P10 qualification claim.
 
 ## Adversarial qualification matrix
 
