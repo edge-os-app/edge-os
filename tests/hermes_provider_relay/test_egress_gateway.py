@@ -429,14 +429,14 @@ class TimedSocket(FakeSocket):
 def test_an_empty_look_returns_at_once_and_restores_the_timeout() -> None:
     client = TimedSocket()
     client.settimeout(3.0)  # what _read_head leaves on the socket
-    assert _early_bytes(client) is False
+    assert _early_bytes(client) is None
     assert (client.waited, client.gettimeout()) == (0.0, 3.0)
 
 
 def test_a_queued_byte_is_seen_left_unread_and_the_timeout_restored() -> None:
     client = TimedSocket([b"\x16"])
     client.settimeout(3.0)
-    assert _early_bytes(client) is True
+    assert _early_bytes(client) == "data_before_tunnel"
     assert list(client.inbound.queue) == [b"\x16"] and client.gettimeout() == 3.0
 
 
@@ -453,9 +453,9 @@ class ResetSocket(TimedSocket):
 
 
 @pytest.mark.parametrize("client", [BrokenRestore(), ResetSocket()], ids=["restore-fails", "reset"])
-def test_an_unreadable_socket_state_is_refused_not_assumed_clean(client: TimedSocket) -> None:
+def test_an_unreadable_socket_state_is_refused_as_such_never_as_clean_or_as_seen_bytes(client: TimedSocket) -> None:
     client.timeout = 3.0
-    assert _early_bytes(client) is True
+    assert _early_bytes(client) == "socket_state_unknown"
 
 
 def test_a_healthy_connect_passes_both_looks_without_waiting_and_gets_its_tunnel(tmp_path: Path) -> None:
@@ -486,3 +486,43 @@ def test_queued_bytes_are_refused_unread_by_either_look(tmp_path: Path) -> None:
     record = gateway(tmp_path / "second", Arriving([answer("104.18.2.115")], upstream)).handle(before_answer)
     assert record["reason"] == "data_before_tunnel" and before_answer.waited == 0.0
     assert ESTABLISHED not in before_answer.sent and upstream.sent == b"" and upstream.closed
+
+
+
+# --- peekproof (controller disposition l1-peekproof1.md): a failed look is recorded as what it is ------------------
+
+
+class PeekFails(TimedSocket):
+    """Ordinary reads work; the `fail_on`-th look (MSG_PEEK) raises, as a reset or broken socket would."""
+
+    def __init__(self, inbound: list[bytes], fail_on: int) -> None:
+        super().__init__(inbound)
+        self.looks, self.fail_on = 0, fail_on
+
+    def recv(self, size: int, flags: int = 0) -> bytes:
+        if flags & socket.MSG_PEEK:
+            self.looks += 1
+            if self.looks == self.fail_on:
+                raise ConnectionResetError
+        return super().recv(size, flags)
+
+
+def test_a_failed_look_after_the_head_is_recorded_as_unknown_state_before_any_lookup(tmp_path: Path) -> None:
+    network = Network([answer("104.18.2.115")], FakeSocket(end=True))
+    client = PeekFails([live_head()], fail_on=1)
+    record = gateway(tmp_path, network).handle(client)
+    assert (record["outcome"], record["reason"]) == ("refused", "socket_state_unknown")
+    assert receipts(tmp_path)[-1]["reason"] == "socket_state_unknown"
+    assert client.sent == b"HTTP/1.1 403 Forbidden\r\nX-Refusal: socket_state_unknown\r\n\r\n"
+    assert network.resolved == [] and network.connected == []
+
+
+def test_a_failed_look_before_the_answer_is_recorded_as_unknown_state_and_the_provider_gets_nothing(
+        tmp_path: Path) -> None:
+    upstream = FakeSocket()
+    client = PeekFails([live_head()], fail_on=2)
+    record = gateway(tmp_path, Network([answer("104.18.2.115")], upstream)).handle(client)
+    assert (record["outcome"], record["reason"]) == ("refused", "socket_state_unknown")
+    assert [(r["outcome"], r["reason"]) for r in receipts(tmp_path)] == [("opening", None),
+                                                                         ("refused", "socket_state_unknown")]
+    assert ESTABLISHED not in client.sent and upstream.sent == b"" and upstream.closed

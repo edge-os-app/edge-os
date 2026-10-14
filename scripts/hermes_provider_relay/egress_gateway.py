@@ -170,24 +170,27 @@ class Receipts:
                 os.close(fd)
 
 
-def _early_bytes(client: Any) -> bool:
-    """Bytes the client already sent that are still unread. Only already-queued bytes are seen; a byte that arrives
-    after this look and before the answer is not (a platform limit; the trusted relay sends nothing before the answer).
+def _early_bytes(client: Any) -> str | None:
+    """The refusal reason if the client already sent bytes that are still unread (`data_before_tunnel`), or if its
+    socket state cannot be read (`socket_state_unknown`); None when nothing is queued. Only already-queued bytes are
+    seen; a byte that arrives after this look and before the answer is not (a platform limit; the trusted relay sends
+    nothing before the answer).
 
     The look never waits: with a positive timeout CPython waits for readability before any recv, whatever the flags, so
-    the socket is made non-blocking for the look and its timeout restored afterwards. Any other socket error, or a
-    failed restore, counts as early data: the CONNECT is refused, never assumed clean."""
+    the socket is made non-blocking for the look and its timeout restored afterwards. A failed look or restore is
+    refused as an unknown socket state: never as clean, and never as bytes that were not seen."""
     try:
         previous = client.gettimeout()
         client.setblocking(False)
         try:
-            return bool(client.recv(1, socket.MSG_PEEK))
+            queued = client.recv(1, socket.MSG_PEEK)
         except BlockingIOError:
-            return False
+            queued = b""
         finally:
             client.settimeout(previous)
     except OSError:
-        return True
+        return "socket_state_unknown"
+    return "data_before_tunnel" if queued else None
 
 
 def _resolve_within(resolve: Callable[..., list[tuple[Any, ...]]], seconds: float) -> list[tuple[Any, ...]] | str:
@@ -298,9 +301,9 @@ class Gateway:
         end = data.index(b"\r\n\r\n") + 4
         if end > MAX_HEAD:
             return "head_too_large"
-        if len(data) > end or _early_bytes(client):
+        if len(data) > end:
             return "data_before_tunnel"  # e.g. a second CONNECT or TLS bytes sent before the answer
-        return data
+        return _early_bytes(client) or data
 
     def handle(self, client: Any) -> dict[str, Any]:
         try:
@@ -334,8 +337,9 @@ class Gateway:
                 return self._refuse(client, "connect_failed", request.attempt_id)
             opened = self.clock()
             try:
-                if _early_bytes(client):  # sent while the gateway resolved and connected: still before the answer
-                    return self._refuse(client, "data_before_tunnel", request.attempt_id)
+                early = _early_bytes(client)  # sent while the gateway resolved and connected: still before the answer
+                if early is not None:
+                    return self._refuse(client, early, request.attempt_id)
                 client.settimeout(None)
                 upstream.settimeout(None)
                 client.sendall(ESTABLISHED)
