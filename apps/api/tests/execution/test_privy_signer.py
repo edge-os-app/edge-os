@@ -20,6 +20,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -651,6 +652,140 @@ def test_a_local_refusal_reaches_the_caller_as_definitely_unsent(tmp_path):
     assert (outcome.outcome, outcome.detail) == ("DEFINITELY_UNSENT", "SIGNER_REFUSED")
     assert (http.calls, authorize.payloads) == ([], [])
     assert broadcasts(recordings) == 0
+
+
+# ------------------------------------------------------------------------------------------- review repairs
+
+
+SIGNED_DATA = b'{"signed_transaction":"' + SHORT_SIGNED.encode() + b'","encoding":"rlp"}'
+OTHER_SIGNED = "0x02" + "ab" * 40
+
+
+@pytest.mark.parametrize("raw", [
+    # A repeated key is a contradictory reply even when both values agree: no value is chosen.
+    b'{"method":"eth_signTransaction","data":' + SIGNED_DATA + b',"data":{"signed_transaction":"'
+    + OTHER_SIGNED.encode() + b'","encoding":"rlp"}}',
+    b'{"method":"eth_signTransaction","data":' + SIGNED_DATA + b',"data":' + SIGNED_DATA + b'}',
+    b'{"method":"eth_signTransaction","method":"eth_signTransaction","data":' + SIGNED_DATA + b'}',
+    b'{"method":"eth_signTransaction","data":{"signed_transaction":"' + SHORT_SIGNED.encode()
+    + b'","signed_transaction":"' + OTHER_SIGNED.encode() + b'","encoding":"rlp"}}',
+    b'{"method":"eth_signTransaction","data":{"signed_transaction":"' + SHORT_SIGNED.encode()
+    + b'","encoding":"rlp","encoding":"rlp"}}',
+])
+def test_a_success_reply_with_a_repeated_key_at_any_depth_is_unknown(raw):
+    http = FakeHttp(reply(raw))
+    with pytest.raises(RpcError):
+        client(http).rpc(WALLET_ID, body())
+    assert len(http.calls) == 1
+
+
+def test_the_same_reply_without_repeated_keys_still_succeeds():
+    raw = b'{"method":"eth_signTransaction","data":' + SIGNED_DATA + b'}'
+    assert client(FakeHttp(reply(raw))).rpc(WALLET_ID, body()) == {
+        "data": {"signed_transaction": SHORT_SIGNED, "encoding": "rlp"}}
+
+
+def _set(path: tuple[str, ...], value: Any) -> Callable[[dict[str, Any]], None]:
+    def change(payload: dict[str, Any]) -> None:
+        target = payload
+        for name in path[:-1]:
+            target = target[name]
+        target[path[-1]] = value
+    return change
+
+
+TRANSACTION = ("body", "params", "transaction")
+
+
+def _loop(payload: dict[str, Any]) -> None:
+    payload["body"]["params"]["transaction"]["data"] = payload["body"]
+
+
+@pytest.mark.parametrize("drift", [
+    _set(TRANSACTION + ("value",), False),      # 0 == False in Python, but signs `false`
+    _set(TRANSACTION + ("nonce",), 7.0),        # 7 == 7.0 in Python, but signs `7.0`
+    _set(TRANSACTION + ("chain_id",), 143.0),
+    _set(TRANSACTION + ("type",), 2.0),
+    _set(("version",), True),                   # 1 == True in Python
+    _set(TRANSACTION + ("data",), object()),    # not JSON
+    _loop,                                      # circular
+])
+def test_a_callback_that_changes_a_payload_value_type_is_refused_before_send(drift):
+    http, authorize = FakeHttp(signed_reply(SHORT_SIGNED)), Authorizer(during=drift)
+    caller_body = body()
+
+    result = client(http, authorize).rpc(WALLET_ID, caller_body)
+
+    assert result == local_unsent("AUTHORIZATION_PAYLOAD_CHANGED")
+    assert (len(authorize.payloads), http.calls) == (1, [])
+    assert caller_body == EXPECTED["body"]
+
+
+def _raises(*_args: Any) -> Any:
+    raise RuntimeError(f"clock store failed {APP_SECRET} {SIGNATURE}")
+
+
+@pytest.mark.parametrize("state", [
+    {"cancel": _raises}, {"monotonic": _raises}, {"wall_clock_ms": _raises},
+    {"monotonic": lambda: None}, {"wall_clock_ms": lambda: "soon"},
+])
+def test_a_failing_stop_check_before_authorization_sends_nothing(state):
+    http, authorize = FakeHttp(signed_reply(SHORT_SIGNED)), Authorizer()
+    result = client(http, authorize, **state).rpc(WALLET_ID, body())
+    assert result == local_unsent("STOP_CHECK_FAILED")
+    assert (authorize.payloads, http.calls) == ([], [])
+
+
+def test_a_stop_check_that_fails_after_authorization_sends_nothing():
+    calls = {"count": 0}
+
+    def cancel() -> bool:
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise RuntimeError(f"flag store failed {APP_SECRET}")
+        return False
+
+    http, authorize = FakeHttp(signed_reply(SHORT_SIGNED)), Authorizer()
+    result = client(http, authorize, cancel=cancel).rpc(WALLET_ID, body())
+    assert result == local_unsent("STOP_CHECK_FAILED")
+    assert (len(authorize.payloads), http.calls) == (1, [])
+
+
+class SecretMapping(Mapping[str, Any]):
+    """A Mapping that is not a dict and fails when read, with sensitive text in its error."""
+
+    def __getitem__(self, key: str) -> Any:
+        raise RuntimeError(f"vault read {APP_SECRET}")
+
+    def __iter__(self) -> Any:
+        raise RuntimeError(f"vault iter {APP_SECRET}")
+
+    def __len__(self) -> int:
+        return 1
+
+
+@pytest.mark.parametrize("request_body", [
+    {"method": "eth_signTransaction", "params": MappingProxyType({"transaction": body()["params"]["transaction"]})},
+    {"method": "eth_signTransaction",
+     "params": {"transaction": MappingProxyType(body()["params"]["transaction"])}},
+    {"method": "eth_signTransaction", "params": SecretMapping()},
+    SecretMapping(),
+])
+def test_a_body_that_fails_to_copy_or_serialize_is_refused_before_authorization(request_body):
+    http, authorize = FakeHttp(signed_reply(SHORT_SIGNED)), Authorizer()
+    result = client(http, authorize).rpc(WALLET_ID, request_body)
+    assert result == local_unsent("BODY_INVALID")
+    assert (authorize.payloads, http.calls) == ([], [])
+
+
+def test_an_interrupt_in_a_stop_check_is_not_turned_into_a_refusal():
+    def interrupt() -> bool:
+        raise KeyboardInterrupt
+
+    http = FakeHttp(signed_reply(SHORT_SIGNED))
+    with pytest.raises(KeyboardInterrupt):
+        client(http, cancel=interrupt).rpc(WALLET_ID, body())
+    assert http.calls == []
 
 
 # ------------------------------------------------------------------------------------------- owned loopback

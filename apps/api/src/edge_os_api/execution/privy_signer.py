@@ -120,11 +120,17 @@ class PrivySignerClient:
             # The first call may have produced a signature: a second call is never a definite refusal.
             raise RpcError("PRIVY_ADAPTER_ALREADY_USED")
         self._used = True
-        refusal = _refuse_request(wallet_id, body)
-        if refusal is not None:
-            return _local_unsent(refusal)
-        request_body = copy.deepcopy(dict(body))
-        wire = json.dumps(request_body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        request_body: dict[str, Any] | None = None
+        wire = b""
+        try:
+            refusal = _refuse_request(wallet_id, body)
+            if refusal is None:
+                request_body = copy.deepcopy(dict(body))
+                wire = _encode(request_body).encode("ascii")
+        except Exception:  # noqa: BLE001 - a body that cannot be read, copied or encoded leaves nothing sent
+            refusal = "BODY_INVALID"
+        if refusal is not None or request_body is None:
+            return _local_unsent(refusal or "BODY_INVALID")
         if len(wire) > REQUEST_BYTES_LIMIT:
             return _local_unsent("REQUEST_TOO_LARGE")
         stop = self._stop()
@@ -135,6 +141,7 @@ class PrivySignerClient:
         privy_headers = {"privy-app-id": self._app_id, "privy-idempotency-key": self._request_id,
                          "privy-request-expiry": self._expiry}
         payload = {"version": 1, "method": "POST", "url": url, "body": request_body, "headers": privy_headers}
+        expected = _encode(payload)
         given = copy.deepcopy(payload)
         signature: Any = None
         failed = False
@@ -144,7 +151,13 @@ class PrivySignerClient:
             failed = True
         if failed:
             return _local_unsent("AUTHORIZATION_FAILED")
-        if given != payload:
+        # Compared as encoded JSON, not with ==: 0 == False and 7 == 7.0 in Python but sign different bytes.
+        changed = True
+        try:
+            changed = _encode(given) != expected
+        except Exception:  # noqa: BLE001 - a payload the callback made unencodable was changed
+            pass
+        if changed:
             return _local_unsent("AUTHORIZATION_PAYLOAD_CHANGED")
         if (not isinstance(signature, str) or len(signature) > SIGNATURE_LIMIT
                 or not _SIGNATURE.fullmatch(signature)):
@@ -175,12 +188,15 @@ class PrivySignerClient:
         return self._accept(response, signature)
 
     def _stop(self) -> str | None:
-        if self._cancel is not None and self._cancel():
-            return "CANCELLED"
-        if self._monotonic() >= self._deadline:
-            return "DEADLINE_PASSED"
-        if self._wall_clock_ms() >= self._expiry_ms:
-            return "REQUEST_EXPIRED"
+        try:
+            if self._cancel is not None and self._cancel():
+                return "CANCELLED"
+            if self._monotonic() >= self._deadline:
+                return "DEADLINE_PASSED"
+            if self._wall_clock_ms() >= self._expiry_ms:
+                return "REQUEST_EXPIRED"
+        except Exception:  # noqa: BLE001 - a failing stop check before send leaves nothing sent; text not kept
+            return "STOP_CHECK_FAILED"
         return None
 
     def _accept(self, response: Any, signature: str) -> Mapping[str, Any]:
@@ -226,10 +242,21 @@ class PrivySignerClient:
         return any(secret in text for secret in secrets for text in texts)
 
 
+def _encode(value: Any) -> str:
+    """Compact sorted-key ASCII JSON of the accepted value domain. Raises for anything outside it."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError("repeated key")  # a contradictory reply: no value is chosen, even an identical one
+    return dict(pairs)
+
+
 def _parse(raw: bytes) -> Any:
-    """The decoded JSON value, or None for a reply that is not UTF-8 JSON or nests too deeply."""
+    """The decoded JSON value, or None for a reply that is not UTF-8 JSON, repeats a key or nests too deeply."""
     try:
-        return json.loads(raw.decode("utf-8"))
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
     except (UnicodeDecodeError, ValueError, RecursionError):
         return None
 

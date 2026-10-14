@@ -31,7 +31,7 @@ Keyword-only, all injected, no environment, file or network access:
 | `cancel` | Optional cancellation flag. |
 | `wall_clock_ms`, `monotonic` | Clocks, injectable for tests. |
 
-One adapter serves one original request. A second `rpc` call on the same adapter raises `RpcError` and sends nothing: the first call may have produced a signature, so the second call cannot be a definite refusal.
+One adapter serves one original request. The mounting task must construct one adapter per attempt with `request_id == prepared.attempt_id` and test that tie; this seam (`rpc(wallet_id, body)`) cannot check it. A second `rpc` call on the same adapter raises `RpcError` and sends nothing: the first call may have produced a signature, so the second call cannot be a definite refusal.
 
 ## Accepted request
 
@@ -69,14 +69,16 @@ Sorted compact JSON is not a general RFC 8785 implementation. Within the accepte
 | Situation | Provider effect | Result | Caller records |
 |---|---|---|---|
 | Invalid wallet ID or body on the first call | None: no authorization, no HTTP | `{"error": {"code": "LOCAL_UNSENT", "reason": <stable code>}}` | `DEFINITELY_UNSENT` / `SIGNER_REFUSED` |
-| Cancelled, deadline passed or request expiry passed before authorization | None | `LOCAL_UNSENT` | `SIGNER_REFUSED` |
-| `authorize` raises, returns an invalid value or changes the payload | None: no HTTP | `LOCAL_UNSENT` | `SIGNER_REFUSED` |
-| Cancelled, deadline or expiry passed after authorization, before HTTP | None: no HTTP; one local authorization happened | `LOCAL_UNSENT` | `SIGNER_REFUSED` |
+| A body that cannot be read, copied or encoded (for example a non-dict mapping) | None: no authorization, no HTTP | `LOCAL_UNSENT` (`BODY_INVALID`) | `SIGNER_REFUSED` |
+| Cancelled, deadline passed or request expiry passed before authorization, or a stop check that raises or returns an unusable value | None | `LOCAL_UNSENT` | `SIGNER_REFUSED` |
+| `authorize` raises, returns an invalid value or changes the payload, including a type-only change such as `0` → `false` or `7` → `7.0`, or makes it unencodable | None: no HTTP; one local authorization happened | `LOCAL_UNSENT` | `SIGNER_REFUSED` |
+| Cancelled, deadline or expiry passed, or a stop check failed, after authorization and before HTTP | None: no HTTP; one local authorization happened | `LOCAL_UNSENT` | `SIGNER_REFUSED` |
 | Second `rpc` call on one adapter | Unknown (first call) | `RpcError` | `SIGNING_UNKNOWN` |
-| Timeout, disconnect, cancellation during the request, any transport exception | Unknown | `ReplyLost` | `SIGNING_UNKNOWN` |
+| Timeout, cancellation during the request, any transport exception | Unknown | `ReplyLost` | `SIGNING_UNKNOWN` |
+| Disconnect or truncated reply: the shipped transport reports malformed framing (`HttpProviderError`) or a socket timeout | Unknown | `RpcError` or `ReplyLost` (equivalent: both are `SIGNING_UNKNOWN`) | `SIGNING_UNKNOWN` |
 | Any status other than 200, including every documented Privy error code and redirects | Unknown | `RpcError` | `SIGNING_UNKNOWN` |
 | Oversized, non-identity encoding, non-UTF-8, non-JSON, non-object, too deeply nested, HTML | Unknown | `RpcError` | `SIGNING_UNKNOWN` |
-| 200 reply with `error`, wrong `method`, extra or missing fields, non-hex or oversized bytes, encoding other than `rlp` | Unknown | `RpcError` | `SIGNING_UNKNOWN` |
+| 200 reply with `error`, wrong `method`, a repeated key at any depth (even with identical values), extra or missing fields, non-hex or oversized bytes, encoding other than `rlp` | Unknown | `RpcError` | `SIGNING_UNKNOWN` |
 | Reply that echoes the app secret, the Basic token or the authorization signature | Unknown | `RpcError` | `SIGNING_UNKNOWN` |
 | 200 `{"method": "eth_signTransaction", "data": {"signed_transaction": "0x…", "encoding": "rlp"}}` | Signed | `{"data": {"signed_transaction", "encoding"}}` | `validate_signed` decides |
 
@@ -84,17 +86,19 @@ Sorted compact JSON is not a general RFC 8785 implementation. Within the accepte
 
 No Privy reply becomes a definite refusal. Privy documents error codes (`policy_violation`, `request_expired`, the authorization-signature codes and others) but not the JSON shape of an error body. The adapter therefore cannot recognize a documented refusal, so every error stays UNKNOWN.
 
+The payload-change check compares encoded JSON, not Python equality, because `0 == False` and `7 == 7.0` in Python but sign different bytes. An interrupt (`KeyboardInterrupt`, `SystemExit`) is never turned into a refusal: before send it propagates with nothing sent; during the request it propagates and the caller's attempt stays in flight and UNKNOWN.
+
 Errors carry a stable code only. They are raised outside exception handlers, so no `__cause__` or `__context__` holds provider text, credentials, the signature or signed bytes.
 
 ## Recovery
 
-Privy caches 4xx and 5xx replies for 24 hours against an `/rpc` idempotency key; a policy violation deletes the record. Replay of a 200 reply under the same key is not documented. After `SIGNING_UNKNOWN` the caller makes no second signer call and no broadcast; only receipt reconciliation settles the original liability. This adapter does not change that rule.
+Privy documents that it stores the request and its response for 24 hours per idempotency key and returns the stored response for a repeated key with a matching body, without re-executing; for `/rpc` this covers 4xx and 5xx replies too, and a policy violation deletes the record ([idempotency keys](https://docs.privy.io/api-reference/idempotency-keys)). That replay is documented but untested here, and this adapter and its caller never make a second call. After `SIGNING_UNKNOWN` the caller makes no second signer call and no broadcast; only receipt reconciliation settles the original liability. This adapter does not change that rule.
 
 ## Evidence and limits
 
 - Behaviour tests: `apps/api/tests/execution/test_privy_signer.py`, with injected HTTP and authorization doubles and literal expected request bytes and headers. They run the real caller `OriginalTransactionTransport` for the positive path, tampered replies and a lost reply.
 - The tests prove request shaping, refusal, bounds and redaction inside this process. They do not prove Privy's acceptance, the authorization signer's cryptography, RFC 8785 equality, policy enforcement or independent P21 enforcement.
-- Pure checks ran with the qualified dependencies read-only (`-k "not loopback"`).
-- Prepared, not yet run: the `test_loopback_*` tests drive the shipped `StdlibHttpTransport` against an owned `127.0.0.1` listener through its injected connector, keeping the literal Privy URL. They prove local socket and HTTP handling only, not public DNS, TLS or Privy acceptance. The affected execution suite and sentinel scans also wait for a separate grant.
+- Pure checks run with the qualified dependencies read-only (`-k "not loopback"`).
+- The `test_loopback_*` tests drive the shipped `StdlibHttpTransport` against an owned `127.0.0.1` listener through its injected connector, keeping the literal Privy URL. They prove local socket and HTTP handling only, not public DNS, TLS or Privy acceptance. The worker ran them, the affected execution suite and sentinel scans on an earlier candidate (`5c49c96`); every changed candidate needs its own complete run under a separate grant.
 - Not done here: actual wallet creation or attachment, policy administration, broadcast, real Privy authentication, executor host or key custody, and application mounting.
 - Sources: [eth_signTransaction](https://docs.privy.io/api-reference/wallets/ethereum/eth-sign-transaction), [direct request signing](https://docs.privy.io/controls/authorization-keys/using-owners/sign/direct-implementation), [request expiry](https://docs.privy.io/api-reference/request-expiry), [idempotency keys](https://docs.privy.io/api-reference/idempotency-keys), [API error codes](https://docs.privy.io/basics/troubleshooting/error-handling/api-errors).
