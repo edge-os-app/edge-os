@@ -2,8 +2,9 @@
 
 Task: `P42-QPREP-20261013-01` (issue #28)
 Authority: issue #28's 2026-10-13 bounded local-preparation assignment
-Base: `02827e464e6f9a251bd69d607c1c53c1d028cfa2`
-Base tree: `2ba5bf79c07111679015766cd0d5720781c844d4`
+Assignment starting base: `02827e464e6f9a251bd69d607c1c53c1d028cfa2`
+Assignment base tree: `2ba5bf79c07111679015766cd0d5720781c844d4`
+Rebased integration parent before calibration: `c4bc2a405f872ad284639a8de84712f7bc569b0f`
 Branch: `quant/p42-statistical-preparation`
 Checkout: `/Users/kaluarunsi_1_2/.codex/worktrees/p42-statistical-preparation/edge-os`
 
