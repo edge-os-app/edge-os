@@ -37,7 +37,7 @@ Task `R58-RESEARCH-MOUNT-L2-20261014-LOCAL-v1`. Frozen rules: `CONTRACT.md` sect
 ## Retained limits
 
 - No PostgreSQL, Docker, browser, full suite or verifier run in this stage; they wait for a recorded capacity grant.
-- The verifier has no Nansen release journey yet (`scripts/p03/research_phase.py`, Playwright specs unchanged).
+- The verifier's release phase now also composes a Nansen part over the loopback Nansen stand-in (`scripts/p03/research_phase.py`, `research-release-*.spec.mjs`): one browser report per width, a killed worker, a worker past the saved deadline and a missing key, with SQL, restart and reopen checks against the stand-in's own request log. The web Nansen panel's top label is a fixed "Authored … replayed" sentence even under a release; the saved notice and evidence class below it are correct. The web component is outside this lease.
 - A race between the guard and the adapter's own pre-dispatch check counts an unsent request as sent: UNKNOWN, never zero.
 - The DNS and initial-connect residual of `StdlibHttpTransport` is unchanged.
 - No Hermes interface was prepared; the accepted online L1 contract does not exist yet.

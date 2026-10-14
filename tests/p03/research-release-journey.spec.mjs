@@ -2,6 +2,8 @@
  * #58 RESEARCH-RUNTIME-LOCAL, phase 1: the API composes a STAND-IN operating release served by an owned loopback
  * stand-in provider. Declare on its one source with the release's fixed bounds and start one job while no research
  * worker runs. Nothing reaches a real provider. research-release-report.spec.mjs continues after one worker pass.
+ * R58-RESEARCH-MOUNT-L2: on the same request, save one Nansen report under the same release. Its Nansen part is served
+ * by an owned loopback stand-in through the accepted Nansen HTTP adapter; no request is sent before the worker runs.
  */
 import { test, expect } from "@playwright/test";
 import { apiGet, declare, historySection, noSeriousAxe, noSidewaysScroll, open, record, sample, shot } from "./research-flow.mjs";
@@ -52,8 +54,26 @@ test("declare on the operating-release source with its fixed bounds and start on
   const jobs = (await apiGet(page, token, `/v1/research/requests/${intakeId}/history-investigations/${declarationId}/jobs`)).body.jobs;
   expect(jobs).toHaveLength(1);
   await shot(page, project, "r1-release-declared");
+
+  // The release's Nansen part: the listing names the release and its fixed request; the form defaults equal it.
+  const nansenListing = (await apiGet(page, token, `/v1/research/requests/${intakeId}/nansen-reports`)).body;
+  expect(nansenListing.available).toBe(true);
+  expect(nansenListing.operating_release.release_id).toBe("stand-in-loopback/1");
+  expect(nansenListing.operating_release.evidence_class).toBe("RELEASE_STAND_IN_RESPONSE");
+  expect(nansenListing.operating_release.request.limits.max_credits).toBe("12");
+  const panel = page.getByTestId("nansen-report");
+  await panel.getByLabel("Token contract address").fill(nansenListing.operating_release.request.token_address);
+  await panel.getByLabel("Token symbol").fill(nansenListing.operating_release.request.token_symbol);
+  await panel.getByRole("button", { name: "Save and reserve this report" }).click();
+  const nansenJob = panel.getByTestId("nansen-job").first();
+  await expect(nansenJob).toHaveAttribute("data-state", "RESERVED");
+  await expect(nansenJob).toContainText("No report yet.");
+  const nansenJobs = (await apiGet(page, token, `/v1/research/requests/${intakeId}/nansen-reports`)).body.jobs;
+  expect(nansenJobs).toHaveLength(1);
+  expect(nansenJobs[0].budget.reserved).toEqual({ provider_requests: 4, compute_seconds: 30, nansen_credits: 12 });
+  await shot(page, project, "r1-release-nansen-reserved");
   if (project === "mobile-390") await noSidewaysScroll(page);
   await noSeriousAxe(page);
   record(`release-${project}`, { url, intakeId, declarationId, hypothesis, jobId: jobs[0].job_id,
-    releaseSha256: catalog.operating_release.sha256 });
+    releaseSha256: catalog.operating_release.sha256, nansenJobId: nansenJobs[0].job_id });
 });

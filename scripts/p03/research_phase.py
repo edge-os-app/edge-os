@@ -368,7 +368,7 @@ def after_restart(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence:
 # application. Nothing reaches a real provider.
 
 RELEASE_ID, CHANGED_RELEASE_ID = "stand-in-loopback/1", "stand-in-loopback/2"
-RELEASE_SENTINELS = ("stand-in-bearer-SENTINEL-7d41c0", "stand-in-key-SENTINEL-55e0a1")
+RELEASE_SENTINELS = ("stand-in-bearer-SENTINEL-7d41c0", "stand-in-key-SENTINEL-55e0a1", "stand-in-nansen-SENTINEL-2b9c44")
 _RELEASE_PRELUDE = """
 import os, sys
 sys.path.insert(0, os.environ["P03_RELEASE_TESTS_DIR"])
@@ -381,37 +381,53 @@ stand_in.LoopbackStandInProvider("native-syn-qualified/1", Path(sys.argv[2]), po
 while True:
     time.sleep(3600)
 """
+# R58-RESEARCH-MOUNT-L2: the Nansen stand-in, reached through the accepted NansenHttpTransport and a loopback connector
+# only. Its own log counts the requests it received, outside the application.
+STAND_IN_NANSEN = _RELEASE_PRELUDE + """
+import time
+from pathlib import Path
+stand_in.LoopbackStandInNansen(Path(sys.argv[2]), port=int(sys.argv[1])).start()
+while True:
+    time.sleep(3600)
+"""
 RELEASE_HOST = _RELEASE_PRELUDE + """
 import uvicorn
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 settings = load_settings()
 runtime, _ = stand_in.loopback_runtime_at(settings, int(os.environ["P03_STAND_IN_PORT"]),
-                                          release_id=os.environ["P03_RELEASE_ID"])
+                                          release_id=os.environ["P03_RELEASE_ID"],
+                                          nansen_port=int(os.environ["P03_STAND_IN_NANSEN_PORT"]))
 uvicorn.run(create_app(settings, research_runtime=runtime), host="127.0.0.1", port=int(sys.argv[1]),
             log_level="warning")
 """
-# Fault injection for the verifier only: `kill` ends the worker process right after the first stand-in reply, exactly
-# like a killed worker; `missing` composes the release without its QuickNode credential. The application has neither.
+# Fault injection for the verifier only: `kill` / `kill-nansen` end the worker process right after the first stand-in
+# history / Nansen reply, exactly like a killed worker; `missing` / `missing-nansen` compose the release without its
+# QuickNode / Nansen credential; `late` runs the worker 601 s after now, past every saved 600 s deadline. The application
+# has none of these.
 RELEASE_WORKER = _RELEASE_PRELUDE + """
+import datetime as dt
 import uuid
 from edge_os_api.core.database import make_engine, make_session_factory
 from edge_os_api.core.research import released_source_runtime
 from edge_os_api.core.settings import load_settings
-from edge_os_api.research.investigation_jobs import InvestigationWorker
+from edge_os_api.research.investigation_jobs import InvestigationWorker, utcnow
 settings = load_settings()
 mode = sys.argv[1]
+missing = {"missing": (stand_in.QUICKNODE_SLOT,), "missing-nansen": (stand_in.NANSEN_SLOT,)}.get(mode, ())
 runtime, _ = stand_in.loopback_runtime_at(settings, int(os.environ["P03_STAND_IN_PORT"]),
-                                          release_id=os.environ["P03_RELEASE_ID"],
-                                          missing=(stand_in.QUICKNODE_SLOT,) if mode == "missing" else ())
-if mode == "kill":
-    original = released_source_runtime.HashingTransport.request
-    def killed(self, **kwargs):
-        original(self, **kwargs)
+                                          release_id=os.environ["P03_RELEASE_ID"], missing=missing,
+                                          nansen_port=int(os.environ["P03_STAND_IN_NANSEN_PORT"]))
+if mode in ("kill", "kill-nansen"):
+    name = "HashingTransport" if mode == "kill" else "ReleasedNansenTransport"
+    original = getattr(released_source_runtime, name).request
+    def killed(self, *args, **kwargs):
+        original(self, *args, **kwargs)
         os._exit(9)
-    released_source_runtime.HashingTransport.request = killed
+    setattr(getattr(released_source_runtime, name), "request", killed)
+clock = (lambda: utcnow() + dt.timedelta(seconds=601)) if mode == "late" else utcnow
 worker = InvestigationWorker(make_session_factory(make_engine(settings.database_url)), settings,
-                             research_runtime=runtime)
+                             research_runtime=runtime, clock=clock)
 for job_id in sys.argv[2:]:
     worker.run_job(uuid.UUID(job_id))
 """
@@ -435,11 +451,36 @@ for name in sys.argv[1].split(","):
                  "job_id": started.json().get("job_id")}
 print(json.dumps(out))
 """
+# Saves one release Nansen report job per fault owner through the public API, with the release's fixed request.
+NANSEN_DRIVER = _RELEASE_PRELUDE + """
+import json, uuid
+import httpx
+from research_flows import investigation_request
+client = httpx.Client(base_url=os.environ["P03_API_URL"], timeout=60)
+tokens = json.loads(os.environ["P03_RELEASE_FAULT_TOKENS"])
+out = {}
+for name in sys.argv[1].split(","):
+    headers = {"Authorization": "Bearer " + tokens[name]}
+    intake_id = investigation_request(client, headers)["intake"]["record_id"]
+    listed = client.get(f"/v1/research/requests/{intake_id}/nansen-reports", headers=headers).json()
+    started = client.post(f"/v1/research/requests/{intake_id}/nansen-reports", headers=headers,
+                          json={"operation_id": str(uuid.uuid4()), "request_key": "verifier-nansen-" + name,
+                                **listed["operating_release"]["request"]})
+    out[name] = {"intake_id": intake_id, "status": started.status_code, "job_id": started.json().get("job_id"),
+                 "release": listed["operating_release"]["release_id"]}
+print(json.dumps(out))
+"""
+# Which Nansen fault each fault owner carries, and the worker mode that drives it.
+NANSEN_FAULTS = {"kill": "kill-nansen", "stale": "late", "missing": "missing-nansen"}
 
 
-def _release_env(env: dict[str, str], port: int, release_id: str = RELEASE_ID) -> dict[str, str]:
+def _release_env(env: dict[str, str], port: int, release_id: str = RELEASE_ID,
+                 nansen_port: int | None = None) -> dict[str, str]:
+    # A release Nansen part and the authored Nansen mode cannot both serve reports, so the release processes turn the
+    # authored mode off; the standard API keeps it.
     return {**env, "P03_RELEASE_TESTS_DIR": str(harness.API_DIR / "tests"), "P03_STAND_IN_PORT": str(port),
-            "P03_RELEASE_ID": release_id}
+            "P03_RELEASE_ID": release_id, "P03_STAND_IN_NANSEN_PORT": str(nansen_port or 0),
+            "EDGE_OS_NANSEN_RESEARCH_MODE": "unavailable"}
 
 
 def _spawn(env: dict[str, str], name: str, script: str, args: list[str], log_dir: Path) -> harness.Process:
@@ -541,6 +582,77 @@ def inspect_release(pg: harness.Postgres, results: dict[str, Any], faults: dict[
             "expectations": expectations, "all_checks_pass": bool(runs) and all(expectations.values())}
 
 
+def inspect_release_nansen(pg: harness.Postgres, results: dict[str, Any], faults: dict[str, Any],
+                           requests: list[dict[str, Any]]) -> dict[str, Any]:
+    """Direct SQL over the release Nansen report jobs (R58-RESEARCH-MOUNT-L2), compared with the Nansen stand-in's own
+    request log: saved original deadline, state and stop reason, request and credit settlement, labels, the original
+    attempt, and no stand-in key in any saved row."""
+    runs = {key: run for key, run in results.items() if key.startswith("release-") and run.get("nansenJobId")}
+    job_ids = [run["nansenJobId"] for run in runs.values()] + [case["job_id"] for case in faults.values()]
+    jobs = {row["job_id"]: row for row in _rows(pg, (
+        "select j.job_id::text, j.state, j.terminal_reason, j.budget, "
+        "extract(epoch from j.deadline_at - j.created_at)::int deadline_seconds, "
+        "q.content->'operating_release'->>'release_id' request_release, r.content->>'evidence_class' evidence, "
+        "r.content->>'transport_kind' transport_kind, r.content->>'transport_label' label, "
+        "r.content->'operating_release'->>'release_id' report_release, r.content->'settlement' settlement, "
+        "jsonb_array_length(r.content->'transport_response_sha256') reply_hashes, r.content_sha256 "
+        "from research_local.investigation_jobs j "
+        "join research_local.nansen_requests q on q.request_id = j.declaration_id "
+        "left join research_local.nansen_reports r on r.job_id = j.job_id "
+        "where j.job_id::text in (" + ",".join(f"'{job_id}'" for job_id in job_ids) + ")"))} if job_ids else {}
+    events = {job_id: [row["kind"] for row in _rows(pg, (
+        f"select kind from research_local.investigation_events where job_id = '{job_id}' order by seq"))]
+              for job_id in job_ids}
+    dump = pg.psql("select concat_ws('|', (select string_agg(t::text, '') from research_local.nansen_requests t), "
+                   "(select string_agg(t::text, '') from research_local.nansen_reports t), "
+                   "(select string_agg(t::text, '') from research_local.investigation_events t))")
+    whole = {"provider_requests": 4, "compute_seconds": 30, "nansen_credits": 12}
+    expectations: dict[str, bool] = {}
+    for key, run in runs.items():
+        row, kinds = jobs.get(run["nansenJobId"], {}), events.get(run["nansenJobId"], [])
+        settlement = row.get("settlement") or {}
+        expectations.update({
+            f"{key} Nansen: reported over the accepted adapter to the loopback stand-in with stand-in labels":
+            row.get("state") == "REPORTED" and row.get("evidence") == "RELEASE_STAND_IN_RESPONSE"
+            and row.get("transport_kind") == "LOOPBACK_HTTP" and row.get("label") == "RELEASE_STAND_IN_NANSEN_TRANSPORT"
+            and row.get("request_release") == RELEASE_ID and row.get("report_release") == RELEASE_ID,
+            f"{key} Nansen: saved 600 s original deadline; reservation before the one attempt":
+            row.get("deadline_seconds") == 600 and kinds.count("ATTEMPT_STARTED") == 1 and "BUDGET_RESERVED" in kinds
+            and kinds.index("BUDGET_RESERVED") < kinds.index("ATTEMPT_STARTED"),
+            f"{key} Nansen: 2 requests and 6 credits settled KNOWN from 2 kept reply hashes":
+            settlement.get("provider_requests", {}).get("state") == "KNOWN"
+            and settlement.get("provider_requests", {}).get("measured") == 2
+            and settlement.get("nansen_credits", {}).get("state") == "KNOWN" and row.get("reply_hashes") == 2
+            and (row.get("budget") or {}).get("consumed", {}).get("nansen_credits") == 6
+            and (row.get("budget") or {}).get("unknown_liability", {}).get("nansen_credits") == 0,
+        })
+    kill, late, missing = (jobs.get(faults.get(name, {}).get("job_id"), {}) for name in ("kill", "stale", "missing"))
+    kill_events = events.get(faults.get("kill", {}).get("job_id"), [])
+    expectations.update({
+        "Nansen killed worker: outcome unknown, whole request and credit reservation kept, one attempt only":
+        (kill.get("state"), kill.get("terminal_reason")) == ("UNAVAILABLE", "nansen_outcome_unknown")
+        and (kill.get("budget") or {}).get("unknown_liability", {}).get("nansen_credits") == 12
+        and (kill.get("budget") or {}).get("unknown_liability", {}).get("provider_requests") == 4
+        and kill_events.count("ATTEMPT_STARTED") == 1 and "ATTEMPT_RECONCILED" in kill_events
+        and kill.get("content_sha256") is None,
+        "Nansen worker past the saved deadline: stopped before any key read or request; everything released":
+        (late.get("state"), late.get("terminal_reason")) == ("DEADLINE_EXCEEDED", "deadline_exceeded_before_collection")
+        and (late.get("budget") or {}).get("released") == whole and late.get("deadline_seconds") == 600
+        and "ATTEMPT_STARTED" not in events.get(faults.get("stale", {}).get("job_id"), []),
+        "Nansen missing key: refused before any request; everything released":
+        (missing.get("state"), missing.get("terminal_reason")) == (
+            "UNAVAILABLE", "operating_release_credential_unavailable")
+        and (missing.get("budget") or {}).get("released") == whole
+        and "ATTEMPT_STARTED" not in events.get(faults.get("missing", {}).get("job_id"), []),
+        "the Nansen stand-in received exactly 2 requests per report plus the killed worker's one, all with the key":
+        len(requests) == 2 * len(runs) + 1 and all(entry["authorized"] for entry in requests)
+        and all(entry["operation"] in ("holders", "flows") for entry in requests),
+        "no stand-in credential is saved in any Nansen row or event": not any(value in dump for value in RELEASE_SENTINELS),
+    })
+    return {"jobs": jobs, "events": events, "stand_in_requests": len(requests), "expectations": expectations,
+            "all_checks_pass": bool(runs) and all(expectations.values())}
+
+
 def _http_status(url: str, token: str, method: str = "GET", body: dict[str, Any] | None = None) -> tuple[int, Any]:
     import urllib.error
     import urllib.request
@@ -564,14 +676,19 @@ def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_p
     work, logs = evidence / "research-release", evidence / "logs"
     work.mkdir(parents=True, exist_ok=True)
     log = work / "stand-in-requests.jsonl"
-    port = harness.free_port()
-    release_env = _release_env(env, port)
+    nansen_log = work / "stand-in-nansen-requests.jsonl"
+    port, nansen_port = harness.free_port(), harness.free_port()
+    release_env = _release_env(env, port, nansen_port=nansen_port)
     standard = current_api
     host = None
     try:
         provider = _spawn(release_env, "research-release-stand-in", STAND_IN_PROVIDER, [str(port), str(log)], logs)
         processes.append(provider)
         harness.wait_http(f"http://127.0.0.1:{port}/ready")
+        nansen_provider = _spawn(release_env, "research-release-stand-in-nansen", STAND_IN_NANSEN,
+                                 [str(nansen_port), str(nansen_log)], logs)
+        processes.append(nansen_provider)
+        harness.wait_http(f"http://127.0.0.1:{nansen_port}/ready")
         current_api.stop()
         host = _spawn(release_env, "api-research-release", RELEASE_HOST, [str(api_port)], logs)
         processes.append(host)
@@ -582,6 +699,13 @@ def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_p
         ok &= rec.step("RESEARCH-RUNTIME: the API composes the stand-in release (listed with its fixed limits; no "
                        "request yet)", status == 200 and (catalog.get("operating_release") or {}).get("release_id")
                        == RELEASE_ID and stand_in_requests(log) == [], catalog.get("operating_release"))
+        nansen_view = (catalog.get("operating_release") or {}).get("nansen") or {}
+        ok &= rec.step("R58-MOUNT: the same release has a Nansen part on the loopback host with its fixed request and "
+                       "client bounds; stand-in class and loopback transport; no Nansen request yet",
+                       nansen_view.get("endpoint_host") == "127.0.0.1" and nansen_view.get("limits", {}).get(
+                           "max_credits") == "12" and bool(nansen_view.get("client_bounds"))
+                       and catalog["operating_release"].get("evidence_class") == "RELEASE_STAND_IN_RESPONSE"
+                       and stand_in_requests(nansen_log) == [], nansen_view)
         code = run_playwright(["research-release-journey.spec.mjs"], ui_env, evidence / "ui-research-release-journey.log")
         ok &= rec.step("RESEARCH-RUNTIME: declare on the release source with its fixed bounds and start one job, no "
                        "worker running (desktop and 390px, one owner each)", code == 0, {"exit": code})
@@ -599,21 +723,42 @@ def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_p
         ok &= rec.step("RESEARCH-RUNTIME: the worker is killed right after the first stand-in reply (exit 9)",
                        killed == 9 and len(stand_in_requests(log)) == before + 1,
                        {"exit": killed, "stand_in_requests": len(stand_in_requests(log)) - before})
-        changed = _release_worker(_release_env(env, port, CHANGED_RELEASE_ID), logs, "research-release-worker-changed",
+        changed = _release_worker(_release_env(env, port, CHANGED_RELEASE_ID, nansen_port), logs, "research-release-worker-changed",
                                   "pass", [faults["stale"]["job_id"]])
         missing = _release_worker(release_env, logs, "research-release-worker-missing", "missing",
                                   [faults["missing"]["job_id"]])
         ok &= rec.step("RESEARCH-RUNTIME: a changed release and a missing credential end their jobs before any request",
                        (changed, missing) == (0, 0) and len(stand_in_requests(log)) == before + 1,
                        {"exits": [changed, missing]})
+        nansen_driver = subprocess.run([harness.api_python(), "-c", NANSEN_DRIVER, ",".join(NANSEN_FAULTS)],
+                                       cwd=harness.API_DIR, env={**release_env, "P03_API_URL": api_url,
+                                                                 "P03_RELEASE_FAULT_TOKENS": ui_env["P03_RELEASE_FAULT_TOKENS"]},
+                                       capture_output=True, text=True, timeout=300)
+        nansen_faults = json.loads(nansen_driver.stdout.strip().splitlines()[-1]) if nansen_driver.returncode == 0 else {}
+        rec.write("research-release-nansen-fault-jobs.json", nansen_faults)
+        ok &= rec.step("R58-MOUNT: release Nansen fault reports saved through the API with the release's fixed request",
+                       sorted(nansen_faults) == sorted(NANSEN_FAULTS)
+                       and all(case["status"] == 201 and case["release"] == RELEASE_ID for case in nansen_faults.values()),
+                       {"exit": nansen_driver.returncode})
+        nansen_before = len(stand_in_requests(nansen_log))
+        nansen_exits = {name: _release_worker(release_env, logs, f"research-release-worker-nansen-{name}", mode,
+                                              [nansen_faults[name]["job_id"]]) for name, mode in NANSEN_FAULTS.items()}
+        ok &= rec.step("R58-MOUNT: a Nansen worker killed after the first stand-in reply (exit 9); a worker past the "
+                       "saved deadline and a missing Nansen key end their jobs before any request",
+                       nansen_exits == {"kill": 9, "stale": 0, "missing": 0}
+                       and len(stand_in_requests(nansen_log)) == nansen_before + 1,
+                       {"exits": nansen_exits, "nansen_requests": len(stand_in_requests(nansen_log)) - nansen_before})
         results_path = evidence / "ui" / "research-results.json"
         journey = json.loads(results_path.read_text()) if results_path.exists() else {}
         phase_jobs = [run["jobId"] for key, run in journey.items() if key.startswith("release-")] + [
-            faults["kill"]["job_id"]]
+            faults["kill"]["job_id"]] + [run["nansenJobId"] for key, run in journey.items()
+                                         if key.startswith("release-") and run.get("nansenJobId")] + [
+            nansen_faults["kill"]["job_id"]]
         worker = _release_worker(release_env, logs, "research-release-worker-1", "pass", phase_jobs)
         ok &= rec.step("RESEARCH-RUNTIME: bounded release worker pass over this phase's jobs (stand-in only; the "
-                       "killed job reconciles without a call)", worker == 0 and len(phase_jobs) == 3,
-                       {"exit": worker, "jobs": len(phase_jobs)})
+                       "killed history and Nansen jobs reconcile without a call)", worker == 0 and len(phase_jobs) == 6
+                       and len(stand_in_requests(nansen_log)) == nansen_before + 1 + 4,
+                       {"exit": worker, "jobs": len(phase_jobs), "nansen_requests": len(stand_in_requests(nansen_log))})
         code = run_playwright(["research-release-report.spec.mjs"], ui_env, evidence / "ui-research-release-report.log")
         ok &= rec.step("RESEARCH-RUNTIME: report and dataset with stand-in labels and hashes, market adoption, "
                        "publication and a labelled replay with simulated fills; owner B denied (desktop and 390px)",
@@ -624,20 +769,34 @@ def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_p
         rec.write("research-release-inspection.json", inspection)
         ok &= rec.step("RESEARCH-RUNTIME: SQL matches the screens and the stand-in provider's own request log",
                        inspection["all_checks_pass"], inspection["expectations"])
+        nansen_requests = stand_in_requests(nansen_log)
+        nansen_inspection = inspect_release_nansen(pg, results, nansen_faults, nansen_requests)
+        rec.write("research-release-nansen-inspection.json", nansen_inspection)
+        ok &= rec.step("R58-MOUNT: Nansen SQL (saved deadline, state, stop reason, request and credit settlement, "
+                       "labels, original attempt) matches the screens and the Nansen stand-in's own request log",
+                       nansen_inspection["all_checks_pass"], nansen_inspection["expectations"])
         host.stop()
         host = _spawn(release_env, "api-research-release-restarted", RELEASE_HOST, [str(api_port)], logs)
         processes.append(host)
         harness.wait_http(f"{api_url}/readyz")
         again = _release_worker(release_env, logs, "research-release-worker-restarted", "pass",
-                                [*phase_jobs, faults["stale"]["job_id"], faults["missing"]["job_id"]])
+                                [*phase_jobs, faults["stale"]["job_id"], faults["missing"]["job_id"],
+                                 nansen_faults["stale"]["job_id"], nansen_faults["missing"]["job_id"]])
         code = run_playwright(["research-release-restart.spec.mjs"], ui_env, evidence / "ui-research-release-restart.log")
         after = inspect_release(pg, results, faults, stand_in_requests(log))
         rec.write("research-release-inspection-after-restart.json", after)
+        nansen_after = inspect_release_nansen(pg, results, nansen_faults, stand_in_requests(nansen_log))
+        rec.write("research-release-nansen-inspection-after-restart.json", nansen_after)
         ok &= rec.step("RESEARCH-RUNTIME: after an API and worker restart the report, dataset and replay reopen "
                        "unchanged in a new context; no request was repeated; owner B denied",
                        again == 0 and code == 0 and after["jobs"] == inspection["jobs"]
                        and after["replays"] == inspection["replays"] and len(stand_in_requests(log)) == len(requests),
                        {"worker_exit": again, "spec_exit": code, "stand_in_requests": len(stand_in_requests(log))})
+        ok &= rec.step("R58-MOUNT: after the restart every release Nansen job, report and settlement is unchanged and "
+                       "reopening sent no Nansen request",
+                       again == 0 and code == 0 and nansen_after["jobs"] == nansen_inspection["jobs"]
+                       and len(stand_in_requests(nansen_log)) == len(nansen_requests),
+                       {"nansen_requests": len(stand_in_requests(nansen_log))})
         host.stop()
         standard = harness.start_api(env, api_port, logs, name="api-after-research-release")
         processes.append(standard)
@@ -655,7 +814,7 @@ def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_p
                        and (refused, body.get("code")) == (409, "operating_release_unavailable")
                        and len(stand_in_requests(log)) == len(requests), {"status": refused, "code": body.get("code"),
                                                                           "run": bool(run)})
-        texts = [*logs.glob("*.log"), *(evidence / "ui").glob("*.json"), *evidence.glob("ui-*.log"), log]
+        texts = [*logs.glob("*.log"), *(evidence / "ui").glob("*.json"), *evidence.glob("ui-*.log"), log, nansen_log]
         leaked = [p.name for p in texts if p.exists() and any(value in p.read_text(errors="ignore")
                                                                 for value in RELEASE_SENTINELS)]
         ok &= rec.step("RESEARCH-RUNTIME: no stand-in credential appears in logs, browser results or the request log",

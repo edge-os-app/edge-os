@@ -2,6 +2,8 @@
  * #58 RESEARCH-RUNTIME-LOCAL, phase 2, after one release worker pass: the job's saved dataset and report with the
  * stand-in labels, release identity and kept request hashes; market adoption as a NEW draft, publication and a
  * labelled replay with simulated fills. Another owner reads none of it. Stand-in responses only.
+ * R58-RESEARCH-MOUNT-L2: the release Nansen report, collected over the accepted Nansen HTTP adapter from the loopback
+ * stand-in, with its stand-in labels, saved hashes and KNOWN settlement.
  */
 import { test, expect } from "@playwright/test";
 import { tokens } from "./fixture-auth.mjs";
@@ -9,7 +11,7 @@ import { apiGet, historySection, noSeriousAxe, noSidewaysScroll, open, openDecla
   shot } from "./research-flow.mjs";
 
 const ownerToken = (project) => process.env[`P03_TOKEN_RELEASE_${project.replace("-", "_").toUpperCase()}`];
-const SENTINELS = ["stand-in-bearer-SENTINEL-7d41c0", "stand-in-key-SENTINEL-55e0a1"];
+const SENTINELS = ["stand-in-bearer-SENTINEL-7d41c0", "stand-in-key-SENTINEL-55e0a1", "stand-in-nansen-SENTINEL-2b9c44"];
 
 test("release report, stand-in facts, market adoption, publication and labelled replay", async ({ page }, info) => {
   const project = info.project.name;
@@ -44,6 +46,36 @@ test("release report, stand-in facts, market adoption, publication and labelled 
     `/v1/research/investigation-reports/${reportId}`]) {
     expect((await apiGet(page, tokens.b, route)).status, route).toBe(404);
   }
+
+  // The release Nansen report on the same request.
+  const panel = page.getByTestId("nansen-report");
+  const nansenJob = panel.getByTestId("nansen-job").first();
+  await expect(nansenJob).toHaveAttribute("data-state", "REPORTED");
+  await expect(nansenJob.getByTestId("nansen-job-answer")).toContainText("requests KNOWN 2 · credits KNOWN 6");
+  await nansenJob.getByRole("button", { name: "Open saved report" }).click();
+  const view = panel.getByTestId("nansen-report-view");
+  await expect(view).toContainText("Stand-in Nansen-shaped responses served to the operating-release composition.");
+  await expect(view.getByTestId("nansen-hashes")).toContainText("Saved hashes recomputed and matched.");
+  await expect(view.getByTestId("nansen-hashes")).toContainText("Evidence class RELEASE_STAND_IN_RESPONSE.");
+  const nansenReportId = (await apiGet(page, token, `/v1/research/investigation-jobs/${run.nansenJobId}`)).body
+    .nansen_report.report_id;
+  const nansenReport = (await apiGet(page, token, `/v1/research/nansen-reports/${nansenReportId}`)).body;
+  expect(Object.values(nansenReport.hashes_verified).every(Boolean)).toBe(true);
+  expect(nansenReport.content.evidence_class).toBe("RELEASE_STAND_IN_RESPONSE");
+  expect(nansenReport.content.transport_kind).toBe("LOOPBACK_HTTP");
+  expect(nansenReport.content.transport_label).toBe("RELEASE_STAND_IN_NANSEN_TRANSPORT");
+  expect(nansenReport.content.operating_release.sha256).toBe(run.releaseSha256);
+  expect(nansenReport.content.transport_response_sha256).toHaveLength(2);
+  expect(nansenReport.content.settlement.provider_requests).toEqual({ state: "KNOWN", measured: 2, lost: 0 });
+  expect(nansenReport.content.settlement.nansen_credits.state).toBe("KNOWN");
+  expect(SENTINELS.some((value) => JSON.stringify(nansenReport).includes(value))).toBe(false);
+  for (const route of [`/v1/research/nansen-reports/${nansenReportId}`, `/v1/research/investigation-jobs/${run.nansenJobId}`]) {
+    expect((await apiGet(page, tokens.b, route)).status, route).toBe(404);
+  }
+  await shot(page, project, "r2-release-nansen-report");
+  if (project === "mobile-390") await noSidewaysScroll(page);
+  await noSeriousAxe(page);
+  record(`release-${project}`, { nansenReportId, nansenReportSha256: nansenReport.content_sha256 });
 
   // A strategy request on the same owner: save the fixture-market revision, then adopt the release dataset's market.
   await page.goto("/");

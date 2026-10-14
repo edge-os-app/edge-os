@@ -347,6 +347,11 @@ class LoopbackStandInNansen:
                 self.end_headers()
                 self.wfile.write(data)
 
+            def do_GET(self) -> None:  # noqa: N802 - readiness only; not a provider request and not logged
+                self.send_response(200 if self.path == "/ready" else 404)
+                self.send_header("content-length", "0")
+                self.end_headers()
+
             def log_message(self, *args: Any) -> None:  # requests are logged above, without headers
                 return
 
@@ -372,10 +377,7 @@ class LoopbackStandInNansen:
 
     def connector(self) -> Callable[..., http.client.HTTPConnection]:
         """Moves the adapter's fixed origin to this server and records each requested target."""
-        def connect(scheme: str, host: str, port: int | None, timeout: float) -> http.client.HTTPConnection:
-            self.targets.append((scheme, host, port))
-            return http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
-        return connect
+        return nansen_loopback_connector(self.port, self.targets)
 
     def start(self) -> "LoopbackStandInNansen":
         self._thread.start()
@@ -389,6 +391,16 @@ class LoopbackStandInNansen:
         if not self.log_path.exists():
             return []
         return [json.loads(line) for line in self.log_path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def nansen_loopback_connector(port: int, targets: list[tuple[str, str, int | None]] | None = None,
+                              ) -> Callable[..., http.client.HTTPConnection]:
+    """A test connector for `NansenHttpFactory`: every connection goes to the loopback stand-in on `port`."""
+    def connect(scheme: str, host: str, port_: int | None, timeout: float) -> http.client.HTTPConnection:
+        if targets is not None:
+            targets.append((scheme, host, port_))
+        return http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    return connect
 
 
 # ---------------------------------------------------------------------------------------- runtimes
@@ -417,12 +429,19 @@ def loopback_runtime(settings: Any, provider: LoopbackStandInProvider, *, record
 
 def loopback_runtime_at(settings: Any, port: int, *, recording_id: str = "native-syn-qualified/1",
                         release_id: str = "stand-in-loopback/1", creds: StandInCredentials | None = None,
-                        missing: tuple[str, ...] = ()) -> tuple[ReleasedSourceRuntime, StandInCredentials]:
-    """The same runtime for a stand-in provider already listening on `port` (the verifier runs it as its own process)."""
+                        missing: tuple[str, ...] = (), nansen_port: int | None = None,
+                        ) -> tuple[ReleasedSourceRuntime, StandInCredentials]:
+    """The same runtime for a stand-in provider already listening on `port` (the verifier runs it as its own process).
+
+    With `nansen_port`, the release also has a Nansen part served by a `LoopbackStandInNansen` on that port through
+    the accepted `NansenHttpTransport` and a loopback connector."""
     release = stand_in_release(recording_id, release_id=release_id, envio_endpoint=f"http://127.0.0.1:{port}",
-                               quicknode_host="127.0.0.1", nansen=False)
+                               quicknode_host="127.0.0.1", nansen=nansen_port is not None,
+                               nansen_endpoint=f"http://127.0.0.1:{nansen_port}")
     creds = creds or credentials(quicknode=quicknode_url("127.0.0.1", "http", port), missing=missing)
-    return open_released_runtime(settings, release, credentials=creds, http_transport=StdlibHttpTransport), creds
+    nansen = None if nansen_port is None else NansenHttpFactory(connect=nansen_loopback_connector(nansen_port))
+    return open_released_runtime(settings, release, credentials=creds, http_transport=StdlibHttpTransport,
+                                 nansen_transport=nansen), creds
 
 
 def nansen_loopback_runtime(settings: Any, provider: LoopbackStandInNansen, *,

@@ -1,6 +1,7 @@
 /**
  * #58 RESEARCH-RUNTIME-LOCAL, phase 3, after the release API and worker restart: the report, dataset, adopted revision
  * and replay reopen unchanged in a new browser context, and another owner sees none of it. Reopening calls nothing.
+ * R58-RESEARCH-MOUNT-L2: the release Nansen report reopens with the same saved hash.
  */
 import { test, expect } from "@playwright/test";
 import { tokens } from "./fixture-auth.mjs";
@@ -34,12 +35,23 @@ test("the restarted release services reopen the exact report, dataset and replay
   await expect(replay.getByTestId("spot-replay-history-lineage")).toContainText(run.datasetId);
   await shot(page, project, "r4-release-reopened");
 
+  await historySection(page, run.url);  // the request page also holds the Nansen report panel
+  const panel = page.getByTestId("nansen-report");
+  const nansenJob = panel.getByTestId("nansen-job").first();
+  await expect(nansenJob).toHaveAttribute("data-state", "REPORTED");
+  await nansenJob.getByRole("button", { name: "Open saved report" }).click();
+  await expect(panel.getByTestId("nansen-hashes")).toContainText("Saved hashes recomputed and matched.");
+  const nansenReport = (await apiGet(page, token, `/v1/research/nansen-reports/${run.nansenReportId}`)).body;
+  expect(nansenReport.content_sha256).toBe(run.nansenReportSha256);
+  expect(nansenReport.content.transport_kind).toBe("LOOPBACK_HTTP");
+
   await open(page, tokens.b);
   await page.goto(run.url);
   await expect(page.getByText("This request was not found.")).toBeVisible();
   for (const route of [`/v1/research/investigation-jobs/${run.jobId}`, `/v1/research/investigation-reports/${run.reportId}`,
     `/v1/research/history-datasets/${run.datasetId}`, `/v1/spot-replays/${run.replayId}`,
-    `/v1/research/requests/${run.intakeId}/history-investigations/${run.declarationId}`]) {
+    `/v1/research/requests/${run.intakeId}/history-investigations/${run.declarationId}`,
+    `/v1/research/nansen-reports/${run.nansenReportId}`, `/v1/research/investigation-jobs/${run.nansenJobId}`]) {
     expect((await apiGet(page, tokens.b, route)).status, route).toBe(404);
   }
 });
