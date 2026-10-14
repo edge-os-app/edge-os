@@ -7,6 +7,11 @@ Base tree: `2ba5bf79c07111679015766cd0d5720781c844d4`
 Branch: `quant/p42-statistical-preparation`
 Checkout: `/Users/kaluarunsi_1_2/.codex/worktrees/p42-statistical-preparation/edge-os`
 
+Pre-experiment profile revision: `edge-os.stat-q01-qprep/2026-10-14.1`.
+The prior `2026-10-13.1` proposal was not evaluated. This revision freezes the
+explicit comparison cap, dependent-null IID diagnostic, timestamp-boundary
+fixture, and pre-label holdout access state before calibration begins.
+
 ## Transport and boundaries
 
 This uses the portable contributor route: the draft PR is the return transport;
@@ -18,6 +23,7 @@ holdout access, wallets, and paid compute are outside this packet.
 Owned new paths before editing:
 
 - `apps/api/src/edge_os_api/research/statistical_preparation.py`
+- `apps/api/src/edge_os_api/research/statistical_partition.py`
 - `apps/api/src/edge_os_api/research/statistical_calibration.py`
 - `apps/api/tests/test_statistical_preparation.py`
 - `apps/api/tests/test_statistical_calibration.py`

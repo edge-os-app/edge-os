@@ -1,7 +1,7 @@
 # P42 bounded calibration plan
 
 Status: **FROZEN PROPOSAL BEFORE EXPERIMENTS.** No result appears in this file.
-The plan tests `edge-os.stat-q01-qprep/2026-10-13.1` from
+The plan tests `edge-os.stat-q01-qprep/2026-10-14.1` from
 [`STAT_Q01_CANDIDATE_PREPARATION_PROFILE.md`](../../implementation/STAT_Q01_CANDIDATE_PREPARATION_PROFILE.md).
 It is authored synthetic simulation, not market history, provider evidence, or
 formal statistical support.
@@ -14,24 +14,38 @@ and therefore a schedule-derived block floor of 7 slots. Every run uses 199
 bootstrap draws, a 5% pointwise interval, a 5% whole-family Holm procedure,
 and the profile's floor/selected/double sensitivity policy.
 
-The generator starts with a seeded Gaussian innovation sequence and an AR(1)
-latent process with `rho=0.60`. An observed response is the mean of the next
-seven latent values, giving adjacent scheduled rows overlapping outcomes.
-Groups are generated before outcomes from a seeded balanced Bernoulli process.
-`None` responses follow a seeded 10% missingness process and retain their
-original group and `SYNTHETIC_MISSING` reason. The three named comparisons are
-always present in the family.
+For one repetition, CPython 3.14 `random.Random(seed)` (MT19937) first draws
+166 `normalvariate(0, 0.10)` innovations, then 160 independent group draws
+(`random() < 0.5` means `TRIGGERED`, otherwise `CONTROL`), then 160 independent
+missingness draws (`random() < 0.10` means missing). The latent sequence is
+`x[t]=0.60*x[t-1]+innovation[t]`, starting at zero. An observed response is
+the Decimal-50 mean of `x[t:t+7]`, giving adjacent scheduled rows overlapping
+outcomes. Floats enter Decimal only as `Decimal(str(value))`; all following
+arithmetic uses the repository's Decimal-50, half-even context. Missing rows
+retain their original group and `SYNTHETIC_MISSING` reason. The three named
+comparisons are always present in the family. A treatment effect is added only
+to an observed triggered response; the declared truth remains the injected
+treatment effect across repeated randomized histories.
+
+The runner also applies one deliberately independence-assuming diagnostic on
+the same dependent-null histories: `iid-slot-bootstrap/1` resamples individual
+scheduled slots with replacement, jointly across the three comparisons, then
+uses the same centered contrast, 199 draws, Holm family, and finalist rule. It
+has no block sensitivity and is never a support method. Its purpose is to make
+the calibration capable of exposing loss of serial-dependence handling.
 
 | Experiment | Generator change | Repetitions/seeds | Predeclared purpose |
 |---|---|---|---|
-| `dependent-null-v1` | All group effects are 0.00. | 64, seeds 1101–1164 | ST-02 false-support and pointwise-coverage behavior with dependence and overlap. |
+| `dependent-null-v1` | All group effects are 0.00; run both joint stationary and `iid-slot-bootstrap/1`. | 64, seeds 1101–1164 | ST-02 false-support, pointwise coverage, and dependence-discriminator behavior with overlap. |
 | `known-effect-v1` | Effects are `+0.35`, `0.00`, and `-0.35` for IDs `positive`, `null`, and `negative`. | 64, seeds 2101–2164 | ST-01/ST-03 directional detection, contrast, full-family selection, and coverage behavior. |
 | `nonstationary-v1` | The positive comparison is `+0.35` in the first half and `-0.35` in the second; other comparisons are 0.00. | 32, seeds 3101–3132 | ST-03/ST-04 adverse regime behavior. A favorable result is a calibration failure, not evidence. |
-| `failure-fixtures-v1` | Authored short, sparse, all-missing, invalid-p, tie, selector-bandwidth, and holdout-failure fixtures. | one deterministic fixture each | ST-03/ST-05/ST-07/ST-08/ST-09 failure/governance behavior. |
+| `failure-fixtures-v1` | Canonical authored short, sparse, all-missing, zero-versus-missing, invalid-p, tie, selector-bandwidth, lower/upper partition-boundary, holdout-failure, runner-up, revision-mismatch, and re-access fixtures. | one deterministic fixture each | ST-03/ST-05/ST-07/ST-08/ST-09 failure/governance behavior. |
 
 The run code derives each bootstrap seed from the experiment seed and the
 frozen profile identity; no result-dependent reseeding, retry, or selection is
-allowed. The calibration report must preserve every repetition, including a
+allowed. Before each result is emitted it records a SHA-256 of the canonical
+generated history, the canonical failure-fixture payload, and the plan/profile
+files. The calibration report must preserve every repetition, including a
 resource-limited partial result.
 
 ## Predeclared preliminary criteria
@@ -48,13 +62,16 @@ passes, and it remains proposal-only even if they do.
 | Known effect interval behavior | Observed pointwise coverage for the declared true contrasts is at least 0.85. |
 | Sensitivity stability | At least 80% of valid known-effect repetitions make the same candidate decision at all frozen sensitivities. |
 | Nonstationary adverse case | No repetition may return a candidate finalist. At least 80% must be unresolved because of a frozen selector/sensitivity/family rule; otherwise the profile is insufficient. |
+| Dependence discriminator | On dependent nulls, the report must retain the IID comparator. The candidate is insufficient unless IID has either at least two more false finalists than the joint method or pointwise coverage at least 0.05 lower; indistinguishable bounded evidence is `UNRESOLVED`, not a pass. |
 | Failure fixtures | Every fixture must preserve `None` separately from zero, retain all family members, and return its frozen unresolved/governance status. |
 
-The Wilson intervals quantify simulation error; they do not convert a limited
-64-repetition experiment into a universal calibration. A stopped run, an
-inapplicable selector, any failed criterion, or insufficient precision is
-reported unchanged as `UNRESOLVED`. No threshold is relaxed after seeing a
-result.
+Wilson bounds use the uncorrected score interval with Decimal-50 arithmetic:
+`z=1.6448536269514722` for one-sided 95% bounds and
+`z=1.959963984540054` for two-sided 95% bounds. The Wilson intervals quantify
+simulation error; they do not convert a limited 64-repetition experiment into a
+universal calibration. A stopped run, unavailable family member, inapplicable
+selector, any failed criterion, or insufficient precision is reported unchanged
+as `UNRESOLVED`. No threshold is relaxed after seeing a result.
 
 ## Finite resources and termination
 
@@ -66,7 +83,7 @@ result.
 | Bootstrap draws per sensitivity | 199 |
 | Sensitivities | 3 |
 | Outer repetitions | 64, 64, and 32 as listed above |
-| Maximum bootstrap slot-visits per full experiment | 18,339,840 (`64*3*199*3*160`); 9,169,920 for the 32-repetition case |
+| Maximum bootstrap slot-visits per full experiment | 24,453,120 for dependent null (`64*3*199*4*160`, including IID); 18,339,840 for known effect; 9,169,920 for nonstationary; 51,962,880 total |
 | Maximum wall clock per experiment | 180 seconds |
 | Maximum total wall clock | 540 seconds |
 | Peak traced Python allocation | 256 MiB |
