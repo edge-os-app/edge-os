@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from edge_os_api.nansen_research.http_transport import NANSEN_ORIGIN
 from edge_os_api.records import contract_adapter as record_contract
 
 RELEASE_VERSION = "edge-os.research-operating-release/1"
@@ -75,6 +76,7 @@ class NansenRelease:
     limits: Mapping[str, Any]
     deadline_seconds: int
     compute_seconds: int
+    client_bounds: Mapping[str, int]  # per call: connect_timeout_seconds, max_request_bytes, max_response_bytes
 
 
 @dataclass(frozen=True)
@@ -145,10 +147,26 @@ def _check_history(kind: ReleaseKind, history: HistoryRelease) -> None:
         raise ReleaseRefused("operating_release_invalid", "one reply cannot exceed the collection byte limit")
 
 
-def check_release(release: OperatingRelease, *, network_transport: bool = False) -> str:
+def _check_nansen(kind: ReleaseKind, nansen: NansenRelease, nansen_network: bool) -> None:
+    _check_host(kind, nansen.endpoint)
+    if kind == "STAND_IN" and nansen_network:
+        raise ReleaseRefused("stand_in_endpoint_not_local", "a stand-in Nansen part cannot use the network transport")
+    if kind == "ACTUAL" and nansen.endpoint != NANSEN_ORIGIN:
+        raise ReleaseRefused("operating_release_invalid", f"an actual Nansen part must name {NANSEN_ORIGIN}")
+    bounds = nansen.client_bounds
+    if set(bounds) != {"connect_timeout_seconds", "max_request_bytes", "max_response_bytes"} or not all(
+            isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in bounds.values()):
+        raise ReleaseRefused("operating_release_invalid", "the Nansen client bounds must be positive whole numbers")
+    max_bytes = nansen.limits.get("max_bytes")
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or bounds["max_response_bytes"] > max_bytes:
+        raise ReleaseRefused("operating_release_invalid", "one Nansen reply cannot exceed the report byte limit")
+
+
+def check_release(release: OperatingRelease, *, network_transport: bool = False, nansen_network: bool = False) -> str:
     """Validate a release before any credential read or request. Returns its SHA-256.
 
-    `network_transport` says whether the history transport is the accepted network `StdlibHttpTransport`."""
+    `network_transport` says whether the history transport is the accepted network `StdlibHttpTransport`;
+    `nansen_network` whether the Nansen factory is the accepted network `NansenHttpTransport` with no test connector."""
     if release.kind not in ("STAND_IN", "ACTUAL"):  # the type hint is not enforced at runtime: fail closed
         raise ReleaseRefused("operating_release_invalid", "a release kind must be STAND_IN or ACTUAL")
     if release.history is None and release.nansen is None:
@@ -156,7 +174,7 @@ def check_release(release: OperatingRelease, *, network_transport: bool = False)
     if release.history is not None:
         _check_history(release.kind, release.history)
     if release.nansen is not None:
-        _check_host(release.kind, release.nansen.endpoint)
+        _check_nansen(release.kind, release.nansen, nansen_network)
     digest = release_sha256(release)
     if release.kind == "ACTUAL":
         if APPROVED_RELEASES.get(release.release_id) != digest:
@@ -165,6 +183,7 @@ def check_release(release: OperatingRelease, *, network_transport: bool = False)
         if release.history is not None and not network_transport:
             raise ReleaseRefused("actual_release_needs_network_transport",
                                  "actual history needs the accepted network transport, not a recording")
-        if release.nansen is not None:
-            raise ReleaseRefused("actual_nansen_transport_missing", "no accepted Nansen network transport exists")
+        if release.nansen is not None and not nansen_network:
+            raise ReleaseRefused("actual_nansen_transport_missing",
+                                 "an actual Nansen part needs the accepted Nansen network transport")
     return digest

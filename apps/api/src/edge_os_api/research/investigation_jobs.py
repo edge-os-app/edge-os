@@ -40,7 +40,7 @@ from edge_os_api.core.errors import AppError, finding, not_found
 from edge_os_api.core.request_schemas import InvestigationJobBody, NansenReportBody
 from edge_os_api.core.settings import Settings
 from edge_os_api.records import contract_adapter as record_contract
-from edge_os_api.core.research import provider_composition, released_source_runtime
+from edge_os_api.core.research import provider_composition, released_runtime_bootstrap, released_source_runtime
 from edge_os_api.core.research.operating_release import ReleaseRefused
 from edge_os_api.nansen_research import NansenLimitError, NansenRequestError, run_research
 from edge_os_api.research import history_dataset, investigation_tools, nansen_reports
@@ -256,6 +256,15 @@ def release_http_clients(prepared: Any, deadline_at: dt.datetime, wall_clock: Ca
         anchor = clock()  # read before the wall clock, so the anchored deadline can only be earlier, never later
         return prepared.clients((deadline_at - wall_clock()).total_seconds(), cancelled, clock=clock, anchor=anchor)
     return build
+
+
+def release_nansen_transport(prepared: Any, deadline_at: dt.datetime, wall_clock: Callable[[], dt.datetime],
+                             cancelled: Callable[[], bool], clock: Callable[[], float] = time.monotonic) -> Any:
+    """The worker's Nansen transport for a release job, built before the original attempt is saved. Its one deadline is
+    anchored to the job's SAVED deadline the same way as `release_http_clients`: the monotonic anchor is read first, so
+    the mapped deadline can only be earlier, never later (contract section 12.3)."""
+    anchor = clock()
+    return prepared.transport((deadline_at - wall_clock()).total_seconds(), cancelled, clock=clock, anchor=anchor)
 
 
 def _release_record(runtime: Any) -> dict[str, Any]:
@@ -997,9 +1006,12 @@ class InvestigationWorker:
         assert request_row is not None and request_row.owner_id == job.owner_id
         request = nansen_reports.saved_request(request_row)
         released = request_row.content.get("operating_release")
+        job_id, deadline_at = job.job_id, job.deadline_at
+        cancelled = lambda: self._cancelled(job_id)  # noqa: E731
         try:
             inner = (self._nansen_transport(request.token_address) if released is None
-                     else released_source_runtime.prepare_nansen(self._runtime))
+                     else release_nansen_transport(released_source_runtime.prepare_nansen(self._runtime), deadline_at,
+                                                   self._clock, cancelled))
         except ReleaseRefused as error:  # the credential read failed: nothing was sent, everything is released
             session.rollback()
             job = session.get(InvestigationJobRow, job.job_id, with_for_update=True)
@@ -1027,7 +1039,7 @@ class InvestigationWorker:
         session.commit()  # the original attempt is durable before any provider effect
         started = time.monotonic()
         transport = provider_composition.GuardedNansenTransport(
-            inner, lambda: self._cancelled(job.job_id), lambda: self._clock() >= job.deadline_at)
+            inner, cancelled, lambda: self._clock() >= deadline_at or (released is not None and inner.deadline_passed()))
         try:
             run = run_research(request, transport, clock=lambda: _whole_seconds(self._clock()))
         except Exception as error:  # noqa: BLE001 - any package or transport defect fails this job, liability kept
@@ -1045,10 +1057,13 @@ class InvestigationWorker:
         assert request_row is not None
         settled = nansen_reports.settlement(run.evidence, transport.sent)
         report_id = uuid.uuid4()
+        stand_in = self._runtime is not None and self._runtime.release.kind == "STAND_IN"
         labels = None if released is None else {
-            "evidence_class": self._runtime.evidence_class, "transport_label": released_source_runtime.NANSEN_STAND_IN_LABEL
-            if self._runtime.release.kind == "STAND_IN" else "PROVIDER_NANSEN_TRANSPORT",
-            "notice": released_source_runtime.NANSEN_STAND_IN_NOTICE, "operating_release": released}
+            "evidence_class": self._runtime.evidence_class,
+            "transport_label": released_source_runtime.NANSEN_STAND_IN_LABEL if stand_in
+            else released_source_runtime.NANSEN_ACTUAL_LABEL, "transport_kind": self._runtime.nansen_transport_kind,
+            "notice": released_source_runtime.NANSEN_STAND_IN_NOTICE if stand_in
+            else released_source_runtime.NANSEN_ACTUAL_NOTICE, "operating_release": released}
         content = nansen_reports.report_content(
             report_id=report_id, owner_id=job.owner_id, job_id=job.job_id, request_row=request_row, run=run,
             response_sha256=list(getattr(inner, "response_sha256", [])), settled=settled, labels=labels)
@@ -1064,8 +1079,10 @@ class InvestigationWorker:
             "stop_reason": run.evidence.stop_reason, "report_id": str(report_id)}, attempt_id)
         job.report_id = report_id
         stop = run.evidence.stop_reason
+        # A call the transport stopped at the saved deadline ends the job there, like a refusal at the deadline.
+        expired = stop == "DEADLINE" or (stop == "TIMEOUT" and self._clock() >= deadline_at)
         state, reason = (("CANCELLED", "cancelled_during_collection") if stop == "CANCELLED"
-                         else ("DEADLINE_EXCEEDED", "deadline_during_collection") if stop == "DEADLINE"
+                         else ("DEADLINE_EXCEEDED", "deadline_during_collection") if expired
                          else ("REPORTED", run.report.answer_state.lower()))
         _finish(session, job, self._settings, state, reason,
                 provider=settled["provider_requests"]["state"],
@@ -1113,7 +1130,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
     engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
-    worker = InvestigationWorker(make_session_factory(engine), settings)
+    # The same server-owned release the API composes (none by default); see `released_runtime_bootstrap`.
+    worker = InvestigationWorker(make_session_factory(engine), settings,
+                                 research_runtime=released_runtime_bootstrap.server_research_runtime(settings))
     from edge_os_api.core import worker_loop
 
     worker_loop.exit_with(worker_loop.run("investigation worker", engine, worker.run_pending, once=args.once,

@@ -7,8 +7,9 @@ original attempt is saved, the accepted P07 HTTP clients or the Nansen transport
 
 The evidence class comes from the release kind and the composed transport, never from a request: a stand-in release is
 always `RELEASE_STAND_IN_RESPONSE` with a `SYNTHETIC_FIXTURE` profile; only an approved actual release over the
-accepted network transport is `PROVIDER_ACTUAL`. Credentials are kept in memory for one job and are never saved,
-returned or logged.
+accepted network transports (`StdlibHttpTransport` for history, `NansenHttpFactory` without a test connector for
+Nansen) is `PROVIDER_ACTUAL`. Credentials are kept in memory for one job and are never saved, returned or logged.
+Every request of a job is bounded by one monotonic deadline anchored to the job's saved deadline (contract section 12).
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from edge_os_api.core.research.operating_release import (
     check_release,
     endpoint_host,
 )
+from edge_os_api.nansen_research import NansenInputError, NansenResponse, NansenTimeout
+from edge_os_api.nansen_research.http_transport import NansenHttpTransport
 from edge_os_api.research_history.http_clients import (
     ClientBounds,
     ClientConfigError,
@@ -48,6 +51,10 @@ NANSEN_STAND_IN_LABEL = "RELEASE_STAND_IN_NANSEN_TRANSPORT"
 NANSEN_STAND_IN_NOTICE = ("Stand-in Nansen-shaped responses served to the operating-release composition. Not provider "
                           "data, not a market fact and not bounty evidence. Address counts are returned records; "
                           "amounts keep their raw text and unresolved units.")
+NANSEN_ACTUAL_LABEL = "PROVIDER_NANSEN_TRANSPORT"
+NANSEN_ACTUAL_NOTICE = ("Nansen provider responses under an approved operating release. Address counts are returned "
+                        "records; amounts keep their raw text and unresolved units. No profitability, execution or "
+                        "statistical claim.")
 
 
 class CredentialUnavailable(Exception):
@@ -59,13 +66,41 @@ class CredentialSource(Protocol):
 
 
 @dataclass(frozen=True)
+class NansenHttpFactory:
+    """Builds the accepted `NansenHttpTransport` over `StdlibHttpTransport` for one job. Constructing it performs no I/O.
+
+    `connect` is a test connector (an owned loopback server). Only the factory without one is the network factory, so a
+    loopback proof can never be composed as an actual release or label a report `PROVIDER_ACTUAL`."""
+
+    connect: Callable[..., Any] | None = None
+
+    @property
+    def network(self) -> bool:
+        return self.connect is None
+
+    def __call__(self, release: NansenRelease, key: str, *, deadline_monotonic: float,
+                 connect_timeout_seconds: float, cancel: Callable[[], bool]) -> NansenHttpTransport:
+        http = StdlibHttpTransport() if self.connect is None else StdlibHttpTransport(connect=self.connect)
+        bounds = release.client_bounds
+        return NansenHttpTransport(api_key=key, http=http, connect_timeout_seconds=connect_timeout_seconds,
+                                   deadline_monotonic=deadline_monotonic,
+                                   max_request_bytes=int(bounds["max_request_bytes"]),
+                                   max_response_bytes=int(bounds["max_response_bytes"]), cancel=cancel)
+
+
+def _nansen_network(factory: Any) -> bool:
+    return isinstance(factory, NansenHttpFactory) and factory.network
+
+
+@dataclass(frozen=True)
 class ReleasedSourceRuntime:
     release: OperatingRelease
     release_sha256: str
     credentials: CredentialSource
     http_transport: Callable[[], Any] | None
-    nansen_transport: Callable[[NansenRelease, str], Any] | None
+    nansen_transport: Callable[..., Any] | None
     network_transport: bool
+    nansen_network: bool = False
 
     def __post_init__(self) -> None:
         """Every runtime is validated, however it is built: the composed parts must be present, the transport class
@@ -76,9 +111,10 @@ class ReleasedSourceRuntime:
             raise ReleaseRefused("operating_release_invalid", "a Nansen release needs a composed Nansen transport")
         # Constructing a transport performs no I/O; its class decides whether it is the accepted network transport.
         network = self.http_transport is not None and isinstance(self.http_transport(), StdlibHttpTransport)
-        if network != self.network_transport:
+        if network != self.network_transport or _nansen_network(self.nansen_transport) != self.nansen_network:
             raise ReleaseRefused("operating_release_invalid", "the transport class does not match the runtime")
-        if check_release(self.release, network_transport=network) != self.release_sha256:
+        if check_release(self.release, network_transport=network,
+                         nansen_network=self.nansen_network) != self.release_sha256:
             raise ReleaseRefused("operating_release_invalid", "the runtime digest is not the release's own")
 
     @property
@@ -91,21 +127,31 @@ class ReleasedSourceRuntime:
             return "PROVIDER_HTTP"
         return "LOOPBACK_HTTP" if self.network_transport else "IN_PROCESS_RECORDING"
 
+    @property
+    def nansen_transport_kind(self) -> str:
+        if self.release.kind == "ACTUAL":
+            return "PROVIDER_HTTP"
+        return "LOOPBACK_HTTP" if isinstance(self.nansen_transport, NansenHttpFactory) else "IN_PROCESS_RECORDING"
+
     def __repr__(self) -> str:  # never show the credential source
         return f"ReleasedSourceRuntime({self.release.release_id}, {self.release.kind}, {self.release_sha256[:12]})"
 
 
 def open_released_runtime(settings: Any, release: OperatingRelease, *, credentials: CredentialSource,
                           http_transport: Callable[[], Any] | None = None,
-                          nansen_transport: Callable[[NansenRelease, str], Any] | None = None) -> ReleasedSourceRuntime:
-    """Validate and compose. No credential read, no request. Raises `ReleaseRefused`."""
+                          nansen_transport: Callable[..., Any] | None = None) -> ReleasedSourceRuntime:
+    """Validate and compose. No credential read, no request. Raises `ReleaseRefused`.
+
+    `nansen_transport(release_part, key, *, deadline_monotonic, connect_timeout_seconds, cancel)` builds one job's
+    Nansen transport; the accepted network one is `NansenHttpFactory()`."""
     if release.kind == "STAND_IN" and settings.env == "production":
         raise ReleaseRefused("stand_in_refused_in_production", "a stand-in release is local and test only")
     if release.history is not None and http_transport is None:
         raise ReleaseRefused("operating_release_invalid", "a history release needs a composed HTTP transport")
     network = http_transport is not None and isinstance(http_transport(), StdlibHttpTransport)
-    digest = check_release(release, network_transport=network)
-    return ReleasedSourceRuntime(release, digest, credentials, http_transport, nansen_transport, network)
+    nansen_network = _nansen_network(nansen_transport)
+    digest = check_release(release, network_transport=network, nansen_network=nansen_network)
+    return ReleasedSourceRuntime(release, digest, credentials, http_transport, nansen_transport, network, nansen_network)
 
 
 def release_view(runtime: ReleasedSourceRuntime) -> dict[str, Any]:
@@ -122,7 +168,8 @@ def release_view(runtime: ReleasedSourceRuntime) -> dict[str, Any]:
                            "time_basis": dict(history.time_basis), "required_coverage": history.required_coverage}
     nansen = runtime.release.nansen
     if nansen is not None:
-        view["nansen"] = {**nansen_request(nansen), "endpoint_host": endpoint_host(nansen.endpoint)}
+        view["nansen"] = {**nansen_request(nansen), "endpoint_host": endpoint_host(nansen.endpoint),
+                          "client_bounds": dict(nansen.client_bounds)}
     return view
 
 
@@ -275,8 +322,61 @@ def nansen_mismatches(runtime: ReleasedSourceRuntime, body: Mapping[str, Any]) -
     return [f"/{name}" for name, value in fixed.items() if body.get(name) != value]
 
 
-def prepare_nansen(runtime: ReleasedSourceRuntime) -> Any:
-    """Read the Nansen credential and build the composed transport for one job. Sends nothing."""
+class ReleasedNansenTransport:
+    """Wraps one job's composed Nansen transport. It bounds EVERY request by the job's anchored deadline: a request is
+    not sent once the deadline has passed, and a reply that returns at or after it is incomplete (`TIMEOUT`), so its
+    possible effect and charge stay unknown. It keeps the SHA-256 of each accepted reply only; a refused reply (redirect,
+    oversize, credential echo, malformed) raises inside the adapter and gets no hash."""
+
+    def __init__(self, inner: Any, deadline: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._inner, self.deadline, self._clock = inner, deadline, clock
+        self.response_sha256: list[str] = []
+
+    def deadline_passed(self) -> bool:
+        return self._clock() >= self.deadline
+
+    def request(self, operation: str, path: str, body: Mapping[str, Any]) -> NansenResponse:
+        if self.deadline_passed():
+            raise NansenTimeout("DEADLINE", "the job deadline passed before the next request; it was not sent")
+        reply = self._inner.request(operation, path, body)
+        if self.deadline_passed():
+            raise NansenTimeout("TIMEOUT", "the reply arrived after the job deadline")
+        self.response_sha256.append(hashlib.sha256(reply.body).hexdigest())
+        return reply
+
+
+class PreparedNansen:
+    """The Nansen credential read for one job. Builds the job's transport before the original attempt is saved."""
+
+    def __init__(self, runtime: ReleasedSourceRuntime, key: str) -> None:
+        self._runtime, self._key = runtime, key
+
+    def __repr__(self) -> str:
+        return f"PreparedNansen({self._runtime.release.release_id})"
+
+    def transport(self, seconds_left: float, cancelled: Callable[[], bool],
+                  clock: Callable[[], float] = time.monotonic, anchor: float | None = None) -> ReleasedNansenTransport:
+        """`seconds_left` must be measured now from the job's SAVED deadline, next to `anchor` (read first), so the
+        deadline is never later than the saved one (see `investigation_jobs.release_nansen_transport`)."""
+        nansen = self._runtime.release.nansen
+        assert nansen is not None and self._runtime.nansen_transport is not None
+        deadline = (clock() if anchor is None else anchor) + seconds_left
+        connect = max(0.001, min(float(nansen.client_bounds["connect_timeout_seconds"]), seconds_left))
+        try:
+            inner = self._runtime.nansen_transport(nansen, self._key, deadline_monotonic=deadline,
+                                                   connect_timeout_seconds=connect, cancel=cancelled)
+        except NansenInputError as error:
+            if error.code != "INVALID_CREDENTIAL":
+                raise
+            inner = None  # the adapter refused the key; its message never holds the value
+        if inner is None:
+            raise ReleaseRefused("operating_release_credential_unavailable",
+                                 "the Nansen credential is not usable; nothing was sent")
+        return ReleasedNansenTransport(inner, deadline, clock)
+
+
+def prepare_nansen(runtime: ReleasedSourceRuntime) -> PreparedNansen:
+    """Read the Nansen credential for one job. Raises `ReleaseRefused`; sends nothing."""
     nansen = runtime.release.nansen
     assert nansen is not None and runtime.nansen_transport is not None
-    return runtime.nansen_transport(nansen, _read(runtime, nansen.credential_slot))
+    return PreparedNansen(runtime, _read(runtime, nansen.credential_slot))

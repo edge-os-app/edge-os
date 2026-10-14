@@ -8,6 +8,10 @@ Everything here is SYNTHETIC and local. A stand-in release is built from one SOU
   It writes one JSON line per request it receives to its own log, so a test or the verifier counts provider requests
   outside the application.
 
+Nansen has the same two kinds: `StandInNansen` (in process) and `LoopbackStandInNansen`, an owned 127.0.0.1 server
+reached through the accepted `NansenHttpTransport` and `StdlibHttpTransport`; only an injected connector moves the fixed
+`https://api.nansen.ai` origin to the loopback port, so it is never the network factory.
+
 Both check the stand-in credentials, so a request only succeeds when the application read them from the composed
 credential source. The credential values are sentinels a leak scan looks for; they are not secrets.
 """
@@ -15,9 +19,11 @@ credential source. The credential values are sentinels a leak scan looks for; th
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import threading
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -26,6 +32,7 @@ from edge_os_api.core.research import provider_composition
 from edge_os_api.core.research.operating_release import HistoryRelease, NansenRelease, OperatingRelease
 from edge_os_api.core.research.released_source_runtime import (
     CredentialUnavailable,
+    NansenHttpFactory,
     ReleasedSourceRuntime,
     open_released_runtime,
 )
@@ -65,7 +72,8 @@ def nansen_part(endpoint: str = "https://nansen.stand-in.invalid") -> NansenRele
                       "value_usd_min": None},
         flow_query={"label": "top_100_holders"},
         limits={"max_requests": 4, "max_pages": 2, "max_bytes": 200000, "max_credits": "12", "per_page": 100},
-        deadline_seconds=600, compute_seconds=30)
+        deadline_seconds=600, compute_seconds=30,
+        client_bounds={"connect_timeout_seconds": 15, "max_request_bytes": 65_536, "max_response_bytes": 200_000})
 
 
 def stand_in_release(recording_id: str = "native-syn-qualified/1", *, release_id: str = "stand-in-native/1",
@@ -271,12 +279,15 @@ class LoopbackStandInProvider:
 
 class StandInNansen:
     """In-process stand-in Nansen provider over the authored fixture. A request made without the stand-in key gets a
-    401 reply. `requests` counts every request, outside the application."""
+    401 reply. `requests` counts every request, outside the application; `bounds` keeps the per-job bounds the
+    application passed to the factory."""
 
     def __init__(self) -> None:
         self.requests: list[str] = []
+        self.bounds: list[dict[str, Any]] = []
 
-    def transport(self, release: NansenRelease, key: str) -> "StandInNansenTransport":
+    def transport(self, release: NansenRelease, key: str, **bounds: Any) -> "StandInNansenTransport":
+        self.bounds.append(bounds)
         return StandInNansenTransport(self, release, key)
 
 
@@ -291,6 +302,93 @@ class StandInNansenTransport:
         if self._key != NANSEN_KEY:
             return NansenResponse(status=401, headers={}, body=b'{"error":"stand-in: not authorized"}')
         return self._inner.request(operation, path, body)
+
+
+class LoopbackStandInNansen:
+    """An owned HTTP server on 127.0.0.1 that answers the two pinned Nansen routes from the authored fixture.
+
+    A request without the stand-in key gets a 401. Each request appends one JSON line to `log_path`: the operation,
+    whether the stand-in key was present, the status and the body SHA-256; never a header value. `fault`, when set, is
+    called with (request index from 1, operation) and may return `{"delay": seconds}` (sleep, then answer),
+    `{"drop": True}` (close without a reply) or `{"status", "headers", "body"}` (answer that instead)."""
+
+    ROUTES = {"/api/v1/tgm/holders": "holders", "/api/v1/tgm/flows": "flows"}
+
+    def __init__(self, log_path: Path, *, port: int = 0) -> None:
+        lock = threading.Lock()
+        self.log_path = log_path
+        self.fault: Callable[[int, str], Mapping[str, Any] | None] | None = None
+        self.targets: list[tuple[str, str, int | None]] = []
+        provider = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - http.server naming
+                body = self.rfile.read(int(self.headers.get("content-length") or 0))
+                operation = provider.ROUTES.get(self.path, "other")
+                authorized = self.headers.get("apikey") == NANSEN_KEY
+                with lock:
+                    index = len(provider.entries()) + 1
+                    fault = provider.fault(index, operation) if provider.fault is not None else None
+                    dropped = bool(fault and fault.get("drop"))
+                    status, headers, data = (0, {}, b"") if dropped else provider._answer(operation, authorized,
+                                                                                          body, fault)
+                    with open(log_path, "a", encoding="utf-8") as handle:
+                        handle.write(json.dumps({"operation": operation, "authorized": authorized, "status": status,
+                                                 "body_sha256": hashlib.sha256(body).hexdigest()}) + "\n")
+                if fault and fault.get("delay"):
+                    time.sleep(float(fault["delay"]))
+                if dropped:
+                    self.close_connection = True
+                    return
+                self.send_response(status)
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args: Any) -> None:  # requests are logged above, without headers
+                return
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self._server.daemon_threads = True
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    @staticmethod
+    def _answer(operation: str, authorized: bool, body: bytes,
+                fault: Mapping[str, Any] | None) -> tuple[int, dict[str, str], bytes]:
+        if fault and "status" in fault:
+            return int(fault["status"]), dict(fault.get("headers") or {}), bytes(fault.get("body") or b"{}")
+        if operation == "other":
+            return 404, {"content-type": "application/json"}, b'{"code":"not_found"}'
+        if not authorized:
+            return 401, {"content-type": "application/json"}, b'{"code":"unauthenticated"}'
+        reply = provider_composition.AuthoredNansenTransport(TOKEN).request(operation, "", json.loads(body))
+        return reply.status, {"content-type": "application/json", **reply.headers}, reply.body
+
+    @property
+    def port(self) -> int:
+        return self._server.server_address[1]
+
+    def connector(self) -> Callable[..., http.client.HTTPConnection]:
+        """Moves the adapter's fixed origin to this server and records each requested target."""
+        def connect(scheme: str, host: str, port: int | None, timeout: float) -> http.client.HTTPConnection:
+            self.targets.append((scheme, host, port))
+            return http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        return connect
+
+    def start(self) -> "LoopbackStandInNansen":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+    def entries(self) -> list[dict[str, Any]]:
+        if not self.log_path.exists():
+            return []
+        return [json.loads(line) for line in self.log_path.read_text(encoding="utf-8").splitlines() if line]
 
 
 # ---------------------------------------------------------------------------------------- runtimes
@@ -325,3 +423,13 @@ def loopback_runtime_at(settings: Any, port: int, *, recording_id: str = "native
                                quicknode_host="127.0.0.1", nansen=False)
     creds = creds or credentials(quicknode=quicknode_url("127.0.0.1", "http", port), missing=missing)
     return open_released_runtime(settings, release, credentials=creds, http_transport=StdlibHttpTransport), creds
+
+
+def nansen_loopback_runtime(settings: Any, provider: LoopbackStandInNansen, *,
+                            release_id: str = "stand-in-nansen-loopback/1", creds: StandInCredentials | None = None,
+                            ) -> tuple[ReleasedSourceRuntime, StandInCredentials]:
+    """A stand-in Nansen-only release over the accepted `NansenHttpTransport`, reaching only the loopback stand-in."""
+    release = stand_in_release(release_id=release_id, history=False, nansen_endpoint=f"http://127.0.0.1:{provider.port}")
+    creds = creds or credentials()
+    return open_released_runtime(settings, release, credentials=creds,
+                                 nansen_transport=NansenHttpFactory(connect=provider.connector())), creds

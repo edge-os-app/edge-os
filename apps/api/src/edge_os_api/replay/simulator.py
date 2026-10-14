@@ -13,6 +13,8 @@ from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.strategies import compiler as strategy_compiler
 
 PROFILE_VERSION = "p12.spot-replay/1"
+# Provider history passes only the same qualification, coverage and market checks as a fixture (R58 L2, RG05).
+ADMITTED_EVIDENCE_CLASSES = ("SYNTHETIC_FIXTURE", "PROVIDER_ACTUAL")
 ESSENTIAL_VERSION = "p12.essential-evidence/1"
 _COMPLETE = {"COMPLETE_OCCUPIED", "COMPLETE_EMPTY"}
 
@@ -180,8 +182,9 @@ def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int,
                        "The saved slippage makes a sell fill non-positive.")
     if not run.strategy_revision_id or not run.run_configuration_id or not run.dataset.revision_id:
         raise _invalid("INVALID_REPLAY_IDENTITY", "/identity", "Bind immutable strategy, configuration and dataset revisions.")
-    if run.dataset.evidence_class != "SYNTHETIC_FIXTURE":
-        raise _invalid("EVIDENCE_CLASS_UNSUPPORTED", "/dataset/evidence_class", "This P13 slice accepts synthetic fixtures only.")
+    if run.dataset.evidence_class not in ADMITTED_EVIDENCE_CLASSES:
+        raise _invalid("EVIDENCE_CLASS_UNSUPPORTED", "/dataset/evidence_class",
+                       "This P13 slice accepts synthetic fixtures and qualified provider history only.")
     if isinstance(strategy["invalidation"], dict) and strategy["invalidation"].get("state") != "NOT_REQUESTED":
         raise _invalid("UNSUPPORTED_INVALIDATION", "/strategy/invalidation", "Boolean invalidation is outside P12/1.")
     if run.dataset.qualification != "QUALIFIED" or run.dataset.coverage_complete is not True:

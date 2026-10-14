@@ -3,7 +3,9 @@
 The adapter copies one owner's saved, hash-verified dataset into `ReplayDataset` and `ReplayBucket` values. It never
 changes a bucket, fills a gap, moves an availability time, upgrades a verdict or relabels evidence: the runtime's own
 checks decide warm-up, coverage, truncation, lookahead and market identity. The P07 profile's evidence class is passed
-through as stated, so an actual-provider dataset is refused by the runtime until a separately reviewed change exists.
+through as stated. `PROVIDER_ACTUAL` passes only from a dataset an approved actual release wrote (source class
+`PROVIDER_ACTUAL`, saved release kind `ACTUAL`); the runtime then applies the same qualification, coverage and market
+checks as to a fixture, so the class upgrades nothing.
 """
 
 from __future__ import annotations
@@ -51,6 +53,13 @@ def refuse_protected(session: Session, row: history_dataset.HistoryDatasetRow, w
 def replay_dataset(row: history_dataset.HistoryDatasetRow, window_end: dt.datetime) -> spot_replay.ReplayDataset:
     """Every saved bucket that ends before the run's exclusive end, unchanged. Later buckets are not passed in."""
     content = row.content
+    if content["profile_evidence_class"] == "PROVIDER_ACTUAL" and (
+            content["evidence_class"] != "PROVIDER_ACTUAL"
+            or (content.get("operating_release") or {}).get("kind") != "ACTUAL"):
+        raise AppError(409, "SPOT_REPLAY", "CONFLICTED", "evidence_class_inconsistent",
+                       [finding("evidence_class_inconsistent", "/history_dataset_id",
+                                "Only a dataset an approved actual release collected can be replayed as provider "
+                                "history. Nothing was replayed.")])
     market_id = content["market_binding_id"] or ""
     buckets = []
     for bucket in content["buckets"]:

@@ -34,6 +34,7 @@ from edge_os_api.core.errors import AppError, finding, install_handlers, invalid
 from edge_os_api.research.fixture_interpreter import samples
 from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, NansenReportBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
+from edge_os_api.core.research import released_runtime_bootstrap
 from edge_os_api.core.research.operating_release import ReleaseRefused
 from edge_os_api.core.research.released_source_runtime import ReleasedSourceRuntime, release_view
 from edge_os_api.wallet_setup import router as wallet_setup
@@ -110,12 +111,18 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     """Compose the application. `hermes_runner` is the process boundary of the local Hermes interpreter.
 
     Only the `hermes_local` setting uses it, and that setting needs it. `research_runtime` is a composed operating
-    release (`core/research/released_source_runtime.py`); without it no release source exists. No setting composes
-    one, so the default reaches no provider.
+    release (`core/research/released_source_runtime.py`). Without one, the server bootstrap composes the approved
+    code-owned release, the same one the worker composes; none exists and no setting adds one, so the default reaches
+    no provider.
     """
     settings = settings or load_settings()
     if settings.interpreter == "hermes_local" and hermes_runner is None:
         raise ConfigError("invalid configuration: interpreter: hermes_local needs a Hermes runner")
+    if research_runtime is None:
+        try:
+            research_runtime = released_runtime_bootstrap.server_research_runtime(settings)
+        except ReleaseRefused as error:
+            raise ConfigError(f"invalid configuration: research_runtime: {error.code}") from None
     if research_runtime is not None:
         if research_runtime.release.kind == "STAND_IN" and settings.env == "production":
             raise ConfigError("invalid configuration: research_runtime: a stand-in release is refused in production")

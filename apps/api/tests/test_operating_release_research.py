@@ -122,6 +122,7 @@ def test_without_a_composed_release_nothing_is_listed_and_provider_keys_change_n
         listed = client.get(f"/v1/research/requests/{investigation_request(client, owner_a)['intake']['record_id']}"
                             "/nansen-reports", headers=owner_a).json()
         assert listed == {"available": False, "jobs": []}  # unchanged when no release is composed
+        assert client.app.state.research_runtime is None  # the server bootstrap composes no release by default
 
 
 def test_a_stand_in_release_is_listed_with_its_fixed_bounds_and_stand_in_class(composed, owner_a):
@@ -821,3 +822,130 @@ def test_a_release_nansen_job_ends_before_any_request_without_its_release_or_cre
     assert (job["state"], job["terminal_reason"]) == ("UNAVAILABLE", reason)
     assert job["budget"]["released"] == {"provider_requests": 4, "compute_seconds": 30, "nansen_credits": 12}
     assert nansen.requests == []
+
+
+# --------------------------------------------------------------------------------------- R58-RESEARCH-MOUNT-L2
+# The accepted Nansen HTTP adapter mounted in the original job lifecycle, over an owned 127.0.0.1 stand-in only.
+
+@pytest.fixture
+def nansen_loopback(tmp_path):
+    provider = stand_in.LoopbackStandInNansen(tmp_path / "nansen.log").start()
+    yield provider
+    provider.stop()
+
+
+def start_nansen(client, headers, **overrides) -> str:
+    started = client.post(f"/v1/research/requests/{nansen_intake(client, headers)}/nansen-reports", headers=headers,
+                          json=nansen_body(**overrides))
+    assert started.status_code == 201, started.text
+    return started.json()["job_id"]
+
+
+def request_cancel(client, job_id: str) -> None:
+    """The owner's cancel, saved while the worker is inside a provider call (the API route does the same update)."""
+    from edge_os_api.research.investigation_jobs import InvestigationJobRow
+
+    with client.app.state.session_factory() as session:
+        session.get(InvestigationJobRow, uuid.UUID(job_id)).cancel_requested_at = dt.datetime.now(dt.timezone.utc)
+        session.commit()
+
+
+def test_a_loopback_release_nansen_report_crosses_the_accepted_adapter_and_reopens_without_a_call(
+        settings, owner_a, owner_b, nansen_loopback):
+    runtime, creds = stand_in.nansen_loopback_runtime(settings, nansen_loopback)
+    with app(settings, runtime) as client:
+        job_id = start_nansen(client, owner_a)
+        assert nansen_loopback.entries() == [] and creds.reads == []
+        worker(client, runtime).run_job(uuid.UUID(job_id))
+        job = view(client, owner_a, job_id)
+        report_id = job["nansen_report"]["report_id"]
+        report = client.get(f"/v1/research/nansen-reports/{report_id}", headers=owner_a).json()
+    assert job["state"] == "REPORTED", job["terminal_reason"]
+    assert [(entry["operation"], entry["authorized"]) for entry in nansen_loopback.entries()] == [
+        ("holders", True), ("flows", True)]
+    assert nansen_loopback.targets == [("https", "api.nansen.ai", None)] * 2 and creds.reads == [stand_in.NANSEN_SLOT]
+    content = report["content"]
+    assert (content["evidence_class"], content["transport_label"], content["transport_kind"]) == (
+        "RELEASE_STAND_IN_RESPONSE", "RELEASE_STAND_IN_NANSEN_TRANSPORT", "LOOPBACK_HTTP")
+    assert len(content["transport_response_sha256"]) == 2 and all(report["hashes_verified"].values())
+    assert job["budget"]["consumed"]["nansen_credits"] == 6 and job["budget"]["unknown_liability"]["nansen_credits"] == 0
+    restarted, _ = stand_in.nansen_loopback_runtime(settings, nansen_loopback)
+    with app(settings, restarted) as client:  # a new API process over the same rows: reopening calls nothing
+        reopened = client.get(f"/v1/research/nansen-reports/{report_id}", headers=owner_a).json()
+        foreign = client.get(f"/v1/research/nansen-reports/{report_id}", headers=owner_b).status_code
+        worker(client, restarted).run_pending()
+    assert reopened["content_sha256"] == report["content_sha256"] and foreign == 404
+    assert len(nansen_loopback.entries()) == 2
+    assert not any(value in json.dumps(report) + json.dumps(job) for value in stand_in.SENTINELS)
+
+
+def test_a_release_nansen_call_past_the_saved_deadline_ends_deadline_exceeded_with_unknown_liability(
+        settings, owner_a, nansen_loopback):
+    runtime, _ = stand_in.nansen_loopback_runtime(settings, nansen_loopback)
+    nansen_loopback.fault = lambda index, operation: {"delay": 3.0} if index == 1 else None
+    with app(settings, runtime) as client:
+        job_id = start_nansen(client, owner_a)
+        # The worker starts 598 s after the job: about two seconds of the saved 600 s deadline are left.
+        late = lambda: dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=598)  # noqa: E731
+        worker(client, runtime, clock=late).run_job(uuid.UUID(job_id))
+        job = view(client, owner_a, job_id)
+    assert (job["state"], job["terminal_reason"]) == ("DEADLINE_EXCEEDED", "deadline_during_collection")
+    assert len(nansen_loopback.entries()) == 1  # flows was never sent
+    assert job["budget"]["unknown_liability"]["provider_requests"] == 4
+    assert job["budget"]["unknown_liability"]["nansen_credits"] == 12 and job["budget"]["consumed"]["nansen_credits"] == 0
+
+
+def test_a_cancel_during_a_release_nansen_call_ends_cancelled_with_unknown_liability(settings, owner_a,
+                                                                                    nansen_loopback):
+    runtime, _ = stand_in.nansen_loopback_runtime(settings, nansen_loopback)
+    with app(settings, runtime) as client:
+        job_id = start_nansen(client, owner_a)
+
+        def cancel_mid_call(index: int, operation: str) -> dict[str, Any] | None:
+            if index == 1:
+                request_cancel(client, job_id)
+                return {"delay": 0.3}
+            return None
+
+        nansen_loopback.fault = cancel_mid_call
+        worker(client, runtime).run_job(uuid.UUID(job_id))
+        job = view(client, owner_a, job_id)
+    assert (job["state"], job["terminal_reason"]) == ("CANCELLED", "cancelled_during_collection")
+    assert len(nansen_loopback.entries()) == 1
+    assert job["budget"]["unknown_liability"]["provider_requests"] == 4
+    assert job["budget"]["unknown_liability"]["nansen_credits"] == 12
+
+
+def test_a_release_nansen_job_with_a_malformed_key_ends_before_any_request(settings, owner_a, nansen_loopback):
+    creds = stand_in.StandInCredentials({stand_in.NANSEN_SLOT: "stand-in key with spaces"})
+    runtime, _ = stand_in.nansen_loopback_runtime(settings, nansen_loopback, creds=creds)
+    with app(settings, runtime) as client:
+        job_id = start_nansen(client, owner_a)
+        worker(client, runtime).run_job(uuid.UUID(job_id))
+        job = view(client, owner_a, job_id)
+    assert (job["state"], job["terminal_reason"]) == ("UNAVAILABLE", "operating_release_credential_unavailable")
+    assert [event["kind"] for event in job["events"]].count("ATTEMPT_STARTED") == 0
+    assert job["budget"]["released"] == {"provider_requests": 4, "compute_seconds": 30, "nansen_credits": 12}
+    assert nansen_loopback.entries() == []
+
+
+def test_a_worker_killed_during_a_release_nansen_call_never_runs_it_again(settings, owner_a):
+    class KilledNansen:
+        def request(self, operation: str, path: str, body: Any) -> Any:
+            raise Killed()
+
+    stand_in_nansen = stand_in.StandInNansen()
+    release = stand_in.stand_in_release(history=False)
+    killing = open_released_runtime(settings, release, credentials=stand_in.credentials(),
+                                    nansen_transport=lambda part, key, **bounds: KilledNansen())
+    restarted = open_released_runtime(settings, release, credentials=stand_in.credentials(),
+                                      nansen_transport=stand_in_nansen.transport)
+    with app(settings, killing) as client:
+        job_id = start_nansen(client, owner_a)
+        with pytest.raises(Killed):
+            worker(client, killing).run_job(uuid.UUID(job_id))
+        worker(client, restarted).run_job(uuid.UUID(job_id))
+        job = view(client, owner_a, job_id)
+    assert (job["state"], job["terminal_reason"]) == ("UNAVAILABLE", "nansen_outcome_unknown")
+    assert [event["kind"] for event in job["events"]].count("ATTEMPT_STARTED") == 1
+    assert job["budget"]["unknown_liability"]["nansen_credits"] == 12 and stand_in_nansen.requests == []

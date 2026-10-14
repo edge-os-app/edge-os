@@ -5,15 +5,17 @@ Fills are simulated. Sources are SYNTHETIC recorded responses; no result is obse
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
+from edge_os_api.core.errors import AppError
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
-from edge_os_api.replay import history_inputs, simulator
+from edge_os_api.replay import history_inputs, saved_runs, simulator
 from flows import compiled_thesis, publish
 from research_flows import adoption_body, history_replay_body, reported_dataset
 
@@ -119,24 +121,56 @@ def test_foreign_dataset_and_body_shape_are_refused(research, owner_a, owner_b):
     assert research.post("/v1/spot-replays", headers=owner_a, json=neither).status_code == 422
 
 
-def test_actual_provider_class_is_passed_through_and_refused_by_the_runtime(research, owner_a):
-    strategy_id, _, revision_id, dataset_id = history_strategy(research, owner_a)
-    saved = replay(research, owner_a, history_replay_body(strategy_id, revision_id, dataset_id))
-    strategy = saved["content"]["inputs"]["strategy"]
+def relabelled(row, **labels):
+    """A detached copy of a saved dataset with the given top-level labels. Nothing is written."""
+    row.content = {**row.content, **labels}
+    return row
+
+
+def detached_dataset(research, dataset_id):
     with research.app.state.session_factory() as session:
         row = session.get(history_inputs.history_dataset.HistoryDatasetRow, uuid.UUID(dataset_id))
         session.expunge(row)
-    row.content = {**row.content, "profile_evidence_class": "PROVIDER_ACTUAL"}
+    return row
+
+
+def test_a_dataset_cannot_claim_provider_history_by_its_profile_label_alone(research, owner_a):
+    _, _, _, dataset_id = history_strategy(research, owner_a)
+    row = relabelled(detached_dataset(research, dataset_id), profile_evidence_class="PROVIDER_ACTUAL")
+    with pytest.raises(AppError) as refused:  # a recorded or stand-in source never becomes provider history
+        history_inputs.replay_dataset(row, dt.datetime(2026, 9, 25, 11, 0, tzinfo=dt.timezone.utc))
+    assert (refused.value.status, refused.value.code) == (409, "evidence_class_inconsistent")
+
+
+def test_actual_provider_history_passes_through_with_unchanged_numbers(research, owner_a):
+    """Labels only: the buckets are the saved recorded ones, relabelled in memory as an approved actual release would
+    have written them. No provider data exists; the check is that the class passes and nothing else changes."""
+    strategy_id, _, revision_id, dataset_id = history_strategy(research, owner_a)
+    saved = replay(research, owner_a, history_replay_body(strategy_id, revision_id, dataset_id))
+    strategy = saved["content"]["inputs"]["strategy"]
     window_end = dt.datetime(2026, 9, 25, 11, 0, tzinfo=dt.timezone.utc)
+    synthetic = history_inputs.replay_dataset(detached_dataset(research, dataset_id), window_end)
+    row = relabelled(detached_dataset(research, dataset_id), evidence_class="PROVIDER_ACTUAL",
+                     profile_evidence_class="PROVIDER_ACTUAL",
+                     operating_release={"release_id": "actual-label-check/1", "sha256": "0" * 64, "kind": "ACTUAL"})
     dataset = history_inputs.replay_dataset(row, window_end)
     assert dataset.evidence_class == "PROVIDER_ACTUAL"
+    assert (dataset.buckets, dataset.qualification, dataset.coverage_complete, dataset.market_binding_id) == (
+        synthetic.buckets, synthetic.qualification, synthetic.coverage_complete, synthetic.market_binding_id)
     run = simulator.ReplayInput(strategy_revision_id=revision_id, run_configuration_id="actual-check",
                                 dataset=dataset, essential_evidence=saved["content"]["inputs"]["essential_evidence"],
                                 window_start=dt.datetime(2026, 9, 25, 10, 20, tzinfo=dt.timezone.utc),
                                 window_end=window_end, initial_cash_quote="1000")
-    with pytest.raises(simulator.ReplayError) as refused:
-        simulator.run_spot_replay(strategy, run)
-    assert refused.value.code == "EVIDENCE_CLASS_UNSUPPORTED"
+    result = simulator.run_spot_replay(strategy, run)
+    baseline = simulator.run_spot_replay(strategy, dataclasses.replace(run, dataset=synthetic))
+    assert result.evidence_class == "PROVIDER_ACTUAL" and result.repeatability_id != baseline.repeatability_id
+    assert (result.trades, result.metrics, result.metric_statuses) == (
+        baseline.trades, baseline.metrics, baseline.metric_statuses)
+    snapshot = history_inputs.snapshot(row, strategy, {"state": "ENTRY_IS_DECLARED_RULE"})
+    assert (snapshot["source_evidence_class"], snapshot["profile_evidence_class"], snapshot["fill_label"]) == (
+        "PROVIDER_ACTUAL", "PROVIDER_ACTUAL", "simulated fills")
+    assert saved_runs.notice_for(result.evidence_class) != saved_runs.notice_for("SYNTHETIC_FIXTURE")
+    assert "No trading permission" in saved_runs.notice_for(result.evidence_class)
 
 
 def test_replay_never_reads_validation_or_holdout_buckets(research, owner_a):

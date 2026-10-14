@@ -230,6 +230,15 @@ def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
     return snapshot, run_input, dataset.evidence_class
 
 
+def notice_for(evidence_class: str) -> str:
+    """The saved notice of a replay on an owner dataset. Provider history still claims only hypothetical fills."""
+    if evidence_class == "PROVIDER_ACTUAL":
+        return ("Hypothetical simulated fills on saved provider history. No gas, spread, additional impact, or capacity "
+                "model. No statistical support or profitability is claimed. No trading permission.")
+    return ("Simulated fills on a saved recorded-history dataset. Synthetic recorded responses, not observed "
+            "market history. No gas, spread, additional impact, or capacity model. No trading permission.")
+
+
 def create_spot_replay(session: Session, principal: Principal, body: SpotReplayBody) -> tuple[int, dict[str, Any]]:
     """Create one immutable replay, or return the identical result for its idempotency key."""
     request = body.model_dump(mode="json")
@@ -264,8 +273,7 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
     strategy = revision["strategy"]
     if body.history_dataset_id is not None:
         snapshot, run_input, evidence_class = _history_run(session, principal, body, strategy)
-        notice = ("Simulated fills on a saved recorded-history dataset. Synthetic recorded responses, not observed "
-                  "market history. No gas, spread, additional impact, or capacity model. No trading permission.")
+        notice = notice_for(evidence_class)
     else:
         snapshot, run_input = _fixture_run(session, principal, body, strategy)
         evidence_class = "SYNTHETIC_FIXTURE"
