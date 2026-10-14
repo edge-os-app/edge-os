@@ -549,3 +549,39 @@ def test_mapped_6to4_teredo_and_local_nat64_answers_stay_refused(address: str) -
 def test_one_reserved_ipv6_answer_refuses_the_whole_name() -> None:
     with pytest.raises(ValueError, match="dns_answer_not_global"):
         choose_address([answer("104.18.2.115"), answer("::a00:1")])
+
+
+# --- AR2 (controller disposition l1-addressrepair2.md): site-local and three named special-purpose blocks ----------
+
+
+@pytest.mark.parametrize("address", [
+    "fec0::", "fec0::1", "fef0::1", "feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",  # site-local fec0::/10 (RFC 3879)
+    "2001:20::", "2001:20::1", "2001:2f:ffff::1",  # ORCHIDv2 2001:20::/28 (RFC 7343): overlay identifiers, not locators
+    "2001:30::", "2001:30::1", "2001:3f:ffff::1",  # DET 2001:30::/28 (RFC 9374): non-routable identifiers
+    "192.88.99.0", "192.88.99.1", "192.88.99.2", "192.88.99.255",  # deprecated 6to4 relay anycast (RFC 7526)
+    "64:ff9b::c058:6301",  # NAT64 embedding 192.88.99.1: the IPv4 rule is inherited
+])
+def test_site_local_and_the_named_special_purpose_blocks_are_refused(address: str) -> None:
+    assert address_refusal(address) == "dns_answer_not_global"
+
+
+@pytest.mark.parametrize("address", ["192.0.0.9", "192.31.196.1", "192.52.193.1", "192.175.48.1", "2001:1::1",
+                                     "2001:3::1", "2001:4:112::1", "2620:4f:8000::1", "2001:4860:4860::8888", "8.8.8.8"])
+def test_globally_reachable_special_purpose_more_specifics_and_public_addresses_stay_allowed(address: str) -> None:
+    assert address_refusal(address) is None
+
+
+@pytest.mark.parametrize("answers", [["104.18.2.115", "fec0::1"], ["2001:20::1", "104.18.2.115"],
+                                     ["192.88.99.1", "2606:4700:4700::1111"]])
+def test_one_site_local_or_named_block_answer_refuses_the_whole_name_in_either_order(answers: list[str]) -> None:
+    with pytest.raises(ValueError, match="dns_answer_not_global"):
+        choose_address([answer(a) for a in answers])
+
+
+def test_a_site_local_answer_is_refused_with_a_receipt_before_any_opening_or_connect(tmp_path: Path) -> None:
+    network = Network([answer("fec0::1")], FakeSocket(end=True))
+    client = FakeSocket([live_head("att-ar2")], end=True)
+    record = gateway(tmp_path, network).handle(client)
+    assert (record["outcome"], record["reason"], record["attempt_id"]) == ("refused", "dns_answer_not_global", "att-ar2")
+    assert [r["outcome"] for r in receipts(tmp_path)] == ["refused"] and network.connected == []
+    assert client.sent == b"HTTP/1.1 403 Forbidden\r\nX-Refusal: dns_answer_not_global\r\n\r\n"

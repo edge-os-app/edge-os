@@ -49,6 +49,10 @@ CHUNK = 64 * 1024
 ATTEMPT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 HEADERS = frozenset({"host", "x-relay-attempt", "x-relay-expires"})
 NAT64 = ipaddress.ip_network("64:ff9b::/96")  # RFC 6052 well-known prefix: its low 32 bits are the IPv4 target
+NOT_LOCATORS = tuple(ipaddress.ip_network(net) for net in (  # Python calls them global; A6 needs routable unicast
+    "192.88.99.0/24",  # deprecated 6to4 relay anycast (RFC 7526; IANA IPv4 special registry)
+    "2001:20::/28",  # ORCHIDv2 overlay identifiers, non-routable by design (RFC 7343)
+    "2001:30::/28"))  # DET identifiers, non-routable (RFC 9374)
 DOCKER_RANGES = tuple(ipaddress.ip_network(net) for net in (  # also refused by the global check; named for the record
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fd00::/8"))
 ESTABLISHED = b"HTTP/1.1 200 Connection Established\r\n\r\n"
@@ -117,7 +121,9 @@ def address_refusal(address: str) -> str | None:
         return "dns_answer_invalid"
     if ip.version == 6 and ip in NAT64:  # judge the IPv4 target a translator would reach, by the same rule
         return address_refusal(str(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)))
-    if ip.version == 6 and ip.is_reserved:  # e.g. ::/96 IPv4-compatible or 7000::1: Python may still call them global
+    if ip.version == 6 and (ip.is_reserved or ip.is_site_local):  # e.g. ::/96, 7000::1, fec0::/10: may be "global"
+        return "dns_answer_not_global"
+    if any(ip in net for net in NOT_LOCATORS if net.version == ip.version):
         return "dns_answer_not_global"
     mapped = getattr(ip, "ipv4_mapped", None)
     if mapped is not None or not ip.is_global or ip.is_multicast or any(ip in net for net in DOCKER_RANGES
