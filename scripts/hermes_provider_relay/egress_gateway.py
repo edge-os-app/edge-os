@@ -172,11 +172,22 @@ class Receipts:
 
 def _early_bytes(client: Any) -> bool:
     """Bytes the client already sent that are still unread. Only already-queued bytes are seen; a byte that arrives
-    after this look and before the answer is not (a platform limit; the trusted relay sends nothing before the answer)."""
+    after this look and before the answer is not (a platform limit; the trusted relay sends nothing before the answer).
+
+    The look never waits: with a positive timeout CPython waits for readability before any recv, whatever the flags, so
+    the socket is made non-blocking for the look and its timeout restored afterwards. Any other socket error, or a
+    failed restore, counts as early data: the CONNECT is refused, never assumed clean."""
     try:
-        return bool(client.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT))
-    except (BlockingIOError, InterruptedError):
-        return False
+        previous = client.gettimeout()
+        client.setblocking(False)
+        try:
+            return bool(client.recv(1, socket.MSG_PEEK))
+        except BlockingIOError:
+            return False
+        finally:
+            client.settimeout(previous)
+    except OSError:
+        return True
 
 
 def _resolve_within(resolve: Callable[..., list[tuple[Any, ...]]], seconds: float) -> list[tuple[Any, ...]] | str:

@@ -13,7 +13,9 @@ from typing import Any
 import pytest
 
 import egress_gateway
-from egress_gateway import ESTABLISHED, ConnectRequest, Gateway, Receipts, address_refusal, choose_address, parse_connect
+from egress_gateway import (
+    ESTABLISHED, ConnectRequest, Gateway, Receipts, _early_bytes, address_refusal, choose_address, parse_connect,
+)
 
 NOW = 1_000_000.0
 
@@ -109,6 +111,12 @@ class FakeSocket:
         self.sent += data
 
     def settimeout(self, _: float | None) -> None:
+        pass
+
+    def gettimeout(self) -> float | None:  # a real socket has both; this fake answers at once in every mode
+        return None
+
+    def setblocking(self, _: bool) -> None:
         pass
 
     def shutdown(self, _: int) -> None:
@@ -383,3 +391,98 @@ def test_bytes_that_arrive_during_the_lookup_are_refused_before_the_answer(tmp_p
     record = gateway(tmp_path, Arriving([answer("104.18.2.115")], upstream)).handle(client)
     assert (record["outcome"], record["reason"]) == ("refused", "data_before_tunnel")
     assert ESTABLISHED not in client.sent and upstream.sent == b"" and upstream.closed
+
+
+
+# --- peekfix (controller disposition l1-peekfix1.md): the queued-byte look must never wait -------------------------
+
+
+class TimedSocket(FakeSocket):
+    """Models CPython's socket modes: with a POSITIVE timeout an empty read first waits the whole timeout (whatever the
+    flags) and raises TimeoutError; with timeout 0.0 (non-blocking) it raises BlockingIOError at once; None blocks."""
+
+    def __init__(self, inbound: list[bytes] | None = None, **kwargs: Any) -> None:
+        super().__init__(inbound, **kwargs)
+        self.timeout: float | None = None
+        self.waited = 0.0
+
+    def settimeout(self, value: float | None) -> None:
+        self.timeout = value
+
+    def gettimeout(self) -> float | None:
+        return self.timeout
+
+    def setblocking(self, flag: bool) -> None:
+        self.timeout = None if flag else 0.0
+
+    def recv(self, size: int, flags: int = 0) -> bytes:
+        with self.inbound.mutex:
+            empty = not self.inbound.queue
+        if empty and self.timeout == 0.0:
+            raise BlockingIOError
+        if empty and self.timeout:
+            self.waited += self.timeout
+            raise TimeoutError("timed out")
+        return super().recv(size, flags)
+
+
+def test_an_empty_look_returns_at_once_and_restores_the_timeout() -> None:
+    client = TimedSocket()
+    client.settimeout(3.0)  # what _read_head leaves on the socket
+    assert _early_bytes(client) is False
+    assert (client.waited, client.gettimeout()) == (0.0, 3.0)
+
+
+def test_a_queued_byte_is_seen_left_unread_and_the_timeout_restored() -> None:
+    client = TimedSocket([b"\x16"])
+    client.settimeout(3.0)
+    assert _early_bytes(client) is True
+    assert list(client.inbound.queue) == [b"\x16"] and client.gettimeout() == 3.0
+
+
+class BrokenRestore(TimedSocket):
+    def settimeout(self, value: float | None) -> None:
+        if self.timeout == 0.0:
+            raise OSError("restore failed")
+        super().settimeout(value)
+
+
+class ResetSocket(TimedSocket):
+    def recv(self, size: int, flags: int = 0) -> bytes:
+        raise ConnectionResetError
+
+
+@pytest.mark.parametrize("client", [BrokenRestore(), ResetSocket()], ids=["restore-fails", "reset"])
+def test_an_unreadable_socket_state_is_refused_not_assumed_clean(client: TimedSocket) -> None:
+    client.timeout = 3.0
+    assert _early_bytes(client) is True
+
+
+def test_a_healthy_connect_passes_both_looks_without_waiting_and_gets_its_tunnel(tmp_path: Path) -> None:
+    client = TimedSocket([live_head()])
+    client.on_send = lambda data: client.inbound.put(b"client-hello") if data == ESTABLISHED else None
+    upstream = FakeSocket([b"server-hello"], end=True)
+    record = gateway(tmp_path, Network([answer("104.18.2.115")], upstream)).handle(client)
+    assert record["outcome"] == "tunnel" and client.waited == 0.0
+    assert client.sent.startswith(ESTABLISHED) and upstream.sent == b"client-hello"
+
+
+def test_queued_bytes_are_refused_unread_by_either_look(tmp_path: Path) -> None:
+    after_head = TimedSocket([live_head(), b"\x16\x03\x01"])
+    network = Network([answer("104.18.2.115")], FakeSocket(end=True))
+    record = gateway(tmp_path, network).handle(after_head)
+    assert (record["reason"], network.connected, list(after_head.inbound.queue)[:1]) == (
+        "data_before_tunnel", [], [b"\x16\x03\x01"])
+
+    before_answer = TimedSocket([live_head()])
+
+    class Arriving(Network):
+        def connect(self, address: tuple[str, int], timeout: float) -> FakeSocket:
+            before_answer.inbound.put(b"\x16\x03\x01")
+            return super().connect(address, timeout)
+
+    upstream = FakeSocket()
+    (tmp_path / "second").mkdir()
+    record = gateway(tmp_path / "second", Arriving([answer("104.18.2.115")], upstream)).handle(before_answer)
+    assert record["reason"] == "data_before_tunnel" and before_answer.waited == 0.0
+    assert ESTABLISHED not in before_answer.sent and upstream.sent == b"" and upstream.closed
