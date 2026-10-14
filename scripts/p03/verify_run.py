@@ -30,8 +30,10 @@ import harness  # noqa: E402
 from tokens import OWNER_A, OWNER_B, OWNER_C, TestSigner  # noqa: E402
 from p05_phase import run_p05_phase  # noqa: E402
 import financial_phase  # noqa: E402
+import recurring_phase  # noqa: E402
 import research_phase  # noqa: E402
 import runtime_phase  # noqa: E402
+from hermes_app_mount_phase import run_hermes_app_mount_phase  # noqa: E402
 
 THESIS = ("Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. "
           "Spot only.")
@@ -388,6 +390,9 @@ def main() -> int:
         token_a, token_b, token_c = signer.token(OWNER_A), signer.token(OWNER_B), signer.token(OWNER_C)
         # SOURCE-LOCAL native journey: one owner per browser width, each inside its own research budget.
         native_tokens = {name: signer.token(f"did:privy:test-native-{name}") for name in ("desktop", "mobile-390")}
+        # P27 recurring journey: one more owner per width, so two owners run recurring operation side by side.
+        native_tokens.update({f"rec-{name}": signer.token(f"did:privy:test-recurring-{name}")
+                              for name in ("desktop", "mobile-390")})
         # RESEARCH-PORTS-LOCAL journey: one more owner per width for the HTTP-client job and the Nansen report.
         native_tokens.update({f"ports-{name}": signer.token(f"did:privy:test-ports-{name}") for name in ("desktop", "mobile-390")})
         token_bad = TestSigner().token(OWNER_A)
@@ -405,6 +410,8 @@ def main() -> int:
             ui_env = {"P03_WEB_URL": web_url, "P03_API_URL": api_url, "P03_TOKEN_A": token_a, "P03_TOKEN_B": token_b, "P03_TOKEN_C": token_c, "P03_TOKEN_BAD": token_bad,
                       "P03_TOKEN_NATIVE_DESKTOP": native_tokens["desktop"],
                       "P03_TOKEN_NATIVE_MOBILE_390": native_tokens["mobile-390"],
+                      "P03_TOKEN_REC_DESKTOP": native_tokens["rec-desktop"],
+                      "P03_TOKEN_REC_MOBILE_390": native_tokens["rec-mobile-390"],
                       "P03_TOKEN_PORTS_DESKTOP": native_tokens["ports-desktop"],
                       "P03_TOKEN_PORTS_MOBILE_390": native_tokens["ports-mobile-390"],
                       "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
@@ -447,6 +454,8 @@ def main() -> int:
                 ok &= financial_ok
                 research_ok, research_before = research_phase.drive(rec, pg, env, evidence, ui_env, run_playwright)
                 ok &= research_ok
+                recurring_ok, recurring_before = recurring_phase.drive(rec, pg, env, evidence, ui_env, run_playwright)
+                ok &= recurring_ok
                 # The research phase adds requests, revisions and replays; the restart comparisons start from here.
                 inspection = sql_inspection(pg, results, p19_fixtures["owner_id"], p19_fixtures["account_snapshot"])
                 rec.write("sql-inspection-before-restart.json", inspection)
@@ -484,6 +493,7 @@ def main() -> int:
                 ok &= financial_phase.after_restart(rec, pg, env, evidence, ui_env, run_playwright, processes,
                                                     financial_before, owner_b_id)
                 ok &= research_phase.after_restart(rec, pg, env, evidence, ui_env, run_playwright, research_before)
+                ok &= recurring_phase.after_restart(rec, pg, evidence, ui_env, run_playwright, recurring_before)
                 storage_after_restart = p13_storage_snapshot(pg)
                 rec.write("p13-storage-after-restart.json", storage_after_restart)
                 ok &= rec.step("full P13 replay and configuration rows unchanged by the restart",
@@ -496,6 +506,10 @@ def main() -> int:
         if not args.skip_ui and not args.skip_p05:
             ok &= run_p05_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,
                                 run_playwright, api, processes)
+            # The same Research journey over the LOCAL Hermes transport mount, on the standard API the P05 phase restarted.
+            standard = next((p for p in reversed(processes) if getattr(p, "name", "") == "api-after-p05"), api)
+            ok &= run_hermes_app_mount_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,
+                                             run_playwright, standard, processes)
 
         if args.hold_seconds:
             hold = {"web": web_url, "api": api_url, "token_owner_a": token_a,

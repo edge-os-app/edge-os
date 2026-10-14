@@ -126,11 +126,11 @@ def test_t11_health_and_readiness(env, migrated, pg, tmp_path):
         for forbidden in ("postgres", "edge-os-test-app", pg.password, "BEGIN"):
             assert forbidden not in text
         ready = httpx.get(api.url + "/readyz")
-        assert ready.status_code == 200 and ready.json()["schema_revision"] == "0011"
+        assert ready.status_code == 200 and ready.json()["schema_revision"] == "0013"
         pg.psql("update alembic_version set version_num = '9999'")
         drift = httpx.get(api.url + "/readyz")
         assert drift.status_code == 503 and httpx.get(api.url + "/healthz").status_code == 200
-        pg.psql("update alembic_version set version_num = '0011'")
+        pg.psql("update alembic_version set version_num = '0013'")
         assert httpx.get(api.url + "/readyz").status_code == 200
         block_database(pg)
         try:

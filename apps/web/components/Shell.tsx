@@ -65,6 +65,8 @@ export function Shell() {
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
   const current = route.name === "later" || route.name === "account" ? route.area : "Research";
+  // An opened agent's account view gets the read-only agent health conversation; Research keeps its own.
+  const conversationAgent = route.name === "account" ? route.agentId : undefined;
 
   return (
     <div className="app">
@@ -93,11 +95,14 @@ export function Shell() {
             openConversation={openSheet} />
         )}
         {route.name === "later" && <Later area={route.area} />}
+        {conversationAgent && <div className="btn-row convo-button">
+          <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={openSheet}>Conversation</button>
+        </div>}
         {route.name === "account" && <AccountViews key={`${route.area}:${route.recordId ?? ""}:${route.agentId ?? ""}`}
           initialView={route.area} sourceRecordId={route.recordId} agentId={route.agentId} />}
       </main>
       <div className="convo convo-desktop" role="complementary" aria-label="Conversation" data-focus-surface="side">
-        <Conversation context={context} idPrefix="side" />
+        <Conversation context={context} idPrefix="side" agentId={conversationAgent} />
       </div>
       <dialog ref={sheet} className="sheet" aria-label="Conversation" data-focus-surface="sheet" onKeyDown={trapTab} onClose={() => sheetTrigger.current?.focus()}>
         <div className="convo">
@@ -105,7 +110,7 @@ export function Shell() {
             <h2 tabIndex={-1} data-focus-target>Conversation</h2>
             <button className="btn btn-secondary" type="button" onClick={closeSheet}>Close</button>
           </div>
-          <Conversation context={context} idPrefix="sheet" showTitle={false} />
+          <Conversation context={context} idPrefix="sheet" showTitle={false} agentId={conversationAgent} />
         </div>
       </dialog>
     </div>

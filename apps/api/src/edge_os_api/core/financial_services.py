@@ -17,6 +17,7 @@ from edge_os_api.core.provider_ports import ProviderPorts, build_provider_ports
 from edge_os_api.core.settings import Settings
 from edge_os_api.execution.service import ExecutionService
 from edge_os_api.execution.position_limit import CombinedControls, OnePositionPerWallet
+from edge_os_api.execution.recurring_scheduler import DeploymentEndControl, RecurringOperation
 from edge_os_api.execution.worker import ConnectedExecution
 from edge_os_api.recovery.service import RecoveryService
 from edge_os_api.revocation.enforcement import SubmissionControls
@@ -35,6 +36,7 @@ class FinancialServices:
     consent: ConsentService
     ports: ProviderPorts
     connected: ConnectedExecution
+    recurring: RecurringOperation
 
 
 def build_financial_services(factory: sessionmaker[Session], settings: Settings,
@@ -43,14 +45,16 @@ def build_financial_services(factory: sessionmaker[Session], settings: Settings,
                                           settings.original_recordings_dir)
     stops = StopService(factory)
     removals = RemovalService(factory)
-    # Stops, removal and the one-position-per-wallet limit share the single StopReader seam.
-    controls = CombinedControls(SubmissionControls(stops, removals), OnePositionPerWallet())
+    # Stops, removal, the one-position-per-wallet limit and an ended recurring deployment share the single
+    # StopReader seam, read under the per-wallet admission lock at admission and submission ownership.
+    controls = CombinedControls(SubmissionControls(stops, removals), OnePositionPerWallet(), DeploymentEndControl())
     admission = AdmissionService(factory, stops=controls)
     execution = ExecutionService(factory, admission, stops=controls)
     recovery = RecoveryService(factory, admission, execution)
     consent = ConsentService(factory, admission=admission, stops=stops)
     services = FinancialServices(stops=stops, removals=removals, controls=controls, admission=admission,
                                  execution=execution, recovery=recovery, consent=consent, ports=ports,
-                                 connected=None)  # type: ignore[arg-type]
+                                 connected=None, recurring=None)  # type: ignore[arg-type]
     services.connected = ConnectedExecution(factory, services, ports, qualification=ports.mode)
+    services.recurring = RecurringOperation(factory, services, services.connected)
     return services
