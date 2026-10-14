@@ -1,7 +1,7 @@
 # P42 bounded calibration plan
 
 Status: **FROZEN PROPOSAL BEFORE EXPERIMENTS.** No result appears in this file.
-The plan tests `edge-os.stat-q01-qprep/2026-10-14.1` from
+The plan tests `edge-os.stat-q01-qprep/2026-10-14.2` from
 [`STAT_Q01_CANDIDATE_PREPARATION_PROFILE.md`](../../implementation/STAT_Q01_CANDIDATE_PREPARATION_PROFILE.md).
 It is authored synthetic simulation, not market history, provider evidence, or
 formal statistical support.
@@ -20,8 +20,10 @@ For one repetition, CPython 3.14 `random.Random(seed)` (MT19937) first draws
 missingness draws (`random() < 0.10` means missing). The latent sequence is
 `x[t]=0.60*x[t-1]+innovation[t]`, starting at zero. An observed response is
 the Decimal-50 mean of `x[t:t+7]`, giving adjacent scheduled rows overlapping
-outcomes. Floats enter Decimal only as `Decimal(str(value))`; all following
-arithmetic uses the repository's Decimal-50, half-even context. Missing rows
+outcomes. Floats enter Decimal only as `Decimal(str(value))`; mean construction
+and triggered-effect addition both use the repository's Decimal-50, half-even
+context, so the generated family and its digest do not depend on caller ambient
+Decimal precision. Missing rows
 retain their original group and `SYNTHETIC_MISSING` reason. The three named
 comparisons are always present in the family. A treatment effect is added only
 to an observed triggered response; the declared truth remains the injected
@@ -39,7 +41,7 @@ the calibration capable of exposing loss of serial-dependence handling.
 | `dependent-null-v1` | All group effects are 0.00; run both joint stationary and `iid-slot-bootstrap/1`. | 64, seeds 1101–1164 | ST-02 false-support, pointwise coverage, and dependence-discriminator behavior with overlap. |
 | `known-effect-v1` | Effects are `+0.35`, `0.00`, and `-0.35` for IDs `positive`, `null`, and `negative`. | 64, seeds 2101–2164 | ST-01/ST-03 directional detection, contrast, full-family selection, and coverage behavior. |
 | `nonstationary-v1` | The positive comparison is `+0.35` in the first half and `-0.35` in the second; other comparisons are 0.00. | 32, seeds 3101–3132 | ST-03/ST-04 adverse regime behavior. A favorable result is a calibration failure, not evidence. |
-| `failure-fixtures-v1` | Canonical authored short, sparse, all-missing, zero-versus-missing, invalid-p, tie, selector-bandwidth, lower/upper partition-boundary, holdout-failure, runner-up, revision-mismatch, and re-access fixtures. | one deterministic fixture each | ST-03/ST-05/ST-07/ST-08/ST-09 failure/governance behavior. |
+| `failure-fixtures-v1` | Canonical authored short, sparse, all-missing, zero-versus-missing, invalid-p, tie, selector-bandwidth, lower/upper partition-boundary, holdout-start/failure/wrong-finalist/runner-up/revision-mismatch/re-access fixtures. Its canonical input/expected-status manifest is SHA-256 digested in the result. | one deterministic fixture each | ST-03/ST-05/ST-07/ST-08/ST-09 failure/governance behavior. |
 
 The run code derives each bootstrap seed from the experiment seed and the
 frozen profile identity; no result-dependent reseeding, retry, or selection is
@@ -83,7 +85,7 @@ as `UNRESOLVED`. No threshold is relaxed after seeing a result.
 | Bootstrap draws per sensitivity | 199 |
 | Sensitivities | 3 |
 | Outer repetitions | 64, 64, and 32 as listed above |
-| Maximum bootstrap slot-visits per full experiment | 24,453,120 for dependent null (`64*3*199*4*160`, including IID); 18,339,840 for known effect; 9,169,920 for nonstationary; 51,962,880 total |
+| Maximum bootstrap slot-visits per full experiment | 24,453,120 for dependent null (`64*3*199*4*160`, including IID); 18,339,840 for known effect; 9,169,920 for nonstationary; 51,962,880 total, checked before any experiment starts |
 | Maximum wall clock per experiment | 180 seconds |
 | Maximum total wall clock | 540 seconds |
 | Peak traced Python allocation | 256 MiB |
@@ -100,7 +102,7 @@ After the code and this plan are committed to the draft PR, run from `apps/api`:
 
 ```sh
 uv run --frozen python -m edge_os_api.research.statistical_calibration \
-  --plan docs/qualification/p42/CALIBRATION_PLAN.md \
+  --plan ../../docs/qualification/p42/CALIBRATION_PLAN.md \
   --output ../../docs/qualification/p42/CALIBRATION_RESULT.json
 ```
 

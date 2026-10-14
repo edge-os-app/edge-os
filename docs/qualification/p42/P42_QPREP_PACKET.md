@@ -7,10 +7,12 @@ Base tree: `2ba5bf79c07111679015766cd0d5720781c844d4`
 Branch: `quant/p42-statistical-preparation`
 Checkout: `/Users/kaluarunsi_1_2/.codex/worktrees/p42-statistical-preparation/edge-os`
 
-Pre-experiment profile revision: `edge-os.stat-q01-qprep/2026-10-14.1`.
-The prior `2026-10-13.1` proposal was not evaluated. This revision freezes the
-explicit comparison cap, dependent-null IID diagnostic, timestamp-boundary
-fixture, and pre-label holdout access state before calibration begins.
+Pre-experiment profile revision: `edge-os.stat-q01-qprep/2026-10-14.2`.
+Prior `2026-10-13.1` and `2026-10-14.1` proposals were not evaluated. This
+revision freezes the complete-family schedule guard, append-only pre-label
+holdout event, SHA-256 lineage checks, total work cap, ambient-Decimal-safe
+generator, and dependence/nonstationarity assessment rules before calibration
+begins.
 
 ## Transport and boundaries
 
@@ -27,6 +29,7 @@ Owned new paths before editing:
 - `apps/api/src/edge_os_api/research/statistical_calibration.py`
 - `apps/api/tests/test_statistical_preparation.py`
 - `apps/api/tests/test_statistical_calibration.py`
+- `apps/api/tests/test_statistical_partition.py`
 - `docs/implementation/STAT_Q01_CANDIDATE_PREPARATION_PROFILE.md`
 - `docs/qualification/p42/`
 
@@ -53,8 +56,8 @@ it does not waive their required independent review route.
 
 ## Required evidence
 
-Focused module/generator tests run during changes; final candidate runs both
-new suites, the affected P09 suite, independent-reference and ambient-Decimal
+Focused module/generator tests run during changes; final candidate runs all
+three new suites, the affected P09 suite, independent-reference and ambient-Decimal
 checks, `git diff --check`, scope/ancestry checks, and the bounded calibration
 from the frozen plan. The final PR records exact commands, runtime, resource
 outcome, source hashes, candidate commit, original reviewer reports, and

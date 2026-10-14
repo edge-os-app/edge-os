@@ -3,19 +3,19 @@
 Status: **PROPOSED numerical-preparation profile; not adopted and not a
 formal-support method.**
 
-Identity: `edge-os.stat-q01-qprep/2026-10-14.1`
+Identity: `edge-os.stat-q01-qprep/2026-10-14.2`
 Assignment: `P42-QPREP-20261013-01` / issue #28
 Scope: isolated calculation and authored calibration only. It does not read a
 market holdout, alter P09, create a research job, call a provider, or make an
 operational or financial claim.
 
 This profile freezes the candidate choices used by the accompanying bounded
-calibration plan. Revision `2026-10-13.1` was never evaluated; this new
-identity adds the explicit three-comparison cap, timestamp-boundary guard,
-pre-label holdout-access transition, and independent-comparator calibration
-requirements identified before any experiment. A later revision must receive a
-new identity, plan, and evidence; calibration criteria are not changed after
-inspecting a result.
+calibration plan. Revisions `2026-10-13.1` and `2026-10-14.1` were never
+evaluated. This identity adds the complete-family schedule binding, append-only
+pre-label holdout ledger, exact lineage hashes, total static-work cap, and
+ambient-Decimal-independent generator requirements identified before any
+experiment. A later revision must receive a new identity, plan, and evidence;
+calibration criteria are not changed after inspecting a result.
 
 ## Claim and input boundary
 
@@ -54,13 +54,14 @@ the following proposed feasibility settings hold:
 | Per-draw group observations | at least 2 | A bootstrap draw with fewer is unresolved, not a zero mean or fabricated p-value. |
 | Non-finite response | forbidden | It is a validation error, never a missing-value synonym. |
 
-Before construction/evaluation, a pure chronological guard retains a status for
-every scheduled slot and requires an identified outcome window wholly within
-the validation partition: `validation_start <= outcome_start < outcome_end <=
+Before construction/evaluation, a pure chronological guard derives its slot
+sequence from the complete frozen comparison family, retains a status for every
+such slot, and requires an identified outcome window wholly within the
+validation partition: `validation_start <= outcome_start < outcome_end <=
 protected_holdout_start`. A missing window, unknown revision identity, or a
 window crossing either bound makes the validation family unresolved. The guard
-receives window metadata, not protected labels; display filtering cannot remove
-a scheduled slot from this check.
+receives window metadata, not protected labels; it does not accept a
+display-filtered slot list.
 
 The schedule-derived lower block floor is
 
@@ -151,14 +152,17 @@ comparison ID. This rule is fixed before calibration outcomes. There is no
 runner-up substitution.
 
 One protected holdout confirmation may be recorded only for that exact finalist,
-using the same direction and `alpha=0.05`. Before any outcome label/p-value is
-passed to the pure calculator, an immutable `ACCESS_STARTED` transition binds
-the profile, plan, family, protected-partition, finalist revision, and
-outcome/control/test identities. A failed, missing, or insufficient confirmation
-resolves that same consumed attempt as `UNRESOLVED`; it cannot expose a
-runner-up or relabelled revision to the same holdout. The pure value-state is a
-fixture for later persistence, not proof of durable one-shot enforcement; an
-adopted runtime must persist the transition before reading the label.
+using the same direction and the frozen `alpha=0.05`. Before any outcome
+label/p-value is passed to the pure calculator, an immutable `ACCESS_STARTED`
+event checks and binds canonical SHA-256 profile, plan, family, and
+outcome/control/test identities; protected partition and finalist revision
+identities; and a successful schedule-boundary validation. Resolution appends a
+second event rather than replacing the start. A failed, missing, insufficient,
+or lineage-mismatched confirmation consumes that attempt as `UNRESOLVED`; it
+cannot expose a runner-up or relabelled revision to the same holdout. The pure
+value-state is a fixture for later persistence, not proof of durable one-shot
+enforcement; an adopted runtime must persist the transition before reading the
+label and independently verify its source lineage.
 
 ## Boundaries and sources
 
