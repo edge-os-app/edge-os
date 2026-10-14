@@ -173,3 +173,57 @@ Both original reviewers returned REVISE on dd1c09f. Each change below closes one
 - **Deadline test oracle (heavy window v2, dw-l2-oracle1.md).** `test_each_later_call_is_bounded_by_the_time_the_job_has_left` first asserted dataset `status == "PARTIAL"` and failed on 74fbf1b (137 passed, 1 failed): `status` is the P07 page-collection status, and both pages finish before the deadline. The test now checks the deadline's actual effects in the saved record: request hashes equal the requests the stand-in received (refused requests are never sent), corroboration `missingness.rpc_failed >= 1`, QuickNode `http_accounting.unknown_liability >= 1`, `provider_requests_state == "UNKNOWN"` with `provider_requests` null, and the whole 27-request reservation held as unknown with none consumed. Every per-call bound assertion is kept. Test-only change; no product code changed.
 - **Saved-deadline anchoring (controller dw-l2-clock3.md; review B R2-N2, judged blocking by the controller).** The worker measured the time left once at `started_at` and the clients added that stale duration to the monotonic clock when they were built later, so a setup delay extended the absolute bound (reproduced on dcdb39a: saved deadline 101.0, transport deadline 101.25, a reply at 101.1 accepted). Now `investigation_jobs.release_http_clients` reads the time left from the job's SAVED deadline at client construction, taking the monotonic anchor first so the anchored deadline can only be earlier, never later; `PreparedHistory.clients` accepts that anchor. Same sequence after the fix: transport deadline 101.0 and the late reply refused (`SourceTimeout`, unknown liability). No tolerance is added.
 - **Production stand-in refusal at the worker (controller dw-l2-clock3.md; review A N1).** `InvestigationWorker` now refuses a STAND_IN runtime when `settings.env == "production"` (`stand_in_refused_in_production`), the same rule `open_released_runtime` and `create_app` already apply (section 3), before any credential read, request or reservation.
+
+## 12. Successor: Nansen mount, server bootstrap and actual-history replay compatibility (frozen before code)
+
+Task `R58-RESEARCH-MOUNT-L2-20261014-LOCAL-v1` (#58 Task 6 successor). Base `98d89c5f41d48ce5f76051606e5fba0b767a9f3d`, which contains the accepted composition above and the accepted Nansen HTTP adapter `3cc8630` (`docs/qualification/nansen-http-transport/CONTRACT.md`). This section records how the code implements invariants that are already accepted. It is not a new builder approval. Every actual call stays `NOT_RUN`. `APPROVED_RELEASES` stays empty. The Nansen HTTP source, its tests and its contract are read only here.
+
+### 12.1 Release definition
+
+- `NansenRelease` adds `client_bounds`: exactly `connect_timeout_seconds`, `max_request_bytes`, `max_response_bytes`, positive whole numbers, with `max_response_bytes ≤ limits.max_bytes`. Every per-call bound is then inside the release SHA-256. Refusal: `operating_release_invalid`.
+- An `ACTUAL` Nansen part must name `https://api.nansen.ai` (the adapter's fixed origin) and must be composed with the accepted Nansen network factory (below). Otherwise it stays refused with the retained code `actual_nansen_transport_missing`. It still needs its exact SHA-256 in `APPROVED_RELEASES` first.
+- A `STAND_IN` Nansen part composed with the network factory is refused (`stand_in_endpoint_not_local`): a stand-in can never reach the real origin.
+
+### 12.2 Nansen network factory and runtime
+
+`released_source_runtime.NansenHttpFactory` builds one accepted `NansenHttpTransport` per job over `StdlibHttpTransport`. Its optional `connect` is a test connector. Only the factory without a connector is the network factory (`nansen_network`). A loopback proof injects a connector, so it is never `nansen_network` and can never label a report `PROVIDER_ACTUAL`. The runtime records `nansen_network` and validates it on construction, as it already does for history.
+
+Every composed Nansen transport, stand-in or network, is wrapped by `ReleasedNansenTransport`. It refuses to dispatch at or after the job's anchored deadline, treats a reply that returns at or after it as incomplete (`NansenTimeout TIMEOUT`), and keeps the SHA-256 of each accepted reply only. A refused reply (redirect, oversize, credential echo, malformed) gets no hash, as the adapter contract requires.
+
+### 12.3 Deadline, cancellation and accounting mapping
+
+| Item | Rule (source) |
+|---|---|
+| Deadline source | The job's SAVED `deadline_at` only (start time + declared `deadline_seconds`). |
+| Monotonic anchor | Read the monotonic clock first, then the wall clock: `D = anchor + (deadline_at − wall)`. The anchor is taken when the transport is built, so `D` is never later than the saved deadline (section 11, saved-deadline anchoring). |
+| Construction time | With the credential read, after admission and before `ATTEMPT_STARTED`. A malformed key is refused there (`operating_release_credential_unavailable`), so nothing is sent and everything is released. |
+| Every request | One `D` for the whole job, never reset. `NansenHttpTransport` refuses dispatch at `D`; `StdlibHttpTransport` arms its watchdog for `D − now`; the guard refuses the next request after cancel, the saved wall deadline or `D`. |
+| Connect timeout | `min(client_bounds.connect_timeout_seconds, seconds left at construction)`, at least 1 ms; `StdlibHttpTransport` then uses `min(timeout, D − now)` per connect. It never exceeds the remaining original deadline. |
+| Byte caps | Request body ≤ `max_request_bytes` (adapter); each reply ≤ `max_response_bytes` (streaming cap and adapter); all replies ≤ `limits.max_bytes` (`NansenClient`). |
+| Reservations | Owner and global reservation at start and `NansenClient` request/credit reservations are unchanged. |
+| Cancel before credential read | The existing `RESERVED` check: no read, no request, everything released. |
+| Cancel during a call | `SourceCancelled` → `NansenCancelled`: the call was handed over without a reply, so requests and credits stay UNKNOWN (whole reservation unknown liability). |
+| Cancel after a reply | The reply is kept; the next request is refused before it is sent and is not counted. |
+| Late reply (at or after `D`) | Incomplete: requests and credits UNKNOWN. |
+| Missing reply (reset, DNS, refused) | `NETWORK_ERROR`, run stops, no retry, UNKNOWN. |
+| Auth / payment / rate / redirect / unknown reply | The adapter and `NansenClient` map it once to a stable code; no retry. A refusal that keeps a received status is a made call (request count KNOWN); one without a status is UNKNOWN. Credits are KNOWN only when every made call reported a valid deducted charge (`nansen_reports.settlement`). |
+| Crash after `ATTEMPT_STARTED` | Existing reconciliation: `OUTCOME_UNKNOWN`, never run again, all UNKNOWN. |
+| Duplicate start, last slot | Existing quota locks: one job, one reservation. |
+| Terminal state | Stop `DEADLINE`, or stop `TIMEOUT` when the saved deadline has passed, ends `DEADLINE_EXCEEDED`; stop `CANCELLED` ends `CANCELLED`. |
+
+A race between the guard and the adapter's own pre-dispatch check counts a request that never left as sent. That is UNKNOWN, never zero (conservative).
+
+### 12.4 Server bootstrap
+
+New module `core/research/released_runtime_bootstrap.py`. `server_research_runtime(settings, *, credentials=None)` is the one composition the API (`create_app`, when no runtime is passed) and the worker (`investigation_jobs.main`) both call. It reads the code-owned `RELEASE_DEFINITIONS` (empty) and keeps only definitions whose exact SHA-256 is in `APPROVED_RELEASES` (empty). With none, it returns no runtime: no release, no credential read, no socket. With one, it composes the history part over `StdlibHttpTransport` and the Nansen part over the network factory. A missing credential source refuses startup; credential delivery stays `REQUIRED_DECISION`. More than one approved definition is refused. Both processes then hold the same immutable runtime and the same release SHA-256, and the existing admission check refuses a job whose frozen SHA-256 differs before any effect.
+
+### 12.5 Actual-history replay compatibility (RG05)
+
+- The P13 runtime admits profile evidence `SYNTHETIC_FIXTURE` (unchanged) and `PROVIDER_ACTUAL`. Every other class stays `EVIDENCE_CLASS_UNSUPPORTED`. Its other admission rules are unchanged: overall `QUALIFIED`, proven coverage, exact market binding, UTC five-minute window, timing and availability. The class is in the repeatability identity already, so equal buckets give equal numbers and a different identity.
+- The adapter passes `PROVIDER_ACTUAL` only from a hash-verified owner dataset whose source class is also `PROVIDER_ACTUAL` and whose saved release kind is `ACTUAL`. Any other dataset that claims it is refused `409 evidence_class_inconsistent` before a replay is saved.
+- Preserved: source class and profile hash, revision, market binding, timing and availability, gaps, coverage and verdict, protected partitions, provenance, Decimal arithmetic, P12 literal results and the `simulated fills` label. A provider-history replay states hypothetical simulated fills and claims no statistical support, profitability or trading permission. A `LIMITED` dataset stays refused (`DATASET_COVERAGE_UNPROVEN`).
+- Not changed: P14/P42, numerical methods, source fetching, protected-data reads, P09 comparison.
+
+### 12.6 Not in this candidate
+
+Hermes mount (waits for the accepted online L1 contract and its own lease; no interface prepared). Verifier and Playwright changes for this journey, and every PostgreSQL, Docker, browser or full-suite run, wait for a recorded capacity grant. No actual key, provider, payment or public operation.
