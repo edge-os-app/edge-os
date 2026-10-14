@@ -48,6 +48,12 @@ SLOT_COUNT = 160
 COMPARISON_IDS = ("positive", "null", "negative")
 UTC = timezone.utc
 PROFILE_ID = "edge-os.stat-q01-qprep/2026-10-14.2"
+_CALCULATION_DIGEST_EXCLUDED_FIELDS = (
+    "python",
+    "platform",
+    "elapsed_seconds",
+    "experiments.*.peak_traced_bytes",
+)
 
 
 @dataclass(frozen=True)
@@ -410,8 +416,8 @@ def run_bounded_calibration(
         if frozen_configuration and complete and fixture_pass and criteria_pass
         else "UNRESOLVED"
     )
-    return {
-        "schema": "edge-os.stat-q01-calibration-result/1",
+    result = {
+        "schema": "edge-os.stat-q01-calibration-result/2",
         "status": status,
         "profile": asdict(profile),
         "profile_sha256": _file_hash(_profile_path(plan_path)),
@@ -422,6 +428,7 @@ def run_bounded_calibration(
         "limits": asdict(limits),
         "planned_total_slot_visits": planned_total_slot_visits,
         "frozen_configuration": frozen_configuration,
+        "calculation_digest_excludes": _CALCULATION_DIGEST_EXCLUDED_FIELDS,
         "elapsed_seconds": format(Decimal(str(monotonic() - started)), "f"),
         "termination_reason": (
             "LIMIT_STATIC_TOTAL_WORK" if static_total_limited
@@ -438,10 +445,46 @@ def run_bounded_calibration(
             "PURE_HOLDOUT_LEDGER_REQUIRES_LATER_DURABLE_RUNTIME",
         ] + ([] if frozen_configuration else ["NON_FROZEN_TEST_CONFIGURATION"]),
     }
+    return {**result, "calculation_sha256": calculation_result_sha256(result)}
+
+
+def calculation_result_sha256(result: Mapping[str, object]) -> str:
+    """Fingerprint deterministic calculation content, excluding local run telemetry.
+
+    The raw artifact retains interpreter/platform, elapsed time, and traced peak
+    allocation so reviewers can assess an individual bounded run. Those fields
+    are inherently environment-dependent and must not make equal numerical
+    histories, selections, intervals, and verdicts appear irreproducible.
+    """
+    payload = _calculation_payload(result)
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    return sha256(encoded).hexdigest()
+
+
+def _calculation_payload(result: Mapping[str, object]) -> Mapping[str, object]:
+    """Return JSON-safe result content excluding declared volatile telemetry."""
+    safe = _json_safe(result)
+    if not isinstance(safe, dict):
+        raise ValueError("calculation result must be a mapping")
+    payload = {
+        key: value
+        for key, value in safe.items()
+        if key not in {"calculation_sha256", "python", "platform", "elapsed_seconds"}
+    }
+    experiments = payload.get("experiments")
+    if experiments is not None:
+        if not isinstance(experiments, list):
+            raise ValueError("calibration experiments must be a sequence")
+        payload["experiments"] = [
+            {key: value for key, value in experiment.items() if key != "peak_traced_bytes"}
+            if isinstance(experiment, dict) else experiment
+            for experiment in experiments
+        ]
+    return payload
 
 
 def write_calibration_result(path: Path, result: object) -> None:
-    """Atomically write canonical JSON evidence without leaking Decimal objects."""
+    """Atomically write sorted JSON run evidence without leaking Decimal objects."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(_json_safe(result), indent=2, sort_keys=True) + "\n", encoding="utf-8")

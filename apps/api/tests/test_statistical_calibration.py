@@ -10,6 +10,7 @@ from edge_os_api.research.statistical_calibration import (
     CalibrationScenario,
     ExperimentResult,
     _assess_experiment,
+    calculation_result_sha256,
     generate_synthetic_family,
     frozen_calibration_profile,
     run_bounded_calibration,
@@ -133,6 +134,8 @@ def test_bounded_calibration_uses_decimal_coverage_and_preserves_its_proposal_st
     )
 
     assert result["status"] == "UNRESOLVED"
+    assert result["schema"] == "edge-os.stat-q01-calibration-result/2"
+    assert result["calculation_sha256"] == calculation_result_sha256(result)
     assert result["experiments"][0].status == "COMPLETED"
     assert result["assessments"]["known-effect-v1"]["coverage"]
 
@@ -182,6 +185,27 @@ def test_nonstationary_assessment_requires_a_frozen_rule_not_merely_no_finalist(
     assert _assess_experiment(generic)["passed"] is False
     assert _assess_experiment(generic)["rule_unresolved"] == 0
     assert _assess_experiment(selector_bound)["passed"] is True
+
+
+def test_calculation_digest_excludes_run_telemetry_but_binds_numerical_content() -> None:
+    baseline = {
+        "schema": "edge-os.stat-q01-calibration-result/2",
+        "status": "UNRESOLVED",
+        "python": "3.13.0",
+        "platform": "first-host",
+        "elapsed_seconds": "1.000",
+        "experiments": [{"status": "COMPLETED", "peak_traced_bytes": 101, "repetitions": [{"seed": 1}]}],
+    }
+    rerun = {
+        **baseline,
+        "python": "3.13.1",
+        "platform": "second-host",
+        "elapsed_seconds": "2.000",
+        "experiments": [{"status": "COMPLETED", "peak_traced_bytes": 202, "repetitions": [{"seed": 1}]}],
+    }
+
+    assert calculation_result_sha256(baseline) == calculation_result_sha256(rerun)
+    assert calculation_result_sha256(baseline) != calculation_result_sha256({**baseline, "status": "RESOLVED"})
 
 
 def test_result_writer_emits_json_without_decimal_or_provider_inputs(tmp_path: Path) -> None:
