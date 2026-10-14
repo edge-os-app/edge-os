@@ -40,10 +40,17 @@
       }
     }
   },
-  "elapsed_seconds": "26.81775262497831",
+  "calculation_digest_excludes": [
+    "python",
+    "platform",
+    "elapsed_seconds",
+    "experiments.*.peak_traced_bytes"
+  ],
+  "calculation_sha256": "72755af0c24b79e3f5de2cc1386c50043f9b9806cf87fca63ae3e5b3f94ba673",
+  "elapsed_seconds": "26.967971041915007",
   "experiments": [
     {
-      "peak_traced_bytes": 1608414,
+      "peak_traced_bytes": 1608464,
       "planned_slot_visits": 24453120,
       "repetitions": [
         {
@@ -13175,7 +13182,7 @@
       "status": "COMPLETED"
     },
     {
-      "peak_traced_bytes": 1492389,
+      "peak_traced_bytes": 1492339,
       "planned_slot_visits": 18339840,
       "repetitions": [
         {
@@ -24195,7 +24202,7 @@
       "status": "COMPLETED"
     },
     {
-      "peak_traced_bytes": 1091761,
+      "peak_traced_bytes": 1091461,
       "planned_slot_visits": 9169920,
       "repetitions": [
         {
@@ -28417,7 +28424,7 @@
   },
   "profile_sha256": "0e15049d4b71ebed8bedf71d40d91faf4082c8c9bf3eade399a03ba5e09be564",
   "python": "3.14.2 (main, Dec  5 2025, 16:49:16) [Clang 17.0.0 (clang-1700.4.4.1)]",
-  "schema": "edge-os.stat-q01-calibration-result/1",
+  "schema": "edge-os.stat-q01-calibration-result/2",
   "status": "UNRESOLVED",
   "termination_reason": null
 }

@@ -4,13 +4,28 @@ Status: **UNRESOLVED.** This is a proposal-only authored-synthetic calibration
 record. It is not market evidence, a STAT-Q01 qualification, operational
 admission, or trading authority.
 
-## Exact source and command
+## Exact source, evidence repair, and command
 
-The experiment used source candidate
+The first frozen-profile run used source candidate
 `7e99be8912a03e3224f298532d1b5f8676d8f3f8` on branch
 `quant/p42-statistical-preparation`, rebased on
-`c4bc2a405f872ad284639a8de84712f7bc569b0f`. The candidate profile was
-`edge-os.stat-q01-qprep/2026-10-14.2`.
+`c4bc2a405f872ad284639a8de84712f7bc569b0f`. It returned `UNRESOLVED` and
+produced raw-run artifact SHA-256
+`709ca468a9a50d2aaf8cdef85ccd84808fbff8696870ccc6d74a4841e1cff044`.
+
+A later local repeat exposed a reporting defect: that artifact's sorted JSON
+also contained elapsed time and `tracemalloc` peak allocations, so its raw
+SHA-256 changed despite identical numerical records. The first artifact remains
+historical failed-run evidence at that source commit; it is not relabelled as
+byte-for-byte reproducible.
+
+Source candidate `530c09a3811db8b12124c1d45b3f899a16e15526` repairs only that
+evidence identity boundary. It emits schema `/2` with a
+`calculation_sha256` over deterministic calculation content and retains raw
+interpreter/platform, elapsed-time, and peak-allocation telemetry separately.
+It does **not** alter the frozen profile, plan, seeds, generator, method,
+criteria, resource limits, or the `UNRESOLVED` outcome. The candidate profile
+remains `edge-os.stat-q01-qprep/2026-10-14.2`.
 
 Run from `apps/api` on 2026-10-14:
 
@@ -20,10 +35,18 @@ uv run --frozen python -m edge_os_api.research.statistical_calibration \
   --output ../../docs/qualification/p42/CALIBRATION_RESULT.json
 ```
 
-The command returned `{"status":"UNRESOLVED"}` after 26.81775262497831
-seconds. Its canonical JSON output is
+The repaired run returned `{"status":"UNRESOLVED"}` after
+26.967971041915007 seconds. Its raw-run artifact is
 [`CALIBRATION_RESULT.json`](CALIBRATION_RESULT.json), SHA-256
-`709ca468a9a50d2aaf8cdef85ccd84808fbff8696870ccc6d74a4841e1cff044`.
+`9cfc18d0f162924048dbc257d117cbcafef432a4cf19ec59002619c909f05703`.
+Its deterministic calculation fingerprint is
+`72755af0c24b79e3f5de2cc1386c50043f9b9806cf87fca63ae3e5b3f94ba673`.
+
+An independent repeat from the same `530c09a` source candidate returned the
+same `UNRESOLVED` status and exactly the same calculation fingerprint. Its raw
+JSON differed only in elapsed time and traced-allocation peak telemetry, as
+expected; it did not change history hashes, selections, intervals, fixtures,
+assessments, or the suitability result.
 
 | Recorded input | SHA-256 |
 |---|---|
@@ -34,8 +57,8 @@ seconds. Its canonical JSON output is
 The runner used one process and worker; 51,962,880 planned bootstrap slot
 visits; a 180-second per-experiment limit; a 540-second total limit; and a
 256 MiB traced-allocation limit. All three experiments completed without a
-termination reason. Their traced peaks were 1,608,414, 1,492,389, and
-1,091,761 bytes for dependent null, known effect, and nonstationary cases.
+termination reason. This run's traced peaks were 1,608,464, 1,492,339, and
+1,091,461 bytes for dependent null, known effect, and nonstationary cases.
 
 ## Results against the frozen criteria
 
@@ -81,3 +104,6 @@ server, storage, concurrency, provider, or production-cost behavior.
 - This source candidate still needs the two original independent exact-candidate
   reviews and the separately arranged gate. Pre-calibration adversarial audits
   guided repairs but are not those formal reviews.
+- Raw artifact hashes identify a particular bounded execution, while
+  `calculation_sha256` identifies its deterministic numerical content. Neither
+  hash is formal support or a substitute for independent review.

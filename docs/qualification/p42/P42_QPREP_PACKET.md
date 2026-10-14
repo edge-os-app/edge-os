@@ -15,6 +15,15 @@ holdout event, SHA-256 lineage checks, total work cap, ambient-Decimal-safe
 generator, and dependence/nonstationarity assessment rules before calibration
 begins.
 
+The first bounded run on source `7e99be8912a03e3224f298532d1b5f8676d8f3f8`
+remained `UNRESOLVED`. A later repeat found that raw artifact SHA-256 included
+volatile elapsed-time and allocation telemetry. Source
+`530c09a3811db8b12124c1d45b3f899a16e15526` adds a schema-v2 deterministic
+calculation fingerprint without changing the frozen numerical profile, plan,
+seeds, criteria, or limits; the rerun remains `UNRESOLVED`. See
+[`CALIBRATION_REPORT.md`](CALIBRATION_REPORT.md) for both source identities,
+raw-run provenance, and the repeat result.
+
 ## Transport and boundaries
 
 This uses the portable contributor route: the draft PR is the return transport;
