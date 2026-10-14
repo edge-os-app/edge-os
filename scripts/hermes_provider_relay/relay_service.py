@@ -1,6 +1,7 @@
 """The relay process: the only holder of the provider key, and the only component that can reach the provider.
 
-It runs in its own container on an internal network shared only with the AUTHORED provider (see `relay_supervisor.py`).
+It runs in its own container inside the AUTHORED provider's network namespace, which has loopback only (see
+`relay_supervisor.py`).
 It reads its fixed configuration, the synthetic provider key and the admission key once, at start. Then, in a loop:
 
 - it writes a heartbeat (release, start time, egress self-probe);
@@ -22,6 +23,7 @@ Usage: python relay_service.py <config.json>. See `docs/qualification/hermes-pro
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -50,6 +52,8 @@ RECOVERY_SECONDS = 5.0  # budget C of the relay's own start-up recovery; what it
 MAX_HANDLERS = 16
 CHANNEL = ("output", "relay-channel")
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+PROBE_SECONDS = 2.0
+UNREACHABLE = {errno.ENETUNREACH, errno.EHOSTUNREACH}  # the kernel has no route: nothing left this namespace
 GUARD_HEADERS = {"accept": "application/json", "content-type": "application/json"}
 
 
@@ -97,6 +101,23 @@ def _read_plain(folder: int, name: str, limit: int) -> bytes | None:
         return None
     finally:
         os.close(fd)
+
+
+def connect_outcome(host: str, port: int, timeout: float = PROBE_SECONDS) -> dict[str, Any]:
+    """How one TCP connection attempt ended. Only `unreachable` says that no route exists; `refused` says that
+    something at the address answered; `dns_failure` and `timeout` show neither."""
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return {"outcome": "connected"}
+    except socket.gaierror as error:
+        return {"outcome": "dns_failure", "error": f"gaierror {error.errno}"}
+    except ConnectionRefusedError:
+        return {"outcome": "refused", "error": "ECONNREFUSED"}
+    except TimeoutError:
+        return {"outcome": "timeout", "error": "timeout"}
+    except OSError as error:
+        name = errno.errorcode.get(error.errno or 0, str(error.errno))
+        return {"outcome": "unreachable" if error.errno in UNREACHABLE else "error", "error": name}
 
 
 def _open_path(root: int, parts: tuple[str, ...]) -> int | None:
@@ -191,13 +212,8 @@ class Relay:
 
     def probe(self) -> None:
         for target in self.probes:
-            try:
-                socket.create_connection((target["host"], target["port"]), timeout=2).close()
-                reached = True
-            except OSError:
-                reached = False
-            self.egress.append({"host": target["host"], "port": target["port"], "reached": reached,
-                                "expected": target["expect"] == "reachable"})
+            self.egress.append({"host": target["host"], "port": target["port"],
+                                **connect_outcome(target["host"], target["port"])})
 
     def heartbeat(self) -> None:
         value = {"release": self.release.settings(), "started_at": self.started_at, "at": time.time(),

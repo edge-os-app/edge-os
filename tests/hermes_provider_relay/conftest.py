@@ -1,7 +1,7 @@
 """Hermes provider relay tests: admission, the job channel, the relay process and ACTUAL pinned Hermes behind the relay.
 
 Unit tests need no Docker. The Docker tests build the pinned Hermes image once per session and remove it, run the relay
-and the AUTHORED provider on an internal network of their own and remove them. No real provider, key or network is used:
+and the AUTHORED provider in one loopback-only network namespace and remove them. No real provider, key or network is used:
 the key is a synthetic sentinel and the provider answers from authored scripts.
 """
 

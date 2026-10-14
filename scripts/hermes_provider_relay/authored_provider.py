@@ -1,4 +1,5 @@
-"""The AUTHORED provider behind the relay: HTTPS on the relay's internal network, a scripted reply per attempt. Test support.
+"""The AUTHORED provider behind the relay: HTTPS on 127.0.0.1 in the namespace it shares with the relay, a scripted
+reply per attempt. Test support.
 
 It is the only destination the relay can reach. For each request it appends a receipt (attempt, path, body hash and
 size, header names, whether the bearer equals its expected synthetic key; never a header value or a body) and fsyncs it

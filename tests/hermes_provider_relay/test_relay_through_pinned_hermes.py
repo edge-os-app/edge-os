@@ -1,7 +1,7 @@
 """ACTUAL pinned Hermes (commit 54bc5e5) in a no-network job; its one request leaves only through the relay.
 
-The relay runs in its own container on an internal Docker network shared only with the AUTHORED provider, and is the
-only holder of the synthetic key. Each test runs the saved interpretation path (`HermesInterpreter`) over
+The relay runs in its own container inside the AUTHORED provider's loopback-only network namespace, and is the only
+holder of the synthetic key. Each test runs the saved interpretation path (`HermesInterpreter`) over
 `build_relay_job` and checks the job report against the relay's records and the provider's receipts. Needs Docker.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -28,6 +29,7 @@ from relay_harness import (
     EXACT_CHARGE, POLICY, PRICE, RELEASE, RESERVATION, ROUTE, Rig, case, counts, provider_receipts, relay_events,
     relay_record,
 )
+from relay_supervisor import HARDENING, HERE, KERNEL_VIEW, LABEL, PYTHON, SUPPORT, RelaySupervisor, docker
 from relay_turn_runner import build_relay_job
 from spend_ledger import SpendLedger
 
@@ -183,7 +185,7 @@ def hostile(relay, image: str, root: Path, name: str, actions: dict[str, Any]) -
 
 
 def test_a_hostile_job_finds_no_key_and_no_network_path(relay, pinned_hermes_image, evidence_root) -> None:
-    targets = [["authored-provider", 8443], [relay.names["relay"], 8443], ["1.1.1.1", 53],
+    targets = [["localhost", 8443], [relay.names["relay"], 8443], ["1.1.1.1", 53],
                ["host.docker.internal", 5432]]
     rig, found = hostile(relay, pinned_hermes_image, evidence_root, "hostile-probe",
                          {"probe_key": True, "probe_egress": targets})
@@ -220,20 +222,129 @@ def test_a_hostile_duplicate_request_is_answered_once_and_sent_once(relay, pinne
 # --- enforcement, supervision and restart -------------------------------------------------------------------------
 
 
-def test_the_relay_has_only_the_internal_network_and_only_its_own_mounts(relay) -> None:
+def test_the_relay_shares_only_the_providers_loopback_namespace_and_has_only_its_own_mounts(relay) -> None:
     seen = relay.inspect()
-    assert seen["relay_networks"] == [relay.names["network"]] and seen["network_internal"] is True
-    assert seen["network_members"] == sorted([relay.names["relay"], relay.names["provider"]])
-    assert not seen["relay_ports"]
-    assert seen["relay_mounts"] == sorted(["/relay/code", "/relay/support/job", "/relay/support/interpretation",
-                                           "/relay/config.json", "/relay/secrets/provider-key",
-                                           "/relay/secrets/admission-key", "/relay/tls/ca.pem", "/relay/grants",
-                                           "/relay/revocations", "/relay/state", "/relay/channels/jobs"])
-    probe = {(p["host"], p["port"]): p["reached"] for p in relay.heartbeat()["egress_probe"]}
-    assert probe[("authored-provider", 8443)] is True and probe[("1.1.1.1", 53)] is False
-    assert probe[("host.docker.internal", 80)] is False and list(probe.values()).count(True) == 1
-    gateway = json.loads(relay.inspect_network())["IPAM"]["Config"][0]["Gateway"]
-    assert probe[(gateway, 53)] is False and probe[(gateway, 80)] is False  # the Docker host's side of the network
+    (relay.root.parent / "relay-inspect.json").write_text(json.dumps(seen, indent=1, sort_keys=True))
+    provider, own = seen["provider"], seen["relay"]
+    assert provider["id"] == seen["provider_id"] and provider["network_mode"] == "none"
+    assert own["network_mode"] == f"container:{provider['id']}"
+    assert own["kernel"]["namespace"] == provider["kernel"]["namespace"]  # one namespace, read by each kernel view
+    for side in (own, provider):
+        assert side["kernel"]["interfaces_up"] == ["lo"]  # idle fallback tunnel devices may exist, never up
+        assert side["kernel"]["ipv4_routes"] == [] and side["kernel"]["ipv6_routes_not_loopback"] == []
+        assert side["ports"] == {} and side["port_bindings"] == {}
+    assert own["mounts"] == sorted(["/relay/code", "/relay/support/job", "/relay/support/interpretation",
+                                    "/relay/config.json", "/relay/secrets/provider-key", "/relay/secrets/admission-key",
+                                    "/relay/tls/ca.pem", "/relay/grants", "/relay/revocations", "/relay/state",
+                                    "/relay/channels/jobs"])
+    assert "/relay/secrets/provider-key" not in provider["mounts"] and "/provider/expected-key" in provider["mounts"]
+    assert relay.heartbeat()["egress_probe"] == [{"host": "localhost", "port": 8443, "outcome": "connected"}]
+
+
+PROBE_CODE = """
+import json, socket, sys
+sys.path[:0] = ['/relay/code', '/relay/support/job', '/relay/support/interpretation']
+from relay_service import connect_outcome
+targets, port = json.loads(sys.argv[1]), int(sys.argv[2])
+if port:  # the control side also names the Docker Desktop host by the address its name resolves to
+    try:
+        targets.append([socket.gethostbyname('host.docker.internal'), port])
+    except OSError:
+        pass
+print(json.dumps([[host, each, connect_outcome(host, each)] for host, each in targets]))
+"""
+
+
+def test_no_address_that_a_control_container_reaches_is_reachable_from_the_relay(
+        relay, pinned_hermes_image, run_id, evidence_root) -> None:
+    """Positive controls around the relay probe: an owned listener on an owned ordinary bridge (no published port),
+    and the Docker host by name and by address through a port published on 127.0.0.1 only. The SAME probe code runs
+    in a control container on that bridge, then inside the relay, then in the control again."""
+    label, network = f"{LABEL}={run_id}-control", f"relay-control-{run_id}"
+    listener, record = f"relay-control-listener-{run_id}", {"run": f"{run_id}-control"}
+    with socket.socket() as unused:
+        unused.bind(("127.0.0.1", 0))
+        port = unused.getsockname()[1]
+    code = [f"type=bind,src={Path(p).resolve()},dst={d},readonly" for p, d in (
+        (HERE, "/relay/code"), (SUPPORT[0], "/relay/support/job"),
+        (SUPPORT[1], "/relay/support/interpretation"))]
+    hardened = ["--user", f"{os.getuid()}:{os.getgid()}", *HARDENING, "--label", label, "--entrypoint", PYTHON]
+
+    def control(targets: list) -> list:
+        return json.loads(docker("run", "--rm", "--network", network, *hardened,
+                                 *[arg for mount in code for arg in ("--mount", mount)], pinned_hermes_image, "-B",
+                                 "-c", PROBE_CODE, json.dumps(targets), str(port)).stdout)
+
+    try:
+        docker("network", "create", "--label", label, network)
+        docker("run", "-d", "--name", listener, "--network", network, "-p", f"127.0.0.1:{port}:8000", *hardened,
+               pinned_hermes_image, "-u", "-m", "http.server", "8000", "--bind", "0.0.0.0")
+        until = time.monotonic() + 30
+        while "Serving HTTP" not in docker("logs", listener).stdout and time.monotonic() < until:
+            time.sleep(0.2)  # readiness of the listener, before any measurement
+        gateways = {name: docker("network", "inspect", name, "--format", "{{(index .IPAM.Config 0).Gateway}}").stdout.strip()
+                    for name in (network, "bridge")}
+        address = docker("inspect", listener, "--format",
+                         f"{{{{(index .NetworkSettings.Networks \"{network}\").IPAddress}}}}").stdout.strip()
+        record["targets"] = [[address, 8000], ["host.docker.internal", port],
+                             *[[gateway, port] for gateway in gateways.values()]]
+        record["control_before"] = control(record["targets"])
+        targets = [[host, each] for host, each, _ in record["control_before"]]
+        record["relay"] = json.loads(docker("exec", relay.names["relay"], PYTHON, "-B", "-c", PROBE_CODE,
+                                            json.dumps(targets), "0").stdout)
+        record["control_after"] = control([t for t in targets if t[0] != record["control_before"][-1][0]])
+    finally:
+        docker("rm", "-f", listener, check=False)
+        docker("network", "rm", network, check=False)
+        record["left"] = (docker("ps", "-a", "--filter", f"label={label}", "--format", "{{.Names}}").stdout.split()
+                          + docker("network", "ls", "--filter", f"label={label}", "--format", "{{.Name}}").stdout.split())
+        (evidence_root / "egress-controls.json").write_text(json.dumps(record, indent=1) + "\n")
+    assert record["left"] == []
+    before = {(h, p): r["outcome"] for h, p, r in record["control_before"]}
+    after = {(h, p): r["outcome"] for h, p, r in record["control_after"]}
+    seen = {(h, p): r["outcome"] for h, p, r in record["relay"]}
+    desktop = record["control_before"][-1][:2]
+    controlled = [(address, 8000), ("host.docker.internal", port), tuple(desktop)]
+    assert desktop[0] != "host.docker.internal" and len(before) == len(record["targets"]) + 1
+    for target in controlled:  # each claimed endpoint answers a control container, before and after the relay probe
+        assert before[target] == "connected" and after[target] == "connected", (target, record)
+    for (host, each), outcome in seen.items():  # no route from the relay to anything a control reached, or any other
+        expected = {"dns_failure", "unreachable"} if host == "host.docker.internal" else {"unreachable"}
+        assert outcome in expected, (host, each, record)
+
+
+def test_a_relay_whose_provider_namespace_died_or_was_replaced_fails_closed(
+        pinned_hermes_image, run_id, evidence_root, synthetic_key) -> None:
+    supervisor = RelaySupervisor(evidence_root / "relay-namespace", RELEASE, pinned_hermes_image, f"{run_id}-ns",
+                                 synthetic_key, {"jobs": evidence_root / "jobs-namespace"})
+    record: dict[str, Any] = {}
+    try:
+        supervisor.start()
+        first = supervisor.provider_id
+        docker("kill", supervisor.names["provider"])
+        state = json.loads(docker("inspect", supervisor.names["relay"]).stdout)[0]
+        record["relay_after_provider_death"] = {"running": state["State"]["Running"],
+                                                "network_mode": state["HostConfig"]["NetworkMode"]}
+        assert record["relay_after_provider_death"]["network_mode"] == f"container:{first}"
+        if state["State"]["Running"]:  # still alive: still loopback only, and the provider address now answers nothing
+            record["kernel"] = json.loads(docker("exec", supervisor.names["relay"], PYTHON, "-B", "-c", KERNEL_VIEW).stdout)
+            record["probe"] = json.loads(docker("exec", supervisor.names["relay"], PYTHON, "-B", "-c", PROBE_CODE,
+                                                json.dumps([["localhost", 8443]]), "0").stdout)
+            assert record["kernel"]["interfaces_up"] == ["lo"] and record["kernel"]["ipv4_routes"] == []
+            assert record["probe"][0][2]["outcome"] == "refused"
+        docker("rm", "-f", supervisor.names["provider"])
+        docker("run", "-d", "--name", supervisor.names["provider"], "--label", f"{LABEL}={run_id}-ns", "--network",
+               "none", "--entrypoint", PYTHON, pinned_hermes_image, "-c", "import time; time.sleep(600)")
+        with pytest.raises(subprocess.CalledProcessError):  # a new container under the old name is not the provider
+            supervisor.restart_relay()
+        running = docker("ps", "--filter", f"name=^{supervisor.names['relay']}$", "--format", "{{.Names}}").stdout.split()
+        record["relay_running_after_replacement"] = running
+        assert running == [] and supervisor.provider_id == first
+    finally:
+        cleanup = supervisor.stop()
+        record["cleanup"] = cleanup
+        (evidence_root / "namespace-failure.json").write_text(json.dumps(record, indent=1) + "\n")
+    assert cleanup == {"containers_left": [], "networks_left": []}, cleanup
 
 
 def test_a_host_killed_mid_turn_is_recovered_its_grant_closes_at_expiry_and_its_reservation_stays(
