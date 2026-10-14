@@ -103,11 +103,33 @@ def inventory() -> dict[str, dict[str, dict[str, Any]]]:
                                           "owners": owner_labels(dict(zip(RECOGNIZED_RUN_LABELS, fields[2:])))}
     # `docker image ls` cannot format labels; read them from one JSON inspect over every image ID.
     ids = sorted(set(text(sh(["docker", "image", "ls", "-a", "--no-trunc", "--format", "{{.ID}}"])).split()))
-    images = json.loads(text(sh(["docker", "image", "inspect", *ids]))) if ids else []
+    images, disappeared = _inspect_images(ids)
     found["images"] = {image["Id"]: {"name": ",".join(image.get("RepoTags") or []),
                                      "owners": owner_labels((image.get("Config") or {}).get("Labels"))}
                        for image in images}
+    found["images_disappeared"] = disappeared
     return found
+
+
+def _inspect_images(ids: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Inspect every listed image. An image removed between `ls` and `inspect` (for example by a parallel run) is
+    recorded as disappeared; any other inspect failure raises, so an unknown state is never reported as clean."""
+    if not ids:
+        return [], []
+    bulk = sh(["docker", "image", "inspect", *ids], check=False)
+    if bulk.returncode == 0:
+        return json.loads(text(bulk)), []
+    images, disappeared = [], []
+    for image_id in ids:
+        single = sh(["docker", "image", "inspect", image_id], check=False)
+        error = (single.stderr or b"").decode("utf-8", "replace")
+        if single.returncode == 0:
+            images += json.loads(text(single))
+        elif "No such image" in error:
+            disappeared.append(image_id)
+        else:
+            raise RuntimeError(f"docker image inspect {image_id[:19]} failed: {error.strip()[:200]}")
+    return images, disappeared
 
 
 def owner_class(item: dict[str, Any], run_id: str) -> str:

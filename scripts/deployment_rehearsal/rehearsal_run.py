@@ -42,6 +42,8 @@ from local_stack import LocalStack, StackNames, sh, text  # noqa: E402
 P03_DIR = REPO / "tests" / "p03"
 BROWSER_DIR = REPO / "tests" / "deployment_rehearsal" / "browser"
 APP_ROLES = ("api", "web", "entry")
+EVENTS_SETTLE_SECONDS = 1.0  # wait for the daemon to deliver cleanup events before stopping the events child
+EVENTS_STOP_SECONDS = 10.0   # bound for each of terminate and kill of the events child
 WORKER_COMMANDS = {
     "research-worker": ["python", "-m", "edge_os_api.research.investigation_jobs", "--once"],
     "execution-worker": ["python", "-m", "edge_os_api.execution.worker", "--once"],
@@ -399,24 +401,54 @@ class Rehearsal:
 
     # ---- cleanup ---------------------------------------------------------------------------------------------------
     def cleanup(self) -> bool:
+        """Attempt every owned teardown even after one fails; never report clean without a complete inventory."""
+        errors: list[str] = []
         for stack in (self.restored, self.primary):
-            stack.down()
-        # Image tags are removed only when this run claimed them as new; a refused claim removes nothing.
-        remaining = local_stack.remove_run_images(self.primary.names) if self.primary.claimed else []
-        after = local_stack.inventory()
-        if getattr(self, "events", None) is not None:
-            time.sleep(1)  # let the daemon deliver the cleanup's own remove events
-            self.events.terminate()
-            self.events.wait(timeout=10)
-            self.events_log.close()
+            try:
+                stack.down()
+            except Exception as error:  # noqa: BLE001 - record and continue with the next owned teardown
+                errors.append(f"{stack.names.project}: {type(error).__name__}: {str(error)[:200]}")
+        remaining: list[str] = []
+        try:
+            # Image tags are removed only when this run claimed them as new; a refused claim removes nothing.
+            remaining = local_stack.remove_run_images(self.primary.names) if self.primary.claimed else []
+        except Exception as error:  # noqa: BLE001
+            errors.append(f"images: {type(error).__name__}: {str(error)[:200]}")
+        after, inventory_error = None, None
+        try:
+            after = local_stack.inventory()
+        except Exception as error:  # noqa: BLE001 - an unknown state is recorded as a failed cleanup
+            inventory_error = f"{type(error).__name__}: {str(error)[:300]}"
+        self._stop_events()
+        name = ("cleanup removed exactly this run's containers, volumes, networks and images; no unlabelled or "
+                "conflictingly labelled resource changed (other runs' changes listed)")
+        if after is None:
+            return self.rec.step(name, False, {"teardown_errors": errors, "inventory_error": inventory_error,
+                                               "note": "resources unverified; capacity is not released"})
         self.rec.write("resources-after.json", after)
         leftovers = local_stack.leftovers(after, run_id=self.run_id) + [f"image:{tag}" for tag in remaining]
         foreign = local_stack.foreign_changes(self.before, after, run_id=self.run_id)
         others = local_stack.other_run_changes(self.before, after, run_id=self.run_id)
-        return self.rec.step("cleanup removed exactly this run's containers, volumes, networks and images; no "
-                             "unlabelled or conflictingly labelled resource changed (other runs' changes listed)",
-                             leftovers == [] and foreign == [], {"leftovers": leftovers, "foreign": foreign,
-                                                                 "other_runs": others})
+        return self.rec.step(name, leftovers == [] and foreign == [] and errors == [],
+                             {"leftovers": leftovers, "foreign": foreign, "other_runs": others,
+                              "teardown_errors": errors, "images_disappeared": after.get("images_disappeared", [])})
+
+    def _stop_events(self) -> None:
+        """End the daemon events child within a bound (terminate, then kill) and close its file."""
+        events = getattr(self, "events", None)
+        if events is None:
+            return
+        time.sleep(EVENTS_SETTLE_SECONDS)  # let the daemon deliver the cleanup's own remove events
+        try:
+            if events.poll() is None:
+                events.terminate()
+                try:
+                    events.wait(timeout=EVENTS_STOP_SECONDS)
+                except subprocess.TimeoutExpired:
+                    events.kill()
+                    events.wait(timeout=EVENTS_STOP_SECONDS)
+        finally:
+            self.events_log.close()
 
     def run(self) -> bool:
         ok = False

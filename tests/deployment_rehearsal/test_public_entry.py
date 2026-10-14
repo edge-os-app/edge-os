@@ -221,3 +221,35 @@ def test_reports_a_lost_upstream_with_a_reason_code_only() -> None:
         server.server_close()
     assert status == 502
     assert json.loads(body) == {"status": "unavailable", "reason": "upstream_unavailable", "upstream": "api"}
+
+
+@pytest.mark.parametrize(("line", "code"), [
+    (b"GARBAGE\r\n\r\n", b"400"),                       # wrong word count: rejected before a path exists
+    (b"GET /v1/me HTTP/9.x\r\n\r\n", b"400"),           # bad version
+    (b"GET /" + b"a" * 70_000 + b" HTTP/1.1\r\n\r\n", b"414"),  # request line over the stdlib limit
+], ids=["word-count", "bad-version", "too-long"])
+def test_a_malformed_request_line_gets_its_error_reply_without_a_crash(entry, capsys, line: bytes, code: bytes) -> None:
+    port, api, web = entry
+    client = _raw(port, line)
+    try:
+        data, _ = _read_until_closed(client, limit=5)
+    finally:
+        client.close()
+    assert code in data, data[:200]
+    assert "Traceback" not in capsys.readouterr().err
+    assert api.seen == [] and web.seen == []
+    status, _, _ = _request(port, "GET", "/healthz")
+    assert status == 200
+
+
+@pytest.mark.parametrize("value", ["\xb2", "1" * 5000, "+5", "-1"], ids=["non-ascii-digit", "5000-digits", "plus", "minus"])
+def test_an_invalid_content_length_is_refused_with_400_before_any_upstream(entry, capsys, value: str) -> None:
+    port, api, web = entry
+    client = _raw(port, b"POST /v1/x HTTP/1.1\r\nHost: t\r\nContent-Length: " + value.encode("latin-1") + b"\r\n\r\n")
+    try:
+        data, _ = _read_until_closed(client, limit=5)
+    finally:
+        client.close()
+    assert data.startswith(b"HTTP/1.1 400 ") and b"invalid_length" in data, data[:200]
+    assert "Traceback" not in capsys.readouterr().err
+    assert api.seen == [] and web.seen == []

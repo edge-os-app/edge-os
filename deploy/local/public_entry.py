@@ -26,6 +26,8 @@ MAX_BODY_BYTES = 512 * 1024
 DRAIN_LIMIT_BYTES = 8 * 1024 * 1024
 DRAIN_SECONDS = 5.0
 DRAIN_CHUNK_BYTES = 64 * 1024
+# A Content-Length longer than this is refused as invalid before conversion (far above any accepted size).
+MAX_LENGTH_DIGITS = 19
 # The longest API call (interpreter wait) is 120 s; the entry waits a little longer before reporting a loss.
 UPSTREAM_TIMEOUT_SECONDS = 150.0
 HOP_BY_HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection",
@@ -92,7 +94,8 @@ def build_server(host: str, port: int, upstreams: Mapping[str, tuple[str, int]])
                 self._reply(411, {"status": "refused", "reason": "length_required"}, close=True)
                 return
             declared = self.headers.get("Content-Length") or "0"
-            if not declared.isdigit():
+            # ASCII digits only (str.isdigit also accepts other scripts) and short enough for int(); else refuse.
+            if not (declared.isascii() and declared.isdigit() and len(declared) <= MAX_LENGTH_DIGITS):
                 self._reply(400, {"status": "refused", "reason": "invalid_length"}, close=True)
                 return
             if int(declared) > MAX_BODY_BYTES:
@@ -132,8 +135,13 @@ def build_server(host: str, port: int, upstreams: Mapping[str, tuple[str, int]])
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - BaseHTTPRequestHandler signature
             # Method, path without query and status only: no header, token or query value reaches the log.
+            # A malformed request line is refused before `path` (and `command`) exist; log its status only.
             if format.startswith('"%s" %s'):
-                log.info("%s %s", self.command, self.path.split("?", 1)[0])
+                path = getattr(self, "path", None)
+                if path is None:
+                    log.info("malformed request line refused (%s)", args[1] if len(args) > 1 else "")
+                else:
+                    log.info("%s %s", self.command, path.split("?", 1)[0])
 
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
