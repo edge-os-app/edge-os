@@ -14,7 +14,7 @@ Paths below are relative to `apps/api/src/edge_os_api/` unless they start with `
 | Nansen origin `https://api.nansen.ai` | `operating_release._check_nansen`, `nansen_research/http_transport.NANSEN_ORIGIN` | §12.1 | `operating_release_invalid` |
 | Nansen network factory | `released_source_runtime.NansenHttpFactory`, `_nansen_network` | §12.2 | `actual_nansen_transport_missing` |
 | RPC methods `eth_chainId`, `eth_getTransactionReceipt` | `operating_release.RPC_METHODS`, `_check_history`; `PreparedHistory.clients` passes `allowed_methods` to `HttpQuickNodeRpcClient` | §3 | `operating_release_invalid` |
-| `provider_requests` 13 ≥ 4 + 1 + 8 | `operating_release._check_history`; `research/history_dataset.requests_needed` | §3 | `operating_release_invalid` |
+| `provider_requests` 13 ≥ 4 + 1 + 8 | `operating_release._check_history`; `research/history_dataset.requests_needed`; `research/investigation_adoption.py` | §3 | `operating_release_invalid`; `422 resource_bounds_too_small` |
 | `max_pages` 4 ≤ `provider_requests` 13 | `core/request_schemas.HistoryResourceBounds.pages_fit_requests` | §3 | `422` validation |
 | `max_bytes` 4,194,304; `max_rows` 2,000; `compute_seconds` 600; `deadline_seconds` 600 | `HistoryResourceBounds` field ceilings (4,194,304; 10,000; 600; 3,600) | §6 | `422` validation |
 | Release limits equal declaration bounds | `research/investigation_adoption.py` (`release_bounds_mismatch`) | §6 | `422 release_bounds_mismatch` |
@@ -25,7 +25,7 @@ Paths below are relative to `apps/api/src/edge_os_api/` unless they start with `
 | Source id not a recorded source | `research/history_dataset.check_release_source` | §11 (B5) | `operating_release_invalid` |
 | Nansen bounds: reply ≤ `max_bytes` | `operating_release._check_nansen` | §12.1 | `operating_release_invalid` |
 | Nansen request equals release | `released_source_runtime.nansen_mismatches`; `investigation_jobs` | §6 | `422 release_request_mismatch` |
-| Nansen 5 + 1 credits; `premium_labels` false | `nansen_research/nansen_client.OPERATIONS`, `ALLOWED_BODY_FIELDS`, `_enforce_budget` | Nansen packet | `CREDIT_LIMIT` |
+| Nansen 5 + 1 credits; `premium_labels` false | `nansen_research/nansen_client.OPERATIONS`, `_enforce_budget`; `_pin_body` pins `premium_labels` false | Nansen packet | `CREDIT_LIMIT`; `PREMIUM_NOT_ALLOWED` |
 | Nansen deadline and late reply | `released_source_runtime.ReleasedNansenTransport`, `PreparedNansen.transport` | §12.3 | `NansenTimeout` (`DEADLINE`, `TIMEOUT`) |
 | Owner and global reservations | `research/investigation_jobs.caps`, `_settle`, `_finish`; `core/settings` defaults 16 requests, 900 s, 50 credits | §6 | `BUDGET_EXHAUSTED` |
 | Evidence class from composition | `released_source_runtime.ReleasedSourceRuntime.evidence_class`, `transport_kind`; `history_source` | §5 | `422 history_source_class_mismatch` |
@@ -39,12 +39,13 @@ The row "Declared facts labelled" has no refusal. The code passes release `provi
 | Check | Code symbol | Expected result for this packet |
 |---|---|---|
 | Corroboration class | `research_history/quicknode_corroboration.py` (`COMPLETE` only when every record is compared) | `SAMPLED`, 8 of about 87 |
-| Claim verdicts | `docs/qualification/p07/qualification.py` `qualify` (any `LIMIT` or `ASSUMPTION` gives `LIMITED`; any failed or missing check gives `UNRESOLVED`) | `LIMITED` or `UNRESOLVED` |
+| Decimals | `qualify` (`DECIMALS_NOT_READ` when no `READ` value is declared) | `MISSING_EVIDENCE`: no decimals read is admitted |
+| Claim verdicts | `docs/qualification/p07/qualification.py` `qualify` (any `LIMIT` or `ASSUMPTION` gives `LIMITED`; any failed or missing check gives `UNRESOLVED`) | `UNRESOLVED` (`DECIMALS_NOT_READ`); `LIMITED` at best with an approved decimals read and floors |
 | Feasibility | `docs/qualification/p07/qualification.py` `feasibility` (`UNDECLARED` without floors) | `UNRESOLVED` unless floors are approved |
 | Market adoption | `research/market_adoption.py` (needs `QUALIFIED`, `COMPLETE`, `QUALIFIED_BINDING`) | refused |
-| Replay admission | `replay/simulator.py` `ADMITTED_EVIDENCE_CLASSES`, `DATASET_COVERAGE_UNPROVEN` | refused, saved as unsupported |
+| Replay admission | `replay/simulator.py` `ADMITTED_EVIDENCE_CLASSES`, `DATASET_COVERAGE_UNPROVEN`; `replay/saved_runs.py` saves the refusal | refused, saved with status `UNAVAILABLE` and reason `DATASET_COVERAGE_UNPROVEN` |
 | Provider class consistency | `replay/history_inputs.py` (`evidence_class_inconsistent`) | passes only for an `ACTUAL` release dataset |
-| Fill label | `replay/saved_runs.py` | `simulated fills`, only if a replay runs |
+| Fill label | `replay/history_inputs.FILL_LABEL` | `simulated fills`, only if a replay runs |
 
 ## 3. Packet checks to proof
 
@@ -60,7 +61,7 @@ Every row is `NOT_RUN`. "Local" names the stand-in proof that already passed at 
 | Coverage | `release_coverage`, bucket counts, corroboration class | Sampled-corroboration fault row | `NOT_RUN` |
 | Saved, reopened, restarted | Byte-identical rows after API and worker restart; no new provider count | Verifier restart specs | `NOT_RUN` |
 | UNKNOWN liability | Whole reservation unknown on lost reply, late reply, killed worker | Fault matrix rows; `collection_outcome_unknown`, `nansen_outcome_unknown` | `NOT_RUN` |
-| No auto retry | One call per step; refusal stops the run | `test_a_refused_first_reply_stops_the_run_once_without_retry` | `NOT_RUN` |
+| No auto retry | One call per step; refusal stops the run | History: `test_operating_release_research.py::test_a_refused_page_stops_with_a_stable_code_no_retry_and_no_provider_text`. Nansen: `test_nansen_runtime_mount.py::test_a_refused_first_reply_stops_the_run_once_without_retry` | `NOT_RUN` |
 | Negative without a call | `operating_release_changed`, `operating_release_credential_unavailable`, `stand_in_refused_in_production` | Release research tests and verifier missing-key job | `NOT_RUN` |
 | Other owner | Owner B 404 | Verifier owner B denial | `NOT_RUN` |
 | Session | Signed-out or expired session cannot read | Depends on real Privy login | `NOT_RUN` |
@@ -75,7 +76,7 @@ A claim may be made only when its required proof exists. Until then the claim is
 |---|---|---|
 | Envio: actual Monad history through the application | Section 3 history rows with an `ACTUAL` release; saved dataset with HyperSync page digests | `NOT_RUN` |
 | QuickNode corroboration | Saved `eth_chainId` 143 and 8 receipt results | `NOT_RUN` |
-| Qualified dataset | P07 overall `QUALIFIED` | Not expected (`LIMITED` or `UNRESOLVED`). Demo-scope conflict is `NEEDS_APPROVAL` |
+| Qualified dataset | P07 overall `QUALIFIED` | Not expected (`UNRESOLVED`, `LIMITED` at best). Demo-scope conflict is `NEEDS_APPROVAL` |
 | Replay of actual history | Admitted replay on a `QUALIFIED` dataset, fills labelled `simulated fills` | Not expected. Saved refusal is the valid result |
 | Nansen: actual report through the application | Saved and reopened report; request ids; credits `KNOWN`; coverage limits stated | `NOT_RUN`. Web label fix outstanding |
 | Nansen covers MOE on Monad | Actual reply for MOE | `NEEDS_FACT` (chain-level docs only) |
@@ -94,5 +95,5 @@ A claim may be made only when its required proof exists. Until then the claim is
 | `holders` 5 credits, `flows` 1 credit, `holders` 150 with premium labels | docs.nansen.ai credits page | Matches `NansenClient.OPERATIONS` |
 | Holders returns current holders, no date range | docs.nansen.ai holders page | Snapshot-time note |
 | Flows `date.to` is an inclusive cutoff; hourly snapshots for ranges up to 7 days | docs.nansen.ai flows page | One page for one day |
-| Monad block time 300 ms (mean about 302 ms in September 2026); 400 ms before MIP-12 | docs.monad.xyz | Page and byte arithmetic |
-| Monad finality 2 slots | docs.monad.xyz | `depth_blocks` 2 |
+| Monad minimum block time 300 ms (MonadBFT page); 400 ms before MIP-12 (release changelog); observed mean about 302 ms in September 2026 ("Why Monad" page) | docs.monad.xyz | Page and byte arithmetic |
+| Monad finality 2 slots | docs.monad.xyz MonadBFT page | `depth_blocks` 2 |

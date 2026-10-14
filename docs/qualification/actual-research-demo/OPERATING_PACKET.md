@@ -21,17 +21,17 @@ The earlier proposals are [the P07 actual-collection packet](../research-history
 | Earlier value | Conflict with accepted code at `012fb15` | Value in this packet |
 |---|---|---|
 | `max_response_bytes` 8,388,608 per HyperSync page | `operating_release._check_history` refuses a reply cap above `limits.max_bytes`. `HistoryResourceBounds.max_bytes` allows at most 4,194,304. | 2,097,152 per reply. Aggregate 4,194,304. |
-| 36 requests, including 6 `eth_call` and `eth_getCode` | `operating_release.RPC_METHODS` is exactly `eth_chainId` and `eth_getTransactionReceipt`. `HttpQuickNodeRpcClient` gets that allowlist. Other methods are refused. | 13 requests: 4 pages, 1 `eth_chainId`, 8 receipts. No other method. |
+| 36 requests, including up to 6 `eth_call` decimals reads and 1 `eth_getCode` | `operating_release.RPC_METHODS` is exactly `eth_chainId` and `eth_getTransactionReceipt`. `HttpQuickNodeRpcClient` gets that allowlist. Other methods are refused. | 13 requests: 4 pages, 1 `eth_chainId`, 8 receipts. No other method. |
 | Collection deadline 1,800 s (P07 library recipe) and 600 s (verifier stand-in Nansen jobs) | The application has one clock: the job's saved `deadline_at`. `HistoryResourceBounds.compute_seconds` allows at most 600. Every per-call bound is cut to the time left. | History job: deadline 600 s, compute 600 s. Nansen job: deadline 300 s, compute 300 s. Per-call bounds below. |
-| Two-day window, 16 pages | HyperSync requests use `include_all_blocks` and at most `max_blocks_per_page` blocks. Monad documents a 300 ms block time (400 ms before MIP-12). Two days is 432,000 to 576,000 blocks: 44 to 58 pages at 10,000 blocks per page. That exceeds 16 pages, and each page carries every block header. | One hour: 9,000 to 12,000 blocks, 1 or 2 pages. |
-| Eight sampled receipts | `quicknode_corroboration` gives class `SAMPLED` when fewer records are compared than exist. P07 `qualify` then adds `CORROBORATION_SAMPLED_ONLY`, so the history claim is `LIMITED`. | Expected verdict stays `LIMITED`. See section 6. |
+| Two-day window, 16 pages | HyperSync requests use `include_all_blocks` and at most `max_blocks_per_page` blocks. Monad documents a 300 ms minimum block time (400 ms before MIP-12). Two days is 432,000 to 576,000 blocks: 44 to 58 pages at 10,000 blocks per page. That exceeds 16 pages, and each page carries every block header. | One hour: 9,000 to 12,000 blocks, 1 or 2 pages. |
+| Eight sampled receipts | `quicknode_corroboration` gives class `SAMPLED` when fewer records are compared than exist. P07 `qualify` then adds `CORROBORATION_SAMPLED_ONLY`, so the history claim is `LIMITED`. | The history claim stays `LIMITED`. The overall verdict is `UNRESOLVED` (section 6). |
 | "Real `HttpTransport` and Nansen transport: not written"; "that script does not exist"; "No accepted Nansen network transport exists" | Obsolete. `StdlibHttpTransport`, `NansenHttpTransport`, `NansenHttpFactory` and `released_runtime_bootstrap.server_research_runtime` exist at `012fb15` (contract section 12). | No new adapter. The existing release path is used. |
 
 ## 3. The question and the smallest dataset
 
 **Question (PROPOSED).** Can the application collect one hour of actual MOE/WMON swap history, corroborate it, qualify it honestly, save it, and reopen it after a restart without a second request? Can it also save one Nansen holder and flow report for MOE? A `LIMITED`, `UNRESOLVED`, empty or failed result is a valid answer. The run tests the evidence path. It makes no claim about a trading edge.
 
-**Why one hour.** It is the smallest window that gives twelve five-minute buckets and fits the request, byte and time limits with margin. Probe A observed every five-minute bucket occupied from Sep 25 to Oct 2 (2,019 of 2,019). Its research partition held 6,279 records from Sep 24 23:45 to Sep 28, about 87 per hour on average. The hour's exact count is `NEEDS_FACT`.
+**Why one hour.** It is the smallest window that gives twelve five-minute buckets and fits the request, byte and time limits with margin. Probe A observed every five-minute bucket occupied from the Sep 24 23:45 warm-up to Oct 2 (2,019 of 2,019). Its research partition held 6,279 records from Sep 24 23:45 to Sep 28, about 87 per hour on average. The hour's exact count is `NEEDS_FACT`.
 
 | Field | Value | Status |
 |---|---|---|
@@ -46,7 +46,7 @@ The earlier proposals are [the P07 actual-collection packet](../research-history
 | Availability model | `ASSUMED_DELAY`, 180 s | `PROPOSED` (Probe A precedent), `NEEDS_APPROVAL` |
 | Finality | `depth_blocks` 2, basis `DOCUMENTATION` (Monad: finality after 2 slots) | `PROPOSED` |
 
-**Protected data.** The window ends before the Probe A validation partition (Sep 28 to Sep 30) and the sealed holdout (Sep 30 to Oct 2). Neither is read. The new declaration declares no `VALIDATION` or `HOLDOUT` partition inside the window. `history_dataset.PROTECTED_ROLES` and `readable_until` therefore leave the whole hour readable. The closed Probe A is not reopened, and its private pages are not reused as this run's evidence.
+**Protected data.** The window ends before the Probe A validation partition (Sep 28 to Sep 30) and the sealed holdout (Sep 30 to Oct 2). Neither is read. The new declaration declares no `VALIDATION` or `HOLDOUT` partition inside the window. The declaration schema then requires direction `DESCRIPTIVE` with `DESCRIPTIVE` partitions only (`core/request_schemas.py`). `history_dataset.PROTECTED_ROLES` and `readable_until` therefore leave the whole hour readable. The closed Probe A is not reopened, and its private pages are not reused as this run's evidence.
 
 **Scan blocks.** The release must freeze its block range. The retained Probe A metadata holds block numbers for this hour, but it is private. Two routes exist, and both need approval:
 
@@ -97,22 +97,22 @@ One release holds both parts. `server_research_runtime` composes at most one app
 
 **Byte estimate (inference, `NEEDS_FACT`).** One block header (`number`, `timestamp`, `hash`) is about 120 bytes of JSON. One log with the selected fields is about 700 bytes. A 10,000-block page is then about 1.2 MB plus about 0.06 MB of logs. The hour is about 1.5 MB in total. If the wire size is larger, the byte cap stops the collection and the dataset is `PARTIAL`. Nothing is retried.
 
-**Pacing.** The application does not pace HyperSync requests. Probe A met a plan rate of 15 requests per minute and failed when it went faster. This run makes at most 4 HyperSync requests, so the dated rate is not reached. The current plan rate is `NEEDS_FACT`.
+**Pacing.** The application does not pace HyperSync requests. Probe A observed a plan rate of 15 requests per minute. One of its scans stopped on an HTTP error after dispatching faster than that rate. Probe A recorded the precise cause as unknown. This run makes at most 4 HyperSync requests, so the dated rate is not reached. The current plan rate is `NEEDS_FACT`.
 
 `provider_facts` are declarations, labelled `RELEASE_DECLARATION` in the saved evidence basis. P07 does not read them. **The release may declare only what retained evidence supports.** Declaring `QUALIFIED`, `OBSERVED_FINAL` or delivery records without evidence would make a false `QUALIFIED` verdict. The synthetic fixture `native-syn-qualified/1` declares such values. They must never be copied into an actual release.
 
 | Fact | Declared value | Evidence | Effect in P07 `qualify` |
 |---|---|---|---|
-| `pool_tokens` | `SINGLE_READ` | Probe A RPC reads (dated, not this run) | `LIMIT POOL_TOKENS_SINGLE_READ` |
+| `pool_tokens` | `SINGLE_READ` | Probe A RPC reads of the pair's token0 and token1 (dated, not this run). A V2 pair fixes these at creation. | `LIMIT POOL_TOKENS_SINGLE_READ` |
 | `pool_venue` | `SINGLE_SOURCE` | Probe A registry and creation receipt (dated) | `LIMIT POOL_VENUE_SINGLE_SOURCE` |
-| `decimals` | For `base` and `quote`: `window_start` `STATE_UNAVAILABLE` (any value other than `READ`); `window_end` and `current` `READ` (Probe A) | Probe A start-boundary calls returned state-unavailable | `ASSUMPTION DECIMALS_IMMUTABILITY_ASSUMED` |
+| `decimals` | For `base` and `quote`: `window_start`, `window_end` and `current` all `NOT_READ` | This run cannot read decimals: `eth_call` is not admitted. Probe A read its own window end and its own current time, not this window or this run's time. Declaring those dated reads as `READ` would be false. | `MISSING_EVIDENCE DECIMALS_NOT_READ`, so `EVENT_AND_AMOUNT_MEANING` is `UNRESOLVED` |
 | `fee_transfer_semantics` | not `QUALIFIED` | MOE has a reflection design. Fork fees are unqualified. | `LIMIT TOKEN_MECHANICS_UNQUALIFIED` |
 | `finality_at_collection` | `FINALIZED_BY_DEPTH` | Inferred, not observed | `ASSUMPTION FINALITY_INFERRED_AT_COLLECTION_ONLY` |
 | `delivery_records` | none | Not observed for history | Model is `ASSUMED_DELAY`: `ASSUMPTION` |
 | `feasibility_claim` | A well-formed schedule and partition list. Sample floors are `NEEDS_APPROVAL`. | P07 `feasibility` | With no floors it returns `UNDECLARED`: `MISSING_EVIDENCE`, so `UNRESOLVED`. With floors: `FEASIBLE` or `INFEASIBLE`. A malformed claim makes `normalize` raise `AdapterInputError FEASIBILITY_CLAIM_INVALID`. |
-| `collected_at_utc`, `archive_height` | A value fixed before the run | `NEEDS_APPROVAL` (contract section 9 keeps this open) | See section 9, item 3 |
+| `collected_at_utc`, `archive_height` | A value fixed before the run | `NEEDS_APPROVAL`. Contract section 9 keeps `collected_at_utc` open. The archive-height part is this packet's inference. | See section 9, item 3 |
 
-The table entries for `pool_tokens` and `pool_venue` are the honest weaker states. If the builder wants the stronger states, the evidence must come from this run or an approved source-fact packet.
+The entries for `pool_tokens` and `pool_venue` are the honest weaker states. Stronger states, and any decimals read, need evidence from this run or from an approved source-fact packet. That packet would add `eth_call`, which this release refuses.
 
 ### 4.2 Nansen part (`NansenRelease`)
 
@@ -133,6 +133,8 @@ The table entries for `pool_tokens` and `pool_venue` are the honest weaker state
 
 **Chain coverage.** The current `tgm/holders` and `tgm/flows` request schemas list the chain value `monad`. The chain coverage table marks Token God Mode for Monad. This is chain-level documentation only. MOE token coverage, Monad historical coverage for the flows window and the account's plan rights are `NEEDS_FACT`. A key does not establish them.
 
+**If Nansen does not cover MOE.** A reply that shows no MOE coverage is a requirement conflict with the demo scope. Report it to the builder. Do not substitute another token or chain as demo evidence without the builder's decision.
+
 **Snapshot time.** The holders endpoint returns current holders and takes no date range. The holder result describes the collection time, not the window. The flows endpoint uses the window. The report must say so.
 
 ## 5. Owner, global and money limits
@@ -145,7 +147,7 @@ Default settings at `012fb15` give each owner 16 provider requests, 900 compute 
 | `compute_seconds` | 600 | 300 | 900 | 900 |
 | `nansen_credits` | not reserved | 6 | 6 | 50 |
 
-Both jobs fit the default owner cap even when both reservations stay `UNKNOWN`. A second attempt of either job would not fit. That is intended. Raising a cap is a settings change outside this lease and needs approval.
+Both jobs fit the default owner cap even when both reservations stay `UNKNOWN`. While both reservations stay open or `UNKNOWN`, a second attempt of either job does not fit. A `KNOWN` settlement releases the unused part (`usage/quota.py` `settle`), and a second attempt can then fit. The cap is therefore not the guard against a repeat. The guard is the no-repeat rule in section 7. Raising a cap is a settings change outside this lease and needs approval.
 
 **Money (PROPOSED suballocation of the recorded USD 2.00 combined model and data ceiling).** Current prices and account rights are `NEEDS_FACT` until evidenced.
 
@@ -162,18 +164,19 @@ Both jobs fit the default owner cap even when both reservations stay `UNKNOWN`. 
 
 With honest declarations (section 4.1), P07 `qualify` cannot return `QUALIFIED` for this run:
 
+- `BINDING_IDENTITY` is `LIMITED` (pool tokens `SINGLE_READ`, venue `SINGLE_SOURCE`).
+- `EVENT_AND_AMOUNT_MEANING` is `UNRESOLVED` (no decimals read in this run). Token mechanics are also unqualified.
 - `HISTORY_COMPLETENESS_AND_ORDER` is `LIMITED` because 8 of about 87 records are corroborated (`SAMPLED`).
-- `EVENT_AND_AMOUNT_MEANING` is `LIMITED` (token mechanics unqualified, start decimals assumed).
 - `POINT_IN_TIME_AVAILABILITY` is `LIMITED` (`ASSUMED_DELAY`).
 - `SCHEDULE_FEASIBILITY` is `UNRESOLVED` unless floors are declared.
 
-Complete corroboration is not reachable either. It needs one receipt per record. About 87 receipts plus pages exceed the 64-request schema ceiling. It would also leave the other `LIMITED` claims.
+Complete corroboration is not reachable either. It needs one receipt per record. About 87 receipts plus pages exceed the 64-request schema ceiling. It would also leave the other claims unchanged.
 
-So the expected outcome is a saved `LIMITED` or `UNRESOLVED` dataset. `market_adoption` refuses a dataset that is not `QUALIFIED`. The P13 runtime refuses replay with `DATASET_COVERAGE_UNPROVEN`. Evidence-class compatibility (`PROVIDER_ACTUAL` admitted since contract section 12.5) does not qualify a dataset. **Hypothetical replay runs only if a dataset is actually `QUALIFIED`.** Then every fill is labelled `simulated fills`, and nothing claims statistical support, profit or trading permission.
+So the expected outcome is a saved `UNRESOLVED` dataset. It becomes `LIMITED` at best only if an approved source-fact packet reads decimals and the builder declares floors. `market_adoption` refuses a dataset that is not `QUALIFIED`. The P13 runtime refuses replay with `DATASET_COVERAGE_UNPROVEN`. Evidence-class compatibility (`PROVIDER_ACTUAL` admitted since contract section 12.5) does not qualify a dataset. **Hypothetical replay runs only if a dataset is actually `QUALIFIED`.** Then every fill is labelled `simulated fills`, and nothing claims statistical support, profit or trading permission.
 
 This conflicts with the approved demo scope, which asks for a saved qualified dataset and a replay. `NEEDS_APPROVAL`: the builder chooses one:
 
-1. Accept a saved `LIMITED` dataset and the saved replay refusal as the demo evidence.
+1. Accept a saved `UNRESOLVED` or `LIMITED` dataset and the saved replay refusal as the demo evidence.
 2. Approve separate work that produces stronger evidence. This packet does not propose to relax any verdict rule.
 
 ## 7. Operation sequence and stop rules
@@ -183,8 +186,8 @@ Each step needs the approvals in section 9 first. No step retries automatically.
 1. Freeze the release values, compute `release_sha256`, add `RELEASE_DEFINITIONS` and `APPROVED_RELEASES` entries, and compose a `CredentialSource`. These are reviewed code changes in the lane that owns application composition.
 2. Start the API and the worker. Both call `server_research_runtime`. Record the release SHA-256 from `GET /v1/research/history-sources`.
 3. As owner A, save one declaration for `actual-moe-wmon-1h/1`, with `resource_bounds` equal to the release limits.
-4. Start one history job with a fixed `request_key`, `actual-research-demo-history-1`. A repeated key returns the original job. A new key needs a new approval.
-5. Let the worker run. It reserves, reads credentials, saves `ATTEMPT_STARTED`, then calls in order: pages, `eth_chainId`, receipts.
+4. Start one history job with a fixed `request_key`, `actual-research-demo-history-1`. The API reserves the owner and global limits at this start. A repeated key returns the original job. A new key needs a new approval.
+5. Let the worker run. It reads credentials, saves `ATTEMPT_STARTED`, then calls in order: pages, `eth_chainId`, receipts.
 6. Start one Nansen report with `request_key` `actual-research-demo-nansen-1` and the exact release request (else `422 release_request_mismatch`).
 7. Reopen both results. Restart the API and the worker. Reopen again.
 8. Run the proofs in section 8, then cleanup and reconciliation.
@@ -202,7 +205,15 @@ Each step needs the approvals in section 9 first. No step retries automatically.
 
 The run keeps its partial result. A failed or `UNKNOWN` run is not repeated. A second attempt is a new approval with a new key and fresh reservations.
 
-**UNKNOWN liability.** A lost reply, a cancel during a call, a late reply, a killed worker or a guard and adapter race leaves the whole request reservation (and for Nansen the credit reservation) as unknown liability. It is never settled as zero. A killed worker reconciles `OUTCOME_UNKNOWN` and never collects again.
+**UNKNOWN liability.** These events leave a call's effect unknown:
+
+- a lost reply;
+- a cancel during a call;
+- a late reply;
+- a killed worker;
+- a race between the guard and the adapter.
+
+Each one keeps the whole request reservation as unknown liability. For Nansen, the credit reservation is also kept. It is never settled as zero. A killed worker reconciles `OUTCOME_UNKNOWN` and never collects again.
 
 ## 8. Required proof
 
@@ -232,12 +243,22 @@ Operation approval is separate from these preparations. None of them is approved
 
 1. **Credential delivery** (`NEEDS_APPROVAL`). No default credential source exists. `server_research_runtime` refuses startup without one. The delivery route (host secret store or a file outside the repository) and its code are separate work.
 2. **Application mounting** (`NEEDS_APPROVAL`). `RELEASE_DEFINITIONS` and `APPROVED_RELEASES` are empty. Filling them is a reviewed code change citing the builder's approval of the exact SHA-256.
-3. **Collection time and archive height** (`NEEDS_APPROVAL`, contract section 9). The release fixes `provider_facts` before the run, so `collected_at_utc` and `archive_height` cannot be observed values. The application saves its own `application_collection_time` separately. A declared archive height must be at or above the window's last block plus `depth_blocks`, from evidence. Recording an observed height needs a design change or a separate source-fact packet.
+3. **Collection time and archive height** (`NEEDS_APPROVAL`). Contract section 9 keeps `collected_at_utc` open. The archive-height part is this packet's inference. The release fixes `provider_facts` before the run, so `collected_at_utc` and `archive_height` cannot be observed values. The application saves its own `application_collection_time` separately. A declared archive height must be at or above the window's last block plus `depth_blocks`, from evidence. Recording an observed height needs a design change or a separate source-fact packet.
 4. **Model run** (`NEEDS_APPROVAL`). Exact Hermes model, current price snapshot and request limits come from the Hermes relay packet. Not in this packet.
-5. **Nansen web label** (`NEEDS_FACT` for a fix owner). The web Nansen panel still shows a fixed "Authored … replayed" top label under a release (mount evidence, retained limits). It must change before an actual Nansen report is shown.
-6. **Values marked `NEEDS_FACT`**: scan blocks, QuickNode host, hourly record count, page wire size, HyperSync plan rate and request ids, Nansen token and history coverage, Nansen plan rights and credit price, deployed owner and global caps.
-7. **Values marked `NEEDS_APPROVAL`**: orientation, availability model, feasibility floors, the demo-scope conflict in section 6, publishing scan blocks or the QuickNode host, optional negative and interruption proofs, key rotation.
-8. **Operation approval** for the run itself, after items 1 to 7.
+5. **Nansen web label** (`NEEDS_APPROVAL`: who fixes it). Under a release, the web Nansen panel still shows a fixed "Authored … replayed" top label. The mount evidence records this as a retained limit. The label must change before an actual Nansen report is shown.
+6. **Data-use rights and retention** (`NEEDS_APPROVAL`). Contract section 9 keeps rights and retention open, and the Nansen packet keeps them `UNSET`. Decide the data-use rights and the retention window for saved provider output before the run.
+7. **Values marked `NEEDS_FACT`**:
+   - scan blocks, QuickNode host, hourly record count and page wire size;
+   - HyperSync plan rate and request ids;
+   - Nansen token and history coverage, plan rights and credit price;
+   - deployed owner and global caps.
+8. **Values marked `NEEDS_APPROVAL`**:
+   - orientation, availability model and feasibility floors;
+   - the demo-scope conflict in section 6;
+   - publishing scan blocks or the QuickNode host;
+   - a source-fact packet for decimals or stronger binding facts;
+   - optional negative and interruption proofs, and key rotation.
+9. **Operation approval** for the run itself, after items 1 to 8.
 
 ## 10. Dependencies outside this packet
 
