@@ -344,7 +344,7 @@ def test_a_relay_whose_provider_namespace_died_or_was_replaced_fails_closed(
         cleanup = supervisor.stop()
         record["cleanup"] = cleanup
         (evidence_root / "namespace-failure.json").write_text(json.dumps(record, indent=1) + "\n")
-    assert cleanup == {"containers_left": [], "networks_left": []}, cleanup
+    assert cleanup == {"containers_left": [], "networks_left": [], "volumes_left": []}, cleanup
 
 
 def test_a_host_killed_mid_turn_is_recovered_its_grant_closes_at_expiry_and_its_reservation_stays(

@@ -9,12 +9,15 @@
 
 The job never holds a key or a network path: its one request goes through the job channel to the relay, which holds
 the synthetic key and is the only component that can reach the AUTHORED provider. Construction does no I/O: no file is
-read or written, no key is read and nothing starts. An ACTUAL route is refused before anything is built, with or
-without a release. See `docs/qualification/hermes-provider-relay/CONTRACT.md`.
+read or written, no key is read and nothing starts. An ACTUAL route is refused before anything is built unless the
+caller gives the approved release record it came from (CONTRACT A6); none is approved in this candidate. With an ACTUAL
+record a counted result also needs the relay's recorded provider cost within the attempt's reserved liability.
+See `docs/qualification/hermes-provider-relay/CONTRACT.md`.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -22,6 +25,7 @@ import stat
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +35,7 @@ from guarded_docker_runner import GuardedDockerTurnRunner, JobEntry
 from guarded_turn_runner import GuardedTurnRunner
 from provider_guard import GuardPolicy
 from provider_transport import HERMES_CLIENT_URL, ActualProviderUnavailable, TransportRoute
-from relay_admission import CLOCK_SKEW_SECONDS, RelayRelease, RelaySubject, issue_grant
+from relay_admission import CLOCK_SKEW_SECONDS, ActualRelease, RelayRelease, RelaySubject, issue_grant
 from spend_ledger import SpendLedger
 from transport_turn_runner import TransportTurnRunner
 
@@ -108,10 +112,11 @@ class RelayTurnRunner:
     def __init__(self, delegate: HermesTurnRunner, *, endpoint: RelayEndpoint, release: RelayRelease, policy: GuardPolicy,
                  ledger: SpendLedger, scope_for: Callable[[HermesTurn], str],
                  subject_for: Callable[[HermesTurn], RelaySubject], run_id: str, timeout_seconds: float,
-                 close_budget_seconds: float) -> None:
+                 close_budget_seconds: float, actual: ActualRelease | None = None) -> None:
         self._delegate, self._endpoint, self._release, self._policy = delegate, endpoint, release, policy
         self._ledger, self._scope_for, self._subject_for = ledger, scope_for, subject_for
         self._run_id, self._timeout, self._close_budget = run_id, timeout_seconds, close_budget_seconds
+        self._actual = actual
 
     def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
         try:
@@ -144,7 +149,7 @@ class RelayTurnRunner:
             self._close(turn.attempt_id)  # the job is over either way; the accepted runner keeps the liability
             raise
         closed, finished = self._close(turn.attempt_id)
-        return self._limited(result, grant["grant_id"], closed, finished)
+        return self._limited(result, grant["grant_id"], closed, finished, turn.attempt_id)
 
     def _relay_alive(self) -> bool:
         beat = _read_json(self._endpoint.state / "heartbeat.json")
@@ -186,12 +191,25 @@ class RelayTurnRunner:
             time.sleep(CLOSE_POLL_SECONDS)
         return closed, _read_json(records / "finished.json")
 
+    def _cost_within_reservation(self, attempt_id: str, finished: dict[str, Any]) -> bool:
+        """The relay's recorded provider cost is a finite number no larger than this attempt's reserved liability."""
+        cost = finished.get("cost")
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
+            return False
+        try:
+            liability = self._ledger.liability_usd(attempt_id)
+            return liability is not None and Decimal(repr(cost)) <= liability
+        except Exception:  # noqa: BLE001 - an unreadable liability never counts a result
+            return False
+
     def _limited(self, result: HermesTurnResult, grant_id: str, closed: dict[str, Any] | None,
-                 finished: dict[str, Any] | None) -> HermesTurnResult:
+                 finished: dict[str, Any] | None, attempt_id: str) -> HermesTurnResult:
         started = closed.get("started") if closed is not None else None
         outcome = finished.get("outcome") if finished is not None else None
         observed = {**result.observed, "relay_release_id": self._release.release_id, "relay_grant_id": grant_id,
                     "relay_started": started if isinstance(started, bool) else None, "relay_outcome": outcome}
+        if self._actual is not None and finished is not None:
+            observed.update(relay_cost=finished.get("cost"), relay_generation_id=finished.get("generation_id"))
         result = replace(result, observed=observed)
         if started is False:
             return result if result.request_count == 0 else self._withheld(result, "RelayCountMismatch")
@@ -205,7 +223,11 @@ class RelayTurnRunner:
                     and result.usage.source == "PROVIDER_REPORTED"
                     and (usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"))
                     == (result.usage.input_tokens, result.usage.output_tokens, result.usage.total_tokens))
-            return result if same else self._withheld(result, "RelayCountMismatch")
+            if not same:
+                return self._withheld(result, "RelayCountMismatch")
+            if self._actual is not None and not self._cost_within_reservation(attempt_id, finished):
+                return self._withheld(result, "RelayCostUnverified")  # settlement at a reported cost is a later ledger change
+            return result
         if result.request_count == 0:  # the relay started a request the job says it never sent
             return self._withheld(result, "RelayCountMismatch")
         return result  # UNKNOWN, PROVIDER_FAILED or TIMED_OUT with a request: the accepted runner keeps the liability
@@ -213,6 +235,25 @@ class RelayTurnRunner:
     @staticmethod
     def _withheld(result: HermesTurnResult, error_class: str) -> HermesTurnResult:
         return replace(result, status="UNKNOWN", text=None, request_count=None, error_class=error_class)
+
+
+def _canonical(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _check_actual(route: TransportRoute, actual: ActualRelease, policy: GuardPolicy) -> None:
+    """The route and the guard policy must be exactly the record's: endpoint, reply bound and request shape."""
+    if (route.endpoint_url, route.max_reply_bytes) != (actual.endpoint_url, actual.release.max_reply_bytes):
+        raise ValueError("the ACTUAL route must be the record's endpoint and reply bound")
+    extra = dict(policy.required_extra)
+    expected = {"stream": False, "provider": actual.provider}
+    if actual.reasoning is not None:
+        expected["reasoning"] = actual.reasoning
+    schema = extra.pop("response_format", None)
+    schema_ok = (schema is not None and hashlib.sha256(_canonical(schema)).hexdigest() == actual.response_format_sha256
+                 if "response_format" in actual.allowed_fields else schema is None)
+    if _canonical(extra) != _canonical(expected) or not schema_ok:
+        raise ValueError("the guard policy must require exactly the record's request shape")
 
 
 @dataclass(frozen=True)
@@ -226,9 +267,14 @@ def build_relay_job(route: TransportRoute, *, release: RelayRelease, endpoint: R
                     scope_for: Callable[[HermesTurn], str], image: str, run_id: str, evidence_dir: Path,
                     script_for: Callable[[HermesTurn], Mapping[str, Any]], forbidden: Sequence[str] = (),
                     timeout_seconds: float = 90, run_budget_seconds: int = 60, seal_grace_seconds: float = 5.0,
-                    recovery_budget_seconds: float = 5.0, close_budget_seconds: float = 2.0) -> RelayJob:
-    if route.kind != "AUTHORED":
-        raise ActualProviderUnavailable("no actual provider route exists in this candidate; it needs an approval packet")
+                    recovery_budget_seconds: float = 5.0, close_budget_seconds: float = 2.0,
+                    actual: ActualRelease | None = None) -> RelayJob:
+    if route.kind == "ACTUAL":
+        if actual is None or actual.release != release:
+            raise ActualProviderUnavailable("an ACTUAL route needs its approved release record (CONTRACT A6)")
+        _check_actual(route, actual, policy)
+    elif route.kind != "AUTHORED" or actual is not None or release.kind != "AUTHORED":
+        raise ValueError("an AUTHORED route takes an AUTHORED release and no ACTUAL record")
     if (release.route_id, release.max_reply_bytes) != (route.route_id, route.max_reply_bytes) or (
             release.model, release.max_output_tokens, release.max_request_bytes) != (
             policy.model, policy.max_output_tokens, policy.max_request_bytes):
@@ -243,5 +289,5 @@ def build_relay_job(route: TransportRoute, *, release: RelayRelease, endpoint: R
         job_entry=relay_job_entry(route, release))
     relay = RelayTurnRunner(TransportTurnRunner(supervision, route), endpoint=endpoint, release=release, policy=policy,
                             ledger=ledger, scope_for=scope_for, subject_for=subject_for, run_id=run_id,
-                            timeout_seconds=timeout_seconds, close_budget_seconds=close_budget_seconds)
+                            timeout_seconds=timeout_seconds, close_budget_seconds=close_budget_seconds, actual=actual)
     return RelayJob(GuardedTurnRunner(relay, ledger, policy, scope_for), supervision)

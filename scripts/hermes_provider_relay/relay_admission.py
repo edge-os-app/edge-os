@@ -18,14 +18,27 @@ import hmac
 import json
 import math
 import re
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-__all__ = ["CHANNEL_FIELDS", "ProviderDestination", "RelayRelease", "RelaySubject", "channel_refusal", "grant_refusal",
-           "issue_grant", "parse_channel_message"]
+__all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "ActualRelease", "ActualReleaseUnapproved", "ProviderDestination",
+           "RelayRelease", "RelaySubject", "channel_refusal", "grant_refusal", "issue_grant", "load_actual_release",
+           "parse_channel_message"]
 
-RELEASE_KINDS = ("AUTHORED",)  # an ACTUAL release needs its own approval packet; nothing here can express one
+RELEASE_KINDS = ("AUTHORED", "ACTUAL")  # an ACTUAL release exists only through an approved record (CONTRACT A6)
+APPROVED_ACTUAL_RELEASES: frozenset[str] = frozenset()  # SHA256 of approved release records: none yet, so ACTUAL fails closed
+ACTUAL_DESTINATION = ("openrouter.ai", 443, "/api/v1/chat/completions")
+ACTUAL_BODY_FIELDS = frozenset({"model", "messages", "stream", "response_format", "provider", "reasoning", "max_tokens",
+                                "session_id"})
+REQUIRED_BODY_FIELDS = frozenset({"model", "messages", "stream", "provider", "max_tokens", "session_id"})
+RECORD_FIELDS = frozenset({"release_id", "route_id", "kind", "approval", "destination", "ca_bundle_sha256", "model",
+                           "provider", "max_tokens", "reasoning", "response_format_sha256", "stream", "allowed_fields",
+                           "max_request_bytes", "max_reply_bytes", "timeout_seconds", "price_snapshot_sha256"})
+ROUTING_FIELDS = frozenset({"only", "allow_fallbacks", "require_parameters", "data_collection", "max_price"})
+SHA256 = re.compile(r"[0-9a-f]{64}")
+_LOADING = threading.local()  # set only inside load_actual_release: the one way to build an ACTUAL release
 MAX_REPLY_LIMIT = 1024 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 HOST = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*")
@@ -62,6 +75,8 @@ class RelayRelease:
         _identifier(self.route_id, "route_id")
         if self.kind not in RELEASE_KINDS:
             raise ValueError(f"kind must be one of {RELEASE_KINDS}")
+        if self.kind == "ACTUAL" and not getattr(_LOADING, "record", False):
+            raise ValueError("an ACTUAL release is built only from an approved release record (load_actual_release)")
         if not isinstance(self.model, str) or not 0 < len(self.model) <= 200:
             raise ValueError("model must be a non-empty name")
         _bounded(self.max_output_tokens, "max_output_tokens", 1, 1_000_000)
@@ -187,3 +202,167 @@ def channel_refusal(message: Mapping[str, Any], grant: Mapping[str, Any], releas
     if len(body) > release.max_request_bytes or len(body) > grant["policy"].get("max_request_bytes", 0):
         return "request_too_large"
     return None
+
+
+class ActualReleaseUnapproved(ValueError):
+    """The record is well formed but its SHA256 is not an approved ACTUAL release identity."""
+
+
+def _no_repeats(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError("a key is repeated")
+    return dict(pairs)
+
+
+def _strict_json(raw: bytes) -> Any:
+    """JSON with no repeated key and no NaN or Infinity; ValueError otherwise."""
+    def no_constant(name: str) -> Any:
+        raise ValueError(f"{name} is not allowed")
+
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=_no_repeats, parse_constant=no_constant)
+    except (UnicodeDecodeError, RecursionError) as error:
+        raise ValueError("not strict JSON") from error
+
+
+def _sha256(value: Any, label: str) -> None:
+    if not isinstance(value, str) or not SHA256.fullmatch(value):
+        raise ValueError(f"{label} must be a lower-case SHA256")
+
+
+def _whole(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+@dataclass(frozen=True)
+class ActualRelease:
+    """One frozen ACTUAL release record (CONTRACT A6, ONLINE_CONTINUATION.md section 3), loaded by exact SHA256."""
+
+    record_sha256: str
+    release: RelayRelease
+    destination: ProviderDestination
+    ca_bundle_sha256: str
+    provider: dict[str, Any]
+    reasoning: dict[str, Any] | None
+    response_format_sha256: str
+    allowed_fields: frozenset[str]
+    timeout_seconds: int
+
+    @property
+    def endpoint_url(self) -> str:
+        return f"https://{self.destination.host}{self.destination.path}"
+
+    def body_refusal(self, body: bytes, attempt_id: str) -> str | None:
+        """Why this admitted body is not exactly the release's request shape, or None. Checked before any start."""
+        try:
+            value = _strict_json(body)
+        except ValueError:
+            return "body_not_json"
+        if not isinstance(value, dict):
+            return "body_not_json"
+        if set(value) - self.allowed_fields:
+            return "body_field_not_permitted"
+        required = REQUIRED_BODY_FIELDS | ({"reasoning"} if self.reasoning is not None else set()) | (
+            {"response_format"} if "response_format" in self.allowed_fields else set())
+        if required - set(value):
+            return "body_field_missing"
+        if value["model"] != self.release.model:
+            return "body_model_mismatch"
+        if value["stream"] is not False:
+            return "body_stream_not_false"
+        if type(value["max_tokens"]) is not int or value["max_tokens"] != self.release.max_output_tokens:  # noqa: E721
+            return "body_max_tokens_mismatch"
+        if _canonical(value["provider"]) != _canonical(self.provider):
+            return "body_routing_mismatch"
+        if _canonical(value.get("reasoning")) != _canonical(self.reasoning):
+            return "body_reasoning_mismatch"
+        if "response_format" in value and hashlib.sha256(
+                _canonical(value["response_format"])).hexdigest() != self.response_format_sha256:
+            return "body_schema_mismatch"
+        if value["session_id"] != f"p05-{attempt_id}":
+            return "body_session_mismatch"
+        if not isinstance(value["messages"], list) or not value["messages"]:
+            return "body_messages_invalid"
+        return None
+
+    def reply_check(self, status: int, content_type: str, content_encoding: str,
+                    body: bytes) -> tuple[str | None, dict[str, Any]]:
+        """(None, usage, cost and generation id) only for a complete counted reply; otherwise (reason, {})."""
+        if content_encoding:
+            return "reply_encoded_refused", {}  # nothing asked for an encoding; it is never decoded on trust
+        if isinstance(status, bool) or not isinstance(status, int) or not 200 <= status < 300:
+            return "reply_status_not_2xx", {}
+        if not content_type.startswith("application/json"):
+            return "reply_not_json", {}
+        try:
+            value = _strict_json(body)
+        except ValueError:
+            return "reply_not_a_json_object", {}
+        if not isinstance(value, dict):
+            return "reply_not_a_json_object", {}
+        choices = value.get("choices")
+        if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+            return "reply_choices_invalid", {}
+        finish = choices[0].get("finish_reason")
+        if finish != "stop":
+            return ("reply_truncated" if finish == "length" else "reply_not_final"), {}
+        if value.get("model") != self.release.model:
+            return "reply_model_mismatch", {}
+        usage = value.get("usage")
+        keys = ("prompt_tokens", "completion_tokens", "total_tokens")
+        if not isinstance(usage, dict) or not all(_whole(usage.get(key)) for key in keys):
+            return "reply_usage_invalid", {}
+        cost = usage.get("cost")
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
+            return "reply_cost_invalid", {}
+        generation = value.get("id")
+        return None, {"usage": {key: usage[key] for key in keys}, "cost": cost,
+                      "generation_id": generation if isinstance(generation, str) and len(generation) <= 200 else None}
+
+
+def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset[str] | None = None) -> ActualRelease:
+    """The ACTUAL release in `raw`, only if its bytes have this SHA256 and that SHA256 is approved.
+
+    `approved` defaults to `APPROVED_ACTUAL_RELEASES`, which is empty in this candidate: every ACTUAL release fails closed
+    until a later approved packet names an exact record. A record that names a test resolver is never a release.
+    """
+    sha = hashlib.sha256(raw).hexdigest()
+    if not hmac.compare_digest(sha, expected_sha256):
+        raise ValueError("the release record bytes do not have the named hash")
+    if sha not in (APPROVED_ACTUAL_RELEASES if approved is None else approved):
+        raise ActualReleaseUnapproved("this release record is not an approved ACTUAL release")
+    value = _strict_json(raw)
+    if not isinstance(value, dict) or set(value) != RECORD_FIELDS:
+        raise ValueError("the release record must have exactly the frozen fields")
+    if value["kind"] != "ACTUAL" or value["stream"] is not False:
+        raise ValueError("the release record must be kind ACTUAL with stream false")
+    approval = value["approval"]
+    if not isinstance(approval, dict) or set(approval) != {"path", "sha256"} or not isinstance(approval["path"], str):
+        raise ValueError("the release record must name its approval packet and hash")
+    for label in ("ca_bundle_sha256", "response_format_sha256", "price_snapshot_sha256"):
+        _sha256(value[label], label)
+    _sha256(approval["sha256"], "approval sha256")
+    destination = ProviderDestination(**value["destination"])
+    if (destination.host, destination.port, destination.path) != ACTUAL_DESTINATION:
+        raise ValueError("the ACTUAL destination is fixed: https://openrouter.ai:443/api/v1/chat/completions")
+    routing = value["provider"]
+    if (not isinstance(routing, dict) or set(routing) != ROUTING_FIELDS or not isinstance(routing["only"], list)
+            or len(routing["only"]) != 1 or not isinstance(routing["only"][0], str) or routing["allow_fallbacks"] is not False
+            or routing["require_parameters"] is not True or not isinstance(routing["max_price"], dict)):
+        raise ValueError("routing must name one provider, no fallbacks, required parameters and a price limit")
+    fields = value["allowed_fields"]
+    if (not isinstance(fields, list) or not set(fields) <= ACTUAL_BODY_FIELDS or not REQUIRED_BODY_FIELDS <= set(fields)
+            or len(set(fields)) != len(fields)):
+        raise ValueError("allowed_fields must be the frozen request fields")
+    reasoning = value["reasoning"]
+    if reasoning is not None and not isinstance(reasoning, dict):
+        raise ValueError("reasoning must be an object or null")
+    _bounded(value["timeout_seconds"], "timeout_seconds", 1, 600)
+    _LOADING.record = True
+    try:
+        release = RelayRelease(value["release_id"], value["route_id"], "ACTUAL", value["model"], value["max_tokens"],
+                               value["max_request_bytes"], value["max_reply_bytes"])
+    finally:
+        _LOADING.record = False
+    return ActualRelease(sha, release, destination, value["ca_bundle_sha256"], routing, reasoning,
+                         value["response_format_sha256"], frozenset(fields), value["timeout_seconds"])

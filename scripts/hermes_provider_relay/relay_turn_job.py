@@ -44,8 +44,8 @@ class RelayProvider(base.FakeProvider):
         settings = job["job_settings"]
         self.route = TransportRoute.from_settings(settings["transport"]["route"])
         self.client_url, self.attempt_id = settings["transport"]["client_url"], job["attempt_id"]
-        if self.route.kind != "AUTHORED":
-            raise ActualProviderUnavailable("no actual provider route exists in this candidate")
+        if self.route.kind not in ("AUTHORED", "ACTUAL"):  # either way the job is keyless with no network (A6)
+            raise ActualProviderUnavailable("unknown route kind")
         self.guard = ProviderRequestGuard(GuardPolicy(**job["guard"]["policy"]),
                                           LogicalRequest(job["system_prompt"], job["user_message"]), HERMES_CLIENT_KEY)
         self.transport = ChannelTransport(self.route, settings["relay"]["release_id"])

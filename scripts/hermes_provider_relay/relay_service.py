@@ -1,7 +1,9 @@
 """The relay process: the only holder of the provider key, and the only component that can reach the provider.
 
 It runs in its own container inside the AUTHORED provider's network namespace, which has loopback only (see
-`relay_supervisor.py`).
+`relay_supervisor.py`). In the E1 topology (CONTRACT A6, `gateway_socket` set) it has no network at all and sends only
+through the keyless egress gateway's Unix socket; an ACTUAL relay starts only from its approved release record, with
+that record's CA bundle and the gateway, and checks the body and the reply against the record.
 It reads its fixed configuration, the synthetic provider key and the admission key once, at start. Then, in a loop:
 
 - it writes a heartbeat (release, start time, egress self-probe);
@@ -40,7 +42,8 @@ sys.path[:0] = [str(Path(__file__).resolve().parent)] + [p for p in os.environ.g
 from provider_guard import GuardPolicy, LogicalRequest, ProviderRequestGuard  # noqa: E402
 from provider_transport import TransportReply, TransportRoute, reply_refusal  # noqa: E402
 from relay_admission import (  # noqa: E402
-    IDENTIFIER, ProviderDestination, RelayRelease, channel_refusal, grant_refusal, parse_channel_message,
+    IDENTIFIER, ActualReleaseUnapproved, ProviderDestination, RelayRelease, channel_refusal, grant_refusal,
+    load_actual_release, parse_channel_message,
 )
 from relay_transport import ReplyLost, send_once  # noqa: E402
 
@@ -135,13 +138,27 @@ def _open_path(root: int, parts: tuple[str, ...]) -> int | None:
 
 class Relay:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.release = RelayRelease.from_settings(config["release"])
-        if self.release.kind != "AUTHORED":
-            raise SystemExit("this relay serves AUTHORED releases only")
-        self.destination = ProviderDestination(**config["destination"])
-        self.route = TransportRoute(self.release.route_id, "AUTHORED", f"https://{self.destination.host}{self.destination.path}",
-                                    self.release.max_reply_bytes)
         paths = config["paths"]
+        self.gateway_socket: str | None = config.get("gateway_socket")  # CONTRACT A6: the only way out when set
+        self.actual = None
+        if "release_record" in config:  # ACTUAL: only an approved record, its CA bundle and the gateway
+            named = config["release_record"]
+            try:
+                self.actual = load_actual_release(Path(named["path"]).read_bytes(), named["sha256"])
+            except ActualReleaseUnapproved as error:
+                raise SystemExit(str(error)) from None
+            if hashlib.sha256(Path(paths["provider_ca"]).read_bytes()).hexdigest() != self.actual.ca_bundle_sha256:
+                raise SystemExit("the CA bundle file does not have the release record's hash")
+            if not self.gateway_socket:
+                raise SystemExit("an ACTUAL relay sends only through the egress gateway")
+            self.release, self.destination = self.actual.release, self.actual.destination
+        else:
+            self.release = RelayRelease.from_settings(config["release"])
+            if self.release.kind != "AUTHORED":
+                raise SystemExit("an ACTUAL release is served only from its approved release record")
+            self.destination = ProviderDestination(**config["destination"])
+        self.route = TransportRoute(self.release.route_id, self.release.kind,
+                                    f"https://{self.destination.host}{self.destination.path}", self.release.max_reply_bytes)
         self.key = Path(paths["provider_key"]).read_text(encoding="utf-8").strip()
         self.admission_key = Path(paths["admission_key"]).read_bytes()
         self.ca_file = paths["provider_ca"]
@@ -352,6 +369,8 @@ class Relay:
             logical = LogicalRequest(grant["logical"]["system_prompt"], grant["logical"]["user_message"])
             decision = ProviderRequestGuard(policy, logical, None).admit(body, GUARD_HEADERS)
             refusal = None if decision.admitted else f"guard:{decision.reason}"
+        if refusal is None and self.actual is not None:  # the frozen record, not only the host's policy (A6)
+            refusal = self.actual.body_refusal(body, attempt)
         if refusal is not None:
             return self._refuse(attempt, grant, refusal)
         with self.lock:
@@ -370,17 +389,23 @@ class Relay:
         began = time.time()
         try:
             sent = send_once(self.destination, ca_file=self.ca_file, key=self.key, body=body,
-                             deadline=grant["expires_at"], max_reply_bytes=self.release.max_reply_bytes)
+                             deadline=grant["expires_at"], max_reply_bytes=self.release.max_reply_bytes,
+                             gateway_socket=self.gateway_socket, attempt_id=attempt if self.gateway_socket else None)
         except ReplyLost as lost:
             self._record(attempt, "finished.json", {"outcome": "lost", "error": str(lost), "seconds": time.time() - began})
             return self._reply(grant, {"attempt_id": attempt, "outcome": "lost"})
-        refused = reply_refusal(TransportReply(sent.status, sent.body), self.route)
+        refused = "reply_encoded_refused" if sent.content_encoding else None  # none asked for; never decoded on trust
+        if refused is None:
+            refused = reply_refusal(TransportReply(sent.status, sent.body), self.route)
         if refused is None and 300 <= sent.status < 400:
             refused = "reply_redirect_refused"
         if refused is None and not sent.content_type.startswith("application/json"):
             refused = "reply_not_json"
-        usage = None
-        if refused is None:
+        usage, details = None, {}
+        if refused is None and self.actual is not None:
+            refused, details = self.actual.reply_check(sent.status, sent.content_type, sent.content_encoding, sent.body)
+            usage = details.get("usage")
+        elif refused is None:
             reported = json.loads(sent.body).get("usage")
             keys = ("prompt_tokens", "completion_tokens", "total_tokens")
             if isinstance(reported, dict) and all(type(reported.get(k)) is int for k in keys):  # noqa: E721
@@ -388,7 +413,7 @@ class Relay:
         self._record(attempt, "finished.json", {
             "outcome": "reply" if refused is None else "refused_reply", "refusal": refused, "status": sent.status,
             "reply_bytes": len(sent.body), "reply_sha256": hashlib.sha256(sent.body).hexdigest(), "usage": usage,
-            "seconds": time.time() - began})
+            "cost": details.get("cost"), "generation_id": details.get("generation_id"), "seconds": time.time() - began})
         if refused is not None:
             return self._reply(grant, {"attempt_id": attempt, "outcome": "refused", "refusal": refused,
                                        "before_send": False})

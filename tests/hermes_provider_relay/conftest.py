@@ -79,7 +79,7 @@ def relay(pinned_hermes_image: str, run_id: str, evidence_root: Path, synthetic_
         (evidence_root / "relay-logs.txt").write_text(supervisor.logs(), encoding="utf-8")
         cleanup = supervisor.stop()
         (evidence_root / "relay-cleanup.json").write_text(json.dumps(cleanup, indent=1) + "\n")
-        assert cleanup == {"containers_left": [], "networks_left": []}, cleanup
+        assert cleanup == {"containers_left": [], "networks_left": [], "volumes_left": []}, cleanup
 
 
 def _api_fixtures() -> None:

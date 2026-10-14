@@ -47,7 +47,7 @@ def app_relay(pinned_hermes_image, run_id, evidence_root, synthetic_key):
         (evidence_root / "app-relay-logs.txt").write_text(supervisor.logs(), encoding="utf-8")
         cleanup = supervisor.stop()
         (evidence_root / "app-relay-cleanup.json").write_text(json.dumps(cleanup, indent=1) + "\n")
-        assert cleanup == {"containers_left": [], "networks_left": []}, cleanup
+        assert cleanup == {"containers_left": [], "networks_left": [], "volumes_left": []}, cleanup
 
 
 @pytest.fixture
