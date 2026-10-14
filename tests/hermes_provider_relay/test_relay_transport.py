@@ -88,3 +88,71 @@ def test_a_prompt_reply_is_read_whole(tls: Path) -> None:
     sent = send_once(ProviderDestination("localhost", port, "/v1/chat/completions"), ca_file=str(tls / "ca.pem"),
                      key="sk-test-synthetic", body=b"{}", deadline=time.time() + 5, max_reply_bytes=65_536)
     assert (sent.status, sent.body) == (200, b"{}")
+
+
+def test_setup_time_is_taken_from_the_fixed_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Building the TLS context and the connection uses up time: the watchdog and the socket get only what is left."""
+    import relay_transport
+
+    clock = [1_000.0]
+    deadline = clock[0] + 1.5
+    seen: dict[str, float] = {}
+
+    def slow_context(**_: object) -> ssl.SSLContext:
+        clock[0] += 0.4  # e.g. a slow CA file read
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    class Connection:
+        sock = None
+
+        def __init__(self, *_: object, timeout: float, **__: object) -> None:
+            seen["socket_timeout_ends"] = clock[0] + timeout
+
+        def putrequest(self, *_: object, **__: object) -> None:
+            raise OSError("stop before any byte is sent")
+
+        def close(self) -> None:
+            pass
+
+    class Watchdog:
+        daemon = False
+
+        def __init__(self, interval: float, _cut: object) -> None:
+            seen["watchdog_fires"] = clock[0] + interval
+
+        def start(self) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
+
+    monkeypatch.setattr(relay_transport.time, "time", lambda: clock[0])
+    monkeypatch.setattr(relay_transport.ssl, "create_default_context", slow_context)
+    monkeypatch.setattr(relay_transport.http.client, "HTTPSConnection", Connection)
+    monkeypatch.setattr(relay_transport.threading, "Timer", Watchdog)
+    with pytest.raises(ReplyLost):
+        send_once(ProviderDestination("localhost", 8443, "/v1/chat/completions"), ca_file="unused", key="sk-test-synthetic",
+                  body=b"{}", deadline=deadline, max_reply_bytes=65_536)
+    assert seen["watchdog_fires"] <= deadline
+    assert seen["socket_timeout_ends"] <= deadline
+
+
+def test_no_request_starts_when_setup_used_up_the_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    import relay_transport
+
+    clock = [1_000.0]
+    deadline = clock[0] + 0.3
+
+    def slow_context(**_: object) -> ssl.SSLContext:
+        clock[0] += 0.4
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    def no_connection(*_: object, **__: object) -> None:
+        raise AssertionError("a connection was built after the deadline")
+
+    monkeypatch.setattr(relay_transport.time, "time", lambda: clock[0])
+    monkeypatch.setattr(relay_transport.ssl, "create_default_context", slow_context)
+    monkeypatch.setattr(relay_transport.http.client, "HTTPSConnection", no_connection)
+    with pytest.raises(ReplyLost, match="no time was left"):
+        send_once(ProviderDestination("localhost", 8443, "/v1/chat/completions"), ca_file="unused", key="sk-test-synthetic",
+                  body=b"{}", deadline=deadline, max_reply_bytes=65_536)

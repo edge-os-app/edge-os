@@ -40,10 +40,12 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
     A watchdog shuts the socket down when the deadline comes, so a provider that drips its headers or body byte by
     byte cannot hold the request longer: a per-call socket timeout alone would restart for every byte.
     """
-    left = deadline - time.time()
-    if left <= 0:
+    if deadline - time.time() <= 0:
         raise ReplyLost("no time was left for the request")
     context = ssl.create_default_context(cafile=ca_file)  # verified certificate and host name; no system CA store
+    left = deadline - time.time()  # after the setup above, so the watchdog and the socket end at the fixed deadline
+    if left <= 0:
+        raise ReplyLost("no time was left for the request")
     connection = http.client.HTTPSConnection(destination.host, destination.port, timeout=left, context=context)
     expired = threading.Event()
     held: list[socket.socket] = []  # a reply that closes the connection detaches its socket; the watchdog keeps it
@@ -57,7 +59,7 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
                 except OSError:
                     pass
 
-    watchdog = threading.Timer(left, cut)
+    watchdog = threading.Timer(max(0.0, deadline - time.time()), cut)
     watchdog.daemon = True
     watchdog.start()
     try:
