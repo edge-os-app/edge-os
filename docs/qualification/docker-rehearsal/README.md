@@ -18,6 +18,10 @@ Task DOCKER-REHEARSAL-L4-20261013-LOCAL-v1, issue edge-os-app/edge-os#58 (with #
 
 Application, settings, schema, migrations, research, usage, Hermes, verifier map and lockfiles are unchanged.
 
+## Accepted upstream dependency (R4)
+
+Candidate R4 adds one immutable accepted upstream repair to R3 (2eea9b69) by cherry-pick, without merging other integration history: PRIMARY-BUTTON-CONTRAST-L3-20261014-LOCAL-v1, commit `1dc088a4b3fffbb3a89a85c2eec9da4d87355e2a` (five files: `apps/web/app/app.css` and `tests/web_button_contrast/`). It fixes the disabled-hover fallback behind the intermittent desktop axe `color-contrast` failure seen during rehearsal seeding (OBS-RT-2). Those five files are byte-identical to the accepted commit and belong to that repair, not to lane 4. `app.css` is part of the web image build context, so R4 needs its own fresh image builds and rehearsal; `tests/web_button_contrast/` is outside the build context. The repair proves stylesheet behavior in a minimal page; the mounted journey is proved only by a rehearsal on R4.
+
 ## Rehearsal sequence and pre-agreed seams
 
 1. **Fresh image build and configuration.** No-cache builds from the committed source and frozen locks. Image labels carry the commit; runtime users are non-root; the API image opens every module-path asset; an export of each image is searched for the run's database passwords, synthetic key material and tokens, for private-key blocks in the application tree, and for the test-auth label in the web bundle.
