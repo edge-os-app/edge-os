@@ -163,3 +163,14 @@ def test_any_other_reply_is_refused_and_stays_unknown(status: int, content_type:
                                                       reason: str) -> None:
     refusal, details = load(record()).reply_check(status, content_type, encoding, raw)
     assert (refusal, details) == (reason, {})
+
+
+@pytest.mark.parametrize("seconds", [1, 90, 120])
+def test_a_record_timeout_within_the_gateways_tunnel_limit_is_accepted(seconds: int) -> None:
+    assert load(record(timeout_seconds=seconds)).timeout_seconds == seconds
+
+
+@pytest.mark.parametrize("seconds", [121, 600, 0, True, 90.5, "90"])
+def test_a_record_timeout_beyond_the_gateways_tunnel_limit_or_not_a_whole_number_is_refused(seconds: object) -> None:
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        load(record(timeout_seconds=seconds))

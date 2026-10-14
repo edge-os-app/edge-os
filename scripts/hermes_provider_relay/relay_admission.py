@@ -23,6 +23,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from egress_gateway import MAX_TUNNEL_SECONDS
+
 __all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "ActualRelease", "ActualReleaseUnapproved", "ProviderDestination",
            "RelayRelease", "RelaySubject", "channel_refusal", "grant_refusal", "issue_grant", "load_actual_release",
            "parse_channel_message"]
@@ -357,7 +359,7 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
     reasoning = value["reasoning"]
     if reasoning is not None and not isinstance(reasoning, dict):
         raise ValueError("reasoning must be an object or null")
-    _bounded(value["timeout_seconds"], "timeout_seconds", 1, 600)
+    _bounded(value["timeout_seconds"], "timeout_seconds", 1, int(MAX_TUNNEL_SECONDS))  # the gateway closes at 120 s
     _LOADING.record = True
     try:
         release = RelayRelease(value["release_id"], value["route_id"], "ACTUAL", value["model"], value["max_tokens"],

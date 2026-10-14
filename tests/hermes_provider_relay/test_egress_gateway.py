@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import queue
+import socket
 import stat
 import time
 from pathlib import Path
@@ -94,7 +95,12 @@ class FakeSocket:
         self.on_send = on_send
         self.closed = False
 
-    def recv(self, size: int) -> bytes:
+    def recv(self, size: int, flags: int = 0) -> bytes:
+        if flags & socket.MSG_PEEK:  # a non-blocking look at what is already queued, as a real socket answers
+            with self.inbound.mutex:
+                if not self.inbound.queue:
+                    raise BlockingIOError
+                return self.inbound.queue[0][:size]
         return self.inbound.get()[:size]
 
     def sendall(self, data: bytes) -> None:
@@ -151,7 +157,8 @@ def receipts(folder: Path) -> list[dict[str, Any]]:
 def test_an_admitted_connect_is_tunnelled_once_unchanged_and_receipted(tmp_path: Path) -> None:
     upstream = FakeSocket([b"server-hello", b"reply"], end=True)
     network = Network([answer("104.18.2.115")], upstream)
-    client = FakeSocket([live_head(), b"client-hello"])
+    client = FakeSocket([live_head()])
+    client.on_send = lambda data: client.inbound.put(b"client-hello") if data == ESTABLISHED else None  # after the answer
     record = gateway(tmp_path, network).handle(client)
     assert network.connected == [("104.18.2.115", 443)]
     assert client.sent == ESTABLISHED + b"server-hello" + b"reply"
@@ -287,3 +294,92 @@ def test_no_connect_starts_once_the_budget_is_spent(tmp_path: Path) -> None:
     record = gateway(tmp_path, network, clock=lambda: clock[0]).handle(FakeSocket([live_head(seconds=30)], end=True))
     assert (record["outcome"], record["reason"]) == ("refused", "expired")
     assert network.connected == []
+
+
+
+# --- R9 (controller disposition l1-e1-r9prep.md): NAT64 targets, one head budget, early bytes ----------------------
+
+
+@pytest.mark.parametrize("address, embedded", [
+    ("64:ff9b::7f00:1", "127.0.0.1"), ("64:ff9b::a00:1", "10.0.0.1"), ("64:ff9b::ac11:1", "172.17.0.1"),
+    ("64:ff9b::c0a8:41fe", "192.168.65.254"), ("64:ff9b::6440:1", "100.64.0.1"), ("64:ff9b::a9fe:101", "169.254.1.1"),
+    ("64:ff9b::e000:1", "224.0.0.1"), ("64:ff9b::", "0.0.0.0"),
+])
+def test_a_nat64_answer_whose_embedded_ipv4_is_not_global_is_refused(address: str, embedded: str) -> None:
+    assert address_refusal(embedded) is not None  # the same target, given directly, is refused already
+    assert address_refusal(address) == "dns_answer_not_global"
+
+
+def test_a_nat64_answer_with_a_public_embedded_ipv4_stays_allowed() -> None:
+    assert address_refusal("64:ff9b::6812:273") is None  # 104.18.2.115
+
+
+def test_one_nat64_private_answer_refuses_the_whole_name() -> None:
+    with pytest.raises(ValueError, match="dns_answer_not_global"):
+        choose_address([answer("104.18.2.115"), answer("64:ff9b::a00:1")])
+
+
+class SlowClient(FakeSocket):
+    """A client that sends its valid head in pieces; each piece takes `step` seconds of the gateway's monotonic clock."""
+
+    def __init__(self, pieces: list[bytes], clock: list[float], step: float) -> None:
+        super().__init__(pieces, end=True)
+        self.clock, self.step, self.timeouts = clock, step, []
+
+    def settimeout(self, value: float | None) -> None:
+        self.timeouts.append(value)
+
+    def recv(self, size: int, flags: int = 0) -> bytes:
+        if not flags & socket.MSG_PEEK:
+            self.clock[0] += self.step
+        return super().recv(size, flags)
+
+
+def split(raw: bytes, parts: int) -> list[bytes]:
+    size = -(-len(raw) // parts)
+    return [raw[i:i + size] for i in range(0, len(raw), size)]
+
+
+def test_the_whole_head_shares_one_five_second_budget_and_a_slow_head_connects_nothing(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [500.0]
+    monkeypatch.setattr(egress_gateway, "monotonic", lambda: clock[0], raising=False)
+    network = Network([answer("104.18.2.115")], FakeSocket(end=True))
+    client = SlowClient(split(live_head(), 4), clock, 4.9)  # 4 pieces x 4.9 s: each read is short, the head is not
+    record = gateway(tmp_path, network).handle(client)
+    assert (record["outcome"], record["reason"]) == ("refused", "head_timeout")
+    assert network.resolved == [] and network.connected == []
+    assert receipts(tmp_path)[-1]["reason"] == "head_timeout"
+
+
+def test_a_head_within_the_budget_passes_and_each_read_gets_only_the_time_left(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [500.0]
+    monkeypatch.setattr(egress_gateway, "monotonic", lambda: clock[0], raising=False)
+    network = Network([answer("104.18.2.115")], FakeSocket(end=True))
+    client = SlowClient(split(live_head(), 3), clock, 1.0)
+    record = gateway(tmp_path, network).handle(client)
+    assert record["outcome"] == "tunnel" and network.connected == [("104.18.2.115", 443)]
+    head_timeouts = client.timeouts[:3]
+    assert head_timeouts == [5.0, 4.0, 3.0]  # never renewed per read
+
+
+def test_bytes_already_queued_after_the_head_are_refused_before_any_connect(tmp_path: Path) -> None:
+    network = Network([answer("104.18.2.115")], FakeSocket(end=True))
+    record = gateway(tmp_path, network).handle(FakeSocket([live_head(), b"\x16\x03\x01"]))  # a second read's bytes
+    assert (record["outcome"], record["reason"]) == ("refused", "data_before_tunnel")
+    assert network.resolved == [] and network.connected == []
+
+
+def test_bytes_that_arrive_during_the_lookup_are_refused_before_the_answer(tmp_path: Path) -> None:
+    client = FakeSocket([live_head()])
+
+    class Arriving(Network):
+        def connect(self, address: tuple[str, int], timeout: float) -> FakeSocket:
+            client.inbound.put(b"\x16\x03\x01")  # early client bytes, queued while the gateway connects
+            return super().connect(address, timeout)
+
+    upstream = FakeSocket()
+    record = gateway(tmp_path, Arriving([answer("104.18.2.115")], upstream)).handle(client)
+    assert (record["outcome"], record["reason"]) == ("refused", "data_before_tunnel")
+    assert ESTABLISHED not in client.sent and upstream.sent == b"" and upstream.closed

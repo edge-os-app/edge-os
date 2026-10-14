@@ -286,6 +286,8 @@ def build_relay_job(route: TransportRoute, *, release: RelayRelease, endpoint: R
             raise ActualProviderUnavailable("an ACTUAL route needs its approved release record (CONTRACT A6)")
         if not isinstance(price, TokenPrice):
             raise ValueError("an ACTUAL route needs the ledger's own TokenPrice (E1-COST1)")
+        if isinstance(timeout_seconds, bool) or timeout_seconds != actual.timeout_seconds:
+            raise ValueError("an ACTUAL job's timeout_seconds must equal the release record's grant life (R9)")
         _check_actual(route, actual, policy)
     elif route.kind != "AUTHORED" or actual is not None or price is not None or release.kind != "AUTHORED":
         raise ValueError("an AUTHORED route takes an AUTHORED release, no ACTUAL record and no price")

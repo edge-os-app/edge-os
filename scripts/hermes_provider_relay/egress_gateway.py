@@ -10,7 +10,7 @@ Every connection leaves fsynced lines in `receipts/tunnels.jsonl`: a refusal bef
 before the one connect (so a gateway killed during a tunnel still leaves its count) and a `tunnel` line when it closes.
 An attempt with any receipt is never tunnelled again. No header value is logged except the attempt id and the expiry.
 
-Time: the head is read within `HEAD_SECONDS` (the expiry is not known before it). After that, the name lookup, the one
+Time: the whole head is read within ONE `HEAD_SECONDS` budget (the expiry is not known before it). After that, the name lookup, the one
 connect and the copy all share ONE budget that ends at the relay's expiry (at most `MAX_TUNNEL_SECONDS`): no phase
 gets a renewed timeout. The clock is this container's wall clock, which is the Docker VM's, the same as the relay's.
 
@@ -33,6 +33,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 __all__ = ["ConnectRequest", "Gateway", "Receipts", "address_refusal", "choose_address", "parse_connect", "serve"]
@@ -47,6 +48,7 @@ MAX_TUNNELS = 16
 CHUNK = 64 * 1024
 ATTEMPT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 HEADERS = frozenset({"host", "x-relay-attempt", "x-relay-expires"})
+NAT64 = ipaddress.ip_network("64:ff9b::/96")  # RFC 6052 well-known prefix: its low 32 bits are the IPv4 target
 DOCKER_RANGES = tuple(ipaddress.ip_network(net) for net in (  # also refused by the global check; named for the record
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fd00::/8"))
 ESTABLISHED = b"HTTP/1.1 200 Connection Established\r\n\r\n"
@@ -113,6 +115,8 @@ def address_refusal(address: str) -> str | None:
         ip = ipaddress.ip_address(address)
     except ValueError:
         return "dns_answer_invalid"
+    if ip.version == 6 and ip in NAT64:  # judge the IPv4 target a translator would reach, by the same rule
+        return address_refusal(str(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)))
     mapped = getattr(ip, "ipv4_mapped", None)
     if mapped is not None or not ip.is_global or ip.is_multicast or any(ip in net for net in DOCKER_RANGES
                                                                           if net.version == ip.version):
@@ -164,6 +168,15 @@ class Receipts:
                 os.fsync(fd)
             finally:
                 os.close(fd)
+
+
+def _early_bytes(client: Any) -> bool:
+    """Bytes the client already sent that are still unread. Only already-queued bytes are seen; a byte that arrives
+    after this look and before the answer is not (a platform limit; the trusted relay sends nothing before the answer)."""
+    try:
+        return bool(client.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT))
+    except (BlockingIOError, InterruptedError):
+        return False
 
 
 def _resolve_within(resolve: Callable[..., list[tuple[Any, ...]]], seconds: float) -> list[tuple[Any, ...]] | str:
@@ -250,27 +263,36 @@ class Gateway:
 
     @staticmethod
     def _read_head(client: Any) -> bytes | str:
+        """The whole head within ONE `HEAD_SECONDS` budget: each read gets only the time left, never a renewed one."""
+        until = monotonic() + HEAD_SECONDS
         data = b""
         while b"\r\n\r\n" not in data:
             if len(data) > MAX_HEAD:
                 return "head_too_large"
+            left = until - monotonic()
+            if left <= 0:
+                return "head_timeout"
             try:
+                client.settimeout(left)
                 chunk = client.recv(MAX_HEAD + 1 - len(data))
+            except TimeoutError:
+                return "head_timeout"
             except OSError:
                 return "head_incomplete"
             if not chunk:
                 return "head_incomplete"
             data += chunk
+        if monotonic() > until:
+            return "head_timeout"
         end = data.index(b"\r\n\r\n") + 4
         if end > MAX_HEAD:
             return "head_too_large"
-        if len(data) > end:
+        if len(data) > end or _early_bytes(client):
             return "data_before_tunnel"  # e.g. a second CONNECT or TLS bytes sent before the answer
         return data
 
     def handle(self, client: Any) -> dict[str, Any]:
         try:
-            client.settimeout(HEAD_SECONDS)
             head = self._read_head(client)
             if isinstance(head, str):
                 return self._refuse(client, head, None)
@@ -301,6 +323,8 @@ class Gateway:
                 return self._refuse(client, "connect_failed", request.attempt_id)
             opened = self.clock()
             try:
+                if _early_bytes(client):  # sent while the gateway resolved and connected: still before the answer
+                    return self._refuse(client, "data_before_tunnel", request.attempt_id)
                 client.settimeout(None)
                 upstream.settimeout(None)
                 client.sendall(ESTABLISHED)

@@ -66,8 +66,10 @@ NO_PRICE = object()
 
 
 def build(tmp_path: Path, actual: ActualRelease | None, the_route: TransportRoute, *, release: Any = None,
-          policy: GuardPolicy = POLICY, ledger: Any = None, price: Any = PRICE) -> Any:
+          policy: GuardPolicy = POLICY, ledger: Any = None, price: Any = PRICE, timeout: Any = None) -> Any:
     extra = {} if price is NO_PRICE else {"price": price}
+    if timeout is not None:
+        extra["timeout_seconds"] = timeout
     return build_relay_job(the_route, release=release or (actual.release if actual else RELEASE), actual=actual, **extra,
                            endpoint=RelayEndpoint(*(tmp_path / n for n in ("grants", "revocations", "state", "key")), "jobs"),
                            subject_for=lambda turn: RelaySubject("owner-a", "intake-1"), policy=policy, ledger=ledger,
@@ -209,3 +211,17 @@ def test_invalid_or_different_usage_keeps_the_full_reservation(tmp_path: Path, a
     assert (result.status, result.text) == ("UNKNOWN", None) and result.error_class in (
         "RelayCountMismatch", "RelayCostUnverified")
     assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.liability_usd("att-1") == RESERVATION
+
+
+
+@pytest.mark.parametrize("timeout", [60, 89.9, 120, True])  # the record's grant life is 90 s
+def test_an_actual_job_timeout_other_than_the_records_is_refused_before_any_io(tmp_path: Path, actual: ActualRelease,
+                                                                              timeout: Any) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        build(tmp_path, actual, route(actual), timeout=timeout)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_actual_job_with_the_records_timeout_is_built(tmp_path: Path, actual: ActualRelease) -> None:
+    build(tmp_path, actual, route(actual), timeout=90)
+    assert list(tmp_path.iterdir()) == []
