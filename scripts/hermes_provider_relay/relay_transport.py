@@ -20,6 +20,7 @@ from relay_admission import ProviderDestination
 __all__ = ["ReplyLost", "SentReply", "send_once"]
 
 READ_CHUNK = 64 * 1024
+CUT_LEAD = 0.1  # seconds: the send ends this long before the grant expiry, so its return is not late (CONTRACT A5)
 
 
 class ReplyLost(RuntimeError):
@@ -37,13 +38,15 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
               max_reply_bytes: int) -> SentReply:
     """One request with ONE total deadline (a `time.time()` value) for connecting, sending and reading.
 
-    A watchdog shuts the socket down when the deadline comes, so a provider that drips its headers or body byte by
-    byte cannot hold the request longer: a per-call socket timeout alone would restart for every byte.
+    A watchdog shuts the socket down `CUT_LEAD` seconds before the deadline, so a provider that drips its headers or
+    body byte by byte cannot hold the request longer: a per-call socket timeout alone would restart for every byte. The
+    lead leaves time for the thread wake-up and the return; it only shortens the request, never extends it.
     """
-    if deadline - time.time() <= 0:
+    end = deadline - CUT_LEAD
+    if end - time.time() <= 0:
         raise ReplyLost("no time was left for the request")
     context = ssl.create_default_context(cafile=ca_file)  # verified certificate and host name; no system CA store
-    left = deadline - time.time()  # after the setup above, so the watchdog and the socket end at the fixed deadline
+    left = end - time.time()  # after the setup above, so the watchdog and the socket end at the same fixed time
     if left <= 0:
         raise ReplyLost("no time was left for the request")
     connection = http.client.HTTPSConnection(destination.host, destination.port, timeout=left, context=context)
@@ -59,7 +62,7 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
                 except OSError:
                     pass
 
-    watchdog = threading.Timer(max(0.0, deadline - time.time()), cut)
+    watchdog = threading.Timer(max(0.0, end - time.time()), cut)
     watchdog.daemon = True
     watchdog.start()
     try:
@@ -79,7 +82,7 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
             if not chunk:
                 break
             data += chunk
-        if expired.is_set() or time.time() >= deadline:
+        if expired.is_set() or time.time() >= end:
             raise ReplyLost("the deadline passed before the reply was complete")
         return SentReply(response.status, response.getheader("content-type") or "", bytes(data))
     except (OSError, ValueError, http.client.HTTPException) as error:

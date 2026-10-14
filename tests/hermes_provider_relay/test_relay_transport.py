@@ -75,11 +75,11 @@ SLOW_BODY = b"{" + b" " * 38 + b"}"
 ])
 def test_a_dripping_reply_is_cut_at_the_deadline(tls: Path, head: bytes, body: bytes, head_at_once: bool) -> None:
     port = dripping_server(tls, head, body, pause=0.2, head_at_once=head_at_once)
-    began = time.monotonic()
+    deadline = time.time() + 1.5
     with pytest.raises(ReplyLost):
         send_once(ProviderDestination("localhost", port, "/v1/chat/completions"), ca_file=str(tls / "ca.pem"),
-                  key="sk-test-synthetic", body=b"{}", deadline=time.time() + 1.5, max_reply_bytes=65_536)
-    assert time.monotonic() - began < 1.5 + 0.5
+                  key="sk-test-synthetic", body=b"{}", deadline=deadline, max_reply_bytes=65_536)
+    assert time.time() <= deadline  # the fixed grant expiry itself, with no allowance
 
 
 def test_a_prompt_reply_is_read_whole(tls: Path) -> None:
@@ -90,17 +90,51 @@ def test_a_prompt_reply_is_read_whole(tls: Path) -> None:
     assert (sent.status, sent.body) == (200, b"{}")
 
 
-def test_setup_time_is_taken_from_the_fixed_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Building the TLS context and the connection uses up time: the watchdog and the socket get only what is left."""
+
+LEAD = 0.1  # CONTRACT A5: the relay's own send ends this long before the grant expiry
+
+
+class FakeWatchdog:
+    daemon = False
+
+    def __init__(self, interval: float, _cut: object, *, fires: list[float], clock: list[float]) -> None:
+        fires.append(clock[0] + interval)
+
+    def start(self) -> None:
+        pass
+
+    def cancel(self) -> None:
+        pass
+
+
+def fake_send(monkeypatch: pytest.MonkeyPatch, clock: list[float], deadline: float, *, setup: float = 0.0,
+              connection: object = None, fires: list[float] | None = None):
+    """send_once with a fake clock: `setup` seconds pass while the TLS context is built; nothing touches a network."""
     import relay_transport
 
+    def context(**_: object) -> ssl.SSLContext:
+        clock[0] += setup
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    def no_connection(*_: object, **__: object) -> None:
+        raise AssertionError("a connection was built")
+
+    monkeypatch.setattr(relay_transport.time, "time", lambda: clock[0])
+    monkeypatch.setattr(relay_transport.ssl, "create_default_context", context)
+    monkeypatch.setattr(relay_transport.http.client, "HTTPSConnection", connection or no_connection)
+    monkeypatch.setattr(relay_transport.threading, "Timer",
+                        lambda interval, cut: FakeWatchdog(interval, cut, fires=[] if fires is None else fires,
+                                                           clock=clock))
+    return send_once(ProviderDestination("localhost", 8443, "/v1/chat/completions"), ca_file="unused",
+                     key="sk-test-synthetic", body=b"{}", deadline=deadline, max_reply_bytes=65_536)
+
+
+def test_the_watchdog_and_the_socket_end_the_lead_before_the_deadline_after_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setup time is used up first; the watchdog and the socket then end `LEAD` before the fixed expiry."""
     clock = [1_000.0]
     deadline = clock[0] + 1.5
+    fires: list[float] = []
     seen: dict[str, float] = {}
-
-    def slow_context(**_: object) -> ssl.SSLContext:
-        clock[0] += 0.4  # e.g. a slow CA file read
-        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
     class Connection:
         sock = None
@@ -114,45 +148,59 @@ def test_setup_time_is_taken_from_the_fixed_deadline(monkeypatch: pytest.MonkeyP
         def close(self) -> None:
             pass
 
-    class Watchdog:
-        daemon = False
-
-        def __init__(self, interval: float, _cut: object) -> None:
-            seen["watchdog_fires"] = clock[0] + interval
-
-        def start(self) -> None:
-            pass
-
-        def cancel(self) -> None:
-            pass
-
-    monkeypatch.setattr(relay_transport.time, "time", lambda: clock[0])
-    monkeypatch.setattr(relay_transport.ssl, "create_default_context", slow_context)
-    monkeypatch.setattr(relay_transport.http.client, "HTTPSConnection", Connection)
-    monkeypatch.setattr(relay_transport.threading, "Timer", Watchdog)
     with pytest.raises(ReplyLost):
-        send_once(ProviderDestination("localhost", 8443, "/v1/chat/completions"), ca_file="unused", key="sk-test-synthetic",
-                  body=b"{}", deadline=deadline, max_reply_bytes=65_536)
-    assert seen["watchdog_fires"] <= deadline
-    assert seen["socket_timeout_ends"] <= deadline
+        fake_send(monkeypatch, clock, deadline, setup=0.4, connection=Connection, fires=fires)
+    assert fires == [deadline - LEAD]
+    assert seen["socket_timeout_ends"] == deadline - LEAD
 
 
-def test_no_request_starts_when_setup_used_up_the_time(monkeypatch: pytest.MonkeyPatch) -> None:
-    import relay_transport
-
+@pytest.mark.parametrize("left, setup", [(0.05, 0.0), (LEAD, 0.0), (0.45, 0.4)])
+def test_no_connection_is_built_when_less_than_the_lead_is_left(monkeypatch: pytest.MonkeyPatch, left: float,
+                                                                 setup: float) -> None:
+    """Less than the lead left at the call, or after setup used it up: refused before any connection or byte."""
     clock = [1_000.0]
-    deadline = clock[0] + 0.3
-
-    def slow_context(**_: object) -> ssl.SSLContext:
-        clock[0] += 0.4
-        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-
-    def no_connection(*_: object, **__: object) -> None:
-        raise AssertionError("a connection was built after the deadline")
-
-    monkeypatch.setattr(relay_transport.time, "time", lambda: clock[0])
-    monkeypatch.setattr(relay_transport.ssl, "create_default_context", slow_context)
-    monkeypatch.setattr(relay_transport.http.client, "HTTPSConnection", no_connection)
     with pytest.raises(ReplyLost, match="no time was left"):
-        send_once(ProviderDestination("localhost", 8443, "/v1/chat/completions"), ca_file="unused", key="sk-test-synthetic",
-                  body=b"{}", deadline=deadline, max_reply_bytes=65_536)
+        fake_send(monkeypatch, clock, clock[0] + left, setup=setup)
+
+
+def test_a_reply_completed_inside_the_lead_is_lost_after_one_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A whole reply that ends within the lead is not used: ReplyLost (UNKNOWN, full liability), and it was sent once."""
+    clock = [1_000.0]
+    deadline = clock[0] + 1.5
+    sends: list[bytes] = []
+
+    class Response:
+        status = 200
+        chunks = [b"{}", b""]
+
+        def read(self, _: int) -> bytes:
+            clock[0] = deadline - LEAD / 2  # the last byte arrives inside the lead
+            return self.chunks.pop(0)
+
+        def getheader(self, _: str) -> str:
+            return "application/json"
+
+    class Connection:
+        sock = None
+
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def putrequest(self, *_: object, **__: object) -> None:
+            pass
+
+        def putheader(self, *_: object) -> None:
+            pass
+
+        def endheaders(self, body: bytes) -> None:
+            sends.append(body)
+
+        def getresponse(self) -> Response:
+            return Response()
+
+        def close(self) -> None:
+            pass
+
+    with pytest.raises(ReplyLost, match="deadline passed before the reply was complete"):
+        fake_send(monkeypatch, clock, deadline, connection=Connection)
+    assert sends == [b"{}"]
