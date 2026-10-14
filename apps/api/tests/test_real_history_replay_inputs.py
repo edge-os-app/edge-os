@@ -157,10 +157,11 @@ def test_actual_provider_history_passes_through_with_unchanged_numbers(research,
     assert dataset.evidence_class == "PROVIDER_ACTUAL"
     assert (dataset.buckets, dataset.qualification, dataset.coverage_complete, dataset.market_binding_id) == (
         synthetic.buckets, synthetic.qualification, synthetic.coverage_complete, synthetic.market_binding_id)
-    run = simulator.ReplayInput(strategy_revision_id=revision_id, run_configuration_id="actual-check",
-                                dataset=dataset, essential_evidence=saved["content"]["inputs"]["essential_evidence"],
-                                window_start=dt.datetime(2026, 9, 25, 10, 20, tzinfo=dt.timezone.utc),
-                                window_end=window_end, initial_cash_quote="1000")
+    inputs = saved["content"]["inputs"]  # the saved run's own identities, so only the evidence class differs
+    run = simulator.ReplayInput(strategy_revision_id=revision_id, run_configuration_id=inputs["run_configuration_id"],
+                                dataset=dataset, essential_evidence=inputs["essential_evidence"],
+                                window_start=dt.datetime.fromisoformat(inputs["window_start"].replace("Z", "+00:00")),
+                                window_end=window_end, initial_cash_quote=inputs["initial_cash_quote"])
     result = simulator.run_spot_replay(strategy, run)
     baseline = simulator.run_spot_replay(strategy, dataclasses.replace(run, dataset=synthetic))
     assert result.evidence_class == "PROVIDER_ACTUAL" and result.repeatability_id != baseline.repeatability_id
