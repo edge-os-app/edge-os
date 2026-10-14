@@ -39,3 +39,9 @@ Both are selected only by explicit local settings (`EDGE_OS_RESEARCH_SOURCE_CLIE
 - The Nansen fixture uses the accepted package's authored shapes and credit headers. It shows no account, rights, real coverage or real cost.
 - P27 forward observation is a type contract only (`research/forward_observation.py`); every current source returns `UNAVAILABLE` with its reason. No polling or scheduler exists.
 - Nansen facts never enter a P07 dataset, a market adoption, a rule revision or a replay.
+
+## Operating-release composition (RESEARCH-RUNTIME-LOCAL)
+
+Milestone `RESEARCH-RUNTIME-L2-20261013-LOCAL-v1`. The application can now run an actual-capable source behind one frozen **operating release**: server-owned endpoints and credential slots, the P07 market profile, scan and fixed request, byte, time and credit limits, admitted before any reservation, credential read or request. The contract is [CONTRACT.md](CONTRACT.md). Only stand-in releases ran: an in-process recording and an owned loopback HTTP server reached through the accepted `StdlibHttpTransport`. `APPROVED_RELEASES` is empty, so no actual release can be composed, and no setting or environment value composes any release. Stand-in evidence is `RELEASE_STAND_IN_RESPONSE` with content label `SYNTHETIC_FIXTURE`; it is never provider data.
+
+Proof: `apps/api/tests/test_operating_release_research.py`, `apps/web/tests/research-release.test.tsx`, and the mapped verifier's release phase (`research-release-*.spec.mjs`, `research-release-inspection.json`, the stand-in provider's own `stand-in-requests.jsonl`). Every actual item in [ACTUAL_APPLICATION_COLLECTION_PACKET.md](ACTUAL_APPLICATION_COLLECTION_PACKET.md) stays `NOT_RUN`; RG02 and RG05 actual-data evidence stays open.

@@ -223,10 +223,15 @@ def collect_native(source: Mapping[str, Any], bounds: Mapping[str, Any], deadlin
                  "client_calls": dict(budget.calls), "request_budget": bounds["provider_requests"],
                  "clients": "RECORDED_NATIVE_CLIENTS_LOCAL", "evidence_basis": dict(EVIDENCE_BASIS)}
     if http is not None:
-        # The accepted P07 HTTP clients served these calls over the application's authored transport (no network).
+        # The accepted P07 HTTP clients served these calls over the transport the application composed: its authored
+        # transport (no network), or an operating release's transport, which names its own labels and facts.
         transport.update({
-            "clients": "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT",
+            "clients": getattr(http, "clients_label", "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"),
             "client_classes": {ENVIO: type(base_envio).__name__, QUICKNODE: type(base_rpc).__name__},
             "http_accounting": {ENVIO: base_envio.accounting(), QUICKNODE: base_rpc.accounting()},
-            "response_sha256": list(http.response_sha256), "transport_label": "AUTHORED_HTTP_TRANSPORT"})
+            "response_sha256": list(http.response_sha256),
+            "transport_label": getattr(http, "label", "AUTHORED_HTTP_TRANSPORT")})
+        if hasattr(http, "facts"):
+            transport.update(http.facts())
+        transport["evidence_basis"] = dict(getattr(http, "evidence_basis", EVIDENCE_BASIS))
     return collection, normalized, transport

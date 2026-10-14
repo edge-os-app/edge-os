@@ -6,6 +6,7 @@ import type { HistoryDeclaration, HistorySource, InvestigationJob, Investigation
 import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationProposal, InvestigationSaveResult } from "../lib/types";
 import { EffectComparisonPanel } from "./EffectComparisonPanel";
 import { ResearchNansenReport } from "./ResearchNansenReport";
+import { declarationRelease, describeRelease, releaseBounds, sourceRelease, transportRelease } from "../lib/research-release";
 
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
@@ -541,9 +542,12 @@ function JobReport({ report }: { report: InvestigationReport }) {
 /** What the P07 transport computed from a native recording, apart from what the recording only declares. */
 function TransportFacts({ transport }: { transport: TransportSummary }) {
   const corroboration = transport.corroboration;
+  const release = transportRelease(transport);
   return (
     <p className="muted" data-testid="history-transport">
-      {transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+      {release
+        ? `Operating release ${release.operating_release?.release_id ?? "unknown"} through the accepted P07 HTTP clients (${Object.values(transport.client_classes ?? {}).join(", ")}) over ${(release.transport_kind ?? "").replaceAll("_", " ").toLowerCase()}. ${release.operating_release?.kind === "ACTUAL" ? "Provider responses" : "Stand-in responses, not provider data"}; ${release.requests_hashed ?? 0} request hashes kept; endpoint hosts ${Object.values(release.endpoint_hosts ?? {}).join(", ")}: `
+        : transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
         ? `Authored HTTP responses served on this server through the accepted P07 HTTP clients (${Object.values(transport.client_classes ?? {}).join(", ")}), no network. Not provider data: `
         : "Native recording, replayed locally: "}{transport.envio_pages_framed} Envio pages framed; chain id checked against recorded responses: {transport.chain_id === null ? "not read" : `${transport.chain_id}${transport.chain_network ? ` (${transport.chain_network})` : " (not Monad)"}`}; receipt corroboration {corroboration.class}, {corroboration.sample_size} of {corroboration.population_size} checked, {corroboration.mismatches} mismatches{transport.corroboration_reason ? ` (${transport.corroboration_reason})` : ""}. Client calls: {Object.entries(transport.client_calls).map(([name, count]) => `${name} ${count}`).join(", ")}. Recorded declarations, not read by the application: {transport.recorded_declarations.join(", ").replaceAll("_", " ")}.
     </p>
@@ -605,11 +609,14 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
   const open = async (declaration: HistoryDeclaration) => { setSelected(declaration); setError(""); setNotice(""); await loadJobs(declaration); };
 
   const source = sources.find((item) => item.source_id === sourceId) ?? null;
+  const frozenRelease = selected ? declarationRelease(selected.declaration.content.frozen as unknown as Record<string, unknown>) : null;
   const rulesComplete = rules.every((row) => /^[1-9][0-9]?$/.test(row.lookback) && /^-?[0-9]+(\.[0-9]+)?$/.test(row.threshold)
     && /^[0-9]+(\.[0-9]+)?$/.test(row.volume));
   const ready = source !== null && question.length > 0 && hypothesis.trim().length > 0 && rulesComplete && adopted;
 
   const buildDeclaration = (source: HistorySource): Record<string, unknown> => {
+    const release = sourceRelease(source);
+    const fixedBounds = release ? releaseBounds(release) : null;
     const quoteUnit = `QUOTE:${source.market.quote_asset}`;
     const trial = crypto.randomUUID();
     const evaluations = rules.map(() => crypto.randomUUID());
@@ -644,7 +651,8 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
             return { evaluation_id: evaluations[index], trial_id: trial, variant_id: variants[index], price_expression: built.price,
               volume_expression: built.volume, essential_inputs: ["price", "quote_volume"], rule_source: "USER_ADOPTED" };
           }) },
-        resource_bounds: { provider_requests: Number(bounds.provider_requests), compute_seconds: Number(bounds.compute_seconds),
+        // An operating-release source runs under its fixed limits; the server refuses any other bounds.
+        resource_bounds: fixedBounds ?? { provider_requests: Number(bounds.provider_requests), compute_seconds: Number(bounds.compute_seconds),
           max_pages: Math.min(Number(bounds.provider_requests), source.page_requests_recorded + 1) || 1, max_rows: 2000,
           max_bytes: 1_048_576, deadline_seconds: Number(bounds.deadline_seconds) },
         permitted_access: [source.evidence_class], stopping_rule: "Stop after the declared evaluations on the declared window.",
@@ -714,7 +722,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
     <section className="stack" aria-labelledby="history-title" data-testid="history-investigation"
       style={{ overflowWrap: "anywhere" }}>
       <h3 id="history-title">Recorded-history investigation</h3>
-      <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>
+      {sources.some((item) => sourceRelease(item)?.kind === "ACTUAL")
+        ? <p className="status stop">This server composes an approved actual operating release: its source calls the named provider within the listed fixed limits. Every other source is a SYNTHETIC recording. Results are descriptive and grant no trading permission.</p>
+        : <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>}
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p><button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>Retry</button></div> : null}
       {budget ? (
         <p data-testid="research-budget">Research budget available: {budget.available.provider_requests} provider requests, {budget.available.compute_seconds} compute seconds. Reserved {budget.reserved.provider_requests}; unknown liability {budget.unknown_liability.provider_requests}.</p>
@@ -746,6 +756,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
             <dt>Configuration hash</dt><dd className="mono">{selected.declaration.content.frozen.configuration_sha256}</dd>
             <dt>Rule map hash</dt><dd className="mono">{selected.declaration.content.frozen.rule_map_sha256}</dd>
             <dt>Reserved per job</dt><dd>{selected.declaration.content.configuration.resource_bounds.provider_requests} provider requests, {selected.declaration.content.configuration.resource_bounds.compute_seconds} compute seconds</dd>
+            {frozenRelease ? <>
+              <dt>Operating release</dt><dd className="mono" data-testid="history-declaration-release">{frozenRelease.id} · {frozenRelease.sha256}</dd>
+            </> : null}
           </dl>
           <div className="btn-row">
             <button className="btn btn-primary" type="button" onClick={() => void startJob(false)} disabled={busy}>Start investigation job</button>
@@ -776,7 +789,10 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               const next = sources.find((item) => item.source_id === event.target.value);
               setSourceId(event.target.value); setAdopted(false);
               // A native recording also needs one chain read and one receipt per corroborated swap.
-              if (next) setBounds((current) => ({ ...current,
+              const fixed = sourceRelease(next ?? null)?.history?.limits;
+              if (next && fixed) setBounds({ provider_requests: String(fixed.provider_requests), compute_seconds: String(fixed.compute_seconds),
+                deadline_seconds: String(fixed.deadline_seconds) });
+              else if (next) setBounds((current) => ({ ...current,
                 provider_requests: String(next.transport ? next.transport.provider_requests_needed : next.page_requests_recorded) }));
             }}>
               <option value="">Choose a recorded source</option>
@@ -785,6 +801,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
             </select>
           </div>
           {source ? <p className="muted">{source.evidence_class}, {source.content_label}. Pool <span className="mono">{source.market.pool_address}</span>; window {source.window.start} to {source.window.end}.</p> : null}
+          {sourceRelease(source) ? <p className="muted" data-testid="history-source-release">{describeRelease(sourceRelease(source)!)}</p> : null}
           {source?.transport ? <p className="muted" data-testid="history-source-transport">{source.transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
             ? "Served through the accepted P07 HTTP clients over authored responses on this server, with no network and no credential."
             : "Replayed through the accepted Envio HyperSync transport with QuickNode receipt checks, against recorded responses only."} It needs {source.transport.provider_requests_needed} provider requests: {source.page_requests_recorded} pages, one chain read and {source.transport.corroboration_sample_size} receipts.</p> : null}
@@ -832,6 +849,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
             {(["provider_requests", "compute_seconds", "deadline_seconds"] as const).map((name) => (
               <label className="field" key={name}>{name.replace("_", " ")}
                 <input className="input" aria-label={`Bound ${name}`} value={bounds[name]} inputMode="numeric"
+                  readOnly={sourceRelease(source) !== null}
                   onChange={(event) => { setBounds({ ...bounds, [name]: event.target.value.trim() }); setAdopted(false); }} />
               </label>
             ))}

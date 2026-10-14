@@ -150,12 +150,16 @@ def settlement(evidence: NansenEvidence, sent: int) -> dict[str, Any]:
 
 
 def report_content(*, report_id: uuid.UUID, owner_id: uuid.UUID, job_id: uuid.UUID, request_row: NansenRequestRow,
-                   run: NansenRun, response_sha256: list[str], settled: dict[str, Any]) -> dict[str, Any]:
+                   run: NansenRun, response_sha256: list[str], settled: dict[str, Any],
+                   labels: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The saved report record. `labels` come from a composed operating release (evidence class, transport label,
+    notice and release identity); without it the authored-fixture labels apply."""
     request = saved_request(request_row)
+    labels = labels or {"evidence_class": NANSEN_EVIDENCE_CLASS, "transport_label": NANSEN_TRANSPORT_LABEL,
+                        "notice": NOTICE}
     return {"schema_version": REPORT_RECORD_VERSION, "report_id": str(report_id), "owner_id": str(owner_id),
             "job_id": str(job_id), "request_id": str(request_row.request_id),
-            "intake_record_id": request_row.content["intake_record_id"], "evidence_class": NANSEN_EVIDENCE_CLASS,
-            "transport_label": NANSEN_TRANSPORT_LABEL, "notice": NOTICE,
+            "intake_record_id": request_row.content["intake_record_id"], **labels,
             "request": request.to_dict(), "evidence": run.evidence.to_dict(), "report": run.report.to_dict(),
             "request_sha256": request.sha256(), "evidence_sha256": run.evidence.sha256(),
             "report_sha256": run.report.sha256(), "transport_response_sha256": list(response_sha256),

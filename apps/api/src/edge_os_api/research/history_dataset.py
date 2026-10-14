@@ -23,6 +23,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import not_found
+from edge_os_api.core.research import released_source_runtime
+from edge_os_api.core.research.operating_release import ReleaseRefused
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research.service import parse_uuid
 from edge_os_api.research_history import (
@@ -50,7 +52,9 @@ NATIVE_BUNDLE_PATH = (Path(__file__).resolve().parents[3] / "tests" / "fixtures"
 NATIVE_CLASS = "RECORDED_NATIVE_RESPONSE"
 # A native-shaped source collected through the accepted P07 HTTP clients over the application's AUTHORED transport.
 HTTP_CLASS = "AUTHORED_HTTP_RESPONSE"
-NATIVE_SHAPED = frozenset({NATIVE_CLASS, HTTP_CLASS})
+# A source served by a composed operating release (stand-in now; actual only when an approved release is composed).
+RELEASE_CLASSES = frozenset({released_source_runtime.STAND_IN_CLASS, released_source_runtime.ACTUAL_CLASS})
+NATIVE_SHAPED = frozenset({NATIVE_CLASS, HTTP_CLASS, *RELEASE_CLASSES})
 HTTP_SOURCE_ID = "native-http-qualified/1"
 HTTP_SOURCE_OF = "native-syn-qualified/1"
 COMPLETE_STATUSES = frozenset({"COMPLETE_OCCUPIED", "COMPLETE_EMPTY"})
@@ -150,8 +154,27 @@ def recorded_sources() -> dict[str, dict[str, Any]]:
     return {source["source_id"]: source for source in sources}
 
 
+def check_release_source(runtime: released_source_runtime.ReleasedSourceRuntime) -> None:
+    """A release history source must not reuse a recorded source's id, or it would silently replace that source for
+    existing declarations (review B5). Checked when the application or a worker is composed."""
+    history = runtime.release.history
+    if history is not None and history.source_id in recorded_sources():
+        raise ReleaseRefused("operating_release_invalid", "the release source id names an existing recorded source")
+
+
+def served_sources(runtime: released_source_runtime.ReleasedSourceRuntime | None = None) -> dict[str, dict[str, Any]]:
+    """The recorded sources, plus the release history source when this process composes an operating release."""
+    sources = recorded_sources()
+    if runtime is not None and runtime.release.history is not None:
+        release = released_source_runtime.history_source(runtime)
+        sources[release["source_id"]] = release
+    return sources
+
+
 def page_requests(source: Mapping[str, Any]) -> int:
-    """Recorded history page requests the source needs (including a recorded fault)."""
+    """History page requests the source needs (including a recorded fault); a release fixes its page limit."""
+    if "release" in source:
+        return int(source["release"]["history"]["limits"]["max_pages"])
     return len(source["envio_pages"] if source["evidence_class"] in NATIVE_SHAPED else source["responses"])
 
 
@@ -171,6 +194,8 @@ def transport_view(source: Mapping[str, Any]) -> dict[str, Any] | None:
             "provider_requests_needed": requests_needed(source)}
     if source["evidence_class"] == HTTP_CLASS:  # additive; the recorded sources' view is unchanged
         view["clients"] = "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+    if "release" in source:
+        view["clients"] = released_source_runtime.CLIENTS_LABEL
     return view
 
 
@@ -190,17 +215,20 @@ def source_window(source: Mapping[str, Any]) -> dict[str, str]:
     return {"start": window["start_utc"], "end": window["end_utc"]}
 
 
-def catalog(http_clients_available: bool = False) -> dict[str, Any]:
-    """The supported recorded sources, as a user reviews them before declaring one. `available` is false for the HTTP
-    source unless this server composes the HTTP clients; a job on an unavailable source is refused before effect."""
+def catalog(http_clients_available: bool = False,
+            runtime: released_source_runtime.ReleasedSourceRuntime | None = None) -> dict[str, Any]:
+    """The supported sources, as a user reviews them before declaring one. `available` is false for the HTTP source
+    unless this server composes the HTTP clients; a job on an unavailable source is refused before effect. A composed
+    operating release adds its one history source with its release identity, fixed limits and endpoint hosts."""
     return {"label": _bundle()["label"], "native_label": _native_bundle()["label"], "sources": [
         {"source_id": source_id, "title": source["title"], "evidence_class": source["evidence_class"],
          "available": source["evidence_class"] != HTTP_CLASS or http_clients_available,
          "content_label": source["content_label"], "profile_version": P07_PROFILE_VERSION,
          "profile_sha256": profile_sha256(source), "market": source_market(source), "window": source_window(source),
          "history_provider": source["profile"]["source"]["history_provider"],
-         "page_requests_recorded": page_requests(source), "transport": transport_view(source)}
-        for source_id, source in recorded_sources().items()]}
+         "page_requests_recorded": page_requests(source), "transport": transport_view(source),
+         **({"release": source["release"]} if "release" in source else {})}
+        for source_id, source in served_sources(runtime).items()]}
 
 
 def provider_usage(source: Mapping[str, Any]) -> tuple[str, dict[str, int] | None]:
@@ -268,10 +296,13 @@ def measured_usage(transport: Mapping[str, Any]) -> tuple[str, dict[str, int] | 
 
 def dataset_content(*, dataset_id: uuid.UUID, owner_id: uuid.UUID, declaration_id: uuid.UUID, job_id: uuid.UUID,
                     attempt_id: uuid.UUID, source: Mapping[str, Any], collection: Mapping[str, Any],
-                    normalized: Mapping[str, Any], transport: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                    normalized: Mapping[str, Any], transport: Mapping[str, Any] | None = None,
+                    release: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """The `edge-os.history-dataset/1` record. Verdicts, buckets and gaps are copied, never upgraded.
 
-    A native source adds `transport` and `evidence_basis` (additive keys); a bundle source's content is unchanged."""
+    A native source adds `transport` and `evidence_basis` (additive keys); a bundle source's content is unchanged. An
+    operating-release source also adds its release identity, transport kind, endpoint hosts, application collection
+    times and whether the release's required coverage was met (`release`, from the worker)."""
     qualification = normalized["qualification"]
     overall = qualification["overall"]
     usage_state, usage = provider_usage(source) if transport is None else measured_usage(transport)
@@ -328,6 +359,19 @@ def dataset_content(*, dataset_id: uuid.UUID, owner_id: uuid.UUID, declaration_i
                              "accepted P07 transport. The chain id and receipts were checked against recorded "
                              "responses, not a network. Not provider, chain or market evidence; no profitability, "
                              "execution or statistical claim.")
+    if release is not None and transport is not None:
+        history = source["release"]["history"]
+        content.update({key: release[key] for key in ("operating_release", "transport_kind",
+                                                      "application_collection_time")})
+        content["transport"]["endpoint_hosts"] = dict(history["endpoint_hosts"])
+        content["release_coverage"] = {"required": history["required_coverage"],
+                                       "met": collection["status"] == "COMPLETE"
+                                       and collection["coverage"].get("covers_requested_scan") is True}
+        if source["evidence_class"] == released_source_runtime.STAND_IN_CLASS:
+            content["notice"] = released_source_runtime.STAND_IN_NOTICE
+        else:
+            content["notice"] = ("Provider history collected under an approved operating release. Its verdict and "
+                                 "gaps are kept as collected; no profitability, execution or statistical claim.")
     return content
 
 

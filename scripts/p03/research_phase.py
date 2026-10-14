@@ -359,3 +359,315 @@ def after_restart(rec: Any, pg: harness.Postgres, env: dict[str, str], evidence:
                        [job["state"] for job in after["checks"][key]["jobs"][:4]]
                        == [job["state"] for job in before["checks"][key]["jobs"][:4]] for key in after["checks"]), retried)
     return ok
+
+
+# ------------------------------------------------------------------------------------------- RESEARCH-RUNTIME-LOCAL
+# The operating-release composition, proved with an owned loopback STAND-IN provider only. The API and the worker run
+# with a stand-in release composed by these verifier-only host scripts; no setting can compose one. The stand-in
+# provider is its own process and logs every request it receives, so request counts come from outside the
+# application. Nothing reaches a real provider.
+
+RELEASE_ID, CHANGED_RELEASE_ID = "stand-in-loopback/1", "stand-in-loopback/2"
+RELEASE_SENTINELS = ("stand-in-bearer-SENTINEL-7d41c0", "stand-in-key-SENTINEL-55e0a1")
+_RELEASE_PRELUDE = """
+import os, sys
+sys.path.insert(0, os.environ["P03_RELEASE_TESTS_DIR"])
+import operating_release_stand_in as stand_in
+"""
+STAND_IN_PROVIDER = _RELEASE_PRELUDE + """
+import time
+from pathlib import Path
+stand_in.LoopbackStandInProvider("native-syn-qualified/1", Path(sys.argv[2]), port=int(sys.argv[1])).start()
+while True:
+    time.sleep(3600)
+"""
+RELEASE_HOST = _RELEASE_PRELUDE + """
+import uvicorn
+from edge_os_api.core.settings import load_settings
+from edge_os_api.main import create_app
+settings = load_settings()
+runtime, _ = stand_in.loopback_runtime_at(settings, int(os.environ["P03_STAND_IN_PORT"]),
+                                          release_id=os.environ["P03_RELEASE_ID"])
+uvicorn.run(create_app(settings, research_runtime=runtime), host="127.0.0.1", port=int(sys.argv[1]),
+            log_level="warning")
+"""
+# Fault injection for the verifier only: `kill` ends the worker process right after the first stand-in reply, exactly
+# like a killed worker; `missing` composes the release without its QuickNode credential. The application has neither.
+RELEASE_WORKER = _RELEASE_PRELUDE + """
+import uuid
+from edge_os_api.core.database import make_engine, make_session_factory
+from edge_os_api.core.research import released_source_runtime
+from edge_os_api.core.settings import load_settings
+from edge_os_api.research.investigation_jobs import InvestigationWorker
+settings = load_settings()
+mode = sys.argv[1]
+runtime, _ = stand_in.loopback_runtime_at(settings, int(os.environ["P03_STAND_IN_PORT"]),
+                                          release_id=os.environ["P03_RELEASE_ID"],
+                                          missing=(stand_in.QUICKNODE_SLOT,) if mode == "missing" else ())
+if mode == "kill":
+    original = released_source_runtime.HashingTransport.request
+    def killed(self, **kwargs):
+        original(self, **kwargs)
+        os._exit(9)
+    released_source_runtime.HashingTransport.request = killed
+worker = InvestigationWorker(make_session_factory(make_engine(settings.database_url)), settings,
+                             research_runtime=runtime)
+for job_id in sys.argv[2:]:
+    worker.run_job(uuid.UUID(job_id))
+"""
+# Saves fault-case declarations and jobs through the public API, with the same request shapes the API tests use.
+RELEASE_DRIVER = _RELEASE_PRELUDE + """
+import json, uuid
+import httpx
+from research_flows import declare, jobs_path
+client = httpx.Client(base_url=os.environ["P03_API_URL"], timeout=60)
+tokens = json.loads(os.environ["P03_RELEASE_FAULT_TOKENS"])  # one owner per case: each job fits its owner's budget
+out = {}
+for name in sys.argv[1].split(","):
+    headers = {"Authorization": "Bearer " + tokens[name]}
+    source = next(item for item in client.get("/v1/research/history-sources", headers=headers).json()["sources"]
+                  if "release" in item)
+    intake_id, declaration_id, _ = declare(client, headers, source_id=source["source_id"],
+                                           bounds=source["release"]["history"]["limits"])
+    started = client.post(jobs_path(intake_id, declaration_id), headers=headers,
+                          json={"operation_id": str(uuid.uuid4()), "request_key": "verifier-" + name})
+    out[name] = {"intake_id": intake_id, "declaration_id": declaration_id, "status": started.status_code,
+                 "job_id": started.json().get("job_id")}
+print(json.dumps(out))
+"""
+
+
+def _release_env(env: dict[str, str], port: int, release_id: str = RELEASE_ID) -> dict[str, str]:
+    return {**env, "P03_RELEASE_TESTS_DIR": str(harness.API_DIR / "tests"), "P03_STAND_IN_PORT": str(port),
+            "P03_RELEASE_ID": release_id}
+
+
+def _spawn(env: dict[str, str], name: str, script: str, args: list[str], log_dir: Path) -> harness.Process:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handle = open(log_dir / f"{name}.log", "ab")
+    popen = subprocess.Popen([harness.api_python(), "-c", script, *args], cwd=harness.API_DIR, env=env,
+                             stdout=handle, stderr=handle, start_new_session=True)
+    return harness.Process(name, popen, log_dir / f"{name}.log", handle)
+
+
+def _release_worker(env: dict[str, str], log_dir: Path, name: str, mode: str, job_ids: list[str]) -> int:
+    """One bounded worker process over this phase's own jobs only, so no other phase's saved job is advanced."""
+    with open(log_dir / f"{name}.log", "ab") as handle:
+        return subprocess.run([harness.api_python(), "-c", RELEASE_WORKER, mode, *job_ids], cwd=harness.API_DIR,
+                              env=env, stdout=handle, stderr=handle, timeout=300).returncode
+
+
+def stand_in_requests(log: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in log.read_text().splitlines() if line] if log.exists() else []
+
+
+def inspect_release(pg: harness.Postgres, results: dict[str, Any], faults: dict[str, Any],
+                    requests: list[dict[str, Any]]) -> dict[str, Any]:
+    """Direct SQL over the release jobs, datasets, reports and replays, compared with the stand-in provider's own
+    request log."""
+    from collections import Counter
+
+    runs = {key: run for key, run in results.items() if key.startswith("release-")}
+    job_ids = [run["jobId"] for run in runs.values()] + [case["job_id"] for case in faults.values()]
+    jobs = {row["job_id"]: row for row in _rows(pg, (
+        "select j.job_id::text, j.state, j.terminal_reason, j.budget, d.content->>'evidence_class' evidence, "
+        "d.content->>'content_label' label, d.content->>'profile_evidence_class' profile_evidence, "
+        "d.content->>'transport_kind' transport_kind, d.content->'operating_release' release, "
+        "d.content->'transport'->'request_sha256' request_hashes, d.content->'transport'->'endpoint_hosts' hosts, "
+        "d.content->'application_collection_time' collected, d.content->>'query_sha256' query_sha256, "
+        "d.content->'release_coverage' coverage, d.content->'verdict'->>'overall' verdict, "
+        "r.content->>'evidence_class' report_evidence, r.content->>'outcome' outcome "
+        "from research_local.investigation_jobs j "
+        "left join research_local.history_datasets d using (dataset_id) "
+        "left join research_local.investigation_reports r using (report_id) "
+        "where j.job_id::text in (" + ",".join(f"'{job_id}'" for job_id in job_ids) + ")"))} if job_ids else {}
+    events = {job_id: [row["kind"] for row in _rows(pg, (
+        f"select kind from research_local.investigation_events where job_id = '{job_id}' order by seq"))]
+              for job_id in job_ids}
+    replays = _rows(pg, "select content->'result'->>'status' status, "
+                        "content->'inputs'->'history_input'->>'source_evidence_class' evidence, "
+                        "content->'inputs'->'history_input'->>'fill_label' fills, "
+                        "content->'inputs'->'history_input'->>'dataset_id' dataset from spot_replay_runs where "
+                        "replay_id::text in (" + ",".join(f"'{run.get('replayId')}'" for run in runs.values()) + ")"
+                    ) if runs else []
+    dump = pg.psql("select concat_ws('|', (select string_agg(t::text, '') from research_local.history_datasets t), "
+                   "(select string_agg(t::text, '') from research_local.investigation_events t), "
+                   "(select string_agg(t::text, '') from research_local.investigation_reports t))")
+    saved_hashes = Counter(hash_ for row in jobs.values() for hash_ in (row["request_hashes"] or []))
+    logged = Counter(entry["body_sha256"] for entry in requests)
+    expectations: dict[str, bool] = {}
+    for key, run in runs.items():
+        row = jobs.get(run["jobId"], {})
+        kinds = events.get(run["jobId"], [])
+        expectations.update({
+            f"{key}: reported on the loopback stand-in with stand-in labels": row.get("state") == "REPORTED"
+            and row.get("evidence") == "RELEASE_STAND_IN_RESPONSE" and row.get("label") == "SYNTHETIC_FIXTURE"
+            and row.get("profile_evidence") == "SYNTHETIC_FIXTURE" and row.get("transport_kind") == "LOOPBACK_HTTP"
+            and row.get("report_evidence") == "RELEASE_STAND_IN_RESPONSE" and row.get("verdict") == "QUALIFIED",
+            f"{key}: release identity, query hash, hosts, coverage and collection times saved":
+            (row.get("release") or {}).get("release_id") == RELEASE_ID and bool(row.get("query_sha256"))
+            and row.get("hosts") == {"ENVIO_HYPERSYNC": "127.0.0.1", "QUICKNODE_JSON_RPC": "127.0.0.1"}
+            and row.get("coverage") == {"required": "COMPLETE_SCAN", "met": True}
+            and (row.get("collected") or {}).get("basis") == "APPLICATION_CLOCK",
+            f"{key}: 27 measured calls settled; reservation before the one attempt":
+            (row.get("budget") or {}).get("consumed", {}).get("provider_requests") == 27
+            and len(row.get("request_hashes") or []) == 27 and kinds.count("ATTEMPT_STARTED") == 2
+            and "BUDGET_RESERVED" in kinds and kinds.index("BUDGET_RESERVED") < kinds.index("ATTEMPT_STARTED"),
+        })
+    kill, stale, missing = (jobs.get(faults.get(name, {}).get("job_id"), {}) for name in ("kill", "stale", "missing"))
+    kill_events = events.get(faults.get("kill", {}).get("job_id"), [])
+    extra = logged - saved_hashes
+    expectations.update({
+        "killed worker: outcome unknown, whole reservation kept, one attempt only":
+        (kill.get("state"), kill.get("terminal_reason")) == ("UNAVAILABLE", "collection_outcome_unknown")
+        and (kill.get("budget") or {}).get("unknown_liability", {}).get("provider_requests") == 27
+        and kill_events.count("ATTEMPT_STARTED") == 1 and "ATTEMPT_RECONCILED" in kill_events,
+        "changed release: refused before any credential read or request; everything released":
+        (stale.get("state"), stale.get("terminal_reason")) == ("UNAVAILABLE", "operating_release_changed")
+        and (stale.get("budget") or {}).get("released", {}).get("provider_requests") == 27,
+        "missing credential: refused before any request; everything released":
+        (missing.get("state"), missing.get("terminal_reason")) == (
+            "UNAVAILABLE", "operating_release_credential_unavailable")
+        and (missing.get("budget") or {}).get("released", {}).get("provider_requests") == 27,
+        "the stand-in provider received exactly the saved requests plus the killed worker's one":
+        sum(extra.values()) == 1 and not (saved_hashes - logged)
+        and len(requests) == 27 * len(runs) + 1 and all(entry["authorized"] for entry in requests),
+        "replays on release datasets are labelled stand-in and simulated": bool(replays) and len(replays) == len(runs)
+        and all(item["status"] == "COMPLETE" and item["evidence"] == "RELEASE_STAND_IN_RESPONSE"
+                and item["fills"] == "simulated fills" for item in replays),
+        "no stand-in credential is saved in any research row": not any(value in dump for value in RELEASE_SENTINELS),
+    })
+    return {"jobs": jobs, "events": events, "replays": replays, "stand_in_requests": len(requests),
+            "expectations": expectations, "all_checks_pass": bool(runs) and all(expectations.values())}
+
+
+def _http_status(url: str, token: str, method: str = "GET", body: dict[str, Any] | None = None) -> tuple[int, Any]:
+    import urllib.error
+    import urllib.request
+
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read() or b"{}")
+
+
+def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port: int, api_url: str,
+                      evidence: Path, ui_env: dict[str, str], run_playwright: Callable[..., int],
+                      current_api: Any, processes: list[Any]) -> tuple[bool, Any]:
+    """Returns whether every step passed and the standard API it started last. It stops `current_api`; every process
+    it starts goes into `processes` at once, so the caller's cleanup stops it even when a step raises."""
+    ok = True
+    work, logs = evidence / "research-release", evidence / "logs"
+    work.mkdir(parents=True, exist_ok=True)
+    log = work / "stand-in-requests.jsonl"
+    port = harness.free_port()
+    release_env = _release_env(env, port)
+    standard = current_api
+    host = None
+    try:
+        provider = _spawn(release_env, "research-release-stand-in", STAND_IN_PROVIDER, [str(port), str(log)], logs)
+        processes.append(provider)
+        harness.wait_http(f"http://127.0.0.1:{port}/ready")
+        current_api.stop()
+        host = _spawn(release_env, "api-research-release", RELEASE_HOST, [str(api_port)], logs)
+        processes.append(host)
+        harness.wait_http(f"{api_url}/readyz")
+        fault_tokens = json.loads(ui_env["P03_RELEASE_FAULT_TOKENS"])
+        token = fault_tokens["kill"]
+        status, catalog = _http_status(f"{api_url}/v1/research/history-sources", token)
+        ok &= rec.step("RESEARCH-RUNTIME: the API composes the stand-in release (listed with its fixed limits; no "
+                       "request yet)", status == 200 and (catalog.get("operating_release") or {}).get("release_id")
+                       == RELEASE_ID and stand_in_requests(log) == [], catalog.get("operating_release"))
+        code = run_playwright(["research-release-journey.spec.mjs"], ui_env, evidence / "ui-research-release-journey.log")
+        ok &= rec.step("RESEARCH-RUNTIME: declare on the release source with its fixed bounds and start one job, no "
+                       "worker running (desktop and 390px, one owner each)", code == 0, {"exit": code})
+        driver = subprocess.run([harness.api_python(), "-c", RELEASE_DRIVER, "kill,stale,missing"],
+                                cwd=harness.API_DIR, env={**release_env, "P03_API_URL": api_url,
+                                                          "P03_RELEASE_FAULT_TOKENS": ui_env["P03_RELEASE_FAULT_TOKENS"]},
+                                capture_output=True, text=True, timeout=300)
+        faults = json.loads(driver.stdout.strip().splitlines()[-1]) if driver.returncode == 0 else {}
+        rec.write("research-release-fault-jobs.json", faults)
+        ok &= rec.step("RESEARCH-RUNTIME: fault-case declarations and jobs saved through the API",
+                       sorted(faults) == ["kill", "missing", "stale"]
+                       and all(case["status"] == 201 for case in faults.values()), {"exit": driver.returncode})
+        before = len(stand_in_requests(log))
+        killed = _release_worker(release_env, logs, "research-release-worker-killed", "kill", [faults["kill"]["job_id"]])
+        ok &= rec.step("RESEARCH-RUNTIME: the worker is killed right after the first stand-in reply (exit 9)",
+                       killed == 9 and len(stand_in_requests(log)) == before + 1,
+                       {"exit": killed, "stand_in_requests": len(stand_in_requests(log)) - before})
+        changed = _release_worker(_release_env(env, port, CHANGED_RELEASE_ID), logs, "research-release-worker-changed",
+                                  "pass", [faults["stale"]["job_id"]])
+        missing = _release_worker(release_env, logs, "research-release-worker-missing", "missing",
+                                  [faults["missing"]["job_id"]])
+        ok &= rec.step("RESEARCH-RUNTIME: a changed release and a missing credential end their jobs before any request",
+                       (changed, missing) == (0, 0) and len(stand_in_requests(log)) == before + 1,
+                       {"exits": [changed, missing]})
+        results_path = evidence / "ui" / "research-results.json"
+        journey = json.loads(results_path.read_text()) if results_path.exists() else {}
+        phase_jobs = [run["jobId"] for key, run in journey.items() if key.startswith("release-")] + [
+            faults["kill"]["job_id"]]
+        worker = _release_worker(release_env, logs, "research-release-worker-1", "pass", phase_jobs)
+        ok &= rec.step("RESEARCH-RUNTIME: bounded release worker pass over this phase's jobs (stand-in only; the "
+                       "killed job reconciles without a call)", worker == 0 and len(phase_jobs) == 3,
+                       {"exit": worker, "jobs": len(phase_jobs)})
+        code = run_playwright(["research-release-report.spec.mjs"], ui_env, evidence / "ui-research-release-report.log")
+        ok &= rec.step("RESEARCH-RUNTIME: report and dataset with stand-in labels and hashes, market adoption, "
+                       "publication and a labelled replay with simulated fills; owner B denied (desktop and 390px)",
+                       code == 0, {"exit": code})
+        results = json.loads(results_path.read_text()) if results_path.exists() else {}
+        requests = stand_in_requests(log)
+        inspection = inspect_release(pg, results, faults, requests)
+        rec.write("research-release-inspection.json", inspection)
+        ok &= rec.step("RESEARCH-RUNTIME: SQL matches the screens and the stand-in provider's own request log",
+                       inspection["all_checks_pass"], inspection["expectations"])
+        host.stop()
+        host = _spawn(release_env, "api-research-release-restarted", RELEASE_HOST, [str(api_port)], logs)
+        processes.append(host)
+        harness.wait_http(f"{api_url}/readyz")
+        again = _release_worker(release_env, logs, "research-release-worker-restarted", "pass",
+                                [*phase_jobs, faults["stale"]["job_id"], faults["missing"]["job_id"]])
+        code = run_playwright(["research-release-restart.spec.mjs"], ui_env, evidence / "ui-research-release-restart.log")
+        after = inspect_release(pg, results, faults, stand_in_requests(log))
+        rec.write("research-release-inspection-after-restart.json", after)
+        ok &= rec.step("RESEARCH-RUNTIME: after an API and worker restart the report, dataset and replay reopen "
+                       "unchanged in a new context; no request was repeated; owner B denied",
+                       again == 0 and code == 0 and after["jobs"] == inspection["jobs"]
+                       and after["replays"] == inspection["replays"] and len(stand_in_requests(log)) == len(requests),
+                       {"worker_exit": again, "spec_exit": code, "stand_in_requests": len(stand_in_requests(log))})
+        host.stop()
+        standard = harness.start_api(env, api_port, logs, name="api-after-research-release")
+        processes.append(standard)
+        harness.wait_http(f"{api_url}/readyz")
+        run = next(iter(value for key, value in results.items() if key.startswith("release-")), {})
+        status_list, plain = _http_status(f"{api_url}/v1/research/history-sources", token)
+        refused, body = _http_status(
+            f"{api_url}/v1/research/requests/{faults['stale']['intake_id']}/history-investigations/"
+            f"{faults['stale']['declaration_id']}/jobs", fault_tokens["stale"], "POST",
+            {"operation_id": "3f1c2a4e-0b7d-4c5e-9a8b-1d2e3f4a5b6c", "request_key": "verifier-no-release"})
+        ok &= rec.step("RESEARCH-RUNTIME: the standard API composes no release: the source is not listed and a saved "
+                       "release declaration cannot start (409 operating_release_unavailable)",
+                       status_list == 200 and not any("release" in item for item in plain.get("sources", []))
+                       and plain.get("operating_release") is None
+                       and (refused, body.get("code")) == (409, "operating_release_unavailable")
+                       and len(stand_in_requests(log)) == len(requests), {"status": refused, "code": body.get("code"),
+                                                                          "run": bool(run)})
+        texts = [*logs.glob("*.log"), *(evidence / "ui").glob("*.json"), *evidence.glob("ui-*.log"), log]
+        leaked = [p.name for p in texts if p.exists() and any(value in p.read_text(errors="ignore")
+                                                                for value in RELEASE_SENTINELS)]
+        ok &= rec.step("RESEARCH-RUNTIME: no stand-in credential appears in logs, browser results or the request log",
+                       not leaked, leaked)
+    finally:
+        if host is not None:
+            try:
+                host.stop()
+            except Exception as error:  # noqa: BLE001
+                ok &= rec.step("RESEARCH-RUNTIME: stop the release API", False, f"{type(error).__name__}: {error}")
+        if standard is current_api:  # a step raised before the standard API was restarted
+            standard = harness.start_api(env, api_port, logs, name="api-after-research-release")
+            processes.append(standard)
+            harness.wait_http(f"{api_url}/readyz")
+    return bool(ok), standard
