@@ -11,7 +11,8 @@ The job never holds a key or a network path: its one request goes through the jo
 the synthetic key and is the only component that can reach the AUTHORED provider. Construction does no I/O: no file is
 read or written, no key is read and nothing starts. An ACTUAL route is refused before anything is built unless the
 caller gives the approved release record it came from (CONTRACT A6); none is approved in this candidate. With an ACTUAL
-record a counted result also needs the relay's recorded provider cost within the attempt's reserved liability.
+record the caller must also give the ledger's own TokenPrice, and a counted result needs the provider-reported cost,
+rounded up to a whole nano-USD, to EQUAL that price's charge for the reported usage, within the held reservation.
 See `docs/qualification/hermes-provider-relay/CONTRACT.md`.
 """
 
@@ -25,7 +26,7 @@ import stat
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,7 @@ from guarded_turn_runner import GuardedTurnRunner
 from provider_guard import GuardPolicy
 from provider_transport import HERMES_CLIENT_URL, ActualProviderUnavailable, TransportRoute
 from relay_admission import CLOCK_SKEW_SECONDS, ActualRelease, RelayRelease, RelaySubject, issue_grant
-from spend_ledger import SpendLedger
+from spend_ledger import EXACT, NANO, SpendLedger, TokenPrice
 from transport_turn_runner import TransportTurnRunner
 
 __all__ = ["RelayEndpoint", "RelayJob", "RelayTurnRunner", "build_relay_job", "relay_job_entry"]
@@ -112,11 +113,12 @@ class RelayTurnRunner:
     def __init__(self, delegate: HermesTurnRunner, *, endpoint: RelayEndpoint, release: RelayRelease, policy: GuardPolicy,
                  ledger: SpendLedger, scope_for: Callable[[HermesTurn], str],
                  subject_for: Callable[[HermesTurn], RelaySubject], run_id: str, timeout_seconds: float,
-                 close_budget_seconds: float, actual: ActualRelease | None = None) -> None:
+                 close_budget_seconds: float, actual: ActualRelease | None = None,
+                 price: TokenPrice | None = None) -> None:
         self._delegate, self._endpoint, self._release, self._policy = delegate, endpoint, release, policy
         self._ledger, self._scope_for, self._subject_for = ledger, scope_for, subject_for
         self._run_id, self._timeout, self._close_budget = run_id, timeout_seconds, close_budget_seconds
-        self._actual = actual
+        self._actual, self._price = actual, price
 
     def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
         try:
@@ -191,15 +193,23 @@ class RelayTurnRunner:
             time.sleep(CLOSE_POLL_SECONDS)
         return closed, _read_json(records / "finished.json")
 
-    def _cost_within_reservation(self, attempt_id: str, finished: dict[str, Any]) -> bool:
-        """The relay's recorded provider cost is a finite number no larger than this attempt's reserved liability."""
-        cost = finished.get("cost")
-        if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
+    def _cost_equals_charge(self, attempt_id: str, finished: dict[str, Any]) -> bool:
+        """E1-COST1: the provider-reported cost, rounded up to a whole nano-USD like the ledger rounds, equals the ledger
+        price's charge for the reported usage, and that charge is within the held reservation. Unreadable means no.
+
+        shortcut: other provider prices, cached-token discounts or fees make this UNKNOWN; settling at a reported cost
+        needs the ledger owner (CONTRACT A6)."""
+        cost, usage = finished.get("cost"), finished.get("usage")
+        if (self._price is None or isinstance(cost, bool) or not isinstance(cost, (int, float))
+                or not math.isfinite(cost) or cost < 0 or not isinstance(usage, dict)):
             return False
         try:
+            reported = int(EXACT.multiply(Decimal(repr(cost)), NANO).to_integral_value(rounding=ROUND_CEILING,
+                                                                                        context=EXACT))
+            charge = self._price.nano_usd(usage["prompt_tokens"], usage["completion_tokens"])
             liability = self._ledger.liability_usd(attempt_id)
-            return liability is not None and Decimal(repr(cost)) <= liability
-        except Exception:  # noqa: BLE001 - an unreadable liability never counts a result
+            return reported == charge and liability is not None and EXACT.divide(Decimal(charge), NANO) <= liability
+        except Exception:  # noqa: BLE001 - unreadable evidence never counts a result
             return False
 
     def _limited(self, result: HermesTurnResult, grant_id: str, closed: dict[str, Any] | None,
@@ -225,8 +235,8 @@ class RelayTurnRunner:
                     == (result.usage.input_tokens, result.usage.output_tokens, result.usage.total_tokens))
             if not same:
                 return self._withheld(result, "RelayCountMismatch")
-            if self._actual is not None and not self._cost_within_reservation(attempt_id, finished):
-                return self._withheld(result, "RelayCostUnverified")  # settlement at a reported cost is a later ledger change
+            if self._actual is not None and not self._cost_equals_charge(attempt_id, finished):
+                return self._withheld(result, "RelayCostUnverified")  # the full reservation stays as liability
             return result
         if result.request_count == 0:  # the relay started a request the job says it never sent
             return self._withheld(result, "RelayCountMismatch")
@@ -268,13 +278,17 @@ def build_relay_job(route: TransportRoute, *, release: RelayRelease, endpoint: R
                     script_for: Callable[[HermesTurn], Mapping[str, Any]], forbidden: Sequence[str] = (),
                     timeout_seconds: float = 90, run_budget_seconds: int = 60, seal_grace_seconds: float = 5.0,
                     recovery_budget_seconds: float = 5.0, close_budget_seconds: float = 2.0,
-                    actual: ActualRelease | None = None) -> RelayJob:
+                    actual: ActualRelease | None = None, price: TokenPrice | None = None) -> RelayJob:
+    """`price` is required for an ACTUAL route: the SAME TokenPrice the caller gave its ledger (the trusted composition
+    owner's obligation; a type check cannot prove it). An AUTHORED route takes no record and no price."""
     if route.kind == "ACTUAL":
         if actual is None or actual.release != release:
             raise ActualProviderUnavailable("an ACTUAL route needs its approved release record (CONTRACT A6)")
+        if not isinstance(price, TokenPrice):
+            raise ValueError("an ACTUAL route needs the ledger's own TokenPrice (E1-COST1)")
         _check_actual(route, actual, policy)
-    elif route.kind != "AUTHORED" or actual is not None or release.kind != "AUTHORED":
-        raise ValueError("an AUTHORED route takes an AUTHORED release and no ACTUAL record")
+    elif route.kind != "AUTHORED" or actual is not None or price is not None or release.kind != "AUTHORED":
+        raise ValueError("an AUTHORED route takes an AUTHORED release, no ACTUAL record and no price")
     if (release.route_id, release.max_reply_bytes) != (route.route_id, route.max_reply_bytes) or (
             release.model, release.max_output_tokens, release.max_request_bytes) != (
             policy.model, policy.max_output_tokens, policy.max_request_bytes):
@@ -289,5 +303,6 @@ def build_relay_job(route: TransportRoute, *, release: RelayRelease, endpoint: R
         job_entry=relay_job_entry(route, release))
     relay = RelayTurnRunner(TransportTurnRunner(supervision, route), endpoint=endpoint, release=release, policy=policy,
                             ledger=ledger, scope_for=scope_for, subject_for=subject_for, run_id=run_id,
-                            timeout_seconds=timeout_seconds, close_budget_seconds=close_budget_seconds, actual=actual)
+                            timeout_seconds=timeout_seconds, close_budget_seconds=close_budget_seconds, actual=actual,
+                            price=price)
     return RelayJob(GuardedTurnRunner(relay, ledger, policy, scope_for), supervision)
