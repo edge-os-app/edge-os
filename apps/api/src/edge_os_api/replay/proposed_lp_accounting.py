@@ -80,6 +80,10 @@ class ProposedLpResult:
     reasons: tuple[str, ...]
 
 
+def _is_nonnegative_finite(value: Decimal | None) -> bool:
+    return value is not None and value.is_finite() and value >= 0
+
+
 def calculate_proposed_lp_result(valuation: ProposedLpValuation) -> ProposedLpResult:
     """Report components once; unknown inputs withhold only affected conclusions."""
     values = {
@@ -102,11 +106,18 @@ def calculate_proposed_lp_result(valuation: ProposedLpValuation) -> ProposedLpRe
         "inventory_quote", "separately_held_fees_quote", "gas_quote", "rebalance_cost_quote", "comparator_quote",
     )):
         reasons += ("NEGATIVE_LP_COMPONENT",)
+    impermanent_loss = None
+    if (
+        valuation.model.is_usable()
+        and _is_nonnegative_finite(valuation.inventory_quote)
+        and _is_nonnegative_finite(valuation.comparator_quote)
+    ):
+        with localcontext(strategy_compiler.NUMERIC):
+            impermanent_loss = valuation.inventory_quote - valuation.comparator_quote
     if reasons:
-        return ProposedLpResult(valuation.inventory_quote, valuation.separately_held_fees_quote, None, None, reasons)
+        return ProposedLpResult(valuation.inventory_quote, valuation.separately_held_fees_quote, impermanent_loss, None, reasons)
     assert all(value is not None for value in values.values())
     with localcontext(strategy_compiler.NUMERIC):
-        impermanent_loss = valuation.inventory_quote - valuation.comparator_quote
         net_benefit = (
             valuation.inventory_quote + valuation.separately_held_fees_quote
             - valuation.gas_quote - valuation.rebalance_cost_quote

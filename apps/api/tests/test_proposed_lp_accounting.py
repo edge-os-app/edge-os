@@ -40,9 +40,14 @@ def test_lp_net_benefit_keeps_il_diagnostic_out_of_the_formula() -> None:
 
 
 def test_unknown_cost_or_double_counted_reinvested_fee_withholds_net_result() -> None:
-    unknown = calculate_proposed_lp_result(_valuation(gas_quote=None))
+    unknown_gas = calculate_proposed_lp_result(_valuation(gas_quote=None))
+    unknown_rebalance = calculate_proposed_lp_result(_valuation(rebalance_cost_quote=None))
     double_count = calculate_proposed_lp_result(_valuation(fees_reinvested=True))
-    assert unknown.net_benefit_quote is None and unknown.reasons == ("UNKNOWN:gas_quote",)
+    assert unknown_gas.impermanent_loss_diagnostic_quote == Decimal("-100")
+    assert unknown_gas.net_benefit_quote is None and unknown_gas.reasons == ("UNKNOWN:gas_quote",)
+    assert unknown_rebalance.impermanent_loss_diagnostic_quote == Decimal("-100")
+    assert unknown_rebalance.net_benefit_quote is None
+    assert unknown_rebalance.reasons == ("UNKNOWN:rebalance_cost_quote",)
     assert double_count.net_benefit_quote is None and double_count.reasons == ("REINVESTED_FEE_DOUBLE_COUNT",)
 
 
@@ -55,3 +60,14 @@ def test_negative_cost_is_refused_rather_than_improving_lp_result() -> None:
     result = calculate_proposed_lp_result(_valuation(gas_quote=Decimal("-1")))
     assert result.net_benefit_quote is None
     assert result.reasons == ("NEGATIVE_LP_COMPONENT",)
+
+
+def test_il_diagnostic_requires_usable_identity_and_known_nonnegative_core_values() -> None:
+    unusable_model = ProposedLpModelIdentity("chain-x", "venue-y", "", "model-v1", "USDC")
+    cases = (
+        _valuation(model=unusable_model),
+        _valuation(inventory_quote=None),
+        _valuation(comparator_quote=Decimal("-1")),
+    )
+    for valuation in cases:
+        assert calculate_proposed_lp_result(valuation).impermanent_loss_diagnostic_quote is None

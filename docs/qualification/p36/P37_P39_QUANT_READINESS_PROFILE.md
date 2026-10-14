@@ -1,4 +1,4 @@
-# P36 → P37 → P39 proposed LP quantitative readiness profile
+# P36 → P37 → P38 → P39 proposed LP quantitative readiness profile
 
 Status: **proposal only; P36 remains unresolved and P37–P39 are not started.**
 The existing P36 mechanics fixture remains illustrative constant-product
@@ -56,7 +56,7 @@ add them both to inventory and a separate fee balance.
 | Missing position/fee history | The affected inventory/fee/net-benefit claim is `UNKNOWN`; no zero-fill. |
 | Collected versus accrued versus reinvested fee | Report distinct values and prevent double count. |
 | Partial removal or range change | Preserve old/new position identity, timing, residual inventory and cash flow. |
-| Rebalance cost unknown | Show the gross components but withhold net benefit. |
+| Gas or rebalance cost unknown | Show the gross components and a valid cost-independent IL diagnostic, but withhold net benefit. |
 | Comparator receives a deposit/withdrawal | Apply the identical declared external cash flow, or mark comparison unavailable. |
 | Price/decimal/source mismatch | Refuse valuation until unit conversion and source time are identified. |
 | Two model versions share a pool ID | Refuse aggregation; preserve the model/version identity. |
@@ -66,7 +66,9 @@ add them both to inventory and a separate fee balance.
 
 This profile is ready only to receive a controller-selected P36 model/data
 packet. It does not select a venue, gather history, compile a rule, or run a
-simulation. Those choices need a separate assignment after the adoption gate.
+simulation. P36 has only an unresolved preparation/reference-case closure;
+P37, P38 and P39 remain unstarted. Those choices need a separate assignment
+after the adoption gate.
 
 Run its focused proposal checks from the repository root:
 
