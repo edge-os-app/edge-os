@@ -15,6 +15,9 @@ import datetime as dt
 import http.client
 import json
 import shutil
+import sys
+import threading
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -34,8 +37,15 @@ from edge_os_api.execution.original_transaction import (
 from edge_os_api.execution.privy_signer import PrivySignerClient
 from edge_os_api.execution.transport import PreparedSubmission
 from edge_os_api.research_history.http_clients.client_config import HttpProviderError
-from edge_os_api.research_history.http_clients.http_transport import HttpResponse
+from edge_os_api.research_history.http_clients.http_transport import HttpResponse, StdlibHttpTransport
 from edge_os_api.research_history.provider_transport import SourceCancelled, SourceTimeout
+
+# The accepted owned-loopback helpers live in a sibling test folder (shared server and recording connector).
+_LOOPBACK_HELPERS = str(Path(__file__).resolve().parent.parent / "nansen_http_transport")
+if _LOOPBACK_HELPERS not in sys.path:
+    sys.path.insert(0, _LOOPBACK_HELPERS)
+
+import nansen_http_support as loopback  # noqa: E402
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 EXPECTED = json.loads((FIXTURES / "privy_signer" / "expected_request.json").read_text())
@@ -641,3 +651,162 @@ def test_a_local_refusal_reaches_the_caller_as_definitely_unsent(tmp_path):
     assert (outcome.outcome, outcome.detail) == ("DEFINITELY_UNSENT", "SIGNER_REFUSED")
     assert (http.calls, authorize.payloads) == ([], [])
     assert broadcasts(recordings) == 0
+
+
+# ------------------------------------------------------------------------------------------- owned loopback
+#
+# The shipped `StdlibHttpTransport` over an owned 127.0.0.1 listener, reusing the accepted Nansen loopback helpers.
+# The client keeps its literal `https://api.privy.io/...` URL and authorization payload; only the injected connector
+# points the socket at the owned port and records the requested target. This proves the shipped socket/HTTP handling
+# (framing, bounds, redirect refusal, deadline, cancellation, close) in this process. It does not prove public DNS,
+# TLS or Privy acceptance. Credentials and signatures are synthetic. Every test here opens sockets: run them only in a
+# granted loopback window (`-k loopback`); the pure selection is `-k "not loopback"`.
+
+Reply = loopback.http_support.Reply
+LoopbackServer = loopback.http_support.LoopbackServer
+RPC_PATH = "/v1/wallets/wallet_abc-123/rpc"
+
+
+class Listener:
+    """Records every request the owned server receives and answers with one scripted reply."""
+
+    def __init__(self, answer: Any) -> None:
+        self.answer = answer
+        self.received: list[tuple[str, str, dict[str, str], bytes]] = []
+
+    def __call__(self, method: str, path: str, headers: Mapping[str, str], body: bytes) -> Any:
+        self.received.append((method, path, {name.lower(): value for name, value in headers.items()}, body))
+        return self.answer
+
+
+def live_timers() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate() if isinstance(thread, threading.Timer) and thread.is_alive()]
+
+
+def over_loopback(server: Any, authorize: Any = None, *, on_connect: Callable[[], None] | None = None,
+                  **overrides: Any) -> tuple[PrivySignerClient, Any]:
+    connector = loopback.LoopbackConnector(server, on_connect=on_connect)
+    values: dict[str, Any] = dict(monotonic=time.monotonic, deadline_monotonic=time.monotonic() + 30.0,
+                                  connect_timeout_seconds=2.0)
+    values.update(overrides)
+    return client(StdlibHttpTransport(connect=connector), authorize, **values), connector
+
+
+def assert_one_closed_attempt(connector: Any, listener: Listener) -> None:
+    assert connector.targets == [("https", "api.privy.io", None)]
+    assert len(connector.sockets) == 1 and connector.sockets[0].fileno() == -1
+    assert len(listener.received) == 1
+    assert live_timers() == []
+
+
+def json_reply(payload: Any, status: int = 200, headers: Mapping[str, str] | None = None) -> Any:
+    return Reply(status=status, body=json.dumps(payload).encode(),
+                 headers=dict(headers or {"content-type": "application/json"}))
+
+
+def test_loopback_one_post_carries_the_literal_request_and_returns_the_signed_envelope():
+    listener = Listener(json_reply({"method": "eth_signTransaction",
+                                    "data": {"signed_transaction": SHORT_SIGNED, "encoding": "rlp"}}))
+    with LoopbackServer(listener) as server:
+        signer, connector = over_loopback(server)
+        result = signer.rpc(WALLET_ID, body())
+
+    assert result == {"data": {"signed_transaction": SHORT_SIGNED, "encoding": "rlp"}}
+    assert_one_closed_attempt(connector, listener)
+    method, path, headers, sent = listener.received[0]
+    assert (method, path, sent) == ("POST", RPC_PATH, EXPECTED["wire_body"].encode())
+    assert {name: headers[name] for name in EXPECTED["headers"]} == EXPECTED["headers"]
+    assert headers["content-length"] == str(len(EXPECTED["wire_body"]))
+
+
+def test_loopback_the_caller_validates_and_broadcasts_the_signed_reply_once(tmp_path):
+    listener = Listener(json_reply({"method": "eth_signTransaction",
+                                    "data": {"signed_transaction": recorded_signature("ENTRY", 0),
+                                             "encoding": "rlp"}}))
+    with LoopbackServer(listener) as server:
+        signer, connector = over_loopback(server)
+        transport, recordings, stages = original(tmp_path, signer)
+        outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("SUBMISSION_POSSIBLE", "BROADCAST_RETURNED")
+    assert dict(stages)["SIGNED"]["transaction_hash"] == ENTRY_NONCE0_HASH
+    assert broadcasts(recordings) == 1
+    assert_one_closed_attempt(connector, listener)
+
+
+@pytest.mark.parametrize("answer", [
+    json_reply({"error": {"code": "policy_violation"}}, 403),
+    json_reply({"error": "request_expired"}, 400),
+    json_reply({"error": "internal"}, 500),
+    Reply(status=403, body=b"<html>Attention Required! | Cloudflare</html>", headers={"content-type": "text/html"}),
+    Reply(status=302, body=b"", headers={"location": "https://api.privy.io/v1/wallets/other/rpc"}),
+    Reply(status=200, body=b"{not json", headers={"content-type": "application/json"}),
+    Reply(status=200, body=b"x" * 20_000, headers={"content-type": "application/json"}),
+    Reply(raw_http=b"HTTP/1.1 abc\r\n\r\n"),
+])
+def test_loopback_an_error_redirect_malformed_or_oversized_reply_is_unknown_after_one_attempt(answer, caplog):
+    listener = Listener(answer)
+    with LoopbackServer(listener) as server:
+        signer, connector = over_loopback(server)
+        with pytest.raises(RpcError) as raised:
+            signer.rpc(WALLET_ID, body())
+
+    assert_one_closed_attempt(connector, listener)
+    assert_no_secret(raised.value)
+    assert all(secret not in caplog.text for secret in SECRETS)
+
+
+@pytest.mark.parametrize("answer", [
+    Reply(raw_http=b""),
+    Reply(raw_http=b"HTTP/1.1 200 OK\r\ncontent-length: 400\r\n\r\n{\"method\""),
+])
+def test_loopback_an_empty_or_truncated_reply_after_dispatch_stays_unknown_after_one_attempt(answer):
+    # The keep-alive listener sends nothing or a short body and holds the socket: the 2 s socket timeout ends it.
+    listener = Listener(answer)
+    with LoopbackServer(listener) as server:
+        signer, connector = over_loopback(server)
+        with pytest.raises((RpcError, ReplyLost)) as raised:  # both are SIGNING_UNKNOWN to the caller
+            signer.rpc(WALLET_ID, body())
+
+    assert_one_closed_attempt(connector, listener)
+    assert_no_secret(raised.value)
+
+
+def test_loopback_a_slow_reply_past_the_deadline_is_a_lost_reply_after_one_attempt():
+    listener = Listener(Reply(status=200, body=b"{}", delay_before_headers=1.5))
+    with LoopbackServer(listener) as server:
+        signer, connector = over_loopback(server, deadline_monotonic=time.monotonic() + 0.5)
+        started = time.monotonic()
+        with pytest.raises(ReplyLost):
+            signer.rpc(WALLET_ID, body())
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 1.4
+    assert_one_closed_attempt(connector, listener)
+
+
+def test_loopback_an_in_flight_cancellation_stops_a_paced_body_as_a_lost_reply():
+    listener = Listener(Reply(chunks=[b"{", b'"method"', b':"eth_signTransaction"', b"}"], pause_between_chunks=0.2))
+    flag = {"cancel": False}
+    with LoopbackServer(listener) as server:
+        # The flag turns on once the socket is open, so only the in-flight checks can see it.
+        signer, connector = over_loopback(server, on_connect=lambda: flag.update(cancel=True),
+                                          cancel=lambda: flag["cancel"])
+        started = time.monotonic()
+        with pytest.raises(ReplyLost):
+            signer.rpc(WALLET_ID, body())
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 0.6
+    assert_one_closed_attempt(connector, listener)
+
+
+def test_loopback_a_reply_that_echoes_the_credential_is_unknown_and_never_repeats_it():
+    listener = Listener(json_reply({"error": {"message": f"bad {APP_SECRET} {SIGNATURE}"}}, 401))
+    with LoopbackServer(listener) as server:
+        signer, connector = over_loopback(server)
+        with pytest.raises(RpcError) as raised:
+            signer.rpc(WALLET_ID, body())
+
+    assert_one_closed_attempt(connector, listener)
+    assert_no_secret(raised.value)
