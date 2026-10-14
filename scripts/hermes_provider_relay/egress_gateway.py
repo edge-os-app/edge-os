@@ -117,6 +117,8 @@ def address_refusal(address: str) -> str | None:
         return "dns_answer_invalid"
     if ip.version == 6 and ip in NAT64:  # judge the IPv4 target a translator would reach, by the same rule
         return address_refusal(str(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)))
+    if ip.version == 6 and ip.is_reserved:  # e.g. ::/96 IPv4-compatible or 7000::1: Python may still call them global
+        return "dns_answer_not_global"
     mapped = getattr(ip, "ipv4_mapped", None)
     if mapped is not None or not ip.is_global or ip.is_multicast or any(ip in net for net in DOCKER_RANGES
                                                                           if net.version == ip.version):

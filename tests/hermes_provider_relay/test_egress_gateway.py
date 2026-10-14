@@ -526,3 +526,26 @@ def test_a_failed_look_before_the_answer_is_recorded_as_unknown_state_and_the_pr
     assert [(r["outcome"], r["reason"]) for r in receipts(tmp_path)] == [("opening", None),
                                                                          ("refused", "socket_state_unknown")]
     assert ESTABLISHED not in client.sent and upstream.sent == b"" and upstream.closed
+
+
+# --- address repair (controller disposition l1-addressrepair1.md): reserved IPv6 is refused ------------------------
+
+
+@pytest.mark.parametrize("address", ["::a00:1", "::7f00:1", "::c0a8:41fe", "::ac11:1", "7000::1"])
+def test_a_reserved_ipv6_answer_is_refused_even_where_python_calls_it_global(address: str) -> None:
+    assert address_refusal(address) == "dns_answer_not_global"
+
+
+@pytest.mark.parametrize("address", ["64:ff9b::6812:273", "2606:4700:4700::1111", "104.18.2.115"])
+def test_public_ipv4_native_ipv6_and_a_public_nat64_target_stay_allowed(address: str) -> None:
+    assert address_refusal(address) is None
+
+
+@pytest.mark.parametrize("address", ["::ffff:10.0.0.1", "2002:a00:1::", "2001::a00:1", "64:ff9b:1::a00:1"])
+def test_mapped_6to4_teredo_and_local_nat64_answers_stay_refused(address: str) -> None:
+    assert address_refusal(address) == "dns_answer_not_global"
+
+
+def test_one_reserved_ipv6_answer_refuses_the_whole_name() -> None:
+    with pytest.raises(ValueError, match="dns_answer_not_global"):
+        choose_address([answer("104.18.2.115"), answer("::a00:1")])
