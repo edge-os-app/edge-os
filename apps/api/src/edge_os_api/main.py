@@ -25,8 +25,8 @@ from edge_os_api.usage import quota, rate_limit
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service as service
 from edge_os_api.research.attempt_store import AdvisoryLockGuard
-from edge_os_api.research.hermes_interpreter import HermesTurnRunner
-from edge_os_api.research.interpretation_workflow import HermesResearch
+from edge_os_api.research.hermes_interpreter import HermesInterpreterConfig, HermesTurnRunner
+from edge_os_api.research.interpretation_workflow import LOCAL_FAKE_CONFIG, HermesResearch
 from edge_os_api.replay import saved_runs as spot_replay_api
 from edge_os_api.core.authentication import Principal, Verifier, require_principal
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
@@ -107,17 +107,25 @@ def parse_body(model: type[ModelT], data: Any) -> ModelT:
 
 
 def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner | None = None,
-               research_runtime: ReleasedSourceRuntime | None = None) -> FastAPI:
+               research_runtime: ReleasedSourceRuntime | None = None,
+               hermes_config: HermesInterpreterConfig | None = None) -> FastAPI:
     """Compose the application. `hermes_runner` is the process boundary of the local Hermes interpreter.
 
-    Only the `hermes_local` setting uses it, and that setting needs it. `research_runtime` is a composed operating
-    release (`core/research/released_source_runtime.py`). Without one, the server bootstrap composes the approved
-    code-owned release, the same one the worker composes; none exists and no setting adds one, so the default reaches
-    no provider.
+    Only the `hermes_local` setting uses it, and that setting needs it. `hermes_config` is the interpreter configuration
+    of the release that runner serves (`research/hermes_relay_composition.py`); without one the runner serves the local
+    fake provider configuration. A configuration needs its runner and is refused in production.
+
+    `research_runtime` is a composed operating release (`core/research/released_source_runtime.py`). Without one, the
+    server bootstrap composes the approved code-owned release, the same one the worker composes; none exists and no
+    setting adds one, so the default reaches no provider.
     """
     settings = settings or load_settings()
     if settings.interpreter == "hermes_local" and hermes_runner is None:
         raise ConfigError("invalid configuration: interpreter: hermes_local needs a Hermes runner")
+    if hermes_config is not None and (settings.interpreter != "hermes_local" or hermes_runner is None
+                                      or settings.env == "production"):
+        raise ConfigError("invalid configuration: interpreter: a Hermes release configuration needs hermes_local, "
+                          "its Hermes runner and a non-production environment")
     if research_runtime is None:
         try:
             research_runtime = released_runtime_bootstrap.server_research_runtime(settings)
@@ -144,7 +152,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     wallet_provider = build_wallet_provider(settings.wallet_provider)
     session_factory = make_session_factory(engine)
     started_at = service.utcnow().isoformat()
-    hermes = (HermesResearch(hermes_runner, session_factory, AdvisoryLockGuard(engine), time.monotonic)
+    hermes = (HermesResearch(hermes_runner, session_factory, AdvisoryLockGuard(engine), time.monotonic,
+                             hermes_config or LOCAL_FAKE_CONFIG)
               if settings.interpreter == "hermes_local" and hermes_runner is not None else None)
 
     @asynccontextmanager
