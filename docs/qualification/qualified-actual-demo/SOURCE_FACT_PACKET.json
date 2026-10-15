@@ -10,7 +10,7 @@
   "requires_new_capability": {
     "needed": true,
     "reason": "No accepted tool runs these reads on a fixed schedule and saves hashed results. The application release allowlist is exactly eth_chainId and eth_getTransactionReceipt (operating_release.RPC_METHODS), and release facts freeze before a run.",
-    "scope_of_separate_packet": "A reviewed, owner-run recorder that reads credential slots at run time, makes only the calls below, enforces each max_calls and the packet stop rules, never retries, and writes the outputs below plus request and response SHA-256 values. It must not import or change the application release path."
+    "scope_of_separate_packet": "A reviewed, owner-run recorder that reads credential slots at run time, makes only the calls below, enforces each max_calls and the safety stops and evidence outcomes, never retries, and writes the outputs below plus request and response SHA-256 values. It must not import or change the application release path."
   },
   "global_rules": {
     "credentials": "Read at run time from the named slots only. No key, URL path secret or authorization header in any output, log, evidence or model input.",
@@ -270,17 +270,21 @@
               "block": [
                 "number",
                 "timestamp",
-                "hash",
-                "parent_hash"
+                "hash"
               ],
               "log": [
+                "address",
+                "topic0",
+                "topic1",
+                "topic2",
+                "topic3",
+                "data",
                 "block_number",
                 "block_hash",
                 "transaction_hash",
                 "transaction_index",
                 "log_index",
-                "address",
-                "topic0"
+                "removed"
               ]
             }
           },
@@ -292,11 +296,15 @@
             "last_block_timestamp",
             "covers_bucket",
             "log_count",
+            "per-bucket payload digest (see payload_binding)",
             "B_PRE and B_START (bucket 1)",
             "B_END and B_POST (bucket 4)",
-            "response_sha256"
+            "request_sha256",
+            "response_sha256",
+            "private full reply"
           ],
-          "supplies": "delivery_records: bucket start -> reply_received_at_utc of the first recorder reply whose blocks cover the bucket; exact B_PRE, B_START, B_END, B_POST"
+          "supplies": "delivery_records candidates: bucket start -> reply_received_at_utc of the first recorder reply whose blocks cover the bucket, with the payload digest of every log in that bucket received at or before that reply; exact B_PRE, B_START, B_END, B_POST",
+          "field_selection_basis": "Exactly LOG_FIELD_SELECTION and BLOCK_FIELD_SELECTION of the accepted apps/api/src/edge_os_api/research_history/http_clients/envio_query_client.py, so the reply carries the amount words and indexed topics the P07 decoder needs."
         }
       ],
       "max_calls_by_provider": {
@@ -307,7 +315,8 @@
       ],
       "evidence_if": [
         "A bucket is still uncovered after its second read: it has no delivery record. The release must then declare ASSUMED_DELAY, not OBSERVED_DELIVERY (OPERATING_PACKET.md section 2.1). The remaining bucket reads still run.",
-        "log_count over the scan from B_PRE exceeds 61: complete corroboration is not reachable. Record it; P4 and P5 still run."
+        "log_count over the scan from B_PRE exceeds 61: complete corroboration is not reachable. Record it; P4 and P5 still run.",
+        "A boundary block (B_PRE, B_START, B_END or B_POST) cannot be determined: the reads that need it are not made, and no release is frozen from this attempt. A new attempt needs a new decision."
       ]
     },
     {
@@ -365,7 +374,7 @@
     },
     {
       "id": "P5",
-      "when": "At WINDOW_END + 60 s or later and before WINDOW_END + 3600 s, after P3 ended and P4 ended without a safety stop",
+      "when": "At WINDOW_END + 60 s or later and before WINDOW_END + 3600 s, after P3 ended and P4 ended or was not run, in both cases without a safety stop",
       "depends_on": [
         "P3",
         "P4"
@@ -438,7 +447,7 @@
         "quicknode": 6
       },
       "safety_stop_if": [
-        "any decimals value differs from the P4 value"
+        "any decimals value differs from the P4 value, or from 18 when the P4 read is NOT_READ"
       ],
       "evidence_if": [
         "finalized number < B_POST + 2: finality is NOT_OBSERVED and no repeated read is made",
@@ -523,7 +532,7 @@
     "decimals": "window_start (P4), window_end and current (P5) READ only for reads that returned without error",
     "fee_transfer_semantics": "QUALIFIED only after P6 evidence and decision D5",
     "finality_at_collection": "OBSERVED_FINAL only if the P5 finalized number >= B_POST + 2",
-    "availability_model": "OBSERVED_DELIVERY with SOURCE_DELIVERY_RECORD only if P3 recorded a delivery for all 4 bucket starts and D3 is accepted. Otherwise ASSUMED_DELAY with delay_seconds 180 (the Probe A precedent used by the earlier packet; the value itself needs D3). P07 qualify does not read delivery_records, so this rule is the only guard.",
+    "availability_model": "OBSERVED_DELIVERY with SOURCE_DELIVERY_RECORD only if P3 recorded a delivery time and a payload digest for all 4 bucket starts and D3 is accepted. The dataset may then be used as QUALIFIED only after payload_binding passes for all 4 buckets. Otherwise ASSUMED_DELAY with delay_seconds 180 (the Probe A precedent used by the earlier packet; the value itself needs D3). P07 qualify does not read delivery_records or payloads, so these rules are the only guard.",
     "delivery_records": "One entry per bucket covered in P3",
     "archive_height": "P5 latest number, only if >= B_POST + 2",
     "collected_at_utc": "The P5 finalized read time, if D3 accepts it; not earlier than WINDOW_END",
@@ -539,7 +548,8 @@
     "conditions": [
       "Any 401, 402, 403 or 429 reply, or any quota, rate or payment message.",
       "A credential, key or authorization header seen in any output, log or evidence. This is also a credential incident: report it to the controller.",
-      "chain_id is not 143, or any identity mismatch listed as a safety stop in a phase.",
+      "chain_id is not 143, or eth_chainId could not be read.",
+      "Any failed P1 call, or any identity mismatch listed as a safety stop in a phase. P1 supplies the identity basis for every later read.",
       "A call beyond its max_calls, or a call not listed here, is never made."
     ]
   },
@@ -549,5 +559,28 @@
       "Any other failed call (timeout, non-200 reply, JSON-RPC error including historical-state-unavailable): that call's fact is NOT_READ or not recorded. No retry.",
       "Each phase's evidence_if entries."
     ]
+  },
+  "payload_binding": {
+    "purpose": "Bind the price and volume inputs of the later application dataset to the payload the recorder actually received at each delivery time. P07 qualify never checks this, so this comparison is the only guard.",
+    "record_fields": [
+      "block_number",
+      "transaction_index",
+      "log_index",
+      "block_hash",
+      "block_timestamp",
+      "address",
+      "topic0",
+      "topic1",
+      "topic2",
+      "topic3",
+      "data",
+      "removed"
+    ],
+    "normalization": "Hex strings lowercased; numbers as base-10 integers; block_timestamp taken from the reply's block header for that block_number; absent fields are a mismatch, never filled.",
+    "bucket_membership": "A log belongs to bucket [s, e) when its block_timestamp t satisfies s <= t < e.",
+    "digest": "For each bucket, SHA-256 of the canonical JSON list of normalized records sorted by (block_number, transaction_index, log_index). The recorder computes it from every log of that bucket received in replies up to and including the reply that first covered the bucket.",
+    "comparison": "After the application history job, compute the same digest from the saved dataset's raw records for each bucket. Every one of the 4 bucket digests must be equal, and the record counts must be equal.",
+    "if_unequal_or_missing": "The dataset's availability is unbound: whatever its saved verdict, it is not used as QUALIFIED. No replay, no qualified claim. Record the failing buckets. A new attempt needs a new decision.",
+    "byte_note": "With full log fields a 20-minute bucket reply is about the same size as the application page: about 4,000 headers x 120 B + 61 logs x 700 B = 522,700 B in total (INFERENCE, same per-item sizes as QUALIFICATION_GAPS.md section 5.4)."
   }
 }
