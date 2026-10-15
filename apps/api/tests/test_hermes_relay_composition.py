@@ -572,12 +572,12 @@ def test_a_reservation_that_no_longer_names_the_saved_owner_gets_no_grant_and_is
         mounted, owner_a, monkeypatch: pytest.MonkeyPatch) -> None:
     job = StandInJob(mounted.relay, (reply_record(), RETURNED))
     app, app_client = mounted("subject", job)
-    reserve = app.spend.reserve
+    reserve, moved = app.spend.reserve, []
 
     def reserve_then_move(attempt_id: str, **kwargs: Any) -> Any:
         made = reserve(attempt_id, **kwargs)
-        rows(app_client, "UPDATE usage_local.provider_spend_reservations SET owner_id = gen_random_uuid() "
-                         "WHERE attempt_id = :a", a=attempt_id)
+        moved.extend(rows(app_client, "UPDATE usage_local.provider_spend_reservations SET owner_id = gen_random_uuid() "
+                                      "WHERE attempt_id = :a RETURNING owner_id", a=attempt_id))
         return made
 
     monkeypatch.setattr(app.spend, "reserve", reserve_then_move)
@@ -587,3 +587,6 @@ def test_a_reservation_that_no_longer_names_the_saved_owner_gets_no_grant_and_is
     assert (attempt["status"], attempt["request_count"], attempt["error_class"]) == (
         "PROVIDER_FAILED", 0, "RelaySubjectUnavailable")
     assert app.spend.state(attempt["attempt_id"]) == "RELEASED" and job.turns == [] and mounted.relay.grants() == []
+    [(new_owner,)] = moved  # exactly one reservation row was moved before the subject check
+    row = saved(app_client, attempt["attempt_id"])
+    assert row["reserved_owner"] == new_owner != row["owner"]
