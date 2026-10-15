@@ -498,3 +498,23 @@ def test_5000_digit_saved_quantity_is_a_mismatch_through_checker_and_cli(tmp_pat
              (("handoff", handoff_bytes), ("export", export), ("expected", _expected(handoff_bytes)))}
     assert main(["--handoff", str(paths["handoff"]), "--export", str(paths["export"]), "--expected",
                  str(paths["expected"]), "--out", str(tmp_path / "report.json")]) == 1
+
+
+# GATE1 repair: G2 saved token order
+
+
+@pytest.mark.parametrize("order,expected", [([QUOTE, BASE], "MISMATCH"), ([BASE], "MISMATCH"), ("x", "MISMATCH"),
+                                            ([BASE, QUOTE, BASE], "MISMATCH"), (None, "INCOMPLETE")],
+                         ids=["reversed", "short", "not-list", "long", "null"])
+def test_saved_token_order_must_equal_base_then_quote(order: Any, expected: str) -> None:
+    export = _export()
+    export["content"]["binding_view"]["token_order"] = order
+    report = _check(_rehash(export))
+    assert report["overall"] == expected
+    assert [c["result"] for c in report["global_checks"] if c["check"] == "TOKEN_ORDER"] == [expected]
+
+
+def test_missing_saved_token_order_is_incomplete() -> None:
+    export = _export()
+    del export["content"]["binding_view"]["token_order"]
+    assert _check(_rehash(export))["overall"] == "INCOMPLETE"

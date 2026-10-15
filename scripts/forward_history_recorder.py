@@ -89,7 +89,8 @@ SECOND_READ_OFFSET = 120
 P2_EARLIEST, P2_CUTOFF = 120, 5
 LATE_PHASE_SECONDS = 3600
 SCAN_LOG_LIMIT = 61
-QUOTA_SIGNALS = (b"quota", b"rate limit", b"rate-limit", b"ratelimit", b"too many requests", b"payment",
+QUOTA_SIGNALS = (b"quota", b"rate limit", b"rate-limit", b"ratelimit", b"too many requests", b"request limit",
+                 b"requests limit", b"payment",
                  b"billing", b"insufficient credit", b"credits exhausted")
 SAFETY_CODES = frozenset({"AUTH_DENIED", "PAYMENT_REQUIRED", "RATE_LIMITED"})
 _ATTEMPT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -362,12 +363,15 @@ class RecordingTransport:
         self._urls = {"quicknode": quicknode_url, "hypersync": hypersync_url}
         self._secrets = tuple(secret for secret in secrets if secret)
         self._label = ("", "", "")
+        self._admission_end_utc: float | None = None
         self.last_receipt: dict[str, Any] | None = None
         self.stopped: str | None = None
         self._seen = (clock.utc(), clock.monotonic())
 
-    def label(self, *, phase: str, slot: str, provider: str) -> None:
+    def label(self, *, phase: str, slot: str, provider: str, admission_end_utc: float | None = None) -> None:
+        """Name the next call. `admission_end_utc` closes a fixed P3 admission slot at the durable boundary."""
         self._label = (phase, slot, provider)
+        self._admission_end_utc = admission_end_utc
 
     def observe(self) -> tuple[float, float]:
         utc, mono = self._clock.utc(), self._clock.monotonic()
@@ -399,6 +403,8 @@ class RecordingTransport:
         if journal.reply_bytes + reply_cap > MAX_TOTAL_REPLY_BYTES:
             raise AdmissionRefused("AGGREGATE_REPLY_BUDGET")
         utc, mono = self.observe()
+        if self._admission_end_utc is not None and utc >= self._admission_end_utc:
+            raise AdmissionRefused("SLOT_CLOSED")
         if mono >= deadline:
             raise AdmissionRefused("DEADLINE")
         last = journal.last_admission.get(provider)
@@ -568,7 +574,8 @@ class _Attempt:
         self.wire.label(phase=phase, slot=slot, provider="quicknode")
         return client.call(method, params)
 
-    def _hypersync(self, phase: str, slot: str, payload: Mapping[str, Any], cutoff_utc: float) -> Mapping[str, Any]:
+    def _hypersync(self, phase: str, slot: str, payload: Mapping[str, Any], cutoff_utc: float,
+                   admission_end_utc: float | None = None) -> Mapping[str, Any]:
         self._pace("hypersync")
         deadline, remaining = self._deadline(cutoff_utc)
         if remaining <= 0:
@@ -576,7 +583,7 @@ class _Attempt:
         body = json.dumps(payload, separators=(",", ":")).encode()
         headers = {"content-type": "application/json", "accept": "application/json",
                    "accept-encoding": "identity", "authorization": f"Bearer {self.hypersync_token}"}
-        self.wire.label(phase=phase, slot=slot, provider="hypersync")
+        self.wire.label(phase=phase, slot=slot, provider="hypersync", admission_end_utc=admission_end_utc)
         response = self.wire.request(method="POST", url=self.value["hypersync_url"], headers=headers, body=body,
                                      timeout=min(MAX_CONNECT_SECONDS, remaining), deadline=deadline,
                                      max_response_bytes=MAX_REPLY_BYTES, cancel=self.cancel)
@@ -839,7 +846,12 @@ class _Attempt:
                    "include_all_blocks": True, "max_num_blocks": MAX_BLOCKS_PER_PAGE,
                    "field_selection": {"block": list(BLOCK_FIELD_SELECTION), "log": list(LOG_FIELD_SELECTION)}}
         try:
-            reply = self._hypersync("P3", f"bucket{index}_{kind}", payload, cutoff)
+            reply = self._hypersync("P3", f"bucket{index}_{kind}", payload, cutoff, admission_end_utc=due + 1)
+        except AdmissionRefused as refused:
+            if refused.code == "SLOT_CLOSED":
+                return "MISSED"  # refused before the durable admission: no liability, no send
+            self._classify(refused, fatal=False, phase="P3")
+            return "FAILED"
         except Exception as error:
             self._classify(error, fatal=False, phase="P3")
             return "FAILED"
@@ -892,10 +904,8 @@ class _Attempt:
             if timestamp > receipt["utc"]:
                 return False
             previous = timestamp
-        if guard is not None and "block_number" in guard:
-            guarded = _quantity_or(guard.get("block_number"))
-            if guarded in page and str(guard.get("hash", "")).lower() != page[guarded][1]:
-                raise SafetyStop("CONFLICTING_BLOCK_FACT")
+        if guard is not None and not self._guard_consistent(guard, start, next_block, page):
+            return False
         projected: dict[tuple[int, int, int], dict[str, Any]] = {}
         for log in logs:
             if not isinstance(log, Mapping):
@@ -923,6 +933,31 @@ class _Attempt:
         self.p3_replies.append({"call_id": receipt["call_id"], "from_block": start, "next_block": next_block,
                                 "archive_height": archive, "log_count": len(projected),
                                 "received_utc_us": int(receipt["utc"] * 1_000_000)})
+        return True
+
+    def _guard_consistent(self, guard: Mapping[str, Any], start: int, next_block: int,
+                          page: Mapping[int, tuple[int, str]]) -> bool:
+        """Every supplied rollback-guard fact must match the page (source_transport._frame precedent).
+
+        A malformed fact rejects the page; a contradictory fact is a safety stop.
+        """
+        end_timestamp, end_hash = page[next_block - 1]
+        for key, expected in (("first_block_number", start), ("block_number", next_block - 1),
+                              ("timestamp", end_timestamp)):
+            if key in guard:
+                value = _quantity_or(guard[key])
+                if value is None:
+                    return False
+                if value != expected:
+                    raise SafetyStop("CONFLICTING_BLOCK_FACT")
+        for key, expected in (("hash", end_hash), ("first_parent_hash", self.headers.get(start - 1, (None, None))[1])):
+            if key in guard and guard[key] is not None:
+                try:
+                    value = hex_value(guard[key], 32, key)
+                except PayloadError:
+                    return False
+                if expected is not None and value != expected:
+                    raise SafetyStop("CONFLICTING_BLOCK_FACT")
         return True
 
     def _freeze_covered(self, receipt: Mapping[str, Any]) -> None:
@@ -1163,17 +1198,31 @@ def recover_attempt(directory: Path) -> dict[str, Any]:
     admitted = resolved = 0
     t0 = None
     admissions: dict[str, list[float]] = {"quicknode": [], "hypersync": []}
-    for line in body.splitlines():
-        record = json.loads(line)
-        if record["event"] == "ATTEMPT_STARTED":
+    lines = body.split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    torn_tail = False
+    for position, line in enumerate(lines):
+        try:
+            record = json.loads(line)
+            event = record["event"]
+        except (ValueError, TypeError, KeyError):
+            if position == len(lines) - 1:
+                torn_tail = True  # an interrupted final append; the complete prefix stays authoritative
+                break
+            raise PayloadError("JOURNAL_CORRUPT") from None
+        if event == "ATTEMPT_STARTED":
             t0 = record["t0_utc"]
         elif record["event"] == "ADMITTED":
             admitted += 1
             admissions[record["provider"]].append(record["admitted_monotonic"])
         elif record["event"] == "RESOLVED":
             resolved += 1
+    notice = ("TORN_TAIL: the final journal record is incomplete and is not counted. Any call it concerned keeps "
+              "uncertain liability; this proves neither a send nor its absence." if torn_tail else "")
     return {"t0_utc": t0, "admitted": admitted, "resolved": resolved, "unknown_liability": admitted - resolved,
-            "handoff_present": (Path(directory) / "handoff.json").exists(), "admission_monotonic": admissions}
+            "handoff_present": (Path(directory) / "handoff.json").exists(), "admission_monotonic": admissions,
+            "torn_tail": torn_tail, "notice": notice}
 
 
 def main(argv: Sequence[str] | None = None) -> int:

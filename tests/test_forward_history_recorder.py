@@ -937,8 +937,12 @@ def test_rollback_guard_hash_conflict_is_a_safety_stop(tmp_path: Path) -> None:
 
 
 def test_consistent_rollback_guard_is_accepted(tmp_path: Path) -> None:
-    result, providers, _ = run(tmp_path, configure=_page_override(
-        9, lambda page: page.update(rollback_guard={"block_number": 5, "hash": block_hash(5)})))
+    # GATE1 correction: a guard names the page-end block (source_transport._frame), not an interior block.
+    def guard(page: dict[str, Any]) -> None:
+        end = page["data"]["blocks"][-1]
+        page["rollback_guard"] = {"block_number": end["number"], "timestamp": end["timestamp"], "hash": end["hash"],
+                                  "first_block_number": page["data"]["blocks"][0]["number"]}
+    result, providers, _ = run(tmp_path, configure=_page_override(9, guard))
     assert result["status"] == "COMPLETED"
     assert handoff_of(result)["buckets"][0]["status"] == "DELIVERED"
 
@@ -1116,3 +1120,163 @@ def test_incident_call_keeps_no_body_hash_in_the_handoff(tmp_path: Path) -> None
     incident = handoff["calls"][1]
     assert incident["outcome"] == "CREDENTIAL_INCIDENT"
     assert incident["body_sha256"] is None and incident["body_bytes"] is None
+
+
+# GATE1 repair: G1 admission slot, G3 rollback guard, G4 request limit, G5 torn journal
+
+
+class SlowReadClock(FakeClock):
+    """Each UTC read inside one admission slot costs `step` seconds of elapsed work (authored clock injection)."""
+
+    def __init__(self, utc: float, slot_start: float, step: float) -> None:
+        super().__init__(utc)
+        self.slot_start, self.step = slot_start, step
+
+    def utc(self) -> float:
+        value = self.now
+        if self.slot_start <= value < self.slot_start + 1:
+            self.advance(self.step)
+        return value
+
+
+def _run_with_clock(tmp_path: Path, clock: FakeClock, lag: float = 1.0) -> tuple[dict, SyntheticProviders]:
+    providers = SyntheticProviders(clock, lag=lag)
+    result = run_attempt(recorder_input(tmp_path), transport=providers, clock=clock, credentials=Credentials())
+    return result, providers
+
+
+def test_first_slot_admission_after_the_slot_closes_is_missed_with_no_send(tmp_path: Path) -> None:
+    result, providers = _run_with_clock(tmp_path, SlowReadClock(T0 - 600, T0 + 330, 0.3))
+    handoff = handoff_of(result)
+    assert [call["what"] for call in providers.calls if call["provider"] == "hypersync"] == [
+        "query:900", "query:0", "query:64", "query:94"]
+    assert handoff["buckets"][0]["reason"] == "FIRST_SLOT_MISSED"
+    assert handoff["accounting"]["admitted"]["hypersync"] == 4
+    assert handoff["accounting"]["unknown_liability"] == 0
+    assert result["status"] == "COMPLETED"
+
+
+def test_second_slot_admission_after_the_slot_closes_is_missed_with_no_send(tmp_path: Path) -> None:
+    result, providers = _run_with_clock(tmp_path, SlowReadClock(T0 - 600, T0 + 420, 0.3), lag=60.0)
+    handoff = handoff_of(result)
+    hypersync = [call["what"] for call in providers.calls if call["provider"] == "hypersync"]
+    assert hypersync[:3] == ["query:900", "query:0", "query:29"] and len(hypersync) == 8
+    assert handoff["buckets"][0]["reason"] == "SECOND_SLOT_MISSED"
+    assert handoff["accounting"]["unknown_liability"] == 0
+
+
+def test_admission_exactly_at_slot_close_is_refused(tmp_path: Path) -> None:
+    result, providers = _run_with_clock(tmp_path, SlowReadClock(T0 - 600, T0 + 330, 0.25))
+    assert handoff_of(result)["buckets"][0]["reason"] == "FIRST_SLOT_MISSED"
+    assert "hypersync:query:0" in sequence(providers)  # the bucket-1 read still runs from the same cursor
+
+
+def _guard_page(**changes: Any) -> Callable[[dict[str, Any]], None]:
+    def damage(page: dict[str, Any]) -> None:
+        end = page["data"]["blocks"][-1]
+        guard = {"block_number": end["number"], "timestamp": end["timestamp"], "hash": end["hash"],
+                 "first_block_number": page["data"]["blocks"][0]["number"]}
+        guard.update({key: (value(end) if callable(value) else value) for key, value in changes.items()})
+        page["rollback_guard"] = guard
+    return damage
+
+
+@pytest.mark.parametrize("changes", [
+    {"timestamp": lambda end: end["timestamp"] + 1}, {"block_number": lambda end: end["number"] - 1},
+    {"first_block_number": 1}, {"hash": "0x" + "94" * 32},
+], ids=["timestamp", "last-block", "first-block", "hash"])
+def test_contradictory_rollback_guard_fact_is_a_safety_stop(tmp_path: Path, changes: dict[str, Any]) -> None:
+    result, providers, _ = run(tmp_path, configure=_page_override(9, _guard_page(**changes)))
+    assert (result["status"], result["stop_reason"]) == ("SAFETY_STOP", "CONFLICTING_BLOCK_FACT")
+    assert len(providers.calls) == 9
+    assert handoff_of(result)["buckets"][0]["status"] == "INCOMPLETE"
+
+
+@pytest.mark.parametrize("changes", [{"timestamp": "soon"}, {"block_number": True}, {"hash": "0x12"},
+                                     {"first_parent_hash": 7}], ids=["timestamp", "number", "hash", "parent"])
+def test_malformed_rollback_guard_fact_rejects_the_page(tmp_path: Path, changes: dict[str, Any]) -> None:
+    result, _, _ = run(tmp_path, configure=_page_override(9, _guard_page(**changes)))
+    assert result["status"] == "COMPLETED"
+    assert handoff_of(result)["buckets"][0]["reason"] == "FIRST_READ_REJECTED"
+
+
+def test_guard_parent_hash_contradicting_the_previous_page_is_a_safety_stop(tmp_path: Path) -> None:
+    result, providers, _ = run(tmp_path, configure=_page_override(10, _guard_page(first_parent_hash="0x" + "93" * 32)))
+    assert (result["status"], result["stop_reason"]) == ("SAFETY_STOP", "CONFLICTING_BLOCK_FACT")
+    assert len(providers.calls) == 10
+
+
+REQUEST_LIMIT = json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -32005,
+                                                                 "message": "request limit exceeded"}}).encode()
+
+
+@pytest.mark.parametrize("call_number", [2, 9, 13, 17], ids=["P1", "P3", "P4", "P5"])
+def test_request_limit_message_at_http_200_stops_every_provider(tmp_path: Path, call_number: int) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.overrides[call_number] = lambda call: HttpResponse(200, {}, REQUEST_LIMIT)
+    result, providers, _ = run(tmp_path, configure=configure)
+    assert (result["status"], result["stop_reason"]) == ("SAFETY_STOP", "QUOTA_OR_PAYMENT_SIGNAL")
+    assert len(providers.calls) == call_number
+
+
+@pytest.mark.parametrize("message", ["execution reverted", "gas limit exceeded"])
+def test_unrelated_rpc_error_stays_weak(tmp_path: Path, message: str) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.overrides[13] = lambda call: HttpResponse(200, {}, json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": message}}).encode())
+    result, providers, _ = run(tmp_path, configure=configure)
+    assert result["status"] == "COMPLETED" and len(providers.calls) == 22
+
+
+def _crashed_attempt(tmp_path: Path) -> Path:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        def crash(call: dict[str, Any]) -> None:
+            raise Crash()
+        providers.overrides[10] = crash
+    with pytest.raises(Crash):
+        run(tmp_path, configure=configure)
+    return tmp_path / "attempts" / "synthetic-attempt-1"
+
+
+@pytest.mark.parametrize("tail", [b'{"event":"RESOLVED","call_id":"10-P3', b'{"event":"ADMITTED","call_id":"11-P3'],
+                         ids=["torn-resolution", "torn-admission"])
+def test_torn_final_journal_record_recovers_the_durable_prefix_read_only(
+        tmp_path: Path, tail: bytes, capsys: pytest.CaptureFixture[str]) -> None:
+    attempt = _crashed_attempt(tmp_path)
+    journal = attempt / "journal.jsonl"
+    with journal.open("ab") as handle:
+        handle.write(tail)
+    before = journal.read_bytes()
+    summary = recover_attempt(attempt)
+    assert (summary["admitted"], summary["resolved"], summary["unknown_liability"]) == (10, 9, 1)
+    assert summary["torn_tail"] is True and "TORN_TAIL" in summary["notice"]
+    assert journal.read_bytes() == before
+    capsys.readouterr()
+    assert main(["recover", "--attempt-dir", str(attempt)]) == 0
+    assert json.loads(capsys.readouterr().out)["torn_tail"] is True
+    clock = FakeClock(T0 + 700)
+    providers = SyntheticProviders(clock)
+    credentials = Credentials()
+    with pytest.raises(AttemptExists):
+        run_attempt(recorder_input(tmp_path), transport=providers, clock=clock, credentials=credentials)
+    assert providers.calls == [] and credentials.reads == []
+
+
+def test_clean_journal_reports_no_torn_tail(tmp_path: Path) -> None:
+    summary = recover_attempt(_crashed_attempt(tmp_path))
+    assert summary["torn_tail"] is False
+
+
+def test_interior_journal_corruption_is_a_stable_refusal(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts.history_payload_binding import PayloadError
+    attempt = _crashed_attempt(tmp_path)
+    journal = attempt / "journal.jsonl"
+    lines = journal.read_bytes().split(b"\n")
+    lines.insert(3, b"{not json")
+    journal.write_bytes(b"\n".join(lines))
+    with pytest.raises(PayloadError) as refused:
+        recover_attempt(attempt)
+    assert refused.value.code == "JOURNAL_CORRUPT"
+    capsys.readouterr()
+    assert main(["recover", "--attempt-dir", str(attempt)]) == 2
+    assert json.loads(capsys.readouterr().out) == {"status": "REFUSED", "code": "JOURNAL_CORRUPT"}

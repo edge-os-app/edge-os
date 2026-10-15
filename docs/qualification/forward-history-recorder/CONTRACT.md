@@ -88,6 +88,10 @@ event that fixed this layout is not published here.
 | P4 | decimals token1, token0, then pool `token0()`, `token1()` at `B_START` (4 QN) | After the last P3 slot; before `T0+3600`. |
 | P5 | finalized, latest, decimals at `B_END` (token1, token0), current decimals (token1, token0) (6 QN) | At or after `WE+60`; before `WE+3600`. |
 
+The slot bound is enforced again at the durable admission boundary, after pacing and every clock observation. A
+call whose admission time is at or after `due+1s` is refused before its journal record. It adds no liability and no
+send, and the read is recorded `MISSED`. The reply deadline stays separate.
+
 A second P3 read is made only after a valid first reply proves insufficient coverage. A failed, rejected, missed or
 expired first read never allows it. The first read's deadline is the second event. A wake outside a slot records
 `MISSED` and continues to the next event. Pacing is at least one monotonic second between admissions to one provider;
@@ -104,7 +108,8 @@ further call is admitted, the attempt ends with status `CANCELLED`, and open buc
 
 Safety stops end every provider and leave remaining buckets `INCOMPLETE`:
 
-- HTTP 401, 402, 403 or 429, and any quota, rate or payment wording in a reply body, also with status 200.
+- HTTP 401, 402, 403 or 429, and any quota, rate, request-limit or payment wording in a reply body, also with status
+  200 (for example a JSON-RPC error message `request limit exceeded`). Other RPC errors stay weak.
 - A credential echo in a body, header, provider error or transport exception (`CREDENTIAL_INCIDENT`).
 - Any failed P1 call or P1 identity difference, an anchor timestamp at or after T0, conflicting block facts, wrong
   decimals or wrong pool token order.
@@ -120,7 +125,11 @@ An accepted P3 reply is an object with quantity `archive_height`, positive `next
 `blocks` and `logs` arrays and an optional object `rollback_guard`. The page range is `[from_block, next_block)` with
 at most 10,000 blocks. It needs exactly one header for each block in the range, nondecreasing timestamps across the
 chain and no header later than the reply's receipt time. Every log must be inside the range, match its header's hash,
-name the pool and the Swap topic, project cleanly and have a new ordering identity. Anything else rejects the page
+name the pool and the Swap topic, project cleanly and have a new ordering identity. Every supplied rollback-guard
+fact must match the page (the accepted `source_transport._frame` rule): `first_block_number` is the page start,
+`block_number` is the page end, and `timestamp` and `hash` are the page-end header's facts. A present
+`first_parent_hash` must equal the known header hash of the block before the page start. A malformed guard fact
+rejects the page; a contradictory one is the `CONFLICTING_BLOCK_FACT` safety stop. Anything else rejects the page
 (no delivery proof). A header that contradicts an earlier fact or the P2 anchor is a safety stop.
 
 The cursor moves to `next_block` after every accepted reply, also an insufficient one. Earlier headers and logs are
@@ -142,7 +151,9 @@ logs outside the window. More than 61 adds `SCAN_LOG_COUNT_EXCEEDS_61` as weaker
 - `journal.jsonl` records `ATTEMPT_STARTED` (with T0) before any credential read. Each physical call appends `ADMITTED`
   with `UNKNOWN` liability, request hash and length, phase, slot and deadline, flushed and fsynced before the send.
   `RESOLVED` follows only after the reply body is safely written, or after an oversized reply is refused unsaved.
-  Admitted calls equal resolved plus unknown. Uncertain
+  Admitted calls equal resolved plus unknown. `recover` treats an unparseable FINAL line as an interrupted append: it
+  reports the complete prefix, keeps every uncertain liability, sets `torn_tail` with a notice and leaves the bytes
+  unchanged. An unparseable interior line is the stable refusal `JOURNAL_CORRUPT`. Uncertain
   admissions are never refunded or resent. A journal or body write failure stops all sends.
 - Credentials are read once each, after validation, through the injected slot reader. Bodies and headers are scanned for
   the full QuickNode URL, its path secret, the bearer token and `Bearer <token>` before anything is saved. An echo saves
@@ -211,7 +222,8 @@ expected file holds `owner_id`, `dataset_id`, `release {release_id, sha256, kind
 2. Recompute the content hash with `records.contract_adapter.sha256_hex` and the raw hash with
    `research_history.qualification_engine.raw_sha256` before any normalization; check the raw count.
 3. Compare outer and inner owner and dataset ids, each `content.operating_release` field, source id, evidence side,
-   chain id, pool, base and quote (P02 `[base, quote]`, not pool order), window and the query scan with the handoff.
+   chain id, pool, base and quote, the saved `binding_view.token_order` against P02 `[base, quote]` (not pool
+   order), window and the query scan with the handoff.
    A value missing on either side is INCOMPLETE, never PASS. The evidence side maps the saved application classes
    exactly: `RECORDED_RESPONSE`, `RECORDED_NATIVE_RESPONSE`, `AUTHORED_HTTP_RESPONSE` and `RELEASE_STAND_IN_RESPONSE`
    are SYNTHETIC; `PROVIDER_ACTUAL` is ACTUAL; any other or malformed label has no side and cannot pass.

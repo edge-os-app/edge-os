@@ -236,6 +236,7 @@ def _check_identity(report: _Report, handoff: Mapping[str, Any], export: Mapping
     report.same("POOL", _get(content, "binding_view", "pool_address"), market.get("pool"))
     report.same("BASE_ASSET", _get(content, "binding_view", "base_asset"), market.get("base"))
     report.same("QUOTE_ASSET", _get(content, "binding_view", "quote_asset"), market.get("quote"))
+    report.same("TOKEN_ORDER", _get(content, "binding_view", "token_order"), [market.get("base"), market.get("quote")])
     report.same("WINDOW_START", _get(content, "window_start"), _get(handoff, "window", "start_utc"))
     report.same("WINDOW_END", _get(content, "window_end"), _get(handoff, "window", "end_utc"))
     scan = handoff.get("scan")
