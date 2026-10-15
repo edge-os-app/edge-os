@@ -198,7 +198,7 @@ Task `HERMES-LIVE-PATH-L1-20261015-LOCAL-v1`, base `19e6063ec72fc676e479a1d9f477
 
 ### 7.1 Image identity
 
-The relay operator starts its containers by the Docker image id it inspected for its configured reference, and hands off `image: {reference, id}`. A locally built image has an image id (`sha256:<64 hex>`, the hash of its configuration) and no registry manifest digest; the two are different identities. `RelayApplicationDefinition.image` is therefore the Docker image id, and the handoff's `image.id` must equal it exactly. `build_relay_job(image=release.image)` launches every job by that id. A tag, a registry digest reference (`name@sha256:...`) or an upper-case id is refused when the definition binds. No registry service is added, and no RepoDigest is made up.
+The relay operator starts its containers by the immutable image id that `docker image inspect --format {{.Id}}` reports for its configured reference (`sha256:<64 hex>`), and hands off `image: {reference, id}`. A locally built image may have no registry entry; which digest Docker reports as `.Id` depends on the host's image store, so this contract relies only on that reported value. `RelayApplicationDefinition.image` is therefore that image id, and the handoff's `image.id` must equal it exactly. `build_relay_job(image=release.image)` launches every job by that id. A tag, a registry digest reference (`name@sha256:...`) or an upper-case id is refused when the definition binds. No registry service is added, and no RepoDigest is made up.
 
 ### 7.2 Request shape
 

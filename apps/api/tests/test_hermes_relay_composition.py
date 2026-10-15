@@ -332,7 +332,7 @@ def test_a_routing_price_limit_that_cannot_bound_the_snapshot_is_refused(approve
     {"response_format": None},
     {"response_format": {"type": "json_object"}},
     {"image": "edge-os/pinned-hermes:latest"},
-    {"image": "edge-os/pinned-hermes@" + IMAGE},  # a registry manifest digest is not the id the operator launches
+    {"image": "edge-os/pinned-hermes@" + IMAGE},  # a digest reference names an image; it is not the bare id
     {"image": "sha256:" + "D" * 64},
     {"image": "d" * 64},
     {"channel_root": "../app"},

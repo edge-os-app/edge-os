@@ -70,7 +70,7 @@ HANDOFF_FIELDS = frozenset({"format", "operation_id", "config_sha256", "kind", "
 ENDPOINT_FIELDS = frozenset({"grants", "revocations", "state", "admission_key_file", "channel_root",
                              "heartbeat_max_age_seconds"})
 MAX_HANDOFF_BYTES = 16 * 1024
-IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")  # Docker's image (configuration) id, not a registry manifest digest
+IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")  # the immutable id `docker image inspect --format {{.Id}}` reports
 IMAGE_REFERENCE = re.compile(r"[^\s]{1,200}")
 MAX_HEARTBEAT_AGE_SECONDS = 10.0
 
