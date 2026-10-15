@@ -14,16 +14,18 @@ The topology is always the accepted E1 one (`online=True`, CONTRACT A6). Every r
   once (0444). Any failure after the claim removes the resources this operation owns and records `start-failed.json`.
 - `restart` restarts the relay of a complete started operation; the relay's own recovery marks a started attempt
   `unknown_restart` and never sends it again. The operator sends nothing itself.
-- `stop` removes exactly this operation's owned containers, network and volume and records `stopped.json` once. It needs
-  only the configuration bytes and the run root's owner record, not the key file or a still-approved release.
+- `stop` removes exactly this operation's owned containers, network and volume, records `stopped.json` once when the
+  stop ends clean and `stop-incomplete-<ns>.json` otherwise. It needs only the configuration bytes and the run root's
+  owner record, not the key file or a still-approved release.
 
 Ownership: the supervisor run id (every Docker name and label) is `<operation_id>-<first 12 hex of the configuration
 SHA256>`, so two configurations never share names even with one operation id. A resource counts as this operation's
-only if it carries this run id's label and, for a container, mounts its role's config file from this run root, and for
-the network, has the id recorded at start. Anything else under these names is foreign: it is never killed, removed,
-mounted or adopted, and is reported. Removal goes by the Docker id just inspected, never by name (a volume has only its
-name and label). A failed start removes only owned resources, so a competing object created between the name check and
-the launch stays.
+only if it carries this run id's label and, for a container, mounts its role's config file from this run root, for
+the network, has the id recorded at start, and for the egress volume, carries the random claim label this start wrote
+(the operator creates that volume before the supervisor, because Docker re-uses an existing volume of that name).
+Absent means Docker answered "no such object"; any other unreadable answer is unknown, never gone and never ours.
+Foreign and unknown objects are never killed, removed, mounted or adopted, and are reported. Removal goes by the Docker
+id just inspected (a volume by its name) and is then checked; only a stop that ends clean writes `stopped.json`.
 
 ACTUAL is accepted only through `relay_admission.load_actual_release` with its default registry, which is empty: every
 ACTUAL configuration is refused. The operator never reads the provider key; it only checks the file is outside the
@@ -40,7 +42,9 @@ import json
 import math
 import os
 import re
+import secrets
 import stat
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -75,6 +79,7 @@ CHANNEL_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 MAX_FILE_BYTES = 1024 * 1024
+VOLUME_CLAIM_LABEL = "edge-os.relay-operator.claim"  # a fresh random value per start, on the egress volume only
 CONFIG_FILES = {"relay": "relay-config.json", "gateway": "gateway-config.json", "provider": "provider-config.json"}
 
 
@@ -311,11 +316,22 @@ def _write_once(path: Path, value: dict[str, Any], mode: int) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _inspect(kind: str, name: str) -> dict[str, Any] | None | bool:
-    """Docker's view of the object named `name`: None when absent, False when it cannot be read."""
-    seen = relay_supervisor.docker("inspect", "--type", kind, name, check=False)
-    if seen.returncode != 0:
+def _docker(*args: str) -> subprocess.CompletedProcess[str] | None:
+    """One Docker call that never raises: None when Docker could not be asked (missing, timed out)."""
+    try:
+        return relay_supervisor.docker(*args, check=False)
+    except (OSError, subprocess.SubprocessError):
         return None
+
+
+def _inspect(kind: str, name: str) -> dict[str, Any] | None | bool:
+    """Docker's view of the object named `name`: None only when Docker says there is no such object, False when the
+    answer is anything else that is not one readable object (daemon down, timeout, malformed reply)."""
+    seen = _docker("inspect", "--type", kind, name)
+    if seen is None:
+        return False
+    if seen.returncode != 0:
+        return None if "no such" in (seen.stderr or "").lower() else False
     try:
         [value] = json.loads(seen.stdout)
     except (TypeError, ValueError):
@@ -323,14 +339,17 @@ def _inspect(kind: str, name: str) -> dict[str, Any] | None | bool:
     return value if isinstance(value, dict) else False
 
 
-def _ownership(target: OperationTarget, kind: str, role: str, network_id: str | None) -> tuple[str, str | None]:
-    """('absent', None), ('owned', what to remove it by) or ('foreign', None) for one of this operation's names."""
+def _ownership(target: OperationTarget, kind: str, role: str, network_id: str | None,
+               claim: str | None) -> tuple[str, str | None]:
+    """('absent' | 'owned' | 'foreign' | 'unknown', what to remove an owned object by) for one of this operation's names.
+    Owned: this run id's label, and a container's role config mounted from this run root, the network id recorded at
+    start, the volume's claim label written by this start."""
     name = target.names()["egress" if kind != "container" else role]
     seen = _inspect(kind, name)
     if seen is None:
         return "absent", None
     if seen is False:
-        return "foreign", None  # unreadable: never treated as ours
+        return "unknown", None  # never treated as gone and never as ours
     labels = (seen.get("Config") or {}).get("Labels") if kind == "container" else seen.get("Labels")
     if not isinstance(labels, dict) or labels.get(LABEL) != target.run_id:
         return "foreign", None
@@ -341,8 +360,10 @@ def _ownership(target: OperationTarget, kind: str, role: str, network_id: str | 
             return "foreign", None
     if kind == "network" and network_id is not None and seen.get("Id") != network_id:
         return "foreign", None
+    if kind == "volume" and (claim is None or labels.get(VOLUME_CLAIM_LABEL) != claim):
+        return "foreign", None
     identity = name if kind == "volume" else seen.get("Id")
-    return ("owned", identity) if isinstance(identity, str) and identity else ("foreign", None)
+    return ("owned", identity) if isinstance(identity, str) and identity else ("unknown", None)
 
 
 def _recorded_network(target: OperationTarget) -> str | None:
@@ -355,36 +376,53 @@ def _recorded_network(target: OperationTarget) -> str | None:
     return value
 
 
-def _resources(target: OperationTarget, network_id: str | None) -> dict[str, tuple[str, str | None]]:
-    found = {role: _ownership(target, "container", role, None) for role in ("relay", "gateway", "provider")}
-    found["network"] = _ownership(target, "network", "egress", network_id)
-    found["volume"] = _ownership(target, "volume", "egress", None)
+def _resources(target: OperationTarget, network_id: str | None, claim: str | None) -> dict[str, tuple[str, str | None]]:
+    found = {role: _ownership(target, "container", role, None, claim) for role in ("relay", "gateway", "provider")}
+    found["network"] = _ownership(target, "network", "egress", network_id, claim)
+    found["volume"] = _ownership(target, "volume", "egress", network_id, claim)
     return found
 
 
-def _remove_owned(target: OperationTarget, network_id: str | None) -> dict[str, Any]:
-    """Remove this operation's owned resources by id; leave and report foreign ones; list what still carries its label."""
-    found = _resources(target, network_id)
-    names = target.names()
-    foreign = [names["egress" if role in ("network", "volume") else role] for role, (state, _) in found.items()
-               if state == "foreign"]
-    docker = relay_supervisor.docker
-    for role in ("relay", "gateway", "provider"):  # containers first: a network or volume in use cannot go
-        if found[role][0] == "owned":
-            docker("rm", "-f", str(found[role][1]), check=False)
-    if found["network"][0] == "owned":
-        docker("network", "rm", str(found["network"][1]), check=False)
-    if found["volume"][0] == "owned":
-        docker("volume", "rm", str(found["volume"][1]), check=False)
+def _name(target: OperationTarget, role: str) -> str:
+    return target.names()["egress" if role in ("network", "volume") else role]
+
+
+def _remove_owned(target: OperationTarget, network_id: str | None, claim: str | None) -> dict[str, Any]:
+    """Remove this operation's owned objects by id and check they are gone. Foreign objects stay; objects whose state
+    Docker did not establish stay as `unknown`; failed removals are `errors`. Clean only when every list is empty."""
+    found = _resources(target, network_id, claim)
+    foreign = sorted({_name(target, role) for role, (state, _) in found.items() if state == "foreign"})
+    unknown = sorted({_name(target, role) for role, (state, _) in found.items() if state == "unknown"})
+    errors: list[str] = []
+    removal = {"relay": ("rm", "-f"), "gateway": ("rm", "-f"), "provider": ("rm", "-f"), "network": ("network", "rm"),
+               "volume": ("volume", "rm")}
+    for role in ("relay", "gateway", "provider", "network", "volume"):  # containers first: a used network cannot go
+        state, identity = found[role]
+        if state == "owned":
+            done = _docker(*removal[role], str(identity))
+            if done is None or done.returncode != 0:
+                errors.append(_name(target, role))
+    for role, (state, _) in found.items():  # every removed object must now be positively absent
+        if state == "owned" and _ownership(target, "container" if role not in ("network", "volume") else role,
+                                           role if role not in ("network", "volume") else "egress", network_id,
+                                           claim)[0] != "absent":
+            unknown.append(_name(target, role))
+    left: dict[str, Any] = {}
     label = f"label={LABEL}={target.run_id}"
-    return {"containers_left": docker("ps", "-a", "--filter", label, "--format", "{{.Names}}", check=False).stdout.split(),
-            "networks_left": docker("network", "ls", "--filter", label, "--format", "{{.Name}}", check=False).stdout.split(),
-            "volumes_left": docker("volume", "ls", "--filter", label, "--format", "{{.Name}}", check=False).stdout.split(),
-            "foreign": sorted(set(foreign))}
+    for key, command in (("containers_left", ("ps", "-a")), ("networks_left", ("network", "ls")),
+                         ("volumes_left", ("volume", "ls"))):
+        listed = _docker(*command, "--filter", label, "--format", "{{.Names}}" if key == "containers_left" else
+                         "{{.Name}}")
+        if listed is None or listed.returncode != 0:
+            unknown.append(f"listing:{key}")
+            left[key] = []
+        else:
+            left[key] = listed.stdout.split()
+    return {**left, "foreign": foreign, "unknown": sorted(set(unknown)), "errors": sorted(set(errors))}
 
 
-def _check_owned(target: OperationTarget) -> None:
-    """Restart and stop act only on a run root this exact configuration claimed."""
+def _check_owned(target: OperationTarget) -> dict[str, Any]:
+    """Restart and stop act only on a run root this exact configuration claimed. Returns its owner record."""
     try:
         owner = _strict_json(_read_file(target.run_root / "owner.json", "owner record"), "owner record")
     except OperatorRefused as error:
@@ -392,6 +430,7 @@ def _check_owned(target: OperationTarget) -> None:
     if (owner.get("config_sha256"), owner.get("operation_id"), owner.get("run_id")) != (
             target.sha256, target.operation_id, target.run_id):
         raise OperatorRefused("this run root belongs to another operator configuration")
+    return owner
 
 
 def _check_image(config: OperatorConfig) -> None:
@@ -410,33 +449,57 @@ def _check_new_folders(config: OperatorConfig) -> None:
         raise OperatorRefused("the channel folder must not be the run root or inside the relay's folder")
 
 
+def _claim_volume(target: OperationTarget, claim: str) -> None:
+    """Create the egress volume before the supervisor does, with the supervisor's own options and run label plus this
+    start's claim label, and require that claim. Docker re-uses an existing local volume of that name without an error
+    (and keeps its labels), so a volume that was already there fails this check before any container mounts it. The
+    supervisor's own `volume create` then re-uses this one."""
+    name = target.names()["egress"]
+    created = _docker("volume", "create", "--driver", "local", "--opt", "type=tmpfs", "--opt", "device=tmpfs", "--opt",
+                      f"o=uid={os.getuid()},gid={os.getgid()},mode=0700,size=1m", "--label", f"{LABEL}={target.run_id}",
+                      "--label", f"{VOLUME_CLAIM_LABEL}={claim}", name)
+    if created is None or created.returncode != 0:
+        raise RuntimeError("the egress volume could not be created")
+    if _ownership(target, "volume", "egress", None, claim)[0] != "owned":
+        raise RuntimeError("a volume under this operation's name was there before this start's claim")
+
+
 # --- commands ------------------------------------------------------------------------------------------------------------
 
 def start(config: OperatorConfig) -> tuple[Path, str]:
     """Start the operation; return the handoff path and its SHA256. After the claim, any failure removes exactly the
-    owned resources, records `start-failed.json` (error class, cleanup result or cleanup error class) and re-raises."""
+    owned objects, records `start-failed.json` (error class, cleanup result or cleanup error class) and re-raises."""
     target = config.target
     _check_new_folders(config)
     supervisor = config.supervisor()
     _check_image(config)
-    for role, (state, _) in _resources(target, None).items():
+    for role, (state, _) in _resources(target, None, None).items():
         if state != "absent":
-            raise OperatorRefused(f"a {role} resource under this operation's name exists; this operation did not "
-                                  "create it")
+            raise OperatorRefused(f"the {role} name is not free ({state}); this operation did not create it")
     try:
         config.run_root.mkdir(mode=0o700)  # the exclusive claim: a competing start of this configuration fails here
     except FileExistsError as error:
         raise OperatorRefused("another start claimed this run root first") from error
-    _write_once(config.run_root / "owner.json", {"operation_id": target.operation_id, "run_id": target.run_id,
-                                                 "config_sha256": target.sha256, "shutdown_owner": SHUTDOWN_OWNER},
-                0o400)
+    claim = secrets.token_hex(16)
+    try:
+        _write_once(config.run_root / "owner.json", {"operation_id": target.operation_id, "run_id": target.run_id,
+                                                     "config_sha256": target.sha256, "shutdown_owner": SHUTDOWN_OWNER,
+                                                     "volume_claim": claim}, 0o400)
+    except BaseException:
+        config.run_root.rmdir()  # still empty and created by this call; an rmdir never removes anything else
+        raise
     try:
         config.channel_path.mkdir(mode=0o700)
+        _claim_volume(target, claim)
         supervisor.start()
         network = _inspect("network", target.names()["egress"])
         if not isinstance(network, dict) or not isinstance(network.get("Id"), str):
             raise RuntimeError("the started network cannot be read")
         _write_once(config.run_root / "resources.json", {"network_id": network["Id"]}, 0o400)
+        needed = ("relay", "gateway", "network", "volume") + (("provider",) if config.actual is None else ())
+        found = _resources(target, network["Id"], claim)
+        if any(found[role][0] != "owned" for role in needed):  # finds a swap; cannot undo a mount that already happened
+            raise RuntimeError("a started object is not this operation's own")
         endpoint = supervisor.endpoint(config.channel_name)
         handoff = {
             "format": HANDOFF_FORMAT, "operation_id": config.operation_id, "config_sha256": config.sha256,
@@ -454,7 +517,7 @@ def start(config: OperatorConfig) -> tuple[Path, str]:
         cleanup: dict[str, Any] | None = None
         cleanup_error: str | None = None
         try:
-            cleanup = _remove_owned(target, None)
+            cleanup = _remove_owned(target, _recorded_network(target), claim)
         except Exception as failure:  # noqa: BLE001 - recorded; the start error is the one raised
             cleanup_error = type(failure).__name__
         try:
@@ -468,16 +531,18 @@ def start(config: OperatorConfig) -> tuple[Path, str]:
 def restart(config: OperatorConfig) -> None:
     """Restart the relay of this complete started operation. The relay's recovery never resends a started attempt."""
     target = config.target
-    _check_owned(target)
+    owner = _check_owned(target)
     for name, why in (("start-failed.json", "its start failed"), ("stopped.json", "it was stopped")):
         if (config.run_root / name).exists():
             raise OperatorRefused(f"this operation is not restarted: {why}")
+    if any(config.run_root.glob("stop-incomplete-*.json")):
+        raise OperatorRefused("this operation is not restarted: a stop was asked for")
     if not (config.run_root / "handoff.json").exists():
         raise OperatorRefused("this operation is not restarted: it has no handoff (its start did not complete)")
-    found = _resources(target, _recorded_network(target))
+    found = _resources(target, _recorded_network(target), owner.get("volume_claim"))
     needed = ("gateway", "network", "volume") + (("provider",) if config.actual is None else ())
-    if found["relay"][0] == "foreign" or any(found[role][0] != "owned" for role in needed):
-        raise OperatorRefused("this operation is incomplete or a resource under its names is not its own")
+    if found["relay"][0] not in ("owned", "absent") or any(found[role][0] != "owned" for role in needed):
+        raise OperatorRefused("this operation is incomplete, or a resource under its names is not its own or unknown")
     if found["relay"][0] == "owned":
         relay_supervisor.docker("kill", str(found["relay"][1]), check=False)
         relay_supervisor.docker("rm", "-f", str(found["relay"][1]), check=False)
@@ -485,11 +550,15 @@ def restart(config: OperatorConfig) -> None:
 
 
 def stop(target: OperationTarget) -> dict[str, Any]:
-    """Remove exactly this operation's owned resources; record the first stop once. Returns what is left."""
-    _check_owned(target)
-    left = _remove_owned(target, _recorded_network(target))
-    if not (target.run_root / "stopped.json").exists():
-        _write_once(target.run_root / "stopped.json", {"left": left, "stopped_at": time.time()}, 0o400)
+    """Remove exactly this operation's owned objects. Only a stop that ends with nothing left, foreign, unknown or failed
+    writes `stopped.json` (the first such stop); any other stop writes its own `stop-incomplete-<ns>.json`."""
+    owner = _check_owned(target)
+    left = _remove_owned(target, _recorded_network(target), owner.get("volume_claim"))
+    record = {"left": left, "stopped_at": time.time()}
+    if any(left.values()):
+        _write_once(target.run_root / f"stop-incomplete-{time.time_ns()}.json", record, 0o400)
+    elif not (target.run_root / "stopped.json").exists():
+        _write_once(target.run_root / "stopped.json", record, 0o400)
     return left
 
 

@@ -35,13 +35,17 @@ ROUTING = {"only": ["synthetic-slug"], "allow_fallbacks": False, "require_parame
 KINDS = ("container", "network", "volume")
 
 
-def done(stdout: str = "", code: int = 0) -> Any:
-    return type("Done", (), {"stdout": stdout, "stderr": "", "returncode": code})()
+def done(stdout: str = "", code: int = 0, stderr: str = "") -> Any:
+    return type("Done", (), {"stdout": stdout, "stderr": stderr, "returncode": code})()
 
 
 class FakeDocker:
     """Docker's object model as far as the operator and supervisor use it. `objects[kind][name]` is {Id, Labels, Mounts}.
-    `before_create(kind, name)` runs before each create, so a test can put a competing object under that name first."""
+    `before_create(kind, name)` runs before each create and `on_inspect(name)` before each inspect, so a test can put a
+    competing object in place. A missing object answers like Docker ("No such object"); a second network or container
+    under one name is refused; a second `volume create` of a local volume re-uses the first without an error, as Docker
+    documents (docker/cli docs/reference/commandline/volume_create.md). Fault switches: `daemon_down`,
+    `malformed` (names whose inspect reply is not JSON), `fail_list`, `fail_rm` (names or ids whose removal fails)."""
 
     def __init__(self) -> None:
         self.image_id = IMAGE_ID
@@ -52,10 +56,19 @@ class FakeDocker:
         self.fail_run: str | None = None  # a container name prefix whose launch fails
         self.before_create: Callable[[str, str], None] | None = None
         self.raise_on_rm: BaseException | None = None
+        self.on_inspect: Callable[[str], None] | None = None
+        self.daemon_down = False
+        self.malformed: set[str] = set()
+        self.fail_list = False
+        self.fail_rm: set[str] = set()
+        self.inspect_error: set[str] = set()  # names whose inspect fails with an error that is not "no such object"
+        self.ignore_rm: set[str] = set()  # ids whose removal answers success but leaves the object
 
-    def add(self, kind: str, name: str, *, label: str | None, sources: tuple[str, ...] = ()) -> str:
+    def add(self, kind: str, name: str, *, label: str | None, sources: tuple[str, ...] = (),
+            labels: dict[str, str] | None = None) -> str:
         identity = f"{kind[0]}{next(self.ids):04d}"
-        self.objects[kind][name] = {"Id": identity, "Name": name, "Labels": {LABEL: label} if label else {},
+        self.objects[kind][name] = {"Id": identity, "Name": name,
+                                    "Labels": {**({LABEL: label} if label else {}), **(labels or {})},
                                     "Mounts": [{"Source": source} for source in sources]}
         return identity
 
@@ -67,12 +80,22 @@ class FakeDocker:
 
     def __call__(self, *args: str, timeout: float = 0, check: bool = True) -> Any:
         self.calls.append(list(args))
+        if self.daemon_down:
+            if check:
+                raise subprocess.CalledProcessError(1, ["docker", *args], "", "Cannot connect to the Docker daemon")
+            return done(code=1, stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock")
         if args[:2] == ("image", "inspect"):
             return done(self.image_id)
         if args[0] == "inspect" and args[1] == "--type":
+            if self.on_inspect is not None:
+                self.on_inspect(args[3])
+            if args[3] in self.malformed:
+                return done("<html>proxy error</html>")
+            if args[3] in self.inspect_error:
+                return done(code=1, stderr="Error response from daemon: i/o timeout")
             name = self.find(args[2], args[3])
             if name is None:
-                return done("[]", 1)
+                return done("[]", 1, f"Error: No such object: {args[3]}")
             value = self.objects[args[2]][name]
             shaped = ({"Id": value["Id"], "Name": "/" + name, "Config": {"Labels": value["Labels"]},
                        "Mounts": value["Mounts"]} if args[2] == "container" else
@@ -84,29 +107,43 @@ class FakeDocker:
             return self._run(list(args))
         if args[1:2] == ("create",):
             kind, name = args[0], args[-1]
-            self._create(kind, name, label=args[args.index("--label") + 1].split("=", 1)[1])
-            return done(f"id-{name}")
+            labels = dict(args[i + 1].split("=", 1) for i, flag in enumerate(args) if flag == "--label")
+            if kind == "volume" and name in self.objects["volume"]:
+                if self.before_create is not None:
+                    self.before_create(kind, name)
+                return done(name)  # Docker re-uses a local volume of that name; its labels stay as they were
+            self._create(kind, name, label=labels.pop(LABEL), labels=labels)
+            return done(name if kind == "volume" else f"id-{name}")
         if args[0] in ("rm", "kill") or args[1:2] == ("rm",):
             if self.raise_on_rm is not None and args[0] != "kill":
                 raise self.raise_on_rm
             kind = "container" if args[0] in ("rm", "kill") else args[0]
+            if args[-1] in self.fail_rm:
+                return done(code=1, stderr="Error response from daemon: removal failed")
+            if args[-1] in self.ignore_rm:
+                return done()
             name = self.find(kind, args[-1])
             if name is not None and args[0] != "kill":
                 del self.objects[kind][name]
             return done(code=0 if name is not None else 1)
         if args[0] in ("ps", "network", "volume"):  # ps -a / network ls / volume ls --filter label=K=V
+            if self.fail_list:
+                return done(code=1, stderr="Error response from daemon: listing failed")
             kind = {"ps": "container", "network": "network", "volume": "volume"}[args[0]]
             wanted = args[args.index("--filter") + 1].removeprefix("label=").split("=", 1)
             names = [n for n, v in self.objects[kind].items() if v["Labels"].get(wanted[0]) == wanted[1]]
             return done("\n".join(names))
         raise AssertionError(f"unexpected docker call {args}")
 
-    def _create(self, kind: str, name: str, *, label: str, sources: tuple[str, ...] = ()) -> str:
+    def _create(self, kind: str, name: str, *, label: str, sources: tuple[str, ...] = (),
+                labels: dict[str, str] | None = None) -> str:
         if self.before_create is not None:
             self.before_create(kind, name)
-        if name in self.objects[kind]:  # Docker: the name is already in use
+        if name in self.objects[kind]:  # Docker: the name is already in use (a raced volume is re-used instead)
+            if kind == "volume":
+                return self.objects[kind][name]["Id"]
             raise subprocess.CalledProcessError(125, ["docker", kind, "create", name], "", "name in use")
-        return self.add(kind, name, label=label, sources=sources)
+        return self.add(kind, name, label=label, sources=sources, labels=labels)
 
     def _run(self, argv: list[str]) -> Any:
         name = argv[argv.index("--name") + 1]
@@ -464,8 +501,9 @@ def test_a_resource_replaced_under_our_name_after_start_is_left_and_reported(
     foreign_id = fake.objects[kind][name]["Id"]
     assert main([str(write(tmp_path, config(tmp_path, key))), "stop"]) == 1
     assert fake.objects[kind][name]["Id"] == foreign_id
-    stopped = json.loads((tmp_path / "run" / "stopped.json").read_text())
-    assert stopped["left"]["foreign"] == [name]
+    assert not (tmp_path / "run" / "stopped.json").exists()  # not a clean stop
+    [record] = (tmp_path / "run").glob("stop-incomplete-*.json")
+    assert json.loads(record.read_text())["left"]["foreign"] == [name]
 
 
 @pytest.mark.parametrize("command", ["restart", "stop"])
@@ -563,7 +601,7 @@ def test_a_failed_start_removes_exactly_what_it_started_and_writes_no_handoff(
     assert fake.objects == {kind: {} for kind in KINDS}
     failed = json.loads((tmp_path / "run" / "start-failed.json").read_text())
     assert failed == {"error": "CalledProcessError", "cleanup_error": None,
-                      "cleanup": {"containers_left": [], "networks_left": [], "volumes_left": [], "foreign": []}}
+                      "cleanup": {"containers_left": [], "networks_left": [], "volumes_left": [], "foreign": [], "unknown": [], "errors": []}}
     assert not (tmp_path / "run" / "handoff.json").exists()
 
 
@@ -583,14 +621,31 @@ def test_a_failed_handoff_write_after_start_is_cleaned_up_like_a_failed_start(
     assert not (tmp_path / "run" / "handoff.json").exists()
 
 
-def test_an_error_inside_cleanup_keeps_the_start_error_and_records_both(
+def test_a_removal_timeout_in_cleanup_keeps_the_start_error_and_records_what_is_left(
         tmp_path: Path, key: Path, fake: FakeDocker, capsys: pytest.CaptureFixture[str]) -> None:
     fake.fail_run = "relay-gateway-"
     fake.raise_on_rm = subprocess.TimeoutExpired(["docker", "rm"], 60)
     assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 1
     assert capsys.readouterr().err == "failed: CalledProcessError\n"
     failed = json.loads((tmp_path / "run" / "start-failed.json").read_text())
-    assert failed == {"error": "CalledProcessError", "cleanup_error": "TimeoutExpired", "cleanup": None}
+    assert (failed["error"], failed["cleanup_error"]) == ("CalledProcessError", None)
+    assert failed["cleanup"]["errors"] and failed["cleanup"]["containers_left"]  # not reported as clean
+    assert fake.objects["container"]  # nothing claimed removed that was not
+
+
+def test_an_exception_inside_cleanup_keeps_the_start_error_and_records_both(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    fake.fail_run = "relay-gateway-"
+
+    def broken(*args: Any) -> dict[str, Any]:
+        raise RuntimeError("cleanup broke")
+
+    monkeypatch.setattr(relay_operator, "_remove_owned", broken)
+    assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 1
+    assert capsys.readouterr().err == "failed: CalledProcessError\n"
+    failed = json.loads((tmp_path / "run" / "start-failed.json").read_text())
+    assert failed == {"error": "CalledProcessError", "cleanup_error": "RuntimeError", "cleanup": None}
 
 
 @pytest.mark.parametrize("state", ["start_failed", "stopped", "no_handoff", "gateway_gone", "volume_gone",
@@ -745,5 +800,170 @@ def test_docker_the_cli_runs_the_e1_relay_from_the_handoff_restarts_and_stops_wi
     finally:
         stopped_cli = cli("stop")
     assert stopped_cli.returncode == 0, stopped_cli.stdout + stopped_cli.stderr
-    assert json.loads((root / "run" / "stopped.json").read_text())["left"] == {
-        "containers_left": [], "networks_left": [], "volumes_left": [], "foreign": []}
+    assert json.loads((root / "run" / "stopped.json").read_text())["left"] == {"containers_left": [], "networks_left": [], "volumes_left": [], "foreign": [], "unknown": [], "errors": []}
+
+
+# --- round 3: unknown Docker state, the volume race, the claim race and the owner record --------------------------------
+
+@pytest.mark.parametrize("fault", ["daemon_down", "malformed_relay", "list_fails", "relay_removal_fails"])
+def test_a_stop_that_cannot_establish_a_clean_state_records_no_clean_stop(
+        tmp_path: Path, key: Path, fake: FakeDocker, fault: str) -> None:
+    loaded, _, _ = started(tmp_path, key)
+    relay = names(loaded)["relay"]
+    if fault == "daemon_down":
+        fake.daemon_down = True
+    elif fault == "malformed_relay":
+        fake.malformed.add(relay)
+    elif fault == "list_fails":
+        fake.fail_list = True
+    else:
+        fake.fail_rm.add(fake.objects["container"][relay]["Id"])
+    path = write(tmp_path, config(tmp_path, key))
+    assert main([str(path), "stop"]) == 1
+    assert not (loaded.run_root / "stopped.json").exists()
+    [record] = loaded.run_root.glob("stop-incomplete-*.json")
+    left = json.loads(record.read_text())["left"]
+    assert left["unknown"] or left["errors"] or left["containers_left"], left
+    if fault in ("daemon_down", "malformed_relay", "relay_removal_fails"):
+        assert relay in fake.objects["container"]  # nothing unknown is treated as gone
+    assert main([str(path), "restart"]) == 2  # a stop was asked for: no restart after it
+    fake.daemon_down, fake.fail_list = False, False
+    fake.malformed.clear()
+    fake.fail_rm.clear()
+    assert main([str(path), "stop"]) == 0  # the first genuine clean stop is the one recorded
+    assert json.loads((loaded.run_root / "stopped.json").read_text())["left"] == {"containers_left": [], "networks_left": [], "volumes_left": [], "foreign": [], "unknown": [], "errors": []}
+
+
+def test_an_unreadable_name_before_start_refuses_the_start(tmp_path: Path, key: Path, fake: FakeDocker) -> None:
+    loaded = loaded_from(config(tmp_path, key))
+    fake.malformed.add(names(loaded)["gateway"])
+    assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 2
+    assert fake.effects() == [] and not (tmp_path / "run").exists()
+
+
+def test_the_operator_claims_the_volume_with_the_supervisor_options_and_its_own_claim_label(
+        tmp_path: Path, key: Path, fake: FakeDocker) -> None:
+    loaded, _, _ = started(tmp_path, key)
+    creates = [call for call in fake.calls if call[:2] == ["volume", "create"]]
+    assert len(creates) == 2  # the operator's claim, then the supervisor's own create re-uses it
+    claim, supervisor_create = creates
+    nonce = json.loads((loaded.run_root / "owner.json").read_text())["volume_claim"]
+    claim_label = f"{relay_operator.VOLUME_CLAIM_LABEL}={nonce}"
+    i = claim.index(claim_label)
+    assert len(nonce) == 32 and claim[i - 1] == "--label"
+    assert claim[:i - 1] + claim[i + 1:] == supervisor_create  # the same options, names and run label
+    assert fake.objects["volume"][names(loaded)["egress"]]["Labels"][relay_operator.VOLUME_CLAIM_LABEL] == nonce
+
+
+def test_a_volume_raced_in_before_the_claim_is_refused_before_any_container_uses_it(
+        tmp_path: Path, key: Path, fake: FakeDocker) -> None:
+    loaded = loaded_from(config(tmp_path, key))
+    egress = names(loaded)["egress"]
+
+    def race(kind: str, name: str) -> None:  # after the name check, before our create: a copied label, no claim
+        if kind == "volume" and name == egress and name not in fake.objects["volume"]:
+            fake.add("volume", name, label=loaded.target.run_id)
+
+    fake.before_create = race
+    assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 1
+    foreign = fake.objects["volume"][egress]["Id"]
+    assert [call for call in fake.calls if call[0] == "run"] == []  # no container mounted it
+    assert fake.objects["volume"][egress]["Id"] == foreign and fake.objects["container"] == {}
+    failed = json.loads((tmp_path / "run" / "start-failed.json").read_text())
+    assert failed["cleanup"]["foreign"] == [egress] and not (tmp_path / "run" / "handoff.json").exists()
+
+
+def test_a_volume_swapped_after_the_claim_is_found_before_any_handoff_and_kept(
+        tmp_path: Path, key: Path, fake: FakeDocker) -> None:
+    """The post-start check finds the swap and refuses the handoff; it does not undo a mount that already happened."""
+    loaded = loaded_from(config(tmp_path, key))
+    egress, gateway = names(loaded)["egress"], names(loaded)["gateway"]
+
+    def swap(kind: str, name: str) -> None:
+        if kind == "container" and name == gateway:
+            del fake.objects["volume"][egress]
+            fake.add("volume", egress, label=loaded.target.run_id)
+
+    fake.before_create = swap
+    assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 1
+    assert not (tmp_path / "run" / "handoff.json").exists()
+    assert egress in fake.objects["volume"] and fake.objects["container"] == {} and fake.objects["network"] == {}
+    assert json.loads((tmp_path / "run" / "start-failed.json").read_text())["cleanup"]["foreign"] == [egress]
+
+
+def test_failed_start_cleanup_uses_the_recorded_network_id(tmp_path: Path, key: Path, fake: FakeDocker,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = loaded_from(config(tmp_path, key))
+    egress = names(loaded)["egress"]
+    real = relay_operator._write_once
+
+    def swap_then_fail(path: Path, value: dict[str, Any], mode: int) -> str:
+        if path.name == "handoff.json":  # the network was recorded; now another one sits under its name
+            del fake.objects["network"][egress]
+            fake.add("network", egress, label=loaded.target.run_id)
+            raise OSError(28, "No space left on device")
+        return real(path, value, mode)
+
+    monkeypatch.setattr(relay_operator, "_write_once", swap_then_fail)
+    assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 1
+    assert egress in fake.objects["network"]
+    assert json.loads((tmp_path / "run" / "start-failed.json").read_text())["cleanup"]["foreign"] == [egress]
+
+
+def test_a_failed_owner_record_write_releases_the_empty_claim(tmp_path: Path, key: Path, fake: FakeDocker,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    real = relay_operator._write_once
+
+    def fail_owner(path: Path, value: dict[str, Any], mode: int) -> str:
+        if path.name == "owner.json":
+            raise OSError(28, "No space left on device")
+        return real(path, value, mode)
+
+    monkeypatch.setattr(relay_operator, "_write_once", fail_owner)
+    assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 1
+    assert not (tmp_path / "run").exists() and fake.effects() == []
+
+
+def test_a_start_that_loses_the_run_root_claim_touches_nothing(tmp_path: Path, key: Path, fake: FakeDocker) -> None:
+    loaded = loaded_from(config(tmp_path, key))
+    relay = names(loaded)["relay"]
+
+    def other_start_claims(name: str) -> None:  # another start claims the run root between our check and our mkdir
+        if name == relay and not loaded.run_root.exists():
+            loaded.run_root.mkdir()
+            (loaded.run_root / "theirs").write_text("kept")
+
+    fake.on_inspect = other_start_claims
+    assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 2
+    assert sorted(p.name for p in loaded.run_root.iterdir()) == ["theirs"] and fake.effects() == []
+
+
+def test_an_inspect_error_is_unknown_not_absent_even_when_listing_works(tmp_path: Path, key: Path,
+                                                                        fake: FakeDocker) -> None:
+    loaded, _, _ = started(tmp_path, key)
+    relay = names(loaded)["relay"]
+    fake.inspect_error.add(relay)
+    assert main([str(write(tmp_path, config(tmp_path, key))), "stop"]) == 1
+    [record] = loaded.run_root.glob("stop-incomplete-*.json")
+    assert relay in json.loads(record.read_text())["left"]["unknown"] and relay in fake.objects["container"]
+
+
+def test_a_removal_that_answers_success_but_leaves_the_object_is_unknown(tmp_path: Path, key: Path,
+                                                                         fake: FakeDocker) -> None:
+    loaded, _, _ = started(tmp_path, key)
+    relay = names(loaded)["relay"]
+    fake.ignore_rm.add(fake.objects["container"][relay]["Id"])
+    assert main([str(write(tmp_path, config(tmp_path, key))), "stop"]) == 1
+    [record] = loaded.run_root.glob("stop-incomplete-*.json")
+    assert relay in json.loads(record.read_text())["left"]["unknown"] and not (loaded.run_root / "stopped.json").exists()
+
+
+def test_no_restart_after_a_stop_that_removed_nothing(tmp_path: Path, key: Path, fake: FakeDocker) -> None:
+    loaded, _, _ = started(tmp_path, key)
+    fake.fail_rm |= {fake.objects[kind][name]["Id"] for kind in ("container", "network")
+                     for name in fake.objects[kind]} | {names(loaded)["egress"]}
+    path = write(tmp_path, config(tmp_path, key))
+    assert main([str(path), "stop"]) == 1 and all(fake.labelled(loaded.target.run_id).values())
+    fake.fail_rm.clear()
+    effects = len(fake.effects())
+    assert main([str(path), "restart"]) == 2 and len(fake.effects()) == effects
