@@ -1,18 +1,25 @@
 """Transport construction identity and per-call receipts in the recorder's `transport-receipts.json` sidecar.
 
-The real `StdlibHttpTransport` runs through the recorder-owned fixture construction path with an in-memory connection
-that serves authored synthetic bytes; no socket is opened. Every value is a synthetic fixture. Nothing here is provider,
-chain or market evidence, and every handoff and sidecar stays SYNTHETIC.
+The real `StdlibHttpTransport` runs through the recorder-owned fixture construction path. The default tests use an
+in-memory connection and open no socket. The loopback tests at the end use an owned 127.0.0.1 HTTPServer and run only
+with EDGE_OS_LOOPBACK_QUALIFICATION=1. Every value is a synthetic fixture. Nothing here is provider, chain or market
+evidence, and every handoff and sidecar stays SYNTHETIC.
 """
 
 from __future__ import annotations
 
 import hashlib
+import http.client
 import io
 import json
 import os
+import socket
+import socketserver
 import stat
+import threading
+import time
 from collections.abc import Callable
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -20,14 +27,21 @@ import pytest
 
 import edge_os_api.research_history.http_clients.http_transport as http_transport_module
 from edge_os_api.records.contract_adapter import canonical_bytes
-from edge_os_api.research_history.http_clients.http_transport import HttpResponse, StdlibHttpTransport
-from edge_os_api.research_history.provider_transport import SourceTimeout
+from edge_os_api.research_history.http_clients.client_config import HttpProviderError
+from edge_os_api.research_history.http_clients.http_transport import (
+    HttpResponse,
+    StdlibHttpTransport,
+    refuse_provider_status,
+)
+from edge_os_api.research_history.provider_transport import SourceCancelled, SourceTimeout
 from scripts.forward_history_recorder import (
     TRANSPORT_RECEIPTS_FILE,
     TRANSPORT_RECEIPTS_SCHEMA,
+    AdmissionRefused,
     AttemptExists,
     AttemptJournal,
     RecordingTransport,
+    SystemClock,
     local_fixture_transport,
     owned_stdlib_transport,
     recover_attempt,
@@ -448,3 +462,327 @@ def test_not_ready_input_writes_no_sidecar(tmp_path: Path) -> None:
     clock = FakeClock(T0 - 600)
     result = run_attempt(value, transport=owned_stdlib_transport(), clock=clock, credentials=Credentials())
     assert result["status"] == "NOT_READY" and list((tmp_path / "attempts").iterdir()) == []
+
+
+# Owned loopback qualification: the real recorder wrapper and stdlib transport over a 127.0.0.1 HTTPServer.
+#
+# Runs only with EDGE_OS_LOOPBACK_QUALIFICATION=1. The server is bound to 127.0.0.1 port 0 and serves authored bytes.
+# The recorder keeps its invalid logical URLs; only the fixture connector reaches the loopback port, so every receipt
+# is LOCAL_FIXTURE and every handoff stays SYNTHETIC. No DNS, TLS, provider or real credential is used.
+
+loopback = pytest.mark.skipif(os.environ.get("EDGE_OS_LOOPBACK_QUALIFICATION") != "1",
+                              reason="owned loopback qualification runs only under its separate grant")
+MAX_HANDLER_SECONDS = 5.0  # every authored server action ends within this bound
+Script = Callable[["LoopbackServer", int, bytes, Any], None]
+
+
+class _RawHandler(socketserver.StreamRequestHandler):
+    """Captures the exact request bytes, then runs the test's authored reply script."""
+
+    def handle(self) -> None:
+        server: LoopbackServer = self.server  # type: ignore[assignment]
+        self.connection.settimeout(MAX_HANDLER_SECONDS)
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = self.connection.recv(65_536)
+            if not chunk:
+                return
+            head += chunk
+        header_end = head.index(b"\r\n\r\n") + 4
+        length = 0
+        for line in head[:header_end].split(b"\r\n")[1:]:
+            if line.lower().startswith(b"content-length:"):
+                length = int(line.split(b":", 1)[1])
+        raw = head
+        while len(raw) < header_end + length:
+            chunk = self.connection.recv(65_536)
+            if not chunk:
+                break
+            raw += chunk
+        with server.lock:
+            index = len(server.requests)
+            server.requests.append(raw)
+        try:
+            server.script(server, index, raw, self.connection)
+        except OSError:
+            pass  # the client closed or the transport shut its socket at a deadline
+
+
+class LoopbackServer(ThreadingHTTPServer):
+    daemon_threads = False  # server_close joins every handler thread
+    block_on_close = True
+
+    def __init__(self, script: Script) -> None:
+        super().__init__(("127.0.0.1", 0), _RawHandler)
+        self.script = script
+        self.requests: list[bytes] = []
+        self.lock = threading.Lock()
+        self.port = self.server_address[1]
+        self.thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05},
+                                       name="l4-loopback-server", daemon=True)
+
+    def connect(self, scheme: str, host: str, port: int | None, timeout: float) -> http.client.HTTPConnection:
+        return http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+
+
+@pytest.fixture
+def loopback_server() -> Any:
+    servers: list[LoopbackServer] = []
+    before = set(threading.enumerate())
+
+    def start(script: Script) -> LoopbackServer:
+        server = LoopbackServer(script)
+        server.thread.start()
+        servers.append(server)
+        return server
+    try:
+        yield start
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+            server.thread.join(MAX_HANDLER_SECONDS)
+    for server in servers:
+        assert not server.thread.is_alive()
+        assert server.socket.fileno() == -1
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", server.port), timeout=1.0).close()
+    deadline = time.monotonic() + MAX_HANDLER_SECONDS
+    while time.monotonic() < deadline and set(threading.enumerate()) - before:
+        time.sleep(0.05)  # transport watchdog timers end at their cancel
+    assert set(threading.enumerate()) - before == set()
+
+
+def reply(status: int, body: bytes, headers: dict[str, str] | None = None) -> bytes:
+    lines = [f"HTTP/1.1 {status} X".encode(), f"Content-Length: {len(body)}".encode(), b"Connection: close"]
+    lines += [f"{name}: {value}".encode() for name, value in (headers or {}).items()]
+    return b"\r\n".join(lines) + b"\r\n\r\n" + body
+
+
+def fixed(status: int, body: bytes, headers: dict[str, str] | None = None) -> Script:
+    def script(server: LoopbackServer, index: int, raw: bytes, connection: Any) -> None:
+        connection.sendall(reply(status, body, headers))
+    return script
+
+
+def loopback_wrapper(tmp_path: Path, server: LoopbackServer) -> tuple[RecordingTransport, AttemptJournal, Path]:
+    clock = SystemClock()
+    transport = local_fixture_transport(server.connect, time.monotonic)
+    attempt = tmp_path / "attempt"
+    journal = AttemptJournal.create(attempt)
+    wrapper = RecordingTransport(transport, journal, clock, quicknode_url=QN_URL, hypersync_url=HS_URL,
+                                 secrets=SECRETS)
+    wrapper.label(phase="P1", slot="loopback", provider="quicknode")
+    return wrapper, journal, attempt
+
+
+def loopback_send(wrapper: RecordingTransport, *, seconds: float = 3.0,
+                  cancel: Callable[[], bool] | None = None) -> HttpResponse:
+    return wrapper.request(method="POST", url=QN_URL, headers={"content-type": "application/json"},
+                           body=CHAIN_ID_REQUEST, timeout=2.0, deadline=time.monotonic() + seconds,
+                           max_response_bytes=2_097_152, cancel=cancel)
+
+
+def only_receipt(wrapper: RecordingTransport) -> dict[str, Any]:
+    receipts = wrapper.receipts_document("loopback", "0" * 64)["receipts"]
+    assert len(receipts) == 1
+    return receipts[0]
+
+
+def admissions(attempt: Path) -> tuple[int, int]:
+    summary = recover_attempt(attempt)
+    return summary["admitted"], summary["resolved"]
+
+
+NULL_RECEIPT = dict.fromkeys(("status", "body_sha256", "body_bytes", "received_at_utc_us", "elapsed_us"))
+
+
+@loopback
+def test_loopback_exact_wire_bytes_and_receipt_hashes(tmp_path: Path, loopback_server: Any) -> None:
+    body = _rpc("0x8f")
+    server = loopback_server(fixed(200, body, {"Content-Type": "application/json"}))
+    wrapper, _, attempt = loopback_wrapper(tmp_path, server)
+    response = loopback_send(wrapper)
+    assert response.status == 200 and response.body == body
+    (raw,) = server.requests
+    head, wire_body = raw.split(b"\r\n\r\n", 1)
+    lines = head.split(b"\r\n")
+    assert lines[0] == f"POST /{QN_PATH_SECRET}/ HTTP/1.1".encode()
+    assert sorted(lines[1:]) == sorted([f"Host: 127.0.0.1:{server.port}".encode(), b"Accept-Encoding: identity",
+                                        b"content-type: application/json",
+                                        f"Content-Length: {len(CHAIN_ID_REQUEST)}".encode()])
+    assert wire_body == CHAIN_ID_REQUEST
+    receipt = only_receipt(wrapper)
+    assert receipt["request_sha256"] == hashlib.sha256(wire_body).hexdigest()
+    assert receipt["body_sha256"] == hashlib.sha256(body).hexdigest() and receipt["body_bytes"] == len(body)
+    assert receipt["outcome"] == "REPLY_RECEIVED" and receipt["status"] == 200
+    assert receipt["transport_binding_sha256"] == FIXTURE_BINDING
+    assert receipt["received_at_utc_us"] is not None and 0 <= receipt["elapsed_us"] < 3_000_000
+    assert (attempt / "bodies" / f"{receipt['call_id']}.bin").read_bytes() == body
+    assert admissions(attempt) == (1, 1)
+
+
+@loopback
+@pytest.mark.parametrize("size", [2_097_152, 2_097_153])
+def test_loopback_reply_cap_at_and_over_2_mib(tmp_path: Path, loopback_server: Any, size: int) -> None:
+    server = loopback_server(fixed(200, b"y" * size))
+    wrapper, _, attempt = loopback_wrapper(tmp_path, server)
+    if size == 2_097_152:
+        assert len(loopback_send(wrapper).body) == size
+        assert only_receipt(wrapper)["body_bytes"] == size and admissions(attempt) == (1, 1)
+        return
+    with pytest.raises(HttpProviderError) as caught:
+        loopback_send(wrapper)
+    assert caught.value.code == "OVERSIZED_RESPONSE"
+    receipt = only_receipt(wrapper)
+    assert receipt["outcome"] == "UNKNOWN" and {key: receipt[key] for key in NULL_RECEIPT} == NULL_RECEIPT
+    assert b"y" * 1000 not in all_bytes(attempt) and admissions(attempt) == (1, 0)
+    assert len(server.requests) == 1
+
+
+def _drip(phase: str) -> Script:
+    def script(server: LoopbackServer, index: int, raw: bytes, connection: Any) -> None:
+        if phase == "header":
+            connection.sendall(b"HTTP/1.1 200 X\r\n")
+            payload = b"X-Slow: " + b"a" * 40
+        else:
+            connection.sendall(b"HTTP/1.1 200 X\r\nContent-Length: 40\r\nConnection: close\r\n\r\n")
+            payload = b"b" * 40
+        for byte in payload:  # one byte every 100 ms: never idle long enough for a per-read socket timeout
+            connection.sendall(bytes([byte]))
+            time.sleep(0.1)
+    return script
+
+
+@loopback
+@pytest.mark.parametrize("phase", ["header", "body"])
+def test_loopback_drip_past_the_deadline_times_out_with_unknown_liability(
+        tmp_path: Path, loopback_server: Any, phase: str) -> None:
+    server = loopback_server(_drip(phase))
+    wrapper, _, attempt = loopback_wrapper(tmp_path, server)
+    started = time.monotonic()
+    with pytest.raises(SourceTimeout):
+        loopback_send(wrapper, seconds=1.0)
+    assert time.monotonic() - started < 2.5
+    receipt = only_receipt(wrapper)
+    assert receipt["outcome"] == "UNKNOWN" and {key: receipt[key] for key in NULL_RECEIPT} == NULL_RECEIPT
+    assert admissions(attempt) == (1, 0) and len(server.requests) == 1
+
+
+@loopback
+def test_loopback_redirect_is_not_followed(tmp_path: Path, loopback_server: Any) -> None:
+    server = loopback_server(fixed(302, b"", {"Location": f"http://127.0.0.1:{1}/elsewhere"}))
+    wrapper, _, attempt = loopback_wrapper(tmp_path, server)
+    response = loopback_send(wrapper)
+    assert response.status == 302 and len(server.requests) == 1
+    with pytest.raises(HttpProviderError) as caught:
+        refuse_provider_status(response.status, "loopback")
+    assert caught.value.code == "REDIRECT_REFUSED"
+    assert only_receipt(wrapper)["status"] == 302 and admissions(attempt) == (1, 1)
+
+
+@loopback
+def test_loopback_cancellation_between_body_reads_stops_the_call(tmp_path: Path, loopback_server: Any) -> None:
+    server = loopback_server(fixed(200, b"z" * 300_000))
+    wrapper, _, attempt = loopback_wrapper(tmp_path, server)
+    checks = {"count": 0}
+
+    def cancel() -> bool:  # admission, pre-connect, first read; then cancelled before the second chunk
+        checks["count"] += 1
+        return checks["count"] >= 4
+    with pytest.raises(SourceCancelled):
+        loopback_send(wrapper, cancel=cancel)
+    receipt = only_receipt(wrapper)
+    assert receipt["outcome"] == "UNKNOWN" and {key: receipt[key] for key in NULL_RECEIPT} == NULL_RECEIPT
+    assert admissions(attempt) == (1, 0) and len(server.requests) == 1
+    with pytest.raises(AdmissionRefused):
+        wrapper.request(method="POST", url=QN_URL, headers={}, body=CHAIN_ID_REQUEST, timeout=2.0,
+                        deadline=time.monotonic() + 3, max_response_bytes=2_097_152, cancel=lambda: True)
+    assert len(server.requests) == 1
+
+
+@loopback
+@pytest.mark.parametrize("where", ["body", "header"])
+def test_loopback_secret_echo_is_an_incident_without_digest(tmp_path: Path, loopback_server: Any,
+                                                             where: str) -> None:
+    if where == "body":
+        script = fixed(200, json.dumps({"error": f"bad token {HS_TOKEN}"}).encode())
+    else:
+        script = fixed(200, _rpc("0x8f"), {"X-Debug": f"path /{QN_PATH_SECRET}/"})
+    server = loopback_server(script)
+    wrapper, _, attempt = loopback_wrapper(tmp_path, server)
+    with pytest.raises(Exception) as caught:
+        loopback_send(wrapper)
+    assert getattr(caught.value, "code", None) == "CREDENTIAL_INCIDENT"
+    receipt = only_receipt(wrapper)
+    assert receipt["outcome"] == "CREDENTIAL_INCIDENT" and receipt["body_sha256"] is None
+    stored = all_bytes(attempt) + canonical_bytes(wrapper.receipts_document("loopback", "0" * 64))
+    for secret in SECRETS:
+        assert secret.encode() not in stored
+    assert len(server.requests) == 1
+
+
+def _synthetic_script(providers: SyntheticProviders, interrupt_at: int | None = None) -> Script:
+    def script(server: LoopbackServer, index: int, raw: bytes, connection: Any) -> None:
+        head, body = raw.split(b"\r\n\r\n", 1)
+        path = head.split(b"\r\n")[0].split(b" ")[1].decode()
+        url = HS_URL if path == "/query" else QN_URL
+        produced = providers.request(method="POST", url=url, headers={}, body=body, timeout=0.0, deadline=0.0,
+                                     max_response_bytes=0)
+        connection.sendall(reply(produced.status, produced.body, dict(produced.headers)))
+    return script
+
+
+def loopback_run(tmp_path: Path, loopback_server: Any, cancel: Callable[[], bool] | None = None
+                 ) -> tuple[dict[str, Any], LoopbackServer, Path]:
+    clock = FakeClock(T0 - 600)
+    providers = SyntheticProviders(clock)
+    server = loopback_server(_synthetic_script(providers))
+    transport = local_fixture_transport(server.connect, clock.monotonic)
+    result = run_attempt(recorder_input(tmp_path), transport=transport, clock=clock, credentials=Credentials(),
+                         cancel=cancel)
+    return result, server, tmp_path / "attempts" / "synthetic-attempt-1"
+
+
+@loopback
+def test_loopback_full_attempt_has_one_durable_admission_per_wire_request(tmp_path: Path,
+                                                                          loopback_server: Any) -> None:
+    result, server, attempt = loopback_run(tmp_path, loopback_server)
+    assert result["status"] == "COMPLETED"
+    sidecar, _ = sidecar_of(attempt)
+    assert sidecar["transport"]["construction"] == "LOCAL_FIXTURE" and sidecar["evidence_class"] == "SYNTHETIC"
+    assert json.loads(Path(result["handoff_path"]).read_bytes())["evidence_class"] == "SYNTHETIC"
+    wire_bodies = [raw.split(b"\r\n\r\n", 1)[1] for raw in server.requests]
+    assert len(wire_bodies) == len(sidecar["receipts"]) == len(journal_records(attempt, "ADMITTED")) == 22
+    assert [hashlib.sha256(body).hexdigest() for body in wire_bodies] == [
+        receipt["request_sha256"] for receipt in sidecar["receipts"]]
+    assert admissions(attempt) == (22, 22)
+
+
+@loopback
+def test_loopback_interrupted_attempt_is_never_resumed_or_resent(tmp_path: Path, loopback_server: Any) -> None:
+    class Interrupt(BaseException):
+        pass
+    holder: dict[str, LoopbackServer] = {}
+
+    def cancel() -> bool:  # interrupts in the read loop after the tenth request reached the wire
+        server = holder.get("server")
+        if server is not None and len(server.requests) == 10 and not holder.get("fired"):
+            holder["fired"] = True  # type: ignore[assignment]
+            raise Interrupt()
+        return False
+    clock = FakeClock(T0 - 600)
+    providers = SyntheticProviders(clock)
+    server = loopback_server(_synthetic_script(providers))
+    holder["server"] = server
+    with pytest.raises(Interrupt):
+        run_attempt(recorder_input(tmp_path), transport=local_fixture_transport(server.connect, clock.monotonic),
+                    clock=clock, credentials=Credentials(), cancel=cancel)
+    attempt = tmp_path / "attempts" / "synthetic-attempt-1"
+    summary = recover_attempt(attempt)
+    assert summary["admitted"] == 10 and summary["unknown_liability"] == 1 and len(server.requests) == 10
+    assert not (attempt / TRANSPORT_RECEIPTS_FILE).exists() and summary["handoff_present"] is False
+    with pytest.raises(AttemptExists):
+        run_attempt(recorder_input(tmp_path), transport=local_fixture_transport(server.connect, clock.monotonic),
+                    clock=clock, credentials=Credentials())
+    assert len(server.requests) == 10 and recover_attempt(attempt) == summary

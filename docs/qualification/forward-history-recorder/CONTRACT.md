@@ -307,10 +307,18 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:apps/api/src apps/api/.venv/bin/py
 The suite needs no Docker, database, service, socket or provider. The receipts tests run the real
 `StdlibHttpTransport` through `local_fixture_transport` with an in-memory connection.
 
-Before any actual operation, the recorder wrapper still needs a separate owned-loopback qualification with the real
-`StdlibHttpTransport`: wire, hash and receipt capture, the 2 MiB streaming cutoff, header/body drip deadlines, redirect
-refusal, cancellation, credential echo, one admitted request and interrupted no-resume behavior. Synthetic tests cannot
-supply that proof.
+The owned loopback qualification runs the real recorder wrapper and `StdlibHttpTransport` against an authored
+`HTTPServer` on `127.0.0.1` port 0 through `local_fixture_transport`. It is skipped unless enabled:
+
+```sh
+EDGE_OS_LOOPBACK_QUALIFICATION=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:apps/api/src apps/api/.venv/bin/python -m pytest --noconftest -p no:cacheprovider -q tests/test_forward_history_transport_receipts.py -k loopback
+```
+
+It checks exact wire bytes against receipt hashes, the 2 MiB cutoff, header and body drip deadlines, redirect
+non-following, cancellation between body reads, secret echo in a body or header, one durable admission per wire request,
+interrupted no-resume behavior, and that every listener, server thread and handler thread is gone after each test. Its
+evidence stays `LOCAL_FIXTURE` and `SYNTHETIC`. It is not provider, DNS or TLS evidence; an actual operation still needs
+its own authority.
 
 ## Claim limits
 
