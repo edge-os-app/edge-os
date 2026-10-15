@@ -24,7 +24,7 @@ only if it carries this run id's label and, for a container, mounts its role's c
 the network, has the id recorded at start, and for the egress volume, carries the random claim label this start wrote
 (the operator creates that volume before the supervisor, because Docker re-uses an existing volume of that name).
 Absent means Docker's exact no-such-object answer for that kind and name (Docker 29.4.0 says `network NAME not found`
-for a network); any other unreadable answer is unknown, never gone and never ours.
+for a network, plain or in the daemon's JSON `message`); any other unreadable answer is unknown, never gone and never ours.
 Foreign and unknown objects are never killed, removed, mounted or adopted, and are reported. Removal goes by the Docker
 id just inspected (a volume by its name) and is then checked; only a stop that ends clean writes `stopped.json`.
 
@@ -325,13 +325,32 @@ def _docker(*args: str) -> subprocess.CompletedProcess[str] | None:
         return None
 
 
+DAEMON_ERROR = "Error response from daemon: "
+
+
 def _absent_answers(kind: str, name: str) -> set[str]:
     """Docker's whole error line for no `kind` object named `name`: the generic `inspect` forms and each kind's own
     (Docker 29.4.0: `network NAME not found`, `No such container: NAME`, `get NAME: no such volume`)."""
     own = {"container": f"No such container: {name}", "network": f"network {name} not found",
            "volume": f"get {name}: no such volume"}[kind]
-    return {prefix + text for prefix in ("Error: ", "Error response from daemon: ")
+    return {prefix + text for prefix in ("Error: ", DAEMON_ERROR)
             for text in (f"No such object: {name}", f"No such {kind}: {name}", own)}
+
+
+def _absent_line(line: str, kind: str, name: str) -> bool:
+    """One of those lines, plain or with the daemon's JSON body (`Error response from daemon: {"message": "..."}`,
+    one strict object whose only key is a string `message`), as Docker 29.4.0 also answers."""
+    allowed = _absent_answers(kind, name)
+    if line in allowed:
+        return True
+    if not line.startswith(DAEMON_ERROR):
+        return False
+    try:
+        body = _strict_json(line.removeprefix(DAEMON_ERROR).encode(), "Docker error")
+    except OperatorRefused:
+        return False
+    message = body.get("message")
+    return set(body) == {"message"} and isinstance(message, str) and DAEMON_ERROR + message in allowed
 
 
 def _inspect(kind: str, name: str) -> dict[str, Any] | None | bool:
@@ -343,7 +362,8 @@ def _inspect(kind: str, name: str) -> dict[str, Any] | None | bool:
         return False
     if seen.returncode != 0:
         lines = (seen.stderr or "").strip().splitlines()
-        absent = (seen.stdout or "").strip() in ("", "[]") and lines and set(lines) <= _absent_answers(kind, name)
+        absent = (seen.stdout or "").strip() in ("", "[]") and lines and all(_absent_line(line, kind, name)
+                                                                               for line in lines)
         return None if absent else False
     try:
         [value] = json.loads(seen.stdout)
