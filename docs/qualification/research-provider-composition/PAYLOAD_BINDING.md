@@ -47,8 +47,9 @@ and executes exactly the bytes it hashed. A missing or changed checker gives INC
 it bypasses the CLI's bounded file reads, it enforces the CLI ceilings itself: handoff 8 MiB, canonical export 64 MiB
 and expected identities 64 KiB.
 
-The API image does not copy `scripts/`. A deployed image therefore gives INCOMPLETE for every required binding until
-an accepted packaging change adds the checker. This fails closed.
+The API image copies only this checker from `scripts/` (`deploy/docker/api.Dockerfile`, `.dockerignore`), at
+`/app/scripts/history_payload_binding.py`. `tests/deployment_rehearsal/test_image_definitions.py` lists it as a required
+runtime asset. If the file is missing or changed, every required binding is INCOMPLETE.
 
 ## Collection
 

@@ -41,6 +41,8 @@ COPY docs/qualification/p07 /app/docs/qualification/p07
 COPY docs/implementation/EFFECT_COMPARISON_PROFILE.md docs/implementation/SPOT_REPLAY_RUNTIME_PROFILE.md /app/docs/implementation/
 COPY scripts/hermes_interpretation /app/scripts/hermes_interpretation
 COPY scripts/hermes_job_support /app/scripts/hermes_job_support
+# The accepted forward-history checker, loaded by path for saved-history payload binding (pinned bytes).
+COPY scripts/history_payload_binding.py /app/scripts/history_payload_binding.py
 COPY deploy/local/public_entry.py deploy/local/http_probe.py /app/deploy/local/
 WORKDIR /app/apps/api
 USER 10001:10001
