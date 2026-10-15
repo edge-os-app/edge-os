@@ -22,7 +22,7 @@ Run the steps in order on the exact release build. Each step has one pass condit
 | 12 | Open the reconciliation record | reserved = consumed + released + unknown for requests, compute and credits; provider-side counts equal saved client counts | Show the unreconciled values |
 | 13 | Open the secret-scan record | 0 key and authorization-header matches in replies, browser results, logs, rows and evidence | Stop. Treat it as a credential incident |
 
-Step 8 shows Nansen data to judges. Do it only after decision D9 in [OPERATING_PACKET.md section 9](OPERATING_PACKET.md#9-decisions-the-builder-makes-once-facts-exist). The Nansen API terms limit use to internal business purposes and require written consent for redistribution.
+Step 8 shows Nansen data to judges. Do it only after decision D9 in [OPERATING_PACKET.md section 9](OPERATING_PACKET.md#9-decisions-the-builder-makes-once-facts-exist). The Nansen API terms limit use to internal business purposes, except what the Data Redistribution Guidelines permit ([OPERATING_PACKET.md section 4](OPERATING_PACKET.md#4-nansen-evidence-needed-before-the-run)).
 
 ## 2. Sponsor claim-to-proof map
 

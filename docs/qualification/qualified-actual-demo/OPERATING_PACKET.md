@@ -28,7 +28,7 @@ One release holds both parts, so the API and the worker share one SHA-256. `rele
 | `quicknode_host`, `quicknode_credential_slot` | `<QuickNode host>`, `quicknode_monad_url` | Host `NEEDS_FACT`; publishing it `NEEDS_APPROVAL` |
 | `rpc_methods`, `source_version` | `eth_chainId`, `eth_getTransactionReceipt`; `envio-hypersync/1` | `FIXED_BY_CODE` |
 | Profile window | `[T0, T0 + 1,200 s)` | `PROPOSED` |
-| Profile availability | `{"model": "OBSERVED_DELIVERY", "basis_evidence": "SOURCE_DELIVERY_RECORD"}` | Only when source-fact P3 recorded a delivery for all 4 buckets and D3 is accepted. Otherwise `ASSUMED_DELAY` (the expected verdict is then `LIMITED`). `qualify` never reads `delivery_records`, so this rule is the only guard against a false `QUALIFIED` |
+| Profile availability | `{"model": "OBSERVED_DELIVERY", "basis_evidence": "SOURCE_DELIVERY_RECORD"}` | Only when source-fact P3 recorded a delivery for all 4 buckets and D3 is accepted. Otherwise `{"model": "ASSUMED_DELAY", "delay_seconds": 180}`, the Probe A precedent of the earlier packet (the value needs D3). With the section 5.3 claim this makes every slot fail availability, so feasibility is `INFEASIBLE` and the expected verdict is `UNRESOLVED`. `qualify` never reads `delivery_records`, so this rule is the only guard against a false `QUALIFIED` |
 | Profile finality | `depth_blocks` 2, basis `DOCUMENTATION` | As the earlier packet |
 | Orientation | `QUOTE_PER_BASE` (WMON per MOE) | `NEEDS_APPROVAL` |
 | `scan` | `from_block` `<B_PRE>`, `to_block_exclusive` `<B_POST + 1>` | From source-fact P3 block headers |
@@ -56,7 +56,7 @@ One release holds both parts, so the API and the worker share one SHA-256. `rele
 | `decimals` | Base and quote: `window_start`, `window_end`, `current` all `READ` | P4 (start) and P5 (end, current) reads | `NOT_READ` for each missing read |
 | `fee_transfer_semantics` | `QUALIFIED` | P6 evidence, written finding, decision D5 | Not `QUALIFIED` |
 | `finality_at_collection` | `OBSERVED_FINAL` | P5 finalized number ≥ `B_POST + 2` | `FINALIZED_BY_DEPTH` |
-| `delivery_records` | One time per bucket start | P3 | Any missing bucket: declare the profile `ASSUMED_DELAY` instead (row above) |
+| `delivery_records` | One time per bucket start | P3 | Any missing bucket: declare the profile `ASSUMED_DELAY` 180 s instead (row above); expected verdict `UNRESOLVED` |
 | `feasibility_claim` | QUALIFICATION_GAPS.md section 5.3 claim, floors 1 and 1 | Decision D6 | No floors: `UNDECLARED` |
 | `collected_at_utc` | P5 finalized read time | Decision D3 | Undecided: the release cannot be frozen |
 | `archive_height` | P5 latest number | P5 | Undecided: the release cannot be frozen |
@@ -104,7 +104,7 @@ No step retries automatically. A repeated key returns the original job. A new ke
 
 | Resource | History | Nansen | Total | Default owner cap | Needed |
 |---|---|---|---|---|---|
-| `provider_requests` | 64 | 2 | 66 | 16 | Cap ≥ 66 (`NEEDS_APPROVAL`, settings change outside this lease, before first use) |
+| `provider_requests` | 64 | 2 | 66 | 16 | 66 unconsumed requests for owner A, see below (`NEEDS_APPROVAL`, settings change outside this lease) |
 | `compute_seconds` | 600 | 300 | 900 | 900 | Fits |
 | `nansen_credits` | not reserved | 6 | 6 | 50 | Fits |
 
@@ -125,7 +125,7 @@ Global defaults (100,000 requests, 10,000,000 s, 10,000 credits) fit. Caps freez
 
 | Provider | Published terms (read 2026-10-15) | Decision needed |
 |---|---|---|
-| Nansen | See section 4. Internal use only; redistribution needs written consent; attribution required; cache limited to documented timeframes | `NEEDS_APPROVAL`: written consent or no public display; retention window |
+| Nansen | See section 4. Internal use only, except what the Data Redistribution Guidelines permit: `tgm/flows` allowed with attribution; unfiltered `tgm/holders` not listed. Cache limited to documented timeframes | `NEEDS_APPROVAL`: holders display (consent, a Nansen statement, or no public display); retention window |
 | Envio | Terms last updated 2025-02-06 describe HyperSync as a read-only API and have no clause on reuse or display of returned data ([terms](https://docs.envio.dev/docs/terms-of-service)) | `NEEDS_FACT`: confirm with Envio if public display matters; retention window |
 | QuickNode | [Terms of Use](https://www.quicknode.com/terms), last updated 2025-12-01: section 3, "This license does not include a right to use any of the content and information"; section 7(v) and (viii) bar distributing or making derivative works of the QuickNode Products. No clause addresses reuse or retention of RPC responses | `NEEDS_FACT`: a short question to QuickNode or the account owner on storing and showing RPC results; retention window |
 
@@ -137,7 +137,7 @@ The earlier packet's section 7 applies unchanged, including every stop condition
 
 - If the saved overall verdict is not `QUALIFIED`, do not run a replay. Save one replay attempt only to record `DATASET_COVERAGE_UNPROVEN`. Report the verdict and its reasons.
 - If the history job records more than 61 records, corroboration is `SAMPLED` and the verdict is `LIMITED`. This is a valid result, not a failure. Do not rerun with a narrower window under the same approval.
-- If the source-fact packet stopped in any phase, do not freeze the release with the stronger value for that fact.
+- A source-fact safety stop means no release and no dataset from that attempt; a new attempt needs a new decision. A source-fact evidence outcome means the release is frozen with the weaker value for that fact, as section 2.1 lists.
 - A failed or `UNKNOWN` history or Nansen job is not repeated. A second attempt is a new approval with a new key, a new window and new source facts.
 - A replay is a calculation on saved data. It makes no provider call and no trade.
 - Every chosen `T0`, including abandoned ones, stays in the private attempt log named in the source-fact packet. A later claim about a qualified window cites that log, so a successful window is never shown without the attempts that failed.
