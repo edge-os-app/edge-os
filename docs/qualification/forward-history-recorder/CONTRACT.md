@@ -1,7 +1,8 @@
 # Forward history recorder and payload binding contract
 
-Status: LOCAL implementation contract for task `FORWARD-HISTORY-RECORDER-L4-20261015-LOCAL-v1`. It defines the
-recorder (`scripts/forward_history_recorder.py`) and the offline checker (`scripts/history_payload_binding.py`). It
+Status: LOCAL implementation contract for task `FORWARD-HISTORY-RECORDER-L4-20261015-LOCAL-v1`, amended by
+`HISTORY-TRANSPORT-RECEIPTS-L4-20261015-LOCAL-v1` (transport receipts sidecar). It defines the recorder
+(`scripts/forward_history_recorder.py`) and the offline checker (`scripts/history_payload_binding.py`). It
 authorizes no provider, credential, chain, account, wallet or recording operation. All tests use synthetic transports,
 fake clocks and sentinel credentials.
 
@@ -13,6 +14,7 @@ fake clocks and sentinel credentials.
 | Recorder handoff | `edge-os.forward-history-handoff/1` |
 | Canonical payload | `edge-os.forward-history-payload/1` |
 | Binding report | `edge-os.history-payload-binding/1` |
+| Transport receipts sidecar | `edge-os.forward-history-transport-receipts/1` |
 | Creation-event decoder | `retained-v2-pair-created/1` |
 | Predecessor read packet | `docs/qualification/qualified-actual-demo/SOURCE_FACT_PACKET.json`, SHA-256 `c4fc01c4d498742cd9a904606135fdb2b27fea448bb254462a79a9f67824312f` |
 
@@ -209,6 +211,63 @@ the future actual route, but the public `HttpTransport` seam cannot show whether
 caller's `ACTUAL` string therefore never promotes an injected transport. When `ACTUAL` is requested, `evidence_notice`
 starts with `ACTUAL_NOT_ESTABLISHED`. Making `ACTUAL` reachable needs a separately qualified transport-provenance seam.
 
+The transport receipts sidecar below records construction facts only. It does not change this rule: every handoff,
+including one made through the recorder-owned stdlib construction or with a requested `ACTUAL`, stays `SYNTHETIC`.
+
+## Transport receipts sidecar `edge-os.forward-history-transport-receipts/1`
+
+After `handoff.json` is written, the recorder writes `transport-receipts.json` in the attempt directory, exclusively,
+mode 0600, as canonical JSON (the same `canonical_bytes`). Its keys are exactly:
+
+| Key | Value |
+|---|---|
+| `schema_version` | `edge-os.forward-history-transport-receipts/1` |
+| `attempt_id`, `recorder_code_sha256` | As in the handoff. |
+| `handoff_sha256` | SHA-256 of the final `handoff.json` bytes. |
+| `evidence_class` | Always `SYNTHETIC`. |
+| `transport` | `{construction, implementation, implementation_sha256}`. |
+| `receipts` | One entry per admitted call, in admission order. |
+
+Construction comes only from the recorder:
+
+- `owned_stdlib_transport()` builds `StdlibHttpTransport()` with its defaults: `OWNED_STDLIB`.
+- `local_fixture_transport(connect, clock)` builds `StdlibHttpTransport(connect=..., clock=...)` for fixtures and
+  owned loopback checks: `LOCAL_FIXTURE`.
+- Every other object is `INJECTED`, with null `implementation` and `implementation_sha256`. This includes a caller's
+  own `StdlibHttpTransport(connect=...)`, a subclass, a wrapper and an object that carries an `ACTUAL` or construction
+  label.
+
+For `OWNED_STDLIB` and `LOCAL_FIXTURE`, `implementation` is
+`edge_os_api.research_history.http_clients.http_transport.StdlibHttpTransport` and `implementation_sha256` is the
+SHA-256 of that module file, read when the recorder is imported. Input JSON and transport attributes never supply these
+facts.
+
+`transport_binding_sha256` is the SHA-256 of the canonical `transport` object. The binding is checked before every
+admission, before the journal record. A recorded construction must still have the exact class, the class attributes and
+the instance attributes it was created with (compared by identity), and the request method called is the class method
+captured at import. An injected object keeps the class and `request` it had at binding. Any change (an instance
+`request`, a new connector or clock, a reassigned class or a class-level method patch) is refused with
+`ADMISSION_TRANSPORT_SUBSTITUTED`: nothing is sent, no liability is added and every later admission stops. A recorded
+construction altered before binding is reported `INJECTED` and never sends.
+
+Each receipt has exactly `call_id`, `transport_binding_sha256`, `request_sha256`, `outcome`, `status`, `body_sha256`,
+`body_bytes`, `received_at_utc_us` and `elapsed_us`. `outcome`, `request_sha256`, `body_sha256` and a received reply's
+`status` and `body_bytes` equal the handoff `calls` entry; an incident or oversized reply also keeps its status and byte
+count. The receipt clock and returned bytes are captured immediately after the bounded body returns, before decode.
+Times are integer microseconds: UTC receipt time and monotonic time since admission. A UTC or monotonic reading earlier
+than the admission leaves both null; the clock-reversal stop still applies. A missing reply keeps null status, body and
+time fields with `UNKNOWN` outcome and liability. A credential incident never exposes a body digest.
+
+A sidecar write failure is reported as `transport_receipts_status = WRITE_FAILED` in the `run_attempt` result. The
+completed handoff is not changed and nothing is resent. An attempt that is interrupted or refused before its handoff
+writes no sidecar; an existing attempt directory is never reused.
+
+The sidecar proves only the construction and receipt facts captured within this process. It is not provider
+authentication, it does not establish that the bytes came from a provider, and it is no defense against a malicious
+process owner. Input, handoff, payload and report versions stay `/1`; `check_saved_export` is unchanged. A later checked
+L2 handoff must define any `/2` handoff, report migration, actual-release binding and the explicit rejection of legacy
+evidence before any actual classification. A historical `/1` artifact is never upgraded from its label or sidecar.
+
 ## Saved-export checker `edge-os.history-payload-binding/1`
 
 `python scripts/history_payload_binding.py --handoff H --export E --expected X --out R` reads bounded files
@@ -242,13 +301,16 @@ the later application must compute this binding in process on owner-scoped raw r
 From the candidate checkout root, with an existing qualified Python 3.14 environment:
 
 ```sh
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:apps/api/src apps/api/.venv/bin/python -m pytest --noconftest -p no:cacheprovider -q tests/test_forward_history_recorder.py tests/test_history_payload_binding.py
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:apps/api/src apps/api/.venv/bin/python -m pytest --noconftest -p no:cacheprovider -q tests/test_forward_history_transport_receipts.py tests/test_forward_history_recorder.py tests/test_history_payload_binding.py
 ```
 
-The suite needs no Docker, database, service, socket or provider. Before any actual operation, the recorder wrapper
-still needs a separate owned-loopback qualification with the real `StdlibHttpTransport`: wire, hash and receipt capture,
-the 2 MiB streaming cutoff, header/body drip deadlines, redirect refusal, cancellation, credential echo, one admitted
-request and interrupted no-resume behavior. Synthetic tests cannot supply that proof.
+The suite needs no Docker, database, service, socket or provider. The receipts tests run the real
+`StdlibHttpTransport` through `local_fixture_transport` with an in-memory connection.
+
+Before any actual operation, the recorder wrapper still needs a separate owned-loopback qualification with the real
+`StdlibHttpTransport`: wire, hash and receipt capture, the 2 MiB streaming cutoff, header/body drip deadlines, redirect
+refusal, cancellation, credential echo, one admitted request and interrupted no-resume behavior. Synthetic tests cannot
+supply that proof.
 
 ## Claim limits
 

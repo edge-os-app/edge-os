@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import functools
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -25,11 +27,13 @@ import re
 import stat
 import sys
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+import edge_os_api.research_history.http_clients.http_transport as stdlib_transport_module
 from edge_os_api.records.contract_adapter import canonical_bytes
 from edge_os_api.research_history.http_clients.client_config import (
     ClientBounds,
@@ -41,6 +45,7 @@ from edge_os_api.research_history.http_clients.envio_query_client import BLOCK_F
 from edge_os_api.research_history.http_clients.http_transport import (
     HttpResponse,
     HttpTransport,
+    StdlibHttpTransport,
     decode_json_reply,
     refuse_provider_status,
 )
@@ -62,6 +67,8 @@ from scripts.history_payload_binding import (
 )
 
 INPUT_SCHEMA = "edge-os.forward-history-input/1"
+TRANSPORT_RECEIPTS_SCHEMA = "edge-os.forward-history-transport-receipts/1"
+TRANSPORT_RECEIPTS_FILE = "transport-receipts.json"
 PREDECESSOR_SHA256 = "c4fc01c4d498742cd9a904606135fdb2b27fea448bb254462a79a9f67824312f"
 DECODER_VERSION = "retained-v2-pair-created/1"
 CHAIN_ID = 143
@@ -297,6 +304,91 @@ def plan(value: Mapping[str, Any]) -> dict[str, Any]:
             "credential_slots": value["credential_slots"], "p6": "EXTERNAL_EVIDENCE_REQUIRED", "sends": 0}
 
 
+# Transport construction identity
+#
+# Only the two construction functions below record a construction, with the exact attributes they created. Any other
+# object, including a caller's own StdlibHttpTransport, a subclass, a wrapper or an object that advertises ACTUAL, is
+# INJECTED. Construction facts never come from input JSON or from a label on the transport.
+
+_STDLIB_NAME = f"{StdlibHttpTransport.__module__}.{StdlibHttpTransport.__qualname__}"
+_STDLIB_SHA256 = hashlib.sha256(Path(stdlib_transport_module.__file__).read_bytes()).hexdigest()
+_STDLIB_CLASS = dict(vars(StdlibHttpTransport))
+_CONSTRUCTED: weakref.WeakKeyDictionary[StdlibHttpTransport, tuple[str, dict[str, Any]]] = (
+    weakref.WeakKeyDictionary())
+
+
+def owned_stdlib_transport() -> StdlibHttpTransport:
+    """The recorder-owned construction of the accepted network transport: defaults only, real sockets."""
+    return _construct("OWNED_STDLIB", StdlibHttpTransport())
+
+
+def local_fixture_transport(connect: Callable[..., object], clock: Callable[[], float]) -> StdlibHttpTransport:
+    """The real stdlib transport over a fixture connector and clock. Its evidence is a LOCAL_FIXTURE receipt."""
+    return _construct("LOCAL_FIXTURE", StdlibHttpTransport(connect=connect, clock=clock))
+
+
+def _construct(construction: str, transport: StdlibHttpTransport) -> StdlibHttpTransport:
+    _CONSTRUCTED[transport] = (construction, dict(vars(transport)))
+    return transport
+
+
+def _same_objects(live: Mapping[str, Any], recorded: Mapping[str, Any]) -> bool:
+    return live.keys() == recorded.keys() and all(live[key] is value for key, value in recorded.items())
+
+
+def _recorded_construction(transport: object) -> str | None:
+    """The construction of an exact, unmodified owned or fixture transport, else None."""
+    if type(transport) is not StdlibHttpTransport or not _same_objects(vars(StdlibHttpTransport), _STDLIB_CLASS):
+        return None
+    record = _CONSTRUCTED.get(transport)
+    if record is None or not _same_objects(vars(transport), record[1]):
+        return None
+    return record[0]
+
+
+def transport_identity(transport: object) -> dict[str, Any]:
+    """The canonical transport object of a receipt sidecar."""
+    construction = _recorded_construction(transport)
+    if construction is None:
+        return {"construction": "INJECTED", "implementation": None, "implementation_sha256": None}
+    return {"construction": construction, "implementation": _STDLIB_NAME, "implementation_sha256": _STDLIB_SHA256}
+
+
+class _TransportBinding:
+    """Binds the transport identity to the request method before every send; any later substitution is refused."""
+
+    def __init__(self, transport: HttpTransport) -> None:
+        self.identity = transport_identity(transport)
+        self.sha256 = hashlib.sha256(canonical_bytes(self.identity)).hexdigest()
+        self._transport = transport
+        self._construction = self.identity["construction"]
+        try:
+            # A recorded construction altered before binding keeps no identity and is never used.
+            self._altered = self._construction == "INJECTED" and transport in _CONSTRUCTED
+        except TypeError:
+            self._altered = False
+        if self._construction == "INJECTED":
+            self._methods = self._injected_methods()
+            self._send: Callable[..., HttpResponse] = transport.request
+        else:
+            self._send = functools.partial(_STDLIB_CLASS["request"], transport)
+
+    def _injected_methods(self) -> tuple[Any, ...]:
+        kind = type(self._transport)
+        return kind, inspect.getattr_static(kind, "request", None), getattr(self._transport, "__dict__", {}).get(
+            "request")
+
+    def verified_send(self) -> Callable[..., HttpResponse]:
+        if self._construction == "INJECTED":
+            unchanged = not self._altered and all(
+                live is bound for live, bound in zip(self._injected_methods(), self._methods, strict=True))
+        else:
+            unchanged = _recorded_construction(self._transport) == self._construction
+        if not unchanged:
+            raise AdmissionRefused("TRANSPORT_SUBSTITUTED")
+        return self._send
+
+
 # Private journal and recording transport
 
 
@@ -357,7 +449,8 @@ class RecordingTransport:
 
     def __init__(self, inner: HttpTransport, journal: AttemptJournal, clock: RecorderClock, *, quicknode_url: str,
                  hypersync_url: str, secrets: Sequence[str]) -> None:
-        self._inner = inner
+        self._binding = _TransportBinding(inner)
+        self._receipts: dict[str, dict[str, Any]] = {}
         self._journal = journal
         self._clock = clock
         self._urls = {"quicknode": quicknode_url, "hypersync": hypersync_url}
@@ -402,6 +495,7 @@ class RecordingTransport:
         reply_cap = min(max_response_bytes, MAX_REPLY_BYTES)
         if journal.reply_bytes + reply_cap > MAX_TOTAL_REPLY_BYTES:
             raise AdmissionRefused("AGGREGATE_REPLY_BUDGET")
+        send = self._binding.verified_send()
         utc, mono = self.observe()
         if self._admission_end_utc is not None and utc >= self._admission_end_utc:
             raise AdmissionRefused("SLOT_CLOSED")
@@ -419,18 +513,26 @@ class RecordingTransport:
         journal.calls[call_id] = {"call_id": call_id, "phase": phase, "slot": slot, "provider": provider,
                                   "request_sha256": hashlib.sha256(body).hexdigest(), "request_bytes": len(body),
                                   "outcome": "UNKNOWN", "status": None, "body_sha256": None, "body_bytes": None}
+        receipt = {"call_id": call_id, "transport_binding_sha256": self._binding.sha256,
+                   "request_sha256": journal.calls[call_id]["request_sha256"], "outcome": "UNKNOWN", "status": None,
+                   "body_sha256": None, "body_bytes": None, "received_at_utc_us": None, "elapsed_us": None}
+        self._receipts[call_id] = receipt
         journal.counts[(phase, provider)] = journal.counts.get((phase, provider), 0) + 1
         journal.provider_counts[provider] = journal.admitted(provider) + 1
         journal.last_admission[provider] = mono
         try:
-            response = self._inner.request(method=method, url=url, headers=headers, body=body,
-                                           timeout=min(timeout, MAX_CONNECT_SECONDS), deadline=deadline,
-                                           max_response_bytes=reply_cap, cancel=cancel)
+            response = send(method=method, url=url, headers=headers, body=body,
+                            timeout=min(timeout, MAX_CONNECT_SECONDS), deadline=deadline,
+                            max_response_bytes=reply_cap, cancel=cancel)
         except BaseException as error:
             if isinstance(error, Exception) and self.leaks(str(error).encode()):
                 self._incident(call_id, None)
             raise
         received_utc, received_mono = self._clock.utc(), self._clock.monotonic()
+        receipt.update(status=response.status, body_bytes=len(response.body))
+        if received_utc >= utc and received_mono >= mono:  # a backward clock leaves the receipt time unknown
+            receipt.update(received_at_utc_us=int(received_utc * 1_000_000),
+                           elapsed_us=int((received_mono - mono) * 1_000_000))
         header_bytes = json.dumps(dict(response.headers), sort_keys=True).encode()
         if self.leaks(response.body) or self.leaks(header_bytes):
             self._incident(call_id, response.body)
@@ -440,6 +542,7 @@ class RecordingTransport:
             journal.resolved += 1
             journal.calls[call_id].update(outcome="OVERSIZED_REFUSED", status=response.status,
                                           body_bytes=len(response.body))
+            receipt["outcome"] = "OVERSIZED_REFUSED"
             raise HttpProviderError("OVERSIZED_RESPONSE", "reply exceeds the recorder reply cap")
         journal.reply_bytes += len(response.body)
         journal.save_body(call_id, response.body)
@@ -451,6 +554,7 @@ class RecordingTransport:
         journal.calls[call_id].update(outcome="REPLY_RECEIVED", status=response.status,
                                       body_sha256=hashlib.sha256(response.body).hexdigest(),
                                       body_bytes=len(response.body))
+        receipt.update(outcome="REPLY_RECEIVED", body_sha256=journal.calls[call_id]["body_sha256"])
         self.last_receipt = {"call_id": call_id, "utc": received_utc, "mono": received_mono}
         self.observe()
         lowered = response.body.lower()
@@ -458,11 +562,20 @@ class RecordingTransport:
             raise SafetyStop("QUOTA_OR_PAYMENT_SIGNAL")
         return response
 
+    def receipts_document(self, attempt_id: str, handoff_sha256: str) -> dict[str, Any]:
+        """The `transport-receipts.json` content: construction facts and receipts captured within this process."""
+        return {"schema_version": TRANSPORT_RECEIPTS_SCHEMA, "attempt_id": attempt_id,
+                "handoff_sha256": handoff_sha256, "recorder_code_sha256": recorder_code_sha256(),
+                "evidence_class": EFFECTIVE_EVIDENCE_CLASS,
+                "transport": dict(self._binding.identity),
+                "receipts": [dict(receipt) for receipt in self._receipts.values()]}
+
     def _incident(self, call_id: str, body: bytes | None) -> None:
         self._journal.append({"event": "CREDENTIAL_INCIDENT", "call_id": call_id,
                               "body_sha256": None if body is None else hashlib.sha256(body).hexdigest()})
         self.stopped = "CREDENTIAL_INCIDENT"
         self._journal.calls[call_id]["outcome"] = "CREDENTIAL_INCIDENT"  # no body hash leaves the private journal
+        self._receipts[call_id]["outcome"] = "CREDENTIAL_INCIDENT"
         raise CredentialIncident()
 
 
@@ -1187,9 +1300,18 @@ def run_attempt(raw_input: Mapping[str, Any], *, transport: HttpTransport, clock
     body = canonical_bytes(handoff)
     path = directory / "handoff.json"
     write_exclusive(path, body)
-    journal.append({"event": "HANDOFF_WRITTEN", "sha256": hashlib.sha256(body).hexdigest()})
+    handoff_sha256 = hashlib.sha256(body).hexdigest()
+    journal.append({"event": "HANDOFF_WRITTEN", "sha256": handoff_sha256})
+    receipts = canonical_bytes(attempt.wire.receipts_document(value["attempt_id"], handoff_sha256))
+    try:
+        write_exclusive(directory / TRANSPORT_RECEIPTS_FILE, receipts)
+        receipts_status, receipts_sha256 = "WRITTEN", hashlib.sha256(receipts).hexdigest()
+    except OSError:
+        # The handoff is already complete. A missing sidecar never changes it and never authorizes a resend.
+        receipts_status, receipts_sha256 = "WRITE_FAILED", None
     return {"status": attempt.status, "stop_reason": attempt.stop_reason, "handoff_path": str(path),
-            "handoff_sha256": hashlib.sha256(body).hexdigest()}
+            "handoff_sha256": handoff_sha256, "transport_receipts_status": receipts_status,
+            "transport_receipts_sha256": receipts_sha256}
 
 
 def recover_attempt(directory: Path) -> dict[str, Any]:
