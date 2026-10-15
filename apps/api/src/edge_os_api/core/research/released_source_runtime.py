@@ -22,6 +22,7 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from edge_os_api.core.research.operating_release import (
+    BINDING_FACT,
     HistoryRelease,
     NansenRelease,
     OperatingRelease,
@@ -166,6 +167,10 @@ def release_view(runtime: ReleasedSourceRuntime) -> dict[str, Any]:
                            "endpoint_hosts": {"ENVIO_HYPERSYNC": endpoint_host(history.envio_endpoint),
                                               "QUICKNODE_JSON_RPC": history.quicknode_host},
                            "time_basis": dict(history.time_basis), "required_coverage": history.required_coverage}
+        binding = history.provider_facts.get(BINDING_FACT)
+        if binding is not None:  # additive: unbound release views are unchanged
+            view["history"]["payload_binding"] = {"handoff_sha256": binding["handoff_sha256"],
+                                                  "evidence_class": "SYNTHETIC"}
     nansen = runtime.release.nansen
     if nansen is not None:
         view["nansen"] = {**nansen_request(nansen), "endpoint_host": endpoint_host(nansen.endpoint),
@@ -186,6 +191,12 @@ def history_source(runtime: ReleasedSourceRuntime) -> dict[str, Any]:
             "profile": profile, "scan": dict(history.scan), "provider_facts": dict(history.provider_facts),
             "corroboration_sample_size": history.corroboration_sample_size,
             "release": release_view(runtime)}
+
+
+def forward_history_binding(runtime: ReleasedSourceRuntime) -> Mapping[str, str] | None:
+    """The release's frozen recorder handoff `{handoff_json, handoff_sha256}`, validated at admission, or None."""
+    history = runtime.release.history
+    return None if history is None else history.provider_facts.get(BINDING_FACT)
 
 
 def _basis(runtime: ReleasedSourceRuntime) -> dict[str, str]:

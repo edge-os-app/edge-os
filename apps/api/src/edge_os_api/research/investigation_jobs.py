@@ -43,7 +43,7 @@ from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.core.research import provider_composition, released_runtime_bootstrap, released_source_runtime
 from edge_os_api.core.research.operating_release import ReleaseRefused
 from edge_os_api.nansen_research import NansenLimitError, NansenRequestError, run_research
-from edge_os_api.research import history_dataset, investigation_tools, nansen_reports
+from edge_os_api.research import history_dataset, history_payload_binding, investigation_tools, nansen_reports
 from edge_os_api.research.history_dataset import HistoryDatasetRow, ResearchBase
 from edge_os_api.research.investigation_adoption import owned_history_declaration
 from edge_os_api.research.service import get_owned, parse_uuid
@@ -572,7 +572,8 @@ def job_view(session: Session, job: InvestigationJobRow) -> dict[str, Any]:
         "cancel_requested_at": _iso(job.cancel_requested_at), "created_at": _iso(job.created_at),
         "updated_at": _iso(job.updated_at),
         "events": [{"kind": event.kind, "attempt_id": None if event.attempt_id is None else str(event.attempt_id),
-                    "created_at": _iso(event.created_at), "content": event.content}
+                    "created_at": _iso(event.created_at),
+                    "content": history_payload_binding.public_event(event.kind, event.content)}
                    for event in _events(session, job.job_id)],
         "dataset": None if dataset is None else {
             "dataset_id": str(dataset.dataset_id), "content_sha256": dataset.content_sha256,
@@ -581,7 +582,8 @@ def job_view(session: Session, job: InvestigationJobRow) -> dict[str, Any]:
                 "source_id", "evidence_class", "content_label", "status", "stop_reason", "verdict", "binding_state",
                 "unavailable_states", "provider_requests", "provider_requests_state", "invocations_measured",
                 "window_start", "window_end", "gaps", "normalized_sha256", "collection_sha256", "market_binding_id")},
-            "transport": _transport_summary(dataset.content)},
+            "transport": _transport_summary(dataset.content),
+            "payload_binding": history_payload_binding.binding_state(session, dataset, job.owner_id)},
         "report": None if report is None else _report_view(report),
     }
 
@@ -809,6 +811,9 @@ class InvestigationWorker:
         release = None if prepared is None else {
             "operating_release": _release_record(self._runtime), "evidence_class": source["evidence_class"],
             "transport_kind": self._runtime.transport_kind}
+        binding = None if prepared is None else released_source_runtime.forward_history_binding(self._runtime)
+        if binding is not None:  # frozen with the attempt, before any effect; the handoff text is not copied
+            release[history_payload_binding.REQUIREMENT_KEY] = history_payload_binding.requirement(binding)
         _event(session, job, "ATTEMPT_STARTED", {"tool": investigation_tools.COLLECT_TOOL,
                                                  "tool_version": investigation_tools.TOOL_VERSION,
                                                  "input_sha256": investigation_tools.input_sha256(tool_input),
@@ -851,6 +856,9 @@ class InvestigationWorker:
         _event(session, job, "ATTEMPT_FINISHED", {
             "tool": result.tool, "outcome": result.outcome, "output": result.output, "usage": result.usage,
             "provenance": result.provenance, "findings": findings, "dataset_id": str(dataset_id)}, attempt_id)
+        if binding is not None:  # in the dataset transaction: one commit saves the dataset, its result and its binding
+            history_payload_binding.record_binding(session, owner_id=job.owner_id, job_id=job.job_id,
+                                                   attempt_id=attempt_id, dataset_id=dataset_id, definition=binding)
         session.commit()
         self._after_collection_saved(job.job_id)
         job = session.get(InvestigationJobRow, job.job_id, with_for_update=True)

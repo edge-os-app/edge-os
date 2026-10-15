@@ -1,6 +1,6 @@
 import type { Bundle, EffectRunBody, EffectRunResult, InvestigationProposal, InvestigationSaveResult,
   PublicationResult, RequestSummary, Sample, SpotReplayBody, SpotReplayRecord, WalletProviderInfo,
-  WalletSetupPrepareBody, WalletSetupRecord } from "./types";
+  PayloadBindingLineage, PayloadBindingState, WalletSetupPrepareBody, WalletSetupRecord } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: string, public findings: { path: string; detail: string }[] = []) {
@@ -125,7 +125,7 @@ export interface InvestigationJob {
     summary: { source_id: string; status: string; stop_reason: string; verdict: { overall: string };
       binding_state: string; unavailable_states: string[]; provider_requests: Record<string, number> | null;
       provider_requests_state: string; evidence_class: string; content_label: string };
-    transport: TransportSummary | null };
+    transport: TransportSummary | null; payload_binding?: PayloadBindingState };
   report: InvestigationReport | null;
   kind?: "HISTORY_INVESTIGATION" | "NANSEN_REPORT";
   nansen_report?: NansenReportSummary | null;
@@ -168,6 +168,7 @@ export interface DatasetSummary {
   unavailable_states: string[]; market_binding: Record<string, unknown> | null; market_binding_id: string | null;
   window_start: string; window_end: string; declaration_id: string; job_id: string;
   readable_until: string;
+  payload_binding?: PayloadBindingState; // always sent by this API; optional for older responses
   declared_rules: { evaluation_id: string; variant_id: string; price_expression: Record<string, unknown>;
     volume_expression: Record<string, unknown> }[];
 }
@@ -179,7 +180,8 @@ export interface MarketAdoptionBody {
 }
 export interface MarketAdoptionResult {
   adoption: { interpretation_revision_id: string; draft_id: string; dataset_id: string; declaration_id: string;
-    market_binding_id: string; quote_unit: string; base_revision_id: string | null };
+    market_binding_id: string; quote_unit: string; base_revision_id: string | null;
+    payload_binding?: PayloadBindingLineage };
   replayed: boolean;
   bundle: Bundle;
 }

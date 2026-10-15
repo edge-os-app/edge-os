@@ -302,7 +302,8 @@ def dataset_content(*, dataset_id: uuid.UUID, owner_id: uuid.UUID, declaration_i
 
     A native source adds `transport` and `evidence_basis` (additive keys); a bundle source's content is unchanged. An
     operating-release source also adds its release identity, transport kind, endpoint hosts, application collection
-    times and whether the release's required coverage was met (`release`, from the worker)."""
+    times and whether the release's required coverage was met (`release`, from the worker). A bound release adds the
+    identity of its payload-binding requirement before the content is hashed."""
     qualification = normalized["qualification"]
     overall = qualification["overall"]
     usage_state, usage = provider_usage(source) if transport is None else measured_usage(transport)
@@ -367,6 +368,8 @@ def dataset_content(*, dataset_id: uuid.UUID, owner_id: uuid.UUID, declaration_i
         content["release_coverage"] = {"required": history["required_coverage"],
                                        "met": collection["status"] == "COMPLETE"
                                        and collection["coverage"].get("covers_requested_scan") is True}
+        if "payload_binding_requirement" in release:  # only the requirement identity; never the handoff text
+            content["payload_binding_requirement"] = dict(release["payload_binding_requirement"])
         if source["evidence_class"] == released_source_runtime.STAND_IN_CLASS:
             content["notice"] = released_source_runtime.STAND_IN_NOTICE
         else:
@@ -435,11 +438,14 @@ def list_datasets(session: Session, principal: Principal) -> dict[str, Any]:
         return [] if declaration is None else [
             {key: rule[key] for key in ("evaluation_id", "variant_id", "price_expression", "volume_expression")}
             for rule in declaration.content["rule_map"]["rules"]]
+    from edge_os_api.research import history_payload_binding
+
     keys = ("source_id", "evidence_class", "content_label", "profile_evidence_class", "status", "stop_reason",
             "verdict", "binding_state", "unavailable_states", "market_binding", "market_binding_id", "window_start",
             "window_end", "declaration_id", "job_id")
     return {"datasets": [{"dataset_id": str(row.dataset_id), "created_at": record_contract.utc_string(row.created_at),
                           "content_sha256": row.content_sha256, "hashes_verified": verify_hashes(row),
+                          "payload_binding": history_payload_binding.binding_state(session, row, principal.user_id),
                           "quote_unit": None if row.content["strategy_market"] is None
                           else row.content["strategy_market"]["quote_unit"],
                           "declared_rules": rules(row.declaration_id),

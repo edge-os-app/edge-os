@@ -200,6 +200,7 @@ def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
     """The owner's saved dataset through the unchanged runtime. The runtime decides every refusal."""
     row = history_inputs.load(session, principal, body.history_dataset_id or "")
     history_inputs.refuse_protected(session, row, body.window_end)
+    binding = history_inputs.payload_binding(session, principal, row)
     dataset = history_inputs.replay_dataset(row, body.window_end)
     try:
         profile_hash = _sha256(PROFILE_PATH)
@@ -211,7 +212,8 @@ def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
         "strategy_revision_id": body.strategy_revision_id, "strategy_id": body.strategy_id,
         "strategy_sha256": record_contract.sha256_hex(strategy), "strategy": strategy,
         "run_configuration_id": body.run_configuration_id, "dataset_fixture_id": None,
-        "history_input": history_inputs.snapshot(row, strategy, history_inputs.rule_linkage(session, row, strategy)),
+        "history_input": history_inputs.snapshot(row, strategy, history_inputs.rule_linkage(session, row, strategy),
+                                                 binding),
         "dataset_revision_id": dataset.revision_id, "dataset_qualification": dataset.qualification,
         "coverage_complete": dataset.coverage_complete, "evidence_class": dataset.evidence_class,
         "profile_sha256": profile_hash, "market_binding_id": dataset.market_binding_id,

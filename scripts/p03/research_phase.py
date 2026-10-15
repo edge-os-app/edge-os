@@ -667,6 +667,256 @@ def _http_status(url: str, token: str, method: str = "GET", body: dict[str, Any]
         return error.code, json.loads(error.read() or b"{}")
 
 
+# ------------------------------------------------------------------------------------------- SAVED-HISTORY-BINDING-L2
+# The release journey once more with ONE bound synthetic source plus the existing Nansen stand-in: a four-bucket
+# SYNTHETIC recording whose release names a frozen recorder handoff (`apps/api/tests/forward_history_stand_in.py`). The
+# worker binds the saved dataset in its own transaction; adoption and replay rerun the checker on the saved records.
+# Everything is SYNTHETIC and loopback; a PASS proves payload binding only.
+
+_BOUND_PRELUDE = _RELEASE_PRELUDE + "import forward_history_stand_in as bound\n"
+BOUND_PROVIDER = _BOUND_PRELUDE + """
+import time
+from pathlib import Path
+bound.loopback_provider(Path(sys.argv[2]), port=int(sys.argv[1])).start()
+while True:
+    time.sleep(3600)
+"""
+BOUND_HOST = _BOUND_PRELUDE + """
+import uvicorn
+from edge_os_api.core.settings import load_settings
+from edge_os_api.main import create_app
+settings = load_settings()
+runtime, _ = bound.loopback_runtime_at(settings, int(os.environ["P03_STAND_IN_PORT"]),
+                                       nansen_port=int(os.environ["P03_STAND_IN_NANSEN_PORT"]))
+uvicorn.run(create_app(settings, research_runtime=runtime), host="127.0.0.1", port=int(sys.argv[1]),
+            log_level="warning")
+"""
+BOUND_WORKER = _BOUND_PRELUDE + """
+import uuid
+from edge_os_api.core.database import make_engine, make_session_factory
+from edge_os_api.core.settings import load_settings
+from edge_os_api.research.investigation_jobs import InvestigationWorker
+settings = load_settings()
+runtime, _ = bound.loopback_runtime_at(settings, int(os.environ["P03_STAND_IN_PORT"]),
+                                       nansen_port=int(os.environ["P03_STAND_IN_NANSEN_PORT"]))
+worker = InvestigationWorker(make_session_factory(make_engine(settings.database_url)), settings,
+                             research_runtime=runtime)
+for job_id in sys.argv[1:]:
+    worker.run_job(uuid.UUID(job_id))
+"""
+# Declares on the bound source (DESCRIPTIVE: its window is 20 minutes) and saves one history job and one Nansen report
+# job under the bound release, through the public API, while no worker runs.
+BOUND_DECLARE = _BOUND_PRELUDE + """
+import json, uuid
+import httpx
+from research_flows import jobs_path
+client = httpx.Client(base_url=os.environ["P03_API_URL"], timeout=60)
+headers = {"Authorization": "Bearer " + os.environ["P03_BOUND_TOKEN"]}
+catalog = client.get("/v1/research/history-sources", headers=headers).json()
+source = next(item for item in catalog["sources"] if "release" in item)
+intake_id, declaration_id, body = bound.declare(client, headers, source["release"]["history"]["limits"])
+job = client.post(jobs_path(intake_id, declaration_id), headers=headers,
+                  json={"operation_id": str(uuid.uuid4()), "request_key": "verifier-bound"})
+listed = client.get(f"/v1/research/requests/{intake_id}/nansen-reports", headers=headers).json()
+nansen = client.post(f"/v1/research/requests/{intake_id}/nansen-reports", headers=headers,
+                     json={"operation_id": str(uuid.uuid4()), "request_key": "verifier-bound-nansen",
+                           **listed["operating_release"]["request"]})
+print(json.dumps({"url": f"/#/research/{intake_id}", "intakeId": intake_id, "declarationId": declaration_id,
+                  "hypothesis": body["edge_spec"]["hypothesis"], "jobStatus": job.status_code,
+                  "jobId": job.json().get("job_id"), "nansenStatus": nansen.status_code,
+                  "nansenJobId": nansen.json().get("job_id"), "sourceId": source["source_id"],
+                  "release": {key: catalog["operating_release"][key] for key in ("release_id", "sha256", "kind")},
+                  "handoffSha256": (source["release"]["history"].get("payload_binding") or {}).get("handoff_sha256"),
+                  "providerRequests": source["release"]["history"]["limits"]["provider_requests"]}))
+"""
+# After the worker: market adoption on a NEW revision, publication and a replay on the bound dataset; then another
+# owner's reads. Prints the ids and the lineage each consumer saved.
+BOUND_CONSUME = _BOUND_PRELUDE + """
+import json
+import httpx
+from flows import compiled_thesis, publish
+from research_flows import adoption_body, history_replay_body
+client = httpx.Client(base_url=os.environ["P03_API_URL"], timeout=60)
+headers = {"Authorization": "Bearer " + os.environ["P03_BOUND_TOKEN"]}
+other = {"Authorization": "Bearer " + os.environ["P03_BOUND_OTHER_TOKEN"]}
+run = json.loads(os.environ["P03_BOUND_RUN"])
+job = client.get(f"/v1/research/investigation-jobs/{run['jobId']}", headers=headers).json()
+dataset_id = job["dataset"]["dataset_id"]
+listed = next(item for item in client.get("/v1/research/history-datasets", headers=headers).json()["datasets"]
+              if item["dataset_id"] == dataset_id)
+bundle = compiled_thesis(client, headers)
+first, _ = publish(client, headers, bundle)
+parent = first.json()["revision_id"]
+adopted = client.post(f"/v1/research/requests/{bundle['intake']['record_id']}/market-adoptions", headers=headers,
+                      json=adoption_body(bundle, dataset_id, parent=parent, quote_unit="QUOTE:0x" + "d2" * 20,
+                                         evaluation_id=listed["declared_rules"][0]["evaluation_id"]))
+second, _ = publish(client, headers, adopted.json()["bundle"], parent=parent)
+revision = second.json().get("revision_id")
+replay = client.post("/v1/spot-replays", headers=headers, json=history_replay_body(
+    bundle["head"]["strategy_id"], revision, dataset_id, start=bound.WINDOW_START, end=bound.WINDOW_END))
+replay_id = replay.json().get("replay_id")
+routes = [f"/v1/research/history-datasets/{dataset_id}", f"/v1/research/investigation-jobs/{run['jobId']}",
+          f"/v1/spot-replays/{replay_id}", f"/v1/research/investigation-jobs/{run['nansenJobId']}"]
+print(json.dumps({"datasetId": dataset_id, "jobState": job["state"], "binding": listed["payload_binding"],
+                  "adoptionStatus": adopted.status_code, "adoptionBinding": adopted.json().get("adoption", {}).get(
+                      "payload_binding"), "publishStatus": second.status_code, "releaseRevision": revision,
+                  "strategyUrl": f"/#/research/{bundle['intake']['record_id']}", "replayStatus": replay.status_code,
+                  "replayId": replay_id, "otherOwner": {route: client.get(route, headers=other).status_code
+                                                        for route in routes}}))
+"""
+
+
+def _bound_env(env: dict[str, str], port: int, nansen_port: int) -> dict[str, str]:
+    return {**_release_env(env, port, nansen_port=nansen_port), "P03_RELEASE_ID": "stand-in-bound/1"}
+
+
+def _driver(script: str, run_env: dict[str, str], logs: Path, name: str) -> dict[str, Any]:
+    done = subprocess.run([harness.api_python(), "-c", script], cwd=harness.API_DIR, env=run_env, capture_output=True,
+                          text=True, timeout=300)
+    (logs / f"{name}.log").write_text(done.stdout + done.stderr)
+    return json.loads(done.stdout.strip().splitlines()[-1]) if done.returncode == 0 and done.stdout.strip() else {}
+
+
+def _bound_worker(run_env: dict[str, str], logs: Path, name: str, job_ids: list[str]) -> int:
+    with open(logs / f"{name}.log", "ab") as handle:
+        return subprocess.run([harness.api_python(), "-c", BOUND_WORKER, *job_ids], cwd=harness.API_DIR,
+                              env=run_env, stdout=handle, stderr=handle, timeout=300).returncode
+
+
+def inspect_bound(pg: harness.Postgres, run: dict[str, Any], requests: list[dict[str, Any]],
+                  nansen_requests: int) -> dict[str, Any]:
+    """Direct SQL over the bound job, dataset, binding event, Nansen report and replay, compared with the bound
+    stand-in provider's own request log and the identities the API listed before any request."""
+    job_id, nansen_job, replay_id = run.get("jobId"), run.get("nansenJobId"), run.get("replayId")
+    dataset = (_rows(pg, (
+        "select d.dataset_id::text, d.owner_id::text, d.attempt_id::text, d.content_sha256, "
+        "d.content->'raw_evidence'->>'sha256' raw_sha256, d.content->'operating_release' release, "
+        "d.content->'payload_binding_requirement' requirement, d.content->'verdict'->>'overall' verdict, "
+        "d.content->'transport'->'request_sha256' request_hashes, j.state, j.budget "
+        "from research_local.investigation_jobs j join research_local.history_datasets d using (dataset_id) "
+        f"where j.job_id = '{job_id}'")) or [{}])[0] if job_id else {}
+    events = _rows(pg, ("select owner_id::text, attempt_id::text, content from research_local.investigation_events "
+                        f"where job_id = '{job_id}' and kind = 'HISTORY_PAYLOAD_BOUND'")) if job_id else []
+    nansen = (_rows(pg, ("select r.content->>'evidence_class' evidence, r.content_sha256, "
+                         "r.content->'operating_release'->>'release_id' release from research_local.nansen_reports r "
+                         f"where r.job_id = '{nansen_job}'")) or [{}])[0] if nansen_job else {}
+    replay = (_rows(pg, ("select owner_id::text, content_sha256, content->'inputs'->'history_input'->>'dataset_id' "
+                         "dataset, content->'inputs'->'history_input'->'payload_binding' binding "
+                         f"from spot_replay_runs where replay_id::text = '{replay_id}'")) or [{}])[0] if replay_id else {}
+    dump = pg.psql("select concat_ws('|', (select string_agg(t::text, '') from research_local.history_datasets t), "
+                   "(select string_agg(t::text, '') from research_local.investigation_events t), "
+                   "(select string_agg(t::text, '') from spot_replay_runs t))")
+    event = events[0] if len(events) == 1 else {}
+    content = event.get("content") or {}
+    report = content.get("report") or {}
+    calls = run.get("providerRequests")
+    expectations = {
+        "bound: one HISTORY_PAYLOAD_BOUND event, PASS, for the owner, attempt and dataset of the saved row":
+        len(events) == 1 and content.get("result") == "PASS" and content.get("dataset_id") == dataset.get("dataset_id")
+        and event.get("owner_id") == dataset.get("owner_id") and event.get("attempt_id") == dataset.get("attempt_id"),
+        "bound: report content and raw hashes are the saved row's; handoff and release hashes are the listed ones":
+        report.get("content_sha256") == dataset.get("content_sha256") and report.get("raw_sha256")
+        == dataset.get("raw_sha256") and report.get("handoff_sha256") == content.get("handoff_sha256")
+        == (dataset.get("requirement") or {}).get("handoff_sha256") == run.get("handoffSha256") is not None
+        and report.get("release") == dataset.get("release") == run.get("release"),
+        "bound: the P07 verdict stays QUALIFIED and the job reported with the measured calls settled":
+        dataset.get("verdict") == "QUALIFIED" and dataset.get("state") == "REPORTED"
+        and (dataset.get("budget") or {}).get("consumed", {}).get("provider_requests") == calls,
+        "bound: the stand-in received exactly the saved requests, all with the stand-in credential":
+        len(requests) == calls and all(entry["authorized"] for entry in requests)
+        and [entry["body_sha256"] for entry in requests] == (dataset.get("request_hashes") or []),
+        "bound: the Nansen report under the bound release, 2 Nansen requests":
+        nansen.get("evidence") == "RELEASE_STAND_IN_RESPONSE" and nansen.get("release") == run.get("release", {}).get(
+            "release_id") and nansen_requests == 2,
+        "bound: adoption and replay saved the binding report and handoff identity":
+        (run.get("adoptionStatus"), run.get("publishStatus"), run.get("replayStatus")) == (201, 201, 201)
+        and (run.get("adoptionBinding") or {}).get("report_sha256") == content.get("report_sha256")
+        and (replay.get("binding") or {}).get("report_sha256") == content.get("report_sha256")
+        and (replay.get("binding") or {}).get("handoff_sha256") == run.get("handoffSha256")
+        and replay.get("dataset") == dataset.get("dataset_id") and replay.get("owner_id") == dataset.get("owner_id"),
+        "bound: another owner receives 404 for the dataset, job, replay and Nansen job":
+        bool(run.get("otherOwner")) and set((run.get("otherOwner") or {}).values()) == {404},
+        "bound: no stand-in credential in any research or replay row": not any(value in dump for value in RELEASE_SENTINELS),
+    }
+    return {"dataset": dataset, "event": {key: value for key, value in content.items() if key != "handoff_json"},
+            "nansen": nansen, "replay": replay, "expectations": expectations,
+            "all_checks_pass": all(expectations.values())}
+
+
+def run_bound_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port: int, api_url: str,
+                            evidence: Path, ui_env: dict[str, str], run_playwright: Callable[..., int],
+                            processes: list[Any], nansen_port: int, nansen_log: Path, logs: Path) -> bool:
+    """The bound journey. The caller stopped the release API; every process started here goes into `processes` at
+    once, and the bound API is stopped before return."""
+    ok = True
+    work = evidence / "research-release"
+    log = work / "stand-in-bound-requests.jsonl"
+    port = harness.free_port()
+    bound_env = _bound_env(env, port, nansen_port)
+    tokens = json.loads(ui_env["P03_RELEASE_FAULT_TOKENS"])
+    driver_env = {**bound_env, "P03_API_URL": api_url, "P03_BOUND_TOKEN": tokens["missing"],
+                  "P03_BOUND_OTHER_TOKEN": tokens["stale"]}
+    host = None
+    try:
+        provider = _spawn(bound_env, "research-bound-stand-in", BOUND_PROVIDER, [str(port), str(log)], logs)
+        processes.append(provider)
+        harness.wait_http(f"http://127.0.0.1:{port}/ready")
+        host = _spawn(bound_env, "api-research-bound", BOUND_HOST, [str(api_port)], logs)
+        processes.append(host)
+        harness.wait_http(f"{api_url}/readyz")
+        nansen_before = len(stand_in_requests(nansen_log))
+        run = _driver(BOUND_DECLARE, driver_env, logs, "research-bound-declare")
+        ok &= rec.step("SAVED-HISTORY-BINDING: the bound release lists its SYNTHETIC handoff identity; one history job "
+                       "and one Nansen report saved with no request sent yet",
+                       (run.get("jobStatus"), run.get("nansenStatus")) == (201, 201) and bool(run.get("handoffSha256"))
+                       and run.get("release", {}).get("release_id") == "stand-in-bound/1"
+                       and stand_in_requests(log) == [] and len(stand_in_requests(nansen_log)) == nansen_before,
+                       {key: run.get(key) for key in ("jobStatus", "nansenStatus", "release", "handoffSha256")})
+        worker = _bound_worker(bound_env, logs, "research-bound-worker-1", [run["jobId"], run["nansenJobId"]])
+        consumed = _driver(BOUND_CONSUME, {**driver_env, "P03_BOUND_RUN": json.dumps(run)}, logs,
+                           "research-bound-consume")
+        run.update(consumed)
+        results_path = evidence / "ui" / "research-results.json"
+        results = json.loads(results_path.read_text()) if results_path.exists() else {}
+        results["bound"] = run
+        results_path.write_text(json.dumps(results, indent=2))
+        ok &= rec.step("SAVED-HISTORY-BINDING: one worker pass binds the saved dataset (PASS); adoption, publication "
+                       "and replay carry the binding; another owner reads nothing",
+                       worker == 0 and run.get("jobState") == "REPORTED"
+                       and (run.get("binding") or {}).get("status") == "PASS"
+                       and (run.get("adoptionStatus"), run.get("replayStatus")) == (201, 201),
+                       {"worker": worker, **{key: run.get(key) for key in ("jobState", "binding", "adoptionStatus",
+                                                                            "replayStatus", "otherOwner")}})
+        requests = stand_in_requests(log)
+        nansen_sent = len(stand_in_requests(nansen_log)) - nansen_before
+        inspection = inspect_bound(pg, run, requests, nansen_sent)
+        rec.write("research-bound-inspection.json", inspection)
+        ok &= rec.step("SAVED-HISTORY-BINDING: SQL matches owner, dataset, raw/content/handoff/report/release hashes, "
+                       "one event, and the stand-in's own request log", inspection["all_checks_pass"],
+                       inspection["expectations"])
+        host.stop()
+        host = _spawn(bound_env, "api-research-bound-restarted", BOUND_HOST, [str(api_port)], logs)
+        processes.append(host)
+        harness.wait_http(f"{api_url}/readyz")
+        again = _bound_worker(bound_env, logs, "research-bound-worker-restarted", [run["jobId"], run["nansenJobId"]])
+        code = run_playwright(["research-release-restart.spec.mjs"], {**ui_env, "P03_BOUND_PHASE": "1"},
+                              evidence / "ui-research-bound-restart.log")
+        after = inspect_bound(pg, run, stand_in_requests(log), len(stand_in_requests(nansen_log)) - nansen_before)
+        rec.write("research-bound-inspection-after-restart.json", after)
+        ok &= rec.step("SAVED-HISTORY-BINDING: after an API and worker restart the bound job, dataset, binding and replay "
+                       "reopen unchanged in a new context (desktop and 390px); no request repeated; owner B denied",
+                       again == 0 and code == 0 and after == inspection
+                       and len(stand_in_requests(log)) == len(requests),
+                       {"worker_exit": again, "spec_exit": code, "stand_in_requests": len(stand_in_requests(log))})
+    finally:
+        if host is not None:
+            try:
+                host.stop()
+            except Exception as error:  # noqa: BLE001
+                ok &= rec.step("SAVED-HISTORY-BINDING: stop the bound API", False, f"{type(error).__name__}: {error}")
+    return bool(ok)
+
+
 def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port: int, api_url: str,
                       evidence: Path, ui_env: dict[str, str], run_playwright: Callable[..., int],
                       current_api: Any, processes: list[Any]) -> tuple[bool, Any]:
@@ -798,6 +1048,8 @@ def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_p
                        and len(stand_in_requests(nansen_log)) == len(nansen_requests),
                        {"nansen_requests": len(stand_in_requests(nansen_log))})
         host.stop()
+        ok &= run_bound_release_phase(rec, pg, env, api_port, api_url, evidence, ui_env, run_playwright, processes,
+                                      nansen_port, nansen_log, logs)
         standard = harness.start_api(env, api_port, logs, name="api-after-research-release")
         processes.append(standard)
         harness.wait_http(f"{api_url}/readyz")

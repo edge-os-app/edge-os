@@ -23,7 +23,7 @@ from edge_os_api.core.errors import AppError, finding, invalid
 from edge_os_api.core.request_schemas import MarketAdoptionBody
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.records.models import IdempotencyRecord, InvestigationDeclaration, StrategyRevision
-from edge_os_api.research import history_dataset, service
+from edge_os_api.research import history_dataset, history_payload_binding, service
 from edge_os_api.research.effect_comparison import expression_inputs
 from edge_os_api.research.investigation_adoption import EXAMPLE_RULE_HASHES, HISTORY_SCHEMA_VERSION
 from edge_os_api.research.outcome_router import route
@@ -79,8 +79,10 @@ def _head_revision(session: Session, principal: Principal, strategy_id: str) -> 
     return heads[0] if len(heads) == 1 else None
 
 
-def _market_from_dataset(session: Session, principal: Principal, dataset_id: str) -> tuple[Any, dict[str, Any]]:
-    """The full P02 market, rebuilt only from a same-owner, hash-verified, QUALIFIED and complete dataset."""
+def _market_from_dataset(session: Session, principal: Principal,
+                         dataset_id: str) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    """The full P02 market, rebuilt only from a same-owner, hash-verified, QUALIFIED and complete dataset whose
+    required payload binding passes now. Returns the row, the market and the binding state."""
     row = history_dataset.owned_dataset(session, principal, dataset_id)
     verified = history_dataset.verify_hashes(row)
     if not all(verified.values()):
@@ -96,7 +98,9 @@ def _market_from_dataset(session: Session, principal: Principal, dataset_id: str
     if strategy_compiler.market_binding_id(market) != content["market_binding_id"]:
         raise _conflict("dataset_binding_mismatch", "/dataset_id",
                         "The dataset's market identity does not recompute. It cannot bind a market.")
-    return row, market
+    # The saved P07 verdict stays QUALIFIED either way; a failed or missing required binding only blocks this use.
+    binding = history_payload_binding.require_bound(session, principal, row, stage="VALIDATION", path="/dataset_id")
+    return row, market, binding
 
 
 def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
@@ -133,7 +137,7 @@ def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
     if (None if parent is None else str(parent)) != body.expected_parent_revision_id:
         raise _conflict("parent_revision_conflict", "/expected_parent_revision_id",
                         "The published revision changed. Reload the request before adopting a market.")
-    dataset, market = _market_from_dataset(session, principal, body.dataset_id)
+    dataset, market, binding = _market_from_dataset(session, principal, body.dataset_id)
     if body.quote_unit != market["quote_unit"]:
         raise invalid("/quote_unit", "Confirm the dataset market's exact quote unit.", "quote_unit_mismatch")
     declaration, rule = declared_rule(session, principal, dataset.content["declaration_id"], body.evaluation_id)
@@ -216,6 +220,9 @@ def adopt_dataset_market(session: Session, principal: Principal, intake_id: str,
                 "market_binding_id": dataset.content["market_binding_id"], "quote_unit": market["quote_unit"],
                 "evaluation_id": rule["evaluation_id"], "rule_map_sha256": declaration.content["frozen"]["rule_map_sha256"],
                 "base_revision_id": draft["base_revision_id"]}
+    lineage = history_payload_binding.lineage(binding)
+    if lineage is not None:  # additive: an adoption of an unbound dataset keeps its saved shape
+        adoption["payload_binding"] = lineage
     inserted = session.execute(pg_insert(IdempotencyRecord).values(
         owner_id=principal.user_id, method="POST", path=path, idempotency_key=body.idempotency_key,
         fingerprint=fingerprint, revision_id=revision_id, response=adoption).on_conflict_do_nothing()

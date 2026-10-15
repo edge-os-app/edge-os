@@ -9,6 +9,9 @@ owned loopback server; it is refused in production. An `ACTUAL` release points a
 only when `APPROVED_RELEASES` records its exact SHA-256. That registry is empty: no actual release is approved, and no
 setting, environment value, file or request can add one. See
 `docs/qualification/research-provider-composition/CONTRACT.md`.
+
+A history part may name one frozen forward-history recorder handoff for saved-payload binding; admission validates it
+here, before any credential read (`research/history_payload_binding.py`, `PAYLOAD_BINDING.md`).
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 # Approved ACTUAL release id -> its exact release SHA-256. Empty: nothing is approved. Adding an entry is a reviewed
 # code change that cites the builder's recorded approval of that exact release.
 APPROVED_RELEASES: Mapping[str, str] = {}
+# The reserved `HistoryRelease.provider_facts` key of an optional frozen recorder handoff: {handoff_json, handoff_sha256}.
+BINDING_FACT = "forward_history_binding"
 
 ReleaseKind = Literal["STAND_IN", "ACTUAL"]
 
@@ -145,6 +150,11 @@ def _check_history(kind: ReleaseKind, history: HistoryRelease) -> None:
         raise ReleaseRefused("operating_release_invalid", "the release client bounds must be positive whole numbers")
     if history.client_bounds["max_response_bytes"] > limits["max_bytes"]:
         raise ReleaseRefused("operating_release_invalid", "one reply cannot exceed the collection byte limit")
+    # The optional frozen recorder handoff (`provider_facts["forward_history_binding"]`). Its bytes are part of the
+    # release content, so they enter the release SHA-256; a release without it keeps its hash.
+    from edge_os_api.research import history_payload_binding  # deferred: that module imports this one
+
+    history_payload_binding.check_definition(kind, history)
 
 
 def _check_nansen(kind: ReleaseKind, nansen: NansenRelease, nansen_network: bool) -> None:

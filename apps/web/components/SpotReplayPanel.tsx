@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import { payloadBindingText, payloadBindingUsable } from "../lib/types";
 import type { DatasetSummary, HistorySpotReplayBody } from "../lib/api";
 import type { SpotReplayBody, SpotReplayDependency, SpotReplayRecord, Strategy } from "../lib/types";
 import { ReplayResult } from "./ReplayResult";
@@ -45,13 +46,18 @@ function historyBody(base: SpotReplayBody, dataset: DatasetSummary, start: strin
 
 export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Props) {
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
+  const [blocked, setBlocked] = useState<DatasetSummary[]>([]);
   const [source, setSource] = useState("fixture");
   const [windowStart, setWindowStart] = useState("");
   const [windowEnd, setWindowEnd] = useState("");
   useEffect(() => {
     let current = true;
     Promise.resolve().then(() => api.historyDatasets()).then((result) => {
-      if (current) setDatasets(result.datasets.filter((item) => item.binding_state === "QUALIFIED_BINDING"));
+      if (!current) return;
+      const qualified = result.datasets.filter((item) => item.binding_state === "QUALIFIED_BINDING");
+      // A required payload binding that does not PASS blocks the replay; its reason is shown, never hidden.
+      setDatasets(qualified.filter((item) => payloadBindingUsable(item.payload_binding)));
+      setBlocked(qualified.filter((item) => !payloadBindingUsable(item.payload_binding)));
     }).catch(() => { /* the synthetic fixture stays available; history datasets are optional here */ });
     return () => { current = false; };
   }, []);
@@ -135,9 +141,16 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
           {datasets.map((item) => <option key={item.dataset_id} value={item.dataset_id}>Saved recorded history {item.source_id} · {item.dataset_id.slice(0, 8)}</option>)}
         </select>
       </div>
+      {blocked.length ? (
+        <details data-testid="spot-replay-binding-blocked">
+          <summary>Saved datasets that cannot be replayed ({blocked.length})</summary>
+          <ul style={{ overflowWrap: "anywhere" }}>{blocked.map((item) => <li key={item.dataset_id}><span className="mono">{item.dataset_id}</span>: {item.source_id}. {payloadBindingText(item.payload_binding)}</li>)}</ul>
+        </details>
+      ) : null}
       {dataset ? (
         <div className="stack" data-testid="spot-replay-history-source" style={{ overflowWrap: "anywhere" }}>
           <p className="status stop">Simulated fills on saved recorded-history dataset {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. These prices are synthetic recorded responses, not observed market history. The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
+          <p data-testid="spot-replay-history-binding">{payloadBindingText(dataset.payload_binding)}</p>
           <div className="field">
             <label htmlFor="spot-replay-window-start">Window start (UTC)</label>
             <input id="spot-replay-window-start" className="input mono" value={windowStart} onChange={(event) => setWindowStart(event.target.value.trim())} />

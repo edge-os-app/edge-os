@@ -19,7 +19,7 @@ from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding
 from edge_os_api.replay import simulator as spot_replay
 from edge_os_api.records import contract_adapter as record_contract
-from edge_os_api.research import history_dataset
+from edge_os_api.research import history_dataset, history_payload_binding
 from edge_os_api.strategies import compiler as strategy_compiler
 
 INPUT_VERSION = "edge-os.history-replay-input/1"
@@ -38,6 +38,13 @@ def load(session: Session, principal: Principal, dataset_id: str) -> history_dat
                        [finding("dataset_hash_mismatch", "/history_dataset_id",
                                 "The saved dataset no longer matches its recorded hashes.")])
     return row
+
+
+def payload_binding(session: Session, principal: Principal,
+                    row: history_dataset.HistoryDatasetRow) -> dict[str, Any]:
+    """The dataset's required payload binding, rechecked on the current saved data. Refuses before anything is saved."""
+    return history_payload_binding.require_bound(session, principal, row, stage="SPOT_REPLAY",
+                                                 path="/history_dataset_id")
 
 
 def refuse_protected(session: Session, row: history_dataset.HistoryDatasetRow, window_end: dt.datetime) -> None:
@@ -98,10 +105,13 @@ def rule_linkage(session: Session, row: history_dataset.HistoryDatasetRow, strat
             "rule_map_sha256": None if declaration is None else declaration.content["frozen"]["rule_map_sha256"]}
 
 
-def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any],
-             linkage: dict[str, Any]) -> dict[str, Any]:
-    """The lineage saved beside the replay: exact dataset, declaration, job, source and both market identities."""
+def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any], linkage: dict[str, Any],
+             binding: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The lineage saved beside the replay: exact dataset, declaration, job, source and both market identities, plus
+    the payload-binding report identity when one is required. It enters the run-configuration identity, so a changed
+    binding under a reused configuration ID is the existing configuration conflict."""
     content = row.content
+    lineage = None if binding is None else history_payload_binding.lineage(binding)
     return {
         "schema_version": INPUT_VERSION, "dataset_id": str(row.dataset_id),
         "dataset_content_sha256": row.content_sha256, "normalized_sha256": content["normalized_sha256"],
@@ -116,4 +126,5 @@ def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any],
         "rule_linkage": linkage, "fill_label": FILL_LABEL,
         "fill_assumptions": {"price": "bucket close of the decision bucket", "costs": strategy["cost_assumptions"],
                              "not_modeled": ["gas", "spread", "extra price impact", "capacity"]},
+        **({} if lineage is None else {"payload_binding": lineage}),
     }

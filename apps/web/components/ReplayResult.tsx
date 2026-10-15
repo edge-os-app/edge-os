@@ -1,4 +1,5 @@
-import type { SpotReplayRecord } from "../lib/types";
+import { payloadBindingText } from "../lib/types";
+import type { PayloadBindingLineage, SpotReplayRecord } from "../lib/types";
 import { ReplayBalanceChart } from "./ReplayBalanceChart";
 
 interface Props { replay: SpotReplayRecord }
@@ -16,7 +17,8 @@ export function ReplayResult({ replay }: Props) {
   const history = (inputs as { history_input?: { dataset_id: string; source_id: string; content_label: string;
     declaration_id: string; job_id: string; dataset_market_binding_id: string | null; strategy_market_binding_id: string;
     fill_label: string; dataset_content_sha256: string;
-    rule_linkage?: { state: string; evaluation_id: string | null } } }).history_input ?? null;
+    rule_linkage?: { state: string; evaluation_id: string | null };
+    payload_binding?: PayloadBindingLineage } }).history_input ?? null;
   const dependencies = (field: "entry" | "exit") => inputs.essential_evidence.fields[field];
   const bindingSummary = (field: "entry" | "exit") => {
     const binding = dependencies(field);
@@ -72,13 +74,14 @@ export function ReplayResult({ replay }: Props) {
             <dt>Entry rule</dt><dd>{history.rule_linkage?.state === "ENTRY_IS_DECLARED_RULE"
               ? `The declared rule ${history.rule_linkage.evaluation_id}`
               : "Not a rule of this dataset's declaration"}</dd>
+            <dt>Saved payload binding</dt><dd data-testid="spot-replay-saved-binding">{payloadBindingText(history.payload_binding)}</dd>
           </dl>
         </section>
       ) : null}
       <section aria-labelledby="spot-replay-saved-inputs-title" data-testid="spot-replay-saved-inputs">
         <h4 id="spot-replay-saved-inputs-title">Exact saved run settings</h4>
         <dl className="kv">
-          <dt>Profile</dt><dd>{inputs.profile_version}</dd>
+          <dt>Profile</dt><dd data-testid="spot-replay-saved-profile">{inputs.profile_version}{inputs.profile_sha256 ? ` · ${inputs.profile_sha256}` : ""}</dd>
           <dt>Strategy revision</dt><dd className="mono">{inputs.strategy_revision_id}</dd>
           <dt>Run configuration</dt><dd className="mono">{inputs.run_configuration_id}</dd>
           <dt>Fixture and dataset</dt><dd>{inputs.dataset_fixture_id} · {inputs.dataset_revision_id}</dd>

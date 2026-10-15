@@ -388,5 +388,43 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
     render(<ReplayResult replay={saved as SpotReplayRecord} />);
     expect(screen.getByTestId("spot-replay-history-lineage")).toHaveTextContent("decl-1");
     expect(screen.getByText(/Simulated fills on saved recorded-history dataset/)).toBeInTheDocument();
+    expect(screen.getByTestId("spot-replay-saved-binding")).toHaveTextContent("not required for this synthetic recorded dataset");
+  });
+
+  const bindingState = (status: string, reason: string | null) => ({ status, required_by: "RELEASE_BINDING", reason,
+    evidence_class: "SYNTHETIC", handoff_sha256: "e".repeat(64), report_sha256: status === "PASS" ? "9".repeat(64) : null,
+    checker_sha256: "1".repeat(64), claim_limit: "Payload binding only." });
+
+  it("offers only datasets whose required binding passes and shows why the others are blocked", async () => {
+    const user = userEvent.setup();
+    const passing = { ...dataset, dataset_id: "d0000000-0000-4000-8000-000000000002", source_id: "release-forward-bound/1",
+      payload_binding: bindingState("PASS", null) };
+    const blocked = { ...dataset, dataset_id: "d0000000-0000-4000-8000-000000000003", source_id: "release-forward-bad/1",
+      payload_binding: bindingState("INCOMPLETE", "BINDING_EVENT_MISSING") };
+    mocks.datasets.mockResolvedValue({ datasets: [passing, blocked] });
+    render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "50", unit: "QUOTE:0xbb" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
+    await screen.findByRole("option", { name: /release-forward-bound/ });
+    expect(screen.queryByRole("option", { name: /release-forward-bad/ })).toBeNull();
+    const list = screen.getByTestId("spot-replay-binding-blocked");
+    expect(list).toHaveTextContent(blocked.dataset_id);
+    expect(list).toHaveTextContent("Payload binding: INCOMPLETE (BINDING_EVENT_MISSING)");
+    await user.selectOptions(screen.getByLabelText("Price data"), passing.dataset_id);
+    expect(screen.getByTestId("spot-replay-history-binding")).toHaveTextContent("Payload binding: PASS against the SYNTHETIC handoff");
+  });
+
+  it("reopens a saved replay with its saved binding lineage and profile identity", () => {
+    const saved = structuredClone(replay);
+    (saved.content.inputs as unknown as Record<string, unknown>).profile_sha256 = "p".repeat(64);
+    (saved.content.inputs as unknown as Record<string, unknown>).history_input = { dataset_id: dataset.dataset_id,
+      source_id: "release-forward-bound/1", content_label: "SYNTHETIC_FIXTURE", declaration_id: "decl-1", job_id: "job-1",
+      dataset_market_binding_id: "m".repeat(64), strategy_market_binding_id: "m".repeat(64), fill_label: "simulated fills",
+      dataset_content_sha256: "h".repeat(64), payload_binding: { status: "PASS", required_by: "RELEASE_BINDING",
+        evidence_class: "SYNTHETIC", handoff_sha256: "e".repeat(64), report_sha256: "9".repeat(64), checker_sha256: "1".repeat(64) } };
+    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+    expect(screen.getByTestId("spot-replay-saved-binding")).toHaveTextContent(
+      `Payload binding: PASS against the SYNTHETIC handoff ${"e".repeat(64)}; report ${"9".repeat(64)}.`);
+    expect(screen.getByTestId("spot-replay-saved-profile")).toHaveTextContent(`p12.spot-replay/1 · ${"p".repeat(64)}`);
   });
 });
