@@ -1,0 +1,500 @@
+{
+  "schema_version": "edge-os.qualified-demo-source-facts/1",
+  "task": "QUALIFIED-DATA-PACKET-L4-20261015-LOCAL-v1",
+  "base_commit": "c34bd3959e51696193c1a031652a62fa67829e28",
+  "status": "PROPOSED_NOT_RUN",
+  "authorizes_operation": false,
+  "is_provider_proof": false,
+  "purpose": "Exact read-only reads that would supply the P07 declarations listed in QUALIFICATION_GAPS.md section 4 for option B (MOE/WMON forward 20-minute window). Nothing here was executed.",
+  "requires_new_capability": {
+    "needed": true,
+    "reason": "No accepted tool runs these reads on a fixed schedule and saves hashed results. The application release allowlist is exactly eth_chainId and eth_getTransactionReceipt (operating_release.RPC_METHODS), and release facts freeze before a run.",
+    "scope_of_separate_packet": "A reviewed, owner-run recorder that reads credential slots at run time, makes only the calls below, enforces each max_calls, never retries, and writes the outputs below plus request and response SHA-256 values. It must not import or change the application release path."
+  },
+  "global_rules": {
+    "credentials": "Read at run time from the named slots only. No key, URL path secret or authorization header in any output, log, evidence or model input.",
+    "chain_writes": "None. No eth_sendRawTransaction, no signing, no wallet, no gas. eth_call is a read-only simulation.",
+    "retries": "None. A failed or refused call stops its phase and is recorded.",
+    "pacing": "At most 1 request per second per provider. Documented limits are higher: QuickNode Build 50 requests per second; HyperSync Starter 100 requests per minute (PUBLIC_DOC 2026-10-15). The account plans are unknown.",
+    "outputs": "Values, hashes, statuses, times and counts only. Raw responses stay in private evidence outside the repository.",
+    "time_source": "Recorder UTC clock for observation times. Block timestamps come from the replies. No time is invented or backfilled."
+  },
+  "placeholders": {
+    "T0": "Window start, a five-minute grid UTC time chosen and recorded before P2 starts. NEEDS_APPROVAL.",
+    "WINDOW_END": "T0 + 1200 s.",
+    "B_PRE": "Number of the last block with timestamp < T0, from the P2 latest-block reads.",
+    "B_START": "Number of the first block with timestamp >= T0.",
+    "B_END": "Number of the last block with timestamp < WINDOW_END, from P3 pages.",
+    "B_POST": "Number of the first block with timestamp >= WINDOW_END, from P3 pages.",
+    "POOL_CREATION_TX": "The retained Probe A pool-creation transaction hash (private evidence C2-meme-flow-selection-03, moe-pool-creation-receipt). Publishing it is part of decision D7.",
+    "FACTORY": "The address that emitted the pool-creation event, read from the P1 receipt.",
+    "CREATION_TOPIC0": "topic0 of the pool-creation event in the P1 receipt. The fork may not use the canonical PairCreated topic 0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9."
+  },
+  "destinations": {
+    "quicknode": {
+      "credential_slot": "quicknode_monad_url",
+      "host": "NEEDS_FACT: host of the builder's QuickNode Monad endpoint",
+      "protocol": "HTTPS POST JSON-RPC 2.0",
+      "credits_per_call": 30,
+      "credits_basis": "PUBLIC_DOC https://www.quicknode.com/api-credits/monad read 2026-10-15"
+    },
+    "hypersync": {
+      "credential_slot": "envio_hypersync_bearer",
+      "url": "https://monad.hypersync.xyz/query",
+      "protocol": "HTTPS POST, bearer token",
+      "request_id_header": "NEEDS_FACT"
+    },
+    "public_source_lookup": {
+      "credential_slot": null,
+      "url": "NEEDS_FACT: an explorer or verification service that publishes verified source for chain 143",
+      "protocol": "HTTPS GET, no key"
+    }
+  },
+  "contracts": {
+    "pool": "0x97199b34564911936bc850ac45ede785892b5aad",
+    "wmon_token0_quote": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+    "moe_token1_base": "0xd8e004acba279417c04c0633cb5a21ceca207777",
+    "swap_topic0": "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+    "selectors": {
+      "decimals()": "0x313ce567",
+      "token0()": "0x0dfe1681",
+      "token1()": "0xd21220a7",
+      "factory()": "0xc45a0155"
+    },
+    "selector_basis": "Computed with the accepted keccak256 in docs/qualification/p07/qualification.py"
+  },
+  "phases": [
+    {
+      "id": "P0",
+      "when": "Before any call",
+      "calls": [],
+      "evidence_requests": [
+        "Builder states the QuickNode plan name and whether Monad archive state is included, without sharing the URL or key.",
+        "Builder states the Envio HyperSync plan name and its current rate limit.",
+        "Builder confirms T0 and the decisions in QUALIFICATION_GAPS.md section 7."
+      ],
+      "stop_if": [
+        "Any decision in QUALIFICATION_GAPS.md section 7 items 2 to 4 is missing."
+      ]
+    },
+    {
+      "id": "P1",
+      "when": "Any time before P2",
+      "calls": [
+        {
+          "provider": "quicknode",
+          "method": "eth_chainId",
+          "params": [],
+          "max_calls": 1,
+          "output_fields": [
+            "chain_id"
+          ],
+          "supplies": "chain check before other reads"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_getTransactionReceipt",
+          "params": [
+            "<POOL_CREATION_TX>"
+          ],
+          "max_calls": 1,
+          "output_fields": [
+            "status",
+            "block_number",
+            "block_hash",
+            "FACTORY",
+            "CREATION_TOPIC0",
+            "pool_address_in_event",
+            "token_addresses_in_event",
+            "log_index"
+          ],
+          "supplies": "pool_venue source 1; pool_tokens source 2"
+        },
+        {
+          "provider": "hypersync",
+          "method": "POST /query",
+          "params": {
+            "from_block": "<receipt block_number>",
+            "to_block": "<receipt block_number + 1>",
+            "logs": [
+              {
+                "address": [
+                  "<FACTORY>"
+                ],
+                "topics": [
+                  [
+                    "<CREATION_TOPIC0>"
+                  ]
+                ]
+              }
+            ],
+            "field_selection": {
+              "block": [
+                "number",
+                "timestamp",
+                "hash"
+              ],
+              "log": [
+                "block_number",
+                "block_hash",
+                "transaction_hash",
+                "transaction_index",
+                "log_index",
+                "address",
+                "data",
+                "topic0",
+                "topic1",
+                "topic2",
+                "topic3"
+              ]
+            }
+          },
+          "max_calls": 1,
+          "output_fields": [
+            "log identity",
+            "pool_address_in_event",
+            "token_addresses_in_event",
+            "block_hash"
+          ],
+          "supplies": "pool_venue source 2; pool_tokens source 3"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_call",
+          "params": [
+            {
+              "to": "0x97199b34564911936bc850ac45ede785892b5aad",
+              "data": "0xc45a0155"
+            },
+            "latest"
+          ],
+          "max_calls": 1,
+          "output_fields": [
+            "factory_address"
+          ],
+          "supplies": "pool_venue: the pool names the same factory"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_getCode",
+          "params": [
+            "<each of pool, WMON, MOE>",
+            "latest"
+          ],
+          "max_calls": 3,
+          "output_fields": [
+            "bytecode_sha256",
+            "bytecode_bytes"
+          ],
+          "supplies": "code identity for mechanics review (P5)"
+        }
+      ],
+      "max_calls_by_provider": {
+        "quicknode": 6,
+        "hypersync": 1,
+        "public_source_lookup": 0
+      },
+      "stop_if": [
+        "chain_id is not 143",
+        "receipt status is not success or the event does not name the pool",
+        "the HyperSync log differs from the receipt log in any identity field",
+        "factory() differs from FACTORY"
+      ]
+    },
+    {
+      "id": "P2",
+      "when": "Starting at most 120 s before T0 and finished by T0 + 60 s",
+      "calls": [
+        {
+          "provider": "quicknode",
+          "method": "eth_getBlockByNumber",
+          "params": [
+            "latest",
+            false
+          ],
+          "max_calls": 2,
+          "output_fields": [
+            "number",
+            "timestamp",
+            "hash",
+            "observed_at_utc"
+          ],
+          "supplies": "B_PRE and B_START bounds; the second read is scheduled after T0, not a retry"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_call",
+          "params": [
+            {
+              "to": "<MOE, then WMON>",
+              "data": "0x313ce567"
+            },
+            "<B_START as hex>"
+          ],
+          "max_calls": 2,
+          "output_fields": [
+            "decimals",
+            "block_number_read"
+          ],
+          "supplies": "decimals window_start READ"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_call",
+          "params": [
+            {
+              "to": "0x97199b34564911936bc850ac45ede785892b5aad",
+              "data": "<0x0dfe1681, then 0xd21220a7>"
+            },
+            "<B_START as hex>"
+          ],
+          "max_calls": 2,
+          "output_fields": [
+            "token0",
+            "token1",
+            "block_number_read"
+          ],
+          "supplies": "pool_tokens source 1 at the window start"
+        }
+      ],
+      "max_calls_by_provider": {
+        "quicknode": 6,
+        "hypersync": 0,
+        "public_source_lookup": 0
+      },
+      "stop_if": [
+        "any historical-state-unavailable or other JSON-RPC error: decimals stay NOT_READ",
+        "decimals differ from 18",
+        "token0 or token1 differs from the retained order"
+      ]
+    },
+    {
+      "id": "P3",
+      "when": "For each of the 4 buckets: first read at bucket end + 30 s, second read at bucket end + 120 s only if the first did not cover the bucket",
+      "calls": [
+        {
+          "provider": "hypersync",
+          "method": "POST /query",
+          "params": {
+            "from_block": "<B_PRE for bucket 1, else the previous reply's next_block>",
+            "logs": [
+              {
+                "address": [
+                  "0x97199b34564911936bc850ac45ede785892b5aad"
+                ],
+                "topics": [
+                  [
+                    "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
+                  ]
+                ]
+              }
+            ],
+            "include_all_blocks": true,
+            "max_num_blocks": 10000,
+            "field_selection": {
+              "block": [
+                "number",
+                "timestamp",
+                "hash",
+                "parent_hash"
+              ],
+              "log": [
+                "block_number",
+                "block_hash",
+                "transaction_hash",
+                "transaction_index",
+                "log_index",
+                "address",
+                "topic0"
+              ]
+            }
+          },
+          "max_calls": 8,
+          "output_fields": [
+            "reply_received_at_utc",
+            "archive_height",
+            "next_block",
+            "last_block_timestamp",
+            "covers_bucket",
+            "log_count",
+            "response_sha256"
+          ],
+          "supplies": "delivery_records: bucket start -> first reply_received_at_utc whose blocks cover the bucket"
+        }
+      ],
+      "max_calls_by_provider": {
+        "quicknode": 0,
+        "hypersync": 8,
+        "public_source_lookup": 0
+      },
+      "stop_if": [
+        "any non-200 reply, 401, 402, 403 or 429",
+        "a bucket is still uncovered after its second read: that bucket has no delivery record and availability stays below QUALIFIED",
+        "log_count over the whole scan from B_PRE exceeds 61: complete corroboration is not reachable, so stop before P4 and report"
+      ]
+    },
+    {
+      "id": "P4",
+      "when": "At WINDOW_END + 60 s or later, after P3",
+      "calls": [
+        {
+          "provider": "quicknode",
+          "method": "eth_getBlockByNumber",
+          "params": [
+            "finalized",
+            false
+          ],
+          "max_calls": 1,
+          "output_fields": [
+            "number",
+            "timestamp",
+            "observed_at_utc"
+          ],
+          "supplies": "finality_at_collection OBSERVED_FINAL when number >= B_POST + 2"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_getBlockByNumber",
+          "params": [
+            "latest",
+            false
+          ],
+          "max_calls": 1,
+          "output_fields": [
+            "number",
+            "observed_at_utc"
+          ],
+          "supplies": "archive_height and collected_at_utc candidates"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_call",
+          "params": [
+            {
+              "to": "<MOE, then WMON>",
+              "data": "0x313ce567"
+            },
+            "<B_END as hex>"
+          ],
+          "max_calls": 2,
+          "output_fields": [
+            "decimals"
+          ],
+          "supplies": "decimals window_end READ"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_call",
+          "params": [
+            {
+              "to": "<MOE, then WMON>",
+              "data": "0x313ce567"
+            },
+            "latest"
+          ],
+          "max_calls": 2,
+          "output_fields": [
+            "decimals",
+            "block_number_read"
+          ],
+          "supplies": "decimals current READ"
+        }
+      ],
+      "max_calls_by_provider": {
+        "quicknode": 6,
+        "hypersync": 0,
+        "public_source_lookup": 0
+      },
+      "stop_if": [
+        "finalized number < B_POST + 2: finality is NOT_OBSERVED; no repeated read",
+        "any decimals value differs from the P2 value"
+      ]
+    },
+    {
+      "id": "P5",
+      "when": "Any time after P1",
+      "calls": [
+        {
+          "provider": "public_source_lookup",
+          "method": "GET verified source for MOE",
+          "params": [
+            "0xd8e004acba279417c04c0633cb5a21ceca207777"
+          ],
+          "max_calls": 1,
+          "output_fields": [
+            "verified",
+            "compiler",
+            "source_sha256",
+            "matches_P1_bytecode_sha256"
+          ],
+          "supplies": "mechanics: source bound to code"
+        },
+        {
+          "provider": "public_source_lookup",
+          "method": "GET verified source for the pool",
+          "params": [
+            "0x97199b34564911936bc850ac45ede785892b5aad"
+          ],
+          "max_calls": 1,
+          "output_fields": [
+            "verified",
+            "source_sha256",
+            "matches_P1_bytecode_sha256"
+          ],
+          "supplies": "mechanics: pair swap accounting"
+        },
+        {
+          "provider": "quicknode",
+          "method": "eth_call",
+          "params": [
+            {
+              "to": "0xd8e004acba279417c04c0633cb5a21ceca207777",
+              "data": "<selector of a reflection-exclusion view named in the verified MOE source, applied to the pool address>"
+            },
+            "latest"
+          ],
+          "max_calls": 1,
+          "conditional": "Only when the verified source has such a view. Otherwise 0 calls.",
+          "output_fields": [
+            "excluded"
+          ],
+          "supplies": "mechanics: whether the pair receives reflection"
+        }
+      ],
+      "max_calls_by_provider": {
+        "quicknode": 1,
+        "hypersync": 0,
+        "public_source_lookup": 2
+      },
+      "stop_if": [
+        "no verified source matches the bytecode: fee_transfer_semantics stays unqualified"
+      ],
+      "after_calls": "A written mechanics finding, reviewed like a document, plus a builder-approved definition of QUALIFIED mechanics. Reading code is not proof of runtime behavior."
+    }
+  ],
+  "totals": {
+    "quicknode_calls_max": 19,
+    "hypersync_calls_max": 9,
+    "public_source_lookup_calls_max": 2,
+    "nansen_calls": 0,
+    "quicknode_credits_max": 570,
+    "arithmetic": "Sum of phase maxima. QuickNode P1 6 + P2 6 + P3 0 + P4 6 + P5 1 = 19. HyperSync P1 1 + P3 8 = 9. Public lookups P5 2. Credits 19 x 30 = 570."
+  },
+  "declarations_supplied": {
+    "pool_tokens": "CORROBORATED_READ only if P1 receipt, P1 HyperSync log and P2 token0/token1 all agree",
+    "pool_venue": "CORROBORATED only if the P1 receipt, the P1 HyperSync log and P1 factory() agree",
+    "decimals": "window_start, window_end and current READ only for reads that returned without error",
+    "fee_transfer_semantics": "QUALIFIED only after P5 evidence and decision D5",
+    "finality_at_collection": "OBSERVED_FINAL only if P4 finalized number >= B_POST + 2",
+    "delivery_records": "One entry per bucket covered in P3; a bucket without one stays undelivered",
+    "archive_height": "P4 latest number, only if >= B_POST + 2",
+    "collected_at_utc": "The P4 finalized read time, if decision D3 accepts it; not earlier than WINDOW_END",
+    "scan": "from_block B_PRE, to_block_exclusive B_POST + 1"
+  },
+  "not_supplied": [
+    "Account rights, plan, price or retention: these are evidence requests in P0 and OPERATING_PACKET.md section 6.",
+    "Nansen coverage of MOE: only an actual Nansen reply can show it; see OPERATING_PACKET.md section 4.",
+    "Any history page, receipt or verdict for the application run."
+  ],
+  "decision_ids": "D1 to D10 are defined in OPERATING_PACKET.md section 9."
+}
