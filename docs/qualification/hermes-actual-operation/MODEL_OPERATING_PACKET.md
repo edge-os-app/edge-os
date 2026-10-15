@@ -31,8 +31,9 @@ NOT VERIFIED by documentation: that `openai/gpt-6.1-sol` exists now, its endpoin
 | `provider.max_price` | `{"prompt": P, "completion": C}` equal to the snapshot rates (USD per million) | open (6.1); see section 3 |
 | `max_tokens` | 4096 | equal to the application interpreter limit (lane 2 checks) |
 | `reasoning` | `{"effort": "low"}` | Probe A value; support open (6.2) |
-| `response_format_sha256` | SHA256 of the accepted application interpreter output schema (canonical JSON) | lane 2 supplies; no fixture schema |
-| `allowed_fields` | `model, messages, stream, response_format, provider, reasoning, max_tokens, session_id` | fixed by A6 |
+| `response_format_sha256` | SHA256 of the accepted application interpreter output schema (canonical JSON, as `bind_release` hashes it) | open: the code-owned schema in `research/interpreter_output_schema.py` is not yet accepted; no fixture schema |
+| `prompt_cache_options` | `{"mode": "explicit"}` exactly, no breakpoint or other member | builder-approved value (relay CONTRACT E1); qualification for the provider/model open (6.2) |
+| `allowed_fields` | `model, messages, stream, response_format, provider, reasoning, max_tokens, session_id, prompt_cache_options` | A6 plus the E1 cache field, which the record may name only when it sets `prompt_cache_options` |
 | `max_request_bytes` | 65,536 | ONLINE_CONTINUATION section 3 (Probe A about 34 KB) |
 | `max_reply_bytes` | 262,144 | ONLINE_CONTINUATION section 3 (Probe A up to about 17 KB) |
 | `timeout_seconds` | 90 (grant life; must be 1-120) | Probe A C2 calls: 24.2 and 38.5 s in `PROBE_A_PROVIDER_REUSE.md`, 26.104 and 40.088 s in the result table |
@@ -74,8 +75,8 @@ The generation lookup (`GET /api/v1/generation?id=`) is a separate host-held, ke
 ## 6. Open facts (labelled, not invented)
 
 1. Current model existence, endpoint list, one provider slug and its exact current prompt and completion prices, plus any reasoning, cache, request or override pricing (a public models/endpoints read; whether it needs a key is open).
-2. That slug's support for `data_collection: deny`, `require_parameters` with `reasoning`, `response_format` and `max_tokens` 4096.
+2. That slug's support for `data_collection: deny`, `require_parameters` with `reasoning`, `response_format`, `prompt_cache_options` and `max_tokens` 4096.
 3. Account facts: key existence and scope, credit balance, spend limits, fees. Not read here.
 4. The CA bundle file and its SHA256.
 5. The builder's model share of the combined USD 2.00 ceiling, and the spend already recorded against it.
-6. Application facts owned by lane 2: interpreter schema hash, prompt size against 65,536 bytes, and trusted definition and price snapshot binding.
+6. Application facts: interpreter schema hash (task `INTERPRETER-OUTPUT-CONTRACT-L1-20261015`), prompt size against 65,536 bytes, and trusted definition and price snapshot binding through `hermes_relay_composition.bind_release`.
