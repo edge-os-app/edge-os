@@ -406,3 +406,13 @@ def test_checker_does_not_modify_its_inputs() -> None:
     before = copy.deepcopy(export)
     _check(export)
     assert export == before
+
+
+def test_actual_handoff_binds_only_an_actual_dataset_label() -> None:
+    handoff = _handoff()
+    handoff["evidence_class"] = "ACTUAL"
+    export = _export(handoff=handoff)
+    export["content"]["evidence_class"] = "PROVIDER_ACTUAL"
+    assert _check(_rehash(export), handoff=handoff)["overall"] == "PASS"
+    synthetic = _export(handoff=handoff)
+    assert _check(synthetic, handoff=handoff)["overall"] == "MISMATCH"

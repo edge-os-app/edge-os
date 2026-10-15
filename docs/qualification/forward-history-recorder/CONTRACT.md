@@ -97,6 +97,9 @@ Each call's effective deadline is the earliest of 120 seconds, its phase or sche
 timeout is at most 15 seconds. A call at or after its deadline is refused before admission. A clock that moves
 backward (UTC or monotonic) is untrusted: the recorder stops further sends and keeps availability unknown.
 
+The injected cancel callback is checked before every admission and after every decode. Once it returns true, no
+further call is admitted, the attempt ends with status `CANCELLED`, and open buckets close `INCOMPLETE`.
+
 ## Stops and weak evidence
 
 Safety stops end every provider and leave remaining buckets `INCOMPLETE`:

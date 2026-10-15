@@ -893,3 +893,165 @@ def test_pacing_keeps_one_second_between_same_provider_admissions(tmp_path: Path
 def test_input_validation_accepts_the_complete_synthetic_input(tmp_path: Path) -> None:
     value = validate_input(copy.deepcopy(recorder_input(tmp_path)))
     assert value["t0"] == T0 and value["window_end"] == WE
+
+
+# SOURCE2 matrix completion
+
+
+def test_cancellation_stops_every_later_admission(tmp_path: Path) -> None:
+    flag = {"cancelled": False}
+
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        def cancel_during(call: dict[str, Any]) -> None:
+            flag["cancelled"] = True
+            return None
+        providers.overrides[9] = cancel_during
+    clock = FakeClock(T0 - 600)
+    providers = SyntheticProviders(clock)
+    configure(providers, clock)
+    result = run_attempt(recorder_input(tmp_path), transport=providers, clock=clock, credentials=Credentials(),
+                         cancel=lambda: flag["cancelled"])
+    assert result["status"] == "CANCELLED"
+    assert len(providers.calls) == 9
+    summary = recover_attempt(tmp_path / "attempts" / "synthetic-attempt-1")
+    assert summary["admitted"] == 9
+    handoff = handoff_of(result)
+    assert handoff["buckets"][0]["status"] == "INCOMPLETE"
+
+
+def _page_override(index: int, damage: Callable[[dict[str, Any]], None]) -> Callable:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        def damaged(call: dict[str, Any]) -> HttpResponse:
+            page = providers._query(call["body"])
+            damage(page)
+            return HttpResponse(200, {}, json.dumps(page).encode())
+        providers.overrides[index] = damaged
+    return configure
+
+
+def test_rollback_guard_hash_conflict_is_a_safety_stop(tmp_path: Path) -> None:
+    result, providers, _ = run(tmp_path, configure=_page_override(
+        9, lambda page: page.update(rollback_guard={"block_number": 5, "hash": "0x" + "96" * 32})))
+    assert (result["status"], result["stop_reason"]) == ("SAFETY_STOP", "CONFLICTING_BLOCK_FACT")
+    assert len(providers.calls) == 9
+
+
+def test_consistent_rollback_guard_is_accepted(tmp_path: Path) -> None:
+    result, providers, _ = run(tmp_path, configure=_page_override(
+        9, lambda page: page.update(rollback_guard={"block_number": 5, "hash": block_hash(5)})))
+    assert result["status"] == "COMPLETED"
+    assert handoff_of(result)["buckets"][0]["status"] == "DELIVERED"
+
+
+def test_later_reply_contradicting_an_earlier_reply_header_is_a_safety_stop(tmp_path: Path) -> None:
+    def damage(page: dict[str, Any]) -> None:
+        page["data"]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": "0x" + "95" * 32})
+    result, providers, _ = run(tmp_path, configure=_page_override(10, damage))
+    assert (result["status"], result["stop_reason"]) == ("SAFETY_STOP", "CONFLICTING_BLOCK_FACT")
+    assert len(providers.calls) == 10
+    assert handoff_of(result)["buckets"][0]["status"] == "DELIVERED"
+
+
+def test_later_reply_repeating_an_identical_earlier_header_is_rejected_not_stopped(tmp_path: Path) -> None:
+    def damage(page: dict[str, Any]) -> None:
+        page["data"]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": block_hash(33)})
+    result, providers, _ = run(tmp_path, configure=_page_override(10, damage))
+    assert result["status"] == "COMPLETED"
+    assert handoff_of(result)["buckets"][1]["reason"] == "FIRST_READ_REJECTED"
+
+
+@pytest.mark.parametrize("extra,flagged", [(59, False), (60, True)])
+def test_more_than_61_scan_logs_is_weaker_evidence_and_later_phases_still_run(
+        tmp_path: Path, extra: int, flagged: bool) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.swaps = [ORACLE_SWAP, BOUNDARY_SWAP] + [
+            dict(ORACLE_SWAP, block_number=2 + index, transaction_hash="0x" + "%064x" % (index + 1))
+            for index in range(extra)]
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert handoff["scan_log_count"] == extra + 2
+    assert handoff["weaker_evidence"] == (["SCAN_LOG_COUNT_EXCEEDS_61"] if flagged else [])
+    assert result["status"] == "COMPLETED"
+    assert (count(providers, "quicknode"), count(providers, "hypersync")) == (17, 5)
+
+
+@pytest.mark.parametrize("call_number,returned", [(15, MOE), (16, WMON)])
+def test_wrong_pool_token_order_at_b_start_is_a_safety_stop(tmp_path: Path, call_number: int,
+                                                              returned: str) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.overrides[call_number] = lambda call: HttpResponse(200, {}, _rpc("0x" + _addr_word(returned)))
+    result, providers, _ = run(tmp_path, configure=configure)
+    assert (result["status"], result["stop_reason"]) == ("SAFETY_STOP", "TOKEN_ORDER_DIFFERS")
+    assert len(providers.calls) == call_number
+
+
+@pytest.mark.parametrize("reply,outcome", [
+    (lambda clock: HttpResponse(500, {}, b"{}"), "FAILED:HTTP_STATUS"),
+    (lambda clock: HttpResponse(200, {}, _rpc({"number": "0x0", "timestamp": hex(T0 - 200)})),
+     "FAILED:MALFORMED_HEADER"),
+    (lambda clock: HttpResponse(200, {}, b"not json"), "FAILED:MALFORMED_PROVIDER_RESPONSE"),
+    (lambda clock: clock.advance(120) or HttpResponse(200, {}, _rpc(
+        {"number": "0x0", "timestamp": hex(T0 - 200), "hash": block_hash(0)})), "FAILED:SourceTimeout"),
+], ids=["status", "missing-hash", "not-json", "after-cutoff"])
+def test_failed_or_malformed_anchor_gives_no_p3_scan_and_p5_still_runs(tmp_path: Path, reply: Callable,
+                                                                       outcome: str) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.overrides[8] = lambda call: reply(clock)
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert result["status"] == "COMPLETED"
+    assert handoff["phases"]["P2"]["outcome"] == outcome
+    assert count(providers, "hypersync") == 1
+    assert {bucket["reason"] for bucket in handoff["buckets"]} == {"NO_ANCHOR"}
+    assert handoff["phases"]["P4"]["outcome"] == "SKIPPED_NO_B_START"
+    assert count(providers, "quicknode") == 6 + 1 + 0 + 4
+
+
+@pytest.mark.parametrize("number,final,declarable", [(122, "NOT_OBSERVED", False), (123, "OBSERVED_FINAL", True)])
+def test_p5_heads_below_b_post_plus_2_keep_finality_and_archive_height_weak(
+        tmp_path: Path, number: int, final: str, declarable: bool) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        def header(params: list[Any]) -> dict[str, Any]:
+            chosen = number if clock.now > WE else head_at(clock.now, 1.0)
+            return {"number": hex(chosen), "timestamp": hex(block_ts(chosen)), "hash": block_hash(chosen)}
+        providers.rpc["eth_getBlockByNumber"] = header
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert handoff["boundaries"]["B_POST"] == 121
+    assert handoff["facts"]["finality_at_collection"] == final
+    assert handoff["facts"]["archive_height_declarable"] is declarable
+    assert handoff["facts"]["finalized"]["number"] == number and handoff["facts"]["latest"]["number"] == number
+    assert count(providers, "quicknode") == 17
+
+
+def test_recover_cli_reports_a_saved_attempt_read_only(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        def crash(call: dict[str, Any]) -> None:
+            raise Crash()
+        providers.overrides[10] = crash
+    with pytest.raises(Crash):
+        run(tmp_path, configure=configure)
+    attempt = tmp_path / "attempts" / "synthetic-attempt-1"
+    before = {path: path.read_bytes() for path in attempt.rglob("*") if path.is_file()}
+    capsys.readouterr()
+    assert main(["recover", "--attempt-dir", str(attempt)]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert (printed["admitted"], printed["resolved"], printed["unknown_liability"]) == (10, 9, 1)
+    assert printed["handoff_present"] is False and printed["t0_utc"] == "2027-01-15T08:00:00Z"
+    assert {path: path.read_bytes() for path in attempt.rglob("*") if path.is_file()} == before
+    assert main(["recover", "--attempt-dir", str(tmp_path / "absent")]) == 2
+    assert json.loads(capsys.readouterr().out)["status"] == "REFUSED"
+
+
+def test_actual_label_keeps_admission_ceilings_and_private_retention_without_a_synthetic_claim(
+        tmp_path: Path) -> None:
+    result, providers, attempt = run(tmp_path, evidence_class="ACTUAL")
+    handoff = handoff_of(result)
+    assert handoff["evidence_class"] == "ACTUAL"
+    assert "SYNTHETIC" not in handoff["claim_limit"]
+    assert handoff["release_frozen"] is False
+    assert handoff["accounting"]["admitted"] == {"quicknode": 17, "hypersync": 5}
+    assert len(list((attempt / "bodies").iterdir())) == 22
+    assert {oct(path.stat().st_mode & 0o777) for path in attempt.rglob("*") if path.is_file()} == {"0o600"}
+    for secret in SECRETS:
+        assert secret.encode() not in all_bytes(attempt)

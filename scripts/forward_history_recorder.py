@@ -384,6 +384,8 @@ class RecordingTransport:
         journal = self._journal
         if self.stopped is not None:
             raise AdmissionRefused("STOPPED")
+        if cancel is not None and cancel():
+            raise AdmissionRefused("CANCELLED")
         if provider not in self._urls or url != self._urls[provider]:
             raise AdmissionRefused("UNLISTED_DESTINATION")
         if journal.counts.get((phase, provider), 0) >= PHASE_LIMITS.get(phase, {}).get(provider, 0):
@@ -588,6 +590,9 @@ class _Attempt:
         if isinstance(error, SafetyStop):
             self._stop("SAFETY_STOP", error.code)
             return error.code
+        if isinstance(error, SourceCancelled) or (isinstance(error, AdmissionRefused) and error.code == "CANCELLED"):
+            self._stop("CANCELLED", "CANCELLED")
+            return "CANCELLED"
         if isinstance(error, AdmissionRefused) and (error.code != "DEADLINE" or fatal):
             self._stop("SAFETY_STOP", f"ADMISSION_{error.code}")
             return error.code
