@@ -40,6 +40,13 @@ MAX_EXPECTED_BYTES = 64 * 1024
 PROJECTION_FIELDS = ("block_number", "transaction_index", "log_index", "block_hash", "block_timestamp", "address",
                      "topic0", "topic1", "topic2", "topic3", "data", "removed")
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+MAX_QUANTITY = 2 ** 256 - 1  # every provider quantity here is at most an unsigned 256-bit word
+_MAX_DECIMAL_DIGITS = len(str(MAX_QUANTITY))
+_MAX_HEX_DIGITS = 64
+# Saved application evidence classes (research/history_dataset.py, core/research/released_source_runtime.py).
+SYNTHETIC_DATASET_CLASSES = frozenset({"RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE", "AUTHORED_HTTP_RESPONSE",
+                                       "RELEASE_STAND_IN_RESPONSE"})
+ACTUAL_DATASET_CLASSES = frozenset({"PROVIDER_ACTUAL"})
 _SWAP_DATA_BYTES = 128
 
 PASS, MISMATCH, INCOMPLETE = "PASS", "MISMATCH", "INCOMPLETE"
@@ -58,19 +65,22 @@ def quantity(value: Any, field: str) -> int:
     if isinstance(value, bool):
         raise PayloadError("QUANTITY_INVALID", field)
     if isinstance(value, int):
-        if value < 0:
+        if not 0 <= value <= MAX_QUANTITY:
             raise PayloadError("QUANTITY_INVALID", field)
         return value
     if not isinstance(value, str) or not value:
         raise PayloadError("QUANTITY_INVALID", field)
     if value.startswith("0x"):
         digits = value[2:]
-        if not digits or not set(digits) <= _HEX_DIGITS:
+        if not digits or len(digits) > _MAX_HEX_DIGITS or not set(digits) <= _HEX_DIGITS:
             raise PayloadError("QUANTITY_INVALID", field)
         return int(digits, 16)
-    if not value.isascii() or not value.isdigit():
+    if len(value) > _MAX_DECIMAL_DIGITS or not value.isascii() or not value.isdigit():
         raise PayloadError("QUANTITY_INVALID", field)
-    return int(value, 10)
+    parsed = int(value, 10)
+    if parsed > MAX_QUANTITY:
+        raise PayloadError("QUANTITY_INVALID", field)
+    return parsed
 
 
 def hex_value(value: Any, byte_length: int, field: str) -> str:
@@ -159,6 +169,10 @@ class _Report:
         self.checks.append({"check": check, "result": result, "reason": reason})
 
     def same(self, check: str, saved: Any, expected: Any) -> bool:
+        """Missing evidence on either side is INCOMPLETE; it never becomes PASS through None == None."""
+        if saved is None or expected is None:
+            self.add(check, INCOMPLETE, "VALUE_MISSING")
+            return False
         ok = saved == expected
         self.add(check, PASS if ok else MISMATCH, None if ok else "VALUE_DIFFERS")
         return ok
@@ -181,9 +195,26 @@ def _get(mapping: Any, *keys: str) -> Any:
 
 
 def _evidence_side(label: Any) -> str | None:
-    if not isinstance(label, str):
-        return None
-    return "SYNTHETIC" if "SYNTHETIC" in label.upper() else "ACTUAL"
+    """The side of a saved application evidence class. Unknown or malformed labels have no side."""
+    if label in SYNTHETIC_DATASET_CLASSES:
+        return "SYNTHETIC"
+    if label in ACTUAL_DATASET_CLASSES:
+        return "ACTUAL"
+    return None
+
+
+_EXPECTED_TEXT = ("owner_id", "dataset_id", "source_id", "handoff_sha256")
+_RELEASE_FIELDS = ("release_id", "sha256", "kind")
+
+
+def _require_expected(expected: Any) -> None:
+    """The trusted caller's identities are mandatory; an incomplete expectation is refused, never defaulted."""
+    def text(value: Any) -> bool:
+        return isinstance(value, str) and value != ""
+    release = expected.get("release") if isinstance(expected, Mapping) else None
+    if (not isinstance(expected, Mapping) or not all(text(expected.get(key)) for key in _EXPECTED_TEXT)
+            or not isinstance(release, Mapping) or not all(text(release.get(key)) for key in _RELEASE_FIELDS)):
+        raise PayloadError("EXPECTED_INVALID")
 
 
 def _check_identity(report: _Report, handoff: Mapping[str, Any], export: Mapping[str, Any],
@@ -192,11 +223,14 @@ def _check_identity(report: _Report, handoff: Mapping[str, Any], export: Mapping
     for key in ("dataset_id", "owner_id"):
         report.same(f"OUTER_{key.upper()}", export.get(key), expected.get(key))
         report.same(f"INNER_{key.upper()}", _get(content, key), expected.get(key))
-    report.same("RELEASE", _get(content, "operating_release"), expected.get("release"))
+    saved_release = _get(content, "operating_release")
+    for field in _RELEASE_FIELDS:
+        report.same(f"RELEASE_{field.upper()}", _get(saved_release, field), expected["release"][field])
     report.same("SOURCE_ID", _get(content, "source_id"), expected.get("source_id"))
     report.same("HANDOFF_SOURCE_ID", handoff.get("source_id"), expected.get("source_id"))
+    handoff_side = handoff.get("evidence_class")
     report.same("EVIDENCE_CLASS", _evidence_side(_get(content, "evidence_class")),
-                _evidence_side(handoff.get("evidence_class")))
+                handoff_side if handoff_side in ("SYNTHETIC", "ACTUAL") else None)
     report.same("CHAIN_ID", _get(content, "network", "chain_id"), _get(handoff, "network", "chain_id"))
     market = handoff.get("market") or {}
     report.same("POOL", _get(content, "binding_view", "pool_address"), market.get("pool"))
@@ -297,6 +331,7 @@ def _check_buckets(handoff: Mapping[str, Any], saved: Any, projected: list[dict[
 
 def check_saved_export(handoff_bytes: bytes, export: Mapping[str, Any], expected: Mapping[str, Any]) -> dict:
     """Compare a private saved export with the exact recorder handoff bytes. Returns a new report; mutates nothing."""
+    _require_expected(expected)
     handoff = strict_json(handoff_bytes, "HANDOFF_NOT_STRICT_JSON")
     if not isinstance(handoff, Mapping):
         raise PayloadError("HANDOFF_NOT_OBJECT")

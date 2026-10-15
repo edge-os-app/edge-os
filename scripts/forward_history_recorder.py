@@ -316,6 +316,7 @@ class AttemptJournal:
         self.reply_bytes = 0
         self.last_admission: dict[str, float] = {}
         self.sequence = 0
+        self.calls: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def create(cls, directory: Path) -> AttemptJournal:
@@ -409,6 +410,9 @@ class RecordingTransport:
                         "request_sha256": hashlib.sha256(body).hexdigest(), "request_bytes": len(body),
                         "admitted_utc_us": int(utc * 1_000_000), "admitted_monotonic": mono,
                         "deadline_monotonic": deadline, "liability": "UNKNOWN"})
+        journal.calls[call_id] = {"call_id": call_id, "phase": phase, "slot": slot, "provider": provider,
+                                  "request_sha256": hashlib.sha256(body).hexdigest(), "request_bytes": len(body),
+                                  "outcome": "UNKNOWN", "status": None, "body_sha256": None, "body_bytes": None}
         journal.counts[(phase, provider)] = journal.counts.get((phase, provider), 0) + 1
         journal.provider_counts[provider] = journal.admitted(provider) + 1
         journal.last_admission[provider] = mono
@@ -428,6 +432,8 @@ class RecordingTransport:
             journal.append({"event": "RESOLVED", "call_id": call_id, "outcome": "OVERSIZED_REFUSED",
                             "body_bytes": len(response.body)})
             journal.resolved += 1
+            journal.calls[call_id].update(outcome="OVERSIZED_REFUSED", status=response.status,
+                                          body_bytes=len(response.body))
             raise HttpProviderError("OVERSIZED_RESPONSE", "reply exceeds the recorder reply cap")
         journal.reply_bytes += len(response.body)
         journal.save_body(call_id, response.body)
@@ -436,6 +442,9 @@ class RecordingTransport:
                         "body_bytes": len(response.body), "received_utc_us": int(received_utc * 1_000_000),
                         "elapsed_us": int((received_mono - mono) * 1_000_000)})
         journal.resolved += 1
+        journal.calls[call_id].update(outcome="REPLY_RECEIVED", status=response.status,
+                                      body_sha256=hashlib.sha256(response.body).hexdigest(),
+                                      body_bytes=len(response.body))
         self.last_receipt = {"call_id": call_id, "utc": received_utc, "mono": received_mono}
         self.observe()
         lowered = response.body.lower()
@@ -447,6 +456,7 @@ class RecordingTransport:
         self._journal.append({"event": "CREDENTIAL_INCIDENT", "call_id": call_id,
                               "body_sha256": None if body is None else hashlib.sha256(body).hexdigest()})
         self.stopped = "CREDENTIAL_INCIDENT"
+        self._journal.calls[call_id]["outcome"] = "CREDENTIAL_INCIDENT"  # no body hash leaves the private journal
         raise CredentialIncident()
 
 
@@ -671,7 +681,7 @@ class _Attempt:
         creation = self.value["creation"]
         if not isinstance(receipt, Mapping) or receipt.get("status") != "0x1":
             raise SafetyStop("P1_RECEIPT_STATUS")
-        if (receipt.get("transactionHash", "").lower() != creation["transaction_hash"]
+        if (str(receipt.get("transactionHash", "")).lower() != creation["transaction_hash"]
                 or _quantity_or(receipt.get("blockNumber")) != creation["block_number"]
                 or str(receipt.get("blockHash", "")).lower() != creation["block_hash"]
                 or _quantity_or(receipt.get("transactionIndex")) != creation["transaction_index"]):
@@ -1022,6 +1032,12 @@ class _Attempt:
 
     # Handoff
 
+    def evidence_notice(self) -> str:
+        if self.value["evidence_class"] == "ACTUAL":
+            return ("ACTUAL_NOT_ESTABLISHED: ACTUAL was requested, but transport provenance cannot be established "
+                    "through the injected transport seam; the handoff stays SYNTHETIC.")
+        return "SYNTHETIC: injected transport."
+
     def handoff(self, input_sha256: str) -> dict[str, Any]:
         bounds = self.boundaries()
         scan = None
@@ -1040,6 +1056,8 @@ class _Attempt:
                             "received_at_utc_us": delivery.get("received_at_utc_us"),
                             "record_count": delivery.get("record_count"),
                             "payload_sha256": delivery.get("payload_sha256"),
+                            "reply_body_sha256": self.journal.calls[delivery["reply_id"]]["body_sha256"]
+                            if delivery else None,
                             "reason": None if bucket["status"] == "DELIVERED" else bucket["reason"]})
         weaker = []
         if scan is not None and len(in_scan) > SCAN_LOG_LIMIT:
@@ -1050,7 +1068,8 @@ class _Attempt:
             "schema_version": HANDOFF_SCHEMA, "canonicalization_version": CANONICALIZATION_VERSION,
             "input_schema": INPUT_SCHEMA, "predecessor_sha256": PREDECESSOR_SHA256, "input_sha256": input_sha256,
             "recorder_code_sha256": recorder_code_sha256(), "decoder": DECODER_VERSION,
-            "attempt_id": value["attempt_id"], "source_id": value["source_id"], "evidence_class": value["evidence_class"],
+            "attempt_id": value["attempt_id"], "source_id": value["source_id"], "evidence_class": EFFECTIVE_EVIDENCE_CLASS,
+            "requested_evidence_class": value["evidence_class"], "evidence_notice": self.evidence_notice(),
             "status": self.status, "stop_reason": self.stop_reason,
             "network": {"chain_id": CHAIN_ID},
             "market": {"pool": value["pool"], "token0": value["token0"], "token1": value["token1"],
@@ -1069,17 +1088,23 @@ class _Attempt:
             "accounting": {"admitted": {provider: self.journal.admitted(provider) for provider in PROVIDER_LIMITS},
                            "resolved": self.journal.resolved, "unknown_liability": unknown,
                            "reply_bytes": self.journal.reply_bytes, "ceilings": PROVIDER_LIMITS},
+            "calls": [dict(call) for call in self.journal.calls.values()],
             "buckets": buckets,
             "delivery_records": {b["start_utc"]: b["received_at_utc"] for b in buckets if b["status"] == "DELIVERED"},
             "release_frozen": False,
             "claim_limit": ("Recorder delivery evidence only. A handoff never freezes a release and proves no "
-                            "mechanics, rights, fillability or provider qualification."
-                            + (" SYNTHETIC fixture transport." if value["evidence_class"] == "SYNTHETIC" else "")),
+                            "mechanics, rights, fillability or provider qualification. SYNTHETIC: injected "
+                            "transport; actual network provenance is not established by this recorder."),
         }
 
 
 class _P1Stop(Exception):
     pass
+
+
+# The public HttpTransport seam cannot show whether a StdlibHttpTransport uses a test connector, so no handoff from
+# this recorder is ACTUAL. A requested ACTUAL label is kept separately and reported, never adopted.
+EFFECTIVE_EVIDENCE_CLASS = "SYNTHETIC"
 
 
 def recorder_code_sha256() -> str:

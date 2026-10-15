@@ -18,6 +18,7 @@ from edge_os_api.records.contract_adapter import sha256_hex
 from edge_os_api.research_history.qualification_engine import raw_sha256
 from scripts.history_payload_binding import (
     PayloadError,
+    quantity,
     canonical_payload,
     check_saved_export,
     main,
@@ -191,7 +192,7 @@ def _export(raw: list[Any] | None = None, handoff: dict[str, Any] | None = None)
                         "status": "COMPLETE_OCCUPIED" if bucket["record_count"] else "COMPLETE_EMPTY",
                         "available_at": bucket["received_at_utc"], "availability_basis": "OBSERVED_DELIVERY"})
     content = {"dataset_id": "dataset-1", "owner_id": "owner-1", "source_id": "forward-synthetic-1",
-               "evidence_class": "SYNTHETIC_FIXTURE", "network": {"network": "MONAD", "chain_id": 143},
+               "evidence_class": "AUTHORED_HTTP_RESPONSE", "network": {"network": "MONAD", "chain_id": 143},
                "binding_view": {"chain_id": 143, "pool_address": POOL, "base_asset": BASE, "quote_asset": QUOTE,
                                 "token_order": [BASE, QUOTE]},
                "window_start": _iso(T0), "window_end": _iso(T0 + 1200), "query": dict(QUERY),
@@ -416,3 +417,84 @@ def test_actual_handoff_binds_only_an_actual_dataset_label() -> None:
     assert _check(_rehash(export), handoff=handoff)["overall"] == "PASS"
     synthetic = _export(handoff=handoff)
     assert _check(synthetic, handoff=handoff)["overall"] == "MISMATCH"
+
+
+# REPAIR2: empty defaults, real application labels and oversized quantities
+
+
+@pytest.mark.parametrize("missing", ["release", "owner_id", "dataset_id", "source_id", "handoff_sha256",
+                                     "release.sha256", "release.kind"])
+def test_incomplete_trusted_expectation_is_refused(missing: str) -> None:
+    body = _bytes(_handoff())
+    expected = _expected(body)
+    if "." in missing:
+        del expected["release"][missing.split(".")[1]]
+    else:
+        del expected[missing]
+    with pytest.raises(PayloadError):
+        check_saved_export(body, _export(), expected)
+
+
+@pytest.mark.parametrize("path", ["content.operating_release", "content.operating_release.sha256", "owner_id",
+                                  "content.owner_id", "content.source_id", "content.window_start"])
+def test_missing_saved_identity_is_incomplete_never_pass(path: str) -> None:
+    export = _export()
+    target: Any = export
+    keys = path.split(".")
+    for key in keys[:-1]:
+        target = target[key]
+    del target[keys[-1]]
+    if path.startswith("content."):
+        _rehash(export)
+    report = _check(export)
+    assert report["overall"] in ("INCOMPLETE", "MISMATCH")
+    assert report["overall"] != "PASS"
+    failing = [check for check in report["global_checks"] if check["result"] != "PASS"]
+    assert failing and all(check["result"] == "INCOMPLETE" for check in failing
+                           if check["check"] not in ("CONTENT_SHA256",))
+
+
+@pytest.mark.parametrize("label,side,expected", [
+    ("RECORDED_RESPONSE", "SYNTHETIC", "PASS"), ("RECORDED_NATIVE_RESPONSE", "SYNTHETIC", "PASS"),
+    ("AUTHORED_HTTP_RESPONSE", "SYNTHETIC", "PASS"), ("RELEASE_STAND_IN_RESPONSE", "SYNTHETIC", "PASS"),
+    ("PROVIDER_ACTUAL", "SYNTHETIC", "MISMATCH"),
+    ("RECORDED_RESPONSE", "ACTUAL", "MISMATCH"), ("RECORDED_NATIVE_RESPONSE", "ACTUAL", "MISMATCH"),
+    ("AUTHORED_HTTP_RESPONSE", "ACTUAL", "MISMATCH"), ("RELEASE_STAND_IN_RESPONSE", "ACTUAL", "MISMATCH"),
+    ("PROVIDER_ACTUAL", "ACTUAL", "PASS"),
+])
+def test_real_application_evidence_labels_bind_only_their_own_side(label: str, side: str, expected: str) -> None:
+    handoff = _handoff()
+    handoff["evidence_class"] = side
+    export = _export(handoff=handoff)
+    export["content"]["evidence_class"] = label
+    assert _check(_rehash(export), handoff=handoff)["overall"] == expected
+
+
+@pytest.mark.parametrize("label", ["SYNTHETIC_FIXTURE", "SOMETHING_ELSE", 5, None])
+def test_unknown_or_malformed_evidence_label_cannot_pass(label: Any) -> None:
+    export = _export()
+    export["content"]["evidence_class"] = label
+    assert _check(_rehash(export))["overall"] != "PASS"
+
+
+@pytest.mark.parametrize("bad", ["9" * 5000, "0x" + "f" * 5000, "9" * 79, "0x" + "1" + "0" * 64, 2 ** 256])
+def test_oversized_quantities_are_stable_refusals(bad: Any) -> None:
+    with pytest.raises(PayloadError):
+        quantity(bad, "field")
+
+
+def test_largest_uint256_quantity_is_accepted() -> None:
+    assert quantity("0x" + "f" * 64, "field") == 2 ** 256 - 1
+    assert quantity(str(2 ** 256 - 1), "field") == 2 ** 256 - 1
+
+
+def test_5000_digit_saved_quantity_is_a_mismatch_through_checker_and_cli(tmp_path: Path) -> None:
+    record = _raw_record()
+    record["log_index"] = "9" * 5000
+    export = _rehash(_export(raw=[record]))
+    assert _check(export)["overall"] == "MISMATCH"
+    handoff_bytes = _bytes(_handoff())
+    paths = {name: _write(tmp_path / f"{name}.json", value) for name, value in
+             (("handoff", handoff_bytes), ("export", export), ("expected", _expected(handoff_bytes)))}
+    assert main(["--handoff", str(paths["handoff"]), "--export", str(paths["export"]), "--expected",
+                 str(paths["expected"]), "--out", str(tmp_path / "report.json")]) == 1

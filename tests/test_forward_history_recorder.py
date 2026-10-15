@@ -1043,15 +1043,76 @@ def test_recover_cli_reports_a_saved_attempt_read_only(tmp_path: Path, capsys: p
     assert json.loads(capsys.readouterr().out)["status"] == "REFUSED"
 
 
-def test_actual_label_keeps_admission_ceilings_and_private_retention_without_a_synthetic_claim(
-        tmp_path: Path) -> None:
+def test_actual_request_through_an_injected_transport_stays_synthetic_with_a_notice(tmp_path: Path) -> None:
+    # REPAIR2 correction of the SOURCE2 row-9 test: a caller's ACTUAL string cannot promote an injected transport.
     result, providers, attempt = run(tmp_path, evidence_class="ACTUAL")
     handoff = handoff_of(result)
-    assert handoff["evidence_class"] == "ACTUAL"
-    assert "SYNTHETIC" not in handoff["claim_limit"]
+    assert handoff["evidence_class"] == "SYNTHETIC"
+    assert handoff["requested_evidence_class"] == "ACTUAL"
+    assert "ACTUAL_NOT_ESTABLISHED" in handoff["evidence_notice"]
+    assert "SYNTHETIC" in handoff["claim_limit"]
     assert handoff["release_frozen"] is False
     assert handoff["accounting"]["admitted"] == {"quicknode": 17, "hypersync": 5}
     assert len(list((attempt / "bodies").iterdir())) == 22
     assert {oct(path.stat().st_mode & 0o777) for path in attempt.rglob("*") if path.is_file()} == {"0o600"}
     for secret in SECRETS:
         assert secret.encode() not in all_bytes(attempt)
+
+
+# REPAIR2: malformed provider values and body hashes
+
+
+def test_null_creation_transaction_hash_is_a_p1_stop_with_one_handoff(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.rpc["eth_getTransactionReceipt"] = dict(creation_receipt(), transactionHash=None)
+    result, providers, attempt = run(tmp_path, configure=configure)
+    assert result["status"] == "SAFETY_STOP" and result["stop_reason"].startswith("P1_")
+    assert len(providers.calls) == 2
+    assert recover_attempt(attempt)["handoff_present"] is True
+
+
+def test_5000_digit_page_quantity_rejects_the_page_and_later_phases_run(tmp_path: Path) -> None:
+    result, providers, _ = run(tmp_path, configure=_page_override(9, lambda page: page.update(
+        archive_height="9" * 5000)))
+    handoff = handoff_of(result)
+    assert result["status"] == "COMPLETED"
+    assert handoff["buckets"][0]["reason"] == "FIRST_READ_REJECTED"
+    assert len(providers.calls) == 22
+
+
+def test_5000_digit_p2_quantity_is_a_weak_malformed_anchor(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.overrides[8] = lambda call: HttpResponse(200, {}, _rpc(
+            {"number": "9" * 5000, "timestamp": hex(T0 - 200), "hash": block_hash(0)}))
+    result, _, _ = run(tmp_path, configure=configure)
+    assert result["status"] == "COMPLETED"
+    assert handoff_of(result)["phases"]["P2"]["outcome"] == "FAILED:MALFORMED_HEADER"
+
+
+def test_handoff_binds_literal_request_and_reply_body_hashes_per_call(tmp_path: Path) -> None:
+    result, providers, attempt = run(tmp_path)
+    handoff = handoff_of(result)
+    first = handoff["calls"][0]
+    assert (first["provider"], first["phase"], first["outcome"], first["status"]) == (
+        "quicknode", "P1", "REPLY_RECEIVED", 200)
+    assert (first["request_bytes"], first["request_sha256"]) == (
+        59, "09fabe0af56b7726f1666ddd147482df4d951f86f66124b936716c53ab0e8471")
+    assert (first["body_bytes"], first["body_sha256"]) == (
+        45, "297e3000506f347fcae580843cdf2272e5f7c69bcbcc0498cda4a774038ec821")
+    assert len(handoff["calls"]) == 22
+    by_id = {call["call_id"]: call for call in handoff["calls"]}
+    for bucket in handoff["buckets"]:
+        reply = by_id[bucket["reply_id"]]
+        assert bucket["reply_body_sha256"] == reply["body_sha256"]
+        stored = (attempt / "bodies" / f"{bucket['reply_id']}.bin").read_bytes()
+        assert hashlib.sha256(stored).hexdigest() == reply["body_sha256"]
+
+
+def test_incident_call_keeps_no_body_hash_in_the_handoff(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.overrides[2] = lambda call: HttpResponse(200, {}, _rpc(f"see {QN_URL}"))
+    result, _, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    incident = handoff["calls"][1]
+    assert incident["outcome"] == "CREDENTIAL_INCIDENT"
+    assert incident["body_sha256"] is None and incident["body_bytes"] is None

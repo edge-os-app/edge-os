@@ -154,8 +154,9 @@ The projection has exactly twelve fields: `block_number`, `transaction_index`, `
 `block_timestamp`, `address`, `topic0`, `topic1`, `topic2`, `topic3`, `data`, `removed`. `transaction_hash` is a
 required, validated log identity, kept for audit, but not a payload field.
 
-- Quantities: non-boolean JSON integers, ASCII decimal digits or `0x` plus hex digits; nonnegative. Booleans, floats,
-  signs, whitespace, empty strings and `0X` are refused. They become JSON integers.
+- Quantities: non-boolean JSON integers, ASCII decimal digits or `0x` plus at most 64 hex digits; nonnegative and at
+  most `2^256-1` (at most 78 decimal digits). Booleans, floats, signs, whitespace, empty strings, `0X` and longer or
+  larger values are refused with a stable code before any conversion. They become JSON integers.
 - Hex: addresses 20 bytes, hashes and topics 32 bytes, Swap data exactly four 32-byte words; validated, then lowercased.
 - `removed` must be a JSON boolean. Required fields are never filled. `topic3` is the presence tag above.
 - Recorder input takes `block_timestamp` from the matching validated header. Saved exports must carry it.
@@ -177,13 +178,25 @@ the versions, predecessor, input and recorder-code hashes, attempt and source id
 reason, network, market and pool token order, window, exact query and field selection, boundaries, scan, scan log count,
 retained header facts (in-scan log blocks and boundaries), phase outcomes, P3 reply summaries, facts (bytecode hashes
 and lengths of decoded bytes, decimals, finality, archive height, `fee_transfer_semantics=EXTERNAL_EVIDENCE_REQUIRED`),
-clock trust, call accounting and exactly four buckets.
+clock trust, call accounting, a `calls` list and exactly four buckets. Each `calls` entry has the admitted call id,
+phase, slot, provider, request SHA-256 and byte count, outcome (`REPLY_RECEIVED`, `OVERSIZED_REFUSED`,
+`CREDENTIAL_INCIDENT` or `UNKNOWN`), HTTP status, and the retained reply body SHA-256 and byte count. A credential
+incident or an oversized reply keeps no body hash in the handoff.
 
 Each bucket has `start_utc`, `end_utc`, `status` (`DELIVERED` or `INCOMPLETE`), `reply_id`, `received_at_utc` (UTC
-seconds rounded up, never earlier than receipt), `received_at_utc_us`, `record_count`, `payload_sha256` and `reason`.
+seconds rounded up, never earlier than receipt), `received_at_utc_us`, `record_count`, `payload_sha256`, `reply_body_sha256` (the delivering reply's retained body)
+and `reason`.
 An incomplete bucket has null delivery, count and digest plus a reason; it is never an empty payload.
 `delivery_records` holds only delivered buckets. No floats appear. A handoff never contains a release SHA and never
 freezes a release; the release is built later from these facts.
+
+## Evidence class
+
+The handoff `evidence_class` is always `SYNTHETIC`. The input's `evidence_class` is kept as
+`requested_evidence_class`. The accepted network transport (`StdlibHttpTransport` without a test connector) would be
+the future actual route, but the public `HttpTransport` seam cannot show whether a test connector is installed. A
+caller's `ACTUAL` string therefore never promotes an injected transport. When `ACTUAL` is requested, `evidence_notice`
+starts with `ACTUAL_NOT_ESTABLISHED`. Making `ACTUAL` reachable needs a separately qualified transport-provenance seam.
 
 ## Saved-export checker `edge-os.history-payload-binding/1`
 
@@ -192,11 +205,16 @@ freezes a release; the release is built later from these facts.
 exclusive 0600 report. The export is `{dataset_id, owner_id, content_sha256, content, raw_records}`. The trusted
 expected file holds `owner_id`, `dataset_id`, `release {release_id, sha256, kind}`, `source_id` and `handoff_sha256`.
 
-1. Check the handoff bytes' SHA-256, handoff schema and canonicalization version.
+1. Refuse an expected file without non-empty `owner_id`, `dataset_id`, `source_id`, `handoff_sha256` and
+   `release.{release_id, sha256, kind}`. Then check the handoff bytes' SHA-256, handoff schema and canonicalization
+   version.
 2. Recompute the content hash with `records.contract_adapter.sha256_hex` and the raw hash with
    `research_history.qualification_engine.raw_sha256` before any normalization; check the raw count.
-3. Compare outer and inner owner and dataset ids, `content.operating_release`, source id, evidence side, chain id, pool,
-   base and quote (P02 `[base, quote]`, not pool order), window and the query scan with the handoff.
+3. Compare outer and inner owner and dataset ids, each `content.operating_release` field, source id, evidence side,
+   chain id, pool, base and quote (P02 `[base, quote]`, not pool order), window and the query scan with the handoff.
+   A value missing on either side is INCOMPLETE, never PASS. The evidence side maps the saved application classes
+   exactly: `RECORDED_RESPONSE`, `RECORDED_NATIVE_RESPONSE`, `AUTHORED_HTTP_RESPONSE` and `RELEASE_STAND_IN_RESPONSE`
+   are SYNTHETIC; `PROVIDER_ACTUAL` is ACTUAL; any other or malformed label has no side and cannot pass.
 4. Project every raw record with its stored `block_timestamp`; require it in scan and equal to the retained header
    fact. Compare the scan log count. For each of exactly four saved buckets, compare the interval, `available_at`
    with `max(bucket_end, received_at_utc)`, the count and the canonical digest of half-open members.
