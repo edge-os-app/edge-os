@@ -5,9 +5,11 @@
 type-2 body `OriginalTransactionTransport` builds and never rewrites, fills or converts a value. It is unmounted: no
 caller, setting or factory constructs it, and it reads no environment, file or network at import or construction.
 
-The `privy-authorization-signature` value comes from an injected callable (a still-unimplemented P-256 key holder that
-canonicalizes per RFC 8785). The adapter gives it the documented payload, sends compact sorted-key JSON, and does not
-claim that encoding is general RFC 8785; the accepted value domain (ASCII strings, safe integers) is where they agree.
+The `privy-authorization-signature` value comes from an injected callable. `make_p256_authorizer` builds one from an
+already loaded P-256 private-key object: it accepts only the payload this adapter builds, serializes it with the same
+compact sorted-key JSON, and signs those bytes with ECDSA SHA-256. That serialization equals RFC 8785 only for the
+accepted value domain (fixed ASCII keys, ASCII strings, safe integers); it is not a general RFC 8785 implementation.
+The authorizer signs Privy API requests only. It never signs a wallet transaction and loads, stores or creates no key.
 
 Outcomes, matched to the caller's existing vocabulary:
 - nothing was sent (invalid input, stop or authorization failure before HTTP) → the `LOCAL_UNSENT` error envelope,
@@ -30,6 +32,9 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from edge_os_api.execution.original_transaction import SIGNED_BYTES_LIMIT, ReplyLost, RpcError
 from edge_os_api.research_history.http_clients.client_config import HttpProviderError
 from edge_os_api.research_history.http_clients.http_transport import HttpResponse, HttpTransport
@@ -50,6 +55,9 @@ _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 _DATA = re.compile(r"0x(?:[0-9a-fA-F]{2})*")
 _SIGNED = re.compile(r"0x(?:[0-9a-fA-F]{2})+")
 _SIGNATURE = re.compile(r"[A-Za-z0-9+/=,]+")
+_RPC_URL = re.compile(r"https://api\.privy\.io/v1/wallets/([A-Za-z0-9_-]{1,128})/rpc")
+_EXPIRY = re.compile(r"[1-9][0-9]*")
+SIGNED_HEADERS = frozenset({"privy-app-id", "privy-idempotency-key", "privy-request-expiry"})
 
 
 def _printable(value: Any) -> bool:
@@ -240,6 +248,65 @@ class PrivySignerClient:
             elif isinstance(value, list):
                 pending.extend(value)
         return any(secret in text for secret in secrets for text in texts)
+
+
+def make_p256_authorizer(*, private_key: ec.EllipticCurvePrivateKey) -> Callable[[Mapping[str, Any]], str]:
+    """The `authorize` callable for `PrivySignerClient`, signing with an owned, already loaded P-256 key object.
+
+    The callable refuses any payload outside the request profile this adapter builds (`ValueError`, before signing),
+    signs the canonical UTF-8 bytes with ECDSA SHA-256 and returns the DER signature as standard padded Base64.
+    It reads the payload without changing it. Construction signs nothing; the caller owns key loading and custody.
+
+    Raises:
+        TypeError: `private_key` is not an EC private-key object on SECP256R1 (P-256).
+    """
+    if not isinstance(private_key, ec.EllipticCurvePrivateKey) or not isinstance(private_key.curve, ec.SECP256R1):
+        raise TypeError("private_key must be an EC P-256 (SECP256R1) private-key object")
+
+    def authorize(payload: Mapping[str, Any]) -> str:
+        message = _authorization_message(payload)
+        signature = private_key.sign(message, ec.ECDSA(hashes.SHA256()))
+        return base64.b64encode(signature).decode("ascii")
+
+    return authorize
+
+
+def _authorization_message(payload: Any) -> bytes:
+    """The bytes to sign for an accepted authorization payload. Raises `ValueError` without input text otherwise."""
+    # shortcut: only the accepted ASCII and safe-integer request profile is canonicalized; use a reviewed JCS
+    # (RFC 8785) implementation before widening it.
+    message = None
+    try:
+        if _accepted_authorization_payload(payload):
+            message = _encode(payload).encode("utf-8")
+    except Exception:  # noqa: BLE001 - an unreadable or unencodable payload is refused; its text is not kept
+        pass
+    # Raised outside the handler: no cause or context keeps payload values.
+    if message is None:
+        raise ValueError("authorization payload is outside the accepted request profile")
+    return message
+
+
+def _accepted_authorization_payload(payload: Any) -> bool:
+    """Whether the payload is exactly what `PrivySignerClient.rpc` signs: fixed ASCII keys, ASCII strings, safe ints."""
+    if not isinstance(payload, Mapping) or set(payload) != {"version", "method", "url", "body", "headers"}:
+        return False
+    if not _is_int(payload["version"]) or payload["version"] != 1 or payload["method"] != "POST":
+        return False
+    url = payload["url"]
+    match = _RPC_URL.fullmatch(url) if isinstance(url, str) else None
+    if match is None or _refuse_request(match.group(1), payload["body"]) is not None:
+        return False
+    if len(_encode(payload["body"]).encode("ascii")) > REQUEST_BYTES_LIMIT:
+        return False
+    headers = payload["headers"]
+    if not isinstance(headers, Mapping) or set(headers) != SIGNED_HEADERS:
+        return False
+    app_id, request_id, expiry = (headers["privy-app-id"], headers["privy-idempotency-key"],
+                                  headers["privy-request-expiry"])
+    return (isinstance(app_id, str) and _APP_ID.fullmatch(app_id) is not None
+            and isinstance(request_id, str) and _REQUEST_ID.fullmatch(request_id) is not None
+            and isinstance(expiry, str) and _EXPIRY.fullmatch(expiry) is not None)
 
 
 def _encode(value: Any) -> str:

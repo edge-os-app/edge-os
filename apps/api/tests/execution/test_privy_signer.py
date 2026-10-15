@@ -1,14 +1,16 @@
 """The Privy sign-only HTTP adapter at the existing `SignerClient` seam (#58 Stage 3, LOCAL).
 
 Network and authorization are injected doubles; nothing here opens a socket or reads a credential. Expected request
-bytes, headers and the authorization payload are hand-written literals in `fixtures/privy_signer/`. The positive,
-tampered and lost-reply paths run through the real `OriginalTransactionTransport` over the authored recordings.
-These tests prove request shaping, refusal, bounds and redaction in this process only: not Privy acceptance, the
-authorization signer's cryptography or any independent P21 enforcement.
+bytes, headers, the authorization payload and its canonical text are hand-written literals in `fixtures/privy_signer/`.
+The positive, tampered and lost-reply paths run through the real `OriginalTransactionTransport` over the authored
+recordings. The P-256 authorizer tests sign with keys generated in memory and verify against those literals. These
+tests prove request shaping, refusal, bounds, redaction and local P-256 signature compatibility in this process only:
+not Privy acceptance, key custody or any independent P21 enforcement.
 """
 
 from __future__ import annotations
 
+import base64
 import copy
 import dataclasses
 import datetime as dt
@@ -24,8 +26,13 @@ from types import MappingProxyType
 from typing import Any
 
 import pytest
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from eth_account import Account
 
+from edge_os_api.execution import privy_signer
 from edge_os_api.execution.original_recordings import RECORDINGS_FILE, OriginalRecordings
 from edge_os_api.execution.original_transaction import (
     Leg,
@@ -786,6 +793,404 @@ def test_an_interrupt_in_a_stop_check_is_not_turned_into_a_refusal():
     with pytest.raises(KeyboardInterrupt):
         client(http, cancel=interrupt).rpc(WALLET_ID, body())
     assert http.calls == []
+
+
+# ------------------------------------------------------------------------------------------- P-256 request authorizer
+#
+# `make_p256_authorizer` signs the authorization payload with an injected P-256 key. Keys are generated in memory per
+# test and never saved. Every expected message is a hand-written literal or is rebuilt by hand from the recorded
+# request: none comes from the module's own encoder. This is request authorization only, never transaction signing.
+
+CANONICAL = EXPECTED["canonical_authorization_payload"]
+SIGNED_VALUES = ("app-test-1", "attempt-0001", "1790000000000", "wallet_abc-123", "0x12345678")
+
+
+class RecordingP256Key(ec.EllipticCurvePrivateKey):
+    """A P-256 private-key object that records each `sign` call and delegates to a real in-memory key."""
+
+    def __init__(self, *, raises: BaseException | None = None, during: Callable[[], None] | None = None) -> None:
+        self.key = ec.generate_private_key(ec.SECP256R1())
+        self.raises, self.during = raises, during
+        self.signed: list[bytes] = []
+
+    def sign(self, data: Any, signature_algorithm: Any) -> bytes:
+        self.signed.append(bytes(data))
+        if self.during is not None:
+            self.during()
+        if self.raises is not None:
+            raise self.raises
+        return self.key.sign(data, signature_algorithm)
+
+    @property
+    def curve(self) -> ec.EllipticCurve:
+        return self.key.curve
+
+    @property
+    def key_size(self) -> int:
+        return self.key.key_size
+
+    def public_key(self) -> ec.EllipticCurvePublicKey:
+        return self.key.public_key()
+
+    def exchange(self, *_args: Any) -> bytes:
+        raise NotImplementedError
+
+    def private_numbers(self) -> Any:
+        raise NotImplementedError
+
+    def private_bytes(self, *_args: Any) -> bytes:
+        raise NotImplementedError
+
+    def __copy__(self) -> RecordingP256Key:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> RecordingP256Key:
+        return self
+
+
+def authorizer(key: Any) -> Callable[[Mapping[str, Any]], str]:
+    return privy_signer.make_p256_authorizer(private_key=key)
+
+
+def verify_header(public_key: ec.EllipticCurvePublicKey, header: str, message: str) -> None:
+    """Standard padded Base64 of a DER ECDSA signature over `message` as UTF-8, checked with SHA-256."""
+    der = base64.b64decode(header, validate=True)  # refuses Base64url characters
+    assert base64.b64encode(der).decode("ascii") == header
+    decode_dss_signature(der)  # DER (r, s), not raw r || s
+    public_key.verify(der, message.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+
+
+def signed_message(call: dict[str, Any]) -> str:
+    """The authorization payload rebuilt by hand from what was sent: RFC 8785 key order, no whitespace."""
+    headers = call["headers"]
+    return ('{"body":' + call["body"].decode("ascii") + ',"headers":{"privy-app-id":"' + headers["privy-app-id"]
+            + '","privy-idempotency-key":"' + headers["privy-idempotency-key"] + '","privy-request-expiry":"'
+            + headers["privy-request-expiry"] + '"},"method":"POST","url":"' + call["url"] + '","version":1}')
+
+
+def authorization_payload() -> dict[str, Any]:
+    return copy.deepcopy(EXPECTED["authorization_payload"])
+
+
+def test_the_authorizer_signs_the_literal_canonical_payload_with_p256_sha256():
+    key, payload = ec.generate_private_key(ec.SECP256R1()), authorization_payload()
+
+    header = authorizer(key)(payload)
+
+    verify_header(key.public_key(), header, CANONICAL)
+    assert payload == EXPECTED["authorization_payload"]
+
+
+def test_a_signature_does_not_verify_under_another_p256_key():
+    header = authorizer(ec.generate_private_key(ec.SECP256R1()))(authorization_payload())
+    with pytest.raises(InvalidSignature):
+        verify_header(ec.generate_private_key(ec.SECP256R1()).public_key(), header, CANONICAL)
+
+
+def test_the_signed_bytes_do_not_depend_on_dictionary_insertion_order():
+    expected = EXPECTED["authorization_payload"]
+    transaction = expected["body"]["params"]["transaction"]
+    payload = {"headers": dict(reversed(list(expected["headers"].items()))),
+               "body": {"params": {"transaction": dict(reversed(list(transaction.items())))},
+                        "method": expected["body"]["method"]},
+               "url": expected["url"], "method": "POST", "version": 1}
+    key = ec.generate_private_key(ec.SECP256R1())
+
+    verify_header(key.public_key(), authorizer(key)(payload), CANONICAL)
+
+
+BOUNDARY_CANONICAL = (
+    '{"body":{"method":"eth_signTransaction","params":{"transaction":{"chain_id":143,"data":"0x12345678",'
+    '"gas_limit":9007199254740991,"max_fee_per_gas":9007199254740991,"max_priority_fee_per_gas":0,"nonce":0,'
+    '"to":"0x00000000000000000000000000000000000f1007","type":2,"value":0}}},"headers":{"privy-app-id":"app-test-1",'
+    '"privy-idempotency-key":"attempt-0001","privy-request-expiry":"1790000000000"},"method":"POST",'
+    '"url":"https://api.privy.io/v1/wallets/wallet_abc-123/rpc","version":1}')
+
+
+def test_zero_and_the_largest_safe_integer_quantities_sign_their_exact_decimal_text():
+    payload = authorization_payload()
+    payload["body"]["params"]["transaction"].update(
+        nonce=0, value=0, max_priority_fee_per_gas=0, gas_limit=2**53 - 1, max_fee_per_gas=2**53 - 1)
+    key = ec.generate_private_key(ec.SECP256R1())
+
+    verify_header(key.public_key(), authorizer(key)(payload), BOUNDARY_CANONICAL)
+
+
+@pytest.mark.parametrize("old,new", [
+    ('"version":1}', '"version":2}'),
+    ('"method":"POST"', '"method":"PUT"'),
+    ("wallets/wallet_abc-123/rpc", "wallets/wallet_abc-124/rpc"),
+    ('"privy-app-id":"app-test-1"', '"privy-app-id":"app-test-2"'),
+    ('"privy-idempotency-key":"attempt-0001"', '"privy-idempotency-key":"attempt-0002"'),
+    ('"privy-request-expiry":"1790000000000"', '"privy-request-expiry":"1790000000001"'),
+    ('"method":"eth_signTransaction"', '"method":"eth_sendTransaction"'),
+    ('"chain_id":143', '"chain_id":10143'),
+    ('"data":"0x12345678"', '"data":"0x12345679"'),
+    ('"gas_limit":300000', '"gas_limit":300001'),
+    ('"max_fee_per_gas":3000000000', '"max_fee_per_gas":3000000001'),
+    ('"max_priority_fee_per_gas":1000000000', '"max_priority_fee_per_gas":1000000001'),
+    ('"nonce":7', '"nonce":8'),
+    ('"to":"0x00000000000000000000000000000000000f1007"', '"to":"0x00000000000000000000000000000000000f1008"'),
+    ('"type":2', '"type":3'),
+    ('"value":0}', '"value":1}'),
+])
+def test_a_signature_does_not_verify_over_any_single_altered_field(old, new):
+    assert CANONICAL.count(old) == 1
+    key = ec.generate_private_key(ec.SECP256R1())
+    header = authorizer(key)(authorization_payload())
+
+    with pytest.raises(InvalidSignature):
+        verify_header(key.public_key(), header, CANONICAL.replace(old, new))
+
+
+@pytest.mark.parametrize("key", [
+    ec.generate_private_key(ec.SECP384R1()),
+    ec.generate_private_key(ec.SECP256K1()),
+    ec.generate_private_key(ec.SECP256R1()).public_key(),
+    ed25519.Ed25519PrivateKey.generate(),
+    b"sentinel-raw-key-bytes",
+    "wallet-auth:sentinel-encoded-key",
+    object(),
+    None,
+], ids=["p384", "secp256k1", "p256-public", "ed25519", "bytes", "string", "object", "none"])
+def test_a_key_that_is_not_a_p256_private_key_object_is_refused_at_construction(key):
+    with pytest.raises(TypeError) as raised:
+        authorizer(key)
+    assert "sentinel" not in f"{raised.value} {raised.value!r}"
+    assert (raised.value.__cause__, raised.value.__context__) == (None, None)
+
+
+def test_construction_signs_nothing():
+    key = RecordingP256Key()
+    authorizer(key)
+    assert key.signed == []
+
+
+def _drop(*path: str) -> Callable[[dict[str, Any]], None]:
+    def change(payload: dict[str, Any]) -> None:
+        target = payload
+        for name in path[:-1]:
+            target = target[name]
+        del target[path[-1]]
+    return change
+
+
+def _circular(payload: dict[str, Any]) -> None:
+    payload["body"]["params"]["transaction"]["data"] = payload["body"]
+
+
+def _proxy_body(payload: dict[str, Any]) -> None:
+    payload["body"] = MappingProxyType(payload["body"])
+
+
+def _key(name: Any, value: Any, *path: str) -> Callable[[dict[str, Any]], None]:
+    def change(payload: dict[str, Any]) -> None:
+        target = payload
+        for item in path:
+            target = target[item]
+        target[name] = value
+    return change
+
+
+URL = ("url",)
+HEADERS = ("headers",)
+
+
+@pytest.mark.parametrize("change", [
+    # Shape and signed-header set.
+    _drop("headers"), _key("extra", 1), _drop("headers", "privy-idempotency-key"),
+    _drop("headers", "privy-request-expiry"), _drop("headers", "privy-app-id"),
+    _key("authorization", "Basic YXBwOnNlY3JldA==", *HEADERS), _key("content-type", "application/json", *HEADERS),
+    _key("privy-authorization-signature", "c2ln", *HEADERS), _key(1, "x", *HEADERS), _key(1, "x"),
+    _set(("version",), 2), _set(("version",), True), _set(("version",), 1.0), _set(("version",), "1"),
+    _set(("method",), "post"), _set(("method",), "GET"),
+    # URL: origin, path, query, fragment, encoding, trailing slash, wallet ID.
+    _set(URL, "https://api.privy.io.example/v1/wallets/wallet_abc-123/rpc"),
+    _set(URL, "http://api.privy.io/v1/wallets/wallet_abc-123/rpc"),
+    _set(URL, "https://api.privy.io/v1/wallets/wallet_abc-123/rpc/"),
+    _set(URL, "https://api.privy.io/v1/wallets/wallet_abc-123/rpc?x=1"),
+    _set(URL, "https://api.privy.io/v1/wallets/wallet_abc-123/rpc#a"),
+    _set(URL, "https://api.privy.io/v1/wallets/wallet%5Fabc-123/rpc"),
+    _set(URL, "https://api.privy.io/v1/wallets/wallet.1/rpc"),
+    _set(URL, "https://api.privy.io/v1/wallets/../rpc"),
+    _set(URL, "https://api.privy.io/v1/wallets/wallet_abc-123/rpc\n"),
+    _set(URL, "https://api.privy.io/v1/wallets/wallet_äbc/rpc"),
+    # Header values: Unicode, control characters, non-canonical or numeric expiry.
+    _set(("headers", "privy-app-id"), "app-tést-1"), _set(("headers", "privy-app-id"), "app\x00"),
+    _set(("headers", "privy-idempotency-key"), "attempt\n0001"),
+    _set(("headers", "privy-request-expiry"), "１７９０"),
+    _set(("headers", "privy-request-expiry"), "١٧٩٠"),
+    _set(("headers", "privy-request-expiry"), "01790000000000"), _set(("headers", "privy-request-expiry"), "0"),
+    _set(("headers", "privy-request-expiry"), "+1790000000000"),
+    _set(("headers", "privy-request-expiry"), " 1790000000000"),
+    _set(("headers", "privy-request-expiry"), "1790000000000 "),
+    _set(("headers", "privy-request-expiry"), "1.79e12"), _set(("headers", "privy-request-expiry"), ""),
+    _set(("headers", "privy-request-expiry"), 1790000000000),
+    # Body: the existing request rules and the numeric domain.
+    _set(TRANSACTION + ("data",), "0x1234é"), _set(TRANSACTION + ("to",), "0x" + "０" * 40),
+    _set(TRANSACTION + ("nonce",), 7.0), _set(TRANSACTION + ("nonce",), True),
+    _set(TRANSACTION + ("value",), float("nan")), _set(TRANSACTION + ("gas_limit",), float("inf")),
+    _set(TRANSACTION + ("value",), 2**53), _set(TRANSACTION + ("chain_id",), 0),
+    _set(("body", "method"), "eth_signTransaction​"),
+    _set(TRANSACTION + ("authorization_list",), []), _set(TRANSACTION + ("type",), 4),
+    _set(TRANSACTION + ("gas_price",), 1), _set(TRANSACTION + ("data",), "0x" + "ab" * 40_000),
+    _set(TRANSACTION + ("data",), object()), _circular, _proxy_body,
+])
+def test_a_payload_outside_the_accepted_profile_is_refused_without_signing(change):
+    key, payload = RecordingP256Key(), authorization_payload()
+    change(payload)
+    before = repr(payload)
+
+    with pytest.raises(ValueError) as raised:
+        authorizer(key)(payload)
+
+    assert key.signed == []
+    assert repr(payload) == before
+    text = f"{raised.value} {raised.value!r}"
+    assert all(value not in text for value in SIGNED_VALUES)
+    assert (raised.value.__cause__, raised.value.__context__) == (None, None)
+
+
+@pytest.mark.parametrize("payload", [None, [], "payload", b"{}"])
+def test_a_payload_that_is_not_a_mapping_is_refused_without_signing(payload):
+    key = RecordingP256Key()
+    with pytest.raises(ValueError):
+        authorizer(key)(payload)
+    assert key.signed == []
+
+
+def test_the_adapter_signs_through_the_real_authorizer_and_sends_one_verified_request():
+    key, http = RecordingP256Key(), FakeHttp(signed_reply(SHORT_SIGNED))
+
+    result = client(http, authorizer(key)).rpc(WALLET_ID, body())
+
+    assert result == {"data": {"signed_transaction": SHORT_SIGNED, "encoding": "rlp"}}
+    assert (len(key.signed), len(http.calls)) == (1, 1)
+    call = http.calls[0]
+    assert call["body"] == EXPECTED["wire_body"].encode()
+    assert call["headers"]["privy-idempotency-key"] == "attempt-0001"
+    assert signed_message(call) == CANONICAL
+    verify_header(key.public_key(), call["headers"]["privy-authorization-signature"], signed_message(call))
+
+
+def test_the_caller_broadcasts_once_with_the_real_authorizer_and_the_recorded_wallet_signature(tmp_path):
+    key, http = RecordingP256Key(), FakeHttp(signed_reply(recorded_signature("ENTRY", 0)))
+    transport, recordings, stages = original(tmp_path, client(http, authorizer(key)))
+
+    outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("SUBMISSION_POSSIBLE", "BROADCAST_RETURNED")
+    assert [stage for stage, _ in stages][:2] == ["PREPARED", "SIGN_REQUESTED"]
+    assert (len(key.signed), len(http.calls)) == (1, 1)
+    call = http.calls[0]
+    assert json.loads(call["body"])["params"]["transaction"] == dict(stages)["PREPARED"]["unsigned"]
+    assert call["headers"]["privy-idempotency-key"] == "attempt-0001"
+    verify_header(key.public_key(), call["headers"]["privy-authorization-signature"], signed_message(call))
+    assert dict(stages)["SIGNED"]["transaction_hash"] == ENTRY_NONCE0_HASH
+    assert broadcasts(recordings) == 1
+
+
+@pytest.mark.parametrize("signed,reasons", [
+    (lambda: recorded_signature("ENTRY", 1), ["SIGNED_NONCE_MISMATCH"]),
+    (lambda: resigned(OTHER_TEST_KEY), ["SIGNED_SENDER_MISMATCH"]),
+])
+def test_tampered_wallet_signatures_are_still_rejected_with_the_real_authorizer(tmp_path, signed, reasons):
+    key = RecordingP256Key()
+    transport, recordings, stages = original(tmp_path, client(FakeHttp(signed_reply(signed())), authorizer(key)))
+
+    outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("SUBMISSION_POSSIBLE", "SIGNED_RESPONSE_REJECTED")
+    assert dict(stages)["SIGNED_RESPONSE_REJECTED"]["reasons"] == reasons
+    assert len(key.signed) == 1
+    assert broadcasts(recordings) == 0
+
+
+def test_a_failing_key_is_an_unsent_authorization_failure_without_its_text(tmp_path):
+    key, http = RecordingP256Key(raises=RuntimeError(f"key service down {APP_SECRET}")), FakeHttp(signed_reply(
+        recorded_signature("ENTRY", 0)))
+    transport, recordings, stages = original(tmp_path, client(http, authorizer(key)))
+
+    outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("DEFINITELY_UNSENT", "SIGNER_REFUSED")
+    assert (len(key.signed), http.calls, broadcasts(recordings)) == (1, [], 0)
+    assert APP_SECRET not in repr(stages)
+    assert client(FakeHttp(None), authorizer(RecordingP256Key(raises=RuntimeError("down")))).rpc(
+        WALLET_ID, body()) == local_unsent("AUTHORIZATION_FAILED")
+
+
+def test_an_interrupt_inside_the_key_propagates_and_sends_nothing():
+    http = FakeHttp(signed_reply(SHORT_SIGNED))
+    with pytest.raises(KeyboardInterrupt):
+        client(http, authorizer(RecordingP256Key(raises=KeyboardInterrupt()))).rpc(WALLET_ID, body())
+    assert http.calls == []
+
+
+@pytest.mark.parametrize("state,reason", [
+    ({"cancel": lambda: True}, "CANCELLED"),
+    ({"monotonic": lambda: DEADLINE}, "DEADLINE_PASSED"),
+    ({"wall_clock_ms": lambda: EXPIRY_MS}, "REQUEST_EXPIRED"),
+])
+def test_a_stop_before_authorization_never_reaches_the_key(state, reason):
+    key, http = RecordingP256Key(), FakeHttp(signed_reply(SHORT_SIGNED))
+    assert client(http, authorizer(key), **state).rpc(WALLET_ID, body()) == local_unsent(reason)
+    assert (key.signed, http.calls) == ([], [])
+
+
+@pytest.mark.parametrize("flip,reason", [("cancel", "CANCELLED"), ("deadline", "DEADLINE_PASSED"),
+                                         ("expiry", "REQUEST_EXPIRED")])
+def test_a_stop_during_signing_sends_nothing_and_keeps_the_original_expiry(flip, reason):
+    moment = {"cancel": False, "monotonic": 10.0, "wall": NOW_MS}
+
+    def arrive() -> None:
+        moment.update({"cancel": {"cancel": True}, "deadline": {"monotonic": DEADLINE},
+                       "expiry": {"wall": EXPIRY_MS}}[flip])
+
+    key, http = RecordingP256Key(during=arrive), FakeHttp(signed_reply(SHORT_SIGNED))
+    result = client(http, authorizer(key), cancel=lambda: moment["cancel"], monotonic=lambda: moment["monotonic"],
+                    wall_clock_ms=lambda: moment["wall"]).rpc(WALLET_ID, body())
+
+    assert result == local_unsent(reason)
+    assert (len(key.signed), http.calls) == (1, [])
+    assert b'"privy-request-expiry":"1790000000000"' in key.signed[0]
+
+
+@pytest.mark.parametrize("http", [lambda: FakeHttp(raises=SourceTimeout("lost")),
+                                  lambda: FakeHttp(reply(ERROR_BODY, 403))])
+def test_a_lost_or_rejected_reply_with_the_real_authorizer_is_unknown_and_never_resigned(tmp_path, http):
+    key, transport_http = RecordingP256Key(), http()
+    signer = client(transport_http, authorizer(key))
+    transport, recordings, stages = original(tmp_path, signer)
+
+    outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("SUBMISSION_POSSIBLE", "SIGNING_UNKNOWN")
+    with pytest.raises(RpcError):
+        signer.rpc(WALLET_ID, body())
+    assert (len(key.signed), len(transport_http.calls), broadcasts(recordings)) == (1, 1, 0)
+
+
+class EchoHttp(FakeHttp):
+    """Answers 401 with an error body that repeats the authorization signature it was sent."""
+
+    def request(self, **kwargs: Any) -> HttpResponse:
+        self.calls.append(dict(kwargs))
+        echoed = kwargs["headers"]["privy-authorization-signature"]
+        return reply({"error": {"message": f"bad signature {echoed}"}}, 401)
+
+
+def test_a_reply_echoing_the_generated_signature_is_unknown_and_never_repeats_it(caplog):
+    key, http = RecordingP256Key(), EchoHttp()
+    with pytest.raises(RpcError) as raised:
+        client(http, authorizer(key)).rpc(WALLET_ID, body())
+
+    generated = http.calls[0]["headers"]["privy-authorization-signature"]
+    scalar = str(key.key.private_numbers().private_value)
+    for item in chain(raised.value):
+        text = " ".join([str(item), repr(item), repr(item.args)])
+        assert generated not in text and scalar not in text
+    assert generated not in caplog.text and scalar not in caplog.text
 
 
 # ------------------------------------------------------------------------------------------- owned loopback

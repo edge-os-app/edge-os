@@ -52,5 +52,6 @@
       "privy-idempotency-key": "attempt-0001",
       "privy-request-expiry": "1790000000000"
     }
-  }
+  },
+  "canonical_authorization_payload": "{\"body\":{\"method\":\"eth_signTransaction\",\"params\":{\"transaction\":{\"chain_id\":143,\"data\":\"0x12345678\",\"gas_limit\":300000,\"max_fee_per_gas\":3000000000,\"max_priority_fee_per_gas\":1000000000,\"nonce\":7,\"to\":\"0x00000000000000000000000000000000000f1007\",\"type\":2,\"value\":0}}},\"headers\":{\"privy-app-id\":\"app-test-1\",\"privy-idempotency-key\":\"attempt-0001\",\"privy-request-expiry\":\"1790000000000\"},\"method\":\"POST\",\"url\":\"https://api.privy.io/v1/wallets/wallet_abc-123/rpc\",\"version\":1}"
 }
