@@ -20,7 +20,8 @@ The topology is always the accepted E1 one (`online=True`, CONTRACT A6). Every r
 
 Ownership: the supervisor run id (every Docker name and label) is `<operation_id>-<first 12 hex of the configuration
 SHA256>`, so two configurations never share names even with one operation id. A resource counts as this operation's
-only if it carries this run id's label and, for a container, mounts its role's config file from this run root, for
+only if it carries this run id's label and, for a container, mounts its role's config file from this run root (the
+resolved path, or exactly that path under Docker Desktop's `/host_mnt`), for
 the network, has the id recorded at start, and for the egress volume, carries the random claim label this start wrote
 (the operator creates that volume before the supervisor, because Docker re-uses an existing volume of that name).
 Absent means Docker's exact no-such-object answer for that kind and name (Docker 29.4.0 says `network NAME not found`
@@ -326,6 +327,7 @@ def _docker(*args: str) -> subprocess.CompletedProcess[str] | None:
 
 
 DAEMON_ERROR = "Error response from daemon: "
+DOCKER_DESKTOP_HOST_ROOT = "/host_mnt"  # Docker Desktop's bind Source for a host path is this prefix + the path
 
 
 def _absent_answers(kind: str, name: str) -> set[str]:
@@ -389,7 +391,7 @@ def _ownership(target: OperationTarget, kind: str, role: str, network_id: str | 
     if kind == "container":
         expected = str((target.run_root / "relay" / CONFIG_FILES[role]).resolve())
         sources = {mount.get("Source") for mount in seen.get("Mounts") or [] if isinstance(mount, dict)}
-        if expected not in sources:
+        if not sources & {expected, DOCKER_DESKTOP_HOST_ROOT + expected}:
             return "foreign", None
     if kind == "network" and network_id is not None and seen.get("Id") != network_id:
         return "foreign", None

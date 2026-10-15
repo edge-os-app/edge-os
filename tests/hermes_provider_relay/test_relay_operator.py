@@ -83,6 +83,7 @@ plain or in the daemon's JSON body, or the generic "No such object" of other ver
         self.inspect_error: set[str] = set()  # names whose inspect fails with an error that is not "no such object"
         self.ignore_rm: set[str] = set()  # ids whose removal answers success but leaves the object
         self.absent_wording = "docker-29.4.0"
+        self.host_mnt = False  # Docker Desktop: report each bind Source as `/host_mnt` + the host path (RUNTIME3)
 
     def add(self, kind: str, name: str, *, label: str | None, sources: tuple[str, ...] = (),
             labels: dict[str, str] | None = None) -> str:
@@ -175,7 +176,7 @@ plain or in the daemon's JSON body, or the generic "No such object" of other ver
                 parts = dict(item.split("=", 1) for item in value.split(",") if "=" in item)
                 mounts[parts["dst"]] = parts["src"]
         identity = self._create("container", name, label=argv[argv.index("--label") + 1].split("=", 1)[1],
-                                sources=tuple(mounts.values()))
+                                sources=tuple(("/host_mnt" if self.host_mnt else "") + src for src in mounts.values()))
         if "/provider/receipts" in mounts:
             Path(mounts["/provider/receipts"], "ready").write_text("{}")
         elif "/gateway/receipts" in mounts:
@@ -1046,3 +1047,48 @@ def test_start_and_a_clean_stop_work_with_either_absence_wording(tmp_path: Path,
     loaded, _, _ = started(tmp_path, key)
     assert main([str(write(tmp_path, config(tmp_path, key))), "stop"]) == 0
     assert (loaded.run_root / "stopped.json").exists() and not any(fake.labelled(loaded.target.run_id).values())
+
+
+# --- Docker Desktop bind sources ------------------------------------------------------------------------------------
+
+
+def test_start_restart_and_stop_work_when_docker_reports_bind_sources_under_host_mnt(
+        tmp_path: Path, key: Path, fake: FakeDocker) -> None:
+    fake.host_mnt = True
+    loaded, path, sha = started(tmp_path, key)
+    assert read_handoff(path, sha).operation_id == loaded.operation_id
+    config_path = write(tmp_path, config(tmp_path, key))
+    assert main([str(config_path), "restart"]) == 0
+    assert main([str(config_path), "stop"]) == 0
+    assert (loaded.run_root / "stopped.json").exists() and not any(fake.labelled(loaded.target.run_id).values())
+
+
+def role_container(fake: FakeDocker, loaded: relay_operator.OperatorConfig, role: str, source: str,
+                   label: str | None) -> tuple[str, str | None]:
+    fake.add("container", loaded.target.names()[role], label=label, sources=(source,))
+    return relay_operator._ownership(loaded.target, "container", role, None, None)
+
+
+@pytest.mark.parametrize("role", ["relay", "gateway", "provider"])
+@pytest.mark.parametrize("prefix", ["", "/host_mnt"])
+def test_a_role_config_mounted_from_this_run_root_is_owned_in_either_representation(
+        tmp_path: Path, key: Path, fake: FakeDocker, role: str, prefix: str) -> None:
+    loaded = loaded_from(config(tmp_path, key))
+    expected = str((loaded.run_root / "relay" / relay_operator.CONFIG_FILES[role]).resolve())
+    assert role_container(fake, loaded, role, prefix + expected, loaded.target.run_id)[0] == "owned"
+
+
+@pytest.mark.parametrize("case", ["other_run_root", "other_run_root_host_mnt", "wrong_role", "wrong_role_host_mnt",
+                                  "near_prefix", "double_prefix", "outer_prefix", "suffix", "short", "no_label"])
+def test_any_other_mount_source_or_a_missing_label_is_foreign(tmp_path: Path, key: Path, fake: FakeDocker,
+                                                               case: str) -> None:
+    loaded = loaded_from(config(tmp_path, key))
+    ours = str((loaded.run_root / "relay" / "gateway-config.json").resolve())
+    other = str((tmp_path / "run-other" / "relay" / "gateway-config.json").resolve())
+    relay = str((loaded.run_root / "relay" / "relay-config.json").resolve())
+    source = {"other_run_root": other, "other_run_root_host_mnt": "/host_mnt" + other, "wrong_role": relay,
+              "wrong_role_host_mnt": "/host_mnt" + relay, "near_prefix": "/host_mntx" + ours,
+              "double_prefix": "/host_mnt/host_mnt" + ours, "outer_prefix": "/private/host_mnt" + ours,
+              "suffix": "/host_mnt" + ours + ".bak", "short": "/host_mnt" + ours[:-1], "no_label": "/host_mnt" + ours}[case]
+    label = None if case == "no_label" else loaded.target.run_id
+    assert role_container(fake, loaded, "gateway", source, label) == ("foreign", None)
