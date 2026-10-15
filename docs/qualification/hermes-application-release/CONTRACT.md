@@ -29,11 +29,11 @@ class RelayApplicationDefinition:     # code-owned; RELEASE_DEFINITIONS = () in 
     owner_cap_usd: Decimal
 
 @dataclass(frozen=True)
-class HermesApplicationRelease:       # built only by bind_release(definition); pure
+class HermesApplicationRelease:       # built by bind_release(definition); pure (the type does not enforce it, 3.3)
     actual: ActualRelease             # from load_actual_release(record, record_sha256), no override
     approval_sha256: str              # re-read from the same accepted record bytes
     price_snapshot_sha256: str        # re-read from the same accepted record bytes
-    price: TokenPrice                 # ONE object: SpendLimits.price and build_relay_job(price=...)
+    price: TokenPrice                 # ONE object configures SpendLimits.price and build_relay_job(price=...)
     route: TransportRoute             # ACTUAL, the record's endpoint and reply bound
     policy: GuardPolicy               # the record's model, token/byte limits and request shape
     config: HermesInterpreterConfig   # model, route id, max tokens, runtime_label LIVE, LiveRelease
@@ -50,6 +50,10 @@ Price snapshot format (owned by this application): strict JSON (no repeated key,
 - Each rate is at most the record's routing `max_price` for the same token kind.
 
 Assumption: `max_price` is USD per million tokens. The qualification packet must confirm this. The snapshot gives one prompt rate and one completion rate. It does NOT capture cached-token discounts, fee variants or actual billing. Under E1-COST1 any reported cost other than this price's charge stays UNKNOWN with the full reservation.
+
+Price identity: the SAME `TokenPrice` object configures `SpendLimits`/`PostgresSpendLedger` and `build_relay_job(price=...)`, where the relay runner's E1-COST1 check uses it. `PostgresSpendLedger` computes reservation and settlement amounts with a `TokenPrice` rebuilt from its database-frozen settings row. `reserve` refuses (`LedgerConfigMismatch`) unless that copy has exactly the same `Decimal` values as the configured object. `settle` does not check again, because frozen prices never change.
+
+That settings row is a single row per database, shared with the LOCAL transport and relay mounts. If it was frozen first at another price, every reservation of this composition is refused (`SpendLedgerUnavailable`, request count 0). Actual activation therefore needs a ledger-owner procedure or a fresh approved ledger. This candidate grants no reset, migration, data deletion or price change.
 
 Ownership of the request shape: the policy's `required_extra` (`stream`, `provider`, `reasoning`, `response_format`) is a JSON copy that shares no object with the record or the definition. `compose_application` refuses a release whose copy no longer hashes to `required_extra_sha256`, or whose record routing or reasoning no longer equals the copy.
 
@@ -82,19 +86,27 @@ class HermesApplication:
 4. Read the operator handoff (section 3.1) and take the relay endpoint and job evidence folder from it.
 5. Open its own engine, require the migration head, `compose_application`, then one `recover_pending` pass (budget C).
 
-Steps 1 to 4 run before any engine, key, socket or Docker effect. Steps 1 to 3 also read no file: the default (no approved definition) never opens the handoff. `compose_application` builds `PostgresSpendLedger(session_factory, release.limits)` and `build_relay_job(release.route, release=actual.release, actual=actual, price=release.price, policy=release.policy, timeout_seconds=actual.timeout_seconds, image=release.image, script_for=lambda turn: {}, ...)` with `credential_file=None`. The application holds no provider key. The admission key stays a host/relay endpoint file that only `RelayTurnRunner` reads.
+Steps 1 to 4 run before any engine, key, socket or Docker effect. Steps 1 to 3 also read no file: the default (no approved definition) never opens the handoff.
+
+`compose_application` builds `PostgresSpendLedger(session_factory, release.limits)` and `build_relay_job(release.route, release=actual.release, actual=actual, price=release.price, policy=release.policy, timeout_seconds=actual.timeout_seconds, image=release.image, script_for=lambda turn: {}, ...)` with `credential_file=None`. The application holds no provider key. The admission key stays a host/relay endpoint file that only `RelayTurnRunner` reads.
+
+Two refusals come later. A bad `run_id` (checked in `compose_application`) and invalid caps (checked when `PostgresSpendLedger` is built) are refused in step 5, after the engine opens and `require_head` reads the migration head from the database. The engine is then disposed. No grant, provider request, key read or Docker effect occurs.
+
+`bind_release` maps the `ValueError` refusals of `load_actual_release` to `MountRefused`. Some malformed code-owned records raise `TypeError` instead, for example a `destination` with extra keys, unhashable `allowed_fields` items, or a schema that is a `Mapping` but not a `dict`. Both happen before any effect. This candidate does not promise `MountRefused` for every malformed definition.
 
 ### 3.1 Operator handoff (read only)
 
 The application's trusted configuration owner gives `handoff_path` and `handoff_sha256`: the line the lane-1 operator prints at start. The handoff approves nothing. The release comes only from the code-owned definition, and the handoff's `release_record.path` is never read, because the approved record bytes are the definition's own. The reader refuses (`MountRefused`) in each of these cases:
 
-- The file is not a regular file, is reached through a symbolic link (`O_NOFOLLOW`), is over 16 KiB, or does not have the named SHA-256.
+- The file is not a regular file, is itself a symbolic link, is over 16 KiB, or does not have the named SHA-256. `O_NOFOLLOW` checks the final path part only; symbolic links in parent folders are followed. The exact hash still binds the bytes that are read.
 - The JSON is not strict, the fields are not exactly the frozen twelve, or `format` is not `edge-os.relay-operator-handoff/1`.
 - `kind` is not `ACTUAL`, `release` differs from `actual.release.settings()`, `release_record.sha256` differs from the record SHA-256, or `ca_bundle_sha256` differs from the record's.
 - `image.reference` is not the definition's digest reference (`name@sha256:<64 hex>`), or `image.id` is not `sha256:<64 hex>`. A mutable tag is refused. The job runs the digest reference itself, so the launch argument is immutable.
 - `shutdown_owner` is not `relay_operator`.
 - The `endpoint` fields are not exactly the six frozen fields, a path is not absolute, `channel_root` is not the release's, or `heartbeat_max_age_seconds` is not a number in (0, 10].
 - `evidence_dir` is not absolute.
+
+The endpoint folders that the handoff names are not checked when the application opens. If the grants folder is missing or not writable, each turn becomes UNKNOWN (`RelayGrantExists`, from the accepted runner) and keeps its full reservation. Nothing is sent.
 
 `operation_id`, `config_sha256` and `started_at` are evidence only. Mode 0444 on the handoff prevents routine accidental writes. It is not protection against the same OS user, and no host-user isolation is claimed.
 
@@ -115,41 +127,65 @@ Subject and scope: `scope_for` is `intake:<intake_record_id>` of the saved attem
 
 Application seam: `create_app(settings, hermes_runner=app.runner, hermes_config=app.config)`. `create_app` refuses a `hermes_config` without its runner, outside `hermes_local`, or in production, before any engine. Without `hermes_config` the factory keeps `LOCAL_FAKE_CONFIG`, so existing callers are unchanged. Settings are unchanged: production already allows only the fixture interpreter.
 
+### 3.3 Trusted code seams
+
+`compose_application`, `HermesApplicationRelease` and the `create_app(hermes_runner=..., hermes_config=...)` pair are trusted code seams. They are not checked again against every approval, environment and configuration property.
+
+- `compose_application` checks the request shape, the endpoint channel and the run id again. It does not check the trusted registry, the environment or the interpreter setting again.
+- Code that builds a `HermesApplicationRelease` by hand could compose without a registry entry. No production caller does this, and no setting, environment value, file, request or handoff can.
+- `create_app` does not check that `hermes_config` belongs to `hermes_runner`. A composition runner without its configuration fails closed at the guard's model check. A `LIVE` configuration given with another runner would label that runner's attempts `LIVE`.
+
 ## 4. Fault matrix (request -> possible effect -> outcome -> accounting -> restart)
 
 | Case | Requests | Outcome | Liability | Restart / retry |
 |---|---|---|---|---|
 | No approved definition | 0 | `None`, nothing built | none | n/a |
-| Production, other interpreter, two approved, foreign channel, bad run id | 0 | `MountRefused` before effect | none | n/a |
+| Production, other interpreter, two approved, foreign channel or other handoff fault | 0 | `MountRefused` before any engine | none | n/a |
+| Bad run id or invalid caps, through the opener | 0 | `MountRefused` or `ValueError` after the engine reads the migration head; engine disposed | none | n/a |
 | Record outside registry, wrong hash, bad snapshot, schema, image | 0 | `MountRefused` (pure) | none | n/a |
+| Malformed code-owned record (see section 3) | 0 | `MountRefused` or `TypeError` (pure) | none | n/a |
+| Ledger price row frozen at another price | 0 | `SpendLedgerUnavailable` (`LedgerConfigMismatch`), job never runs | nothing reserved | n/a |
 | Reservation no longer names the saved owner/request | 0 | `PROVIDER_FAILED` `RelaySubjectUnavailable`, no grant | RELEASED | new attempt allowed |
 | Owner or global cap reached (any instance) | 0 | `SpendCapReached`, job never runs | none added | n/a |
 | Reply, cost equal to snapshot charge | 1 | SETTLED at `price.nano_usd` | the charge | reopen elsewhere shows it |
 | Reply, any other cost | 1 | UNKNOWN `RelayCostUnverified`, text withheld | full reservation | retry 409, never resent |
-| Lost reply, timeout, missing close record | 0 or 1 | UNKNOWN | full reservation | restart keeps UNKNOWN, retry 409 |
-| Second grant for one attempt | 0 | UNKNOWN `RelayGrantExists` (accepted) | full reservation | never resent |
+| Lost reply, timeout, missing close record | 0 or 1 | UNKNOWN | full reservation | another instance with the same run id keeps UNKNOWN; retry 409 |
+| Second grant for one attempt, or grants folder missing or not writable | 0 | UNKNOWN `RelayGrantExists` (accepted) | full reservation | never resent |
+| Process crash during a turn (by code reading; not tested) | 0 or 1 | reservation stays RESERVED | counted as liability, scope blocked | never resent |
 
 ## 5. Checks
 
 Pure (no database, Docker or network), in `apps/api/tests/test_hermes_relay_composition.py`: default composes nothing, refusals before effect, factory refusals, one bound identity, registry refusal, record hash, 14 snapshot faults, 4 routing price-limit faults, schema/image/channel faults, the SAME `TokenPrice` object in the ledger and the relay runner, no I/O at construction, post-binding change refused.
 
+Limits of the pure proof:
+
+- The opener's production and other-interpreter test can pass on the missing-handoff refusal. It does not prove the opener's own check. Production is also refused by settings and by `create_app`, and the `create_app` test does prove that check.
+- The handoff repeated-key, snapshot repeated-key, snapshot `[]` and `max_price` Infinity cases can be refused by another guard: the duplicate value is also wrong, `[]` also lacks the fields, and the record cannot hold Infinity. They do not isolate the repeated-key, object or `is_finite` checks.
+
 Mounted (the session PostgreSQL container; needs a capacity grant), same file: the real composition, `create_app`, the accepted guard and relay runners and `PostgresSpendLedger`. Only the container job and the relay process are stand-ins that write the relay's records (synthetic provider). The record is synthetic and is admitted only by patching the registry inside the test. It is not an approved release. The mounted tests cover these cases:
 
 - A saved request is sent once. It settles at the snapshot price (not the LOCAL 2.00/7.50). The grant names the saved owner, request and scope. Another instance reopens it, and another owner gets 404.
 - A different cost stays UNKNOWN and is never resent.
-- Interruptions (lost, timeout, missing close) stay UNKNOWN across a restart with the same run id.
+- Interruptions (lost, timeout, missing close) stay UNKNOWN when a second live instance opens with the same run id. The test does not kill or restart a process, so it gives no crash proof.
 - Two instances share one owner cap, and a refused reservation never reaches the job.
 - A moved reservation owner gets no grant.
+
+The recorded charge evidence is 73,056,000 nano-USD reserved and 9,768,000 nano-USD charged at the synthetic 3.00/9.00 snapshot. The saved rows of these tests carry `runtime_label` `LIVE` because the synthetic record is kind ACTUAL. They do not prove an actual provider.
+
+Overflow (a matching cost whose charge is above the reservation) and invalid or unknown usage are not tested on this composition. They are proved by the unchanged accepted relay components: `tests/hermes_provider_relay/test_relay_turn_runner_actual.py` (`test_a_matching_cost_whose_charge_exceeds_the_reservation_is_unknown`, `test_invalid_or_different_usage_keeps_the_full_reservation`), with the SQLite ledger. The relay runner and the ledger rules they use are unchanged here.
 
 Selectors (frozen at commit): composition `tests/test_hermes_relay_composition.py`, then affected `tests/test_hermes_transport_mount.py` and `tests/test_provider_spend_ledger.py`, then the full API suite. Each runs from `apps/api` with `.venv/bin/python -m pytest -p no:cacheprovider`.
 
 The pure tests also cover the handoff: the exact handoff is accepted, 20 field faults are refused before any engine, and so are wrong hash bytes, a link, a folder, an oversized file, a missing file and a repeated key. The mounted fixture writes a mode-0444 handoff for the stand-in relay.
 
-Not covered here: pinned Hermes through an ACTUAL route. It cannot run without provider network. Pinned Hermes through the relay is the lane-1 AUTHORED proof (`tests/hermes_provider_relay/test_relay_application_mount.py`). No browser or UI is changed.
+Not proved here: pinned Hermes producing the ACTUAL request shape. The ACTUAL job has no network and sends its one request through the relay channel, so this can be tested offline with pinned Hermes and a stand-in relay. It was not run. The lane-1 pinned-Hermes relay proof (`tests/hermes_provider_relay/test_relay_application_mount.py`) uses the AUTHORED policy with an empty `required_extra`. No browser or UI is changed.
 
 ## 6. Follow-on files and blockers (not in this candidate)
 
 - `research/interpretation_workflow.py` `LABEL` and `HermesResearch.label()`: the `/v1/interpreter` view still says a local fake provider ran and no real model was called. It must follow `config.runtime_label` before any approved release is activated. That is UI/label work for a later milestone.
 - An approved release needs the exact qualification packet. It must give the record, price snapshot (with current provider pricing evidence, the `max_price` unit, and cached-token/fee treatment), schema, image digest, CA bundle, caps, channel and the relay operator start (lane 1). Then add it to `RELEASE_DEFINITIONS` and `APPROVED_ACTUAL_RELEASES` in one reviewed change.
 - Deployment qualification for production (settings still refuse it). Actual history/Nansen mounting is a later milestone. Settlement at a provider-reported cost needs a later ledger-owner extension (E1-COST1 limit).
+- Pinned Hermes must be proved to send the record's `provider`, `reasoning` and `response_format` fields (the policy's `required_extra`) through the isolated job before activation. Otherwise the job guard refuses every ACTUAL turn.
+- The shared ledger price row (section 2) needs a ledger-owner procedure or a fresh approved ledger before activation.
+- No server launcher or factory composition calls `open_hermes_application` and `create_app` yet (compare `scripts/hermes_app_mount/serve_transport_mount.py`). A launcher is follow-on work together with the runtime labels, the actual release and the deployment.
 - The CA bundle is checked by the relay against the record. The application only carries `ca_bundle_sha256` inside `actual`.
