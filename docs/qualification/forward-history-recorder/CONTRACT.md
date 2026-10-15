@@ -230,7 +230,8 @@ mode 0600, as canonical JSON (the same `canonical_bytes`). Its keys are exactly:
 
 Construction comes only from the recorder:
 
-- `owned_stdlib_transport()` builds `StdlibHttpTransport()` with its defaults: `OWNED_STDLIB`.
+- `owned_stdlib_transport()` builds `StdlibHttpTransport(connect=..., clock=time.monotonic)` with the accepted
+  connector captured when the recorder is imported, not from the constructor's current defaults: `OWNED_STDLIB`.
 - `local_fixture_transport(connect, clock)` builds `StdlibHttpTransport(connect=..., clock=...)` for fixtures and
   owned loopback checks: `LOCAL_FIXTURE`.
 - Every other object is `INJECTED`, with null `implementation` and `implementation_sha256`. This includes a caller's
@@ -250,6 +251,16 @@ captured at import. An injected object keeps the class and `request` it had at b
 `ADMISSION_TRANSPORT_SUBSTITUTED`: nothing is sent, no liability is added and every later admission stops. A recorded
 construction altered before binding is reported `INJECTED` and never sends.
 
+The binding is checked again after the `ADMITTED` record, at the last point the recorder controls before the send. This
+second check covers a change made by a recorder clock reading or by the journal write. If it refuses, the call was
+admitted but not sent: its liability stays `UNKNOWN`, its receipt keeps null fields, nothing is resent and the attempt
+stops with `ADMISSION_TRANSPORT_SUBSTITUTED`.
+
+Residual scope. The binding compares objects by identity in this process. It does not detect: a change made by the
+transport's own connector or clock callbacks while the bound send runs; a changed function `__code__`; a class or module
+patched before the recorder is imported; or changes to the module globals that `StdlibHttpTransport` uses. These are
+in-process changes by the process owner, which this sidecar does not defend against. All evidence stays `SYNTHETIC`.
+
 Each receipt has exactly `call_id`, `transport_binding_sha256`, `request_sha256`, `outcome`, `status`, `body_sha256`,
 `body_bytes`, `received_at_utc_us` and `elapsed_us`. `outcome`, `request_sha256`, `body_sha256` and a received reply's
 `status` and `body_bytes` equal the handoff `calls` entry; an incident or oversized reply also keeps its status and byte
@@ -259,8 +270,10 @@ than the admission leaves both null; the clock-reversal stop still applies. A mi
 time fields with `UNKNOWN` outcome and liability. A credential incident never exposes a body digest.
 
 A sidecar write failure is reported as `transport_receipts_status = WRITE_FAILED` in the `run_attempt` result. The
-completed handoff is not changed and nothing is resent. An attempt that is interrupted or refused before its handoff
-writes no sidecar; an existing attempt directory is never reused.
+completed handoff is not changed and nothing is resent. A `transport-receipts.json` file from a `WRITE_FAILED` attempt
+is not evidence, even when the file is present and complete; the recorder does not delete it. Only a sidecar whose
+SHA-256 equals the returned `transport_receipts_sha256` is the attempt's sidecar. An attempt that is interrupted or
+refused before its handoff writes no sidecar; an existing attempt directory is never reused.
 
 The sidecar proves only the construction and receipt facts captured within this process. It is not provider
 authentication, it does not establish that the bytes came from a provider, and it is no defense against a malicious
@@ -313,6 +326,11 @@ The owned loopback qualification runs the real recorder wrapper and `StdlibHttpT
 ```sh
 EDGE_OS_LOOPBACK_QUALIFICATION=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:apps/api/src apps/api/.venv/bin/python -m pytest --noconftest -p no:cacheprovider -q tests/test_forward_history_transport_receipts.py -k loopback
 ```
+
+A transport object without `request` is outside the declared `HttpTransport` interface and fails while the recorder
+binds it, after the attempt journal exists and before any send. The loopback cleanup check also reconnects to the closed
+port; another local process could take that ephemeral port first, so a failure of that one probe needs the listener
+descriptor and thread checks to judge it.
 
 It checks exact wire bytes against receipt hashes, the 2 MiB cutoff, header and body drip deadlines, redirect
 non-following, cancellation between body reads, secret echo in a body or header, one durable admission per wire request,

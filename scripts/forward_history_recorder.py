@@ -313,13 +313,15 @@ def plan(value: Mapping[str, Any]) -> dict[str, Any]:
 _STDLIB_NAME = f"{StdlibHttpTransport.__module__}.{StdlibHttpTransport.__qualname__}"
 _STDLIB_SHA256 = hashlib.sha256(Path(stdlib_transport_module.__file__).read_bytes()).hexdigest()
 _STDLIB_CLASS = dict(vars(StdlibHttpTransport))
+# The accepted constructor inputs, bound at import so a later change to the constructor defaults cannot reach them.
+_DEFAULT_CONNECT = stdlib_transport_module._default_connect
 _CONSTRUCTED: weakref.WeakKeyDictionary[StdlibHttpTransport, tuple[str, dict[str, Any]]] = (
     weakref.WeakKeyDictionary())
 
 
 def owned_stdlib_transport() -> StdlibHttpTransport:
     """The recorder-owned construction of the accepted network transport: defaults only, real sockets."""
-    return _construct("OWNED_STDLIB", StdlibHttpTransport())
+    return _construct("OWNED_STDLIB", StdlibHttpTransport(connect=_DEFAULT_CONNECT, clock=time.monotonic))
 
 
 def local_fixture_transport(connect: Callable[..., object], clock: Callable[[], float]) -> StdlibHttpTransport:
@@ -520,6 +522,11 @@ class RecordingTransport:
         journal.counts[(phase, provider)] = journal.counts.get((phase, provider), 0) + 1
         journal.provider_counts[provider] = journal.admitted(provider) + 1
         journal.last_admission[provider] = mono
+        try:
+            self._binding.verified_send()  # recheck after the recorder clock readings and the journal write
+        except AdmissionRefused:
+            self.stopped = "TRANSPORT_SUBSTITUTED"  # admitted but never sent: liability stays UNKNOWN, no resend
+            raise
         try:
             response = send(method=method, url=url, headers=headers, body=body,
                             timeout=min(timeout, MAX_CONNECT_SECONDS), deadline=deadline,

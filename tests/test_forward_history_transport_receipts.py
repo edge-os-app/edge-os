@@ -786,3 +786,79 @@ def test_loopback_interrupted_attempt_is_never_resumed_or_resent(tmp_path: Path,
         run_attempt(recorder_input(tmp_path), transport=local_fixture_transport(server.connect, clock.monotonic),
                     clock=clock, credentials=Credentials())
     assert len(server.requests) == 10 and recover_attempt(attempt) == summary
+
+
+# Repair 1: late binding check, constructor inputs and post-create sidecar failure
+
+
+class _ArmedClock(FakeClock):
+    """A recorder clock whose next reading runs one in-process callback (for example a connector swap)."""
+
+    def __init__(self, utc: float) -> None:
+        super().__init__(utc)
+        self.armed: Callable[[], None] | None = None
+
+    def monotonic(self) -> float:
+        if self.armed is not None:
+            callback, self.armed = self.armed, None
+            callback()
+        return super().monotonic()
+
+
+def test_connector_swapped_by_a_recorder_clock_callback_after_the_early_check_is_never_used(tmp_path: Path) -> None:
+    clock = _ArmedClock(T0)
+    used = SyntheticProviders(clock)
+    swapped_to = SyntheticProviders(clock)
+    transport = fixture_transport(used, clock)
+    journal = AttemptJournal.create(tmp_path / "attempt")
+    wrapper = RecordingTransport(transport, journal, clock, quicknode_url=QN_URL, hypersync_url=HS_URL,
+                                 secrets=SECRETS)
+    wrapper.label(phase="P1", slot="late", provider="quicknode")
+    clock.advance(1.0)
+    clock.armed = lambda: setattr(transport, "_connect", FixtureConnector(swapped_to))
+    with pytest.raises(AdmissionRefused) as caught:
+        wrapper.request(method="POST", url=QN_URL, headers={}, body=CHAIN_ID_REQUEST, timeout=15.0,
+                        deadline=clock.mono + 60, max_response_bytes=2_097_152)
+    assert caught.value.code == "TRANSPORT_SUBSTITUTED"
+    assert used.calls == [] and swapped_to.calls == []
+    # The late refusal follows the durable admission: its liability stays UNKNOWN and nothing is resent.
+    summary = recover_attempt(tmp_path / "attempt")
+    assert summary["admitted"] == 1 and summary["unknown_liability"] == 1
+    receipt = wrapper.receipts_document("late", "0" * 64)["receipts"][0]
+    assert receipt["outcome"] == "UNKNOWN" and receipt["status"] is None
+    with pytest.raises(AdmissionRefused):
+        wrapper.request(method="POST", url=QN_URL, headers={}, body=CHAIN_ID_REQUEST, timeout=15.0,
+                        deadline=clock.mono + 60, max_response_bytes=2_097_152)
+    assert used.calls == [] and swapped_to.calls == [] and recover_attempt(tmp_path / "attempt")["admitted"] == 1
+
+
+def test_owned_construction_binds_the_accepted_connector_and_clock_not_mutable_defaults(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    def foreign_connect(*args: Any) -> None:
+        raise AssertionError("never used")
+    monkeypatch.setattr(StdlibHttpTransport.__init__, "__defaults__", (foreign_connect, lambda: 0.0))
+    owned = owned_stdlib_transport()
+    assert vars(owned)["_connect"] is http_transport_module._default_connect
+    assert vars(owned)["_clock"] is time.monotonic
+    assert transport_identity(owned)["construction"] == "OWNED_STDLIB"
+
+
+def test_sidecar_write_failing_after_create_is_write_failed_and_the_file_is_left_untouched(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.forward_history_recorder as recorder
+    real_write = recorder.write_exclusive
+
+    def fail_after_create(path: Path, body: bytes) -> None:
+        if path.name != TRANSPORT_RECEIPTS_FILE:
+            return real_write(path, body)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        os.write(descriptor, body[:10])
+        os.close(descriptor)
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(recorder, "write_exclusive", fail_after_create)
+    result, providers, attempt, _ = run_with(tmp_path, fixture_transport)
+    assert result["status"] == "COMPLETED" and len(providers.calls) == 22
+    assert result["transport_receipts_status"] == "WRITE_FAILED" and result["transport_receipts_sha256"] is None
+    assert len((attempt / TRANSPORT_RECEIPTS_FILE).read_bytes()) == 10  # present, partial, and not evidence
+    assert hashlib.sha256(Path(result["handoff_path"]).read_bytes()).hexdigest() == result["handoff_sha256"]
+    assert len(journal_records(attempt, "ADMITTED")) == 22
