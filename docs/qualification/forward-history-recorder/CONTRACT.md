@@ -1,0 +1,224 @@
+# Forward history recorder and payload binding contract
+
+Status: LOCAL implementation contract for task `FORWARD-HISTORY-RECORDER-L4-20261015-LOCAL-v1`. It defines the
+recorder (`scripts/forward_history_recorder.py`) and the offline checker (`scripts/history_payload_binding.py`). It
+authorizes no provider, credential, chain, account, wallet or recording operation. All tests use synthetic transports,
+fake clocks and sentinel credentials.
+
+## Versions and predecessor
+
+| Identity | Value |
+|---|---|
+| Recorder input | `edge-os.forward-history-input/1` |
+| Recorder handoff | `edge-os.forward-history-handoff/1` |
+| Canonical payload | `edge-os.forward-history-payload/1` |
+| Binding report | `edge-os.history-payload-binding/1` |
+| Creation-event decoder | `retained-v2-pair-created/1` |
+| Predecessor read packet | `docs/qualification/qualified-actual-demo/SOURCE_FACT_PACKET.json`, SHA-256 `c4fc01c4d498742cd9a904606135fdb2b27fea448bb254462a79a9f67824312f` |
+
+The predecessor file is not modified. This contract amends its mechanics only where listed below. The predecessor's
+unamended digest rule is not reused.
+
+## Mechanical amendments to the predecessor
+
+1. Optional `topic3` keeps its presence. An absent value projects to `{"presence":"ABSENT"}`. An explicit null projects
+   to `{"presence":"NULL"}`. A non-null fourth topic is unsupported. The two projections hash differently.
+2. Quantities are strictly defined (see canonicalization). The predecessor said only "base-10 integers".
+3. P3 omits `to_block`. It uses the literal predecessor filter, `include_all_blocks=true`, `max_num_blocks=10000` and
+   the accepted `LOG_FIELD_SELECTION` and `BLOCK_FIELD_SELECTION`. There is no implied end block and no pagination loop.
+4. The P3 admission rule is a one-second slot `[due, due+1s)` for every scheduled read. There is no catch-up, grace,
+   retry or moved T0. This is a conservative recorder bound frozen by the controller.
+5. P6 has no implemented call. Its status stays `EXTERNAL_EVIDENCE_REQUIRED`. A missing P6 destination reference keeps
+   an input `NOT_READY` with zero calls.
+6. The executable recorder ceiling is P0-P5 only: 17 QuickNode and 9 HyperSync calls, 26 in total. The predecessor's
+   29-call total (with P6) and the later application's 64 history plus 2 Nansen reservations are separate allowances.
+
+## Input
+
+The input is one JSON object with exactly these keys. Unknown or missing keys are refused.
+
+| Key | Rule |
+|---|---|
+| `schema_version`, `predecessor_sha256` | Literal values above. |
+| `attempt_id` | `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. One attempt id is executed at most once. |
+| `source_id`, `evidence_class` | Text; `SYNTHETIC` or `ACTUAL`. |
+| `chain_id` | `143`. |
+| `pool`, `token0`, `token1`, `base`, `quote` | 20-byte addresses; `{base, quote} == {token0, token1}`. |
+| `swap_topic0`, `selectors` | The predecessor Swap topic and the four predecessor selectors, exactly. |
+| `expected_decimals` | `{"token0": int, "token1": int}`. |
+| `creation` | `decoder`, `transaction_hash`, `block_number`, `block_hash`, `transaction_index`, `log_index`, `factory`, `topic0`. |
+| `t0_utc` | `YYYY-MM-DDTHH:MM:SSZ` on the 300-second grid. |
+| `window_seconds`, `bucket_seconds` | `1200` and `300`. |
+| `destinations` | `quicknode_host` (host only) and `hypersync_url` (`https://<host>/query`). |
+| `credential_slots` | Slot names for `quicknode` and `hypersync`. Values are never in the input. |
+| `output_dir` | Absolute, existing, non-symlink directory. |
+| `decisions`, `plans`, `p6` | References for D1-D3, both provider plans and the P6 dependency. |
+
+Validation of every value, limit and schedule finishes before any credential read. A missing decision, plan or P6
+destination reference returns `NOT_READY`: no attempt directory, no credential read and zero calls.
+
+`python scripts/forward_history_recorder.py plan --input <file>` validates and prints a redacted plan. It reads no
+credential and sends nothing. `recover --attempt-dir <dir>` prints a read-only journal summary. The only network entry
+is the library function `run_attempt`, which requires an injected transport, clock and credential source. This ticket
+authorizes only synthetic injection.
+
+## Creation-event decoder `retained-v2-pair-created/1`
+
+The receipt log must have exactly three topics: the creation topic, token0 and token1. Each token topic is 12 zero bytes
+then 20 address bytes. The data is exactly 64 bytes: word 1 is 12 zero bytes then the pool address, and word 2 is an
+unsigned 256-bit pair count. Exactly one receipt log may match the expected factory and creation topic. Its
+transaction, block, transaction index and log index must equal the input. The token order and pool must equal the input.
+
+The P1 HyperSync query selects the factory and creation topic in `[block, block+1)`. Exactly one log must match. Its
+identity fields, three topics and data must equal the receipt event. `topic3` may be absent or null. `removed` is not
+requested; a supplied `true` is refused. The `factory()` read must return one ABI address word equal to the emitter.
+Any difference, failed P1 call or ambiguous match is a safety stop. No other layout is guessed. The retained private
+event that fixed this layout is not published here.
+
+## Schedule and calls
+
+`WE = T0 + 1200`. Bucket `i` is `[T0 + 300i, T0 + 300(i+1))`.
+
+| Phase | Calls (maximum) | Time rule |
+|---|---|---|
+| P0 | none | Validation and readiness; T0 is journaled before the first call. |
+| P1 | `eth_chainId`, creation receipt, creation HyperSync query, pool `factory()`, `eth_getCode` pool/token0/token1 (6 QN, 1 HS) | Any time; chain id must be 143. |
+| P2 | `eth_getBlockByNumber("latest", false)` (1 QN) | Admitted in `[T0-120, T0-5)`; complete before `T0-5`; timestamp `< T0`. |
+| P3 | HyperSync forward query (8 HS) | First read slot `[end+30, end+31)`; conditional second read slot `[end+120, end+121)`. |
+| P4 | decimals token1, token0, then pool `token0()`, `token1()` at `B_START` (4 QN) | After the last P3 slot; before `T0+3600`. |
+| P5 | finalized, latest, decimals at `B_END` (token1, token0), current decimals (token1, token0) (6 QN) | At or after `WE+60`; before `WE+3600`. |
+
+A second P3 read is made only after a valid first reply proves insufficient coverage. A failed, rejected, missed or
+expired first read never allows it. The first read's deadline is the second event. A wake outside a slot records
+`MISSED` and continues to the next event. Pacing is at least one monotonic second between admissions to one provider;
+it never moves a call into another slot.
+
+Each call's effective deadline is the earliest of 120 seconds, its phase or schedule cutoff and `WE+3600`. The connect
+timeout is at most 15 seconds. A call at or after its deadline is refused before admission. A clock that moves
+backward (UTC or monotonic) is untrusted: the recorder stops further sends and keeps availability unknown.
+
+## Stops and weak evidence
+
+Safety stops end every provider and leave remaining buckets `INCOMPLETE`:
+
+- HTTP 401, 402, 403 or 429, and any quota, rate or payment wording in a reply body, also with status 200.
+- A credential echo in a body, header, provider error or transport exception (`CREDENTIAL_INCIDENT`).
+- Any failed P1 call or P1 identity difference, an anchor timestamp at or after T0, conflicting block facts, wrong
+  decimals or wrong pool token order.
+- An excess, unlisted or oversized request, or an aggregate reply budget that cannot fit.
+
+Other failures (timeout, non-2xx, JSON-RPC error, malformed reply) are weak evidence: `NOT_READ` or no delivery, with no
+retry. Later independent phases still run. Weak finality is recorded once and never repeated. A missing `B_END` skips
+only the two dependent decimals reads.
+
+## Forward pages and coverage
+
+An accepted P3 reply is an object with quantity `archive_height`, positive `next_block`, object `data` with explicit
+`blocks` and `logs` arrays and an optional object `rollback_guard`. The page range is `[from_block, next_block)` with
+at most 10,000 blocks. It needs exactly one header for each block in the range, nondecreasing timestamps across the
+chain and no header later than the reply's receipt time. Every log must be inside the range, match its header's hash,
+name the pool and the Swap topic, project cleanly and have a new ordering identity. Anything else rejects the page
+(no delivery proof). A header that contradicts an earlier fact or the P2 anchor is a safety stop.
+
+The cursor moves to `next_block` after every accepted reply, also an insufficient one. Earlier headers and logs are
+kept. The chain starts at `B_ANCHOR` and has no gaps. A bucket is covered when the chain holds a header with timestamp
+`>= end`. At first coverage the bucket freezes: reply id, receipt time, record count and payload digest of every log
+in the bucket received so far. Later replies never rewrite it. A bucket whose permitted reads end without coverage
+closes `INCOMPLETE` with a reason, and later replies do not backfill it.
+
+`B_PRE` is the last header `< T0`; `B_START` the first `>= T0`; `B_END` the last `< WE`; `B_POST` the first `>= WE`.
+They must be adjacent. The final scan is `[B_PRE, B_POST+1)`. Every Swap log in the scan counts, including boundary-block
+logs outside the window. More than 61 adds `SCAN_LOG_COUNT_EXCEEDS_61` as weaker evidence.
+
+## Bytes, journal and private files
+
+- Request body: at most 65,536 bytes. Reply: at most 2,097,152 bytes, enforced in transport and again on the returned
+  bytes. Total replies: at most 67,108,864 bytes, checked before admission.
+- The attempt directory `<output_dir>/<attempt_id>` is created exclusively with mode 0700. Files are created
+  exclusively with mode 0600 and `O_NOFOLLOW`. An existing attempt directory is refused before any credential read.
+- `journal.jsonl` records `ATTEMPT_STARTED` (with T0) before any credential read. Each physical call appends `ADMITTED`
+  with `UNKNOWN` liability, request hash and length, phase, slot and deadline, flushed and fsynced before the send.
+  `RESOLVED` follows only after the reply body is safely written, or after an oversized reply is refused unsaved.
+  Admitted calls equal resolved plus unknown. Uncertain
+  admissions are never refunded or resent. A journal or body write failure stops all sends.
+- Credentials are read once each, after validation, through the injected slot reader. Bodies and headers are scanned for
+  the full QuickNode URL, its path secret, the bearer token and `Bearer <token>` before anything is saved. An echo saves
+  only incident metadata and a body hash.
+
+## Canonical payload `edge-os.forward-history-payload/1`
+
+The projection has exactly twelve fields: `block_number`, `transaction_index`, `log_index`, `block_hash`,
+`block_timestamp`, `address`, `topic0`, `topic1`, `topic2`, `topic3`, `data`, `removed`. `transaction_hash` is a
+required, validated log identity, kept for audit, but not a payload field.
+
+- Quantities: non-boolean JSON integers, ASCII decimal digits or `0x` plus hex digits; nonnegative. Booleans, floats,
+  signs, whitespace, empty strings and `0X` are refused. They become JSON integers.
+- Hex: addresses 20 bytes, hashes and topics 32 bytes, Swap data exactly four 32-byte words; validated, then lowercased.
+- `removed` must be a JSON boolean. Required fields are never filled. `topic3` is the presence tag above.
+- Recorder input takes `block_timestamp` from the matching validated header. Saved exports must carry it.
+- Records sort by numeric `(block_number, transaction_index, log_index)`. Duplicate identities are refused.
+- Bucket membership is `start <= block_timestamp < end`.
+- Bytes are the P02 `canonical_bytes` of the list (sorted keys, compact separators, UTF-8, no trailing newline).
+
+Literal oracle: one record with number 1, transaction and log index 0, timestamp 1800000000, address `0x` plus twenty
+`22` bytes, block hash `0x` plus thirty-two `11` bytes, the Swap topic0, zero topic1/topic2, data words `[1,0,0,2]`,
+`removed=false` and absent topic3 is 771 bytes with SHA-256
+`c7032fb27b3a0b2103c49ab792a402dc9e5c99795b948dab1f3ff297d7fbcccf`. The same record with explicit null topic3 is 769
+bytes, `925cef405e3ad73335776bc6ce117a8eacc4ef5d3d9cc547dbe478e04ac3cb82`. The empty list is
+`4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`.
+
+## Handoff `edge-os.forward-history-handoff/1`
+
+`handoff.json` is written once, exclusively, as canonical JSON; its SHA-256 is computed on the final bytes. It contains
+the versions, predecessor, input and recorder-code hashes, attempt and source identity, evidence class, status and stop
+reason, network, market and pool token order, window, exact query and field selection, boundaries, scan, scan log count,
+retained header facts (in-scan log blocks and boundaries), phase outcomes, P3 reply summaries, facts (bytecode hashes
+and lengths of decoded bytes, decimals, finality, archive height, `fee_transfer_semantics=EXTERNAL_EVIDENCE_REQUIRED`),
+clock trust, call accounting and exactly four buckets.
+
+Each bucket has `start_utc`, `end_utc`, `status` (`DELIVERED` or `INCOMPLETE`), `reply_id`, `received_at_utc` (UTC
+seconds rounded up, never earlier than receipt), `received_at_utc_us`, `record_count`, `payload_sha256` and `reason`.
+An incomplete bucket has null delivery, count and digest plus a reason; it is never an empty payload.
+`delivery_records` holds only delivered buckets. No floats appear. A handoff never contains a release SHA and never
+freezes a release; the release is built later from these facts.
+
+## Saved-export checker `edge-os.history-payload-binding/1`
+
+`python scripts/history_payload_binding.py --handoff H --export E --expected X --out R` reads bounded files
+(handoff 8 MiB, export 64 MiB, expected 64 KiB), refuses duplicate keys, floats and non-finite values, and writes one
+exclusive 0600 report. The export is `{dataset_id, owner_id, content_sha256, content, raw_records}`. The trusted
+expected file holds `owner_id`, `dataset_id`, `release {release_id, sha256, kind}`, `source_id` and `handoff_sha256`.
+
+1. Check the handoff bytes' SHA-256, handoff schema and canonicalization version.
+2. Recompute the content hash with `records.contract_adapter.sha256_hex` and the raw hash with
+   `research_history.qualification_engine.raw_sha256` before any normalization; check the raw count.
+3. Compare outer and inner owner and dataset ids, `content.operating_release`, source id, evidence side, chain id, pool,
+   base and quote (P02 `[base, quote]`, not pool order), window and the query scan with the handoff.
+4. Project every raw record with its stored `block_timestamp`; require it in scan and equal to the retained header
+   fact. Compare the scan log count. For each of exactly four saved buckets, compare the interval, `available_at`
+   with `max(bucket_end, received_at_utc)`, the count and the canonical digest of half-open members.
+5. Report `PASS`, `MISMATCH` or `INCOMPLETE` per check and bucket. Contradiction gives MISMATCH. Missing evidence gives
+   INCOMPLETE. Overall PASS needs every check and bucket to pass.
+
+A PASS proves payload binding only. It does not authenticate the owner, prove database provenance, grant source rights,
+promote P07, adopt a market, authorize replay or prove execution timing. Current owner GET excludes raw records;
+the later application must compute this binding in process on owner-scoped raw records.
+
+## Verification recipe
+
+From the candidate checkout root, with an existing qualified Python 3.14 environment:
+
+```sh
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:apps/api/src apps/api/.venv/bin/python -m pytest --noconftest -p no:cacheprovider -q tests/test_forward_history_recorder.py tests/test_history_payload_binding.py
+```
+
+The suite needs no Docker, database, service, socket or provider. Before any actual operation, the recorder wrapper
+still needs a separate owned-loopback qualification with the real `StdlibHttpTransport`: wire, hash and receipt capture,
+the 2 MiB streaming cutoff, header/body drip deadlines, redirect refusal, cancellation, credential echo, one admitted
+request and interrupted no-resume behavior. Synthetic tests cannot supply that proof.
+
+## Claim limits
+
+Synthetic handoffs stay `SYNTHETIC`. Nothing here proves the HyperSync endpoint's served shape, account rights or
+limits, MOE mechanics, market activity or fillability. The resolver and initial TCP connect of the accepted transport
+cannot be interrupted by its watchdog; that disclosed limit remains.
