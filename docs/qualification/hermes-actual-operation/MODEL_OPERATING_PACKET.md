@@ -35,7 +35,7 @@ NOT VERIFIED by documentation: that `openai/gpt-6.1-sol` exists now, its endpoin
 | `allowed_fields` | `model, messages, stream, response_format, provider, reasoning, max_tokens, session_id` | fixed by A6 |
 | `max_request_bytes` | 65,536 | ONLINE_CONTINUATION section 3 (Probe A about 34 KB) |
 | `max_reply_bytes` | 262,144 | ONLINE_CONTINUATION section 3 (Probe A up to about 17 KB) |
-| `timeout_seconds` | 90 (grant life; must be 1-120) | Probe A calls 24-40 s |
+| `timeout_seconds` | 90 (grant life; must be 1-120) | Probe A C2 calls: 24.2 and 38.5 s in `PROBE_A_PROVIDER_REUSE.md`, 26.104 and 40.088 s in the result table |
 | `ca_bundle_sha256` | SHA256 of the frozen public CA bundle file the relay trusts for `openrouter.ai` | open (6.4) |
 | `price_snapshot_sha256` | SHA256 of the lane-2 snapshot (exact model, provider slug, prompt/completion USD per million as decimal strings) | open (6.1) |
 | `approval` | `{path, sha256}` of the builder's signed-off final packet | open |
@@ -46,8 +46,8 @@ Session id is bound to `p05-<attempt>` by the relay. No tools, memory, fallback 
 
 - Maximum actual requests: **1** for this qualification. After it, stop, whatever the outcome.
 - One reservation before the grant (accepted `GuardedTurnRunner` and `PostgresSpendLedger`): `max_input_tokens = max_request_bytes + 64` (`INPUT_TOKEN_MARGIN`), `max_output_tokens = max_tokens`. Liability in USD = `(65,600 × P + 4,096 × C) / 1,000,000`, with P and C the snapshot rates in USD per million.
-- Set `max_price` equal to the snapshot rates, so no routed endpoint can be priced above the rates the reservation uses.
-- Ceiling: the model and the data work together may use at most **USD 2.00**, counting every reservation, settled charge and UNKNOWN liability already recorded. The model reservation must not exceed the model share the builder assigns from that USD 2.00; this packet does not choose the share. Trading and gas have their own separate USD 2.00 and are not part of this packet. Example only, not a price: P = 2, C = 8 gives USD 0.1312 + 0.0328 = USD 0.1640.
+- Set `max_price` equal to the snapshot rates. By OpenRouter's documentation, routing then skips endpoints priced above those rates. This is documented provider behaviour, not enforcement this system proves.
+- Ceiling: the model and the data work together may use at most **USD 2.00**, counting every reservation, settled charge and UNKNOWN liability already recorded. The model reservation must not exceed the model share the builder assigns from that USD 2.00; this packet does not choose the share. Trading and gas have their own separate USD 2.00 and are not part of this packet. Example only, not a price: P = 2, C = 8 gives USD 0.1312 + 0.032768 = USD 0.163968.
 - Counted result (E1-COST1): 2xx, one choice, `finish_reason` `stop`, the record's model, integer usage equal to the job's, and the provider `cost` rounded up to a nano-USD EQUAL to `TokenPrice.nano_usd(prompt, completion)` and at most the reservation. Anything else is UNKNOWN: text withheld, never resent, the full reservation stays.
 - Known gap: cached-prompt discounts, reasoning-token rates, request fees, discounts and conditional overrides are not in the two-rate `TokenPrice`. If any applies, the cost will not equal the token charge, and the result stays UNKNOWN with full liability. That is safe but does not settle. Settling those needs a later ledger-owner change.
 
@@ -65,7 +65,7 @@ The generation lookup (`GET /api/v1/generation?id=`) is a separate host-held, ke
 ## 5. Stop and recovery
 
 1. Before the request: `relay_operator.py CONFIG check`, then `start`; record the printed handoff hash.
-2. After the one request, or on any failure or timeout: no second request. `relay_operator.py CONFIG stop`; exit 0 needs no leftovers.
+2. After the one request, or on any failure or timeout: no second request. `relay_operator.py CONFIG stop`; exit 0 needs no leftovers and no foreign object. Stop needs only the configuration file and the run root, not the key file.
 3. Relay killed after start: `restart` only to let recovery C mark `unknown_restart`; nothing is resent. The attempt stays UNKNOWN.
 4. Host killed mid-turn: the application's `recover_pending` handles the job; the reservation stays.
 5. Any UNKNOWN blocks further actual requests until a separately approved reconciliation (generation lookup) records the real charge.
