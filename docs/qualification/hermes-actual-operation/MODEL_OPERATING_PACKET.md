@@ -31,10 +31,10 @@ NOT VERIFIED by documentation: that `openai/gpt-6.1-sol` exists now, its endpoin
 | `provider.max_price` | `{"prompt": P, "completion": C}` equal to the snapshot rates (USD per million) | open (6.1); see section 3 |
 | `max_tokens` | 4096 | equal to the application interpreter limit (lane 2 checks) |
 | `reasoning` | `{"effort": "low"}` | Probe A value; support open (6.2) |
-| `response_format_sha256` | SHA256 of the accepted application interpreter output schema (canonical JSON, as `bind_release` hashes it) | open: the code-owned schema in `research/interpreter_output_schema.py` is not yet accepted; no fixture schema |
+| `response_format_sha256` | SHA256 of `interpretation_response_format()` from `research/interpreter_output_schema.py`, canonical JSON as `bind_release` hashes it; recipe and current value in `../hermes-interpreter-output/LOCAL_VERIFICATION.md` | prepared, not yet accepted; the live value is the one in the accepted candidate; no fixture schema |
 | `prompt_cache_options` | `{"mode": "explicit"}` exactly, no breakpoint or other member | builder-approved value (relay CONTRACT E1); qualification for the provider/model open (6.2) |
 | `allowed_fields` | `model, messages, stream, response_format, provider, reasoning, max_tokens, session_id, prompt_cache_options` | A6 plus the E1 cache field, which the record may name only when it sets `prompt_cache_options` |
-| `max_request_bytes` | 65,536 | ONLINE_CONTINUATION section 3 (Probe A about 34 KB) |
+| `max_request_bytes` | 65,536 | ONLINE_CONTINUATION section 3 (Probe A about 34 KB); the application prompt, task and strict schema serialize to about 14 KB for the concrete-thesis case (LOCAL estimate) |
 | `max_reply_bytes` | 262,144 | ONLINE_CONTINUATION section 3 (Probe A up to about 17 KB) |
 | `timeout_seconds` | 90 (grant life; must be 1-120) | Probe A C2 calls: 24.2 and 38.5 s in `PROBE_A_PROVIDER_REUSE.md`, 26.104 and 40.088 s in the result table |
 | `ca_bundle_sha256` | SHA256 of the frozen public CA bundle file the relay trusts for `openrouter.ai` | open (6.4) |

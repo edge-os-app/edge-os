@@ -34,7 +34,7 @@ from relay_admission import ActualReleaseUnapproved, load_actual_release
 from relay_turn_runner import RelayEndpoint, build_relay_job
 from spend_ledger import TokenPrice
 from test_hermes_relay_composition import (  # noqa: F401 - `approve` is used as a fixture
-    CHARGE, MODEL, RESERVATION, ROUTING, SCHEMA, approve, canonical, definition, handoff, record,
+    CHARGE, MODEL, RESERVATION, ROUTING, SCHEMA, SNAPSHOT, approve, canonical, definition, handoff, record,
     write_handoff,
 )
 
@@ -242,11 +242,11 @@ class InProcessRelay:
         return json.loads(path.read_text()) if path.exists() else None
 
 
-def provider_reply(cost: float) -> bytes:
+def provider_reply(cost: float, model: str = MODEL) -> bytes:
     from authored_cases import load_case, provider_script
 
     script = provider_script(load_case("concrete-thesis")["provider"])
-    return json.dumps({"id": "gen-SYNTHETIC-1", "object": "chat.completion", "created": 0, "model": MODEL,
+    return json.dumps({"id": "gen-SYNTHETIC-1", "object": "chat.completion", "created": 0, "model": model,
                        "choices": [{"index": 0, "message": {"role": "assistant", "content": script["content"]},
                                     "finish_reason": "stop"}],
                        "usage": {**script["usage"], "cost": cost}}).encode()
@@ -290,7 +290,9 @@ def image_id(pinned_hermes_image: str, evidence_root: Path) -> str:
 @pytest.fixture
 def shaped(image_id: str, env, migrated, pg, run_id: str, evidence_root: Path, request,
            monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
-    """One application over the composition with a test-approved SYNTHETIC record that asks for no prompt caching."""
+    """One application over the composition with a test-approved SYNTHETIC record that asks for no prompt caching.
+
+    An indirect parameter gives `definition` keyword changes, merged over these (its `record_fields` likewise)."""
     from edge_os_api.core.settings import load_settings
     from edge_os_api.main import create_app
     from edge_os_api.research import hermes_relay_composition as composition
@@ -303,9 +305,11 @@ def shaped(image_id: str, env, migrated, pg, run_id: str, evidence_root: Path, r
     channel = root / "jobs"
     channel.mkdir(parents=True)
     ca = b"SYNTHETIC CA bundle"
-    given = definition(image=image_id, record_fields={
+    changes = dict(getattr(request, "param", {}))
+    record_changes = changes.pop("record_fields", {})
+    given = definition(image=image_id, **changes, record_fields={
         "release_id": RELEASE_ID, "ca_bundle_sha256": hashlib.sha256(ca).hexdigest(),
-        "prompt_cache_options": dict(CACHE), "allowed_fields": list(CACHED_FIELDS)})
+        "prompt_cache_options": dict(CACHE), "allowed_fields": list(CACHED_FIELDS), **record_changes})
     monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", (given,))
     monkeypatch.setattr(relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset({given.record_sha256}))
     pg.psql(f"truncate {SPEND_TABLES}")
@@ -421,6 +425,78 @@ def test_docker_the_saved_request_leaves_the_job_with_every_bound_field_is_sent_
     assert pg.psql("select count(*) from usage_local.provider_spend_reservations") == "1"
     assert len(relay.sends) == 1
     assert find_leaks(shaped.channel, SENTINEL) == [] and find_leaks(shaped.root / "operator", SENTINEL) == []
+
+
+PREFERRED_MODEL = "openai/gpt-6.1-sol"  # the builder's preferred model: a SYNTHETIC record value here, not proof of it
+
+
+def application_schema_release() -> dict[str, Any]:
+    """`shaped` changes for the application's own strict response format, the preferred model and a body limit that
+    holds the real prompt, task and schema (about 14 KB). The rates stay SNAPSHOT's, so the reservation is
+    (24,000 + 64) x 3.00 / 1e6 + 4,096 x 9.00 / 1e6 = USD 0.109056, under the owner cap."""
+    from edge_os_api.research.interpreter_output_schema import interpretation_response_format
+
+    response_format = interpretation_response_format()
+    snapshot = canonical({**SNAPSHOT, "model": PREFERRED_MODEL})
+    return {"response_format": response_format, "snapshot": snapshot, "record_fields": {
+        "model": PREFERRED_MODEL, "max_request_bytes": 24_000,
+        "response_format_sha256": hashlib.sha256(canonical(response_format)).hexdigest(),
+        "price_snapshot_sha256": hashlib.sha256(snapshot).hexdigest()}}
+
+
+def cache_markers(value: Any, path: str = "") -> list[str]:
+    """Every key in the body that names a cache breakpoint or cache control, at any depth."""
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if "cache" in key and path + key != "prompt_cache_options":
+                found.append(path + key)
+            found.extend(cache_markers(child, f"{path}{key}/"))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            found.extend(cache_markers(child, f"{path}{index}/"))
+    return found
+
+
+@pytest.mark.parametrize("shaped", [application_schema_release()], indirect=True, ids=["application-schema"])
+def test_docker_the_application_schema_and_preferred_model_go_on_the_wire_with_no_cache_marker(
+        shaped, owner_a, pg) -> None:
+    from edge_os_api.records import contract_adapter as record_contract
+    from edge_os_api.research.hermes_interpreter import SYSTEM_PROMPT
+    from edge_os_api.research.interpreter_output_schema import interpretation_response_format
+
+    relay = shaped.relay
+    relay.answers.append(relay.reply(200, "application/json", provider_reply(float(CHARGE), PREFERRED_MODEL)))
+    client = shaped("schema")
+
+    created = client.post("/v1/research/requests", json=intake(), headers=owner_a)
+
+    assert created.status_code == 201, created.text
+    [attempt] = created.json()["attempts"]
+    attempt_id = attempt["attempt_id"]
+    assert (attempt["status"], attempt["parse_result"], attempt["request_count"]) == ("COMPLETED", "ACCEPTED", 1)
+    assert attempt["spend"] == {"state": "SETTLED", "charge_usd": str(CHARGE)}
+    [send] = relay.sends
+    body = json.loads(send["body"])
+    expected = {**EXTRA, "response_format": interpretation_response_format(), "prompt_cache_options": CACHE,
+                "model": PREFERRED_MODEL, "max_tokens": 4096, "session_id": f"p05-{attempt_id}"}
+    assert {name: body[name] for name in expected} == expected and set(body) == set(expected) | {"messages"}
+    assert [set(message) for message in body["messages"]] == [{"role", "content"}] * 2
+    assert [message["role"] for message in body["messages"]] == ["system", "user"]
+    system, user = (message["content"] for message in body["messages"])
+    assert isinstance(system, str) and SYSTEM_PROMPT in system  # Hermes wraps the prompt in its own text
+    assert isinstance(user, str) and record_contract.canonical_bytes(json.loads(user)).decode() == user
+    task = json.loads(user)
+    assert (task["task"], task["original_request"]) == ("interpret", intake()["original_request"])
+    assert cache_markers(body) == []
+    wire_sha = hashlib.sha256(send["body"]).hexdigest()
+    [admitted] = [e for e in container_result(shaped.channel, attempt_id)["guard"]["evidence"] if e["admitted"]]
+    assert admitted["request_sha256"] == wire_sha
+    (shaped.root / "wire.json").write_text(json.dumps({
+        "label": "SYNTHETIC", "attempt_id": attempt_id, "body_sha256": wire_sha, "body_bytes": len(send["body"]),
+        "response_format_sha256": hashlib.sha256(canonical(expected["response_format"])).hexdigest(),
+        "message_roles": ["system", "user"], "cache_markers": []}, indent=1, sort_keys=True) + "\n")
+    assert len(relay.sends) == 1 and pg.psql("select count(*) from usage_local.provider_spend_reservations") == "1"
 
 
 @pytest.mark.parametrize("answer", ["cost_mismatch", "lost_reply"])
