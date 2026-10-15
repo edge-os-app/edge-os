@@ -35,6 +35,18 @@ ROUTING = {"only": ["synthetic-slug"], "allow_fallbacks": False, "require_parame
 KINDS = ("container", "network", "volume")
 
 
+DOCKER_29_ABSENT = {  # Docker 29.4.0 `docker inspect --type KIND NAME` for no such object, recorded in RUNTIME1
+    "network": "Error response from daemon: network {name} not found",
+    "container": "Error response from daemon: No such container: {name}",
+    "volume": "Error response from daemon: get {name}: no such volume"}
+
+
+def absent_answer(wording: str, kind: str, name: str) -> str:
+    if wording == "docker-29.4.0":
+        return DOCKER_29_ABSENT[kind].format(name=name) + "\n"
+    return f"Error: No such object: {name}\n"
+
+
 def done(stdout: str = "", code: int = 0, stderr: str = "") -> Any:
     return type("Done", (), {"stdout": stdout, "stderr": stderr, "returncode": code})()
 
@@ -42,7 +54,8 @@ def done(stdout: str = "", code: int = 0, stderr: str = "") -> Any:
 class FakeDocker:
     """Docker's object model as far as the operator and supervisor use it. `objects[kind][name]` is {Id, Labels, Mounts}.
     `before_create(kind, name)` runs before each create and `on_inspect(name)` before each inspect, so a test can put a
-    competing object in place. A missing object answers like Docker ("No such object"); a second network or container
+    competing object in place. A missing object answers like Docker 29.4.0 (`absent_wording`: each kind's own text, or
+the generic "No such object" of other versions); a second network or container
     under one name is refused; a second `volume create` of a local volume re-uses the first without an error, as Docker
     documents (docker/cli docs/reference/commandline/volume_create.md). Fault switches: `daemon_down`,
     `malformed` (names whose inspect reply is not JSON), `fail_list`, `fail_rm` (names or ids whose removal fails)."""
@@ -63,6 +76,7 @@ class FakeDocker:
         self.fail_rm: set[str] = set()
         self.inspect_error: set[str] = set()  # names whose inspect fails with an error that is not "no such object"
         self.ignore_rm: set[str] = set()  # ids whose removal answers success but leaves the object
+        self.absent_wording = "docker-29.4.0"
 
     def add(self, kind: str, name: str, *, label: str | None, sources: tuple[str, ...] = (),
             labels: dict[str, str] | None = None) -> str:
@@ -95,7 +109,7 @@ class FakeDocker:
                 return done(code=1, stderr="Error response from daemon: i/o timeout")
             name = self.find(args[2], args[3])
             if name is None:
-                return done("[]", 1, f"Error: No such object: {args[3]}")
+                return done("[]", 1, absent_answer(self.absent_wording, args[2], args[3]))
             value = self.objects[args[2]][name]
             shaped = ({"Id": value["Id"], "Name": "/" + name, "Config": {"Labels": value["Labels"]},
                        "Mounts": value["Mounts"]} if args[2] == "container" else
@@ -967,3 +981,46 @@ def test_no_restart_after_a_stop_that_removed_nothing(tmp_path: Path, key: Path,
     fake.fail_rm.clear()
     effects = len(fake.effects())
     assert main([str(path), "restart"]) == 2 and len(fake.effects()) == effects
+
+
+# --- absence wording ------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("kind", "stderr"), [
+    *DOCKER_29_ABSENT.items(),
+    *((kind, form) for kind in KINDS for form in ("Error: No such object: {name}", "Error: No such {kind}: {name}",
+                                                  "Error response from daemon: No such {kind}: {name}"))])
+def test_each_kind_of_docker_absence_answer_for_the_asked_name_is_absent(
+        monkeypatch: pytest.MonkeyPatch, kind: str, stderr: str) -> None:
+    name = "relay-egress-op-unit-0123456789ab"
+    monkeypatch.setattr(relay_supervisor, "docker",
+                        lambda *args, **_: done("[]", 1, stderr.format(name=name, kind=kind) + "\n"))
+    assert relay_operator._inspect(kind, name) is None
+
+
+@pytest.mark.parametrize(("kind", "stdout", "stderr"), [
+    ("network", "[]", "Error response from daemon: network relay-egress-other not found"),  # another name
+    ("network", "[]", "Error response from daemon: network relay-egress-op-unit-0123456789ab-2 not found"),
+    ("network", "[]", "Error response from daemon: not found"),
+    ("network", "[]", "Error response from daemon: network relay-egress-op-unit-0123456789ab not found: i/o timeout"),
+    ("network", "[]", "Error response from daemon: network relay-egress-op-unit-0123456789ab not found\nother error"),
+    ("volume", "[]", "Error response from daemon: network relay-egress-op-unit-0123456789ab not found"),  # wrong kind
+    ("container", "[]", "Error response from daemon: get relay-egress-op-unit-0123456789ab: no such volume"),
+    ("network", "[]", "permission denied while trying to connect to the Docker daemon socket"),
+    ("network", "[]", "Error response from daemon: context deadline exceeded"),
+    ("network", "[]", ""),
+    ("network", "[{}]", "Error response from daemon: network relay-egress-op-unit-0123456789ab not found"),
+])
+def test_an_absence_answer_for_another_name_kind_or_with_any_other_error_is_unknown(
+        monkeypatch: pytest.MonkeyPatch, kind: str, stdout: str, stderr: str) -> None:
+    monkeypatch.setattr(relay_supervisor, "docker", lambda *args, **_: done(stdout, 1, stderr))
+    assert relay_operator._inspect(kind, "relay-egress-op-unit-0123456789ab") is False
+
+
+@pytest.mark.parametrize("wording", ["docker-29.4.0", "no-such-object"])
+def test_start_and_a_clean_stop_work_with_either_absence_wording(tmp_path: Path, key: Path, fake: FakeDocker,
+                                                                  wording: str) -> None:
+    fake.absent_wording = wording
+    loaded, _, _ = started(tmp_path, key)
+    assert main([str(write(tmp_path, config(tmp_path, key))), "stop"]) == 0
+    assert (loaded.run_root / "stopped.json").exists() and not any(fake.labelled(loaded.target.run_id).values())

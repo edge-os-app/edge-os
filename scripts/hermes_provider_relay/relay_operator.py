@@ -23,7 +23,8 @@ SHA256>`, so two configurations never share names even with one operation id. A 
 only if it carries this run id's label and, for a container, mounts its role's config file from this run root, for
 the network, has the id recorded at start, and for the egress volume, carries the random claim label this start wrote
 (the operator creates that volume before the supervisor, because Docker re-uses an existing volume of that name).
-Absent means Docker answered "no such object"; any other unreadable answer is unknown, never gone and never ours.
+Absent means Docker's exact no-such-object answer for that kind and name (Docker 29.4.0 says `network NAME not found`
+for a network); any other unreadable answer is unknown, never gone and never ours.
 Foreign and unknown objects are never killed, removed, mounted or adopted, and are reported. Removal goes by the Docker
 id just inspected (a volume by its name) and is then checked; only a stop that ends clean writes `stopped.json`.
 
@@ -324,14 +325,26 @@ def _docker(*args: str) -> subprocess.CompletedProcess[str] | None:
         return None
 
 
+def _absent_answers(kind: str, name: str) -> set[str]:
+    """Docker's whole error line for no `kind` object named `name`: the generic `inspect` forms and each kind's own
+    (Docker 29.4.0: `network NAME not found`, `No such container: NAME`, `get NAME: no such volume`)."""
+    own = {"container": f"No such container: {name}", "network": f"network {name} not found",
+           "volume": f"get {name}: no such volume"}[kind]
+    return {prefix + text for prefix in ("Error: ", "Error response from daemon: ")
+            for text in (f"No such object: {name}", f"No such {kind}: {name}", own)}
+
+
 def _inspect(kind: str, name: str) -> dict[str, Any] | None | bool:
-    """Docker's view of the object named `name`: None only when Docker says there is no such object, False when the
-    answer is anything else that is not one readable object (daemon down, timeout, malformed reply)."""
+    """Docker's view of the object named `name`: None only when Docker's whole answer is the no-such-object error for
+    this kind and name, False when it is anything else that is not one readable object (daemon down, permission,
+    timeout, another name or kind, an extra error, a malformed reply)."""
     seen = _docker("inspect", "--type", kind, name)
     if seen is None:
         return False
     if seen.returncode != 0:
-        return None if "no such" in (seen.stderr or "").lower() else False
+        lines = (seen.stderr or "").strip().splitlines()
+        absent = (seen.stdout or "").strip() in ("", "[]") and lines and set(lines) <= _absent_answers(kind, name)
+        return None if absent else False
     try:
         [value] = json.loads(seen.stdout)
     except (TypeError, ValueError):
