@@ -1,6 +1,6 @@
 # Model operating packet: one actual Hermes request (prepared, NOT approved, NOT run)
 
-Task `HERMES-OPERATOR-L1-20261015-LOCAL-v1`. Status: PREPARED FOR BUILDER REVIEW. This packet authorizes nothing. No key or account was read and no provider request was made to prepare it. A real request needs, in order: the open facts in section 6 proved, an exact release record and price snapshot frozen, a reviewed code change that adds that record's SHA256 to `APPROVED_ACTUAL_RELEASES`, lane-2 composition accepted, and an explicit builder approval of this packet's final values.
+Task `HERMES-OPERATOR-L1-20261015-LOCAL-v1`. Status: PREPARED FOR BUILDER REVIEW. This packet authorizes nothing. No key or account was read and no provider request was made to prepare it. A real request needs, in order: the open facts in section 6 proved, an exact release record and price snapshot frozen, a reviewed code change that adds that record's SHA256 to `APPROVED_ACTUAL_RELEASES`, the application composition and release binding (`hermes_relay_composition.bind_release` with its code-owned definition) accepted for that record, and an explicit builder approval of this packet's final values.
 
 It reuses the closed Probe A handling (`../hermes-provider-relay/PROBE_A_PROVIDER_REUSE.md`, `../../prototypes/EDGE_OS_PROBE_A_RESULT.md`) and does not reopen that probe.
 
@@ -17,7 +17,7 @@ Fetched from `/openrouterteam/docs` and `/websites/openrouter_ai`. Documentation
 | Model and endpoint pricing (`/api/v1/models`, `/api/v1/models/{author}/{slug}/endpoints`) is per token in USD strings; pricing may also carry `internal_reasoning`, `input_cache_read`, `input_cache_write`, `discount`, `request` and conditional `overrides` (long-context or time windows); the documented examples send an `Authorization` header | models and endpoints API reference, SDK `PublicPricing` |
 | Model variants such as `:floor` can admit discounted flex endpoints | guides/routing/model-variants/floor |
 
-NOT VERIFIED by documentation: that `openai/gpt-6.1-sol` exists now, its endpoints, provider slugs, current prices, `data_collection: deny` compliance, supported parameters (`reasoning`, `response_format`, `max_tokens`) or maximum output. The builder preference (OpenRouter, `openai/gpt-6.1-sol`) is an input, not proof. Probe A observed `openai/gpt-6.1-sol` with requested route `openai/flex`, low reasoning and `max_tokens` 4096 on its own dated run (R1 9,511/1,957 tokens USD 0.021673; R2 9,903/3,312 tokens USD 0.028938). Those are dated observations, not current prices.
+NOT VERIFIED by documentation: that `openai/gpt-6.1-sol` exists now, its endpoints, provider slugs, current prices, `data_collection: deny` compliance, supported parameters (`reasoning`, `response_format`, `max_tokens`, `prompt_cache_options`), the provider's cache semantics and cache billing for `prompt_cache_options`, or maximum output. The builder preference (OpenRouter, `openai/gpt-6.1-sol`) is an input, not proof. Probe A observed `openai/gpt-6.1-sol` with requested route `openai/flex`, low reasoning and `max_tokens` 4096 on its own dated run (R1 9,511/1,957 tokens USD 0.021673; R2 9,903/3,312 tokens USD 0.028938). Those are dated observations, not current prices.
 
 ## 2. Frozen request shape (release record fields, CONTRACT A6)
 
@@ -29,7 +29,7 @@ NOT VERIFIED by documentation: that `openai/gpt-6.1-sol` exists now, its endpoin
 | `provider.only` | exactly one slug from the current endpoints list | open (6.1); Probe A's `openai/flex` is dated |
 | `provider.allow_fallbacks`, `require_parameters`, `data_collection` | `false`, `true`, `"deny"` | fixed; `deny` support for the slug open (6.2) |
 | `provider.max_price` | `{"prompt": P, "completion": C}` equal to the snapshot rates (USD per million) | open (6.1); see section 3 |
-| `max_tokens` | 4096 | equal to the application interpreter limit (lane 2 checks) |
+| `max_tokens` | 4096 | equal to the application interpreter limit (`bind_release` sets the interpreter configuration from the record) |
 | `reasoning` | `{"effort": "low"}` | Probe A value; support open (6.2) |
 | `response_format_sha256` | SHA256 of `interpretation_response_format()` from `research/interpreter_output_schema.py`, canonical JSON as `bind_release` hashes it; recipe and current value in `../hermes-interpreter-output/LOCAL_VERIFICATION.md` | prepared, not yet accepted; the live value is the one in the accepted candidate; no fixture schema |
 | `prompt_cache_options` | `{"mode": "explicit"}` exactly, no breakpoint or other member | builder-approved value (relay CONTRACT E1); qualification for the provider/model open (6.2) |
@@ -38,7 +38,7 @@ NOT VERIFIED by documentation: that `openai/gpt-6.1-sol` exists now, its endpoin
 | `max_reply_bytes` | 262,144 | ONLINE_CONTINUATION section 3 (Probe A up to about 17 KB) |
 | `timeout_seconds` | 90 (grant life; must be 1-120) | Probe A C2 calls: 24.2 and 38.5 s in `PROBE_A_PROVIDER_REUSE.md`, 26.104 and 40.088 s in the result table |
 | `ca_bundle_sha256` | SHA256 of the frozen public CA bundle file the relay trusts for `openrouter.ai` | open (6.4) |
-| `price_snapshot_sha256` | SHA256 of the lane-2 snapshot (exact model, provider slug, prompt/completion USD per million as decimal strings) | open (6.1) |
+| `price_snapshot_sha256` | SHA256 of the price snapshot that the code-owned release definition supplies to `bind_release` (exact model, provider slug, prompt/completion USD per million as decimal strings) | open (6.1) |
 | `approval` | `{path, sha256}` of the builder's signed-off final packet | open |
 
 Session id is bound to `p05-<attempt>` by the relay. No tools, memory, fallback model or retries (accepted job configuration).

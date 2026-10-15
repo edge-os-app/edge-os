@@ -97,6 +97,49 @@ def test_every_object_is_closed_and_requires_all_its_keys_using_only_the_provide
         assert "enum" not in node or node["type"] == "string"
 
 
+# The accepted grammar, written out by hand: the model-owned P02 CREATE_STRATEGY fields, the prompt's item branches and
+# the P02 operator signatures. The emitted schema must say exactly this, whatever the generator does.
+MODEL_FIELD_NAMES = ["data_inputs", "entry", "exit", "invalidation", "sizing", "additions", "partial_exits",
+                     "cost_assumptions", "risk_limits", "action_scope"]
+ITEM_BRANCHES = {"Stated": {"state": ["KNOWN"], "origin": ["USER_STATED"]},
+                 "Proposed": {"state": ["KNOWN"], "origin": ["AGENT_PROPOSED"], "adoption": ["PENDING"]},
+                 "Missing": {"state": ["MISSING"]},
+                 "Conflicting": {"state": ["CONFLICTING"]}}
+OPERATOR_BRANCHES = {"Constant": ["constant"], "Series": ["price", "quote_volume"], "PriceReturn": ["price_return"],
+                     "Window": ["lag", "sum", "mean"], "Pair": ["gt", "gte", "lt", "lte", "and", "or"],
+                     "Negation": ["not"]}
+NODE_REFS = [{"$ref": f"#/$defs/{name}"} for name in OPERATOR_BRANCHES]
+
+
+def assert_emitted_grammar(response_format: dict[str, Any]) -> None:
+    """The emitted schema states the accepted grammar literally: field names, item branches, operators, `args` size."""
+    schema = response_format["json_schema"]["schema"]
+    defs = schema["$defs"]
+    assert schema["properties"]["meaning_status"]["enum"] == ["SUPPORTED", "UNSUPPORTED"]
+    assert schema["properties"]["evidence_readiness"]["enum"] == ["READY", "UNRESOLVED"]
+    assert schema["properties"]["field_evidence"]["items"] == {"anyOf": [{"$ref": f"#/$defs/{name}"}
+                                                                         for name in ITEM_BRANCHES]}
+    for name, tokens in ITEM_BRANCHES.items():
+        properties = defs[name]["properties"]
+        assert properties["field_name"] == {"type": "string", "enum": MODEL_FIELD_NAMES}, name
+        for key, enum in tokens.items():
+            assert properties[key] == {"type": "string", "enum": enum}, (name, key)
+    assert defs["Question"]["properties"]["field_name"]["enum"] == MODEL_FIELD_NAMES
+    for name, ops in OPERATOR_BRANCHES.items():
+        assert defs[name]["properties"]["op"] == {"type": "string", "enum": ops}, name
+    assert sorted(op for ops in OPERATOR_BRANCHES.values() for op in ops) == sorted(
+        ["constant", "price", "quote_volume", "price_return", "lag", "sum", "mean", "gt", "gte", "lt", "lte", "and",
+         "or", "not"])
+    assert defs["Pair"]["properties"]["args"] == {"type": "array", "items": {"anyOf": NODE_REFS},
+                                                  "minItems": 2, "maxItems": 2}
+    for name in ("Window", "Negation"):
+        assert defs[name]["properties"]["value"] == {"anyOf": NODE_REFS}, name
+
+
+def test_the_emitted_schema_states_the_accepted_grammar_literally() -> None:
+    assert_emitted_grammar(interpretation_response_format())
+
+
 # --- Admits the authored fixtures ------------------------------------------------------------------------------------
 
 

@@ -51,7 +51,10 @@ Sources: Context7 `/websites/developers_openai_api` and `/openrouterteam/docs`
 
 - Supported types: string, number, boolean, integer, object, array, enum, anyOf. The root must be an object, not
   `anyOf`. Every object needs `additionalProperties: false` and every property in `required`. `$defs` with `$ref`
-  and recursion are supported. Arrays support `minItems` and `maxItems`.
+  and recursion are supported. Arrays support `minItems` and `maxItems`, except on fine-tuned models, where the page
+  lists `minItems`, `maxItems`, `pattern`, `format`, `minimum`, `maximum`, `multipleOf` and `patternProperties` as
+  unsupported. That exception does not change this task's model string, `openai/gpt-6.1-sol`, which is not a
+  fine-tuned model, and it qualifies nothing about that model either.
 - Unsupported for all models: `allOf`, `not`, `dependentRequired`, `dependentSchemas`, `if`, `then`, `else`. `const`
   is not listed as a supported keyword, so the schema uses one-value `enum`s.
 - Limits: 5,000 object properties, 10 levels of object nesting, 1,000 enum values, 120,000 characters of names and
@@ -98,13 +101,17 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=<worktree>/apps/api/src <same python> -B -m
   --basetemp=<private tmp> -q tests/hermes_provider_relay/test_pinned_hermes_actual_shape.py -k "not docker"
 ```
 
-Measured on this candidate's source:
-- Command 1: 279 passed (62 new, 217 existing).
+Measured on the repair candidate's source (worker run; the first candidate 33573f4 measured 279 with 62 new):
+- Command 1: 280 passed (63 new, 217 existing).
 - Command 2: 18 passed, 4 deselected (the module's Docker cases, one of them new).
 
 The new suite covers:
 - the exact identity and copies;
 - the strict subset;
+- the emitted schema's grammar, against hand-written literals: the 10 model-owned field names, the four item branches and
+  their state, origin and adoption tokens, the 14 P02 operators by signature, and `args` with exactly two items. A
+  private worker diagnostic (not repository code) truncated or widened copies of the factory result five ways; this
+  check refused all five and accepted the unchanged result;
 - all 13 authored answers with a `model_response` (10 first, 3 follow-up), with the parser re-run on every accepted
   first case;
 - every item state and value shape;
@@ -113,7 +120,7 @@ The new suite covers:
 - binding and mutation refusal through the real `bind_release` with test-only registry injection;
 - empty ordinary registries.
 
-## Prepared pinned-wire case (not run)
+## Pinned-wire case (one synthetic run PASSED; endpoint not run)
 
 `tests/hermes_provider_relay/test_pinned_hermes_actual_shape.py::test_docker_the_application_schema_and_preferred_model_go_on_the_wire_with_no_cache_marker[application-schema]`
 uses the existing Docker `shaped` fixture with a SYNTHETIC test-approved record for `openai/gpt-6.1-sol`, this exact
@@ -125,6 +132,18 @@ format and `prompt_cache_options = {"mode": "explicit"}`. It checks the one coun
 - the guard-admitted body hash;
 - one reservation, settled at the token charge.
 
-This is synthetic serialization proof for this exact model string, transport and Hermes pin. It is not endpoint,
-cache, billing or account proof, and it does not extend to another model family. It needs a separate Docker/PostgreSQL
-grant and the receipted image.
+Worker result (runtime stage 1, candidate `33573f4`, which has the same schema module, wire test, job, scripts and
+locks as later candidates of this repair): `1 passed` under the pressure guard. The run used the worker's own clone and
+source and the receipted image `sha256:2d28b6d6...81f0` with in-image job `38be9722...`, which equals the candidate job.
+It recorded a 15,245-byte body, format SHA256 `cdffe6fd...cbc60`, roles `system` and `user`, and no cache markers. This
+is the worker's evidence only. Each original reviewer runs the same node on the final candidate as its own check.
+
+Process notes kept from that run and earlier stages:
+- The first image check of runtime stage 1 exited 1 (`No such image`) while the engine woke from Resource Saver. A
+  later read-only check confirmed the image. This continuation is a recorded process deviation, and it does not prove
+  the Resource Saver cause.
+- The source1 origin import ran without the guard. The worker's skill reading was incomplete before the candidate was
+  written, and most behavior tests were written after the module. Later reading does not make that order compliant.
+
+This is synthetic serialization proof for this exact model string, transport and Hermes pin. Actual endpoint schema
+acceptance, cache behavior, billing and account checks are NOT RUN. The result does not extend to another model family.
