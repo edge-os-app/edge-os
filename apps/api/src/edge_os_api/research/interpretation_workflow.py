@@ -52,6 +52,10 @@ LOCAL_FAKE_CONFIG = HermesInterpreterConfig(model="local-fake/p05-interpretation
 LABEL = {"kind": "HERMES_LOCAL_FAKE_PROVIDER", "id": "p05-interpretation/4",
          "notice": "Actual pinned Hermes ran in a sandbox against a local fake provider. No real model was called "
                    "and no research ran."}
+LIVE_KIND = "HERMES_LIVE_RELEASE"
+LIVE_NOTICE = ("Pinned Hermes is configured for release {release_id}: provider {provider}, model {model}, model budget "
+               "USD {budget_usd}. This describes the configuration only. It does not show that a model call completed; "
+               "each attempt records its own result.")
 TEXT_QUESTION_PREFIX = "ask-"
 UNCERTAIN = frozenset({"TIMED_OUT", "UNKNOWN", "INTERRUPTED"})
 
@@ -144,6 +148,7 @@ class HermesResearch:
     def __init__(self, runner: HermesTurnRunner, session_factory: Callable[[], Session], guard: AdvisoryLockGuard,
                  monotonic: Callable[[], float], config: HermesInterpreterConfig = LOCAL_FAKE_CONFIG) -> None:
         self._session_factory = session_factory
+        self.config = config
         self.guard = guard
         self.store = PostgresAttemptStore(session_factory)
         self.ledger = AttemptLedger(self.store, new_id=lambda: str(uuid.uuid4()), now=service.utcnow)
@@ -151,7 +156,14 @@ class HermesResearch:
                                              publication=RecordPublicationCheck())
 
     def label(self) -> dict[str, str]:
-        return dict(LABEL)
+        """What the interpreter is configured to be. A LIVE release names its release, provider and model; it never
+        claims a call happened. The release id is shown as recorded, so a SYNTHETIC test release stays visibly one."""
+        release = self.config.live_release
+        if self.config.runtime_label != "LIVE" or release is None:
+            return dict(LABEL)
+        return {"kind": LIVE_KIND, "id": release.release_id,
+                "notice": LIVE_NOTICE.format(release_id=release.release_id, provider=release.provider,
+                                             model=release.model, budget_usd=release.budget_usd)}
 
     # --- creating a request -------------------------------------------------------------------------------------
 

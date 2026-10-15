@@ -23,7 +23,7 @@ class RelayApplicationDefinition:     # code-owned; RELEASE_DEFINITIONS = () in 
     record_sha256: str
     price_snapshot: bytes             # the bytes the record names by price_snapshot_sha256
     response_format: Mapping | None   # the schema the record names by response_format_sha256
-    image: str                        # pinned Hermes job image, by digest
+    image: str                        # pinned Hermes job image, by Docker image id sha256:<64 hex> (section 7.1)
     channel_root: str                 # this application's channel under the relay
     global_cap_usd: Decimal
     owner_cap_usd: Decimal
@@ -55,7 +55,7 @@ Price identity: the SAME `TokenPrice` object configures `SpendLimits`/`PostgresS
 
 That settings row is a single row per database, shared with the LOCAL transport and relay mounts. If it was frozen first at another price, every reservation of this composition is refused (`SpendLedgerUnavailable`, request count 0). Actual activation therefore needs a ledger-owner procedure or a fresh approved ledger. This candidate grants no reset, migration, data deletion or price change.
 
-Ownership of the request shape: the policy's `required_extra` (`stream`, `provider`, `reasoning`, `response_format`) is a JSON copy that shares no object with the record or the definition. `compose_application` refuses a release whose copy no longer hashes to `required_extra_sha256`, or whose record routing or reasoning no longer equals the copy.
+Ownership of the request shape: the policy's `required_extra` (`stream`, `provider`, `reasoning`, `response_format` and, when the record names it, `prompt_cache_options`) is a JSON copy that shares no object with the record or the definition. `compose_application` refuses a release whose copy no longer hashes to `required_extra_sha256`, or whose record routing, reasoning or cache options no longer equal the copy.
 
 ## 3. Composition and order of refusals
 
@@ -101,7 +101,7 @@ The application's trusted configuration owner gives `handoff_path` and `handoff_
 - The file is not a regular file, is itself a symbolic link, is over 16 KiB, or does not have the named SHA-256. `O_NOFOLLOW` checks the final path part only; symbolic links in parent folders are followed. The exact hash still binds the bytes that are read.
 - The JSON is not strict, the fields are not exactly the frozen twelve, or `format` is not `edge-os.relay-operator-handoff/1`.
 - `kind` is not `ACTUAL`, `release` differs from `actual.release.settings()`, `release_record.sha256` differs from the record SHA-256, or `ca_bundle_sha256` differs from the record's.
-- `image.reference` is not the definition's digest reference (`name@sha256:<64 hex>`), or `image.id` is not `sha256:<64 hex>`. A mutable tag is refused. The job runs the digest reference itself, so the launch argument is immutable.
+- `image.id` is not exactly the definition's Docker image id, or `image.reference` is not 1-200 characters without white space. The reference is the operator's name for that id (often a local tag); it is evidence only and never selects what runs. The job runs the image id itself, so the launch argument is immutable (section 7.1).
 - `shutdown_owner` is not `relay_operator`.
 - The `endpoint` fields are not exactly the six frozen fields, a path is not absolute, `channel_root` is not the release's, or `heartbeat_max_age_seconds` is not a number in (0, 10].
 - `evidence_dir` is not absolute.
@@ -178,9 +178,11 @@ Selectors (frozen at commit): composition `tests/test_hermes_relay_composition.p
 
 The pure tests also cover the handoff: the exact handoff is accepted, 20 field faults are refused before any engine, and so are wrong hash bytes, a link, a folder, an oversized file, a missing file and a repeated key. The mounted fixture writes a mode-0444 handoff for the stand-in relay.
 
-Not proved here: pinned Hermes producing the ACTUAL request shape. The ACTUAL job has no network and sends its one request through the relay channel, so this can be tested offline with pinned Hermes and a stand-in relay. It was not run. The lane-1 pinned-Hermes relay proof (`tests/hermes_provider_relay/test_relay_application_mount.py`) uses the AUTHORED policy with an empty `required_extra`. No browser or UI is changed.
+Not proved by this file: pinned Hermes producing the ACTUAL request shape. Task `HERMES-LIVE-PATH-L1-20261015-LOCAL-v1` adds that proof in `tests/hermes_provider_relay/test_pinned_hermes_actual_shape.py` (section 7.4). The lane-1 pinned-Hermes relay proof (`tests/hermes_provider_relay/test_relay_application_mount.py`) still uses the AUTHORED policy with an empty `required_extra`. No browser or UI is changed.
 
 ## 6. Follow-on files and blockers (not in this candidate)
+
+Section 7 records which of these the follow-on task `HERMES-LIVE-PATH-L1-20261015-LOCAL-v1` closed locally. The list is kept as written for the earlier candidate.
 
 - `research/interpretation_workflow.py` `LABEL` and `HermesResearch.label()`: the `/v1/interpreter` view still says a local fake provider ran and no real model was called. It must follow `config.runtime_label` before any approved release is activated. That is UI/label work for a later milestone.
 - An approved release needs the exact qualification packet. It must give the record, price snapshot (with current provider pricing evidence, the `max_price` unit, and cached-token/fee treatment), schema, image digest, CA bundle, caps, channel and the relay operator start (lane 1). Then add it to `RELEASE_DEFINITIONS` and `APPROVED_ACTUAL_RELEASES` in one reviewed change.
@@ -189,3 +191,29 @@ Not proved here: pinned Hermes producing the ACTUAL request shape. The ACTUAL jo
 - The shared ledger price row (section 2) needs a ledger-owner procedure or a fresh approved ledger before activation.
 - No server launcher or factory composition calls `open_hermes_application` and `create_app` yet (compare `scripts/hermes_app_mount/serve_transport_mount.py`). A launcher is follow-on work together with the runtime labels, the actual release and the deployment.
 - The CA bundle is checked by the relay against the record. The application only carries `ca_bundle_sha256` inside `actual`.
+
+## 7. Amendment: local launcher, labels, request shape and image identity
+
+Task `HERMES-LIVE-PATH-L1-20261015-LOCAL-v1`, base `19e6063ec72fc676e479a1d9f477c2af3e23020a`. LOCAL only. Both registries stay empty, so the default still composes nothing. This amendment approves no release, provider, model, price, key, network, spending, deployment or recording.
+
+### 7.1 Image identity
+
+The relay operator starts its containers by the Docker image id it inspected for its configured reference, and hands off `image: {reference, id}`. A locally built image has an image id (`sha256:<64 hex>`, the hash of its configuration) and no registry manifest digest; the two are different identities. `RelayApplicationDefinition.image` is therefore the Docker image id, and the handoff's `image.id` must equal it exactly. `build_relay_job(image=release.image)` launches every job by that id. A tag, a registry digest reference (`name@sha256:...`) or an upper-case id is refused when the definition binds. No registry service is added, and no RepoDigest is made up.
+
+### 7.2 Request shape
+
+`hermes_turn_job.request_options` maps the job's `guard.policy.required_extra` onto pinned Hermes' own `AIAgent` options: `stream` and `response_format` go to the top level of `request_overrides`; `provider`, `reasoning` and `prompt_cache_options` go to its `extra_body`, which Hermes merges into the top level of the request body. A required `reasoning` value is also given as `reasoning_config`, so Hermes' own setting agrees with the routed value. The session id stays `p05-<attempt_id>`. An empty or absent policy adds no option, so the direct, guarded, transport and relay AUTHORED jobs build the same agent as before. A required field the mapping does not know is not sent, and the guard refuses the request before it leaves the job.
+
+The optional record field `prompt_cache_options` (relay contract A7) is bound like `reasoning`: when the record names it, `bind_release` adds its exact value to `required_extra`, and `unchanged()` compares it with the record again.
+
+### 7.3 Interpreter label
+
+`HermesResearch.label()` keeps the shape `{kind, id, notice}`. The local fake configuration keeps `HERMES_LOCAL_FAKE_PROVIDER` and its notice. A `LIVE` configuration with its `LiveRelease` gives `kind` `HERMES_LIVE_RELEASE`, `id` the release id, and a notice that names the release, provider, model and model budget and states that it describes the configuration only and does not show that a model call completed. The release id is shown as recorded, so a SYNTHETIC test release stays visibly SYNTHETIC even though its record is kind ACTUAL and its configuration is `LIVE`.
+
+### 7.4 Launcher and checks
+
+`scripts/hermes_app_mount/serve_relay_application.py` (`main(argv=None) -> int`) is the launcher listed in section 6. See `docs/qualification/hermes-application-launcher/LOCAL_VERIFICATION.md` for its inputs, refusals, lifecycle, recipe and limits.
+
+Pure checks: `apps/api/tests/test_hermes_application_launcher.py` (launcher refusals, serving and close, labels), this file's composition tests (image id binding and the handoff image rules), and the pure part of `tests/hermes_provider_relay/test_pinned_hermes_actual_shape.py` (request options, cache field). Docker and PostgreSQL checks (`-k test_docker_` in that file) need a separate capacity grant and a kept image receipt.
+
+Still open before activation: an approved record, schema, image, CA bundle, price snapshot and caps with their qualification packet; the ledger price row (section 2); the operator start; provider-side proof that the documented cache setting is honoured and billed as expected (E1-COST1 keeps any other cost UNKNOWN with full liability); deployment; and browser verification of the label.

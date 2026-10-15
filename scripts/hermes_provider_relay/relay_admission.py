@@ -33,11 +33,14 @@ RELEASE_KINDS = ("AUTHORED", "ACTUAL")  # an ACTUAL release exists only through 
 APPROVED_ACTUAL_RELEASES: frozenset[str] = frozenset()  # SHA256 of approved release records: none yet, so ACTUAL fails closed
 ACTUAL_DESTINATION = ("openrouter.ai", 443, "/api/v1/chat/completions")
 ACTUAL_BODY_FIELDS = frozenset({"model", "messages", "stream", "response_format", "provider", "reasoning", "max_tokens",
-                                "session_id"})
+                                "session_id", "prompt_cache_options"})
 REQUIRED_BODY_FIELDS = frozenset({"model", "messages", "stream", "provider", "max_tokens", "session_id"})
 RECORD_FIELDS = frozenset({"release_id", "route_id", "kind", "approval", "destination", "ca_bundle_sha256", "model",
                            "provider", "max_tokens", "reasoning", "response_format_sha256", "stream", "allowed_fields",
                            "max_request_bytes", "max_reply_bytes", "timeout_seconds", "price_snapshot_sha256"})
+# Optional: a record that names it sends exactly this value (automatic prompt caching off, no breakpoint); a record
+# without it keeps the earlier shape, where the body must not carry the field.
+PROMPT_CACHE_OPTIONS = {"mode": "explicit"}
 ROUTING_FIELDS = frozenset({"only", "allow_fallbacks", "require_parameters", "data_collection", "max_price"})
 SHA256 = re.compile(r"[0-9a-f]{64}")
 _LOADING = threading.local()  # set only inside load_actual_release: the one way to build an ACTUAL release
@@ -249,6 +252,7 @@ class ActualRelease:
     response_format_sha256: str
     allowed_fields: frozenset[str]
     timeout_seconds: int
+    prompt_cache_options: dict[str, Any] | None = None  # PROMPT_CACHE_OPTIONS when the record names it
 
     @property
     def endpoint_url(self) -> str:
@@ -265,7 +269,8 @@ class ActualRelease:
         if set(value) - self.allowed_fields:
             return "body_field_not_permitted"
         required = REQUIRED_BODY_FIELDS | ({"reasoning"} if self.reasoning is not None else set()) | (
-            {"response_format"} if "response_format" in self.allowed_fields else set())
+            {"response_format"} if "response_format" in self.allowed_fields else set()) | (
+            {"prompt_cache_options"} if self.prompt_cache_options is not None else set())
         if required - set(value):
             return "body_field_missing"
         if value["model"] != self.release.model:
@@ -278,6 +283,9 @@ class ActualRelease:
             return "body_routing_mismatch"
         if _canonical(value.get("reasoning")) != _canonical(self.reasoning):
             return "body_reasoning_mismatch"
+        if "prompt_cache_options" in value and _canonical(value["prompt_cache_options"]) != _canonical(
+                self.prompt_cache_options):
+            return "body_cache_options_mismatch"
         if "response_format" in value and hashlib.sha256(
                 _canonical(value["response_format"])).hexdigest() != self.response_format_sha256:
             return "body_schema_mismatch"
@@ -334,7 +342,7 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
     if sha not in (APPROVED_ACTUAL_RELEASES if approved is None else approved):
         raise ActualReleaseUnapproved("this release record is not an approved ACTUAL release")
     value = _strict_json(raw)
-    if not isinstance(value, dict) or set(value) != RECORD_FIELDS:
+    if not isinstance(value, dict) or set(value) - {"prompt_cache_options"} != RECORD_FIELDS:
         raise ValueError("the release record must have exactly the frozen fields")
     if value["kind"] != "ACTUAL" or value["stream"] is not False:
         raise ValueError("the release record must be kind ACTUAL with stream false")
@@ -359,6 +367,11 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
     reasoning = value["reasoning"]
     if reasoning is not None and not isinstance(reasoning, dict):
         raise ValueError("reasoning must be an object or null")
+    cache = value.get("prompt_cache_options")
+    if "prompt_cache_options" in value and _canonical(cache) != _canonical(PROMPT_CACHE_OPTIONS):
+        raise ValueError('prompt_cache_options must be exactly {"mode": "explicit"}, with no breakpoint or other field')
+    if ("prompt_cache_options" in value) != ("prompt_cache_options" in fields):
+        raise ValueError("allowed_fields must name prompt_cache_options exactly when the record sets it")
     _bounded(value["timeout_seconds"], "timeout_seconds", 1, int(MAX_TUNNEL_SECONDS))  # the gateway closes at 120 s
     _LOADING.record = True
     try:
@@ -367,4 +380,5 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
     finally:
         _LOADING.record = False
     return ActualRelease(sha, release, destination, value["ca_bundle_sha256"], routing, reasoning,
-                         value["response_format_sha256"], frozenset(fields), value["timeout_seconds"])
+                         value["response_format_sha256"], frozenset(fields), value["timeout_seconds"],
+                         dict(PROMPT_CACHE_OPTIONS) if "prompt_cache_options" in value else None)

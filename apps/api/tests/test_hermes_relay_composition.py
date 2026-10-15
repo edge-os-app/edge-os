@@ -48,7 +48,8 @@ SLUG = "synthetic-provider"
 SCHEMA = {"type": "json_schema", "json_schema": {"name": "interpretation", "strict": True, "schema": {"type": "object"}}}
 ROUTING = {"only": [SLUG], "allow_fallbacks": False, "require_parameters": True, "data_collection": "deny",
            "max_price": {"prompt": 4, "completion": 10}}
-IMAGE = "edge-os/pinned-hermes@sha256:" + "d" * 64
+IMAGE = "sha256:" + "d" * 64  # the Docker image id the relay operator launches, not a registry digest reference
+REFERENCE = "edge-os-p05-hermes:synthetic-local"  # the operator's local tag for that id; it names, never selects
 CHANNEL = "app"
 # Deliberately not the LOCAL authored 2.00 / 7.50: the ledger must use the snapshot's own rates.
 SNAPSHOT = {"model": MODEL, "provider": SLUG, "prompt_usd_per_million": "3.00", "completion_usd_per_million": "9.00"}
@@ -121,7 +122,7 @@ def handoff(root: Path, given: RelayApplicationDefinition, channel: str = CHANNE
             "release": {"release_id": actual["release_id"], "route_id": actual["route_id"], "kind": "ACTUAL",
                         "model": actual["model"], "max_output_tokens": actual["max_tokens"],
                         "max_request_bytes": actual["max_request_bytes"], "max_reply_bytes": actual["max_reply_bytes"]},
-            "ca_bundle_sha256": actual["ca_bundle_sha256"], "image": {"reference": given.image, "id": "sha256:" + "f" * 64},
+            "ca_bundle_sha256": actual["ca_bundle_sha256"], "image": {"reference": REFERENCE, "id": given.image},
             "endpoint": {"grants": str(relay / "grants"), "revocations": str(relay / "revocations"),
                          "state": str(relay / "state"), "admission_key_file": str(relay / "admission.key"),
                          "channel_root": channel, "heartbeat_max_age_seconds": 2.0},
@@ -178,6 +179,17 @@ def test_a_handoff_for_exactly_the_bound_release_gives_its_endpoint_and_evidence
     assert found == endpoint(tmp_path / "relay") and evidence == tmp_path / "jobs"
 
 
+def test_the_job_runs_the_exact_image_id_the_operator_started_whatever_its_local_tag(approve, tmp_path: Path) -> None:
+    [given] = approve(definition())
+    release = bind_release(given)
+    for reference in (REFERENCE, "edge-os/pinned-hermes@sha256:" + "9" * 64, "x"):  # names only; Docker checked them
+        content = handoff(tmp_path, given, image={"reference": reference, "id": IMAGE})
+        composition._handoff(*write_handoff(tmp_path / reference.replace("/", "_"), content), release)
+    app = compose_application(release, lazy_engine(), endpoint=endpoint(tmp_path / "relay"), run_id="rc-unit",
+                              evidence_dir=tmp_path / "jobs")
+    assert app.supervision.image == IMAGE == release.image  # the launch argument is the immutable id itself
+
+
 def tampered(content: dict[str, Any], **changes: Any) -> dict[str, Any]:
     return {**content, **changes}
 
@@ -191,10 +203,14 @@ def tampered(content: dict[str, Any], **changes: Any) -> dict[str, Any]:
     lambda h: tampered(h, release_record={"path": "/synthetic/release.json", "sha256": "0" * 64}),
     lambda h: tampered(h, release_record=None),
     lambda h: tampered(h, ca_bundle_sha256="c" * 64),
-    lambda h: tampered(h, image={"reference": "edge-os/pinned-hermes:latest", "id": "sha256:" + "f" * 64}),
-    lambda h: tampered(h, image={"reference": "edge-os/pinned-hermes@sha256:" + "9" * 64, "id": "sha256:" + "f" * 64}),
-    lambda h: tampered(h, image={"reference": IMAGE, "id": "latest"}),
-    lambda h: tampered(h, image={"reference": IMAGE}),
+    lambda h: tampered(h, image={"reference": REFERENCE, "id": "sha256:" + "f" * 64}),  # another image
+    lambda h: tampered(h, image={"reference": REFERENCE, "id": "sha256:" + "D" * 64}),
+    lambda h: tampered(h, image={"reference": REFERENCE, "id": "edge-os/pinned-hermes@" + IMAGE}),  # a registry digest
+    lambda h: tampered(h, image={"reference": REFERENCE, "id": "latest"}),
+    lambda h: tampered(h, image={"reference": "", "id": IMAGE}),
+    lambda h: tampered(h, image={"reference": "a tag", "id": IMAGE}),
+    lambda h: tampered(h, image={"reference": REFERENCE}),
+    lambda h: tampered(h, image={"reference": REFERENCE, "id": IMAGE, "digest": IMAGE}),
     lambda h: tampered(h, shutdown_owner="application"),
     lambda h: tampered(h, endpoint={**h["endpoint"], "channel_root": "another-channel"}),
     lambda h: tampered(h, endpoint={**h["endpoint"], "grants": "relay/grants"}),
@@ -316,7 +332,9 @@ def test_a_routing_price_limit_that_cannot_bound_the_snapshot_is_refused(approve
     {"response_format": None},
     {"response_format": {"type": "json_object"}},
     {"image": "edge-os/pinned-hermes:latest"},
-    {"image": "edge-os/pinned-hermes@sha256:" + "D" * 64},
+    {"image": "edge-os/pinned-hermes@" + IMAGE},  # a registry manifest digest is not the id the operator launches
+    {"image": "sha256:" + "D" * 64},
+    {"image": "d" * 64},
     {"channel_root": "../app"},
 ])
 def test_an_output_schema_image_or_channel_that_is_not_bound_is_refused(approve, changes: dict[str, Any]) -> None:

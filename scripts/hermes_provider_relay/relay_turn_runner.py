@@ -259,6 +259,8 @@ def _check_actual(route: TransportRoute, actual: ActualRelease, policy: GuardPol
     expected = {"stream": False, "provider": actual.provider}
     if actual.reasoning is not None:
         expected["reasoning"] = actual.reasoning
+    if actual.prompt_cache_options is not None:
+        expected["prompt_cache_options"] = actual.prompt_cache_options
     schema = extra.pop("response_format", None)
     schema_ok = (schema is not None and hashlib.sha256(_canonical(schema)).hexdigest() == actual.response_format_sha256
                  if "response_format" in actual.allowed_fields else schema is None)

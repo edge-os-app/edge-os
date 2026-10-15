@@ -64,14 +64,14 @@ __all__ = ["HermesApplication", "HermesApplicationRelease", "RELEASE_DEFINITIONS
 
 SNAPSHOT_FIELDS = frozenset({"model", "provider", "prompt_usd_per_million", "completion_usd_per_million"})
 DECIMAL = re.compile(r"(0|[1-9][0-9]{0,8})(\.[0-9]{1,12})?")
-IMAGE = re.compile(r"[a-z0-9][a-z0-9._/:-]{0,200}@sha256:[0-9a-f]{64}")
 HANDOFF_FORMAT = "edge-os.relay-operator-handoff/1"
 HANDOFF_FIELDS = frozenset({"format", "operation_id", "config_sha256", "kind", "release", "release_record",
                             "ca_bundle_sha256", "image", "endpoint", "evidence_dir", "shutdown_owner", "started_at"})
 ENDPOINT_FIELDS = frozenset({"grants", "revocations", "state", "admission_key_file", "channel_root",
                              "heartbeat_max_age_seconds"})
 MAX_HANDOFF_BYTES = 16 * 1024
-IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
+IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")  # Docker's image (configuration) id, not a registry manifest digest
+IMAGE_REFERENCE = re.compile(r"[^\s]{1,200}")
 MAX_HEARTBEAT_AGE_SECONDS = 10.0
 
 
@@ -86,7 +86,7 @@ class RelayApplicationDefinition:
     record_sha256: str
     price_snapshot: bytes  # the provider price the record names by `price_snapshot_sha256`
     response_format: Mapping[str, Any] | None  # the output schema the record names by `response_format_sha256`
-    image: str  # the pinned Hermes job image, by digest
+    image: str  # the pinned Hermes job image by its Docker image id `sha256:<64 hex>`, the id the operator launches
     channel_root: str  # this application's job channel under the relay
     global_cap_usd: Decimal  # every owner together
     owner_cap_usd: Decimal  # each owner on their own
@@ -114,10 +114,11 @@ class HermesApplicationRelease:
 
     def unchanged(self) -> bool:
         """The owned request shape is still exactly the bound one and still the record's."""
-        extra = _canonical(self.policy.required_extra)
-        return (hmac.compare_digest(hashlib.sha256(extra).hexdigest(), self.required_extra_sha256)
-                and _canonical(self.policy.required_extra["provider"]) == _canonical(self.actual.provider)
-                and _canonical(self.policy.required_extra.get("reasoning")) == _canonical(self.actual.reasoning))
+        required = self.policy.required_extra
+        return (hmac.compare_digest(hashlib.sha256(_canonical(required)).hexdigest(), self.required_extra_sha256)
+                and _canonical(required["provider"]) == _canonical(self.actual.provider)
+                and _canonical(required.get("reasoning")) == _canonical(self.actual.reasoning)
+                and _canonical(required.get("prompt_cache_options")) == _canonical(self.actual.prompt_cache_options))
 
 
 class _Refused(MountRefused):
@@ -196,6 +197,8 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
     extra: dict[str, Any] = {"stream": False, "provider": _owned(actual.provider)}
     if actual.reasoning is not None:
         extra["reasoning"] = _owned(actual.reasoning)
+    if actual.prompt_cache_options is not None:
+        extra["prompt_cache_options"] = _owned(actual.prompt_cache_options)
     if "response_format" in actual.allowed_fields:
         schema = definition.response_format
         if not isinstance(schema, Mapping) or not hmac.compare_digest(
@@ -204,8 +207,9 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
         extra["response_format"] = _owned(schema)
     elif definition.response_format is not None:
         raise _Refused("the release record sends no output schema, so the definition names none")
-    if not isinstance(definition.image, str) or not IMAGE.fullmatch(definition.image):
-        raise _Refused("the job image must be named by its sha256 digest")
+    if not isinstance(definition.image, str) or not IMAGE_ID.fullmatch(definition.image):
+        raise _Refused("the job image must be named by its Docker image id (sha256:<64 hex>), not a tag or a registry "
+                       "digest reference")
     channel = definition.channel_root
     if not isinstance(channel, str) or not relay_admission.IDENTIFIER.fullmatch(channel):
         raise _Refused("the channel root must be 1-64 letters, digits or ._:-")
@@ -346,9 +350,9 @@ def _handoff(path: Path, expected_sha256: str, release: HermesApplicationRelease
             or record["sha256"] != actual.record_sha256 or handoff["ca_bundle_sha256"] != actual.ca_bundle_sha256):
         raise _Refused("the operator handoff is not for this release record, release and CA bundle")
     image = handoff["image"]
-    if (not isinstance(image, dict) or set(image) != {"reference", "id"} or image["reference"] != release.image
-            or not isinstance(image["id"], str) or not IMAGE_ID.fullmatch(image["id"])):
-        raise _Refused("the operator handoff must start this release's image digest")
+    if (not isinstance(image, dict) or set(image) != {"reference", "id"} or not isinstance(image["reference"], str)
+            or not IMAGE_REFERENCE.fullmatch(image["reference"]) or image["id"] != release.image):
+        raise _Refused("the operator handoff must start this release's exact Docker image id")
     if handoff["shutdown_owner"] != "relay_operator":
         raise _Refused("the relay operator must own shutdown; this application never stops the relay")
     given = handoff["endpoint"]
