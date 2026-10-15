@@ -19,12 +19,12 @@ This document answers one question: what evidence would let the accepted P07 qua
 
 ## 2. Answer
 
-Neither the existing one-hour MOE window nor any smaller window of past MOE history can reach `QUALIFIED` under the accepted rules. Two claims block every retrospective window:
+Neither the existing one-hour MOE window nor any smaller window of past MOE history can reach `QUALIFIED` under the accepted rules. The first reason below blocks every retrospective window by itself. The second makes a past window-start read unreliable:
 
 1. `POINT_IN_TIME_AVAILABILITY` is `QUALIFIED` only with observed delivery (`OBSERVED_DELIVERY`, basis `SOURCE_DELIVERY_RECORD`) and observed finality (`OBSERVED_FINAL`). Nobody recorded when a past bucket was first delivered. Collection time is refused as delivery evidence (`check_availability_model`, `COLLECTION_TIME_IS_NOT_DELIVERY`).
-2. `EVENT_AND_AMOUNT_MEANING` needs a decimals read at the window start. QuickNode documents its Monad mainnet endpoint as "Archive: Yes" with "Over 40,000 recent blocks available" (`PUBLIC_DOC`, [QuickNode Monad](https://www.quicknode.com/docs/monad)). Probe A's start-boundary calls for Sep 24 returned historical-state-unavailable errors (`RETAINED`). At 300 ms per block, 40,000 blocks is about 3.3 hours (`INFERENCE`). A window-start read must therefore happen near the window start.
+2. `EVENT_AND_AMOUNT_MEANING` needs a decimals read at the window start. QuickNode documents its Monad mainnet endpoint as "Archive: Yes" with "Over 40,000 recent blocks available" (`PUBLIC_DOC`, [QuickNode Monad](https://www.quicknode.com/docs/monad), read 2026-10-15). At 300 ms per block, 40,000 blocks is about 3.3 hours, and "over" makes this a lower bound (`INFERENCE`). Probe A's start-boundary calls for Sep 24 returned historical-state-unavailable errors, while its reads at the Oct 2 window end succeeded later (`RETAINED`; the exact age of that state is not recorded). The real horizon is therefore unknown. The forward route schedules every state read within one hour of its block.
 
-The smallest credible route is a **forward window**: choose a 20-minute MOE/WMON window before it starts, observe its facts while it happens, then collect it through the application. This route also needs MOE token mechanics to qualify, a larger owner request cap, and several builder decisions. Section 6 lists the exact missing proofs. Nothing here marks the demo ready.
+The smallest credible route is a **forward window**: choose a 20-minute MOE/WMON window before it starts, observe its facts while it happens, then collect it through the application. This route also needs MOE token mechanics to qualify, a larger owner request cap, and several builder decisions. Even then, the accepted replay engine cannot fill an order on a dataset whose delivery is observed after bucket end (section 5.5). Section 6 lists the exact missing proofs. Nothing here marks the demo ready.
 
 ## 3. What `QUALIFIED` requires in code
 
@@ -37,6 +37,8 @@ The smallest credible route is a **forward window**: choose a 20-minute MOE/WMON
 | `HISTORY_COMPLETENESS_AND_ORDER` | Zero conflicts, unsupported, removed, foreign and unlocated records; `PAGE_DIGESTS` revision; every bucket `COMPLETE_*`; corroboration `COMPLETE` with sample = population ≥ trades and zero mismatches | Bucket gaps `LIMIT BUCKET_GAPS` (line 1378). Sample: `LIMIT CORROBORATION_SAMPLED_ONLY` (line 1396) |
 | `POINT_IN_TIME_AVAILABILITY` | Model `OBSERVED_DELIVERY` with `SOURCE_DELIVERY_RECORD`, and finality `OBSERVED_FINAL` | `ASSUMED_DELAY`: `ASSUMPTION` (line 1408). `FINALIZED_BY_DEPTH`: `ASSUMPTION` (line 1412) |
 | `SCHEDULE_FEASIBILITY` | Declared floors and status `FEASIBLE` with consistent rows and zero shortfall | No floors: `MISSING_EVIDENCE SCHEDULE_OR_SAMPLE_FLOOR_UNDECLARED` (line 1428) |
+
+`qualify` decides `POINT_IN_TIME_AVAILABILITY` from the profile's availability model and `finality_at_collection` only (lines 1398-1417). It never reads `delivery_records`. Those records only set each bucket's `available_at` (`history_normalizer._bucket_views`); a missing record gives `available_at` null with `DELIVERY_NOT_RECORDED`, and the verdict is unchanged. So a profile that declares `OBSERVED_DELIVERY` with a missing record can still be `QUALIFIED`. The [source-fact packet](SOURCE_FACT_PACKET.json) therefore allows `OBSERVED_DELIVERY` only when every bucket has a record.
 
 The application passes release `provider_facts` into `normalize` unchanged and labels them `RELEASE_DECLARATION` (`research/native_history_collection.py`, `core/research/released_source_runtime.py`). Nothing in the code checks a declaration. A false declaration gives a false `QUALIFIED`. Only review of the release definition, with the evidence named below, prevents that. `market_adoption` (line 90) and the replay simulator (`replay/simulator.py` line 190) admit only an overall `QUALIFIED`, complete dataset.
 
@@ -57,8 +59,8 @@ Pool `0x97199b34564911936bc850ac45ede785892b5aad` (token0 WMON `0x3bd359c1119da7
 | Event decoding | V2 `Swap` topic0 `0xd78ad95f…d822`; zero unsupported shapes | Probe A corrected V2 signature (`RETAINED`) | Observed in the run | Run outcome |
 | Completeness and order | Pages tile the scan; zero conflicts; every bucket proven | Code computes it (`assemble_segments`, `bucketize`) | Scan block range that starts before the window and ends after it | `SOURCE_FACT` |
 | Corroboration | `COMPLETE`: one receipt per record, zero mismatches | Code: `_sample_indices` returns every record when `sample_size ≥ population` | Records ≤ 61 in the whole scan, and the request budget in section 5 | Run outcome plus approval |
-| Availability | `OBSERVED_DELIVERY` with a delivery time for every bucket | None. No past MOE bucket has a delivery record | A forward recorder that reads HyperSync after each bucket closes and keeps the first covering reply time. A contract reading that this time is a `SOURCE_DELIVERY_RECORD` and not collection time | `NEW_CAPABILITY`, `NEEDS_APPROVAL` |
-| Finality | `OBSERVED_FINAL` | Monad maps the `finalized` RPC tag to MonadBFT `Finalized` blocks, which "cannot be reverted without a hard fork" (`PUBLIC_DOC`, [block states](https://docs.monad.xyz/monad-arch/consensus/block-states)) | One `eth_getBlockByNumber("finalized")` read after the window. Its number must be at least the window's last block plus 2 (`depth_blocks`). Carrying that observation forward to the later collection is an `INFERENCE` from irreversibility | `SOURCE_FACT`, `NEEDS_APPROVAL` |
+| Availability | `OBSERVED_DELIVERY`, declared only when every bucket has a delivery time (the code does not check this) | None. No past MOE bucket has a delivery record | A forward recorder that reads HyperSync after each bucket closes and keeps the time of the first covering reply it received. That time is an upper bound on when the data became available. A contract reading that this time is a `SOURCE_DELIVERY_RECORD` and not collection time | `NEW_CAPABILITY`, `NEEDS_APPROVAL` |
+| Finality | `OBSERVED_FINAL` | Monad maps the `finalized` RPC tag to MonadBFT `Finalized` blocks, which "cannot be reverted without a hard fork" (`PUBLIC_DOC`, [block states](https://docs.monad.xyz/monad-arch/consensus/block-states), read 2026-10-15) | One `eth_getBlockByNumber("finalized")` read after the window. Its number must be at least the window's last block plus 2 (`depth_blocks`). Carrying that observation forward to the later collection is an `INFERENCE` from irreversibility | `SOURCE_FACT`, `NEEDS_APPROVAL` |
 | Archive height and collection time | Declared before the run; the height is at least the last scanned block plus 2; collection time is not before the window end | Contract section 9 keeps `collected_at_utc` open | The same post-window reads. The builder decides which observed time is declared | `SOURCE_FACT`, `NEEDS_APPROVAL` |
 | Feasibility | Floors declared; `FEASIBLE` | `feasibility()` computes slots from the claim | Floors are a builder decision. Section 5.3 shows a schedule that fits | `NEEDS_APPROVAL` |
 
@@ -107,22 +109,31 @@ Floors of 1 and 1 give no statistical support. They only make the schedule decla
 | Provider requests | 2 + 1 + 61 = 64 | Schema ceiling 64 |
 | Owner request cap | 64 history + 2 Nansen = 66 needed; default is 16 | `core/settings.py` line 71. Caps freeze at first use. Raising it is a settings change outside this lease (`NEEDS_APPROVAL`) |
 | Compute and deadline | 600 s history + 300 s Nansen = 900 s, equal to the default owner cap | `HistoryResourceBounds` |
-| QuickNode credits | Run: 62 calls × 30 = 1,860. Source facts: at most 19 × 30 = 570 | 30 credits per Monad method (`PUBLIC_DOC`, [QuickNode credits](https://www.quicknode.com/api-credits/monad)) |
+| QuickNode credits | Run: 62 calls × 30 = 1,860. Source facts: at most 18 × 30 = 540 | 30 credits per Monad method (`PUBLIC_DOC`, [QuickNode credits](https://www.quicknode.com/api-credits/monad)) |
+
+### 5.5 Replay timing on an observed-delivery dataset
+
+The replay engine evaluates each decision at `moment = bucket_end` (`replay/simulator.py` line 492). A pending order fills at that bucket's close, and `_account_mark` refuses a mark whose `available_at` is later than the moment (`LATE_INPUT`, lines 363-364). Under `OBSERVED_DELIVERY`, `available_at` is `max(bucket end, delivery time)` (`bucket_available_at`, `qualification.py` lines 676-680). The recorder sees a bucket at the earliest 30 s after its end. Every mark is then late, every pending order is saved as `FILL_UNAVAILABLE`, and a replay on a `QUALIFIED` option-B dataset saves no fill (`INFERENCE` from reading the code; the replay was not run). The same holds for `ASSUMED_DELAY` with any positive delay.
+
+`feasibility()` hides this, because it treats observed delivery as ready at bucket end (docstring, lines 743-744). The 2 usable slots in section 5.3 count opportunities, not fillable orders.
+
+This is not a defect report: refusing a close that was not yet available is the conservative choice. A replay that fills needs a design change outside this lease, for example filling at a later mark that was available by the moment. That change is a `NEW_CAPABILITY` for the replay owner and a builder decision. This document proposes no change to the engine.
 
 ## 6. Exact missing proofs and the smallest next proposal
 
 For option B to reach `QUALIFIED`, all of these are needed. None exists today.
 
-1. **Forward recorder (`NEW_CAPABILITY`).** A separately scoped, reviewed tool that runs the [source-fact packet](SOURCE_FACT_PACKET.json) phases P2 to P4 on a fixed schedule and saves hashed results without credentials. The existing application cannot do it: the release allowlist refuses `eth_call` and `eth_getBlockByNumber`, and release facts freeze before a run.
-2. **Delivery-record reading (`NEEDS_APPROVAL`).** The builder and the P07 contract owner confirm that "the first HyperSync reply that covers a bucket, observed by the recorder" is a `SOURCE_DELIVERY_RECORD`. If they refuse, availability stays `LIMITED` and the demo cannot be `QUALIFIED` on any route in this document.
-3. **Decimals and identity reads (`SOURCE_FACT`).** Phases P1, P2 and P4 of the source-fact packet.
-4. **Finality read (`SOURCE_FACT`).** Phase P4. The builder accepts the irreversibility inference.
-5. **MOE mechanics (`SOURCE_FACT`, `NEEDS_APPROVAL`).** Phase P5 and a written finding. If MOE mechanics cannot qualify, the next proposal is a builder decision on another V2-compatible pool with plain ERC-20 tokens. Probe A excluded major and stablecoin pairs. No retained alternative fits the V2 decoder.
+1. **Forward recorder (`NEW_CAPABILITY`).** A separately scoped, reviewed tool that runs the [source-fact packet](SOURCE_FACT_PACKET.json) phases P1 to P6 on a fixed schedule, enforces its stop rules and saves hashed results without credentials. The existing application cannot do it: the release allowlist refuses `eth_call` and `eth_getBlockByNumber`, and release facts freeze before a run.
+2. **Delivery-record reading (`NEEDS_APPROVAL`).** The builder and the P07 contract owner confirm that "the first HyperSync reply that covers a bucket, received by the recorder" is a `SOURCE_DELIVERY_RECORD`, and that all 4 buckets need one. If they refuse, availability stays `LIMITED` and the demo cannot be `QUALIFIED` on any route in this document.
+3. **Decimals and identity reads (`SOURCE_FACT`).** Phases P1, P4 and P5 of the source-fact packet.
+4. **Finality read (`SOURCE_FACT`).** Phase P5. The builder accepts the irreversibility inference.
+5. **MOE mechanics (`SOURCE_FACT`, `NEEDS_APPROVAL`).** Phase P6 and a written finding. If MOE mechanics cannot qualify, the next proposal is a builder decision on another V2-compatible pool with plain ERC-20 tokens. Probe A excluded major and stablecoin pairs. No retained alternative fits the V2 decoder.
 6. **Run outcomes.** At most 61 records, both pool sides, zero conflicts, unsupported events and mismatches. These are unknown until the run.
 7. **Owner request cap ≥ 66 (`NEEDS_APPROVAL`).**
 8. **Feasibility floors and schedule (`NEEDS_APPROVAL`).**
+9. **Replay fills (`NEW_CAPABILITY`, `NEEDS_APPROVAL`).** Section 5.5. Without a replay design change, the approved replay runs but saves no fill. The builder decides whether a saved replay with only `FILL_UNAVAILABLE` events meets the demo goal.
 
-If any of items 1 to 5 fails, the honest result is a saved `LIMITED` or `UNRESOLVED` dataset and a saved replay refusal. That is valid evidence but does not meet the approved demo scope. The builder then decides between that evidence and further work. This document proposes no change to a verdict rule.
+If any of items 1 to 6 fails, the honest result is a saved `LIMITED` or `UNRESOLVED` dataset and a saved replay refusal. That is valid evidence but does not meet the approved demo scope. The builder then decides between that evidence and further work. This document proposes no change to a verdict rule.
 
 ## 7. Builder decisions, once facts exist
 
@@ -130,8 +141,9 @@ If any of items 1 to 5 fails, the honest result is a saved `LIMITED` or `UNRESOL
 2. Approve the forward recorder as a separately scoped implementation, with its own review.
 3. Accept or refuse the delivery-record reading (section 6, item 2).
 4. Approve the source-fact packet as an operation, with its call ceilings.
-5. Define what qualifies MOE token mechanics, after phase P5 evidence exists.
+5. Define what qualifies MOE token mechanics, after phase P6 evidence exists.
 6. Approve orientation `QUOTE_PER_BASE`, the 20-minute window shape, the floors and the owner cap.
 7. Approve publishing the scan block numbers, the pool-creation transaction and the QuickNode host. The release makes them public in `release_view`.
+8. Decide how to treat replay fills (section 5.5).
 
-[OPERATING_PACKET.md section 9](OPERATING_PACKET.md#9-decisions-the-builder-makes-once-facts-exist) gives these decisions the ids D1 to D10.
+[OPERATING_PACKET.md section 9](OPERATING_PACKET.md#9-decisions-the-builder-makes-once-facts-exist) gives these decisions the ids D1 to D11.
