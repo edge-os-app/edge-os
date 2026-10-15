@@ -299,7 +299,7 @@ def shaped(image_id: str, env, migrated, pg, run_id: str, evidence_root: Path, r
 
     from conftest import SENTINEL
 
-    root = evidence_root / f"shape-{request.node.name[5:40]}"
+    root = evidence_root / f"shape-{request.node.name}"  # the full name: parametrized cases differ only at the end
     channel = root / "jobs"
     channel.mkdir(parents=True)
     ca = b"SYNTHETIC CA bundle"
