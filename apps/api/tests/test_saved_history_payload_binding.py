@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import make_url
 
 import forward_history_stand_in as bound
@@ -249,17 +250,46 @@ def test_a_contradicted_handoff_is_a_mismatch_that_blocks_consumers_and_keeps_qu
         assert len(provider.requests) == 7
 
 
-def test_a_missing_event_is_incomplete_and_a_forged_pass_grants_nothing(settings, owner_a):
+def stored_dataset(client, dataset_id: str) -> dict[str, Any]:
+    return rows(client, "select owner_id, content, content_sha256, raw_records from research_local.history_datasets "
+                        "where dataset_id = :id", id=dataset_id)[0]
+
+
+IMMUTABLE_EVENT = "investigation_events rows are immutable"
+
+
+def test_a_missing_event_is_incomplete_and_a_forged_pass_grants_nothing(settings, owner_a, monkeypatch):
+    # A saved binding event cannot be forged or removed: the accepted trigger refuses both, each in its own transaction.
     client, runtime, _, _ = composed(settings, bound.bound_release(binding=_contradicted()))
     with client:
         job_id, job = collected(client, owner_a, runtime)
         dataset_id = job["dataset"]["dataset_id"]
-        # Forge the saved verdict only: the rerun on the saved raw records still disagrees.
-        execute(client, "update research_local.investigation_events set content = jsonb_set(content, '{result}', "
-                        "'\"PASS\"') where job_id = :job and kind = 'HISTORY_PAYLOAD_BOUND'", job=job_id)
+        before = (stored_dataset(client, dataset_id), bound_events(client, job_id))
+        assert before[1][0]["content"]["result"] == "MISMATCH"
+        with pytest.raises(IntegrityError, match=IMMUTABLE_EVENT):
+            execute(client, "update research_local.investigation_events set content = jsonb_set(content, '{result}', "
+                            "'\"PASS\"') where job_id = :job and kind = 'HISTORY_PAYLOAD_BOUND'", job=job_id)
+        with pytest.raises(IntegrityError, match=IMMUTABLE_EVENT):
+            execute(client, "delete from research_local.investigation_events where job_id = :job and "
+                            "kind = 'HISTORY_PAYLOAD_BOUND'", job=job_id)
+        assert (stored_dataset(client, dataset_id), bound_events(client, job_id)) == before
         _blocked(client, owner_a, dataset_id, "payload_binding_mismatch")
-        execute(client, "delete from research_local.investigation_events where job_id = :job and "
-                        "kind = 'HISTORY_PAYLOAD_BOUND'", job=job_id)
+
+    # A bound dataset saved without its event (binding step skipped at the worker seam) is INCOMPLETE and blocks.
+    client, runtime, _, _ = composed(settings)
+    with client:
+        job_id = started(client, owner_a, runtime)
+        monkeypatch.setattr(history_payload_binding, "record_binding", lambda *args, **kwargs: None)
+        try:
+            worker(client, runtime).run_job(uuid.UUID(job_id))
+        finally:
+            monkeypatch.undo()  # the consumers below use the normal binding module
+        job = job_view(client, owner_a, job_id)
+        assert job["state"] == "REPORTED", job["terminal_reason"]
+        assert bound_events(client, job_id) == []
+        dataset_id = job["dataset"]["dataset_id"]
+        assert stored_dataset(client, dataset_id)["content"]["payload_binding_requirement"] == \
+            history_payload_binding.requirement(bound.definition())
         state = client.get(f"/v1/research/history-datasets/{dataset_id}", headers=owner_a).json()["payload_binding"]
         assert (state["status"], state["reason"]) == ("INCOMPLETE", "BINDING_EVENT_MISSING")
         _blocked(client, owner_a, dataset_id, "payload_binding_incomplete")
