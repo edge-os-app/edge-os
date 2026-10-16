@@ -144,7 +144,6 @@ cd apps/web && npm test         # web app, Vitest
 - [Architecture guide](docs/architecture/README.md): how the parts fit together, with links to the code
 - [Design decisions](docs/adr/): eight short records of the main technical choices
 - [Local runbook](deploy/local/RUNBOOK.md): settings and commands to run Edge OS on your machine
-- [Product spec](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md) (internal working document)
 
 ## Team
 
