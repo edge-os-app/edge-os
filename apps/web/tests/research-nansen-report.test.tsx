@@ -145,7 +145,29 @@ describe("Nansen report under an operating release", () => {
     await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(1));
     const [intakeId, body] = mocks.start.mock.calls[0];
     expect(intakeId).toBe("intake-1");
-    expect(body).toEqual({ operation_id: expect.any(String), request_key: expect.any(String), ...FLOWS_ONLY });
+    // Hand-written literal: a dropped query, a default limit or an extra field fails here.
+    expect(body).toEqual({ operation_id: expect.any(String), request_key: expect.any(String),
+      token_address: "0x1111111111111111111111111111111111111111", token_symbol: "FLW",
+      window: { start_utc: "2026-10-08T00:00:00Z", end_utc: "2026-10-09T00:00:00Z" }, operations: ["flows"],
+      holder_query: { label_type: "all_holders", aggregate_by_entity: false, order_field: "token_amount", value_usd_min: null },
+      flow_query: { label: "smart_money" },
+      limits: { max_requests: 3, max_pages: 1, max_bytes: 90000, max_credits: "2.5", per_page: 50 },
+      deadline_seconds: 240, compute_seconds: 12 });
+    expect(mocks.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a server refusal of the released request once, without retrying, and saved reports still reopen", async () => {
+    mocks.list.mockResolvedValue({ jobs: [job()], operating_release: release() });
+    mocks.start.mockRejectedValueOnce(new mocks.ApiError("refused"));
+    mocks.open.mockResolvedValue(record);
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Save and reserve this report" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("(WINDOW_INVALID)");
+    expect(mocks.start).toHaveBeenCalledTimes(1);
+    expect(mocks.start.mock.calls[0][1].limits).toEqual({ max_requests: 3, max_pages: 1, max_bytes: 90000, max_credits: "2.5", per_page: 50 });
+    await userEvent.click(screen.getByRole("button", { name: "Open saved report" }));
+    expect(await screen.findByTestId("nansen-report-view")).toHaveTextContent(QUESTION);
+    expect(mocks.start).toHaveBeenCalledTimes(1);
   });
 
   it("posts a holder-only stand-in release and labels it as not provider data", async () => {
@@ -159,7 +181,13 @@ describe("Nansen report under an operating release", () => {
     expect(screen.getByTestId("nansen-label")).toHaveTextContent("Not provider data");
     await userEvent.click(screen.getByRole("button", { name: "Save and reserve this report" }));
     await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(1));
-    expect(mocks.start.mock.calls[0][1]).toEqual({ operation_id: expect.any(String), request_key: expect.any(String), ...FLOWS_ONLY, ...holders });
+    expect(mocks.start.mock.calls[0][1]).toEqual({ operation_id: expect.any(String), request_key: expect.any(String),
+      token_address: "0x1111111111111111111111111111111111111111", token_symbol: "FLW",
+      window: { start_utc: "2026-10-08T00:00:00Z", end_utc: "2026-10-09T00:00:00Z" }, operations: ["holders"],
+      holder_query: { label_type: "all_holders", aggregate_by_entity: true, order_field: "token_amount", value_usd_min: 1000 },
+      flow_query: { label: "smart_money" },
+      limits: { max_requests: 3, max_pages: 1, max_bytes: 90000, max_credits: "2.5", per_page: 50 },
+      deadline_seconds: 240, compute_seconds: 12 });
   });
 
   it.each([
