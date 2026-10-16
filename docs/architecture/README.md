@@ -4,6 +4,51 @@ A market question starts with uncertain meaning and incomplete evidence. A tradi
 
 This page follows one Monad spot idea from the browser through research, replay, and one separately approved Kuru action. It explains which records bind the steps and what the user can recover after a failure.
 
+## Approved completed-demo composition
+
+This diagram names the responsibilities and trust boundaries in the approved completed-demo composition. It is an architecture view, not a deployment manifest.
+
+```mermaid
+flowchart LR
+  Trader[Trader] <-->|"authenticated request and saved response"| Web[Next.js and React browser]
+  Web <-->|"owner sign-in"| PrivyIdentity[Privy owner identity]
+  Web <-->|"synchronous request and response"| API[FastAPI API]
+  API <-->|"records, attempts, and durable jobs"| DB[(PostgreSQL)]
+
+  API -->|"bounded interpretation attempt"| Job["Isolated Hermes job<br/>no provider key or network"]
+  Job -->|"signed, bounded grant"| Relay["Credential-bearing relay"]
+  Relay -->|"fixed CONNECT tunnel"| Gateway["Keyless egress gateway"]
+  Gateway -->|"TLS stays end to end"| OpenRouter[OpenRouter model route]
+
+  DB -->|"claim saved research job"| Research[Research worker]
+  Research -->|"bounded source requests"| Sources[External source clients]
+  Sources --> Envio[Envio HyperSync]
+  Sources --> QuickNode[QuickNode JSON-RPC]
+  Sources --> Nansen[Nansen API]
+  Research -->|"save coverage, evidence, and report"| DB
+
+  DB -->|"claim saved action job"| Action[Action worker]
+  Action -->|"checked route request"| Kuru[Kuru Flow route]
+  Action -->|"separate signing request"| Signer["Privy signer<br/>wallet restrictions"]
+  Action -->|"one original transaction and receipt check"| Monad[Monad RPC]
+  Action -->|"save journal and recovery state"| DB
+```
+
+The browser and API handle request-response interactions. A bounded Hermes interpretation is one API-owned attempt. Research collection and action execution are durable jobs: the API stores them in PostgreSQL, separate workers claim them, and each worker saves attempt state before an external effect. The browser can reopen the saved records without repeating collection or a transaction.
+
+| Responsibility | Boundary and role | Source map |
+| --- | --- | --- |
+| Browser | Next.js 16.3.8 and React 19.3.0 render the research flow, use Privy for owner sign-in, and call the API. | [Web package](../../apps/web/package.json), [Privy setup](../../apps/web/lib/privy-config.ts), [API client](../../apps/web/lib/api.ts) |
+| API | FastAPI 0.142.2 verifies the owner, serves authenticated reads and writes, coordinates a bounded interpretation attempt, and creates durable jobs. | [API package](../../apps/api/pyproject.toml), [application factory](../../apps/api/src/edge_os_api/main.py), [owner verification](../../apps/api/src/edge_os_api/core/authentication.py), [settings](../../apps/api/src/edge_os_api/core/settings.py) |
+| Durable records | PostgreSQL stores owner-scoped records, lineage, interpretation attempts, job state, reservations, and original action journals. | [Database setup](../../apps/api/src/edge_os_api/core/database.py), [record models](../../apps/api/src/edge_os_api/records/models.py), [migrations](../../apps/api/migrations/) |
+| Research worker | Claims frozen investigation jobs, collects declared sources, qualifies history, builds saved reports, and records usage and gaps. | [Investigation worker](../../apps/api/src/edge_os_api/research/investigation_jobs.py), [worker loop](../../apps/api/src/edge_os_api/core/worker_loop.py) |
+| Hermes boundary | The isolated model job has no provider key or network. A separate relay holds its provider credential; the keyless gateway restricts egress to the pinned OpenRouter destination. | [Hermes interpreter](../../apps/api/src/edge_os_api/research/hermes_interpreter.py), [relay composition](../../apps/api/src/edge_os_api/research/hermes_relay_composition.py), [relay runner](../../scripts/hermes_provider_relay/relay_turn_runner.py), [egress gateway](../../scripts/hermes_provider_relay/egress_gateway.py) |
+| Research source clients | Envio supplies indexed history, QuickNode checks chain identity and sampled receipts, and Nansen supplies a bounded holder and flow report. | [History clients](../../apps/api/src/edge_os_api/research/native_history_collection.py), [QuickNode corroboration](../../apps/api/src/edge_os_api/research_history/quicknode_corroboration.py), [Nansen collector](../../apps/api/src/edge_os_api/nansen_research/collector.py) |
+| Action worker | Claims a saved action job, checks current authority and inputs, coordinates reservations, and advances the original transaction through recovery. | [Action worker](../../apps/api/src/edge_os_api/execution/worker.py), [admission](../../apps/api/src/edge_os_api/admission/service.py), [transaction journal](../../apps/api/src/edge_os_api/execution/original_transaction.py) |
+| Route, signer, and chain | Kuru provides route data, a separate Privy signer handles the permitted wallet request, and Monad RPC carries the transaction and receipt observation. | [Kuru preparation](../../apps/api/src/edge_os_api/kuru_flow/transaction_preparation.py), [Privy signer](../../apps/api/src/edge_os_api/execution/privy_signer.py), [original transaction path](../../apps/api/src/edge_os_api/execution/original_transaction.py) |
+
+The API uses the Privy app ID and public verification key to check owner tokens. It refuses a Privy app secret and does not load `.env` files automatically. Signing uses a separate execution boundary. That boundary receives no browser login token and cannot administer wallet policy. Research credentials are admitted through a code-owned release before a source client reads them or opens a provider connection; the same release binds the source, endpoint, and limits.
+
 ## Follow the research path
 
 ```mermaid
@@ -89,11 +134,13 @@ If the next close is late, unknown, unqualified, or empty, the replay records <c
 
 ## Keep owner identity separate from wallet authority
 
-Privy sign-in supplies an access token. The API checks its signature, issuer, audience, expiry, and subject, then maps the Privy DID to an internal owner. API reads use that verified owner. A foreign owner's record returns 404. Login creates no agent wallet.
+Privy sign-in supplies an access token. The API checks its signature, issuer, audience, expiry, and subject, then maps the Privy DID to an internal owner. API reads use that verified owner. A foreign owner's record returns 404. The ordinary API accepts public verification keys and refuses a Privy app secret. Login creates no agent wallet or signing authority.
 
 Wallet setup binds an owner and agent to an exact strategy revision, network, and returned wallet identity. It saves dispatch intent before wallet creation. Binding requires an independent lookup of the exact wallet ID, owner, chain type, and address. If the response is lost and no exact wallet ID is known, recovery stays <code>UNKNOWN</code>. It never selects the newest wallet or repeats creation.
 
 Funding and consent are separate records. Funding credits only confirmed server observations. Consent binds an exact wallet and revision to the allocation, cumulative allowances, gas limit, allowed actions, and expiry. A deposit does not activate trading or reset allowances.
+
+Admission also requires an independently qualified Kuru route and enough exit capacity for an acquisition. Deterministic checks bind the action to the owner, wallet, network, strategy, funds, fresh inputs, and active permission. The current wallet policy must match its approved version before preparation and again before submission. The independent wallet restriction covers the permitted network, contract, signing method, function, and supported argument limits. If enforcement of a required restriction cannot be verified, its state is <code>UNKNOWN</code> and the affected action is denied. Policy administration stays separate from the execution credential. See the [execution authority design](../superpowers/specs/2026-09-29-edge-os-hackathon-design.md#two-enforcement-layers).
 
 The owner reviews this permission separately from the research report. Each agent uses its own wallet. An account summary combines records; it does not combine spending authority.
 
@@ -101,7 +148,7 @@ The owner reviews this permission separately from the research report. Each agen
 
 An action request creates a saved job. The worker checks the exact owner, wallet, strategy, current observation, and permission. The admission service reserves capital, gas, allowances, and attributed inventory under per-wallet locks. The bounded action allows one open or pending position per wallet and network.
 
-The executor validates the supplied Kuru Flow route against the approved network, token addresses, recipient, input, minimum output, fees, allowance, and expiry. Privy signs under wallet-specific restrictions. The executor has no login token and cannot change wallet policy.
+The executor validates the supplied Kuru Flow route against the approved network, ERC-20 trading tokens, recipient, input, minimum output, route, fees, allowance, and expiry. Native MON is reserved for gas; it is not a trading leg. Privy signs the original transaction under wallet-specific restrictions. The executor receives no login token and cannot change its policy. It checks the approved policy version before preparing and submitting the transaction.
 
 The transaction engine records preparation, signing intent, signed bytes, and broadcast intent in order. Before signing and broadcast, it checks current stops and expiry. It broadcasts the original signed bytes once. It does not requote, choose a new nonce, or sign again after an uncertain result.
 
@@ -109,9 +156,41 @@ The application reconciles from server-side receipt evidence for the original at
 
 These states give the owner a specific recovery path. Inspect the attempt and its receipt evidence. Reconcile that same attempt before requesting a new action.
 
+The sequence keeps each external effect attached to the saved attempt:
+
+```mermaid
+sequenceDiagram
+  actor Owner
+  participant API as Owner-scoped API
+  participant DB as PostgreSQL
+  participant Worker as Action worker
+  participant Policy as Independent wallet policy
+  participant Kuru as Kuru Flow route
+  participant Privy as Privy signer
+  participant Monad as Monad RPC
+  Owner->>API: Fund wallet and approve exact action terms
+  API->>DB: Save wallet binding, consent, and action job
+  Worker->>DB: Check authority, reserve resources, and save attempt
+  Worker->>Policy: Check approved policy version before preparation
+  Worker->>Kuru: Request bounded route quote
+  Kuru-->>Worker: Return route and calldata
+  Worker->>DB: Save validated route and signing intent
+  Worker->>Policy: Recheck policy version before submission
+  Worker->>Privy: Request permitted signature for original attempt
+  Worker->>DB: Save signed bytes, hash, and broadcast intent
+  Worker->>Monad: Broadcast original bytes once
+  Worker->>Monad: Observe original receipt
+  Worker->>DB: Reconcile result, inventory, and reservations
+  API-->>Owner: Return action state, receipt references, and holdings
+```
+
+If a response is uncertain, the worker checks receipt evidence for that same attempt. It does not sign or broadcast a replacement. Reservations and the exclusive claim stay in place until the original outcome is known or a safe pre-broadcast denial is proved.
+
 ## Keep provider spending bounded
 
 Hermes interpretation uses a provider relay. The API records and reserves worst-case model liability before a send. The model job has no provider key or network access. A credential-bearing relay accepts a signed bounded grant and sends through a keyless gateway to a fixed destination. TLS continues from the relay to the provider.
+
+The source runtime accepts only a code-owned release with an approved identity. The application checks that release before it reads a source credential or opens a provider connection. The Hermes release pins the OpenRouter destination, model route, request schema, job image, and price snapshot. Request data and environment settings cannot add a source or alter the approved route. A credential alone activates no provider path.
 
 A valid usage record settles the model reservation. Missing or invalid usage keeps the liability <code>UNKNOWN</code>. A started relay request does not run again after restart. Accepted interpretation text can be reparsed without another provider request.
 

@@ -70,6 +70,7 @@ flowchart LR
   I --> T[Typed strategy revision]
   T --> R
   C --> DB[(Saved evidence)]
+  S --> DB
   R --> DB
   DB -. no trading authority .-> O[Owner reviews separate wallet permission]
   O --> K[One bounded Kuru action]
@@ -77,7 +78,7 @@ flowchart LR
   A --> DB
 ```
 
-Solid paths show how the demo carries evidence. The dotted link marks the separate permission review. See the [architecture explanation](docs/architecture/README.md) for records, recovery, spending boundaries, and source map.
+Solid paths show how the demo carries evidence. The dotted link marks the separate permission review. See the [architecture explanation](docs/architecture/README.md) for the service map, durable job flow, records, recovery, spending boundaries, and source map.
 
 ## Run the local fixture
 
