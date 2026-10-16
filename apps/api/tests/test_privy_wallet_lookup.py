@@ -527,3 +527,81 @@ def test_retained_claim_keeps_the_returned_wallet_index(monkeypatch):
                                   provider=lookup, address=ADDR, wallet_index=2)
     retained = [e.content for e in session.added if e.event_type == SetupEventType.RESULT_RETURNED.value]
     assert retained[0]["claimed_wallet_index"] == 2
+
+
+# Live private-socket controls (heavy IPC slot only; never in the pure node list) ---------------------------------
+
+
+@pytest.fixture
+def served_socket(short_private_dir):
+    """The real `serve` loop in a thread with authored records; no credential, no network."""
+    import threading
+
+    path = short_private_dir / "lookup.sock"
+    users = {DID: _user(_wallet())}
+    thread = threading.Thread(target=lookup_server.serve, args=(str(path), users.get, lambda a: None), daemon=True)
+    thread.start()
+    for _ in range(100):
+        if path.exists():
+            break
+        threading.Event().wait(0.02)
+    assert path.exists(), "lookup socket did not start"
+    yield path
+
+
+def _raw_exchange(path, payload: bytes, *, timeout: float = 2.0) -> bytes:
+    import socket as _socket
+
+    with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect(str(path))
+        sock.sendall(payload)
+        chunks = []
+        while True:
+            try:
+                chunk = sock.recv(4096)
+            except TimeoutError:
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+
+def test_ipc_socket_is_private_and_answers_the_owner_bound_client(served_socket):
+    import os
+    import stat as _stat
+
+    assert _stat.S_IMODE(os.stat(served_socket).st_mode) == 0o600  # same-user peer accepted (LOCAL_PEERCRED/SO_PEERCRED)
+    provider = OwnerBoundLookupProvider(str(served_socket), uuid.uuid4(), DID, timeout=2.0).with_claim(ADDR)
+    evidence = provider.lookup_wallet(WID)
+    assert evidence is not None and (evidence.wallet_id, evidence.address) == (WID, ADDR)
+
+
+@pytest.mark.parametrize("payload", [
+    b"\x00\x00\x00\x05[1,2]",                      # not an object
+    b"\x00\x00\x10\x01" + b"x" * 16,               # declared size above 4096
+    b"\x00\x00\x00\x00",                           # empty frame
+    b"\x00\x00\x00\x08not-json",                   # not JSON
+])
+def test_ipc_malformed_or_oversized_frames_get_a_code_only(served_socket, payload):
+    reply = decode_body(_raw_exchange(served_socket, payload)[4:])
+    assert reply == {"status": "unknown", "reason": "MALFORMED_FRAME"}
+
+
+def test_ipc_unsupported_operation_is_refused(served_socket):
+    frame = encode_frame({"op": "create_wallet", "did": DID, "address": ADDR, "wallet_id": WID})
+    assert decode_body(_raw_exchange(served_socket, frame)[4:])["reason"] == "UNSUPPORTED_REQUEST"
+
+
+def test_ipc_silent_peer_is_dropped_and_the_server_keeps_serving(served_socket, monkeypatch):
+    monkeypatch.setattr(lookup_server, "CONNECTION_TIMEOUT", 0.5)
+    _raw_exchange(served_socket, b"\x00\x00", timeout=3.0)  # half a header, then silence until the server drops it
+    provider = OwnerBoundLookupProvider(str(served_socket), uuid.uuid4(), DID, timeout=2.0).with_claim(ADDR)
+    assert provider.lookup_wallet(WID) is not None
+
+
+def test_ipc_absent_socket_or_timeout_is_unavailable(short_private_dir):
+    absent = OwnerBoundLookupProvider(str(short_private_dir / "absent.sock"), uuid.uuid4(), DID, timeout=0.5)
+    with pytest.raises(WalletProviderUnavailable):
+        absent.with_claim(ADDR).lookup_wallet(WID)
