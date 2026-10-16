@@ -251,7 +251,11 @@ def replace_specimen(specimen: Specimen, **changes: Any) -> Specimen:
 
 def _manifest_sha256(rows: Sequence[Specimen]) -> str:
     manifest = [
-        [s.specimen_id, s.profile, str(s.expected), s.request.request_sha256 if s.request else None]
+        [
+            s.specimen_id, s.profile, str(s.category), str(s.expected), s.wallet_id,
+            s.request.request_sha256 if s.request else None,
+            None if s.transaction is None else dict(s.transaction), s.not_run_reason,
+        ]
         for s in rows
     ]
     return hashlib.sha256(canonical_json(manifest)).hexdigest()
@@ -275,7 +279,13 @@ class SpecimenTable:
         return list(self.rows)
 
     def positive_control(self, profile: str) -> Specimen:
-        return next(row for row in self.rows if row.profile == profile and row.is_positive_control)
+        for row in self.rows:
+            if row.profile == profile and row.is_positive_control:
+                return row
+        raise SpecimenRefused("POSITIVE_CONTROL_NOT_QUALIFIED")
+
+    def manifest_matches_rows(self) -> bool:
+        return _manifest_sha256(self.rows) == self.manifest_sha256 == MANIFEST_SHA256
 
 
 def build_table(rows: Sequence[Specimen], check_frozen: bool = False) -> SpecimenTable:
@@ -375,7 +385,7 @@ def _frozen_rows() -> list[Specimen]:
     return raw + decoded
 
 
-MANIFEST_SHA256 = "8d81f5d0fb60eb10ad6760cb5e600c886e7190e4a1cd27b95685135bd1a6f940"
+MANIFEST_SHA256 = "a7a922b04b445798e8f2ff2ff8c19d4b6904652a5471201f26dcff047f125ff9"
 FROZEN_TABLE = build_table(_frozen_rows(), check_frozen=False)
 
 
@@ -475,6 +485,19 @@ class AttemptStore:
 
     def is_stopped(self) -> bool:
         return (self.root / "STOP.json").exists()
+
+    def blocking_attempt(self, excluding: str) -> str | None:
+        """Return a refusal code if another attempt is unresolved or breached."""
+        for intent in sorted(self.root.glob("*.intent.json")):
+            specimen_id = intent.name[: -len(".intent.json")]
+            if specimen_id == excluding:
+                continue
+            if self.state(specimen_id) is not AttemptState.TERMINAL:
+                return "UNRESOLVED_ATTEMPT_IN_STORE"
+            outcome = self._read(self._path(specimen_id, "outcome")) or {}
+            if outcome.get("outcome") == "BREACH":
+                return "STOPPED_AFTER_BREACH"
+        return None
 
 
 def refuse_module_run() -> None:

@@ -7,12 +7,13 @@ local doubles, and every result is SYNTHETIC_FIXTURE.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import logging
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -31,7 +32,6 @@ from scripts.privy_unfunded_proof.specimens import (
 )
 
 CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
-TEMP_PREFIX = "p21-driver-test-"
 
 ENTRYPOINT = "0xb3e6778480b2E488385E8205eA05E20060B813cb"
 WALLET_A = "0x00000000000000000000000000000000000000a1"
@@ -135,9 +135,10 @@ CANARIES = (SECRET_CANARY, SIGNATURE_CANARY, SIGNED_CANARY)
 
 
 @pytest.fixture
-def store_dir() -> Iterator[Path]:
-    with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as name:
-        yield Path(name)
+def store_dir(tmp_path: Path) -> Iterator[Path]:
+    store = tmp_path / "attempts-root"
+    store.mkdir()
+    yield store
 
 
 def clock() -> str:
@@ -452,7 +453,7 @@ def test_changed_request_bytes_refused(store_dir: Path) -> None:
     send = RecordingSend(code_reply(400, "synthetic_policy_violation"))
     with pytest.raises(SpecimenRefused) as caught:
         run("raw.wrong_chain", store_dir, send, table=specimens.build_table(rows, check_frozen=False))
-    assert caught.value.code in {"REQUEST_BYTES_CHANGED", "MANIFEST_MISMATCH"}
+    assert caught.value.code == "REQUEST_BYTES_CHANGED"
     assert send.requests == []
     assert AttemptStore(store_dir).state("raw.wrong_chain") is AttemptState.NOT_SENT
 
@@ -734,7 +735,7 @@ def test_capture_saved_before_parse(store_dir: Path, monkeypatch: pytest.MonkeyP
         "status": 200,
         "content_type": "application/json",
         "byte_count": len(reply.body),
-        "raw_body_sha256": __import__("hashlib").sha256(reply.body).hexdigest(),
+        "raw_body_sha256": hashlib.sha256(reply.body).hexdigest(),
         "metadata_valid": True,
         "captured_at": "2026-10-16T00:00:00Z",
         "evidence_class": "SYNTHETIC_FIXTURE",
@@ -742,10 +743,10 @@ def test_capture_saved_before_parse(store_dir: Path, monkeypatch: pytest.MonkeyP
     outcome = json.loads((store_dir / "raw.baseline.outcome.json").read_text())
     assert outcome["outcome"] == "ALLOW"
     assert outcome["provider_proof"] == "UNQUALIFIED"
-    assert outcome["capture_record_sha256"] == __import__("hashlib").sha256(
+    assert outcome["capture_record_sha256"] == hashlib.sha256(
         (store_dir / "raw.baseline.capture.json").read_bytes()).hexdigest()
     signed_hex = json.loads(reply.body)["data"]["signed_transaction"]
-    assert outcome["signed_bytes_sha256"] == __import__("hashlib").sha256(bytes.fromhex(signed_hex[2:])).hexdigest()
+    assert outcome["signed_bytes_sha256"] == hashlib.sha256(bytes.fromhex(signed_hex[2:])).hexdigest()
     assert outcome["decoded_public_fields"]["chain_id"] == 143
     assert signed_hex[2:] not in all_saved_text(store_dir)
 
@@ -758,18 +759,24 @@ def test_canaries_absent_everywhere(
         signed_fields(canary=SIGNED_CANARY),
         extra={"authorization_signature": SIGNATURE_CANARY, "nested": {"deep": [{"secret": SECRET_CANARY}]}},
     )
-    results = [run("raw.baseline", store_dir, RecordingSend(leaky))]
+    stores = [store_dir / name for name in ("allow", "send", "reply", "breach")]
+    for store in stores:
+        store.mkdir()
+    results = [run("raw.baseline", stores[0], RecordingSend(leaky))]
     error = RuntimeError(f"transport failed token={SECRET_CANARY} sig={SIGNATURE_CANARY}")
-    results.append(run("raw.wrong_chain", store_dir, RecordingSend(error=error)))
+    allow_baseline(stores[1])
+    results.append(run("raw.wrong_chain", stores[1], RecordingSend(error=error)))
     body = json.dumps({"code": f"unknown {SECRET_CANARY}", "message": SIGNATURE_CANARY}).encode()
-    results.append(run("raw.wrong_to", store_dir, RecordingSend(Reply(400, "application/json", body))))
+    allow_baseline(stores[2])
+    results.append(run("raw.wrong_to", stores[2], RecordingSend(Reply(400, "application/json", body))))
 
     def leaking_decoder(raw: bytes) -> dict:
         raise ValueError(f"cannot decode {SIGNED_CANARY}")
 
-    results.append(run("raw.post_removal", store_dir, RecordingSend(leaky), decoder=leaking_decoder))
+    allow_baseline(stores[3])
+    results.append(run("raw.post_removal", stores[3], RecordingSend(leaky), decoder=leaking_decoder))
     printed = capsys.readouterr()
-    surfaces = [all_saved_text(store_dir), printed.out, printed.err, caplog.text]
+    surfaces = [all_saved_text(store) for store in stores] + [printed.out, printed.err, caplog.text]
     surfaces += [repr(r) for r in results] + [str(r) for r in results]
     for canary in CANARIES:
         assert all(canary not in surface for surface in surfaces), canary
@@ -794,7 +801,7 @@ def test_capture_failure_is_unknown_and_stops(store_dir: Path, monkeypatch: pyte
     send = RecordingSend(code_reply(400, "synthetic_policy_violation"))
     with pytest.raises(SpecimenRefused) as caught:
         run("raw.wrong_to", store_dir, send)
-    assert caught.value.code == "STOPPED_AFTER_BREACH"
+    assert caught.value.code == "STAGE_STOPPED"
     assert send.requests == []
 
 
@@ -847,7 +854,7 @@ def test_negative_refused_before_positive_control(store_dir: Path) -> None:
     assert unknown.outcome is Outcome.UNKNOWN
     with pytest.raises(SpecimenRefused) as caught:
         run("raw.wrong_chain", store_dir, send)
-    assert caught.value.code == "POSITIVE_CONTROL_NOT_QUALIFIED"
+    assert caught.value.code == "STAGE_STOPPED"
     assert send.requests == []
 
 
@@ -899,7 +906,7 @@ def test_stop_after_breach(store_dir: Path) -> None:
         send = RecordingSend(code_reply(400, "synthetic_policy_violation"))
         with pytest.raises(SpecimenRefused) as caught:
             run(sid, store_dir, send)
-        assert caught.value.code == "STOPPED_AFTER_BREACH"
+        assert caught.value.code == "STAGE_STOPPED"
         assert send.requests == []
 
 
@@ -954,3 +961,152 @@ print(sorted(set(events)))
     completed = run_child(code)
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "[]"
+
+
+# ---------------------------------------------------------------- review round 1 repairs
+
+
+def _tampered(specimen_id: str, **changes: object):
+    rows = [
+        specimens.replace_specimen(s, **changes) if s.specimen_id == specimen_id else s
+        for s in specimens.FROZEN_TABLE.all()
+    ]
+    return specimens.build_table(rows)
+
+
+@pytest.mark.parametrize(
+    "table_factory",
+    [
+        lambda: _tampered("raw.baseline", transaction={**BASELINE_TX, "chain_id": 10143}),
+        lambda: _tampered("raw.baseline", wallet_id="synthetic-probe-wallet-b"),
+        lambda: _tampered("raw.wrong_chain", category=specimens.Category.POSITIVE_CONTROL),
+        lambda: dataclasses.replace(
+            specimens.FROZEN_TABLE,
+            rows=tuple(
+                specimens.replace_specimen(s, expected=specimens.Expected.ALLOW)
+                if s.specimen_id == "raw.wrong_chain" else s
+                for s in specimens.FROZEN_TABLE.all()
+            ),
+        ),
+    ],
+    ids=["transaction", "wallet", "category", "stale_manifest_attribute"],
+)
+def test_manifest_binds_every_decision_field(store_dir: Path, table_factory) -> None:  # noqa: ANN001
+    send = RecordingSend(success_reply(signed_fields(chain_id=10143)))
+    with pytest.raises(SpecimenRefused) as caught:
+        run("raw.baseline", store_dir, send, table=table_factory())
+    assert caught.value.code == "MANIFEST_MISMATCH"
+    assert send.requests == []
+    assert list(store_dir.iterdir()) == []
+
+
+def test_breach_stops_even_when_stop_write_fails(store_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    allow_baseline(store_dir)
+
+    def failing_stop(self, record):  # noqa: ANN001
+        raise OSError("stop disk failure")
+
+    monkeypatch.setattr(AttemptStore, "stop", failing_stop)
+    breach = run("raw.wrong_chain", store_dir, RecordingSend(success_reply(signed_fields(chain_id=10143))))
+    assert breach.outcome is Outcome.BREACH
+    assert not (store_dir / "STOP.json").exists()
+    send = RecordingSend(code_reply(400, "synthetic_policy_violation"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run("raw.wrong_to", store_dir, send)
+    assert caught.value.code == "STOPPED_AFTER_BREACH"
+    assert send.requests == []
+
+
+def test_breach_reported_when_stop_and_outcome_writes_fail(
+    store_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allow_baseline(store_dir)
+
+    def failing(self, *args):  # noqa: ANN001
+        raise OSError("disk full")
+
+    monkeypatch.setattr(AttemptStore, "stop", failing)
+    monkeypatch.setattr(AttemptStore, "write_outcome", failing)
+    breach = run("raw.wrong_chain", store_dir, RecordingSend(success_reply(signed_fields(chain_id=10143))))
+    assert (breach.outcome, breach.reason) == (Outcome.BREACH, "ALLOWED_WHERE_DENIAL_REQUIRED")
+    monkeypatch.undo()
+    assert AttemptStore(store_dir).state("raw.wrong_chain") is AttemptState.INTENT_SAVED
+    send = RecordingSend(code_reply(400, "synthetic_policy_violation"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run("raw.wrong_to", store_dir, send)
+    assert caught.value.code == "UNRESOLVED_ATTEMPT_IN_STORE"
+    assert send.requests == []
+
+
+def test_deeply_nested_reply_is_unknown(store_dir: Path) -> None:
+    allow_baseline(store_dir)
+    body = b"[" * 8000 + b"]" * 8000
+    assert len(body) <= evidence.MAX_REPLY_BYTES
+    result = run("raw.wrong_chain", store_dir, RecordingSend(Reply(400, "application/json", body)))
+    # The JSON decoder may parse or refuse this depth; either way no exception escapes.
+    assert result.outcome is Outcome.UNKNOWN
+    assert result.reason in {"MALFORMED_JSON", "UNRECOGNIZED_REPLY"}
+    assert AttemptStore(store_dir).state("raw.wrong_chain") is AttemptState.TERMINAL
+
+
+@pytest.mark.parametrize("reply_kind", ["send_failed", "non_json", "unrecognized"])
+def test_unexpected_failures_stop_the_stage(store_dir: Path, reply_kind: str) -> None:
+    allow_baseline(store_dir)
+    send = {
+        "send_failed": RecordingSend(error=ConnectionError("reset")),
+        "non_json": RecordingSend(Reply(502, "text/html", b"bad gateway")),
+        "unrecognized": RecordingSend(code_reply(429, "rate_limited")),
+    }[reply_kind]
+    assert run("raw.wrong_chain", store_dir, send).outcome is Outcome.UNKNOWN
+    assert (store_dir / "STOP.json").exists()
+    later = RecordingSend(code_reply(400, "synthetic_policy_violation"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run("raw.wrong_to", store_dir, later)
+    assert caught.value.code == "STAGE_STOPPED"
+    assert later.requests == []
+
+
+def test_expected_refusals_do_not_stop(store_dir: Path) -> None:
+    allow_baseline(store_dir)
+    run("raw.request_expiry", store_dir, RecordingSend(code_reply(400, "synthetic_request_expired")))
+    run("raw.gas_limit", store_dir, RecordingSend(code_reply(400, "synthetic_invalid_field")))
+    assert not (store_dir / "STOP.json").exists()
+    assert run("raw.wrong_to", store_dir, RecordingSend(code_reply(400, "synthetic_policy_violation"))).outcome \
+        is Outcome.POLICY_DENY
+
+
+@pytest.mark.parametrize("status", [100, 599])
+def test_status_exact_bounds_are_valid_metadata(store_dir: Path, status: int) -> None:
+    result = run("raw.baseline", store_dir, RecordingSend(code_reply(status, "synthetic_policy_violation")))
+    assert result.reason == "UNRECOGNIZED_REPLY"
+    assert json.loads((store_dir / "raw.baseline.capture.json").read_text())["metadata_valid"] is True
+
+
+SPECIAL_REQUESTS = {
+    "raw.foreign_wallet": (URL_B, ()),
+    "raw.request_expiry": (URL_A, (("privy-request-expiry", "1792000000000"),)),
+}
+
+
+def test_every_request_url_and_headers_are_literal() -> None:
+    for specimen in specimens.FROZEN_TABLE.all():
+        if specimen.specimen_id == "raw.type4_envelope":
+            assert specimen.request is None
+            continue
+        url, headers = SPECIAL_REQUESTS.get(specimen.specimen_id, (URL_A, ()))
+        assert (specimen.request.url, specimen.request.http_method, specimen.request.headers) == (url, "POST", headers)
+
+
+@pytest.mark.parametrize(
+    "specimen_id",
+    ["raw.receiver_selector", "decoded.receiver_selector", "raw.trailing_word", "decoded.trailing_word",
+     "raw.data_hex_case", "decoded.program_hex_case", "raw.window_at_t", "raw.window_after_t", "raw.post_removal"],
+)
+def test_unchanged_transaction_fields_are_literal(specimen_id: str) -> None:
+    body = body_of(specimen_id)
+    assert body["method"] == "eth_signTransaction"
+    transaction = body["params"]["transaction"]
+    assert {k: v for k, v in transaction.items() if k != "data"} == {
+        "type": 2, "chain_id": 143, "to": ENTRYPOINT, "value": 0, "nonce": 0,
+        "gas_limit": 300000, "max_fee_per_gas": 100000000000, "max_priority_fee_per_gas": 2000000000,
+    }

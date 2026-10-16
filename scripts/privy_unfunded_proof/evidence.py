@@ -89,6 +89,9 @@ class ReplyProfile:
 SYNTHETIC_PROFILE = ReplyProfile()
 
 _DENIALS = (Expected.POLICY_DENY, Expected.AUTHORIZATION_DENY, Expected.EXPIRY_REFUSAL)
+# Expected refusals end one capability test. Every other UNKNOWN is a network, access,
+# unexpected-server or evidence failure and stops the stage, as the P21 packet requires.
+_NON_STOPPING_UNKNOWN = ("EXPIRY_REFUSAL",)
 
 
 @dataclass(frozen=True)
@@ -162,7 +165,7 @@ class _Attempt:
             self.specimen.specimen_id, self.specimen.profile, expected.value, outcome, reason,
             _matches(expected, outcome, reason),
         )
-        if outcome is Outcome.BREACH:
+        if outcome is Outcome.BREACH or (outcome is Outcome.UNKNOWN and reason not in _NON_STOPPING_UNKNOWN):
             self._stop(reason)
         record = {
             "specimen_id": result.specimen_id,
@@ -180,8 +183,10 @@ class _Attempt:
         }
         try:
             self.store.write_outcome(self.specimen.specimen_id, record)
-        except (OSError, EvidenceOverBound):
+        except (OSError, EvidenceOverBound, ValueError):
             self._stop("OUTCOME_NOT_PERSISTED")
+            if outcome is Outcome.BREACH:
+                return result
             return RunResult(result.specimen_id, result.profile, result.expected, Outcome.UNKNOWN,
                              "OUTCOME_NOT_PERSISTED", False)
         return result
@@ -260,7 +265,7 @@ def _admit(
 ) -> tuple[Specimen, FrozenRequest]:
     if run_mode != EVIDENCE_CLASS:
         raise SpecimenRefused("ACTUAL_RUN_REFUSED")
-    if table.manifest_sha256 != MANIFEST_SHA256:
+    if not table.manifest_matches_rows():
         raise SpecimenRefused("MANIFEST_MISMATCH")
     specimen = table.get(specimen_id)
     request = specimen.request
@@ -269,13 +274,16 @@ def _admit(
         raise SpecimenRefused("NOT_RUN", detail)
     if envelope_sha256(request.url, request.http_method, request.headers, request.body) != request.request_sha256:
         raise SpecimenRefused("REQUEST_BYTES_CHANGED")
-    if store.is_stopped():
-        raise SpecimenRefused("STOPPED_AFTER_BREACH")
     state = store.state(specimen_id)
     if state is AttemptState.TERMINAL:
         raise SpecimenRefused("ALREADY_CLAIMED")
     if state is not AttemptState.NOT_SENT:
         raise SpecimenRefused("ATTEMPT_UNCERTAIN")
+    if store.is_stopped():
+        raise SpecimenRefused("STAGE_STOPPED")
+    blocking = store.blocking_attempt(excluding=specimen_id)
+    if blocking is not None:
+        raise SpecimenRefused(blocking)
     if not specimen.is_positive_control and not _positive_control_allowed(table, store, specimen.profile):
         raise SpecimenRefused("POSITIVE_CONTROL_NOT_QUALIFIED")
     return specimen, request
@@ -314,7 +322,7 @@ def run_specimen(
         return attempt.finish(Outcome.UNKNOWN, "NON_JSON")
     try:
         parsed = json.loads(body.decode("utf-8"))
-    except ValueError:
+    except (ValueError, RecursionError):
         return attempt.finish(Outcome.UNKNOWN, "MALFORMED_JSON")
     if status == 200:
         data = parsed.get("data") if isinstance(parsed, dict) else None

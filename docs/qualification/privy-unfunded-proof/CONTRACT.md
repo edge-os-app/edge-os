@@ -15,7 +15,7 @@ This file is the shared specification for the offline specimen and evidence driv
 | `tests/privy_unfunded_proof/test_specimens_and_evidence.py` | Literal mutation tests, lifecycle tests with injected send, clock and decoder, and redaction tests. |
 | `docs/qualification/privy-unfunded-proof/CONTRACT.md` | This contract. |
 
-Import paths are `scripts.privy_unfunded_proof.specimens` and `scripts.privy_unfunded_proof.evidence` from the checkout root. Both reuse `edge_os_api.kuru_flow.flow_calldata.decode_flow_call` without change. The test-only encoder in `apps/api/tests/kuru_flow/_support.py` is not imported. The baseline calldata is an independent frozen literal. No general ABI encoder exists in this unit. A mutation is a named replacement of whole 32-byte words, one program byte, one appended word or one transaction field.
+Import paths are `scripts.privy_unfunded_proof.specimens` and `scripts.privy_unfunded_proof.evidence` from the checkout root. The tests use `edge_os_api.kuru_flow.flow_calldata.decode_flow_call`, unchanged, to check every calldata mutation. The production modules do not import it. The test-only encoder in `apps/api/tests/kuru_flow/_support.py` is not imported. The baseline calldata is an independent frozen literal. No general ABI encoder exists in this unit. A mutation is a named replacement of whole 32-byte words, one program byte, one appended word or one transaction field.
 
 Importing either module makes no network, subprocess or file call. Running either module as a program exits with status 2 and the text `refused: local synthetic driver has no actual runner`. `run_specimen` accepts only `run_mode="SYNTHETIC_FIXTURE"`. Any other mode raises `SpecimenRefused("ACTUAL_RUN_REFUSED")` before any effect.
 
@@ -29,7 +29,7 @@ Destination `https://api.privy.io/v1/wallets/{wallet_id}/rpc`, HTTP method `POST
 
 Body bytes are `json.dumps(body, sort_keys=True, separators=(",", ":"))` in UTF-8. The canonical envelope is the same encoding of `{"body_sha256": sha256(body bytes), "headers": headers, "http_method": "POST", "url": url}`. `request_sha256` hashes the envelope bytes. Computing it parses no JSON.
 
-The manifest is the canonical JSON list of `[specimen_id, profile, expected, request_sha256 or null]` in table order. `MANIFEST_SHA256` is the frozen literal `8d81f5d0fb60eb10ad6760cb5e600c886e7190e4a1cd27b95685135bd1a6f940`. `run_specimen` refuses a table whose manifest differs with `MANIFEST_MISMATCH`, and refuses a request whose bytes no longer hash to its frozen `request_sha256` with `REQUEST_BYTES_CHANGED`, both before any effect.
+The manifest is the canonical JSON list of `[specimen_id, profile, category, expected, wallet_id, request_sha256 or null, comparison transaction or null, not_run_reason]` in table order. It binds every field that admission, gating or classification reads. `run_specimen` recomputes it from the table rows. A stored manifest attribute alone is not trusted. `MANIFEST_SHA256` is the frozen literal `a7a922b04b445798e8f2ff2ff8c19d4b6904652a5471201f26dcff047f125ff9`. `run_specimen` refuses a table whose manifest differs with `MANIFEST_MISMATCH`, and refuses a request whose bytes no longer hash to its frozen `request_sha256` with `REQUEST_BYTES_CHANGED`, both before any effect.
 
 Baseline type-2 transaction, all values synthetic:
 
@@ -113,14 +113,14 @@ The type-4 specimen needs separately supplied valid owner authority. This unit p
 
 State per specimen: `NOT_SENT`, then `INTENT_SAVED`, then one terminal outcome. A specimen whose intent exists without a valid terminal record is `UNCERTAIN`. A torn or corrupt record is `UNCERTAIN`.
 
-1. Refuse before effect: actual mode, a manifest mismatch, an unknown ID, a `NOT_RUN` specimen, a request whose bytes no longer hash to the frozen value, the stop marker, an existing intent, or a missing positive control.
+1. Refuse before effect, in this order: actual mode, a manifest mismatch, an unknown ID, a `NOT_RUN` specimen, a request whose bytes no longer hash to the frozen value, an existing intent for this specimen, the stop marker, any other attempt in the store that is unresolved or has a `BREACH` outcome, or a missing positive control.
 2. Claim with `os.open(..., O_CREAT | O_EXCL | O_WRONLY)` of `<id>.intent.json`, write, `fsync` the file and the directory. Exactly one claimant wins across threads and processes. A failure here raises `SpecimenRefused("INTENT_NOT_PERSISTED")` and makes no send. The partly persisted file leaves the specimen `INTENT_SAVED` or `UNCERTAIN`. Both states refuse every later attempt with `ATTEMPT_UNCERTAIN`.
 3. Call the injected send once. No retry, redirect, alternate endpoint, renewal, policy change or cleanup request exists.
 4. Capture, classify and write `<id>.outcome.json` with `O_EXCL`.
 
 The store key is the specimen ID only. A new transport, a new response or a new driver object cannot reset an `INTENT_SAVED` or `UNCERTAIN` specimen. A fresh Python process sees the same files and refuses the same way.
 
-Refusal codes: `ACTUAL_RUN_REFUSED`, `MANIFEST_MISMATCH`, `UNKNOWN_SPECIMEN`, `NOT_RUN`, `REQUEST_BYTES_CHANGED`, `STOPPED_AFTER_BREACH`, `ALREADY_CLAIMED`, `ATTEMPT_UNCERTAIN`, `POSITIVE_CONTROL_NOT_QUALIFIED`, `INTENT_NOT_PERSISTED`. Table admission errors raise `SpecimenTableError` with codes `DUPLICATE_ID`, `MALFORMED_ID`, `UNSUPPORTED_OPERATION`, `UNSUPPORTED_DESTINATION`, `UNSUPPORTED_HEADER`, `OVER_CAP`, `REQUEST_OVER_BOUND`.
+Refusal codes: `ACTUAL_RUN_REFUSED`, `MANIFEST_MISMATCH`, `UNKNOWN_SPECIMEN`, `NOT_RUN`, `REQUEST_BYTES_CHANGED`, `ALREADY_CLAIMED`, `ATTEMPT_UNCERTAIN`, `STAGE_STOPPED` (stop marker present), `STOPPED_AFTER_BREACH` (a saved `BREACH` outcome), `UNRESOLVED_ATTEMPT_IN_STORE`, `POSITIVE_CONTROL_NOT_QUALIFIED`, `INTENT_NOT_PERSISTED`. Table admission errors raise `SpecimenTableError` with codes `DUPLICATE_ID`, `MALFORMED_ID`, `UNSUPPORTED_OPERATION`, `UNSUPPORTED_DESTINATION`, `UNSUPPORTED_HEADER`, `OVER_CAP`, `REQUEST_OVER_BOUND`.
 
 ## Local bounds
 
@@ -139,7 +139,7 @@ These are local safety bounds, not an actual grant.
 
 `<id>.capture.json` is written with `O_EXCL` before any JSON parse. It holds `specimen_id`, `profile`, `request_sha256`, `status`, `content_type`, `byte_count`, `raw_body_sha256`, `metadata_valid` and `captured_at`. If this write fails, the outcome is `UNKNOWN` with reason `CAPTURE_FAILED`, the stop marker is written when possible, and the specimen stays `INTENT_SAVED`.
 
-The driver never saves or logs reply bodies, signed bytes, credentials, tokens, authorization signatures or unknown error strings. Exceptions from send or decode are reduced to fixed reason codes and are never re-raised, chained or printed. A success body stays in memory. The driver decodes it with the injected decoder, compares fields, and then saves only public decoded fields and `signed_bytes_sha256`. No memory-zeroization claim is made.
+The driver never saves or logs reply bodies, signed bytes, credentials, tokens, authorization signatures or unknown error strings. `Exception` subclasses from send or decode are reduced to fixed reason codes and are never re-raised, chained or printed. `BaseException` subclasses such as `KeyboardInterrupt` propagate and leave the specimen `INTENT_SAVED`. A success body stays in memory. The driver decodes it with the injected decoder, compares fields, and then saves only public decoded fields and `signed_bytes_sha256`. No memory-zeroization claim is made.
 
 ## Outcomes
 
@@ -151,8 +151,10 @@ The synthetic reply profile has `qualification = "SYNTHETIC"`. Constructing any 
 | `POLICY_DENY` | Status 400 with code `synthetic_policy_violation`, and the profile positive control is `ALLOW`. |
 | `AUTHORIZATION_DENY` | Status 403 with code `synthetic_wallet_not_authorized`. |
 | `SCHEMA_REJECTED` | Status 400 with code `synthetic_invalid_field`. |
-| `UNKNOWN` | Send raised, timeout, non-JSON, malformed JSON or envelope, generic 403, unknown code, malformed metadata, over-bound reply, capture failure, decode failure on an expected allow, or `synthetic_request_expired`. The last keeps the saved label `expiry_refusal` and is never policy denial. |
-| `BREACH` | Any success envelope where the expectation is a denial, or a decoded signed result whose fields differ from the specimen. `BREACH` writes `STOP.json`. Every later specimen in every profile is refused. |
+| `UNKNOWN` | Send raised, timeout, non-JSON, malformed JSON or envelope, generic 403, unknown code, malformed metadata, over-bound reply, capture failure, decode failure on an expected allow, or `synthetic_request_expired`. The last is saved with reason `EXPIRY_REFUSAL` and is never policy denial. Deeply nested JSON returns `UNKNOWN` and never escapes as an exception (`MALFORMED_JSON` when the decoder refuses its depth). |
+| `BREACH` | Any success envelope where the expectation is a denial, or a decoded signed result whose fields differ from the specimen. `BREACH` writes `STOP.json`. Every later specimen in every profile is refused. If the stop write fails, the saved `BREACH` outcome refuses later attempts. If the outcome write also fails, the caller still receives `BREACH` and the unresolved intent refuses later attempts. |
+
+Stage stop: every `UNKNOWN` except reason `EXPIRY_REFUSAL` writes `STOP.json`. This covers send failure, timeout, malformed or non-JSON replies, unrecognized codes, over-bound replies, decode failure and capture failure. It follows the P21 packet rule that any network, access, rate-limit, unexpected-server or evidence-capture failure stops that stage. An expected field-validation or expiry refusal ends only its own capability test.
 
 A `DIAGNOSTIC` specimen records `ALLOW` or `POLICY_DENY` without `BREACH`. It never substitutes for changed-byte denial.
 
@@ -171,16 +173,18 @@ Tests are in `tests/privy_unfunded_proof/test_specimens_and_evidence.py`.
 | 1 Torn or corrupt state | `test_corrupt_intent_is_uncertain` | none |
 | 1 Duplicate claim | `test_terminal_specimen_refused` | none |
 | 2 Admission | `test_table_admission_rejects_bad_tables`, `test_changed_request_bytes_refused`, `test_manifest_mismatch_refused` | Actual app, wallet IDs, destinations |
-| 2 Bounds | `test_unknown_specimen_refused`, `test_request_bound_exact_and_overflow`, `test_reply_bound_exact_and_overflow`, `test_record_bound_exact_and_overflow`, `test_malformed_metadata_is_unknown`, `test_content_type_exact_bound_is_accepted` | Actual size ceilings |
-| 3 Matrix and literal mutations | `test_matrix_ids_and_counts`, `test_baseline_request_is_literal`, `test_receiver_selector_variant`, `test_operation_and_timing_specimens_are_literal`, `test_case_diagnostics_keep_the_same_bytes`, `test_calldata_mutations_change_only_named_field`, `test_transaction_mutations_change_only_named_field`, `test_envelope_variants_declared_separately`, `test_trailing_word_stays_raw_challenge`, `test_decoded_profile_uses_alias_paths` | Actual policy, owners, values |
+| 2 Bounds | `test_unknown_specimen_refused`, `test_request_bound_exact_and_overflow`, `test_reply_bound_exact_and_overflow`, `test_record_bound_exact_and_overflow`, `test_malformed_metadata_is_unknown`, `test_status_exact_bounds_are_valid_metadata`, `test_content_type_exact_bound_is_accepted` | Actual size ceilings |
+| 3 Matrix and literal mutations | `test_every_request_url_and_headers_are_literal`, `test_unchanged_transaction_fields_are_literal`, `test_matrix_ids_and_counts`, `test_baseline_request_is_literal`, `test_receiver_selector_variant`, `test_operation_and_timing_specimens_are_literal`, `test_case_diagnostics_keep_the_same_bytes`, `test_calldata_mutations_change_only_named_field`, `test_transaction_mutations_change_only_named_field`, `test_envelope_variants_declared_separately`, `test_trailing_word_stays_raw_challenge`, `test_decoded_profile_uses_alias_paths` | Actual policy, owners, values |
 | 4 Type 4 | `test_type4_is_not_run_without_owner_authority` | Valid owner self-authorization |
 | 5 Capture and redaction | `test_capture_saved_before_parse`, `test_canaries_absent_everywhere`, `test_capture_failure_is_unknown_and_stops` | none |
-| 6 Classification | `test_generic_and_malformed_replies_are_unknown`, `test_synthetic_codes_classify`, `test_negative_refused_before_positive_control`, `test_profiles_do_not_gate_each_other`, `test_decoded_mismatch_is_breach`, `test_case_only_hex_difference_is_not_mismatch`, `test_decode_failure_on_expected_allow_is_unknown`, `test_stop_after_breach`, `test_personal_sign_success_is_breach`, `test_actual_profile_refused` | Observed provider error shape |
+| 6 Classification | `test_manifest_binds_every_decision_field`, `test_breach_stops_even_when_stop_write_fails`, `test_breach_reported_when_stop_and_outcome_writes_fail`, `test_deeply_nested_reply_is_unknown`, `test_unexpected_failures_stop_the_stage`, `test_expected_refusals_do_not_stop`, `test_generic_and_malformed_replies_are_unknown`, `test_synthetic_codes_classify`, `test_negative_refused_before_positive_control`, `test_profiles_do_not_gate_each_other`, `test_decoded_mismatch_is_breach`, `test_case_only_hex_difference_is_not_mismatch`, `test_decode_failure_on_expected_allow_is_unknown`, `test_stop_after_breach`, `test_personal_sign_success_is_breach`, `test_actual_profile_refused` | Observed provider error shape |
 | Actual-run refusal and import safety | `test_actual_mode_refused`, `test_module_run_refused`, `test_import_makes_no_network_or_process_call` | none |
 
 ## Future actual inputs
 
 Activation of any actual stage still needs the exact app and supported access route, never-funded probe wallets with builder-controlled owners, independently owned policies, the executor identity and override readback, process separation evidence, actual time and size ceilings, valid type-4 owner authority, an observed and reviewed provider denial format, and a transport adapter under its own lease. The historical uncertain policy POST and the stopped 403 GET stay unresolved and are not retried. Kuru deployed sources stay `NOT_REPRODUCIBLE`. None of these inputs is invented here.
+
+A future actual runner must also re-check the stop marker after its claim and before its send, treat any success-shaped reply on a negative specimen as fail-closed, compare the full decoded key set and exact value types from a qualified decoder, and state how identical request bytes in the `raw` and `decoded` profiles are authorized under separate policies.
 
 Unresolved public-document conflicts are also future qualification inputs. Observed in rolling documents on 2026-10-16, not as measured API behavior:
 
