@@ -733,7 +733,8 @@ def test_capture_saved_before_parse(store_dir: Path, monkeypatch: pytest.MonkeyP
         "profile": "raw",
         "request_sha256": specimens.FROZEN_TABLE.get("raw.baseline").request.request_sha256,
         "status": 200,
-        "content_type": "application/json",
+        "media_type": "application/json",
+        "content_type_sha256": hashlib.sha256(b"application/json").hexdigest(),
         "byte_count": len(reply.body),
         "raw_body_sha256": hashlib.sha256(reply.body).hexdigest(),
         "metadata_valid": True,
@@ -1110,3 +1111,155 @@ def test_unchanged_transaction_fields_are_literal(specimen_id: str) -> None:
         "type": 2, "chain_id": 143, "to": ENTRYPOINT, "value": 0, "nonce": 0,
         "gas_limit": 300000, "max_fee_per_gas": 100000000000, "max_priority_fee_per_gas": 2000000000,
     }
+
+
+# ---------------------------------------------------------------- gate round 1 repairs
+
+HOSTILE = "CANARY-HOSTILE-5e1f"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("to", HOSTILE), ("wallet", HOSTILE), ("chain_id", HOSTILE), ("nonce", HOSTILE),
+     ("to", "0x" + "ab" * 60), ("data", "0x" + HOSTILE.encode().hex())],
+)
+def test_hostile_decoded_values_never_saved(store_dir: Path, field: str, value: str) -> None:
+    result = run("raw.baseline", store_dir, RecordingSend(success_reply(signed_fields(**{field: value}))))
+    assert (result.outcome, result.reason) == (Outcome.BREACH, "SIGNED_FIELDS_MISMATCH")
+    saved = all_saved_text(store_dir)
+    assert value not in saved and value[2:] not in saved and HOSTILE not in saved
+    outcome = json.loads((store_dir / "raw.baseline.outcome.json").read_text())
+    assert outcome["decoded_field_matches"][field] is False
+    assert field not in outcome["decoded_public_fields"]
+
+
+def test_saved_decoded_fields_are_frozen_values(store_dir: Path) -> None:
+    result = run("raw.baseline", store_dir, RecordingSend(success_reply(signed_fields(to=ENTRYPOINT.upper().replace("0X", "0x")))))
+    assert result.outcome is Outcome.ALLOW
+    outcome = json.loads((store_dir / "raw.baseline.outcome.json").read_text())
+    assert outcome["decoded_public_fields"]["to"] == ENTRYPOINT
+    assert outcome["decoded_public_fields"]["chain_id"] == 143
+    assert outcome["decoded_public_fields"]["data_sha256"] == hashlib.sha256(bytes.fromhex(BASELINE_DATA[2:])).hexdigest()
+    assert set(outcome["decoded_field_matches"].values()) == {True}
+
+
+def test_content_type_parameters_never_saved(store_dir: Path) -> None:
+    reply = success_reply(signed_fields())
+    content_type = f"application/json; token={HOSTILE}"
+    result = run("raw.baseline", store_dir, RecordingSend(Reply(200, content_type, reply.body)))
+    assert result.outcome is Outcome.ALLOW
+    capture = json.loads((store_dir / "raw.baseline.capture.json").read_text())
+    assert capture["media_type"] == "application/json"
+    assert capture["content_type_sha256"] == hashlib.sha256(content_type.encode("ascii")).hexdigest()
+    assert "content_type" not in capture
+    assert HOSTILE not in all_saved_text(store_dir)
+
+
+def _short_writes(monkeypatch: pytest.MonkeyPatch, marker: bytes, mode: str) -> None:
+    real_write = specimens.os.write
+    state = {"done": False}
+
+    def write(fd: int, data) -> int:  # noqa: ANN001
+        if marker in bytes(data) and not state["done"]:
+            state["done"] = True
+            if mode == "zero":
+                return 0
+            count = real_write(fd, bytes(data)[:13])
+            if mode == "partial_then_error":
+                raise OSError("disk failed after partial write")
+            return count
+        if mode in ("zero", "partial_then_error") and state["done"]:
+            raise OSError("still failing")
+        return real_write(fd, data)
+
+    monkeypatch.setattr(specimens.os, "write", write)
+
+
+@pytest.mark.parametrize("mode", ["short_then_rest", "zero", "partial_then_error"])
+def test_intent_short_write(store_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    _short_writes(monkeypatch, b'"state":"INTENT_SAVED"', mode)
+    send = RecordingSend(success_reply(signed_fields()))
+    if mode == "short_then_rest":
+        assert run("raw.baseline", store_dir, send).outcome is Outcome.ALLOW
+        monkeypatch.undo()
+        assert json.loads((store_dir / "raw.baseline.intent.json").read_text())["state"] == "INTENT_SAVED"
+        return
+    with pytest.raises(SpecimenRefused) as caught:
+        run("raw.baseline", store_dir, send)
+    assert caught.value.code == "INTENT_NOT_PERSISTED"
+    assert send.requests == []
+    monkeypatch.undo()
+    assert AttemptStore(store_dir).state("raw.baseline") is not AttemptState.NOT_SENT
+
+
+@pytest.mark.parametrize("mode", ["zero", "partial_then_error"])
+def test_capture_short_write_is_unknown(store_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    _short_writes(monkeypatch, b'"metadata_valid"', mode)
+    result = run("raw.baseline", store_dir, RecordingSend(success_reply(signed_fields())))
+    assert (result.outcome, result.reason) == (Outcome.UNKNOWN, "CAPTURE_FAILED")
+    monkeypatch.undo()
+    assert AttemptStore(store_dir).state("raw.baseline") is AttemptState.INTENT_SAVED
+
+
+@pytest.mark.parametrize("mode", ["zero", "partial_then_error"])
+def test_outcome_short_write_is_not_allow(store_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    _short_writes(monkeypatch, b'"matches_expectation"', mode)
+    result = run("raw.baseline", store_dir, RecordingSend(success_reply(signed_fields())))
+    assert (result.outcome, result.reason) == (Outcome.UNKNOWN, "OUTCOME_NOT_PERSISTED")
+    monkeypatch.undo()
+    assert AttemptStore(store_dir).state("raw.baseline") is not AttemptState.TERMINAL
+
+
+def test_outcome_short_write_keeps_breach(store_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    allow_baseline(store_dir)
+    _short_writes(monkeypatch, b'"matches_expectation"', "zero")
+    result = run("raw.wrong_chain", store_dir, RecordingSend(success_reply(signed_fields(chain_id=10143))))
+    assert result.outcome is Outcome.BREACH
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        (("privy-request-expiry", "1999999999999"), ("privy-request-expiry", "1792000000000")),
+        (("Privy-Request-Expiry", "1792000000000"),),
+        (("privy-request-expiry", " 1792000000000"),),
+        (("privy-request-expiry", "1792000000000\r\nx: y"),),
+        (("privy-request-expiry", 1792000000000),),
+    ],
+    ids=["duplicate", "case", "space", "crlf", "not_string"],
+)
+def test_noncanonical_headers_refused_before_effect(store_dir: Path, headers: tuple) -> None:
+    allow_baseline(store_dir)
+    table = specimens.FROZEN_TABLE
+    original = table.get("raw.request_expiry")
+    tampered = specimens.replace_specimen(original, request=specimens.replace_request(original.request, headers=headers))
+    rows = [tampered if s.specimen_id == "raw.request_expiry" else s for s in table.all()]
+    send = RecordingSend(code_reply(400, "synthetic_request_expired"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run("raw.request_expiry", store_dir, send, table=specimens.build_table(rows))
+    assert caught.value.code in {"MALFORMED_REQUEST_HEADERS", "MANIFEST_MISMATCH"}
+    assert send.requests == []
+    assert AttemptStore(store_dir).state("raw.request_expiry") is AttemptState.NOT_SENT
+
+
+def test_duplicate_header_keeps_old_digest_and_is_refused(store_dir: Path) -> None:
+    allow_baseline(store_dir)
+    table = specimens.FROZEN_TABLE
+    original = table.get("raw.request_expiry")
+    headers = (("privy-request-expiry", "1999999999999"), ("privy-request-expiry", "1792000000000"))
+    request = specimens.replace_request(original.request, headers=headers)
+    assert specimens.envelope_sha256(request.url, request.http_method, headers, request.body) == original.request.request_sha256
+    rows = [specimens.replace_specimen(s, request=request) if s.specimen_id == "raw.request_expiry" else s for s in table.all()]
+    send = RecordingSend(code_reply(400, "synthetic_request_expired"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run("raw.request_expiry", store_dir, send, table=specimens.build_table(rows))
+    assert caught.value.code == "MALFORMED_REQUEST_HEADERS"
+    assert send.requests == []
+    assert not (store_dir / "raw.request_expiry.intent.json").exists()
+
+
+def test_freeze_request_rejects_noncanonical_header_value() -> None:
+    for value in ("179200000000", "1792000000000 ", "abc"):
+        with pytest.raises(SpecimenTableError) as caught:
+            specimens.freeze_request("synthetic-probe-wallet-a", body_of("raw.baseline"), headers={"privy-request-expiry": value})
+        assert caught.value.code == "UNSUPPORTED_HEADER"

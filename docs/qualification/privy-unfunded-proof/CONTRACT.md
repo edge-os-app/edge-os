@@ -25,7 +25,7 @@ The environment has no Keccak-256. Every hash in this unit is SHA-256 and every 
 
 ## Frozen request format
 
-Destination `https://api.privy.io/v1/wallets/{wallet_id}/rpc`, HTTP method `POST`. Allowed wallet IDs `synthetic-probe-wallet-a` (address `0x00000000000000000000000000000000000000a1`) and `synthetic-probe-wallet-b` (address `0x00000000000000000000000000000000000000a2`). Allowed RPC operations `eth_signTransaction` and `personal_sign`. The only allowed request header is `privy-request-expiry`. The driver adds no credential. A transport adapter is outside this unit.
+Destination `https://api.privy.io/v1/wallets/{wallet_id}/rpc`, HTTP method `POST`. Allowed wallet IDs `synthetic-probe-wallet-a` (address `0x00000000000000000000000000000000000000a1`) and `synthetic-probe-wallet-b` (address `0x00000000000000000000000000000000000000a2`). Allowed RPC operations `eth_signTransaction` and `personal_sign`. The only allowed request header is `privy-request-expiry`, with a 13-digit value. A frozen header tuple must be sorted, duplicate-free, exact lowercase names and exact values. `freeze_request` rejects anything else with `UNSUPPORTED_HEADER`. `run_specimen` rejects a noncanonical tuple with `MALFORMED_REQUEST_HEADERS` before the hash check and before any effect, so a duplicate that a dict would hide cannot pass. The driver adds no credential. A transport adapter is outside this unit.
 
 Body bytes are `json.dumps(body, sort_keys=True, separators=(",", ":"))` in UTF-8. The canonical envelope is the same encoding of `{"body_sha256": sha256(body bytes), "headers": headers, "http_method": "POST", "url": url}`. `request_sha256` hashes the envelope bytes. Computing it parses no JSON.
 
@@ -120,7 +120,7 @@ State per specimen: `NOT_SENT`, then `INTENT_SAVED`, then one terminal outcome. 
 
 The store key is the specimen ID only. A new transport, a new response or a new driver object cannot reset an `INTENT_SAVED` or `UNCERTAIN` specimen. A fresh Python process sees the same files and refuses the same way.
 
-Refusal codes: `ACTUAL_RUN_REFUSED`, `MANIFEST_MISMATCH`, `UNKNOWN_SPECIMEN`, `NOT_RUN`, `REQUEST_BYTES_CHANGED`, `ALREADY_CLAIMED`, `ATTEMPT_UNCERTAIN`, `STAGE_STOPPED` (stop marker present), `STOPPED_AFTER_BREACH` (a saved `BREACH` outcome), `UNRESOLVED_ATTEMPT_IN_STORE`, `POSITIVE_CONTROL_NOT_QUALIFIED`, `INTENT_NOT_PERSISTED`. Table admission errors raise `SpecimenTableError` with codes `DUPLICATE_ID`, `MALFORMED_ID`, `UNSUPPORTED_OPERATION`, `UNSUPPORTED_DESTINATION`, `UNSUPPORTED_HEADER`, `OVER_CAP`, `REQUEST_OVER_BOUND`.
+Refusal codes: `ACTUAL_RUN_REFUSED`, `MANIFEST_MISMATCH`, `UNKNOWN_SPECIMEN`, `NOT_RUN`, `REQUEST_BYTES_CHANGED`, `ALREADY_CLAIMED`, `ATTEMPT_UNCERTAIN`, `MALFORMED_REQUEST_HEADERS`, `STAGE_STOPPED` (stop marker present), `STOPPED_AFTER_BREACH` (a saved `BREACH` outcome), `UNRESOLVED_ATTEMPT_IN_STORE`, `POSITIVE_CONTROL_NOT_QUALIFIED`, `INTENT_NOT_PERSISTED`. Table admission errors raise `SpecimenTableError` with codes `DUPLICATE_ID`, `MALFORMED_ID`, `UNSUPPORTED_OPERATION`, `UNSUPPORTED_DESTINATION`, `UNSUPPORTED_HEADER`, `OVER_CAP`, `REQUEST_OVER_BOUND`.
 
 ## Local bounds
 
@@ -137,9 +137,11 @@ These are local safety bounds, not an actual grant.
 
 ## Capture before interpretation
 
-`<id>.capture.json` is written with `O_EXCL` before any JSON parse. It holds `specimen_id`, `profile`, `request_sha256`, `status`, `content_type`, `byte_count`, `raw_body_sha256`, `metadata_valid` and `captured_at`. If this write fails, the outcome is `UNKNOWN` with reason `CAPTURE_FAILED`, the stop marker is written when possible, and the specimen stays `INTENT_SAVED`.
+`<id>.capture.json` is written with `O_EXCL` before any JSON parse. It holds `specimen_id`, `profile`, `request_sha256`, `status`, `media_type`, `content_type_sha256`, `byte_count`, `raw_body_sha256`, `metadata_valid` and `captured_at`. `media_type` is the lowercase type and subtype only when it matches a strict token pattern. Content-type parameters are never saved, only hashed. If this write fails, the outcome is `UNKNOWN` with reason `CAPTURE_FAILED`, the stop marker is written when possible, and the specimen stays `INTENT_SAVED`.
 
-The driver never saves or logs reply bodies, signed bytes, credentials, tokens, authorization signatures or unknown error strings. `Exception` subclasses from send or decode are reduced to fixed reason codes and are never re-raised, chained or printed. `BaseException` subclasses such as `KeyboardInterrupt` propagate and leave the specimen `INTENT_SAVED`. A success body stays in memory. The driver decodes it with the injected decoder, compares fields, and then saves only public decoded fields and `signed_bytes_sha256`. No memory-zeroization claim is made.
+The driver never saves or logs reply bodies, signed bytes, credentials, tokens, authorization signatures or unknown error strings. `Exception` subclasses from send or decode are reduced to fixed reason codes and are never re-raised, chained or printed. `BaseException` subclasses such as `KeyboardInterrupt` propagate and leave the specimen `INTENT_SAVED`. A success body stays in memory. The driver decodes it with the injected decoder and compares fields. It saves `decoded_field_matches` (a boolean per compared field), `decoded_public_fields` holding only the frozen specimen values of matched fields (and `data_sha256` of the frozen data), and `signed_bytes_sha256`. No value taken from the reply or the decoder is saved.
+
+Every record write goes through one writer. It writes the whole bounded record in a loop, fails with `OSError` when a write makes no progress, then fsyncs the file and the directory. An incomplete intent therefore refuses with `INTENT_NOT_PERSISTED` and makes no send. An incomplete capture gives `UNKNOWN` with `CAPTURE_FAILED` and no interpretation. An incomplete outcome gives `OUTCOME_NOT_PERSISTED`, never a durable `ALLOW`, while `BREACH` is still returned. Partial files are kept, never cleaned, and keep the specimen uncertain. No memory-zeroization claim is made.
 
 ## Outcomes
 
@@ -168,15 +170,15 @@ Tests are in `tests/privy_unfunded_proof/test_specimens_and_evidence.py`.
 | 1 No resend after reconstruction | `test_uncertain_specimen_refused_after_new_store_and_transport` | none |
 | 1 Fresh process | `test_fresh_process_refuses_specimen_lost_after_intent` | none |
 | 1 Concurrent claims | `test_second_claim_loses`, `test_concurrent_threads_send_once`, `test_concurrent_processes_send_once` | none |
-| 1 Persistence failure before effect | `test_intent_persist_failure_makes_no_send` | none |
+| 1 Persistence failure before effect | `test_intent_persist_failure_makes_no_send`, `test_intent_short_write` | none |
 | 1 Callback failure | `test_send_failure_is_unknown_and_consumed` | none |
 | 1 Torn or corrupt state | `test_corrupt_intent_is_uncertain` | none |
 | 1 Duplicate claim | `test_terminal_specimen_refused` | none |
-| 2 Admission | `test_table_admission_rejects_bad_tables`, `test_changed_request_bytes_refused`, `test_manifest_mismatch_refused` | Actual app, wallet IDs, destinations |
+| 2 Admission | `test_table_admission_rejects_bad_tables`, `test_changed_request_bytes_refused`, `test_noncanonical_headers_refused_before_effect`, `test_duplicate_header_keeps_old_digest_and_is_refused`, `test_freeze_request_rejects_noncanonical_header_value`, `test_manifest_mismatch_refused` | Actual app, wallet IDs, destinations |
 | 2 Bounds | `test_unknown_specimen_refused`, `test_request_bound_exact_and_overflow`, `test_reply_bound_exact_and_overflow`, `test_record_bound_exact_and_overflow`, `test_malformed_metadata_is_unknown`, `test_status_exact_bounds_are_valid_metadata`, `test_content_type_exact_bound_is_accepted` | Actual size ceilings |
 | 3 Matrix and literal mutations | `test_every_request_url_and_headers_are_literal`, `test_unchanged_transaction_fields_are_literal`, `test_matrix_ids_and_counts`, `test_baseline_request_is_literal`, `test_receiver_selector_variant`, `test_operation_and_timing_specimens_are_literal`, `test_case_diagnostics_keep_the_same_bytes`, `test_calldata_mutations_change_only_named_field`, `test_transaction_mutations_change_only_named_field`, `test_envelope_variants_declared_separately`, `test_trailing_word_stays_raw_challenge`, `test_decoded_profile_uses_alias_paths` | Actual policy, owners, values |
 | 4 Type 4 | `test_type4_is_not_run_without_owner_authority` | Valid owner self-authorization |
-| 5 Capture and redaction | `test_capture_saved_before_parse`, `test_canaries_absent_everywhere`, `test_capture_failure_is_unknown_and_stops` | none |
+| 5 Capture and redaction | `test_hostile_decoded_values_never_saved`, `test_saved_decoded_fields_are_frozen_values`, `test_content_type_parameters_never_saved`, `test_capture_short_write_is_unknown`, `test_outcome_short_write_is_not_allow`, `test_outcome_short_write_keeps_breach`, `test_capture_saved_before_parse`, `test_canaries_absent_everywhere`, `test_capture_failure_is_unknown_and_stops` | none |
 | 6 Classification | `test_manifest_binds_every_decision_field`, `test_breach_stops_even_when_stop_write_fails`, `test_breach_reported_when_stop_and_outcome_writes_fail`, `test_deeply_nested_reply_is_unknown`, `test_unexpected_failures_stop_the_stage`, `test_expected_refusals_do_not_stop`, `test_generic_and_malformed_replies_are_unknown`, `test_synthetic_codes_classify`, `test_negative_refused_before_positive_control`, `test_profiles_do_not_gate_each_other`, `test_decoded_mismatch_is_breach`, `test_case_only_hex_difference_is_not_mismatch`, `test_decode_failure_on_expected_allow_is_unknown`, `test_stop_after_breach`, `test_personal_sign_success_is_breach`, `test_actual_profile_refused` | Observed provider error shape |
 | Actual-run refusal and import safety | `test_actual_mode_refused`, `test_module_run_refused`, `test_import_makes_no_network_or_process_call` | none |
 

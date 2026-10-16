@@ -40,6 +40,7 @@ ALLOWED_HEADERS = ("privy-request-expiry",)
 PROFILES = ("raw", "decoded")
 
 _ID = re.compile(r"(raw|decoded)\.[a-z0-9_]{1,56}")
+_EXPIRY_VALUE = re.compile(r"[0-9]{13}")
 
 
 class Expected(StrEnum):
@@ -202,6 +203,21 @@ def envelope_sha256(url: str, http_method: str, headers: tuple[tuple[str, str], 
     return hashlib.sha256(canonical_json(envelope)).hexdigest()
 
 
+def headers_are_canonical(headers: object) -> bool:
+    """Accept only a sorted, duplicate-free tuple of allowed lowercase names with exact values."""
+    if not isinstance(headers, tuple):
+        return False
+    names: list[str] = []
+    for item in headers:
+        if not (isinstance(item, tuple) and len(item) == 2 and all(isinstance(part, str) for part in item)):
+            return False
+        name, value = item
+        if name not in ALLOWED_HEADERS or _EXPIRY_VALUE.fullmatch(value) is None:
+            return False
+        names.append(name)
+    return names == sorted(set(names))
+
+
 def freeze_request(
     wallet_id: str, body: Mapping[str, Any], headers: Mapping[str, str] | None = None
 ) -> FrozenRequest:
@@ -211,7 +227,7 @@ def freeze_request(
     if body.get("method") not in OPERATIONS:
         raise SpecimenTableError("UNSUPPORTED_OPERATION")
     header_items = tuple(sorted((headers or {}).items()))
-    if any(name not in ALLOWED_HEADERS or not isinstance(value, str) for name, value in header_items):
+    if not headers_are_canonical(header_items):
         raise SpecimenTableError("UNSUPPORTED_HEADER")
     body_bytes = canonical_json(body)
     if len(body_bytes) > MAX_REQUEST_BODY_BYTES:
@@ -411,7 +427,12 @@ class AttemptStore:
     def _create(self, path: Path, data: bytes) -> None:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         try:
-            os.write(fd, data)
+            remaining = memoryview(data)
+            while remaining:
+                written = os.write(fd, remaining)
+                if written <= 0:
+                    raise OSError("record write made no progress")
+                remaining = remaining[written:]
             os.fsync(fd)
         finally:
             os.close(fd)

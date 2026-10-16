@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -20,7 +21,6 @@ from typing import Any
 from scripts.privy_unfunded_proof.specimens import (
     EVIDENCE_CLASS,
     FROZEN_TABLE,
-    MANIFEST_SHA256,
     PROVIDER_PROOF,
     WALLETS,
     AttemptState,
@@ -32,12 +32,13 @@ from scripts.privy_unfunded_proof.specimens import (
     SpecimenRefused,
     SpecimenTable,
     envelope_sha256,
+    headers_are_canonical,
     refuse_module_run,
 )
 
 MAX_REPLY_BYTES = 16384
 MAX_CONTENT_TYPE_CHARS = 128
-MAX_SAVED_FIELD_CHARS = 66
+_MEDIA_TYPE = re.compile(r"[a-z0-9][a-z0-9.+-]{0,63}/[a-z0-9][a-z0-9.+-]{0,63}")
 
 
 class Outcome(StrEnum):
@@ -149,6 +150,14 @@ def _metadata(reply: object) -> tuple[int | None, str | None, bytes, bool]:
     )
 
 
+def _media_type(content_type: str | None) -> str | None:
+    """Return only a validated lowercase media type. Parameters are never saved."""
+    if content_type is None:
+        return None
+    media = content_type.split(";")[0].strip().lower()
+    return media if _MEDIA_TYPE.fullmatch(media) else None
+
+
 class _Attempt:
     """One claimed specimen. Every exit writes at most one outcome record."""
 
@@ -204,7 +213,10 @@ class _Attempt:
             "profile": self.specimen.profile,
             "request_sha256": self.specimen.request.request_sha256 if self.specimen.request else None,
             "status": status,
-            "content_type": content_type,
+            "media_type": _media_type(content_type),
+            "content_type_sha256": (
+                hashlib.sha256(content_type.encode("ascii")).hexdigest() if content_type is not None else None
+            ),
             "byte_count": len(body),
             "raw_body_sha256": hashlib.sha256(body).hexdigest(),
             "metadata_valid": valid,
@@ -240,16 +252,17 @@ def _classify_success(
     if not isinstance(decoded, Mapping):
         return attempt.finish(Outcome.UNKNOWN, "DECODE_FAILED")
     want = {**specimen.transaction, "wallet": WALLETS[specimen.wallet_id]}
+    # Only frozen specimen values are saved, never values taken from the reply.
+    matches = {key: _normalized(decoded.get(key)) == _normalized(value) for key, value in sorted(want.items())}
     public: dict[str, Any] = {}
-    for key in sorted(want):
-        value = decoded.get(key)
-        if key == "data":
-            raw = _hex_bytes(value)
-            public["data_sha256"] = hashlib.sha256(raw).hexdigest() if raw is not None else None
-        elif (type(value) is int) or (isinstance(value, str) and len(value) <= MAX_SAVED_FIELD_CHARS):
-            public[key] = value
+    for key, matched in matches.items():
+        if matched and key == "data":
+            public["data_sha256"] = hashlib.sha256(bytes.fromhex(want[key][2:])).hexdigest()
+        elif matched:
+            public[key] = want[key]
+    attempt.extra["decoded_field_matches"] = matches
     attempt.extra["decoded_public_fields"] = public
-    if any(_normalized(decoded.get(key)) != _normalized(value) for key, value in want.items()):
+    if not all(matches.values()):
         return attempt.finish(Outcome.BREACH, "SIGNED_FIELDS_MISMATCH")
     return attempt.finish(Outcome.ALLOW, "SIGNED_FIELDS_MATCH")
 
@@ -272,6 +285,8 @@ def _admit(
     if request is None:
         detail = "OWNER_AUTHORITY_ABSENT" if owner_authority is None else "SYNTHETIC_AUTHORITY_NOT_PROOF"
         raise SpecimenRefused("NOT_RUN", detail)
+    if not headers_are_canonical(request.headers):
+        raise SpecimenRefused("MALFORMED_REQUEST_HEADERS")
     if envelope_sha256(request.url, request.http_method, request.headers, request.body) != request.request_sha256:
         raise SpecimenRefused("REQUEST_BYTES_CHANGED")
     state = store.state(specimen_id)
