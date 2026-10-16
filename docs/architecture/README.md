@@ -15,8 +15,10 @@ flowchart LR
   Web <-->|"synchronous request and response"| API[FastAPI API]
   API <-->|"records, attempts, and durable jobs"| DB[(PostgreSQL)]
 
-  API -->|"bounded interpretation attempt"| Job["Isolated Hermes job<br/>no provider key or network"]
-  Job -->|"signed, bounded grant"| Relay["Credential-bearing relay"]
+  API -->|"bounded interpretation attempt"| HostRunner["API-owned trusted host runner"]
+  HostRunner -->|"starts job after grant is saved"| Job["Isolated Hermes job<br/>no provider key or network"]
+  HostRunner -->|"signed, bounded grant"| Relay["Credential-bearing relay"]
+  Job -->|"bounded request through file channel"| Relay
   Relay -->|"fixed CONNECT tunnel"| Gateway["Keyless egress gateway"]
   Gateway -->|"TLS stays end to end"| OpenRouter[OpenRouter model route]
 
@@ -33,6 +35,8 @@ flowchart LR
   Action -->|"one original transaction and receipt check"| Monad[Monad RPC]
   Action -->|"save journal and recovery state"| DB
 ```
+
+The API-owned host runner checks the saved reservation, issues and saves the signed grant to the relay, and only then starts the isolated job. The job receives no grant or admission key. It writes only the attempt, route, release, and bounded request body through its file channel; the relay checks that request against the host-issued grant. The relay's provider credential remains separate.
 
 The browser and API handle request-response interactions. A bounded Hermes interpretation is one API-owned attempt. Research collection and action execution are durable jobs: the API stores them in PostgreSQL, separate workers claim them, and each worker saves attempt state before an external effect. The browser can reopen the saved records without repeating collection or a transaction.
 
