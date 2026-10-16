@@ -116,14 +116,15 @@ lineage and replay profile identity.
 
 Pure checks need no database, socket or provider. One test in `test_forward_history_binding_pure.py`,
 `test_the_loopback_provider_serves_the_four_bucket_page_and_restores_the_lookup`, starts an owned 127.0.0.1 server for
-the mapped verifier's stand-in. It is not pure, so the pure command deselects exactly that node:
+the mapped verifier's stand-in. It is not pure, so the pure command deselects exactly that node. pytest takes its
+rootdir from `apps/api/pyproject.toml`, so node IDs are relative to `apps/api`:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 PYTHONPATH=apps/api/src:apps/api/tests:scripts/p03:. apps/api/.venv/bin/python -B -m pytest --noconftest \
   -p no:cacheprovider -q apps/api/tests/test_forward_history_binding_pure.py \
   apps/api/tests/test_operating_release_validation.py tests/test_history_payload_binding.py \
-  --deselect apps/api/tests/test_forward_history_binding_pure.py::test_the_loopback_provider_serves_the_four_bucket_page_and_restores_the_lookup
+  --deselect tests/test_forward_history_binding_pure.py::test_the_loopback_provider_serves_the_four_bucket_page_and_restores_the_lookup
 ```
 
 `apps/api/tests/test_saved_history_payload_binding.py` proves the matrix with PostgreSQL and the worker. The mapped
