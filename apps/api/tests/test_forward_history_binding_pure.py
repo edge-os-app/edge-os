@@ -11,6 +11,8 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import hashlib
+import http.client
+import json
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -303,3 +305,27 @@ def test_p07_still_qualifies_the_bound_source_and_ignores_the_binding_fact() -> 
     assert normalized["overall"] == "QUALIFIED" and collection["status"] == "COMPLETE"
     assert normalized["normalized_sha256"] == unbound_normalized["normalized_sha256"]
     assert collection["collection_sha256"] == unbound_collection["collection_sha256"]
+
+
+# --------------------------------------------------------------------------------------------- loopback provider
+
+def test_the_loopback_provider_serves_the_four_bucket_page_and_restores_the_lookup(tmp_path) -> None:
+    """The mapped verifier's bound stand-in: one owned 127.0.0.1 server on an ephemeral port, own requests only."""
+    lookup = bound.stand_in.recording
+    server = bound.loopback_provider(tmp_path / "requests.jsonl").start()
+    try:
+        assert bound.stand_in.recording is lookup  # the temporary lookup replacement is undone after construction
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=10)
+        connection.request("POST", "/query", body=json.dumps({"from_block": bound.SCAN["from_block"]}).encode(),
+                           headers={"Authorization": f"Bearer {bound.stand_in.BEARER}"})
+        response = connection.getresponse()
+        status, reply = response.status, json.loads(response.read())
+        connection.close()
+    finally:
+        server.stop()
+    page = bound.recording()["envio_pages"][0]
+    assert status == 200 and reply == json.loads(json.dumps(page))
+    assert reply["next_block"] == hex(bound.SCAN["to_block_exclusive"])
+    assert [block["number"] for block in reply["data"]["blocks"]][-1] == bound.B_POST
+    assert len(reply["data"]["logs"]) == 5
+    assert [(entry["kind"], entry["authorized"], entry["status"]) for entry in server.entries()] == [("envio", True, 200)]

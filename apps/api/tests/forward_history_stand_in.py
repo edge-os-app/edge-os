@@ -191,8 +191,9 @@ def loopback_provider(log_path: Path, *, port: int = 0) -> stand_in.LoopbackStan
 
     `operating_release_stand_in` (outside this lease) builds a provider's replies from a recording id, so its lookup is
     replaced only while this provider is constructed."""
+    source = recording()  # built before the replacement: recording() itself reads stand_in.recording
     original = stand_in.recording
-    stand_in.recording = lambda recording_id="": recording()  # type: ignore[assignment]
+    stand_in.recording = lambda recording_id="": source  # type: ignore[assignment]
     try:
         return stand_in.LoopbackStandInProvider(PROFILE_ID, log_path, port=port)
     finally:
