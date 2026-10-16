@@ -432,3 +432,87 @@ def test_existing_socket_like_target_is_not_unlinked(short_private_dir, monkeypa
     with pytest.raises(SystemExit):
         lookup_server.prepare_socket_path(str(target))
     assert target.exists()
+
+
+# Source2: address-only completion and server-retained claim resume ----------------------------------------------
+
+from edge_os_api.wallet_setup import service  # noqa: E402
+
+
+class _ClaimLookup:
+    """Owner-bound lookup double: answers only the exact address, recording each question."""
+
+    def __init__(self, resolved_id: str | None) -> None:
+        self.resolved_id = resolved_id
+        self.calls: list[tuple[str | None, str | None]] = []
+
+    def create_wallet(self, request: object) -> None:
+        raise AssertionError("completion must never create")
+
+    def lookup_wallet(self, wallet_id: str) -> None:
+        raise AssertionError("an address claim uses lookup_claim")
+
+    def lookup_claim(self, address: str | None, wallet_id: str | None):
+        from edge_os_api.wallet_setup.provider import WalletEvidence
+
+        self.calls.append((address, wallet_id))
+        if self.resolved_id is None or address != ADDR or wallet_id not in (None, self.resolved_id):
+            return None
+        return WalletEvidence(wallet_id=self.resolved_id, owner_id=self.owner_id, chain_type="ethereum", address=ADDR)
+
+
+def _service_row(monkeypatch, **overrides: object) -> tuple[SimpleNamespace, _Session]:
+    row = _row(state=SetupState.PENDING.value, creation_dispatched=True, **overrides)
+    session = _Session()
+    monkeypatch.setattr(service, "load_setup", lambda *a, **k: row)
+    monkeypatch.setattr(service, "conflicting_binding", lambda *a, **k: None)
+    return row, session
+
+
+def test_address_only_claim_binds_the_independently_resolved_id(monkeypatch):
+    row, session = _service_row(monkeypatch)
+    lookup = _ClaimLookup("resolved-wallet")
+    lookup.owner_id = row.owner_id
+    record = service.complete_from_browser(session, Principal(row.owner_id, DID), agent_id="agent-1", wallet_id=None,
+                                           provider=lookup, address=ADDR)
+    assert record.state == SetupState.CONFIRMED and record.wallet_id == "resolved-wallet"
+    assert lookup.calls == [(ADDR, None)]
+    retained = [e.content for e in session.added if e.event_type == SetupEventType.RESULT_RETURNED.value]
+    assert retained == [{"wallet_id": None, "owner_id": str(row.owner_id), "chain_type": "ethereum", "address": None,
+                         "claimed_address": ADDR, "source": "BROWSER_COMPLETION", "trusted": False}]
+
+
+def test_address_only_claim_without_match_stays_unknown(monkeypatch):
+    row, session = _service_row(monkeypatch)
+    lookup = _ClaimLookup(None)
+    lookup.owner_id = row.owner_id
+    record = service.complete_from_browser(session, Principal(row.owner_id, DID), agent_id="agent-1", wallet_id=None,
+                                           provider=lookup, address=ADDR)
+    assert record.state == SetupState.UNKNOWN and record.wallet_id is None
+
+
+def test_resume_after_restart_uses_the_server_retained_claim(monkeypatch):
+    row, session = _service_row(monkeypatch)
+    retained = {"wallet_id": None, "owner_id": str(row.owner_id), "chain_type": "ethereum", "address": None,
+                "claimed_address": ADDR, "source": "BROWSER_COMPLETION", "trusted": False}
+    monkeypatch.setattr(browser_intent, "load_setup", lambda *a, **k: row)
+    monkeypatch.setattr(browser_intent, "latest_event", lambda *a, **k: retained)
+    lookup = _ClaimLookup("resolved-wallet")
+    lookup.owner_id = row.owner_id
+    record = browser_intent.resume_retained_claim(session, Principal(row.owner_id, DID), agent_id="agent-1",
+                                                  provider=lookup)
+    assert record.state == SetupState.CONFIRMED and lookup.calls == [(ADDR, None)]
+
+
+def test_resume_without_a_retained_claim_never_creates(monkeypatch):
+    row, session = _service_row(monkeypatch)
+    monkeypatch.setattr(browser_intent, "load_setup", lambda *a, **k: row)
+    monkeypatch.setattr(browser_intent, "latest_event", lambda *a, **k: None)
+    from edge_os_api.wallet_setup import recovery
+
+    monkeypatch.setattr(recovery, "latest_event", lambda *a, **k: None)  # existing reconcile path, no retained ID
+    lookup = _ClaimLookup("resolved-wallet")
+    lookup.owner_id = row.owner_id
+    record = browser_intent.resume_retained_claim(session, Principal(row.owner_id, DID), agent_id="agent-1",
+                                                  provider=lookup)
+    assert record.state == SetupState.UNKNOWN and record.reason == "RECONCILE_NO_EXACT_ID" and lookup.calls == []

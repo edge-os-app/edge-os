@@ -29,8 +29,9 @@ router = APIRouter(prefix="/v1/wallet-setup", tags=["wallet setup"])
 class BrowserCompletionBody(StrictModel):
     """The wallet id the owner's browser received from owner-linked creation. Untrusted until looked up."""
 
-    wallet_id: str = Field(min_length=1, max_length=200)
+    wallet_id: str | None = Field(default=None, min_length=1, max_length=200)
     # The exact address the SDK returned. Untrusted; required for the owner-bound lookup, optional for the fixture.
+    # An address-only claim (the SDK returned no ID) is resolved by the server's own lookup.
     address: str | None = Field(default=None, min_length=42, max_length=42)
 
 
@@ -84,6 +85,9 @@ def resume(agent_id: str, data: WalletSetupMutationBody | None = Body(default=No
            principal: Principal = Depends(require_principal), session: Session = Depends(get_session),
            provider: WalletCreationPort = Depends(get_provider)) -> dict[str, Any]:
     """Resume or reconcile an existing setup without creating a second wallet."""
+    if isinstance(provider, OwnerBoundLookupProvider):
+        return serialize(browser_intent.resume_retained_claim(session, principal, agent_id=agent_id,
+                                                              provider=provider))
     return serialize(service.resume_setup(session, principal, agent_id=agent_id, provider=provider))
 
 

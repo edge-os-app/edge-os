@@ -233,7 +233,19 @@ def cancel_setup(session: Any, principal: Principal, *, agent_id: str) -> SetupR
     return to_record(row)
 
 
-def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, wallet_id: str,
+def _lookup_browser_claim(provider: Any, wallet_id: str | None, address: str | None) -> WalletEvidence | None:
+    """An owner-bound lookup answers an exact address claim; the fixture answers an exact wallet ID only."""
+    lookup_claim = getattr(provider, "lookup_claim", None)
+    if callable(lookup_claim) and address is not None:
+        try:
+            result = lookup_claim(address, wallet_id)
+        except Exception:  # noqa: BLE001 - any lookup failure stays UNKNOWN
+            return None
+        return result if isinstance(result, WalletEvidence) and evidence_is_wellformed(result) else None
+    return None if wallet_id is None else lookup_wallet_evidence(provider, wallet_id)
+
+
+def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, wallet_id: str | None,
                           provider: WalletCreationPort, address: str | None = None) -> SetupRecord:
     """Record a wallet id returned by owner-linked browser creation, then bind it only after independent lookup.
 
@@ -245,9 +257,14 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
     setup this owner does not hold, binds nothing. No server-side creation runs on this path.
     """
     _validate_agent_id(agent_id)
-    if not evidence_is_wellformed(WalletEvidence(wallet_id=wallet_id, owner_id=principal.user_id,
-                                                 chain_type="ethereum", address="claim")) or len(wallet_id) > 200:
+    if wallet_id is None and address is None:
+        raise invalid("/wallet_id", "A wallet ID or an exact address is required.", "invalid_wallet_id")
+    if wallet_id is not None and (not evidence_is_wellformed(WalletEvidence(
+            wallet_id=wallet_id, owner_id=principal.user_id, chain_type="ethereum", address="claim"))
+            or len(wallet_id) > 200):
         raise invalid("/wallet_id", "The wallet ID must be 1 to 200 storable characters.", "invalid_wallet_id")
+    if address is not None and not (isinstance(address, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", address)):
+        raise invalid("/address", "The address must be an exact 0x-prefixed 20-byte hex address.", "invalid_address")
     row = load_setup(session, principal.user_id, agent_id, lock=True)
     if row is None:
         raise not_found(_SQM)
@@ -272,7 +289,7 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
                   "address": None, "claimed_address": address if isinstance(address, str) else None,
                   "source": "BROWSER_COMPLETION", "trusted": False})
     session.commit()
-    looked_up = lookup_wallet_evidence(provider, wallet_id)
+    looked_up = _lookup_browser_claim(provider, wallet_id, address)
     locked = load_setup(session, principal.user_id, agent_id, lock=True)
     assert locked is not None
     if locked.state == SetupState.CONFIRMED.value:  # a concurrent completion or resume bound first
@@ -280,7 +297,7 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
         return to_record(locked)
     if looked_up is None:
         return mark_unknown(session, locked, SetupReason.RECONCILE_NO_MATCH.value)
-    if not (looked_up.wallet_id == wallet_id and looked_up.owner_id == locked.owner_id
+    if not ((wallet_id is None or looked_up.wallet_id == wallet_id) and looked_up.owner_id == locked.owner_id
             and looked_up.chain_type == "ethereum"
             and (address is None or looked_up.address.lower() == address.lower())):
         record_denial(session, locked.owner_id, locked.agent_id, "BROWSER_RESULT_WRONG_IDENTITY",
