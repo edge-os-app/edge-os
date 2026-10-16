@@ -360,10 +360,11 @@ def actual_config(tmp_path: Path, key: Path) -> dict[str, Any]:
     return config(tmp_path, key, kind="ACTUAL", release=None, release_record=record, ca_bundle=ca)
 
 
-def test_an_actual_configuration_is_refused_by_the_empty_default_registry(
+def test_an_actual_configuration_for_a_record_outside_the_default_registry_is_refused(
         tmp_path: Path, key: Path, fake: FakeDocker, capsys: pytest.CaptureFixture[str]) -> None:
-    assert relay_admission.APPROVED_ACTUAL_RELEASES == frozenset()
-    path = write(tmp_path, actual_config(tmp_path, key))
+    value = actual_config(tmp_path, key)
+    assert value["release_record"]["sha256"] not in relay_admission.APPROVED_ACTUAL_RELEASES  # synthetic record
+    path = write(tmp_path, value)
     assert main([str(path), "start"]) == 2
     assert "not an approved ACTUAL release" in capsys.readouterr().err
     assert fake.calls == [] and not (tmp_path / "run").exists()

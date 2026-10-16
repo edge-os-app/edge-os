@@ -40,8 +40,12 @@ def load(value: dict[str, Any], approved: bool = True):
     return load_actual_release(raw, sha, approved=frozenset({sha}) if approved else None)
 
 
-def test_no_actual_release_is_approved_in_this_candidate_so_every_record_fails_closed() -> None:
-    assert relay_admission.APPROVED_ACTUAL_RELEASES == frozenset()
+def test_a_record_outside_the_default_registry_fails_closed_and_an_empty_registry_admits_none(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    assert hashlib.sha256(json.dumps(record()).encode()).hexdigest() not in relay_admission.APPROVED_ACTUAL_RELEASES
+    with pytest.raises(ActualReleaseUnapproved):
+        load(record(), approved=False)
+    monkeypatch.setattr(relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset())
     with pytest.raises(ActualReleaseUnapproved):
         load(record(), approved=False)
 

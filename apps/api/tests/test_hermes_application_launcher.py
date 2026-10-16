@@ -52,8 +52,9 @@ def argv(tmp_path: Path, *, port: str = "8765", located: tuple[Path, str] | None
 # --- refusals before any effect --------------------------------------------------------------------------------------
 
 
-def test_with_the_empty_default_registries_launch_is_refused_before_the_handoff_engine_or_server(
-        launcher, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_with_empty_registries_launch_is_refused_before_the_handoff_engine_or_server(
+        launcher, approve, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: F811
+    approve()  # explicitly empty registries, whatever the ordinary ones hold
     assert composition.RELEASE_DEFINITIONS == () and composition.relay_admission.APPROVED_ACTUAL_RELEASES == frozenset()
     assert launcher.main(argv(tmp_path)) == 2  # `unreachable` fails the test if an engine is opened
     assert "no approved Hermes relay application release" in capsys.readouterr().err

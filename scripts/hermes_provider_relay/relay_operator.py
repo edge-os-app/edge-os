@@ -29,9 +29,9 @@ for a network, plain or in the daemon's JSON `message`); any other unreadable an
 Foreign and unknown objects are never killed, removed, mounted or adopted, and are reported. Removal goes by the Docker
 id just inspected (a volume by its name) and is then checked; only a stop that ends clean writes `stopped.json`.
 
-ACTUAL is accepted only through `relay_admission.load_actual_release` with its default registry, which is empty: every
-ACTUAL configuration is refused. The operator never reads the provider key; it only checks the file is outside the
-repository and readable by its owner only. No key, key path or environment value is written to the handoff or printed.
+ACTUAL is accepted only through `relay_admission.load_actual_release` with its default registry, which names only the
+adopted release record: every other ACTUAL configuration is refused. The operator never reads the provider key; it only
+checks the file is outside the repository and readable by its owner only. No key, key path or environment value is written to the handoff or printed.
 `read_handoff` is the operator's strict reader of its own handoff (format `edge-os.relay-operator-handoff/1`).
 """
 

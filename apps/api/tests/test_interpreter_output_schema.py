@@ -320,9 +320,12 @@ def test_a_record_naming_another_schema_hash_refuses_this_format(approve) -> Non
         bind_release(given)
 
 
-def test_the_ordinary_registries_stay_empty() -> None:
+def test_the_ordinary_registries_hold_only_the_adopted_release_with_this_format() -> None:
     import relay_admission
 
     from edge_os_api.research import hermes_relay_composition
 
-    assert hermes_relay_composition.RELEASE_DEFINITIONS == () and relay_admission.APPROVED_ACTUAL_RELEASES == frozenset()
+    [adopted] = hermes_relay_composition.RELEASE_DEFINITIONS
+    assert relay_admission.APPROVED_ACTUAL_RELEASES == frozenset({adopted.record_sha256})
+    assert hashlib.sha256(canonical(adopted.response_format)).hexdigest() == FORMAT_SHA256
+    assert adopted.response_format == interpretation_response_format()

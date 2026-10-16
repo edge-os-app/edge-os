@@ -11,10 +11,13 @@ destination), the job image, the relay channel and ONE `TokenPrice` built from t
 price object is the one the ledger reserves and settles with and the one the relay runner checks the provider cost with.
 
 A release is composed only from a code-owned definition in `RELEASE_DEFINITIONS` whose record SHA-256 is in the relay's
-trusted registry `relay_admission.APPROVED_ACTUAL_RELEASES`. Both are empty, so the default composes nothing: no engine,
-file, key, socket or Docker command. No setting, environment value, file or request adds a definition. Production is
-refused. The application holds no provider key: the relay holds it. The owner and saved request of each grant are read
-from the saved attempt row and must equal those the RESERVED reservation copied from it; anything else gets no grant.
+trusted registry `relay_admission.APPROVED_ACTUAL_RELEASES`. Both name only the adopted release `hermes-first-call-1`.
+Binding it reads no file, and nothing opens an engine, key, socket or Docker command before the operator's handoff for
+exactly that release is read. A ledger cap sees one database only: the shared USD 2.00 ceiling still needs an external
+reconciliation before the first actual call. No setting, environment value, file or request adds a definition.
+Production is refused. The application holds no provider key: the relay holds it. The owner and saved request of each
+grant are read from the saved attempt row and must equal those the RESERVED reservation copied from it; anything else
+gets no grant.
 
 Give `app.runner` and `app.config` to `create_app(settings, hermes_runner=..., hermes_config=...)` with
 `EDGE_OS_INTERPRETER=hermes_local`. The lane-1 relay operator starts the relay and owns its shutdown; its one-time
@@ -46,6 +49,7 @@ from edge_os_api.core.settings import Settings
 from edge_os_api.research.hermes_interpreter import HermesInterpreterConfig, HermesTurn, HermesTurnRunner, LiveRelease
 # `hermes_transport_mount` (through `provider_spend_ledger`) has already added the accepted runner folders.
 from edge_os_api.research.hermes_transport_mount import DEFAULT_POLICY, MountRefused
+from edge_os_api.research.interpreter_output_schema import interpretation_response_format
 from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, SpendLimits, TokenPrice
 
 RELAY = Path(__file__).resolve().parents[5] / "scripts" / "hermes_provider_relay"
@@ -92,8 +96,31 @@ class RelayApplicationDefinition:
     owner_cap_usd: Decimal  # each owner on their own
 
 
-# Empty: no release is approved. Every actual value is still an input of a later qualification packet.
-RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = ()
+# The one approved release, hermes-first-call-1. Its record and price bytes are the frozen files in
+# docs/qualification/hermes-actual-operation/release/, held here so that binding reads no file.
+RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationDefinition(
+    record=(b'{"allowed_fields":["model","messages","stream","response_format","provider","reasoning",'
+            b'"max_tokens","session_id","prompt_cache_options"],'
+            b'"approval":{"path":"docs/qualification/hermes-actual-operation/release/hermes_first_call_approval.json",'
+            b'"sha256":"0bcc0c485021cea626b05ddf3c3fad7ad7b372afad158e4e25c02fb09df3e1ac"},'
+            b'"ca_bundle_sha256":"7cef540c6af3bf0a3c7d0070bd3fd7aae34f8aa805b408d1c27a01c8aeb305df",'
+            b'"destination":{"host":"openrouter.ai","path":"/api/v1/chat/completions","port":443},"kind":"ACTUAL",'
+            b'"max_reply_bytes":262144,"max_request_bytes":65536,"max_tokens":4096,"model":"openai/gpt-6.1-sol",'
+            b'"price_snapshot_sha256":"e53259b2605d7a54c7597e04b75dc5b57e8b6ff7484c90be6a788b3388d54fe9",'
+            b'"prompt_cache_options":{"mode":"explicit"},"provider":{"allow_fallbacks":false,'
+            b'"data_collection":"deny","max_price":{"completion":10,"prompt":2},"only":["openai"],'
+            b'"require_parameters":true},"reasoning":{"effort":"low"},"release_id":"hermes-first-call-1",'
+            b'"response_format_sha256":"cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60",'
+            b'"route_id":"openrouter-openai-standard","stream":false,"timeout_seconds":90}'),
+    record_sha256="3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f",
+    price_snapshot=(b'{"completion_usd_per_million":"10","model":"openai/gpt-6.1-sol","prompt_usd_per_million":"2",'
+                    b'"provider":"openai"}'),
+    response_format=interpretation_response_format(),
+    image="sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0",
+    channel_root="edge-os-research",
+    global_cap_usd=Decimal("2.00"),  # the one shared USD 2.00 model and data ceiling, not a Hermes allocation
+    owner_cap_usd=Decimal("2.00"),
+),)
 
 
 @dataclass(frozen=True)

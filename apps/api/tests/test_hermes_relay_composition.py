@@ -1,6 +1,6 @@
 """The Hermes relay application composition: one approved release bound to one price, behind the saved Research path.
 
-Pure tests (no database, Docker or network): the default composes nothing and touches nothing; production and another
+Pure tests (no database, Docker or network): empty registries compose nothing and touch nothing; production and another
 interpreter are refused; a definition binds only when its record is in the relay's trusted registry and its price
 snapshot, schema, image and channel are exactly the record's; the ledger and the relay runner hold the SAME TokenPrice.
 
@@ -149,6 +149,7 @@ def open_with(settings: Any, root: Path, located: tuple[Path, str] | None = None
 
 def test_without_an_approved_definition_nothing_is_composed_and_nothing_is_touched(unreachable, approve,
                                                                                    tmp_path: Path) -> None:
+    approve()  # explicitly empty registries, whatever the ordinary ones hold
     assert composition.RELEASE_DEFINITIONS == () and relay_admission.APPROVED_ACTUAL_RELEASES == frozenset()
     assert open_with(unreachable, tmp_path) is None  # the named handoff does not exist: it was never opened
     approve(definition(), UNAPPROVED)  # a definition whose record the registry does not list
@@ -281,7 +282,7 @@ def test_an_approved_definition_binds_route_policy_model_schema_and_the_snapshot
 
 
 def test_a_record_outside_the_trusted_registry_is_refused_even_when_well_formed() -> None:
-    assert relay_admission.APPROVED_ACTUAL_RELEASES == frozenset()
+    assert definition().record_sha256 not in relay_admission.APPROVED_ACTUAL_RELEASES  # the ordinary registry
     with pytest.raises(MountRefused, match="ActualReleaseUnapproved"):
         bind_release(definition())
 
