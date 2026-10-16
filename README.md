@@ -4,7 +4,7 @@
 
 Edge OS is a research and trading app for meme-token traders on Monad. A research agent checks your idea against on-chain history and saves what it found. Rules that hold up can be replayed on past prices. When you go live, an agent with its own wallet trades on Kuru, and the wallet permission you approved decides what it may do.
 
-[Pitch video](https://vimeo.com/1235649955) · [Technical demo](https://vimeo.com/1235648532) · [Live app](https://edgeos.fun) · [Product spec](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md)
+[Pitch video](https://vimeo.com/1235649955) · [Technical demo](https://vimeo.com/1235648532) · [Live app](https://edgeos.fun)
 
 Built for the Monad hackathon, Onchain Finance & Trading track.
 
@@ -141,7 +141,7 @@ cd apps/web && npm test         # web app, Vitest
 
 ## Project documents
 
-- [Product spec](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md)
+- [Product spec](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md) (internal working document)
 - [Research contracts](docs/EDGE_OS_RESEARCH_CONTRACTS.md)
 - [Architecture guide](docs/architecture/README.md)
 - [Contributor workflow](docs/agents/contributor-workflow.md)
