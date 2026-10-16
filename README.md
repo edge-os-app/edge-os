@@ -1,234 +1,99 @@
 # Edge OS
 
-An edge-generation and alpha research system for onchain traders and liquidity providers.
+**Turn a Monad market question into research you can inspect, save, and revisit.**
 
-Current build, 11 October 2026: saved Research, descriptive comparisons, spot replay and account views work with labelled fixtures. The saved Hermes interpretation path passed local fake-provider verification. Local wallet setup, admission/reservations and decision/submission modules are integrated, but are not a qualified live trading path. Live trading is not available. See [current status](#current-status) for implemented scope and qualification limits.
+A chart shows that a token moved. It does not show the source coverage, the rule behind the signal, or the data missing from the review.
 
-The approved [hackathon release cut](docs/planning/EDGE_OS_RELEASE_CUT_2026-10-10.md) targets a connected Research-to-controlled-Kuru-action demonstration. Its live portion is not yet qualified. LP expansion and general ongoing trading remain outside this submission subset.
+Edge OS keeps the question, source evidence, rule choices, and result in one saved trail. It helps Monad spot traders decide whether an idea deserves more work. An investigation can reject the idea. Research and a simulated result never grant permission to trade.
 
-Edge OS generates market hypotheses, investigates their mechanisms, and turns supported, sufficiently clear trading instructions into inspectable strategy rules. It preserves the evidence, shows uncertainty and separates research findings from permission to trade.
+The demo stays on Monad spot and uses Kuru for its one action. This narrow scope binds the question, history, strategy, and permission to the same chain and venue.
 
-A trading idea can sound convincing while leaving the important questions unanswered. What causes the opportunity? When should a position open or close? What would disprove the thesis? Does the result survive realistic costs, or only look attractive in a backtest?
+## One question, one inspectable path
 
-We are building Edge OS to connect research, strategy construction, testing, delegated execution and monitoring. The wider vision includes publishing strategies and optional token-based distribution or agent funding. These are planned capabilities, not a description of a finished product.
+For example, a trader asks: "When a Monad token makes a sharp move and quote volume rises, what happens next?" The example is illustrative.
 
-Users can investigate an idea, test it against market history where the data permits, observe it without trading money, or authorize live trading. A live trial is optional. Users can start ongoing live operation directly or continue after a trial, without compulsory graduation, favorable backtests or paper trading. Bad or missing historical results remain visible. All live operation needs clear supported rules, verified execution and a user-approved mandate. An authorized agent can monitor markets and carry out permitted actions while the user is offline. The user controls its limits and can revoke its authority. Compilation, a backtest or a few successful trades cannot prove future profitability.
+1. **Describe the question.** Hermes turns the trader's words into structured fields. The app checks quoted facts and numbers against the request. Proposed settings stay pending until the trader adopts them.
+2. **Set the investigation.** The trader reviews the market, time window, hypothesis, rule, and collection bounds before the worker reads outcomes.
+3. **Collect and inspect evidence.** Envio supplies indexed swap history. QuickNode checks chain identity and sampled receipts. Nansen adds a bounded holder and flow report. The saved dataset keeps source coverage, gaps, availability, and raw evidence beside normalized records.
+4. **Write a supported rule.** A deterministic compiler accepts a limited price-and-volume language. Each saved strategy revision binds the exact rule and its semantic manifest.
+5. **Replay with a delay.** The replay waits 300 seconds after a source bucket closes, then uses the next delayed historical close as a hypothetical fill. The app labels every fill as hypothetical. If the next close is late, empty, or unqualified, it records <code>FILL_UNAVAILABLE</code> instead of choosing another price.
+6. **Review a separate action.** One owner signs in with Privy. The owner funds an agent wallet and reviews the exact strategy, wallet, limits, and expiry. A separate execution service prepares one bounded Kuru action on Monad and records its receipt or recovery state.
 
-## Who it is for
+A saved investigation, strategy, dataset, and replay can be reopened by their original identity. Reopening reads the saved result. It does not collect new data or recalculate the replay.
 
-Onchain traders and strategy creators can investigate an observation without building their own data pipeline, research notebooks, simulator and trading runtime. Liquidity providers can investigate whether pool fees compensate for inventory exposure and operating costs.
+## What each integration does
 
-Users can start with:
+| Integration | Role in the demo | Source |
+| --- | --- | --- |
+| Hermes | Interprets the trader's request with bounded context. It cannot grant permission or submit a transaction. | [Interpreter](apps/api/src/edge_os_api/research/hermes_interpreter.py), [relay composition](apps/api/src/edge_os_api/research/hermes_relay_composition.py) |
+| Envio HyperSync | Supplies indexed Monad swap history for the declared investigation. | [History collection](apps/api/src/edge_os_api/research/native_history_collection.py) |
+| QuickNode | Checks the Monad chain identity and corroborates a declared sample of transaction receipts. | [Receipt checks](apps/api/src/edge_os_api/research_history/quicknode_corroboration.py) |
+| Nansen | Supplies bounded holder and flow context in a saved descriptive report. Address inventory does not prove wallet profit or a trading edge. | [Nansen collector](apps/api/src/edge_os_api/nansen_research/collector.py), [saved reports](apps/api/src/edge_os_api/research/nansen_reports.py) |
+| Privy | Identifies the owner at sign-in and provides the separate wallet and signing boundary. Sign-in alone creates no agent wallet and grants no trading authority. | [Web authentication](apps/web/lib/privy-config.ts), [API verification](apps/api/src/edge_os_api/core/authentication.py) |
+| Kuru Flow on Monad | Supplies the selected spot route. The app checks route data against the exact action terms and keeps receipts with the original attempt. | [Route preparation](apps/api/src/edge_os_api/kuru_flow/transaction_preparation.py), [transaction journal](apps/api/src/edge_os_api/execution/original_transaction.py) |
 
-- A concrete thesis, such as a claim that a specified market condition predicts a later price response.
-- A loose intuition, such as noticing that a token keeps moving after a strong move.
-- No thesis, but a bounded request to investigate selected markets or pools using approved data and a finite search budget.
+## Keep evidence and permission separate
 
-The agent asks for missing meaning or proposes an investigation for approval. It cannot silently choose the user's thresholds, sizing or trading permissions. The product is intended to help both experienced and learning traders; it does not promise to make either profitable.
+The research report shows what the evidence supports and what its sources do not cover. It keeps collection times, source gaps, and contrary findings visible. A comparison can remain unresolved.
 
-A research request could also be: "These meme coins ran. Who launched them, what happened to their other launches, and is there a pattern?" The planned research mode includes sourced comparisons, participant histories and competing explanations. It can finish with useful findings without a strategy or backtest. Creator histories, wallet PnL and cross-launch comparisons need additional qualified tools and data; they are not capabilities already demonstrated by our prototype.
+Source records show what each request covered and when each observation became available. Missing delivery evidence stays missing. A qualified receipt sample does not prove every source claim.
 
-## The research-to-strategy path
+The compiler accepts supported typed rules over price and quote volume. It does not run model-generated Python or smart contracts. It binds each saved strategy to a versioned meaning, so the same rule keeps the same interpretation when the trader reopens it.
 
-The planned workflow is:
+Replay binds the exact strategy, dataset, market, window, and run configuration. Its fills are assumptions over past prices. They are not executable quotes or predictions of future profit. The numerical model uses saved fee and slippage assumptions. It omits gas, spread, added price impact, and capacity.
 
-```text
-Thesis, intuition or bounded research request
-→ clarification or an approved research budget
-→ investigation, supporting/contrary evidence and a saved research result
-→ optional strategy construction and claim-specific tests
-→ historical testing where feasible, forward observation or user-selected live trading
-→ separate execution qualification and user-approved mandate if capital is involved
-→ bounded agent operation, inspectable receipts and recorded learning
+The owner reviews wallet, strategy revision, allocation, allowances, gas, permitted actions, and expiry separately from research. The executor checks the route and current permission before signing. A research result or a favorable replay cannot activate a wallet.
+
+When an action result is uncertain, Edge OS marks it <code>UNKNOWN</code>, keeps its reservations, and reconciles the original attempt from server-side receipt evidence. It does not submit a replacement transaction automatically. A stop blocks selected unsent work. Removing signer access prevents new submissions, but it does not undo a broadcast transaction or sell remaining holdings.
+
+## Inspect a saved result
+
+Start with the original request and adopted fields. Follow its declaration to the dataset and report. Check the source window, coverage, gaps, and contrary findings before reading the comparison.
+
+Open the exact strategy revision and replay configuration next. Confirm that each fill is hypothetical and tied to the saved historical close. Then inspect the separate wallet permission and the action's original attempt and receipt record.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Q[Market question] --> H[Hermes interpretation]
+  H --> I[Meaning and source checks]
+  I --> D[Frozen investigation]
+  D --> W[Bounded research worker]
+  W --> E[Envio history]
+  W --> N[QuickNode receipt checks]
+  W --> S[Nansen report]
+  E --> X[Qualified dataset]
+  N --> X
+  X --> C[Descriptive comparison]
+  X --> R[Delayed hypothetical replay]
+  I --> T[Typed strategy revision]
+  T --> R
+  C --> DB[(Saved evidence)]
+  S --> DB
+  R --> DB
+  DB -. no trading authority .-> O[Owner reviews separate wallet permission]
+  O --> K[One bounded Kuru action]
+  K --> A[Receipt and recovery record]
+  A --> DB
 ```
 
-Research starts with a mechanism question. Who produces the relevant flow? What incentive or constraint explains it? Why might an opportunity remain after competition? What costs, liquidity limits and capacity restrict capture? Which evidence would disprove the explanation?
+Solid paths show how the demo carries evidence. The dotted link marks the separate permission review. See the [architecture explanation](docs/architecture/README.md) for the service map, durable job flow, records, recovery, spending boundaries, and source map.
 
-A plausible explanation remains a hypothesis. An unexplained statistical association can also be investigated, with its mechanism marked unknown. Agents must retain contrary evidence instead of inventing a causal story.
+## Run the local fixture
 
-Each investigation declares its markets, features, horizons, candidate limits, data periods and resource budget. The research ledger records attempted, rejected and abandoned variants, including negative results. Planned validation checks address future-information leakage, selection across variants, holdout results, unstable parameters and unrealistic execution assumptions. Historical gaps can require forward observation rather than a fabricated backtest.
+The [local Docker runbook](deploy/local/RUNBOOK.md) gives the required settings and command order. It uses synthetic identity and fixture providers. Its application network has no route to external services, so it is a local rehearsal profile, not a live provider setup.
 
-An investigation can finish with no surviving strategy. The user should still receive the evidence, rejection reasons and unanswered questions. A successful transaction or attractive chart cannot establish an edge.
+The API reads explicit environment variables and does not load <code>.env</code> files by itself. The runbook lists the supported Python, Node.js, and Docker requirements.
 
-"Live trading" is one workflow. A user can choose a trial with a learning objective and stopping point, or ongoing trading within approved permissions. After a trial, the interface offers "Continue trading", "Review and adjust limits", "Revise strategy" and "Pause trading". Continuing does not reset spending allowances or losses, increase authority or turn limited observations into a validated edge. New approval is needed for expired or changed permissions, not a purpose-label change alone. Allocated capital can be lost in full, and an exit may be unavailable. See the [live-trading contract](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#live-trading-optional-trials-and-forward-learning) and [user journey](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-live-user-journey-and-display). This behavior is documented, not implemented or authorized for a particular trade.
+## Scope and project links
 
-### How the compiler fits
+The demo covers Monad spot research and one bounded Kuru action. Recurring trading, LP strategies, and additional exchanges remain later work.
 
-The agent proposes structured meaning. The deterministic compiler checks supported functions, types, units, parameter ranges, timing and risk fields. An accepted strategy becomes a versioned `StrategySpec` that the existing evaluator can run. The user also receives a plain-English interpretation of its rules.
-
-The research hypothesis and its evidence live in an `EdgeSpec` and `ResearchEvidencePackage`. The `ResearchLedger` retains the search history. A `ValidationDecision` records which evidence gates passed, failed or remain unresolved.
-
-The compiler does not execute arbitrary model-generated Python or smart contracts. Missing information produces clarification. Unsupported strategy forms remain unsupported. Compilation alone grants neither validation nor execution authority.
-
-## Delegated agents and observable execution
-
-The planned deployment path lets a user approve a revocable mandate for an exact strategy revision, wallet, venue and set of limits. A persistent worker monitors that strategy while the user is offline. Routine permitted actions do not require another signature.
-
-The accepted design gives each trading agent its own user-owned wallet, funded separately. Creating or funding it must not start trading. Agent A must not use Agent B's money or sell its tokens; each agent can hold multiple positions within its own limits. The account overview combines records, not spending authority. Deposits must not reset allowances, losses or stops, and removing agent access must leave owner access intact. The record contracts and account views are implemented; application wallet creation, funding and live operation are not qualified end to end. A separate bounded Privy test supplied one-owner signing and removal evidence. See [agent wallets and funding](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-agent-wallet-ownership-and-funding) and [P16's retained limits](docs/qualification/p16/README.md).
-
-Models can propose intents. Deterministic checks enforce operational eligibility and approved permissions, preserve evidence status, and check freshness, exposure and risk limits. A restricted Privy signer provides an independent wallet-policy boundary. The execution service holds its authorization credential; models do not receive it. The initial venue adapter targets Kuru on Monad.
-
-The interface keeps agent status, strategy evidence and trading permissions separate. An agent can be "Running" while its evidence says "Limited live observations; edge remains unproven". A trial or ongoing purpose never grants unlimited trading authority.
-
-Durable records retain pending swaps, holdings, capital reservations and stop conditions. After an interruption, the worker must reconcile the original action before submitting another. A changed strategy or expanded authority needs renewed approval. Revocation stops new submissions; it cannot undo a broadcast transaction or remove remaining holdings.
-
-Decision records connect evidence and strategy versions to mandates, risk checks, denied intents, transactions and resulting venue state. Queued, submitted, unknown, confirmed and reverted outcomes remain distinct. The initial Kuru Flow adapter targets fixed-input swaps, not resting orders. Receipts prove recorded execution outcomes, not profitability.
-
-Hermes is the current interpretation-probe runtime and a candidate research investigator. Jev is an optional structured-assessment layer. Neither can override validation or authorize money. The persistent worker owns scheduling and recovery; agent memory does not replace those records.
-
-The planned data path uses Envio for indexed events and history, QuickNode for current state and reconciliation, and Kuru records for venue behavior. Nansen wallet labels and X evidence are conditional research inputs. Each dataset needs coverage, timing and provenance checks. If an essential input is unavailable, its hypothesis remains unresolved.
-
-## Skills and connected tools
-
-The planned MVP includes an Add-ons section for each agent. Users can enable skills and connect tools from a small approved catalog without writing configuration or running installation commands.
-
-Initial skills guide market investigation and price-and-volume analysis. Connected tools provide qualified research data/calculations and read-only access to the user's account records. Each entry explains what it can access, its version and any provider costs. Users can enable, disable or disconnect it for a selected agent.
-
-Skills do not add unimplemented indicators or grant permission to trade. Connections and credentials must remain isolated between users. Custom uploads, arbitrary MCP URLs and executable plugins are later extensions. This catalog is approved product direction, not a working integration. See the [agent add-ons contract](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#accepted-agent-add-ons-catalog).
-
-OpenBB is an optional research-component candidate. Its analysis packages could calculate selected indicators on our qualified data, and its MCP interface could expose selected tools. We have not installed or qualified it, and it does not replace our Envio/QuickNode data path. Edge OS's intended difference is the connected investigation, preserved strategy meaning and bounded agent-operation workflow. AI chat and indicators alone are shared capabilities. See the [sourced comparison and reuse limits](docs/research/OPENBB_RESEARCH_REUSE_AND_PRODUCT_DIFFERENCES_2026-10-04.md).
-
-GeckoTerminal is an optional chart and market-data candidate. Start with a "View market chart" link from a report or position; embedding and read-only agent tools can follow if a specific task needs them. Current market charts must stay separate from saved research data, simulated balances and actual account results. No integration is enabled, and the Envio/QuickNode data path and Kuru execution direction remain unchanged. See the [terminal comparison and integration limits](docs/research/MARKET_TERMINALS_AND_GECKOTERMINAL_INTEGRATION_2026-10-05.md).
-
-## First build
-
-The completed research prototype tested bounded short-horizon momentum/reversal rules and a reconstructed MOE/WMON investigation. It preserved the tested meaning and contrary evidence, returned no supported candidate, and rejected deliberately invalid future inputs. Its evidence does not establish production support for arbitrary strategies.
-
-The [first-release build brief](docs/EDGE_OS_BUILD_BRIEF.md) describes the spot-first direction. Accepted tickets have implemented the request-to-saved-record path, a bounded synthetic spot replay and persisted account views. The wider brief is not evidence that real data, model inference or execution have passed qualification.
-
-The planned execution path uses Kuru Flow and a revocable, policy-scoped Privy wallet mandate. Models propose actions. Deterministic checks and wallet policies determine whether an action is permitted. Swap requests, denied actions, confirmed asset changes and transaction receipts remain inspectable.
-
-Liquidity-provider research is the second product domain. Its initial scope is compilation and simulation, including fees, inventory exposure, impermanent loss and rebalancing costs. It needs an explicit comparison, such as holding the same initial assets. Gross fee revenue alone does not establish a benefit. Live LP execution requires a separately verified adapter and authority.
-
-## Publication, tokens and the wider vision
-
-A strategy should remain useful when its creator keeps it private and no associated token exists. After the applicable evidence gates, the creator could keep running it privately, publish an inspectable record or select an optional token model.
-
-Publication would expose a chosen immutable strategy revision, evidence coverage, limitations, risk rules and operating state. Historical, fixture, paper and live results must remain distinguishable. Publication is opt-in and must protect private data and credentials.
-
-The raw vision contains three possible token models. They are alternatives, not three required launches:
-
-| Model | Intended purpose | Open decisions |
-|---|---|---|
-| Agent-community token | Identity, community and distribution around an agent or strategy. | Holder utility and the functional connection to the strategy. |
-| Agent-financing token | A verified fee route could help pay for inference, data and operating costs. | Actual fee source, collection, recipients, budgets and funding failure behavior. |
-| Strategy-associated token | Connect a token to an exact strategy revision, its evidence and observable operation. | Eligibility, holder rights, issuance, initial liquidity and revision changes. |
-
-A public page could show the associated strategy, actual evidence status, operating funding, risk limits and decision receipts. Performance figures require measured records with periods, costs and limitations. A token must not turn an unresolved strategy into a validated one.
-
-Association or operating funding does not grant ownership of trading assets, redemption rights, profit entitlement or wallet authority. Those rights are not selected. Token holders cannot directly expand a strategy's risk limits or execution mandate. Operating revenue does not automatically become trading capital.
-
-The token extension can be built after the agreed core works, including during the hackathon if its own decisions, tests, funding approvals and remaining time permit it. No token model, fee split or issuance terms are settled by this README. The [product design](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md#conditional-publication-token-and-funding-extensions) records the conditional extension requirements. They remain proposed and require separate implementation and activation approval.
-
-Longer-term possibilities include strategy forks and exports, licensing, marketplaces, broader hypothesis search, additional venues and portfolio-level research. A fork needs its own identity, evidence and mandate. These possibilities are outside the current core. Public pooled capital, profit distribution and autonomous treasuries need separate designs and approvals. Copy trading is outside the selected product direction.
-
-## Current status
-
-The repository contains a runnable Next.js frontend, FastAPI backend and PostgreSQL persistence. The implemented local path can:
-
-- Save a request, ask clarifying questions, review compiled price/volume rules and reopen immutable revisions after an API restart.
-- Review and explicitly adopt a fixture-labelled investigation declaration before outcome access. Preserve its exact settings, origins and prior versions.
-- Run an adopted descriptive comparison on authored synthetic inputs, retaining variants, exclusions, missing references, contrary results and saved reports. Statistical support remains `UNRESOLVED`.
-- Save and replay the adopted one-position spot subset with next-scheduled-bar fills, explicit costs, immutable configuration identities, cash/holdings and available or unavailable metrics. This is a real implemented simulator driven by synthetic fixtures, not qualified market history or a profitable strategy.
-- Display persisted Agents, Positions and Funds records with immutable permission histories and separate deposits/withdrawals. Version agent context through adoption, correction, disable and clear. These are authored account records, not live wallet balances or trading workers.
-
-### Integrated work by ticket
-
-The accepted implementation/decision outputs below are in this codebase. Acceptance refers to each bounded output, including a permitted `UNRESOLVED` qualification result; it does not assert that every GitHub issue is closed or that the product is deployed.
-
-| Ticket | Integrated output | Boundary |
-|---|---|---|
-| P01 | Application/authentication/storage profile | Production deployment and real-auth checks remain separate |
-| P02 | Strict first-slice record contracts and lineage checks | No model or trading authority |
-| P03 | Saved Research API, database and Next.js path | Fixture sign-in and interpretation verification |
-| P04 | Pinned Hermes local runtime qualification | Fake-provider tests passed; live model/hosting unresolved |
-| P06 | Deterministic compiler/evaluator and review/save/reopen path | Supported price/volume subset only |
-| P08 | Investigation review, adoption, immutable save and reopen | Fixture-labelled declarations; no real study by adoption alone |
-| P09 | Descriptive comparison and saved-report runtime | Authored synthetic inputs; no statistical or profitability claim |
-| P12 | Adopted spot-replay accounting/evidence contract | One position, fixed positive quote buys and full exits |
-| P13 | Persisted spot-replay API and UI | Implements P12's bounded synthetic subset; no live fills |
-| P15 | Wallet, mandate and account record contracts | Does not implement live funding or execution |
-| P19 | Persisted account views and versioned agent context | Not live wallet state or Hermes context retrieval |
-| P36 | LP model/data requirements and reference case | Overall `UNRESOLVED`; no adopted LP model or simulator |
-| NANSEN-D01 | Bounded descriptive-input assessment | Limited sampled access; not qualified wallet PnL or signals |
-
-Also integrated: P07's offline history/lineage checker, P16's bounded one-owner signing/removal evidence, the P43 R9 design export and controller delivery/Stop safeguards. Full P07 real-history and P16 owner-linked creation, lost-response, restart and actual-backend cross-user qualification remain incomplete. P43 is a design milestone, not complete design-parity or unfamiliar-user validation.
-
-P05's saved Hermes interpretation path, durable attempts, retry/recovery and Research UI are integrated and passed their local reviews and gate. Verification used actual pinned Hermes with an authored fake provider. Real-model interpretation and production Hermes hosting remain unqualified. P17 wallet setup and P22/P23 admission and decision/submission modules are locally accepted, but do not establish an integrated live wallet or trading path. Real data collection, Kuru swaps, funded agent operation, withdrawals, production deployment, live LP execution and optional token/add-on extensions are not available end to end.
-
-The earlier accepted [Probe A](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md) preserved bounded interpretation and contrary evidence, and returned `UNRESOLVED` with no supported MOE/WMON candidate. Keep that evidence separate from the current fixture-backed application. Compilation, simulations, passing tests and sign-only provider results do not prove a trading edge.
-
-### Verification snapshot
-
-On 11 October 2026, accepted integration `52e5adc` passed 953 API tests, 176 web tests, web typecheck/build and P02/P06/P15 contract checks. This publication preserves those application and verification-tooling bytes. The earlier snapshot below remains historical evidence, not verification of the newer tree. Exact-candidate P05 mapped browser/SQL/restart evidence remains separate from these combined integration checks.
-
-On 10 October 2026, code at `8ad71c4` passed all 377 API tests against isolated PostgreSQL. The same application tree passed 118 web tests, typechecking, P02/P06/P15 contract checks, 73 P07 checks, production build and the full 18-step desktop/390px browser/API/SQL/restart/cleanup path. The backend reorganization received two independent internal PASS assessments and a separate gate PASS before integration.
-
-One unchanged desktop saved-heading focus assertion failed in the first mapped run and passed on an unchanged repeat. Its cause remains unexplained. Safari/Firefox, real devices, full screen-reader use, unfamiliar-user comprehension and deployed load remain unqualified. Verification used fixture authentication and synthetic records, not real market execution.
-
-## Run and test locally
-
-The mapped verifier starts a fresh isolated PostgreSQL database, migrates it, builds and starts the API/web app, drives the saved Research/comparison/replay/account paths, inspects actual rows, restarts the API and cleans up only its own resources. It uses fixture interpretation and sign-in. See [startup and configuration](docs/implementation/P03_FIRST_RESEARCH_PATH.md) and the [verification recipe](.agents/skills/verify-edge-os/SKILL.md) for the full steps and evidence locations. Keep credentials out of source control; example configuration is in `apps/api/.env.example` and `apps/web/.env.example`.
-
-```bash
-(cd apps/api && uv sync --frozen && uv run --frozen pytest)
-(cd apps/web && npm ci && npm run typecheck && npm test)
-(cd tests/p03 && npm ci && npx playwright install chromium)
-(cd apps/api && uv run --frozen python ../../scripts/p03/verify_run.py)   # fresh isolated instance, full path, evidence, cleanup
-```
-
-The commands need Docker, Python 3.14, `uv`, and Node 24.
-
-## Code layout
-
-```text
-apps/web/                  Next.js application
-apps/api/src/edge_os_api/
-  main.py                  application factory and route composition
-  core/                    authentication, database, settings, errors, request schemas
-  records/                 contract adapter and shared SQLAlchemy definitions
-  strategies/              deterministic compiler/evaluator
-  research/                request workflow, investigation adoption, comparisons
-  replay/                  simulator and saved runs
-  accounts/                persisted account views
-  agent_context/           versioned context controls
-docs/contracts/            frozen/versioned record and execution contracts
-docs/implementation/       accepted runtime and decision profiles
-docs/qualification/        bounded qualification evidence and reference cases
-scripts/p03/, tests/p03/    isolated application verification harness
-docs/design/p43/r9/        retained design export
-```
-
-See [backend responsibilities and import paths](docs/implementation/BACKEND_PACKAGE_LAYOUT.md). Application filenames describe their responsibility; ticket/schema identifiers remain in contracts and traceability records. The reorganization changed imports and resource paths without changing database schema or application behavior.
-
-## Project documents
-
-The specification, contracts, scoped probe plan and project workflow in this repository are the shared sources of truth. This README explains the product; the specification controls detailed behavior. Their approval status remains explicit.
-
-- [Current state and next action](docs/CONTROLLER_HANDOFF.md).
-- [Edge OS Compass workflow](docs/EDGE_OS_COMPASS_WORKFLOW.md).
-- [Product scope and qualification requirements](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md).
-- [Research contracts](docs/EDGE_OS_RESEARCH_CONTRACTS.md).
-- [Scoped probe plan and approval record](docs/prototypes/EDGE_OS_SCOPED_PROBE_PLAN.md).
-- [Probe findings and limitations](docs/prototypes/EDGE_OS_PROBE_A_RESULT.md).
-- [Hackathon brief](docs/research/00_HACKATHON_BRIEF.md).
-- [Hackathon Winning Compass](playbooks/HACKATHON_WINNING_COMPASS.md).
-- [Matt Pocock project workflow](playbooks/MATT_POCOCK_PROJECT_WORKFLOW.md).
-
-## Team and agent setup
-
-Track assigned work in [GitHub Issues](https://github.com/edge-os-app/edge-os/issues). Read [AGENTS.md](AGENTS.md) before an agent task. Tracker, label and domain conventions are under [docs/agents/](docs/agents/).
-
-The builder owns product decisions, prototypes and the hackathon release candidate. The controller coordinates assigned agents, reviews and local integration. The former frontend/tokenization teammate split is superseded. The quant contributor can start the bounded P14 numerical PR under its dated assignment, outside the release candidate. The [team ownership section](docs/EDGE_OS_COMPASS_WORKFLOW.md#9-team-ownership) records these boundaries.
-
-Contributors implement assigned accepted tickets in isolated worktrees on task branches. The controller checks both original internal reviews and the separate gate before technical acceptance and serial local integration. Publication and merging to `main` require recorded builder authorization. The builder may authorize the controller to execute a specific merge. This manual gate does not require GitHub-enforced approvals or branch protection. Required checks and independent review still apply.
-
-Start with the [quant contributor brief](docs/team/QUANT_CONTRIBUTOR_BRIEF.md) and [portable contributor workflow](docs/agents/contributor-workflow.md). The latter links worker, internal-reviewer and gate prompt templates, skill setup requirements and optional native/Smux routes. Your own clone is sufficient; the builder's private workspace and tmux setup are not required.
-
-Contributor coding skills require installation in each contributor's agent environment. They are separate from the planned user-facing agent add-ons catalog. These documentation files do not install either kind of skill or create remote labels.
-
-For supporting evidence and required task inputs, follow the [contributor reference rules](docs/agents/domain.md#shared-documents-and-private-evidence).
-
-Use the locked toolchains and repository verification commands above. New feature work requires its assigned scope, tests and independent reviews; publication does not grant provider access or financial authority.
-
-A PASS covers the exact candidate and declared scope. Fixture tests, a component milestone or a release portion do not complete remaining live qualification or the original wider issue. See [current status](#current-status) for accepted features and their limits.
+- [Product specification](docs/superpowers/specs/2026-09-29-edge-os-hackathon-design.md)
+- [Research contracts](docs/EDGE_OS_RESEARCH_CONTRACTS.md)
+- [Delayed replay profile](docs/implementation/DELAYED_HISTORY_REPLAY_PROFILE.md)
+- [Local fixture runbook](deploy/local/RUNBOOK.md)
+- [Contributor workflow](docs/agents/contributor-workflow.md)
+- [Agent instructions](AGENTS.md)
+- [GitHub issue tracker](https://github.com/edge-os-app/edge-os/issues)
