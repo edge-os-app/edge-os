@@ -213,6 +213,36 @@ describe("investigation declaration adoption", () => {
     expect(retryBody.idempotency_key).toBe(firstBody.idempotency_key);
   });
 
+  it("focuses the saved result once the save commits, even when no animation frame runs", async () => {
+    // Synthetic scheduling coverage: frames are withheld, so focus must not depend on the next frame.
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
+    try {
+      const user = userEvent.setup();
+      mocks.save.mockRejectedValueOnce(new Error("temporary network failure")).mockResolvedValue(saved);
+      render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+      await user.click(await screen.findByRole("checkbox", { name: /fixture-only declaration/ }));
+      const saveButton = screen.getByRole("button", { name: "Adopt and save declaration" });
+      saveButton.focus();
+      await user.keyboard("{Enter}");
+      const alert = await screen.findByRole("alert");
+      await waitFor(() => expect(document.activeElement).toBe(alert));
+      saveButton.focus();
+      await user.keyboard("{Enter}");
+      const heading = await screen.findByRole("heading", { name: "Declaration saved" });
+      await waitFor(() => expect(document.activeElement).toBe(heading));
+      expect(mocks.save).toHaveBeenCalledTimes(2);
+    } finally {
+      frame.mockRestore();
+    }
+  });
+
+  it("does not move focus to a saved declaration shown on page load", async () => {
+    mocks.list.mockResolvedValue({ declarations: [saved.declaration], access_history: saved.access_history });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByTestId("investigation-saved");
+    expect(document.activeElement).not.toBe(screen.getByRole("heading", { name: "Declaration saved" }));
+  });
+
   it("keeps replacement intent across repeated proposal failures and saves a fresh hypothesis", async () => {
     const user = userEvent.setup();
     const replacement = {

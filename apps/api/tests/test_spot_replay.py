@@ -641,6 +641,29 @@ def test_spot_replay_does_not_promote_non_fixture_data_to_qualified_evidence() -
         raise AssertionError("the synthetic-only slice must not accept or qualify real market evidence")
 
 
+def test_qualified_provider_history_replays_with_the_same_numbers_and_its_own_label() -> None:
+    """R58 L2 RG05 compatibility: PROVIDER_ACTUAL is admitted, nothing numerical changes and nothing is upgraded."""
+    strategy, replay_input, _ = _wc01_input()
+    synthetic = run_spot_replay(strategy, replay_input)
+    actual_input = replace(replay_input, dataset=replace(replay_input.dataset, evidence_class="PROVIDER_ACTUAL"))
+    actual = run_spot_replay(strategy, actual_input)
+
+    assert actual.evidence_class == "PROVIDER_ACTUAL"
+    assert actual.repeatability_id != synthetic.repeatability_id  # the class is part of the run identity
+    assert (actual.samples, actual.events, actual.trades) == (synthetic.samples, synthetic.events, synthetic.trades)
+    assert (actual.metrics, actual.metric_statuses, actual.metric_reasons, actual.open_position) == (
+        synthetic.metrics, synthetic.metric_statuses, synthetic.metric_reasons, synthetic.open_position)
+    for dataset, code in ((replace(actual_input.dataset, qualification="LIMITED"), "DATASET_COVERAGE_UNPROVEN"),
+                          (replace(actual_input.dataset, coverage_complete=False), "DATASET_COVERAGE_UNPROVEN"),
+                          (replace(actual_input.dataset, market_binding_id="another"), "MARKET_BINDING_MISMATCH")):
+        try:
+            run_spot_replay(strategy, replace(actual_input, dataset=dataset))
+        except ValueError as error:
+            assert getattr(error, "code") == code
+        else:
+            raise AssertionError("the provider class must not upgrade coverage, qualification or market binding")
+
+
 def test_spot_replay_open_position_exit_takes_priority_over_entry_on_that_decision() -> None:
     strategy, replay_input, _ = _wc01_input()
 

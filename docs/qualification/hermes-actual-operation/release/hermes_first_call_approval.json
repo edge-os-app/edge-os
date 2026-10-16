@@ -1,0 +1,67 @@
+{
+  "format": "edge-os.hermes-release-approval/1",
+  "status": "APPROVED_RELEASE_VALUES",
+  "meaning": "The builder-adopted values of one ACTUAL Hermes relay release (hermes-first-call-1). It approves these values for a reviewed code registry entry only. It is not a request, a result or evidence that any provider call ran.",
+  "adopted_utc": "2026-10-16",
+  "base": "5ae6164d29e07f5c58edb035db33cabbed1a4170",
+  "record_values_except_approval": {
+    "release_id": "hermes-first-call-1",
+    "route_id": "openrouter-openai-standard",
+    "kind": "ACTUAL",
+    "stream": false,
+    "destination": {"host": "openrouter.ai", "port": 443, "path": "/api/v1/chat/completions"},
+    "model": "openai/gpt-6.1-sol",
+    "provider": {
+      "only": ["openai"],
+      "allow_fallbacks": false,
+      "require_parameters": true,
+      "data_collection": "deny",
+      "max_price": {"prompt": 2, "completion": 10}
+    },
+    "max_tokens": 4096,
+    "reasoning": {"effort": "low"},
+    "response_format_sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60",
+    "prompt_cache_options": {"mode": "explicit"},
+    "allowed_fields": ["model", "messages", "stream", "response_format", "provider", "reasoning", "max_tokens",
+                       "session_id", "prompt_cache_options"],
+    "max_request_bytes": 65536,
+    "max_reply_bytes": 262144,
+    "timeout_seconds": 90,
+    "ca_bundle_sha256": "7cef540c6af3bf0a3c7d0070bd3fd7aae34f8aa805b408d1c27a01c8aeb305df",
+    "price_snapshot_sha256": "e53259b2605d7a54c7597e04b75dc5b57e8b6ff7484c90be6a788b3388d54fe9"
+  },
+  "application_definition_values": {
+    "image": "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0",
+    "channel_root": "edge-os-research",
+    "global_cap_usd": "2.00",
+    "owner_cap_usd": "2.00"
+  },
+  "inputs": {
+    "response_format": {
+      "source": "edge_os_api.research.interpreter_output_schema.interpretation_response_format()",
+      "canonical_bytes": 7182,
+      "sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60"
+    },
+    "price_snapshot": {
+      "path": "docs/qualification/hermes-actual-operation/release/hermes_first_call_prices.json",
+      "sha256": "e53259b2605d7a54c7597e04b75dc5b57e8b6ff7484c90be6a788b3388d54fe9"
+    },
+    "provider_ca_bundle_sha256": "7cef540c6af3bf0a3c7d0070bd3fd7aae34f8aa805b408d1c27a01c8aeb305df",
+    "image_id": "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"
+  },
+  "spending": {
+    "combined_model_and_data_ceiling_usd": "2.00",
+    "separate_hermes_allocation": "none: the builder rejected a separate Hermes sub-cap; the release shares the one USD 2.00 model and data ceiling",
+    "ledger_caps": "global_cap_usd and owner_cap_usd 2.00 bound liability inside one ledger database only; they do not see spending recorded elsewhere",
+    "maximum_reservation_usd": "0.17216",
+    "maximum_reservation_meaning": "The worst-case reservation of one request ((65,536 + 64) prompt tokens x 2 + 4,096 completion tokens x 10, USD per million). An accounting calculation, not an allocation.",
+    "cache_and_fees": "prompt_cache_options is explicit with no breakpoint. A provider cost other than the two-rate charge (cache, reasoning or discount pricing) leaves the whole reservation as UNKNOWN liability.",
+    "before_first_actual_call": "An external reconciliation of all settled and UNKNOWN model and data liability across ledgers must show remaining room under the USD 2.00 ceiling."
+  },
+  "limits": [
+    "At most one first model request after an accepted registry, a coherent operator configuration, price and ledger, and the remaining-budget reconciliation; no fallback and no blind retry.",
+    "The model job holds no provider key; the relay holds it. No key in logs, model context, source control or application responses.",
+    "Production stays refused.",
+    "No funded transaction, policy or wallet change, host deployment or main publication is approved by this release."
+  ]
+}

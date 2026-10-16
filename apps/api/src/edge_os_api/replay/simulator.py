@@ -10,9 +10,12 @@ from decimal import Decimal, DecimalException, localcontext
 from typing import Any, Sequence
 
 from edge_os_api.records import contract_adapter as record_contract
+from edge_os_api.replay import delayed_history_profile
 from edge_os_api.strategies import compiler as strategy_compiler
 
 PROFILE_VERSION = "p12.spot-replay/1"
+# Provider history passes only the same qualification, coverage and market checks as a fixture (R58 L2, RG05).
+ADMITTED_EVIDENCE_CLASSES = ("SYNTHETIC_FIXTURE", "PROVIDER_ACTUAL")
 ESSENTIAL_VERSION = "p12.essential-evidence/1"
 _COMPLETE = {"COMPLETE_OCCUPIED", "COMPLETE_EMPTY"}
 
@@ -180,8 +183,9 @@ def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int,
                        "The saved slippage makes a sell fill non-positive.")
     if not run.strategy_revision_id or not run.run_configuration_id or not run.dataset.revision_id:
         raise _invalid("INVALID_REPLAY_IDENTITY", "/identity", "Bind immutable strategy, configuration and dataset revisions.")
-    if run.dataset.evidence_class != "SYNTHETIC_FIXTURE":
-        raise _invalid("EVIDENCE_CLASS_UNSUPPORTED", "/dataset/evidence_class", "This P13 slice accepts synthetic fixtures only.")
+    if run.dataset.evidence_class not in ADMITTED_EVIDENCE_CLASSES:
+        raise _invalid("EVIDENCE_CLASS_UNSUPPORTED", "/dataset/evidence_class",
+                       "This P13 slice accepts synthetic fixtures and qualified provider history only.")
     if isinstance(strategy["invalidation"], dict) and strategy["invalidation"].get("state") != "NOT_REQUESTED":
         raise _invalid("UNSUPPORTED_INVALIDATION", "/strategy/invalidation", "Boolean invalidation is outside P12/1.")
     if run.dataset.qualification != "QUALIFIED" or run.dataset.coverage_complete is not True:
@@ -245,6 +249,20 @@ def _validate_run(strategy: dict[str, Any], run: ReplayInput) -> tuple[str, int,
     if cash == 0 and initial_base == 0:
         raise _invalid("INVALID_INITIAL_ACCOUNT", "/initial_state", "Starting capital or inventory must be positive.")
     return run.dataset.market_binding_id, start_index, decision_indices[-1], _validate_descriptor(strategy, run, run.dataset.market_binding_id)
+
+
+def _delayed_decision_range(strategy: dict[str, Any], run: ReplayInput) -> tuple[int, int]:
+    """Select source indexes whose delayed decision time lies in the half-open window."""
+    delay = delayed_history_profile.DECISION_DELAY
+    selected = [index for index, bucket in enumerate(run.dataset.buckets)
+                if run.window_start <= bucket.bucket_end + delay < run.window_end]
+    if not selected or run.dataset.buckets[selected[0]].bucket_end + delay != run.window_start:
+        raise _invalid("DATASET_COVERAGE_UNPROVEN", "/dataset/buckets",
+                       "The run start must be a delayed decision time of a scheduled source bucket.")
+    if selected[0] < strategy["warmup_buckets"]:
+        raise _invalid("DATASET_COVERAGE_UNPROVEN", "/dataset/buckets",
+                       "The saved strategy warm-up must be scheduled before the first delayed decision.")
+    return selected[0], selected[-1]
 
 
 def _observation_for(bucket: ReplayBucket, series: str) -> strategy_compiler.Observation | None:
@@ -368,9 +386,9 @@ def _account_mark(bucket: ReplayBucket, moment: datetime, market_id: str, positi
     return mark, observation.reasons
 
 
-def _fingerprint(strategy: dict[str, Any], run: ReplayInput) -> str:
-    input_record = {
-        "profile_version": PROFILE_VERSION,
+def _fingerprint(strategy: dict[str, Any], run: ReplayInput, timing_profile: str) -> str:
+    input_record: dict[str, Any] = {
+        "profile_version": timing_profile,
         "strategy_sha256": record_contract.sha256_hex(strategy),
         "strategy_revision_id": run.strategy_revision_id,
         "run_configuration_id": run.run_configuration_id,
@@ -395,6 +413,8 @@ def _fingerprint(strategy: dict[str, Any], run: ReplayInput) -> str:
             for bucket in run.dataset.buckets
         ],
     }
+    if timing_profile != PROFILE_VERSION:
+        input_record["timing_policy"] = dict(delayed_history_profile.POLICY)
     return hashlib.sha256(record_contract.canonical_bytes(input_record)).hexdigest()
 
 
@@ -454,13 +474,22 @@ def calculate_quote_metrics(
     return QuoteMetrics(values_by_metric, statuses, reasons)
 
 
-def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
+def run_spot_replay(
+    strategy: dict[str, Any], run: ReplayInput, *, timing_profile: str = PROFILE_VERSION,
+) -> ReplayResult:
     """Replay one immutable P06 spot strategy against one qualified P07 schedule.
 
     P06 values and reasons remain visible. Only an explicit, matching P12 essential
     binding controls action eligibility; this function grants no execution permission.
+    The delayed profile decides each source bucket 300 seconds after it ends and fills
+    only against the next bucket's stale close at that bucket's delayed decision time.
     """
+    if not isinstance(timing_profile, str) or timing_profile not in {PROFILE_VERSION, delayed_history_profile.PROFILE_VERSION}:
+        raise _invalid("UNSUPPORTED_TIMING_PROFILE", "/timing_profile", "Use a recognized replay timing profile.")
+    delayed = timing_profile == delayed_history_profile.PROFILE_VERSION
     market_id, first_index, last_index, essential = _validate_run(strategy, run)
+    if delayed:
+        first_index, last_index = _delayed_decision_range(strategy, run)
     cash = _decimal(run.initial_cash_quote, "/initial_cash_quote")
     initial_base = _decimal(run.initial_base_amount, "/initial_base_amount")
     initial_basis = _decimal(run.initial_basis_quote, "/initial_basis_quote")
@@ -474,6 +503,9 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
     if not strategy["cost_assumptions"].get("source_ref"):
         raise _invalid("UNSUPPORTED_COST_ASSUMPTIONS", "/strategy/cost_assumptions/source_ref", "Retain a saved cost source.")
     schedule = tuple(bucket.bucket_end for bucket in run.dataset.buckets)
+    delay = delayed_history_profile.DECISION_DELAY if delayed else timedelta(0)
+    clocks = tuple(moment + delay for moment in schedule)
+    policy = delayed_history_profile.POLICY
     prices = tuple(bucket.price for bucket in run.dataset.buckets)
     volumes = tuple(bucket.quote_volume for bucket in run.dataset.buckets)
     samples: list[dict[str, Any]] = []
@@ -486,14 +518,19 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
 
     for index in range(first_index, last_index + 1):
         bucket = run.dataset.buckets[index]
-        moment = bucket.bucket_end
+        moment = clocks[index]
+        source = {"source_bucket_end": schedule[index], "timing_profile": timing_profile} if delayed else {}
         if pending is not None:
+            fill_source = {"signal_at": clocks[pending.signal_index], "fill_at": moment,
+                           "available_at": bucket.price.available_at if bucket.price else None,
+                           "fill_rule": policy["fill_rule"], "fill_label": policy["fill_label"],
+                           **source} if delayed else {}
             mark, mark_reasons = _account_mark(bucket, moment, market_id, index)
             if mark is None:
                 events.append({"kind": "ORDER", "at": moment, "status": "FILL_UNAVAILABLE",
                                "side": pending.side, "reasons": mark_reasons,
                                "reservation_released_quote": pending.reserved_quote,
-                               "reservation_released_base": pending.reserved_base})
+                               "reservation_released_base": pending.reserved_base, **fill_source})
                 reservation_quote = Decimal(0)
                 reservation_base = Decimal(0)
             elif pending.side == "BUY":
@@ -506,10 +543,10 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                     cash -= quote_size + fee
                     base += acquired
                     basis_quote = quote_size + fee
-                    position_entry_at = schedule[pending.signal_index]
+                    position_entry_at = clocks[pending.signal_index]
                 events.append({"kind": "ORDER", "at": moment, "status": "BUY_FILLED", "fill_price": fill_price,
                                "base_amount": acquired, "quote_notional": quote_size, "fee_quote": fee,
-                               "cash_quote": cash, "base_balance": base})
+                               "cash_quote": cash, "base_balance": base, **fill_source})
             else:
                 with localcontext(strategy_compiler.NUMERIC):
                     fill_price = mark * (Decimal(1) - slippage_rate)
@@ -524,14 +561,16 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                                    "entry_origin": "REPLAY_SIGNAL" if position_entry_at else "PREEXISTING_AT_RUN_START",
                                    "exit_at": moment,
                                    "base_amount": sold_base, "entry_basis_quote": basis_quote,
-                                   "gross_quote": gross, "exit_fee_quote": fee, "gain_loss_quote": realized})
+                                   "gross_quote": gross, "exit_fee_quote": fee, "gain_loss_quote": realized,
+                                   **({"timing_profile": timing_profile, "fill_label": policy["fill_label"]}
+                                      if delayed else {})})
                     base = Decimal(0)
                     basis_quote = Decimal(0)
                     position_entry_at = None
                     completed_pairs += 1
                 events.append({"kind": "ORDER", "at": moment, "status": "SELL_FILLED", "fill_price": fill_price,
                                "base_amount": sold_base, "gross_quote": gross, "fee_quote": fee,
-                               "cash_quote": cash, "base_balance": base})
+                               "cash_quote": cash, "base_balance": base, **fill_source})
             reservation_quote = Decimal(0)
             reservation_base = Decimal(0)
             pending = None
@@ -543,7 +582,7 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                         "reserved_quote": reservation_quote, "reserved_base": reservation_base,
                         "account_value_quote": account_value,
                         "mark_price": mark if base else None,
-                        "mark_reasons": mark_reasons if mark is None else ()})
+                        "mark_reasons": mark_reasons if mark is None else (), **source})
         if index == first_index and account_value is not None:
             initial_capital = account_value
         context = strategy_compiler.EvaluationContext(prices, volumes, schedule, market_id, moment, index)
@@ -561,7 +600,8 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
                         "TIMING_UNAVAILABLE" if entry_timing else "ELIGIBLE")
         exit_status = ("ESSENTIAL_EVIDENCE_UNAVAILABLE" if exit_reasons else
                        "TIMING_UNAVAILABLE" if exit_timing else "ELIGIBLE")
-        events.append({"kind": "DECISION", "at": moment,
+        signal = {"signal_at": moment, **source} if delayed else {}
+        events.append({"kind": "DECISION", "at": moment, **signal,
                        "entry": {"value": entry.value, "reasons": entry.reasons, "eligible": entry_eligible,
                                  "eligibility_status": entry_status,
                                  "eligibility_reasons": entry_eligibility_reasons},
@@ -574,29 +614,29 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
         if base > 0:
             if exit_eligible and exit_result.value == strategy_compiler.Truth.TRUE:
                 if index + 1 > last_index:
-                    events.append({"kind": "ORDER", "at": moment, "status": "NO_NEXT_BUCKET", "side": "SELL"})
+                    events.append({"kind": "ORDER", "at": moment, "status": "NO_NEXT_BUCKET", "side": "SELL", **signal})
                     continue
                 pending = _Order("SELL", index, index + 1, Decimal(0), base)
                 reservation_base = base
                 samples[-1]["reserved_base"] = reservation_base
                 events.append({"kind": "ORDER", "at": moment, "status": "RESERVED", "side": "SELL",
-                               "reserved_base": base, "fill_at": schedule[index + 1]})
+                               "reserved_base": base, "fill_at": clocks[index + 1], **signal})
             continue
         if entry_eligible and entry.value == strategy_compiler.Truth.TRUE:
             if index + 1 > last_index:
-                events.append({"kind": "ORDER", "at": moment, "status": "NO_NEXT_BUCKET", "side": "BUY"})
+                events.append({"kind": "ORDER", "at": moment, "status": "NO_NEXT_BUCKET", "side": "BUY", **signal})
                 continue
             with localcontext(strategy_compiler.NUMERIC):
                 required_cash = quote_size + quote_size * fee_rate
             if required_cash > cash:
                 events.append({"kind": "ORDER", "at": moment, "status": "INSUFFICIENT_CASH",
-                               "requested_quote": quote_size, "required_cash_quote": required_cash})
+                               "requested_quote": quote_size, "required_cash_quote": required_cash, **signal})
                 continue
             pending = _Order("BUY", index, index + 1, required_cash, Decimal(0))
             reservation_quote = required_cash
             samples[-1]["reserved_quote"] = reservation_quote
             events.append({"kind": "ORDER", "at": moment, "status": "RESERVED", "side": "BUY",
-                           "reserved_quote": required_cash, "fill_at": schedule[index + 1]})
+                           "reserved_quote": required_cash, "fill_at": clocks[index + 1], **signal})
 
     quote_metrics = calculate_quote_metrics(samples, initial_capital, completed_pairs)
     metrics = quote_metrics.values
@@ -607,9 +647,9 @@ def run_spot_replay(strategy: dict[str, Any], run: ReplayInput) -> ReplayResult:
         "base_amount": base,
         "weighted_basis_quote": basis_quote,
         "last_qualified_mark": samples[-1]["mark_price"],
-        "last_mark_at": schedule[last_index] if samples[-1]["mark_price"] is not None else None,
+        "last_mark_at": clocks[last_index] if samples[-1]["mark_price"] is not None else None,
         "last_available_at": last_observation.available_at if last_observation and samples[-1]["mark_price"] is not None else None,
     }
-    return ReplayResult(_fingerprint(strategy, run), run.dataset.evidence_class,
+    return ReplayResult(_fingerprint(strategy, run, timing_profile), run.dataset.evidence_class,
                         tuple(samples), tuple(events), tuple(trades), metrics,
                         metric_statuses, metric_reasons, open_position)

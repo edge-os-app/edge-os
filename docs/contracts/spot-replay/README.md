@@ -8,6 +8,8 @@ This document defines the P13 result record added by the deterministic replay mo
 
 The replay function accepts only a dataset with P07 qualification `QUALIFIED` and complete interval coverage. That admission check does not establish that a real dataset is qualified. This P13 slice has no provider path and cannot promote a fixture or local record to real evidence.
 
+Successor compatibility (R58 L2, 2026-10-14): the runtime also admits `PROVIDER_ACTUAL`. Only the saved-dataset adapter can supply it, and only from a hash-verified owner dataset that an approved actual release collected (source class `PROVIDER_ACTUAL`, saved release kind `ACTUAL`); any other dataset that claims it is refused `evidence_class_inconsistent`. Every other admission rule is unchanged, so the class upgrades no qualification, coverage, market binding or permission. Equal buckets give equal results; the class is part of the repeatability identity. Fills stay hypothetical `simulated fills`, and the saved notice claims no statistical support, profitability or trading permission. Every other class stays `EVIDENCE_CLASS_UNSUPPORTED`. No actual release is approved, so no such dataset exists yet.
+
 ## Result contents
 
 The deterministic result contains:

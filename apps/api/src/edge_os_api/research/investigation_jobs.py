@@ -40,9 +40,10 @@ from edge_os_api.core.errors import AppError, finding, not_found
 from edge_os_api.core.request_schemas import InvestigationJobBody, NansenReportBody
 from edge_os_api.core.settings import Settings
 from edge_os_api.records import contract_adapter as record_contract
-from edge_os_api.core.research import provider_composition
+from edge_os_api.core.research import provider_composition, released_runtime_bootstrap, released_source_runtime
+from edge_os_api.core.research.operating_release import ReleaseRefused
 from edge_os_api.nansen_research import NansenLimitError, NansenRequestError, run_research
-from edge_os_api.research import history_dataset, investigation_tools, nansen_reports
+from edge_os_api.research import history_dataset, history_payload_binding, investigation_tools, nansen_reports
 from edge_os_api.research.history_dataset import HistoryDatasetRow, ResearchBase
 from edge_os_api.research.investigation_adoption import owned_history_declaration
 from edge_os_api.research.service import get_owned, parse_uuid
@@ -233,17 +234,61 @@ def _budget_refusal(row: InvestigationJobRow) -> AppError:
         "nothing was collected.")])
 
 
+def release_refusal(runtime: Any, frozen_sha256: str, part: str = "history") -> tuple[str, str] | None:
+    """Admission of a saved release job: this process must compose the exact release the job froze. Checked before
+    any reservation (start) and before any credential read or request (worker)."""
+    if runtime is None or getattr(runtime.release, part) is None:
+        return ("operating_release_unavailable",
+                "This server does not compose the operating release this job names. Nothing was started or sent.")
+    if runtime.release_sha256 != frozen_sha256:
+        return ("operating_release_changed",
+                "The operating release changed after this was saved. Declare again on the current release. "
+                "Nothing was started or sent.")
+    return None
+
+
+def release_http_clients(prepared: Any, deadline_at: dt.datetime, wall_clock: Callable[[], dt.datetime],
+                         clock: Callable[[], float] = time.monotonic) -> Callable[..., Any]:
+    """The worker's client factory for a release job. The time left is read from the job's SAVED deadline at the moment
+    the clients are built, next to the monotonic anchor, so a delay before construction never extends the bound
+    (review B R2-N2, controller dw-l2-clock3.md)."""
+    def build(_source: Any, _bounds: Any, cancelled: Callable[[], bool]) -> Any:
+        anchor = clock()  # read before the wall clock, so the anchored deadline can only be earlier, never later
+        return prepared.clients((deadline_at - wall_clock()).total_seconds(), cancelled, clock=clock, anchor=anchor)
+    return build
+
+
+def release_nansen_transport(prepared: Any, deadline_at: dt.datetime, wall_clock: Callable[[], dt.datetime],
+                             cancelled: Callable[[], bool], clock: Callable[[], float] = time.monotonic) -> Any:
+    """The worker's Nansen transport for a release job, built before the original attempt is saved. Its one deadline is
+    anchored to the job's SAVED deadline the same way as `release_http_clients`: the monotonic anchor is read first, so
+    the mapped deadline can only be earlier, never later (contract section 12.3)."""
+    anchor = clock()
+    return prepared.transport((deadline_at - wall_clock()).total_seconds(), cancelled, clock=clock, anchor=anchor)
+
+
+def _release_record(runtime: Any) -> dict[str, Any]:
+    return {"release_id": runtime.release.release_id, "sha256": runtime.release_sha256, "kind": runtime.release.kind}
+
+
 def start_job(session: Session, principal: Principal, settings: Settings, intake_id: str, declaration_id: str,
-              body: InvestigationJobBody) -> tuple[int, dict[str, Any]]:
-    """Save one original job and reserve its bounds before any effect. The same key returns the original job."""
+              body: InvestigationJobBody, runtime: Any = None) -> tuple[int, dict[str, Any]]:
+    """Save one original job and reserve its bounds before any effect. The same key returns the original job.
+
+    A declaration on an operating-release source needs that exact release composed here; recorded sources need the
+    recorded history mode."""
     declaration = owned_history_declaration(session, principal, intake_id, declaration_id)
-    if settings.research_history_mode != "recorded":
+    frozen_release = declaration.content["frozen"].get("operating_release_sha256")
+    if frozen_release is None and settings.research_history_mode != "recorded":
         raise _refusal(409, "history_source_unavailable", "/",
                        "History collection is unavailable in this configuration. Nothing was started.")
     fingerprint = _job_fingerprint(principal, declaration.declaration_id, body)
     existing = _existing_job(session, principal.user_id, declaration.declaration_id, body.request_key)
     if existing is not None:
         return _replay(session, existing, fingerprint)
+    release_refused = None if frozen_release is None else release_refusal(runtime, frozen_release)
+    if release_refused is not None:
+        raise _refusal(409, release_refused[0], "/", release_refused[1])
     if (declaration.content["configuration"]["source"]["evidence_class"] == history_dataset.HTTP_CLASS
             and settings.research_source_clients != "authored_http"):
         raise _refusal(409, "history_source_unavailable", "/",
@@ -294,7 +339,9 @@ def start_job(session: Session, principal: Principal, settings: Settings, intake
                            "This operation ID belongs to another job.") from None
         return _replay(session, existing, fingerprint)
     _event(session, job, "JOB_QUEUED", {"schema_version": JOB_VERSION, "requested": requested,
-                                        "declaration_sha256": declaration.content["frozen"]["configuration_sha256"]})
+                                        "declaration_sha256": declaration.content["frozen"]["configuration_sha256"],
+                                        **({} if frozen_release is None else
+                                           {"operating_release": _release_record(runtime)})})
     if not granted:
         job.state, job.terminal_reason = "BUDGET_EXHAUSTED", "research_budget_exhausted"
         _event(session, job, "BUDGET_REFUSED", {"requested": requested, "refused": refused})
@@ -313,11 +360,18 @@ def _nansen_refusal(code: str, detail: str) -> AppError:
     return AppError(422, "NANSEN_REPORT", "INVALID_INPUT", code, [finding(code, "/", detail)])
 
 
+def _nansen_released(runtime: Any) -> bool:
+    return runtime is not None and runtime.release.nansen is not None
+
+
 def start_nansen_job(session: Session, principal: Principal, settings: Settings, intake_id: str,
-                     body: NansenReportBody) -> tuple[int, dict[str, Any]]:
-    """Save one original Nansen report job and reserve its caps before any effect. The same key returns it."""
+                     body: NansenReportBody, runtime: Any = None) -> tuple[int, dict[str, Any]]:
+    """Save one original Nansen report job and reserve its caps before any effect. The same key returns it.
+
+    With a composed release Nansen part, the request must equal the release's fixed request exactly."""
     intake = get_owned(session, principal, intake_id, "IntakeRequest")
-    if settings.nansen_research_mode != "authored_fixture":
+    released = _nansen_released(runtime)
+    if not released and settings.nansen_research_mode != "authored_fixture":
         raise _refusal(409, "nansen_research_unavailable", "/",
                        "Nansen research is unavailable in this configuration. Nothing was started.")
     fingerprint = record_contract.sha256_hex({"owner_id": str(principal.user_id),
@@ -326,6 +380,12 @@ def start_nansen_job(session: Session, principal: Principal, settings: Settings,
     saved = _nansen_request_for_key(session, principal.user_id, intake.record_id, body.request_key)
     if saved is not None:
         return _replay(session, _nansen_job(session, saved), fingerprint)
+    if released:
+        mismatched = released_source_runtime.nansen_mismatches(runtime, body.model_dump(mode="json"))
+        if mismatched:
+            raise AppError(422, "NANSEN_REPORT", "INVALID_INPUT", "release_request_mismatch", [finding(
+                "release_request_mismatch", path, "This report runs under a fixed operating release. Use its listed "
+                "value exactly. Nothing was reserved.") for path in mismatched])
     now = utcnow()
     deadline_at = now + dt.timedelta(seconds=body.deadline_seconds)
     try:
@@ -352,6 +412,8 @@ def start_nansen_job(session: Session, principal: Principal, settings: Settings,
                        f"You already have {active} research jobs waiting or running. Cancel one or wait for one to "
                        "finish. Nothing was started.")
     content = nansen_reports.request_content(principal.user_id, intake.record_id, body.request_key, request)
+    if released:
+        content["operating_release"] = _release_record(runtime)
     session.add(nansen_reports.NansenRequestRow(
         request_id=request_id, owner_id=principal.user_id, intake_record_id=intake.record_id,
         request_key=body.request_key, content_sha256=record_contract.sha256_hex(content), content=content,
@@ -406,15 +468,21 @@ def _nansen_job(session: Session, request: nansen_reports.NansenRequestRow) -> I
         InvestigationJobRow.declaration_id == request.request_id)).scalar_one()
 
 
-def list_nansen_jobs(session: Session, principal: Principal, settings: Settings, intake_id: str) -> dict[str, Any]:
+def list_nansen_jobs(session: Session, principal: Principal, settings: Settings, intake_id: str,
+                     runtime: Any = None) -> dict[str, Any]:
     intake = get_owned(session, principal, intake_id, "IntakeRequest")
     rows = session.execute(select(InvestigationJobRow).where(
         InvestigationJobRow.owner_id == principal.user_id, InvestigationJobRow.intake_record_id == intake.record_id,
         InvestigationJobRow.kind == nansen_reports.NANSEN_KIND)
         .order_by(InvestigationJobRow.created_at, InvestigationJobRow.job_id)).scalars().all()
     # `available` says whether this server composes the Nansen transport; saved reports reopen either way.
-    return {"available": settings.nansen_research_mode == "authored_fixture",
-            "jobs": [job_view(session, row) for row in rows]}
+    released = _nansen_released(runtime)
+    listing: dict[str, Any] = {"available": settings.nansen_research_mode == "authored_fixture" or released,
+                               "jobs": [job_view(session, row) for row in rows]}
+    if released:  # additive: the fixed request a composed release permits
+        listing["operating_release"] = {**_release_record(runtime), "evidence_class": runtime.evidence_class,
+                                        "request": released_source_runtime.nansen_request(runtime.release.nansen)}
+    return listing
 
 
 def get_nansen_report(session: Session, principal: Principal, report_id: str) -> dict[str, Any]:
@@ -504,7 +572,8 @@ def job_view(session: Session, job: InvestigationJobRow) -> dict[str, Any]:
         "cancel_requested_at": _iso(job.cancel_requested_at), "created_at": _iso(job.created_at),
         "updated_at": _iso(job.updated_at),
         "events": [{"kind": event.kind, "attempt_id": None if event.attempt_id is None else str(event.attempt_id),
-                    "created_at": _iso(event.created_at), "content": event.content}
+                    "created_at": _iso(event.created_at),
+                    "content": history_payload_binding.public_event(event.kind, event.content)}
                    for event in _events(session, job.job_id)],
         "dataset": None if dataset is None else {
             "dataset_id": str(dataset.dataset_id), "content_sha256": dataset.content_sha256,
@@ -513,7 +582,8 @@ def job_view(session: Session, job: InvestigationJobRow) -> dict[str, Any]:
                 "source_id", "evidence_class", "content_label", "status", "stop_reason", "verdict", "binding_state",
                 "unavailable_states", "provider_requests", "provider_requests_state", "invocations_measured",
                 "window_start", "window_end", "gaps", "normalized_sha256", "collection_sha256", "market_binding_id")},
-            "transport": _transport_summary(dataset.content)},
+            "transport": _transport_summary(dataset.content),
+            "payload_binding": history_payload_binding.binding_state(session, dataset, job.owner_id)},
         "report": None if report is None else _report_view(report),
     }
 
@@ -533,10 +603,14 @@ def _transport_summary(content: dict[str, Any]) -> dict[str, Any] | None:
                                                                     "mismatches")},
                "corroboration_reason": corroboration.get("reason"),
                "recorded_declarations": sorted(key for key, value in content["evidence_basis"].items()
-                                               if value == "RECORDED_DECLARATION")}
-    if transport.get("clients") == "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT":  # additive; recorded summaries unchanged
+                                               if value in {"RECORDED_DECLARATION", "RELEASE_DECLARATION"})}
+    if transport.get("clients") in {"P07_HTTP_CLIENTS_AUTHORED_TRANSPORT", released_source_runtime.CLIENTS_LABEL}:
         summary.update({"clients": transport["clients"], "client_classes": transport["client_classes"],
-                        "transport_label": transport["transport_label"]})
+                        "transport_label": transport["transport_label"]})  # additive; recorded summaries unchanged
+    if "operating_release" in content:
+        summary.update({"operating_release": content["operating_release"], "transport_kind": content["transport_kind"],
+                        "requests_hashed": len(transport.get("request_sha256", [])),
+                        "endpoint_hosts": transport.get("endpoint_hosts")})
     return summary
 
 
@@ -609,8 +683,15 @@ class InvestigationWorker:
                  clock: Callable[[], dt.datetime] = utcnow,
                  after_collection_saved: Callable[[uuid.UUID], None] | None = None,
                  nansen_transport: Callable[[str], Any] = provider_composition.nansen_transport,
-                 http_clients: Callable[..., Any] = provider_composition.http_source_clients) -> None:
+                 http_clients: Callable[..., Any] = provider_composition.http_source_clients,
+                 research_runtime: Any = None) -> None:
         self._factory, self._settings, self._clock = factory, settings, clock
+        # The composed operating release, if any. Without it every saved release job ends UNAVAILABLE before effect.
+        if research_runtime is not None:
+            if research_runtime.release.kind == "STAND_IN" and settings.env == "production":
+                raise ReleaseRefused("stand_in_refused_in_production", "a stand-in release is local and test only")
+            history_dataset.check_release_source(research_runtime)
+        self._runtime = research_runtime
         # Test seam: runs after the dataset and attempt result commit and before the job advances (a lost reply).
         self._after_collection_saved = after_collection_saved or (lambda job_id: None)
         # Per-job provider clients composed by the application; tests inject authored fault transports here.
@@ -682,10 +763,28 @@ class InvestigationWorker:
                 return
             self._evaluate(session, job)
 
+    def _refuse_source(self, session: Session, job: InvestigationJobRow, source_id: str, reason: str) -> None:
+        """Refused before any credential read or request: nothing was sent, so everything is released."""
+        _event(session, job, "SOURCE_REFUSED", {"source_id": source_id, "reason": reason})
+        _finish(session, job, self._settings, "UNAVAILABLE", reason, provider="KNOWN", compute="KNOWN")
+        session.commit()
+
     def _collect(self, session: Session, job: InvestigationJobRow) -> None:
         declaration = _declaration(session, job)
         config = declaration.content["configuration"]
-        source = history_dataset.recorded_sources().get(config["source"]["source_id"])
+        frozen_release = declaration.content["frozen"].get("operating_release_sha256")
+        prepared = None
+        if frozen_release is not None:  # admission, then the only credential read; no request yet
+            refused = release_refusal(self._runtime, frozen_release)
+            if refused is None:
+                try:
+                    prepared = released_source_runtime.prepare_history(self._runtime)
+                except ReleaseRefused as error:
+                    refused = (error.code, error.detail)
+            if refused is not None:
+                self._refuse_source(session, job, config["source"]["source_id"], refused[0])
+                return
+        source = history_dataset.served_sources(self._runtime).get(config["source"]["source_id"])
         frozen = declaration.content["frozen"]["source_profile_sha256"]
         if (source is not None and source["evidence_class"] == history_dataset.HTTP_CLASS
                 and self._settings.research_source_clients != "authored_http"):
@@ -709,15 +808,25 @@ class InvestigationWorker:
         attempt_id = uuid.uuid4()
         tool_input = {"source_id": source["source_id"], "profile_sha256": history_dataset.profile_sha256(source),
                       "scan": source["scan"], "bounds": config["resource_bounds"]}
+        release = None if prepared is None else {
+            "operating_release": _release_record(self._runtime), "evidence_class": source["evidence_class"],
+            "transport_kind": self._runtime.transport_kind}
+        binding = None if prepared is None else released_source_runtime.forward_history_binding(self._runtime)
+        if binding is not None:  # frozen with the attempt, before any effect; the handoff text is not copied
+            release[history_payload_binding.REQUIREMENT_KEY] = history_payload_binding.requirement(binding)
         _event(session, job, "ATTEMPT_STARTED", {"tool": investigation_tools.COLLECT_TOOL,
                                                  "tool_version": investigation_tools.TOOL_VERSION,
                                                  "input_sha256": investigation_tools.input_sha256(tool_input),
-                                                 "input": tool_input}, attempt_id)
+                                                 "input": tool_input, **(release or {})}, attempt_id)
         job.state, job.updated_at = "COLLECTING", utcnow()
         session.commit()  # the original attempt is durable before the adapter runs
+        started_at = self._clock()
         try:
-            composed = ({"http_clients": self._http_clients}
-                        if source["evidence_class"] == history_dataset.HTTP_CLASS else {})
+            if prepared is not None:
+                composed = {"http_clients": release_http_clients(prepared, job.deadline_at, self._clock)}
+            else:
+                composed = ({"http_clients": self._http_clients}
+                            if source["evidence_class"] == history_dataset.HTTP_CLASS else {})
             result, collection, normalized, transport = investigation_tools.collect_recorded_history(
                 source, config["resource_bounds"], _whole_seconds(job.deadline_at), lambda: self._cancelled(job.job_id),
                 lambda: _whole_seconds(self._clock()), **composed)
@@ -731,9 +840,13 @@ class InvestigationWorker:
             session.commit()
             return
         dataset_id = uuid.uuid4()
+        if release is not None:
+            release["application_collection_time"] = {"started_at": _iso(started_at), "finished_at": _iso(self._clock()),
+                                                      "basis": "APPLICATION_CLOCK"}
         content = history_dataset.dataset_content(
             dataset_id=dataset_id, owner_id=job.owner_id, declaration_id=job.declaration_id, job_id=job.job_id,
-            attempt_id=attempt_id, source=source, collection=collection, normalized=normalized, transport=transport)
+            attempt_id=attempt_id, source=source, collection=collection, normalized=normalized, transport=transport,
+            release=release)
         history_dataset.save_dataset(session, content, normalized["raw_records"])
         findings = []
         if result.usage["provider_requests_state"] == "UNKNOWN":
@@ -743,6 +856,9 @@ class InvestigationWorker:
         _event(session, job, "ATTEMPT_FINISHED", {
             "tool": result.tool, "outcome": result.outcome, "output": result.output, "usage": result.usage,
             "provenance": result.provenance, "findings": findings, "dataset_id": str(dataset_id)}, attempt_id)
+        if binding is not None:  # in the dataset transaction: one commit saves the dataset, its result and its binding
+            history_payload_binding.record_binding(session, owner_id=job.owner_id, job_id=job.job_id,
+                                                   attempt_id=attempt_id, dataset_id=dataset_id, definition=binding)
         session.commit()
         self._after_collection_saved(job.job_id)
         job = session.get(InvestigationJobRow, job.job_id, with_for_update=True)
@@ -837,8 +953,10 @@ class InvestigationWorker:
             "dataset_verdict": dataset.content["verdict"], "evidence_class": dataset.content["evidence_class"],
             "content_label": dataset.content["content_label"], "source_id": dataset.content["source_id"],
             "access_order": [event.kind for event in _events(session, job.job_id)] + ["REPORT_SAVED"],
-            "notice": ("Descriptive comparison of synthetic recorded responses. No statistical support, profitability, "
-                       "execution or capital authority is claimed."),
+            "notice": (("Descriptive comparison of provider history. " if dataset.content["evidence_class"]
+                        == released_source_runtime.ACTUAL_CLASS else "Descriptive comparison of synthetic recorded "
+                        "responses. ") + "No statistical support, profitability, execution or capital authority is "
+                       "claimed."),
         }
         session.add(InvestigationReportRow(report_id=report_id, owner_id=job.owner_id, job_id=job.job_id,
                                            declaration_id=job.declaration_id, dataset_id=dataset.dataset_id,
@@ -861,7 +979,17 @@ class InvestigationWorker:
                     provider="KNOWN", compute="KNOWN")
             session.commit()
             return
-        if job.state == "RESERVED" and self._settings.nansen_research_mode != "authored_fixture":
+        request_row = session.get(nansen_reports.NansenRequestRow, job.declaration_id)
+        released = None if request_row is None else request_row.content.get("operating_release")
+        if job.state == "RESERVED" and released is not None:
+            refused = release_refusal(self._runtime, released["sha256"], "nansen")
+            if refused is not None:
+                _event(session, job, "SOURCE_REFUSED", {"tool": nansen_reports.TOOL, "reason": refused[0]})
+                _finish(session, job, self._settings, "UNAVAILABLE", refused[0], provider="KNOWN", compute="KNOWN")
+                session.commit()
+                return
+        if (job.state == "RESERVED" and released is None
+                and self._settings.nansen_research_mode != "authored_fixture"):
             # The composition was removed after the job was saved: refused before any effect, everything released.
             _event(session, job, "SOURCE_REFUSED", {"tool": nansen_reports.TOOL, "reason": "nansen_research_unavailable"})
             _finish(session, job, self._settings, "UNAVAILABLE", "nansen_research_unavailable",
@@ -885,8 +1013,20 @@ class InvestigationWorker:
         request_row = session.get(nansen_reports.NansenRequestRow, job.declaration_id)
         assert request_row is not None and request_row.owner_id == job.owner_id
         request = nansen_reports.saved_request(request_row)
+        released = request_row.content.get("operating_release")
+        job_id, deadline_at = job.job_id, job.deadline_at
+        cancelled = lambda: self._cancelled(job_id)  # noqa: E731
         try:
-            inner = self._nansen_transport(request.token_address)
+            inner = (self._nansen_transport(request.token_address) if released is None
+                     else release_nansen_transport(released_source_runtime.prepare_nansen(self._runtime), deadline_at,
+                                                   self._clock, cancelled))
+        except ReleaseRefused as error:  # the credential read failed: nothing was sent, everything is released
+            session.rollback()
+            job = session.get(InvestigationJobRow, job.job_id, with_for_update=True)
+            _event(session, job, "SOURCE_REFUSED", {"tool": nansen_reports.TOOL, "reason": error.code})
+            _finish(session, job, self._settings, "UNAVAILABLE", error.code, provider="KNOWN", compute="KNOWN")
+            session.commit()
+            return
         except Exception as error:  # noqa: BLE001 - nothing was sent: the composition failed before any attempt
             session.rollback()
             job = session.get(InvestigationJobRow, job.job_id, with_for_update=True)
@@ -899,12 +1039,15 @@ class InvestigationWorker:
         attempt_id = uuid.uuid4()
         _event(session, job, "ATTEMPT_STARTED", {"tool": nansen_reports.TOOL,
                                                  "tool_version": investigation_tools.TOOL_VERSION,
-                                                 "input_sha256": request_row.content["request_sha256"]}, attempt_id)
+                                                 "input_sha256": request_row.content["request_sha256"],
+                                                 **({} if released is None else {
+                                                     "operating_release": released,
+                                                     "evidence_class": self._runtime.evidence_class})}, attempt_id)
         job.state, job.updated_at = "COLLECTING", utcnow()
         session.commit()  # the original attempt is durable before any provider effect
         started = time.monotonic()
         transport = provider_composition.GuardedNansenTransport(
-            inner, lambda: self._cancelled(job.job_id), lambda: self._clock() >= job.deadline_at)
+            inner, cancelled, lambda: self._clock() >= deadline_at or (released is not None and inner.deadline_passed()))
         try:
             run = run_research(request, transport, clock=lambda: _whole_seconds(self._clock()))
         except Exception as error:  # noqa: BLE001 - any package or transport defect fails this job, liability kept
@@ -922,9 +1065,16 @@ class InvestigationWorker:
         assert request_row is not None
         settled = nansen_reports.settlement(run.evidence, transport.sent)
         report_id = uuid.uuid4()
+        stand_in = self._runtime is not None and self._runtime.release.kind == "STAND_IN"
+        labels = None if released is None else {
+            "evidence_class": self._runtime.evidence_class,
+            "transport_label": released_source_runtime.NANSEN_STAND_IN_LABEL if stand_in
+            else released_source_runtime.NANSEN_ACTUAL_LABEL, "transport_kind": self._runtime.nansen_transport_kind,
+            "notice": released_source_runtime.NANSEN_STAND_IN_NOTICE if stand_in
+            else released_source_runtime.NANSEN_ACTUAL_NOTICE, "operating_release": released}
         content = nansen_reports.report_content(
             report_id=report_id, owner_id=job.owner_id, job_id=job.job_id, request_row=request_row, run=run,
-            response_sha256=list(getattr(inner, "response_sha256", [])), settled=settled)
+            response_sha256=list(getattr(inner, "response_sha256", [])), settled=settled, labels=labels)
         session.add(nansen_reports.NansenReportRow(
             report_id=report_id, owner_id=job.owner_id, job_id=job.job_id, request_id=request_row.request_id,
             content_sha256=record_contract.sha256_hex(content), content=content, created_at=utcnow()))
@@ -937,8 +1087,10 @@ class InvestigationWorker:
             "stop_reason": run.evidence.stop_reason, "report_id": str(report_id)}, attempt_id)
         job.report_id = report_id
         stop = run.evidence.stop_reason
+        # A call the transport stopped at the saved deadline ends the job there, like a refusal at the deadline.
+        expired = stop == "DEADLINE" or (stop == "TIMEOUT" and self._clock() >= deadline_at)
         state, reason = (("CANCELLED", "cancelled_during_collection") if stop == "CANCELLED"
-                         else ("DEADLINE_EXCEEDED", "deadline_during_collection") if stop == "DEADLINE"
+                         else ("DEADLINE_EXCEEDED", "deadline_during_collection") if expired
                          else ("REPORTED", run.report.answer_state.lower()))
         _finish(session, job, self._settings, state, reason,
                 provider=settled["provider_requests"]["state"],
@@ -986,7 +1138,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
     engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
-    worker = InvestigationWorker(make_session_factory(engine), settings)
+    # The same server-owned release the API composes (none by default); see `released_runtime_bootstrap`.
+    worker = InvestigationWorker(make_session_factory(engine), settings,
+                                 research_runtime=released_runtime_bootstrap.server_research_runtime(settings))
     from edge_os_api.core import worker_loop
 
     worker_loop.exit_with(worker_loop.run("investigation worker", engine, worker.run_pending, once=args.once,

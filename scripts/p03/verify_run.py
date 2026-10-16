@@ -67,17 +67,25 @@ def tool_version(args: list[str]) -> str:
 
 def docker_resources(run_id: str) -> dict[str, list[str]]:
     """Containers and volumes that are not another run's. Unlabelled resources (the user's) and this run's are
-    compared, so a parallel labelled run cannot cause a false failure while an unrelated change still shows."""
-    def keep(listing: str) -> list[str]:
-        names = []
-        for line in listing.splitlines():
-            name, _, owner = line.partition("\t")
-            if name and owner in ("", run_id):
-                names.append(name)
-        return sorted(names)
-    containers = harness.sh(["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Label \"edge-os.test.run\"}}"], check=False).stdout
-    volumes = harness.sh(["docker", "volume", "ls", "--format", "{{.Name}}\t{{.Label \"edge-os.test.run\"}}"], check=False).stdout
-    return {"containers": keep(containers), "volumes": keep(volumes)}
+    compared, so a parallel labelled run cannot cause a false failure while an unrelated change still shows. A
+    resource labelled by another lane's local Docker rehearsal (`edge-os.rehearsal.run`) is that run's, not ours."""
+    labels = "\t{{.Label \"edge-os.test.run\"}}\t{{.Label \"edge-os.rehearsal.run\"}}"
+    containers = harness.sh(["docker", "ps", "-a", "--format", "{{.Names}}" + labels], check=False).stdout
+    volumes = harness.sh(["docker", "volume", "ls", "--format", "{{.Name}}" + labels], check=False).stdout
+    return {"containers": comparable_names(containers, run_id), "volumes": comparable_names(volumes, run_id)}
+
+
+def comparable_names(listing: str, run_id: str) -> list[str]:
+    """Names compared before and after a run, from `name<TAB>edge-os.test.run<TAB>edge-os.rehearsal.run` lines.
+
+    This run's own resources always count, whatever other label they carry, so an own leak is never hidden. Another
+    test run's resources and another lane's labelled rehearsal resources are skipped. Unlabelled resources count."""
+    names = []
+    for line in listing.splitlines():
+        name, owner, rehearsal = (line.split("\t") + ["", ""])[:3]
+        if name and (owner == run_id or (not owner and not rehearsal)):
+            names.append(name)
+    return sorted(names)
 
 
 def http(method: str, url: str, token: str | None = None, body: object = None) -> tuple[int, dict]:
@@ -395,6 +403,10 @@ def main() -> int:
                               for name in ("desktop", "mobile-390")})
         # RESEARCH-PORTS-LOCAL journey: one more owner per width for the HTTP-client job and the Nansen report.
         native_tokens.update({f"ports-{name}": signer.token(f"did:privy:test-ports-{name}") for name in ("desktop", "mobile-390")})
+        # RESEARCH-RUNTIME-LOCAL journey: one owner per width for the stand-in release job and one per fault case, so
+        # each 27-request job fits that owner's research budget.
+        native_tokens.update({f"release-{name}": signer.token(f"did:privy:test-release-{name}")
+                              for name in ("desktop", "mobile-390", "kill", "stale", "missing")})
         token_bad = TestSigner().token(OWNER_A)
         p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
         rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
@@ -414,6 +426,10 @@ def main() -> int:
                       "P03_TOKEN_REC_MOBILE_390": native_tokens["rec-mobile-390"],
                       "P03_TOKEN_PORTS_DESKTOP": native_tokens["ports-desktop"],
                       "P03_TOKEN_PORTS_MOBILE_390": native_tokens["ports-mobile-390"],
+                      "P03_TOKEN_RELEASE_DESKTOP": native_tokens["release-desktop"],
+                      "P03_TOKEN_RELEASE_MOBILE_390": native_tokens["release-mobile-390"],
+                      "P03_RELEASE_FAULT_TOKENS": json.dumps({name: native_tokens[f"release-{name}"]
+                                                              for name in ("kill", "stale", "missing")}),
                       "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
                       "P19_AGENT_B_RECORD_ID": p19_fixtures["agent_record_ids"]["agent-b"],
                       "P19_LONG_MONITORING_RECORD_ID": p19_fixtures["long_monitoring_record_id"],
@@ -502,6 +518,11 @@ def main() -> int:
                                 "spot_replay_configurations": len(storage_before_restart["spot_replay_configurations"])})
                 # After every restart comparison, so its writes cannot change them.
                 ok &= runtime_phase.drive(rec, pg, env, evidence, ui_env, run_playwright, processes, signer)
+                # The operating-release composition over an owned loopback stand-in provider. It runs its own API and
+                # worker processes and ends by starting the standard API again, which later phases use.
+                release_ok, api = research_phase.run_release_phase(rec, pg, env, api_port, api_url, evidence, ui_env,
+                                                                   run_playwright, api, processes)
+                ok &= release_ok
 
         if not args.skip_ui and not args.skip_p05:
             ok &= run_p05_phase(rec, pg, env, api_port, api_url, evidence, run_id, ui_env, token_a, token_b,

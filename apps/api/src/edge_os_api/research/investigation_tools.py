@@ -57,7 +57,7 @@ def collect_recorded_history(source: Mapping[str, Any], bounds: Mapping[str, Any
     transport = None
     if source["evidence_class"] in history_dataset.NATIVE_SHAPED:
         base_clients = None
-        if source["evidence_class"] == history_dataset.HTTP_CLASS:
+        if source["evidence_class"] == history_dataset.HTTP_CLASS or "release" in source:
             if http_clients is None:
                 raise ValueError("the HTTP source needs the application's composed HTTP clients")
             base_clients = http_clients(source, bounds, cancelled)

@@ -368,14 +368,18 @@ def _history_refusal(status: int, code: str, path: str, detail: str) -> AppError
     return AppError(status, "INVESTIGATION", kind, code, [finding(code, path, detail)])
 
 
-def _check_history_configuration(body: HistoryInvestigationBody) -> dict[str, Any]:
-    """Bind the declaration to one served recorded source and the user's own rules. Returns that source."""
+def _check_history_configuration(body: HistoryInvestigationBody, runtime: Any = None) -> dict[str, Any]:
+    """Bind the declaration to one served source and the user's own rules. Returns that source.
+
+    `runtime` is the composed operating release, if any; its one history source is served only while it is composed."""
     config = body.configuration
-    if config.source.evidence_class == "PROVIDER_ACTUAL":
+    source = history_dataset.served_sources(runtime).get(config.source.source_id)
+    if config.source.evidence_class == "PROVIDER_ACTUAL" and (
+            source is None or source["evidence_class"] != "PROVIDER_ACTUAL"):
+        # Only an approved actual release, composed by this server, serves actual history; none is approved.
         raise _history_refusal(409, "actual_data_not_authorized", "/configuration/source/evidence_class",
                                "Actual provider history needs a separately approved data packet. "
                                "Only recorded responses are available.")
-    source = history_dataset.recorded_sources().get(config.source.source_id)
     if source is None:
         raise _history_refusal(422, "unsupported_history_source", "/configuration/source/source_id",
                                "Choose one of the listed recorded sources.")
@@ -393,6 +397,9 @@ def _check_history_configuration(body: HistoryInvestigationBody) -> dict[str, An
         raise _history_refusal(422, "history_window_unsupported", "/configuration/window",
                                "Only the declared source's recorded window is supported.")
     bounds = config.resource_bounds
+    if "release" in source and bounds.model_dump() != source["release"]["history"]["limits"]:
+        raise _history_refusal(422, "release_bounds_mismatch", "/configuration/resource_bounds",
+                               "This source runs under a fixed operating release. Use its listed limits exactly.")
     if bounds.max_pages < history_dataset.page_requests(source):
         raise _history_refusal(422, "resource_bounds_too_small", "/configuration/resource_bounds/max_pages",
                                f"This source needs {history_dataset.page_requests(source)} page requests.")
@@ -427,7 +434,7 @@ def parse_utc_text(value: str) -> dt.datetime:
 
 
 def create_history_declaration(session: Session, principal: Principal, intake_id: str,
-                               body: HistoryInvestigationBody) -> tuple[int, dict[str, Any]]:
+                               body: HistoryInvestigationBody, runtime: Any = None) -> tuple[int, dict[str, Any]]:
     """Save one v3 declaration and its first access event before any collection, outcome or provider request."""
     intake = get_owned(session, principal, intake_id, "IntakeRequest")
     if intake.content["requested_job"] != "INVESTIGATE_EFFECT":
@@ -438,7 +445,7 @@ def create_history_declaration(session: Session, principal: Principal, intake_id
                                  fingerprint)
     if replay is not None:
         return replay
-    source = _check_history_configuration(body)
+    source = _check_history_configuration(body, runtime)
     intake = lock_intake(session, principal, intake_id)
     interpretation = head_interpretation(intake_rows(session, principal, intake.record_id))
     current_revision_id = interpretation.content["interpretation_revision_id"] if interpretation is not None else None
@@ -479,7 +486,9 @@ def create_history_declaration(session: Session, principal: Principal, intake_id
         "frozen": {"configuration_sha256": record_contract.sha256_hex(configuration),
                    "rule_map_sha256": record_contract.sha256_hex(rule_map),
                    "source_profile_sha256": history_dataset.profile_sha256(source),
-                   "scan": dict(source["scan"]), "frozen_at": record_contract.utc_string(now)},
+                   "scan": dict(source["scan"]), "frozen_at": record_contract.utc_string(now),
+                   **({"operating_release_id": source["release"]["release_id"],
+                       "operating_release_sha256": source["release"]["sha256"]} if "release" in source else {})},
         "declaration_state": "PRE_OUTCOME_DECLARED",
         "outcome_labels_read": False,
     }

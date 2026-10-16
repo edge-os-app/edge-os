@@ -1,0 +1,57 @@
+{
+  "notice": "AUTHORED. Hand-written expected request for test_privy_signer.py. Sentinel credentials, never real values.",
+  "wallet_id": "wallet_abc-123",
+  "body": {
+    "method": "eth_signTransaction",
+    "params": {
+      "transaction": {
+        "type": 2,
+        "chain_id": 143,
+        "nonce": 7,
+        "to": "0x00000000000000000000000000000000000f1007",
+        "value": 0,
+        "data": "0x12345678",
+        "gas_limit": 300000,
+        "max_fee_per_gas": 3000000000,
+        "max_priority_fee_per_gas": 1000000000
+      }
+    }
+  },
+  "url": "https://api.privy.io/v1/wallets/wallet_abc-123/rpc",
+  "wire_body": "{\"method\":\"eth_signTransaction\",\"params\":{\"transaction\":{\"chain_id\":143,\"data\":\"0x12345678\",\"gas_limit\":300000,\"max_fee_per_gas\":3000000000,\"max_priority_fee_per_gas\":1000000000,\"nonce\":7,\"to\":\"0x00000000000000000000000000000000000f1007\",\"type\":2,\"value\":0}}}",
+  "headers": {
+    "authorization": "Basic YXBwLXRlc3QtMTpzZW50aW5lbC1zZWNyZXQtQWJDMTIz",
+    "content-type": "application/json",
+    "privy-app-id": "app-test-1",
+    "privy-authorization-signature": "c2lnbmF0dXJlLXNlbnRpbmVsLVh5Wg==",
+    "privy-idempotency-key": "attempt-0001",
+    "privy-request-expiry": "1790000000000"
+  },
+  "authorization_payload": {
+    "version": 1,
+    "method": "POST",
+    "url": "https://api.privy.io/v1/wallets/wallet_abc-123/rpc",
+    "body": {
+      "method": "eth_signTransaction",
+      "params": {
+        "transaction": {
+          "type": 2,
+          "chain_id": 143,
+          "nonce": 7,
+          "to": "0x00000000000000000000000000000000000f1007",
+          "value": 0,
+          "data": "0x12345678",
+          "gas_limit": 300000,
+          "max_fee_per_gas": 3000000000,
+          "max_priority_fee_per_gas": 1000000000
+        }
+      }
+    },
+    "headers": {
+      "privy-app-id": "app-test-1",
+      "privy-idempotency-key": "attempt-0001",
+      "privy-request-expiry": "1790000000000"
+    }
+  },
+  "canonical_authorization_payload": "{\"body\":{\"method\":\"eth_signTransaction\",\"params\":{\"transaction\":{\"chain_id\":143,\"data\":\"0x12345678\",\"gas_limit\":300000,\"max_fee_per_gas\":3000000000,\"max_priority_fee_per_gas\":1000000000,\"nonce\":7,\"to\":\"0x00000000000000000000000000000000000f1007\",\"type\":2,\"value\":0}}},\"headers\":{\"privy-app-id\":\"app-test-1\",\"privy-idempotency-key\":\"attempt-0001\",\"privy-request-expiry\":\"1790000000000\"},\"method\":\"POST\",\"url\":\"https://api.privy.io/v1/wallets/wallet_abc-123/rpc\",\"version\":1}"
+}

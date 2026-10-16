@@ -3,7 +3,9 @@
 The adapter copies one owner's saved, hash-verified dataset into `ReplayDataset` and `ReplayBucket` values. It never
 changes a bucket, fills a gap, moves an availability time, upgrades a verdict or relabels evidence: the runtime's own
 checks decide warm-up, coverage, truncation, lookahead and market identity. The P07 profile's evidence class is passed
-through as stated, so an actual-provider dataset is refused by the runtime until a separately reviewed change exists.
+through as stated. `PROVIDER_ACTUAL` passes only from a dataset an approved actual release wrote (source class
+`PROVIDER_ACTUAL`, saved release kind `ACTUAL`); the runtime then applies the same qualification, coverage and market
+checks as to a fixture, so the class upgrades nothing.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding
 from edge_os_api.replay import simulator as spot_replay
 from edge_os_api.records import contract_adapter as record_contract
-from edge_os_api.research import history_dataset
+from edge_os_api.research import history_dataset, history_payload_binding
 from edge_os_api.strategies import compiler as strategy_compiler
 
 INPUT_VERSION = "edge-os.history-replay-input/1"
@@ -38,6 +40,13 @@ def load(session: Session, principal: Principal, dataset_id: str) -> history_dat
     return row
 
 
+def payload_binding(session: Session, principal: Principal,
+                    row: history_dataset.HistoryDatasetRow) -> dict[str, Any]:
+    """The dataset's required payload binding, rechecked on the current saved data. Refuses before anything is saved."""
+    return history_payload_binding.require_bound(session, principal, row, stage="SPOT_REPLAY",
+                                                 path="/history_dataset_id")
+
+
 def refuse_protected(session: Session, row: history_dataset.HistoryDatasetRow, window_end: dt.datetime) -> None:
     """Refuse a window that would pass validation or holdout buckets to the runtime. Nothing is read or saved."""
     protected = history_dataset.protected_from(session, row)
@@ -51,6 +60,13 @@ def refuse_protected(session: Session, row: history_dataset.HistoryDatasetRow, w
 def replay_dataset(row: history_dataset.HistoryDatasetRow, window_end: dt.datetime) -> spot_replay.ReplayDataset:
     """Every saved bucket that ends before the run's exclusive end, unchanged. Later buckets are not passed in."""
     content = row.content
+    if content["profile_evidence_class"] == "PROVIDER_ACTUAL" and (
+            content["evidence_class"] != "PROVIDER_ACTUAL"
+            or (content.get("operating_release") or {}).get("kind") != "ACTUAL"):
+        raise AppError(409, "SPOT_REPLAY", "CONFLICTED", "evidence_class_inconsistent",
+                       [finding("evidence_class_inconsistent", "/history_dataset_id",
+                                "Only a dataset an approved actual release collected can be replayed as provider "
+                                "history. Nothing was replayed.")])
     market_id = content["market_binding_id"] or ""
     buckets = []
     for bucket in content["buckets"]:
@@ -89,10 +105,13 @@ def rule_linkage(session: Session, row: history_dataset.HistoryDatasetRow, strat
             "rule_map_sha256": None if declaration is None else declaration.content["frozen"]["rule_map_sha256"]}
 
 
-def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any],
-             linkage: dict[str, Any]) -> dict[str, Any]:
-    """The lineage saved beside the replay: exact dataset, declaration, job, source and both market identities."""
+def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any], linkage: dict[str, Any],
+             binding: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The lineage saved beside the replay: exact dataset, declaration, job, source and both market identities, plus
+    the payload-binding report identity when one is required. It enters the run-configuration identity, so a changed
+    binding under a reused configuration ID is the existing configuration conflict."""
     content = row.content
+    lineage = None if binding is None else history_payload_binding.lineage(binding)
     return {
         "schema_version": INPUT_VERSION, "dataset_id": str(row.dataset_id),
         "dataset_content_sha256": row.content_sha256, "normalized_sha256": content["normalized_sha256"],
@@ -107,4 +126,5 @@ def snapshot(row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any],
         "rule_linkage": linkage, "fill_label": FILL_LABEL,
         "fill_assumptions": {"price": "bucket close of the decision bucket", "costs": strategy["cost_assumptions"],
                              "not_modeled": ["gas", "spread", "extra price impact", "capacity"]},
+        **({} if lineage is None else {"payload_binding": lineage}),
     }

@@ -88,7 +88,8 @@ export async function declare(section, { source, hypothesis, direction = "OUTPER
     await form.getByLabel(`Rule ${index + 1} return threshold`).fill(rule.threshold);
     await form.getByLabel(`Rule ${index + 1} volume threshold`).fill(rule.volume);
   }
-  await form.getByLabel("Bound provider_requests").fill(providerRequests);
+  // An operating-release source fixes its bounds; the field is read-only there (pass null).
+  if (providerRequests !== null) await form.getByLabel("Bound provider_requests").fill(providerRequests);
   await form.getByLabel("I reviewed and adopt every setting above before any data is read").check();
   await form.getByRole("button", { name: "Save history declaration" }).click();
   await expect(section.getByText("Declaration saved before any collection. No data was read.")).toBeVisible();

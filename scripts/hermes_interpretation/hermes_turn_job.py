@@ -18,6 +18,9 @@ INPUT = Path("/job/input.json")
 OUTPUT = Path("/job/output")
 PINNED_HERMES = "54bc5e509c985f37265c3d416bd2c64b10fc77ba"
 ADMITTED_REQUESTS = 1
+# Where pinned Hermes puts each request field the guard policy requires: top level, or merged from `extra_body`.
+TOP_LEVEL_EXTRA = ("stream", "response_format")
+BODY_EXTRA = ("provider", "reasoning", "prompt_cache_options")
 
 
 def write_json(path: Path, value: object) -> None:
@@ -145,6 +148,23 @@ class FakeProvider:
             stream.write(json.dumps(receipt, sort_keys=True) + "\n")
 
 
+def request_options(job: dict) -> dict:
+    """The AIAgent options that make Hermes send the request fields the job's guard policy requires, exactly.
+
+    An empty or absent policy adds nothing, so AUTHORED jobs build the same agent as before. A required field this
+    mapping does not know is not sent, and the guard then refuses the request before anything leaves the job.
+    """
+    required = (job.get("guard") or {}).get("policy", {}).get("required_extra") or {}
+    overrides = {name: required[name] for name in TOP_LEVEL_EXTRA if name in required}
+    body = {name: required[name] for name in BODY_EXTRA if name in required}
+    if body:
+        overrides["extra_body"] = body
+    options: dict = {"request_overrides": overrides} if overrides else {}
+    if "reasoning" in required:  # Hermes' own reasoning setting must agree with the routed value it overrides
+        options["reasoning_config"] = required["reasoning"]
+    return options
+
+
 def run_hermes(job: dict) -> dict:
     home = Path(os.environ["HERMES_HOME"])
     home.mkdir(parents=True, exist_ok=True)
@@ -161,7 +181,8 @@ def run_hermes(job: dict) -> dict:
         base_url="https://fake-provider.invalid/v1", api_key="fixture-only-not-a-secret", provider="openrouter",
         model=job["model"], max_iterations=2, max_tokens=job["max_output_tokens"], enabled_toolsets=[],
         save_trajectories=False, quiet_mode=True, session_id=f"p05-{job['attempt_id']}", skip_context_files=True,
-        skip_memory=True, skip_background_review=True, fallback_model=None, run_budget_seconds=job["run_budget_seconds"])
+        skip_memory=True, skip_background_review=True, fallback_model=None, run_budget_seconds=job["run_budget_seconds"],
+        **request_options(job))
     agent._api_max_retries = 1
     agent._auto_recovery_cycles = 0
     agent._disable_streaming = True

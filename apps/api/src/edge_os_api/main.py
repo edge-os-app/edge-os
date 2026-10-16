@@ -20,13 +20,13 @@ from edge_os_api.accounts import views as account_views
 from edge_os_api.agent_context import controls as agent_context
 from edge_os_api.research import comparison_runs as effect_run
 from edge_os_api.research import investigation_adoption as investigation_adoption
-from edge_os_api.research import history_dataset, investigation_jobs, market_adoption
+from edge_os_api.research import history_dataset, history_payload_binding, investigation_jobs, market_adoption
 from edge_os_api.usage import quota, rate_limit
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service as service
 from edge_os_api.research.attempt_store import AdvisoryLockGuard
-from edge_os_api.research.hermes_interpreter import HermesTurnRunner
-from edge_os_api.research.interpretation_workflow import HermesResearch
+from edge_os_api.research.hermes_interpreter import HermesInterpreterConfig, HermesTurnRunner
+from edge_os_api.research.interpretation_workflow import LOCAL_FAKE_CONFIG, HermesResearch
 from edge_os_api.replay import saved_runs as spot_replay_api
 from edge_os_api.core.authentication import Principal, Verifier, require_principal
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
@@ -34,6 +34,9 @@ from edge_os_api.core.errors import AppError, finding, install_handlers, invalid
 from edge_os_api.research.fixture_interpreter import samples
 from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, NansenReportBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
+from edge_os_api.core.research import released_runtime_bootstrap
+from edge_os_api.core.research.operating_release import ReleaseRefused
+from edge_os_api.core.research.released_source_runtime import ReleasedSourceRuntime, release_view
 from edge_os_api.wallet_setup import router as wallet_setup
 from edge_os_api.wallet_setup.adapter import build_wallet_provider
 from edge_os_api.consent import routes as consent_routes
@@ -103,14 +106,41 @@ def parse_body(model: type[ModelT], data: Any) -> ModelT:
         raise AppError(422, "VALIDATION", "INVALID_INPUT", "validation_error", findings) from None
 
 
-def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner | None = None,
+               research_runtime: ReleasedSourceRuntime | None = None,
+               hermes_config: HermesInterpreterConfig | None = None) -> FastAPI:
     """Compose the application. `hermes_runner` is the process boundary of the local Hermes interpreter.
 
-    Only the `hermes_local` setting uses it, and that setting needs it. Nothing here reaches a real provider.
+    Only the `hermes_local` setting uses it, and that setting needs it. `hermes_config` is the interpreter configuration
+    of the release that runner serves (`research/hermes_relay_composition.py`); without one the runner serves the local
+    fake provider configuration. A configuration needs its runner and is refused in production.
+
+    `research_runtime` is a composed operating release (`core/research/released_source_runtime.py`). Without one, the
+    server bootstrap composes the approved code-owned release, the same one the worker composes; none exists and no
+    setting adds one, so the default reaches no provider.
     """
     settings = settings or load_settings()
     if settings.interpreter == "hermes_local" and hermes_runner is None:
         raise ConfigError("invalid configuration: interpreter: hermes_local needs a Hermes runner")
+    if hermes_config is not None and (settings.interpreter != "hermes_local" or hermes_runner is None
+                                      or settings.env == "production"):
+        raise ConfigError("invalid configuration: interpreter: a Hermes release configuration needs hermes_local, "
+                          "its Hermes runner and a non-production environment")
+    if research_runtime is None:
+        try:
+            research_runtime = released_runtime_bootstrap.server_research_runtime(settings)
+        except ReleaseRefused as error:
+            raise ConfigError(f"invalid configuration: research_runtime: {error.code}") from None
+    if research_runtime is not None:
+        if research_runtime.release.kind == "STAND_IN" and settings.env == "production":
+            raise ConfigError("invalid configuration: research_runtime: a stand-in release is refused in production")
+        if research_runtime.release.nansen is not None and settings.nansen_research_mode != "unavailable":
+            raise ConfigError("invalid configuration: research_runtime: a release Nansen part and "
+                              "nansen_research_mode cannot both serve Nansen reports")
+        try:
+            history_dataset.check_release_source(research_runtime)
+        except ReleaseRefused as error:
+            raise ConfigError(f"invalid configuration: research_runtime: {error.code}") from None
     engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     try:
         require_head(engine)
@@ -122,7 +152,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     wallet_provider = build_wallet_provider(settings.wallet_provider)
     session_factory = make_session_factory(engine)
     started_at = service.utcnow().isoformat()
-    hermes = (HermesResearch(hermes_runner, session_factory, AdvisoryLockGuard(engine), time.monotonic)
+    hermes = (HermesResearch(hermes_runner, session_factory, AdvisoryLockGuard(engine), time.monotonic,
+                             hermes_config or LOCAL_FAKE_CONFIG)
               if settings.interpreter == "hermes_local" and hermes_runner is not None else None)
 
     @asynccontextmanager
@@ -141,6 +172,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     app.state.settings, app.state.verifier = settings, verifier
     app.state.engine, app.state.session_factory, app.state.hermes = engine, session_factory, hermes
     app.state.wallet_provider = wallet_provider
+    app.state.research_runtime = research_runtime
     # One composition of the accepted financial services. Its provider ports follow `execution_mode`:
     # authored fixtures in local/test configuration, fail-closed unavailable ports in production.
     app.state.financial = build_financial_services(session_factory, settings)
@@ -273,8 +305,9 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/research/history-sources")
     def history_sources() -> dict[str, Any]:
         """The declared recorded sources. All are SYNTHETIC recordings; none is observed market history."""
-        return {**history_dataset.catalog(settings.research_source_clients == "authored_http"),
-                "mode": settings.research_history_mode, "source_clients": settings.research_source_clients}
+        return {**history_dataset.catalog(settings.research_source_clients == "authored_http", research_runtime),
+                "mode": settings.research_history_mode, "source_clients": settings.research_source_clients,
+                "operating_release": None if research_runtime is None else release_view(research_runtime)}
 
     @private.post("/research/requests/{intake_id}/history-investigations")
     def save_history_investigation(intake_id: str, data: Any = Depends(read_json),
@@ -282,7 +315,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
                                    session: Session = Depends(get_session)) -> JSONResponse:
         body = parse_body(HistoryInvestigationBody, data)
         status, result = run(session, lambda: investigation_adoption.create_history_declaration(
-            session, principal, intake_id, body), retry="RECONCILE")
+            session, principal, intake_id, body, research_runtime), retry="RECONCILE")
         return JSONResponse(result, status_code=status)
 
     @private.get("/research/requests/{intake_id}/history-investigations")
@@ -303,7 +336,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
                                 session: Session = Depends(get_session)) -> JSONResponse:
         body = parse_body(InvestigationJobBody, data)
         status, result = run(session, lambda: investigation_jobs.start_job(
-            session, principal, settings, intake_id, declaration_id, body), retry="RECONCILE")
+            session, principal, settings, intake_id, declaration_id, body, research_runtime), retry="RECONCILE")
         return JSONResponse(result, status_code=status)
 
     @private.get("/research/requests/{intake_id}/history-investigations/{declaration_id}/jobs")
@@ -334,14 +367,14 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
                             session: Session = Depends(get_session)) -> JSONResponse:
         body = parse_body(NansenReportBody, data)
         status, result = run(session, lambda: investigation_jobs.start_nansen_job(
-            session, principal, settings, intake_id, body), retry="RECONCILE")
+            session, principal, settings, intake_id, body, research_runtime), retry="RECONCILE")
         return JSONResponse(result, status_code=status)
 
     @private.get("/research/requests/{intake_id}/nansen-reports")
     def list_nansen_reports(intake_id: str, principal: Principal = Depends(require_principal),
                             session: Session = Depends(get_session)) -> Any:
         return run(session, lambda: investigation_jobs.list_nansen_jobs(session, principal, settings,
-                                                                                 intake_id))
+                                                                                 intake_id, research_runtime))
 
     @private.get("/research/nansen-reports/{report_id}")
     def get_nansen_report(report_id: str, principal: Principal = Depends(require_principal),
@@ -356,8 +389,11 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/research/history-datasets/{dataset_id}")
     def get_history_dataset(dataset_id: str, principal: Principal = Depends(require_principal),
                             session: Session = Depends(get_session)) -> Any:
-        return run(session, lambda: history_dataset.dataset_view(
-            history_dataset.owned_dataset(session, principal, dataset_id)))
+        def view() -> dict[str, Any]:
+            row = history_dataset.owned_dataset(session, principal, dataset_id)
+            return {**history_dataset.dataset_view(row),
+                    "payload_binding": history_payload_binding.binding_state(session, row, principal.user_id)}
+        return run(session, view)
 
     @private.post("/research/requests/{intake_id}/market-adoptions")
     def adopt_market(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),

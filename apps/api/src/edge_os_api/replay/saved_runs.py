@@ -200,6 +200,7 @@ def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
     """The owner's saved dataset through the unchanged runtime. The runtime decides every refusal."""
     row = history_inputs.load(session, principal, body.history_dataset_id or "")
     history_inputs.refuse_protected(session, row, body.window_end)
+    binding = history_inputs.payload_binding(session, principal, row)
     dataset = history_inputs.replay_dataset(row, body.window_end)
     try:
         profile_hash = _sha256(PROFILE_PATH)
@@ -211,7 +212,8 @@ def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
         "strategy_revision_id": body.strategy_revision_id, "strategy_id": body.strategy_id,
         "strategy_sha256": record_contract.sha256_hex(strategy), "strategy": strategy,
         "run_configuration_id": body.run_configuration_id, "dataset_fixture_id": None,
-        "history_input": history_inputs.snapshot(row, strategy, history_inputs.rule_linkage(session, row, strategy)),
+        "history_input": history_inputs.snapshot(row, strategy, history_inputs.rule_linkage(session, row, strategy),
+                                                 binding),
         "dataset_revision_id": dataset.revision_id, "dataset_qualification": dataset.qualification,
         "coverage_complete": dataset.coverage_complete, "evidence_class": dataset.evidence_class,
         "profile_sha256": profile_hash, "market_binding_id": dataset.market_binding_id,
@@ -228,6 +230,15 @@ def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
         initial_cash_quote=body.initial_cash_quote, initial_base_amount=body.initial_base_amount,
         initial_basis_quote=body.initial_basis_quote)
     return snapshot, run_input, dataset.evidence_class
+
+
+def notice_for(evidence_class: str) -> str:
+    """The saved notice of a replay on an owner dataset. Provider history still claims only hypothetical fills."""
+    if evidence_class == "PROVIDER_ACTUAL":
+        return ("Hypothetical simulated fills on saved provider history. No gas, spread, additional impact, or capacity "
+                "model. No statistical support or profitability is claimed. No trading permission.")
+    return ("Simulated fills on a saved recorded-history dataset. Synthetic recorded responses, not observed "
+            "market history. No gas, spread, additional impact, or capacity model. No trading permission.")
 
 
 def create_spot_replay(session: Session, principal: Principal, body: SpotReplayBody) -> tuple[int, dict[str, Any]]:
@@ -264,8 +275,7 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
     strategy = revision["strategy"]
     if body.history_dataset_id is not None:
         snapshot, run_input, evidence_class = _history_run(session, principal, body, strategy)
-        notice = ("Simulated fills on a saved recorded-history dataset. Synthetic recorded responses, not observed "
-                  "market history. No gas, spread, additional impact, or capacity model. No trading permission.")
+        notice = notice_for(evidence_class)
     else:
         snapshot, run_input = _fixture_run(session, principal, body, strategy)
         evidence_class = "SYNTHETIC_FIXTURE"

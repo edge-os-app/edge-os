@@ -42,6 +42,7 @@ textarea.input { min-height: 120px; line-height: 1.5; }
 .btn-primary { background: var(--color-accent-700); color: var(--color-neutral-100); }
 .btn-primary:hover:not(:disabled) { background: var(--color-accent-800); }
 .btn-primary:active:not(:disabled) { background: var(--color-accent-900); }
+.btn-primary:disabled { background: var(--color-accent-700); } /* block organic's lighter hover fill; re-enabling must not fade in from it */
 .btn-ghost { color: var(--color-accent-text); }
 .btn-row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }

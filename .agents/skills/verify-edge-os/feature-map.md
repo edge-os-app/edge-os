@@ -146,6 +146,32 @@ select scope, reserved, consumed, unknown from usage_local.usage_allocations whe
 
 Fault cases (401/402/403/429, malformed and oversized replies, wrong-token echo, HTTP receipt mismatch, lost replies, missing credit header, package request/credit limit refusals, cancel and deadline, killed worker, failed report save, composition fault, invalid request, budget refusal, repeated key, other owner, removed composition, production refusal, rollback refusal below 0011, HTTP dataset adoption and replay) are proved by `apps/api/tests/test_research_ports_journey.py` on its own database, not by the mapped run.
 
+## Operating-release research composition (#58 RESEARCH-RUNTIME-LOCAL)
+
+After the Stage 2 runtime phase, `run_release_phase` in `scripts/p03/research_phase.py` stops the standard API and starts its own processes on the same port and database: an owned loopback STAND-IN provider (`apps/api/tests/operating_release_stand_in.py`, request log `<evidence>/research-release/stand-in-requests.jsonl`), an API whose `create_app` receives the stand-in release `stand-in-loopback/1`, and bounded worker processes that receive the same release. No setting composes a release; the standard API lists no release source. The history transport is the accepted `StdlibHttpTransport`, reaching only 127.0.0.1. The verifier mints three more owners (`did:privy:test-release-desktop`, `…-mobile-390`, `…-faults`). Contract: `docs/qualification/research-provider-composition/CONTRACT.md`.
+
+| Feature | Screen path | API | Tables | Expected | After restart | Evidence |
+|---|---|---|---|---|---|---|
+| Declare on the release source | Research request → Recorded source = "Stand-in release over native-syn-qualified/1 (not provider data)" → own rule → adopt → Save → Start investigation job | `GET /v1/research/history-sources` (`operating_release`, `release`), `POST …/history-investigations`, `POST …/jobs` | `investigation_declarations` (`frozen.operating_release_sha256`), `investigation_jobs` | class `RELEASE_STAND_IN_RESPONSE`; release text with fixed limits and hosts 127.0.0.1; bounds read-only, 27; declaration shows the release id and SHA-256; reserved 27; stand-in log empty | — | `*-rg-r1-release-declared.png` |
+| Release dataset and report | One release worker pass, open the declaration | `GET /v1/research/investigation-jobs/{id}`, `GET /v1/research/history-datasets/{id}` | `history_datasets`, `investigation_reports` | REPORTED, QUALIFIED; "Operating release stand-in-loopback/1 … over loopback http. Stand-in responses, not provider data; 27 request hashes kept"; `transport_kind` `LOOPBACK_HTTP`; release identity, query hash, hosts, coverage met, collection times; usage MEASURED 27 | byte-equal; worker pass sends nothing | `research-release-inspection.json`, `*-rg-r2-release-report.png` |
+| Adoption and replay | Strategy request → adopt the release dataset's market → Save → replay on it | `POST …/market-adoptions`, `POST /v1/spot-replays` | `strategy_revisions`, `spot_replay_runs` | COMPLETE; lineage `RELEASE_STAND_IN_RESPONSE`, "simulated fills", entry is the declared rule | loads the saved result | `*-rg-r3-release-replay.png`, `*-rg-r4-release-reopened.png` |
+| Killed worker | Verifier ends the worker after the first stand-in reply (exit 9) | worker pass | `investigation_events` | UNAVAILABLE `collection_outcome_unknown`; whole reservation unknown; one attempt; the stand-in log has exactly one request for it | no second request | `research-release-inspection.json` |
+| Changed release / missing credential | Worker composed with `stand-in-loopback/2`, or without the QuickNode credential | worker pass | `investigation_jobs` | UNAVAILABLE `operating_release_changed` / `operating_release_credential_unavailable`; everything released; no request | unchanged | `research-release-inspection.json` |
+| Stand-in request log | — | — | — | entries = saved request hashes plus the killed job's one; every entry carried the stand-in credential | unchanged | `research-release/stand-in-requests.jsonl` |
+| Default composition | Standard API after the phase | `GET …/history-sources`, `POST …/jobs` on a saved release declaration | none | no release source listed; `409 operating_release_unavailable` | — | `steps.json` |
+| Other owner | Owner B reads the job, report, dataset, replay and declaration | `GET` → 404 | none | not found | 404 | `ui-research-release-*.log` |
+| Leak scan | — | — | research rows | no stand-in credential sentinel in logs, browser results, the request log or saved rows | — | `steps.json` |
+
+```sql
+select j.state, j.terminal_reason, j.budget->'consumed', d.content->>'evidence_class', d.content->>'transport_kind',
+       d.content->'operating_release', jsonb_array_length(d.content->'transport'->'request_sha256')
+from research_local.investigation_jobs j left join research_local.history_datasets d using (dataset_id)
+where j.declaration_id in (select declaration_id from investigation_declarations
+                           where content->'frozen' ? 'operating_release_sha256');
+```
+
+Fault cases (absent, changed and unapproved releases, missing or foreign credentials, budget refusal, concurrent starts on one key and over the owner cap, other owner, cancel before and during collection, the per-call deadline bound, 401/429/500 pages, lost reply, killed worker, limited, contrary and lost histories, the in-process recording and loopback transports, actual-release labels and production refusal, the release Nansen report and its refusals) are proved by `apps/api/tests/test_operating_release_research.py` on its own database.
+
 ## Recurring operation with the browser closed (#58 P27 LOCAL)
 
 `scripts/p03/recurring_phase.py` runs after the research phase. Two owners (one per width: `did:privy:test-recurring-desktop` and `did:privy:test-recurring-mobile-390`) each save a revision, set up and fund an agent, adopt exact terms and start recurring operation through the screens. The browser then closes. Separate `edge_os_api.execution.recurring_producer` processes run `--once` at fixed slot offsets from one mid-slot anchor (`--clock-offset-minutes`, LOCAL fixture mode only). They record their authored fixture effects in `<evidence>/recurring-effects.jsonl`, apart from the financial phase's record. The desktop agent trades normally. The 390px agent (`fx-lost-ack`) loses every acknowledgement, so each action stays unknown until the next pass reconciles it from its receipt.
