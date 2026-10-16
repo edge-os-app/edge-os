@@ -38,15 +38,20 @@ class OwnerBoundLookupProvider:
         return OwnerBoundLookupProvider(self.socket_path, self.owner_id, self.privy_did, self.timeout, address)
 
     def lookup_wallet(self, wallet_id: str) -> WalletEvidence | None:
-        address = self.claimed_address
-        if not (valid_did(self.privy_did) and valid_address(address) and valid_wallet_id(wallet_id)):
+        return self.lookup_claim(self.claimed_address, wallet_id)
+
+    def lookup_claim(self, address: str | None, wallet_id: str | None) -> WalletEvidence | None:
+        """One owner-bound lookup for an exact address claim, with or without a returned wallet ID."""
+        if not (valid_did(self.privy_did) and valid_address(address)
+                and (wallet_id is None or valid_wallet_id(wallet_id))):
             return None
         reply = self._ask({"op": LOOKUP_OPERATION, "did": self.privy_did, "address": address,
                            "wallet_id": wallet_id})
         if reply.get("status") != "matched":
             return None
         found_id, found_address = reply.get("wallet_id"), reply.get("address")
-        if not (found_id == wallet_id and isinstance(found_address, str) and address is not None
+        if not (valid_wallet_id(found_id) and (wallet_id is None or found_id == wallet_id)
+                and isinstance(found_address, str) and address is not None
                 and found_address.lower() == address.lower() and reply.get("chain_type") == "ethereum"):
             return None
         return WalletEvidence(wallet_id=found_id, owner_id=self.owner_id, chain_type="ethereum",

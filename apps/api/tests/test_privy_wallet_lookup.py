@@ -295,3 +295,140 @@ def test_provider_info_reports_lookup_mode_without_fixture_counters():
 
     info = provider_info(OwnerBoundLookupProvider("/tmp/l.sock", uuid.uuid4(), DID))
     assert info == {"provider": "privy_lookup", "create_calls": None, "lookup_calls": None}
+
+
+# Source2: by-address fallback, address-only claims, retained-claim resume, socket target -----------------------
+
+RECORD = {"id": "resolved-wallet", "address": ADDR, "chain_type": "ethereum", "owner_id": "quorum-x", "policy_ids": []}
+
+
+def test_null_linked_id_resolves_only_through_exact_address_record():
+    user = _user(_wallet(id=None))
+    matched = match_claim(user, DID, ADDR, None, wallet_record=RECORD)
+    assert matched is not None and matched.wallet_id == "resolved-wallet"
+
+
+@pytest.mark.parametrize("record,claimed", [
+    ({**RECORD, "address": "0x" + "cd" * 20}, None),       # response address differs
+    ({**RECORD, "chain_type": "solana"}, None),             # wrong chain
+    ({**RECORD, "id": None}, None),                         # no valid ID
+    ({**RECORD, "id": "../x"}, None),
+    (RECORD, "browser-said-other"),                         # claimed ID inconsistent with resolved ID
+    (None, None),                                           # lookup unavailable
+    ([RECORD], None),                                       # malformed shape
+])
+def test_by_address_record_mismatch_stays_unknown(record, claimed):
+    assert match_claim(_user(_wallet(id=None)), DID, ADDR, claimed, wallet_record=record) is None
+
+
+def test_by_address_record_never_proves_a_wallet_absent_from_the_user():
+    """The address record may name the DID as owner/entity; without the user's own linked wallet it is no match."""
+    assert match_claim(_user(), DID, ADDR, None, wallet_record={**RECORD, "owner_id": DID, "entity": DID}) is None
+
+
+def test_linked_id_must_agree_with_any_address_record():
+    assert match_claim(_user(_wallet()), DID, ADDR, None, wallet_record={**RECORD, "id": "other"}) is None
+    assert match_claim(_user(_wallet()), DID, ADDR, None) is not None  # ID from the user's own link
+
+
+def test_answer_uses_address_lookup_only_after_the_user_link_matches():
+    calls: list[tuple[str, str]] = []
+
+    def fetch_user(did: str) -> object:
+        calls.append(("user", did))
+        return _user(_wallet(id=None))
+
+    def fetch_wallet(address: str) -> object:
+        calls.append(("wallet", address))
+        return RECORD
+
+    msg = {"op": "lookup_embedded_wallet", "did": DID, "address": ADDR, "wallet_id": None}
+    reply = lookup_server.answer(msg, fetch_user, fetch_wallet)
+    assert reply == {"status": "matched", "wallet_id": "resolved-wallet", "address": ADDR, "chain_type": "ethereum"}
+    assert calls == [("user", DID), ("wallet", ADDR)]
+    calls.clear()
+    stranger = lookup_server.answer(msg, lambda did: _user(), fetch_wallet)
+    assert stranger["status"] == "unknown" and calls == []  # no address lookup for a wallet the user does not link
+
+
+class _FakeResponse:
+    status = 200
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def read(self, size: int) -> bytes:
+        return self._body[:size]
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def test_reader_address_lookup_is_one_fixed_post():
+    import json as _json
+
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+    sent: list[object] = []
+
+    def opener(request: object, timeout: float) -> _FakeResponse:
+        sent.append((request, timeout))
+        return _FakeResponse(_json.dumps(RECORD).encode())
+
+    reader._opener = SimpleNamespace(open=opener)
+    assert reader.wallet_by_address(ADDR) == RECORD
+    (request, timeout), = sent
+    assert (request.full_url, request.get_method()) == ("https://api.privy.io/v1/wallets/address", "POST")
+    assert _json.loads(request.data) == {"address": ADDR} and timeout == lookup_server.DEADLINE_SECONDS
+    assert reader.wallet_by_address("0x12") is None and len(sent) == 1
+
+
+def test_existing_socket_target_is_refused_not_unlinked(short_private_dir):
+    target = short_private_dir / "x.sock"
+    target.symlink_to(short_private_dir / "elsewhere")
+    with pytest.raises(SystemExit):
+        lookup_server.prepare_socket_path(str(target))
+    assert target.is_symlink()
+
+
+def test_client_sends_address_only_claim_and_takes_the_resolved_id():
+    provider = OwnerBoundLookupProvider("/tmp/unused.sock", uuid.uuid4(), DID)
+    seen: list[dict[str, object]] = []
+
+    def ask(request: dict[str, object]) -> dict[str, object]:
+        seen.append(request)
+        return {"status": "matched", "wallet_id": "resolved-wallet", "address": ADDR, "chain_type": "ethereum"}
+
+    provider._ask = ask  # type: ignore[method-assign]
+    evidence = provider.lookup_claim(ADDR, None)
+    assert evidence is not None and evidence.wallet_id == "resolved-wallet"
+    assert seen == [{"op": "lookup_embedded_wallet", "did": DID, "address": ADDR, "wallet_id": None}]
+    assert provider.lookup_claim(ADDR, "wallet-x") is None  # a claimed ID the lookup did not confirm
+
+
+@pytest.fixture
+def short_private_dir():
+    """Socket paths are limited to 100 characters, so the pytest base path is too long for this control."""
+    import shutil
+    import tempfile
+
+    path = Path(tempfile.mkdtemp(prefix="l3w"))
+    path.chmod(0o700)
+    if len(str(path)) > 80:
+        pytest.fail("no short private temp directory available")
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path)
+
+
+def test_existing_socket_like_target_is_not_unlinked(short_private_dir, monkeypatch):
+    """Without a proved own claim a live or stale socket target stays; startup refuses instead."""
+    target = short_private_dir / "x.sock"
+    target.write_text("stand-in for a live socket")
+    monkeypatch.setattr(lookup_server.stat, "S_ISSOCK", lambda mode: True)
+    with pytest.raises(SystemExit):
+        lookup_server.prepare_socket_path(str(target))
+    assert target.exists()

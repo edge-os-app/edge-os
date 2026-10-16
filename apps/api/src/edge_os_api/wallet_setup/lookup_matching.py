@@ -41,27 +41,46 @@ def _embedded_ethereum(account: object) -> bool:
             and account.get("wallet_client_type") == "privy" and account.get("chain_type") == "ethereum")
 
 
-def match_claim(user: object, did: str, address: str, wallet_id: str | None) -> MatchedWallet | None:
+def match_claim(user: object, did: str, address: str, wallet_id: str | None,
+                wallet_record: object = None) -> MatchedWallet | None:
     """Return the one embedded Ethereum wallet of this exact user with this exact address, or `None`.
 
-    A claimed wallet ID must equal the linked account's own ID. With no claimed ID, the linked account must
-    carry its own ID; this function never guesses one.
+    The verified DID's own linked wallet must match first. Its ID comes from that link; when the link has no ID,
+    only `wallet_record` (the fixed by-address lookup answer) may supply it, with the same exact address, chain
+    `ethereum` and a valid ID. Any ID present in the link, the record or the browser claim must agree. A record's
+    `owner_id` (key quorum) or `entity` (attribution) is never read.
     """
-    if not (isinstance(user, dict) and valid_did(did) and user.get("id") == did and valid_address(address)):
+    found = linked_wallet(user, did, address)
+    if found is None or (wallet_id is not None and not valid_wallet_id(wallet_id)):
         return None
-    if wallet_id is not None and not valid_wallet_id(wallet_id):
+    ids = set()
+    if found.get("id") is not None:
+        if not valid_wallet_id(found.get("id")):
+            return None
+        ids.add(found["id"])
+    if wallet_record is not None:
+        if not (isinstance(wallet_record, dict) and valid_wallet_id(wallet_record.get("id"))
+                and isinstance(wallet_record.get("address"), str)
+                and wallet_record["address"].lower() == address.lower()
+                and wallet_record.get("chain_type") == "ethereum"):
+            return None
+        ids.add(wallet_record["id"])
+    if wallet_id is not None:
+        ids.add(wallet_id)
+    if len(ids) != 1 or (found.get("id") is None and wallet_record is None):
+        return None
+    return MatchedWallet(wallet_id=ids.pop(), address=found["address"], chain_type="ethereum")
+
+
+def linked_wallet(user: object, did: str, address: str) -> dict[str, Any] | None:
+    """The single embedded Ethereum account with this exact address in the verified DID's own user record."""
+    if not (isinstance(user, dict) and valid_did(did) and user.get("id") == did and valid_address(address)):
         return None
     accounts = user.get("linked_accounts")
     if not isinstance(accounts, list):
         return None
     same = [a for a in accounts if _embedded_ethereum(a) and isinstance(a.get("address"), str)
             and a["address"].lower() == address.lower()]
-    if len(same) != 1:
+    if len(same) != 1 or not valid_address(same[0]["address"]):
         return None
-    found: dict[str, Any] = same[0]
-    found_id = found.get("id")
-    if not valid_wallet_id(found_id) or not valid_address(found["address"]):
-        return None
-    if wallet_id is not None and found_id != wallet_id:
-        return None
-    return MatchedWallet(wallet_id=found_id, address=found["address"], chain_type="ethereum")
+    return same[0]

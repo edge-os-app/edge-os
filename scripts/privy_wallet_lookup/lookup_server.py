@@ -25,15 +25,18 @@ from pathlib import Path
 from typing import Any
 
 from edge_os_api.wallet_setup.lookup_framing import FrameError, encode_frame, read_frame
-from edge_os_api.wallet_setup.lookup_matching import match_claim, valid_address, valid_did, valid_wallet_id
+from edge_os_api.wallet_setup.lookup_matching import (linked_wallet, match_claim, valid_address, valid_did,
+                                                      valid_wallet_id)
 
 API_BASE = "https://api.privy.io/v1/users/"
+WALLET_BY_ADDRESS = "https://api.privy.io/v1/wallets/address"
 DEADLINE_SECONDS = 10.0
 MAX_RESPONSE = 256 * 1024
 CONNECTION_TIMEOUT = 20.0
 OPERATION = "lookup_embedded_wallet"
 
 FetchUser = Callable[[str], object]
+FetchWallet = Callable[[str], object]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -58,8 +61,19 @@ class PrivyUserReader:
     def __call__(self, did: str) -> object:
         if not valid_did(did):
             return None
-        request = urllib.request.Request(API_BASE + urllib.parse.quote(did, safe=""), method="GET",
-                                         headers={"Authorization": self._auth, "privy-app-id": self._app_id})
+        return self._fetch(urllib.request.Request(API_BASE + urllib.parse.quote(did, safe=""), method="GET",
+                                                  headers={"Authorization": self._auth,
+                                                           "privy-app-id": self._app_id}))
+
+    def wallet_by_address(self, address: str) -> object:
+        """Read-only fixed lookup: POST {address} to the wallets-by-address endpoint. No create or policy call."""
+        if not valid_address(address):
+            return None
+        body = json.dumps({"address": address}).encode("ascii")
+        return self._fetch(urllib.request.Request(WALLET_BY_ADDRESS, data=body, method="POST", headers={
+            "Authorization": self._auth, "privy-app-id": self._app_id, "Content-Type": "application/json"}))
+
+    def _fetch(self, request: urllib.request.Request) -> object:
         try:
             with self._opener.open(request, timeout=DEADLINE_SECONDS) as response:
                 if response.status != 200:
@@ -75,7 +89,7 @@ class PrivyUserReader:
             return None
 
 
-def answer(message: dict[str, Any], fetch_user: FetchUser) -> dict[str, Any]:
+def answer(message: dict[str, Any], fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None) -> dict[str, Any]:
     """The only supported operation. Any other shape is refused with a code."""
     if set(message) != {"op", "did", "address", "wallet_id"} or message.get("op") != OPERATION:
         return {"status": "unknown", "reason": "UNSUPPORTED_REQUEST"}
@@ -85,7 +99,15 @@ def answer(message: dict[str, Any], fetch_user: FetchUser) -> dict[str, Any]:
     user = fetch_user(did)
     if user is None:
         return {"status": "unknown", "reason": "LOOKUP_UNAVAILABLE"}
-    matched = match_claim(user, did, address, wallet_id)
+    account = linked_wallet(user, did, address)
+    if account is None:
+        return {"status": "unknown", "reason": "NO_EXACT_MATCH"}
+    record = None
+    if account.get("id") is None:  # the user's own link matched; only now resolve its ID by exact address
+        record = fetch_wallet(address) if fetch_wallet is not None else None
+        if record is None:
+            return {"status": "unknown", "reason": "LOOKUP_UNAVAILABLE"}
+    matched = match_claim(user, did, address, wallet_id, wallet_record=record)
     if matched is None:
         return {"status": "unknown", "reason": "NO_EXACT_MATCH"}
     return {"status": "matched", "wallet_id": matched.wallet_id, "address": matched.address,
@@ -109,7 +131,7 @@ def same_user_peer(conn: socket.socket) -> bool:
     return False
 
 
-def handle(conn: socket.socket, fetch_user: FetchUser) -> None:
+def handle(conn: socket.socket, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None) -> None:
     conn.settimeout(CONNECTION_TIMEOUT)
     try:
         if not same_user_peer(conn):
@@ -119,7 +141,7 @@ def handle(conn: socket.socket, fetch_user: FetchUser) -> None:
         except (FrameError, OSError):
             conn.sendall(encode_frame({"status": "unknown", "reason": "MALFORMED_FRAME"}))
             return
-        conn.sendall(encode_frame(answer(message, fetch_user)))
+        conn.sendall(encode_frame(answer(message, fetch_user, fetch_wallet)))
     except OSError:
         return
 
@@ -133,13 +155,12 @@ def prepare_socket_path(path: str) -> Path:
     if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
         raise SystemExit("lookup: socket directory must be owned by this user with mode 0700")
     if target.exists() or target.is_symlink():
-        if not stat.S_ISSOCK(target.lstat().st_mode):
-            raise SystemExit("lookup: socket path exists and is not a socket")
-        target.unlink()
+        # No proved own claim on an existing target: it may be another live process. Refuse, never unlink.
+        raise SystemExit("lookup: socket path already exists; remove it deliberately before startup")
     return target
 
 
-def serve(path: str, fetch_user: FetchUser) -> None:
+def serve(path: str, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None) -> None:
     target = prepare_socket_path(path)
     previous = os.umask(0o177)
     try:
@@ -153,7 +174,7 @@ def serve(path: str, fetch_user: FetchUser) -> None:
         while True:
             conn, _ = server.accept()
             with conn:
-                handle(conn, fetch_user)
+                handle(conn, fetch_user, fetch_wallet)
     finally:
         server.close()
         target.unlink(missing_ok=True)
@@ -164,7 +185,7 @@ def main(argv: list[str]) -> int:
         print("usage: lookup_server.py <socket_path>", file=sys.stderr)
         return 2
     reader = PrivyUserReader(os.environ.get("PRIVY_APP_ID", ""), os.environ.get("PRIVY_APP_SECRET", ""))
-    serve(argv[1], reader)
+    serve(argv[1], reader, reader.wallet_by_address)
     return 0
 
 
