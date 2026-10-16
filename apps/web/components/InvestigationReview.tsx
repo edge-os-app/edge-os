@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import { payloadBindingText } from "../lib/types";
 import type { HistoryDeclaration, HistorySource, InvestigationJob, InvestigationReport, ResearchBudget, TransportSummary } from "../lib/api";
 import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationProposal, InvestigationSaveResult } from "../lib/types";
 import { EffectComparisonPanel } from "./EffectComparisonPanel";
@@ -50,6 +51,8 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
   const [error, setError] = useState("");
   const errorRef = useRef<HTMLParagraphElement>(null);
   const savedHeading = useRef<HTMLHeadingElement>(null);
+  // Set only by a successful save; the effect below moves focus once the saved heading is committed.
+  const focusSavedHeading = useRef(false);
   const hasSavedDeclarations = useRef(false);
   const [proposalError, setProposalError] = useState("");
   const [proposalRetryReplacesDraft, setProposalRetryReplacesDraft] = useState(false);
@@ -118,6 +121,12 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
 
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
 
+  useEffect(() => {
+    if (!selected || !focusSavedHeading.current) return;
+    focusSavedHeading.current = false;
+    savedHeading.current?.focus();
+  }, [selected]);
+
   const beginAnother = async () => {
     setBusy(true); setError(""); setSelected(null); setAdopted(false);
     setRefreshNotice("");
@@ -161,10 +170,10 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
       const result = await api.saveInvestigation(intakeId, { ...keys, ...body });
       setDeclarations((current) => current ? [...current.filter((item) => item.record_id !== result.declaration.record_id), result.declaration]
         : [result.declaration]);
+      focusSavedHeading.current = true;
       setSelected(result); setProposal(null); setAdopted(false);
       setRefreshNotice("");
       try { window.sessionStorage.removeItem(`edge-os:investigation:${intakeId}`); } catch { /* ignore */ }
-      requestAnimationFrame(() => savedHeading.current?.focus());
     } catch (cause) {
       setError(errorDetail(cause));
       if (cause instanceof ApiError && cause.code === "interpretation_revision_conflict") await refreshProposal(false);
@@ -772,6 +781,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               <p className="muted">Provider requests: reserved {job.budget.reserved?.provider_requests ?? 0}, consumed {job.budget.consumed?.provider_requests ?? 0}, released {job.budget.released?.provider_requests ?? 0}, unknown liability {job.budget.unknown_liability?.provider_requests ?? 0}.</p>
               {job.dataset?.transport ? <TransportFacts transport={job.dataset.transport} /> : null}
               {job.dataset ? <p>Dataset <span className="mono">{job.dataset.dataset_id}</span>: {job.dataset.summary.status}, {job.dataset.summary.verdict.overall}, {job.dataset.summary.binding_state}{job.dataset.summary.unavailable_states.length ? `; ${job.dataset.summary.unavailable_states.join(", ")}` : ""}; provider usage {job.dataset.summary.provider_requests_state}.</p> : null}
+              {job.dataset?.payload_binding && job.dataset.payload_binding.status !== "NOT_REQUIRED"
+                ? <p data-testid="history-payload-binding" data-status={job.dataset.payload_binding.status}
+                  style={{ overflowWrap: "anywhere" }}>{payloadBindingText(job.dataset.payload_binding)}</p> : null}
               {RUNNING.has(job.state) && !job.cancel_requested_at ? <button className="btn btn-secondary" type="button" onClick={() => void cancel(job)} disabled={busy}>Cancel this job</button> : null}
               {!RUNNING.has(job.state) && job.state !== "REPORTED" ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(true)} disabled={busy}>Retry as a new job</button> : null}
               {job.report ? <JobReport report={job.report} /> : null}

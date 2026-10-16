@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import { payloadBindingText, payloadBindingUsable } from "../lib/types";
 import type { DatasetSummary, MarketAdoptionBody } from "../lib/api";
 
 interface Props {
@@ -55,8 +56,10 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
   };
   useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A required payload binding that does not PASS blocks the market even when the saved verdict is QUALIFIED.
   const qualified = (datasets ?? []).filter((item) => item.binding_state === "QUALIFIED_BINDING"
-    && item.verdict.overall === "QUALIFIED" && item.hashes_verified.content_sha256 && item.hashes_verified.raw_evidence_sha256);
+    && item.verdict.overall === "QUALIFIED" && item.hashes_verified.content_sha256 && item.hashes_verified.raw_evidence_sha256
+    && payloadBindingUsable(item.payload_binding));
   const others = (datasets ?? []).filter((item) => !qualified.includes(item));
   const chosen = qualified.find((item) => item.dataset_id === datasetId) ?? null;
   const binding = (chosen?.market_binding ?? {}) as Record<string, string | number | null | string[]>;
@@ -109,7 +112,8 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
       {others.length ? (
         <details>
           <summary>Datasets that cannot supply a market ({others.length})</summary>
-          <ul>{others.map((item) => <li key={item.dataset_id}><span className="mono">{item.dataset_id}</span>: {item.source_id}, {item.verdict.overall}, {item.binding_state}{item.unavailable_states.length ? ` (${item.unavailable_states.join(", ")})` : ""}</li>)}</ul>
+          <ul>{others.map((item) => <li key={item.dataset_id}><span className="mono">{item.dataset_id}</span>: {item.source_id}, {item.verdict.overall}, {item.binding_state}{item.unavailable_states.length ? ` (${item.unavailable_states.join(", ")})` : ""}
+            {payloadBindingUsable(item.payload_binding) ? null : <span data-testid="market-adoption-binding-blocked"> {payloadBindingText(item.payload_binding)}</span>}</li>)}</ul>
         </details>
       ) : null}
       {qualified.length ? (
@@ -134,6 +138,7 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
             <dt>Orientation</dt><dd>{String(binding.orientation)}</dd>
             <dt>Versions</dt><dd>{String(binding.event_schema_version)}; {String(binding.amount_conversion_version)}; {String(binding.data_route)}</dd>
             <dt>Binding evidence</dt><dd>{String(binding.evidence_class)}; route qualification {String(binding.qualification)}</dd>
+            <dt>Payload binding</dt><dd data-testid="market-adoption-binding">{payloadBindingText(chosen.payload_binding)}</dd>
             <dt>Quote unit</dt><dd className="mono">{chosen.quote_unit}</dd>
           </dl>
           <div className="field">

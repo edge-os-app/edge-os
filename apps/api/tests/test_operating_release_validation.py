@@ -10,12 +10,14 @@ B B7 (hash alignment) and A F3 (verifier cleanup isolation).
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import sys
 from typing import Any
 
 import pytest
 
+import forward_history_stand_in as bound
 import harness
 import operating_release_stand_in as stand_in
 from edge_os_api.core.research import operating_release
@@ -24,8 +26,9 @@ from edge_os_api.core.research.released_source_runtime import (
     ReleasedSourceRuntime,
     open_released_runtime,
     prepare_history,
+    release_view,
 )
-from edge_os_api.research import history_dataset
+from edge_os_api.research import history_dataset, history_payload_binding
 from edge_os_api.research_history.http_clients import HttpResponse, StdlibHttpTransport
 from edge_os_api.research_history.provider_transport import SourceTimeout
 
@@ -244,3 +247,96 @@ def test_a_production_worker_refuses_a_stand_in_runtime():
         InvestigationWorker(None, PRODUCTION, research_runtime=runtime)
     assert refused.value.code == "stand_in_refused_in_production"
     InvestigationWorker(None, LOCAL, research_runtime=runtime)  # local composition is unchanged
+
+
+# --------------------------------------------------------------------------- SAVED-HISTORY-BINDING-L2: binding admission
+
+def _bound_admission(binding: Any, *, kind: str = "STAND_IN") -> tuple[pytest.ExceptionInfo, Any]:
+    release = bound.bound_release(nansen=False, binding=binding)
+    if kind != "STAND_IN":  # an actual release names provider hosts, so only the binding rule can refuse it
+        release = bound.bound_release(nansen=False, binding=binding, kind=kind,
+                                      envio_endpoint="https://hypersync.example.com",
+                                      quicknode_host="quicknode.example.com")
+    creds = stand_in.credentials()
+    with pytest.raises(ReleaseRefused) as refused:
+        open_released_runtime(LOCAL, release, credentials=creds, http_transport=lambda: TimedInner(Clock()))
+    assert creds.reads == []  # refused before any credential read
+    return refused, creds
+
+
+def _bound_definition(**changes: Any) -> dict[str, str]:
+    return bound.definition(bound.handoff(**changes))
+
+
+def test_a_bound_stand_in_release_is_admitted_and_its_handoff_enters_the_release_hash():
+    unbound = bound.bound_release(nansen=False, binding=None)
+    bound_release = bound.bound_release(nansen=False)
+    other = bound.bound_release(nansen=False, binding=_bound_definition(attempt_id="another-synthetic-attempt"))
+    digests = {check_release(release) for release in (unbound, bound_release, other)}
+    assert len(digests) == 3
+    assert operating_release.release_sha256(unbound) == operating_release.release_sha256(
+        bound.bound_release(nansen=False, binding=None))  # an unbound release keeps its own hash
+    runtime = open_released_runtime(LOCAL, bound_release, credentials=stand_in.credentials(),
+                                    http_transport=lambda: TimedInner(Clock()))
+    view = release_view(runtime)["history"]["payload_binding"]
+    assert view == {"handoff_sha256": bound.definition()["handoff_sha256"], "evidence_class": "SYNTHETIC"}
+    assert "payload_binding" not in release_view(runtime_with(TimedInner(Clock())))["history"]
+
+
+@pytest.mark.parametrize("binding", [
+    "not-an-object",
+    {"handoff_json": "{}"},
+    {"handoff_json": "{}", "handoff_sha256": "x", "extra": "y"},
+    {"handoff_json": 7, "handoff_sha256": "x"},
+])
+def test_a_malformed_binding_is_a_stable_refusal_before_credentials(binding):
+    refused, _ = _bound_admission(binding)
+    assert refused.value.code == "forward_history_binding_invalid"
+
+
+def test_a_binding_whose_digest_differs_from_its_bytes_is_refused():
+    good = _bound_definition()
+    refused, _ = _bound_admission({**good, "handoff_sha256": "0" * 64})
+    assert refused.value.code == "forward_history_binding_invalid" and "digest" in refused.value.detail
+
+
+def test_an_oversized_handoff_is_refused_before_it_is_parsed():
+    text = " " * (8 * 1024 * 1024 + 1)
+    refused, _ = _bound_admission({"handoff_json": text, "handoff_sha256": hashlib.sha256(text.encode()).hexdigest()})
+    assert refused.value.code == "forward_history_binding_invalid" and "ceiling" in refused.value.detail
+
+
+@pytest.mark.parametrize("text", ['{"a":1,"a":2}', '{"a":1.5}', "[1]", "not json"])
+def test_a_non_strict_or_non_object_handoff_is_refused(text):
+    refused, _ = _bound_admission({"handoff_json": text, "handoff_sha256": hashlib.sha256(text.encode()).hexdigest()})
+    assert refused.value.code == "forward_history_binding_invalid"
+
+
+@pytest.mark.parametrize("changes,detail", [
+    ({"schema_version": "edge-os.forward-history-handoff/2"}, "schema version"),
+    ({"canonicalization_version": "edge-os.forward-history-payload/0"}, "canonicalization"),
+    ({"evidence_class": "ACTUAL"}, "SYNTHETIC"),
+    ({"source_id": "another-source/1"}, "another source"),
+    ({"window": {"start_utc": "2026-09-25T10:05:00Z", "end_utc": "2026-09-25T10:25:00Z", "bucket_seconds": 300}},
+     "window"),
+    ({"scan": {"from_block": 500, "to_block_exclusive": 507}}, "scan"),
+])
+def test_a_handoff_for_another_version_source_window_scan_or_class_is_refused(changes, detail):
+    refused, _ = _bound_admission(_bound_definition(**changes))
+    assert refused.value.code == "forward_history_binding_invalid" and detail in refused.value.detail
+
+
+def test_a_binding_on_an_actual_release_is_never_admitted():
+    refused, _ = _bound_admission(_bound_definition(), kind="ACTUAL")
+    assert refused.value.code == "forward_history_binding_not_admitted"
+
+
+def test_an_unavailable_checker_refuses_a_bound_release(monkeypatch):
+    definition = _bound_definition()
+    history_payload_binding.checker.cache_clear()
+    monkeypatch.setattr(history_payload_binding, "CHECKER_SHA256", "0" * 64)
+    try:
+        refused, _ = _bound_admission(definition)
+        assert refused.value.code == "forward_history_checker_unavailable"
+    finally:
+        history_payload_binding.checker.cache_clear()

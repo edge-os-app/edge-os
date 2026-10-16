@@ -388,8 +388,43 @@ export interface SpotReplayBody {
   };
 }
 
+/** A saved dataset's payload binding against its recorder handoff, rechecked on the saved data at each read. */
+export interface PayloadBindingState {
+  status: "PASS" | "MISMATCH" | "INCOMPLETE" | "NOT_REQUIRED";
+  required_by: "RELEASE_BINDING" | "PROVIDER_ACTUAL" | null;
+  reason: string | null;
+  evidence_class: string | null;
+  handoff_sha256: string | null;
+  report_sha256: string | null;
+  checker_sha256: string | null;
+  claim_limit: string;
+}
+
+/** The binding identity a market adoption or replay saved beside its result. Absent when none was required. */
+export type PayloadBindingLineage = Pick<PayloadBindingState, "status" | "required_by" | "evidence_class"
+  | "handoff_sha256" | "report_sha256" | "checker_sha256">;
+
+/** A required binding must PASS before a dataset can supply a market or a replay; MISMATCH and INCOMPLETE block both.
+ * The server enforces this on every use; a response without the field keeps its earlier display. */
+export function payloadBindingUsable(state: Pick<PayloadBindingState, "status"> | null | undefined): boolean {
+  return !state || state.status === "PASS" || state.status === "NOT_REQUIRED";
+}
+
+/** One plain sentence for a saved dataset's payload binding or a saved binding lineage. */
+export function payloadBindingText(state: (PayloadBindingLineage & { reason?: string | null }) | null | undefined): string {
+  if (!state || state.status === "NOT_REQUIRED") return "Payload binding: not required for this synthetic recorded dataset.";
+  const handoff = state.handoff_sha256 ? ` handoff ${state.handoff_sha256}` : "";
+  if (state.status === "PASS") {
+    return `Payload binding: PASS against the ${state.evidence_class ?? "recorded"}${handoff}; report ${state.report_sha256 ?? "unavailable"}. `
+      + "It proves the saved records match the recorded delivery only, not provider provenance.";
+  }
+  return `Payload binding: ${state.status}${state.reason ? ` (${state.reason})` : ""}${handoff}. This dataset cannot `
+    + "supply a market or a replay. Its saved verdict and data stay unchanged.";
+}
+
 export interface SpotReplayInputSnapshot {
   profile_version: string;
+  profile_sha256?: string;
   strategy_revision_id: string;
   strategy_id: string;
   strategy_sha256: string;

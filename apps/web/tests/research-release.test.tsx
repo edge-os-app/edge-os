@@ -103,5 +103,35 @@ describe("operating-release source", () => {
     expect(facts).toHaveTextContent("Operating release stand-in-native/1 through the accepted P07 HTTP clients (HttpEnvioQueryClient, HttpQuickNodeRpcClient) over loopback http.");
     expect(facts).toHaveTextContent("Stand-in responses, not provider data; 27 request hashes kept; endpoint hosts 127.0.0.1, 127.0.0.1:");
     expect(facts).not.toHaveTextContent("Authored HTTP responses");
+    expect(screen.queryByTestId("history-payload-binding")).toBeNull(); // an unbound dataset shows no binding line
+  });
+
+  it("shows a bound job's payload binding and a mismatch reason, never upgrading the saved verdict", async () => {
+    const user = userEvent.setup();
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    const binding = (status: string, reason: string | null) => ({ status, required_by: "RELEASE_BINDING", reason,
+      evidence_class: "SYNTHETIC", handoff_sha256: "e".repeat(64), report_sha256: status === "PASS" ? "9".repeat(64) : null,
+      checker_sha256: "1".repeat(64), claim_limit: "Payload binding only." });
+    const job = (id: string, status: string, reason: string | null) => ({ job_id: id, declaration_id: "rel-decl-1",
+      request_key: id, operation_id: "o", state: "REPORTED", terminal_reason: null,
+      budget: { reserved: { provider_requests: 7 }, consumed: { provider_requests: 7 } }, deadline_at: "",
+      cancel_requested_at: null, created_at: "", events: [], report: null,
+      dataset: { dataset_id: `ds-${id}`, content_sha256: "s", hashes_verified: {}, transport: null,
+        summary: { source_id: SOURCE.source_id, status: "COMPLETE", stop_reason: "COMPLETE", verdict: { overall: "QUALIFIED" },
+          binding_state: "QUALIFIED_BINDING", unavailable_states: [], provider_requests: null,
+          provider_requests_state: "MEASURED_CLIENT_CALLS", evidence_class: "RELEASE_STAND_IN_RESPONSE",
+          content_label: "SYNTHETIC_FIXTURE" },
+        payload_binding: binding(status, reason) } });
+    mocks.jobs.mockResolvedValue({ jobs: [job("job-pass", "PASS", null), job("job-bad", "MISMATCH", "BUCKET_2:PAYLOAD_DIFFERS")] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    const lines = await screen.findAllByTestId("history-payload-binding");
+    expect(lines.map((line) => line.getAttribute("data-status"))).toEqual(["PASS", "MISMATCH"]);
+    expect(lines[0]).toHaveTextContent(`Payload binding: PASS against the SYNTHETIC handoff ${"e".repeat(64)}; report ${"9".repeat(64)}.`);
+    expect(lines[0]).toHaveTextContent("not provider provenance");
+    expect(lines[1]).toHaveTextContent("Payload binding: MISMATCH (BUCKET_2:PAYLOAD_DIFFERS)");
+    expect(lines[1]).toHaveTextContent("cannot supply a market or a replay. Its saved verdict and data stay unchanged.");
+    expect(screen.getAllByText(/QUALIFIED, QUALIFIED_BINDING/)).toHaveLength(2); // the saved verdict is shown as saved
   });
 });

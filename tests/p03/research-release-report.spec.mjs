@@ -91,6 +91,7 @@ test("release report, stand-in facts, market adoption, publication and labelled 
   const reviewBox = adoption.getByTestId("market-adoption-review");
   await expect(reviewBox).toContainText("0x" + "d1".repeat(20));
   await expect(reviewBox).toContainText("RELEASE_STAND_IN_RESPONSE");
+  await expect(adoption.getByTestId("market-adoption-binding")).toContainText("Payload binding: not required");
   await adoption.getByLabel("Trade size in the new quote unit").fill("50");
   await adoption.getByLabel("Largest position value in the new quote unit").fill("50");
   const declaredRule = (await apiGet(page, token, "/v1/research/history-datasets")).body.datasets
@@ -123,6 +124,7 @@ test("release report, stand-in facts, market adoption, publication and labelled 
   await expect(result).toContainText("Saved replay: complete");
   await expect(result).toContainText("Simulated fills on saved recorded-history dataset");
   await expect(replay.getByTestId("spot-replay-history-lineage")).toContainText(run.declarationId);
+  await expect(replay.getByTestId("spot-replay-saved-binding")).toContainText("Payload binding: not required");
   const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
   const savedReplay = (await apiGet(page, token, `/v1/spot-replays/${replayId}`)).body;
   expect(savedReplay.content.inputs.history_input.source_evidence_class).toBe("RELEASE_STAND_IN_RESPONSE");

@@ -189,6 +189,10 @@ def test_a_release_job_runs_the_p07_http_clients_over_the_stand_in_and_saves_lab
         "P07_HTTP_CLIENTS_OPERATING_RELEASE", "IN_PROCESS_RECORDING", "stand-in-native/1")
     report = job["report"]["content"]
     assert report["evidence_class"] == "RELEASE_STAND_IN_RESPONSE"
+    # An unbound release keeps its behavior: no binding event, no requirement, and nothing is required of consumers.
+    assert job["dataset"]["payload_binding"]["status"] == "NOT_REQUIRED"
+    assert "HISTORY_PAYLOAD_BOUND" not in [event["kind"] for event in job["events"]]
+    assert "payload_binding_requirement" not in content and "payload_binding_requirement" not in started["content"]
     # Reopening reads the saved rows: no credential read and no provider request.
     reads, sent = len(creds.reads), len(provider.requests)
     assert view(client, owner_a, job_id) == job
@@ -626,6 +630,8 @@ def test_a_release_dataset_feeds_adoption_and_a_labelled_replay_and_reopens_afte
     assert replay["content"]["result"]["status"] == "COMPLETE", replay["content"]["result"].get("reason")
     assert (lineage["source_evidence_class"], lineage["fill_label"], lineage["rule_linkage"]["state"]) == (
         "RELEASE_STAND_IN_RESPONSE", "simulated fills", "ENTRY_IS_DECLARED_RULE")
+    assert "payload_binding" not in lineage and "payload_binding" not in adopted.json()["adoption"]
+    assert listed["payload_binding"]["status"] == "NOT_REQUIRED"
     assert client.get(f"/v1/spot-replays/{replay['replay_id']}", headers=owner_b).status_code == 404
     before = {"job": view(client, owner_a, job_id),
               "dataset": client.get(f"/v1/research/history-datasets/{dataset_id}", headers=owner_a).json(),

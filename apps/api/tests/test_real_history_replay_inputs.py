@@ -61,12 +61,14 @@ def test_adopted_revision_replays_on_its_dataset_with_exact_lineage(research, ow
     assert content["result"]["trades"], "the declared rule should trade on the recorded prices"
     assert lineage["dataset_market_binding_id"] == lineage["strategy_market_binding_id"]
     assert lineage["source_evidence_class"] == "RECORDED_RESPONSE" and lineage["content_label"] == "SYNTHETIC_FIXTURE"
+    assert "payload_binding" not in lineage  # an unbound recorded dataset keeps its saved snapshot shape
     assert content["strategy_revision_id"] == revision_id and content["dataset_fixture_id"] is None
     assert "Simulated fills" in content["notice"]
     dataset = research.get(f"/v1/research/history-datasets/{dataset_id}", headers=owner_a).json()
     assert content["inputs"]["buckets"] == [bucket for bucket in dataset["content"]["buckets"]
                                             if bucket["bucket_end"] < "2026-09-25T11:00:00Z"]
     assert lineage["declaration_id"] == dataset["content"]["declaration_id"]
+    assert dataset["payload_binding"]["status"] == "NOT_REQUIRED"
     again = research.get(f"/v1/spot-replays/{saved['replay_id']}", headers=owner_a).json()
     assert again == saved
 

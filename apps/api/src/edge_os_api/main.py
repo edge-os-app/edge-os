@@ -20,7 +20,7 @@ from edge_os_api.accounts import views as account_views
 from edge_os_api.agent_context import controls as agent_context
 from edge_os_api.research import comparison_runs as effect_run
 from edge_os_api.research import investigation_adoption as investigation_adoption
-from edge_os_api.research import history_dataset, investigation_jobs, market_adoption
+from edge_os_api.research import history_dataset, history_payload_binding, investigation_jobs, market_adoption
 from edge_os_api.usage import quota, rate_limit
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research import service as service
@@ -389,8 +389,11 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     @private.get("/research/history-datasets/{dataset_id}")
     def get_history_dataset(dataset_id: str, principal: Principal = Depends(require_principal),
                             session: Session = Depends(get_session)) -> Any:
-        return run(session, lambda: history_dataset.dataset_view(
-            history_dataset.owned_dataset(session, principal, dataset_id)))
+        def view() -> dict[str, Any]:
+            row = history_dataset.owned_dataset(session, principal, dataset_id)
+            return {**history_dataset.dataset_view(row),
+                    "payload_binding": history_payload_binding.binding_state(session, row, principal.user_id)}
+        return run(session, view)
 
     @private.post("/research/requests/{intake_id}/market-adoptions")
     def adopt_market(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
