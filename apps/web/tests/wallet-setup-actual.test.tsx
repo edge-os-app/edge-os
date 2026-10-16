@@ -22,7 +22,8 @@ vi.mock("../lib/wallet-setup-api", async (importOriginal) => {
     completeBrowserCreation: (...args: unknown[]) => mocks.complete(...args),
   } };
 });
-vi.mock("../lib/auth", () => ({ useOptionalAuth: () => ({ createEmbeddedWallet: (...args: unknown[]) => mocks.sdk(...args) }) }));
+const auth = vi.hoisted(() => ({ userId: "user-a" }));
+vi.mock("../lib/auth", () => ({ useOptionalAuth: () => ({ userId: auth.userId, createEmbeddedWallet: (...args: unknown[]) => mocks.sdk(...args) }) }));
 
 const ADDRESS = "0x" + "ab".repeat(20);
 const WALLET = { id: "wallet-1", address: ADDRESS, chainType: "ethereum", walletIndex: 1 };
@@ -41,6 +42,7 @@ const confirmed = record({ state: "CONFIRMED", creation_dispatched: true, wallet
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
+  auth.userId = "user-a";
   mocks.provider.mockResolvedValue({ provider: "privy_lookup", create_calls: null, lookup_calls: null });
   mocks.get.mockResolvedValue(record({}));
 });
@@ -59,7 +61,7 @@ describe("actual Privy wallet creation", () => {
     await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Wallet confirmed"));
     expect(mocks.begin.mock.invocationCallOrder[0]).toBeLessThan(mocks.sdk.mock.invocationCallOrder[0]);
     expect(mocks.sdk).toHaveBeenCalledTimes(1);
-    expect(mocks.complete).toHaveBeenCalledWith("agent-a", { wallet_id: "wallet-1", address: ADDRESS });
+    expect(mocks.complete).toHaveBeenCalledWith("agent-a", { wallet_id: "wallet-1", address: ADDRESS, wallet_index: 1 });
     expect(mocks.dispatch).not.toHaveBeenCalled(); // the fixture dispatch is never used on the actual path
   });
 
@@ -71,16 +73,26 @@ describe("actual Privy wallet creation", () => {
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 
-  it("keeps a wallet without a returned ID unknown and never creates again", async () => {
+  it("sends an address-only claim for the server to resolve when the SDK returns no ID", async () => {
     mocks.begin.mockResolvedValue({ ...pending, create_permitted: true });
     mocks.sdk.mockResolvedValue({ ...WALLET, id: null });
-    mocks.get.mockResolvedValueOnce(record({})).mockResolvedValue(pending);
+    mocks.complete.mockResolvedValue(confirmed);
     await clickCreate();
-    expect(await screen.findByRole("alert")).toHaveTextContent("identifier was not returned");
-    expect(mocks.complete).not.toHaveBeenCalled();
-    await userEvent.click(await screen.findByRole("button", { name: "Check the saved setup again" }));
+    await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Wallet confirmed"));
+    expect(mocks.complete).toHaveBeenCalledWith("agent-a", { wallet_id: null, address: ADDRESS, wallet_index: 1 });
     expect(mocks.sdk).toHaveBeenCalledTimes(1);
-    expect(mocks.begin).toHaveBeenCalledTimes(1);
+  });
+
+  it("never shows or sends another signed-in owner's retained claim", async () => {
+    auth.userId = "user-b";
+    window.localStorage.setItem("edge-os:wallet-claim:user-a:agent-a", JSON.stringify(WALLET));
+    mocks.get.mockResolvedValue(pending);
+    mocks.resume.mockResolvedValue(pending);
+    render(<WalletSetup agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Check the saved setup again" }));
+    await waitFor(() => expect(mocks.resume).toHaveBeenCalledTimes(1)); // server-retained claim resume, not user-a's
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(mocks.sdk).not.toHaveBeenCalled();
   });
 
   it("resends the retained claim after a lost completion reply without a second SDK call", async () => {
@@ -93,11 +105,11 @@ describe("actual Privy wallet creation", () => {
     await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Wallet confirmed"));
     expect(mocks.sdk).toHaveBeenCalledTimes(1);
     expect(mocks.complete).toHaveBeenCalledTimes(2);
-    expect(mocks.complete.mock.calls[1]).toEqual(["agent-a", { wallet_id: "wallet-1", address: ADDRESS }]);
+    expect(mocks.complete.mock.calls[1]).toEqual(["agent-a", { wallet_id: "wallet-1", address: ADDRESS, wallet_index: 1 }]);
   });
 
   it("a refreshed page resumes from the retained claim without beginning or creating", async () => {
-    window.localStorage.setItem("edge-os:wallet-claim:agent-a", JSON.stringify(WALLET));
+    window.localStorage.setItem("edge-os:wallet-claim:user-a:agent-a", JSON.stringify(WALLET));
     mocks.get.mockResolvedValue(pending);
     mocks.complete.mockResolvedValue(confirmed);
     render(<WalletSetup agentId="agent-a" />);

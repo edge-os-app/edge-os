@@ -23,21 +23,25 @@ export const walletSetupApi = {
   beginBrowserCreation: (agentId: string) =>
     request<WalletSetupRecord & { create_permitted: boolean }>(path(agentId, "browser-begin"), { method: "POST" })
       .then((r) => r.body),
-  completeBrowserCreation: (agentId: string, wallet: { wallet_id: string; address: string }) =>
+  completeBrowserCreation: (agentId: string, wallet: { wallet_id: string | null; address: string; wallet_index: number | null }) =>
     request<WalletSetupRecord>(path(agentId, "complete"), { method: "POST", body: JSON.stringify(wallet) })
       .then((r) => r.body),
 };
 
-/** The exact returned wallet is kept per agent before completion, so a refresh resumes lookup without creating. */
-const claimKey = (agentId: string) => `edge-os:wallet-claim:${agentId}`;
+/**
+ * The exact returned wallet is kept per verified owner and agent before completion, so a refresh resumes lookup
+ * without creating. A different signed-in owner never reads it. The server also retains the claim.
+ */
+const claimKey = (ownerId: string, agentId: string) => `edge-os:wallet-claim:${ownerId}:${agentId}`;
 
-export function retainClaim(agentId: string, wallet: CreatedWallet): void {
-  try { window.localStorage.setItem(claimKey(agentId), JSON.stringify(wallet)); } catch { /* storage blocked */ }
+export function retainClaim(ownerId: string, agentId: string, wallet: CreatedWallet): void {
+  try { window.localStorage.setItem(claimKey(ownerId, agentId), JSON.stringify(wallet)); } catch { /* storage blocked */ }
 }
 
-export function retainedClaim(agentId: string): CreatedWallet | null {
+export function retainedClaim(ownerId: string | null, agentId: string): CreatedWallet | null {
+  if (!ownerId) return null;
   try {
-    const raw = window.localStorage.getItem(claimKey(agentId));
+    const raw = window.localStorage.getItem(claimKey(ownerId, agentId));
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<CreatedWallet>;
     if (typeof value.address !== "string" || typeof value.chainType !== "string") return null;
@@ -46,6 +50,6 @@ export function retainedClaim(agentId: string): CreatedWallet | null {
   } catch { return null; }
 }
 
-export function forgetClaim(agentId: string): void {
-  try { window.localStorage.removeItem(claimKey(agentId)); } catch { /* ignore */ }
+export function forgetClaim(ownerId: string, agentId: string): void {
+  try { window.localStorage.removeItem(claimKey(ownerId, agentId)); } catch { /* ignore */ }
 }

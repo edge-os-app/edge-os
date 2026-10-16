@@ -246,7 +246,8 @@ def _lookup_browser_claim(provider: Any, wallet_id: str | None, address: str | N
 
 
 def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, wallet_id: str | None,
-                          provider: WalletCreationPort, address: str | None = None) -> SetupRecord:
+                          provider: WalletCreationPort, address: str | None = None,
+                          wallet_index: int | None = None) -> SetupRecord:
     """Record a wallet id returned by owner-linked browser creation, then bind it only after independent lookup.
 
     The browser's wallet id is an untrusted claim, retained as evidence before the lookup. The browser keeps its
@@ -287,6 +288,7 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
     insert_event(session, row, SetupEventType.RESULT_RETURNED,
                  {"wallet_id": wallet_id, "owner_id": str(principal.user_id), "chain_type": "ethereum",
                   "address": None, "claimed_address": address if isinstance(address, str) else None,
+                  "claimed_wallet_index": wallet_index if isinstance(wallet_index, int) else None,
                   "source": "BROWSER_COMPLETION", "trusted": False})
     session.commit()
     looked_up = _lookup_browser_claim(provider, wallet_id, address)

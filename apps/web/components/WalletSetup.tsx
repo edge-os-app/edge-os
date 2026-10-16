@@ -25,7 +25,6 @@ const REASON_COPY: Record<string, string> = {
   CONFLICTING_WALLET: "That wallet already belongs to another agent of this owner. It was not bound.",
 };
 
-const NO_WALLET_ID = "Your wallet was created, but its identifier was not returned. It is kept as unknown and no second wallet is created.";
 const UNSUPPORTED_WALLET = "The wallet that came back is not an Ethereum wallet. Nothing was bound and no second wallet is created.";
 
 function stateTitle(record: WalletSetupRecord): string {
@@ -65,6 +64,7 @@ export function WalletSetup({ agentId, revision, onClose }: {
   const [mode, setMode] = useState<WalletProviderMode | null>(null);
   const auth = useOptionalAuth();
   const createEmbeddedWallet = auth?.createEmbeddedWallet ?? null;
+  const ownerId = auth?.userId ?? null;
   // One sequence for every operation that changes what the panel shows. A late response, from an older
   // read or an older mutation, can never overwrite the current selection.
   const viewSeq = useRef(0);
@@ -167,24 +167,24 @@ export function WalletSetup({ agentId, revision, onClose }: {
 
   const creationAvailable = mode === "fixture" || actualCreation;
 
-  // Send the retained returned wallet for the server's independent lookup. It never creates.
+  // Send the retained returned wallet for the server's independent lookup. It never creates. Without a claim kept
+  // in this browser for this owner, the server resumes from the claim it retained itself.
   const completeRetained = async (agentId: string): Promise<WalletSetupRecord> => {
-    const claim = retainedClaim(agentId);
-    if (!claim) return api.walletSetup(agentId);
+    const claim = retainedClaim(ownerId, agentId);
+    if (!claim) return api.resumeWalletSetup(agentId);
     if (claim.chainType !== "ethereum") { setError(UNSUPPORTED_WALLET); return api.walletSetup(agentId); }
-    if (!claim.id) { setError(NO_WALLET_ID); return api.walletSetup(agentId); }
-    const saved = await walletSetupApi.completeBrowserCreation(agentId, { wallet_id: claim.id, address: claim.address });
-    if (saved.state === "CONFIRMED") forgetClaim(agentId);
+    const saved = await walletSetupApi.completeBrowserCreation(agentId, { wallet_id: claim.id, address: claim.address, wallet_index: claim.walletIndex });
+    if (saved.state === "CONFIRMED" && ownerId) forgetClaim(ownerId, agentId);
     return saved;
   };
 
   // The server commits the intent first and permits one SDK call only. A refused or repeated begin creates nothing.
   const createActual = async (agentId: string): Promise<WalletSetupRecord> => {
-    if (retainedClaim(agentId)) return completeRetained(agentId);
+    if (retainedClaim(ownerId, agentId)) return completeRetained(agentId);
     const begun = await walletSetupApi.beginBrowserCreation(agentId);
-    if (!begun.create_permitted || !createEmbeddedWallet) return begun;
+    if (!begun.create_permitted || !createEmbeddedWallet || !ownerId) return begun;
     const wallet = await createEmbeddedWallet();
-    retainClaim(agentId, wallet);
+    retainClaim(ownerId, agentId, wallet);
     return completeRetained(agentId);
   };
   const blocked = busy || uncertain;

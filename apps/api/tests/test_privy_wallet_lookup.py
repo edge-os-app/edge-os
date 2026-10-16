@@ -479,7 +479,8 @@ def test_address_only_claim_binds_the_independently_resolved_id(monkeypatch):
     assert lookup.calls == [(ADDR, None)]
     retained = [e.content for e in session.added if e.event_type == SetupEventType.RESULT_RETURNED.value]
     assert retained == [{"wallet_id": None, "owner_id": str(row.owner_id), "chain_type": "ethereum", "address": None,
-                         "claimed_address": ADDR, "source": "BROWSER_COMPLETION", "trusted": False}]
+                         "claimed_address": ADDR, "claimed_wallet_index": None, "source": "BROWSER_COMPLETION",
+                         "trusted": False}]
 
 
 def test_address_only_claim_without_match_stays_unknown(monkeypatch):
@@ -516,3 +517,13 @@ def test_resume_without_a_retained_claim_never_creates(monkeypatch):
     record = browser_intent.resume_retained_claim(session, Principal(row.owner_id, DID), agent_id="agent-1",
                                                   provider=lookup)
     assert record.state == SetupState.UNKNOWN and record.reason == "RECONCILE_NO_EXACT_ID" and lookup.calls == []
+
+
+def test_retained_claim_keeps_the_returned_wallet_index(monkeypatch):
+    row, session = _service_row(monkeypatch)
+    lookup = _ClaimLookup(None)
+    lookup.owner_id = row.owner_id
+    service.complete_from_browser(session, Principal(row.owner_id, DID), agent_id="agent-1", wallet_id=None,
+                                  provider=lookup, address=ADDR, wallet_index=2)
+    retained = [e.content for e in session.added if e.event_type == SetupEventType.RESULT_RETURNED.value]
+    assert retained[0]["claimed_wallet_index"] == 2

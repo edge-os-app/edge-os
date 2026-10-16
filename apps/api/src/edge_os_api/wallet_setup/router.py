@@ -32,6 +32,7 @@ class BrowserCompletionBody(StrictModel):
     wallet_id: str | None = Field(default=None, min_length=1, max_length=200)
     # The exact address the SDK returned. Untrusted; required for the owner-bound lookup, optional for the fixture.
     # An address-only claim (the SDK returned no ID) is resolved by the server's own lookup.
+    wallet_index: int | None = Field(default=None, ge=0, le=2_147_483_647)
     address: str | None = Field(default=None, min_length=42, max_length=42)
 
 
@@ -116,7 +117,8 @@ def complete(agent_id: str, data: BrowserCompletionBody, principal: Principal = 
     if isinstance(provider, OwnerBoundLookupProvider):
         provider = provider.with_claim(data.address)
     return serialize(service.complete_from_browser(session, principal, agent_id=agent_id, wallet_id=data.wallet_id,
-                                                   provider=provider, address=data.address))
+                                                   provider=provider, address=data.address,
+                                                   wallet_index=data.wallet_index))
 
 
 @router.get("/agents/{agent_id}")
