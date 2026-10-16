@@ -51,6 +51,8 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
   const [error, setError] = useState("");
   const errorRef = useRef<HTMLParagraphElement>(null);
   const savedHeading = useRef<HTMLHeadingElement>(null);
+  // Set only by a successful save; the effect below moves focus once the saved heading is committed.
+  const focusSavedHeading = useRef(false);
   const hasSavedDeclarations = useRef(false);
   const [proposalError, setProposalError] = useState("");
   const [proposalRetryReplacesDraft, setProposalRetryReplacesDraft] = useState(false);
@@ -119,6 +121,12 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
 
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
 
+  useEffect(() => {
+    if (!selected || !focusSavedHeading.current) return;
+    focusSavedHeading.current = false;
+    savedHeading.current?.focus();
+  }, [selected]);
+
   const beginAnother = async () => {
     setBusy(true); setError(""); setSelected(null); setAdopted(false);
     setRefreshNotice("");
@@ -162,10 +170,10 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
       const result = await api.saveInvestigation(intakeId, { ...keys, ...body });
       setDeclarations((current) => current ? [...current.filter((item) => item.record_id !== result.declaration.record_id), result.declaration]
         : [result.declaration]);
+      focusSavedHeading.current = true;
       setSelected(result); setProposal(null); setAdopted(false);
       setRefreshNotice("");
       try { window.sessionStorage.removeItem(`edge-os:investigation:${intakeId}`); } catch { /* ignore */ }
-      requestAnimationFrame(() => savedHeading.current?.focus());
     } catch (cause) {
       setError(errorDetail(cause));
       if (cause instanceof ApiError && cause.code === "interpretation_revision_conflict") await refreshProposal(false);
