@@ -51,6 +51,11 @@ The API image copies only this checker from `scripts/` (`deploy/docker/api.Docke
 `/app/scripts/history_payload_binding.py`. `tests/deployment_rehearsal/test_image_definitions.py` lists it as a required
 runtime asset. If the file is missing or changed, every required binding is INCOMPLETE.
 
+A saved binding records the checker identity it ran with, and its row and `HISTORY_PAYLOAD_BOUND` event are immutable.
+After a reviewed re-pin of the checker, every binding saved under the earlier identity stays INCOMPLETE with reason
+`CHECKER_IDENTITY_DIFFERS`. Its earlier PASS is never adopted and the dataset is never rebound: a consumer needs a new
+collection bound under the currently accepted checker.
+
 ## Collection
 
 1. The collection attempt's `ATTEMPT_STARTED` event freezes `payload_binding_requirement`
@@ -109,13 +114,16 @@ lineage and replay profile identity.
 
 ## Verification
 
-Pure checks need no database, socket or provider:
+Pure checks need no database, socket or provider. One test in `test_forward_history_binding_pure.py`,
+`test_the_loopback_provider_serves_the_four_bucket_page_and_restores_the_lookup`, starts an owned 127.0.0.1 server for
+the mapped verifier's stand-in. It is not pure, so the pure command deselects exactly that node:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 PYTHONPATH=apps/api/src:apps/api/tests:scripts/p03:. apps/api/.venv/bin/python -B -m pytest --noconftest \
   -p no:cacheprovider -q apps/api/tests/test_forward_history_binding_pure.py \
-  apps/api/tests/test_operating_release_validation.py tests/test_history_payload_binding.py
+  apps/api/tests/test_operating_release_validation.py tests/test_history_payload_binding.py \
+  --deselect apps/api/tests/test_forward_history_binding_pure.py::test_the_loopback_provider_serves_the_four_bucket_page_and_restores_the_lookup
 ```
 
 `apps/api/tests/test_saved_history_payload_binding.py` proves the matrix with PostgreSQL and the worker. The mapped

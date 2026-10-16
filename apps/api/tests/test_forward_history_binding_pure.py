@@ -1,4 +1,7 @@
-"""Pure checks of saved-history payload binding (SAVED-HISTORY-BINDING-L2). No database, socket or provider.
+"""Checks of saved-history payload binding (SAVED-HISTORY-BINDING-L2). No database or provider.
+
+Every test is pure except `test_the_loopback_provider_serves_the_four_bucket_page_and_restores_the_lookup`, which
+starts an owned 127.0.0.1 server for the mapped verifier's stand-in.
 
 A bound stand-in release is collected in process through the accepted P07 release path; its dataset content is built by
 the application's own `dataset_content`, then bound with the accepted checker. Literal digests below were computed once
