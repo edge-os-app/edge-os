@@ -6,9 +6,12 @@ job whose frozen SHA-256 differs before any effect.
 
 A release is composed only from a code-owned ACTUAL definition in `RELEASE_DEFINITIONS` whose exact SHA-256 is in
 `operating_release.APPROVED_RELEASES`. Both are empty, so the default server composes nothing: no release, no
-credential read, no socket. No setting, environment value, file or request can add a definition. Credential delivery is
-a recorded `REQUIRED_DECISION`: until a credential source is composed, an approved release refuses startup. See
-`docs/qualification/research-provider-composition/CONTRACT.md` section 12.
+credential read, no socket. No setting, environment value, file or request can add a definition.
+
+Credentials come from the process environment: unless a caller injects its own source, an approved release is composed
+with the accepted `EnvironmentCredentialSource`, which reads an allowed slot only when a job prepares it. A missing or
+blank slot refuses there, before any provider attempt. See
+`docs/qualification/research-provider-composition/CREDENTIAL_DELIVERY.md`.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from edge_os_api.core.research import operating_release
+from edge_os_api.core.research.environment_credentials import EnvironmentCredentialSource
 from edge_os_api.core.research.operating_release import OperatingRelease, ReleaseRefused, release_sha256
 from edge_os_api.core.research.released_source_runtime import (
     CredentialSource,
@@ -33,7 +37,9 @@ RELEASE_DEFINITIONS: Mapping[str, OperatingRelease] = {}
 
 def server_research_runtime(settings: Any, *,
                             credentials: CredentialSource | None = None) -> ReleasedSourceRuntime | None:
-    """The server's composed release, or None. Reads no credential and opens no socket. Raises `ReleaseRefused`."""
+    """The server's composed release, or None. Reads no credential and opens no socket. Raises `ReleaseRefused`.
+
+    `credentials` replaces the environment source; it is used as given, never with a fallback."""
     if any(key != release.release_id for key, release in RELEASE_DEFINITIONS.items()):
         raise ReleaseRefused("operating_release_invalid", "a release definition is filed under another id")
     approved = [release for release in RELEASE_DEFINITIONS.values() if release.kind == "ACTUAL"
@@ -42,10 +48,8 @@ def server_research_runtime(settings: Any, *,
         return None
     if len(approved) > 1:
         raise ReleaseRefused("operating_release_invalid", "a server composes at most one approved release")
-    if credentials is None:
-        raise ReleaseRefused("operating_release_credential_unavailable",
-                             "no credential source is composed for the approved release; nothing was read or sent")
     release = approved[0]
-    return open_released_runtime(settings, release, credentials=credentials,
+    source = EnvironmentCredentialSource() if credentials is None else credentials
+    return open_released_runtime(settings, release, credentials=source,
                                  http_transport=StdlibHttpTransport if release.history is not None else None,
                                  nansen_transport=NansenHttpFactory() if release.nansen is not None else None)

@@ -4,7 +4,8 @@ server bootstrap that the API and the worker share.
 Host only: no database, Docker, browser or network outside 127.0.0.1. Keys are the stand-in sentinels. The loopback
 provider is an owned 127.0.0.1 server; only an injected connector moves the adapter's fixed `https://api.nansen.ai`
 origin to it, so it can never be the network factory. No actual release is approved and no actual request runs.
-Contract: `docs/qualification/research-provider-composition/CONTRACT.md` section 12.
+Contract: `docs/qualification/research-provider-composition/CONTRACT.md` section 12; credential delivery:
+`CREDENTIAL_DELIVERY.md` beside it.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+import os
 import socket
 import sys
 import time
@@ -99,13 +101,22 @@ def test_an_approved_definition_gives_one_immutable_runtime_and_reads_no_key(mon
     assert creds.reads == [] and no_sockets == []
 
 
-def test_the_bootstrap_refuses_before_any_read_without_a_credential_source_or_with_two_releases(monkeypatch):
+def test_the_bootstrap_composes_the_environment_source_by_default_and_refuses_two_releases(monkeypatch, no_sockets):
     first, second = actual_release(), actual_release(release_id="actual-mount-test/2")
     define(monkeypatch, first)
     approve(monkeypatch, first)
-    with pytest.raises(ReleaseRefused) as refused:
-        released_runtime_bootstrap.server_research_runtime(LOCAL)
-    assert refused.value.code == "operating_release_credential_unavailable"
+    looked_up: list[str] = []
+
+    class WatchedEnviron(dict[str, str]):
+        def get(self, key: str, default: Any = None) -> Any:
+            looked_up.append(key)
+            return default
+
+    monkeypatch.setattr(os, "environ", WatchedEnviron())
+    runtime = released_runtime_bootstrap.server_research_runtime(LOCAL)  # no source passed: the environment source
+    assert runtime is not None and (type(runtime.credentials).__module__, type(runtime.credentials).__qualname__) == (
+        "edge_os_api.core.research.environment_credentials", "EnvironmentCredentialSource")
+    assert looked_up == [] and no_sockets == []
     define(monkeypatch, first, second)
     approve(monkeypatch, first, second)
     creds = stand_in.credentials()
