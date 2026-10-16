@@ -8,12 +8,13 @@ Rebased integration parent before calibration: `c4bc2a405f872ad284639a8de84712f7
 Branch: `quant/p42-statistical-preparation`
 Checkout: `/Users/kaluarunsi_1_2/.codex/worktrees/p42-statistical-preparation/edge-os`
 
-Pre-experiment profile revision: `edge-os.stat-q01-qprep/2026-10-16.1`.
+Pre-experiment profile revision: `edge-os.stat-q01-qprep/2026-10-17.1`.
 Prior `2026-10-13.1` and `2026-10-14.1` proposals were not evaluated. This
 revision freezes the complete-family schedule guard, append-only pre-label
 holdout event, SHA-256 lineage checks, total work cap, ambient-Decimal-safe
-generator, exact-family finalist binding, and per-series/per-history coverage
-assessment before calibration begins.
+generator, exact-family finalist binding, per-series/per-history coverage
+assessment, and a resolve-time check that the retained ledger finalist belongs
+to the checked family before calibration begins.
 
 The first bounded run on source `7e99be8912a03e3224f298532d1b5f8676d8f3f8`
 remained `UNRESOLVED`. A later repeat found that raw artifact SHA-256 included
@@ -26,11 +27,16 @@ report are retained unchanged as
 and
 [`CALIBRATION_REPORT_2026-10-14.2.md`](CALIBRATION_REPORT_2026-10-14.2.md).
 The `/2` coverage Wilson interval incorrectly pooled dependent within-history
-outcomes. This new candidate uses a new profile, frozen plan, result schema `/3`,
-and bounded run; it must not retroactively reinterpret the historical run.
-It preserves the outer seed lists, but its new profile identity intentionally
-changes the derived bootstrap/IID seed namespace; the `/3` run is a separately
-identified experiment.
+outcomes. The later `/3` profile `2026-10-16.1` corrected that issue but exposed
+the need to reject a forged ledger whose finalist is outside its checked family;
+its failed result/report are retained as
+[`CALIBRATION_RESULT_2026-10-16.1.json`](CALIBRATION_RESULT_2026-10-16.1.json)
+and
+[`CALIBRATION_REPORT_2026-10-16.1.md`](CALIBRATION_REPORT_2026-10-16.1.md).
+This candidate uses a new profile, frozen plan, result schema `/3`, and bounded
+run; it must not retroactively reinterpret either historical run. It preserves
+the outer seed lists, but its new profile identity intentionally changes the
+derived bootstrap/IID seed namespace; the new `/3` run is separately identified.
 
 ## Transport and boundaries
 

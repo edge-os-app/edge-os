@@ -3,7 +3,7 @@
 Status: **PROPOSED numerical-preparation profile; not adopted and not a
 formal-support method.**
 
-Identity: `edge-os.stat-q01-qprep/2026-10-16.1`
+Identity: `edge-os.stat-q01-qprep/2026-10-17.1`
 Assignment: `P42-QPREP-20261013-01` / issue #28
 Scope: isolated calculation and authored calibration only. It does not read a
 market holdout, alter P09, create a research job, call a provider, or make an
@@ -15,11 +15,15 @@ evaluated. Historical revision `2026-10-14.2` and its failed `/2` evidence are
 preserved in `docs/qualification/p42/*_2026-10-14.2.*`; it used an invalid
 pooled-Wilson denominator and is not reinterpreted by this revision.
 
-This identity adds exact-family finalist binding, precision-invariant finalist
-ordering, and per-series, per-history coverage uncertainty. It freezes those
-repairs before a new run. A later revision must receive a new identity, plan,
-and evidence; calibration criteria are not changed after inspecting that
-revision's result.
+Historical revision `2026-10-16.1` and its failed `/3` evidence are preserved
+in `docs/qualification/p42/*_2026-10-16.1.*`. This identity retains its
+exact-family finalist binding, precision-invariant finalist ordering, and
+per-series, per-history coverage uncertainty. It additionally rejects a
+persisted ledger whose finalist is absent from its retained canonical family,
+even if a forged `ACCESS_STARTED` event otherwise matches it. It freezes this
+guard and its failure fixture before a new run. A later revision must receive a
+new identity, plan, and evidence; calibration criteria are not changed after
+inspecting that revision's result.
 
 ## Claim and input boundary
 
@@ -157,8 +161,10 @@ negate or round them in a caller's ambient Decimal context. The selection stores
 the canonical SHA-256 fingerprint of its complete frozen comparison family, and
 candidate IDs must be exactly that family. The holdout guard independently
 checks every finalist and eligible ID against the partition's retained canonical
-family IDs; a copied hash alone is not sufficient. This rule is fixed before
-calibration outcomes. There is no runner-up substitution.
+family IDs; a copied hash alone is not sufficient. A ledger is also invalid
+unless its retained finalist belongs to those exact IDs, before either access or
+resolution. This rule is fixed before calibration outcomes. There is no
+runner-up substitution.
 
 One protected holdout confirmation may be recorded only for that exact finalist,
 using the same direction and the frozen `alpha=0.05`. Before any outcome

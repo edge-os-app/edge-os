@@ -237,6 +237,33 @@ def test_holdout_lineage_rejects_unchecked_partitions_mismatch_and_forged_starts
     assert forged_result.decision.status == "UNRESOLVED_HOLDOUT_NOT_STARTED"
 
 
+def test_holdout_rejects_a_forged_ledger_finalist_outside_its_checked_family() -> None:
+    family = _family(comparison_ids=("primary",))
+    selection = _selection(family, finalist_id="primary", eligible_ids=("primary",))
+    partition = validate_validation_windows(
+        family, {"s0": _window("s0"), "s1": _window("s1")},
+        validation_starts_at=VALIDATION_START, protected_starts_at=SPLIT,
+    )
+    ledger = prepare_protected_holdout_ledger(
+        selection, profile_hash=_hash("profile"), plan_hash=_hash("plan"), partition=partition,
+        protected_partition_id="holdout-v1", finalist_revision_id="primary-v1",
+        outcome_control_test_hash=_hash("outcome"),
+    )
+    forged = replace(
+        ledger,
+        finalist_id="outside-family",
+        finalist_revision_id="outside-family-v1",
+        accesses=(ProtectedHoldoutAccess("outside-family", "outside-family-v1", "ACCESS_STARTED"),),
+    )
+
+    result = resolve_protected_holdout(
+        forged, pvalue=Decimal("0.01"), outcome_control_test_hash=ledger.outcome_control_test_hash,
+    )
+
+    assert result.decision.status == "UNRESOLVED_HOLDOUT_LINEAGE_INVALID"
+    assert result.ledger == forged
+
+
 def test_holdout_resolves_success_and_insufficiency_as_append_only_consumed_attempts() -> None:
     family = _family()
     selection = _selection(family)

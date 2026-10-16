@@ -1,20 +1,22 @@
 # P42 bounded calibration plan
 
 Status: **FROZEN PROPOSAL BEFORE EXPERIMENTS.** No result appears in this file.
-The plan tests `edge-os.stat-q01-qprep/2026-10-16.1` from
+The plan tests `edge-os.stat-q01-qprep/2026-10-17.1` from
 [`STAT_Q01_CANDIDATE_PREPARATION_PROFILE.md`](../../implementation/STAT_Q01_CANDIDATE_PREPARATION_PROFILE.md).
 It is authored synthetic simulation, not market history, provider evidence, or
 formal statistical support.
 
 The prior `2026-10-14.2` plan/result used a pooled 576-interval Wilson
 denominator even though the nine pointwise outcomes within one generated history
-are dependent. Its plan, failed result, and report remain historical evidence;
-this new identity does not reclassify them. This replacement plan is frozen
-before its own experiment. It preserves the outer scenario seed lists,
-generator, methods, finite limits, and acceptance thresholds except the
-corrected uncertainty unit below. Because the profile identity is an input to
-the derived bootstrap/IID seed hash, the new identity intentionally creates a
-new deterministic resampling seed namespace; this is a new experiment, not a
+are dependent. The prior `2026-10-16.1` `/3` run corrected that uncertainty but
+did not reject a forged persisted ledger whose finalist was absent from its
+retained family. Both failed plans, results, and reports remain historical
+evidence; this new identity does not reclassify them. This replacement plan is
+frozen before its own experiment. It preserves the outer scenario seed lists,
+generator, methods, finite limits, and acceptance thresholds, while adding the
+ledger-lineage guard fixture. Because the profile identity is an input to the
+derived bootstrap/IID seed hash, the new identity intentionally creates a new
+deterministic resampling seed namespace; this is a new experiment, not a
 relabelled rerun.
 
 ## Exact experiments
@@ -52,7 +54,7 @@ the calibration capable of exposing loss of serial-dependence handling.
 | `dependent-null-v1` | All group effects are 0.00; run both joint stationary and `iid-slot-bootstrap/1`. | 64, seeds 1101–1164 | ST-02 false-support, pointwise coverage, and dependence-discriminator behavior with overlap. |
 | `known-effect-v1` | Effects are `+0.35`, `0.00`, and `-0.35` for IDs `positive`, `null`, and `negative`. | 64, seeds 2101–2164 | ST-01/ST-03 directional detection, contrast, full-family selection, and coverage behavior. |
 | `nonstationary-v1` | The positive comparison is `+0.35` in the first half and `-0.35` in the second; other comparisons are 0.00. | 32, seeds 3101–3132 | ST-03/ST-04 adverse regime behavior. A favorable result is a calibration failure, not evidence. |
-| `failure-fixtures-v1` | Canonical authored short, sparse, all-missing, zero-versus-missing, invalid-p, tie, selector-bandwidth, lower/upper partition-boundary, holdout-start/failure/wrong-finalist/runner-up/revision-mismatch/re-access, and different/reused-ID or copied-hash cross-family-finalist fixtures. Its canonical input/expected-status manifest is SHA-256 digested in the result. | one deterministic fixture each | ST-03/ST-05/ST-07/ST-08/ST-09 failure/governance behavior. |
+| `failure-fixtures-v1` | Canonical authored short, sparse, all-missing, zero-versus-missing, invalid-p, tie, selector-bandwidth, lower/upper partition-boundary, holdout-start/failure/wrong-finalist/runner-up/revision-mismatch/re-access, different/reused-ID or copied-hash cross-family-finalist, and forged-started-ledger/finalist-outside-family fixtures. Its canonical input/expected-status manifest is SHA-256 digested in the result. | one deterministic fixture each | ST-03/ST-05/ST-07/ST-08/ST-09 failure/governance behavior. |
 
 The run code derives each bootstrap seed from the experiment seed and the
 frozen profile identity; no result-dependent reseeding, retry, or selection is
@@ -76,7 +78,7 @@ passes, and it remains proposal-only even if they do.
 | Sensitivity stability | At least 80% of valid known-effect repetitions make the same candidate decision at all frozen sensitivities. |
 | Nonstationary adverse case | No repetition may return a candidate finalist. At least 80% must be unresolved because of a frozen selector/sensitivity/family rule; otherwise the profile is insufficient. |
 | Dependence discriminator | On dependent nulls, the report must retain the IID comparator. The candidate is insufficient unless IID has either at least two more false finalists than the joint method or, for at least one matching comparison ID, IID coverage is at least 0.05 lower than the joint `NOMINAL` coverage. Indistinguishable bounded evidence is `UNRESOLVED`, not a pass. |
-| Failure fixtures | Every fixture must preserve `None` separately from zero, retain all family members, bind the finalist to its exact canonical family, and return its frozen unresolved/governance status. |
+| Failure fixtures | Every fixture must preserve `None` separately from zero, retain all family members, bind the finalist to its exact canonical family, reject a forged ledger whose finalist is outside that family, and return its frozen unresolved/governance status. |
 
 Wilson bounds use the uncorrected score interval with Decimal-50 arithmetic:
 `z=1.6448536269514722` for one-sided 95% bounds and

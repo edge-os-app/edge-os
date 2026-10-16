@@ -20,6 +20,7 @@ from typing import Mapping, Sequence
 from edge_os_api.research.statistical_partition import (
     HoldoutAccessRequest,
     OutcomeWindow,
+    ProtectedHoldoutAccess,
     begin_protected_holdout,
     prepare_protected_holdout_ledger,
     resolve_protected_holdout,
@@ -47,7 +48,7 @@ from edge_os_api.strategies.compiler import NUMERIC
 SLOT_COUNT = 160
 COMPARISON_IDS = ("positive", "null", "negative")
 UTC = timezone.utc
-PROFILE_ID = "edge-os.stat-q01-qprep/2026-10-16.1"
+PROFILE_ID = "edge-os.stat-q01-qprep/2026-10-17.1"
 _CALCULATION_DIGEST_EXCLUDED_FIELDS = (
     "python",
     "platform",
@@ -158,6 +159,7 @@ _FAILURE_FIXTURE_MANIFEST = (
     ("holdout_selection_family_mismatch", "unconsumed_ledger;different_id_other_family", "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"),
     ("holdout_reused_id_family_mismatch", "unconsumed_ledger;reused_id_other_family", "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"),
     ("holdout_forged_hash_family_mismatch", "unconsumed_ledger;other_id_with_copied_family_hash", "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"),
+    ("holdout_forged_ledger_finalist_outside_family", "forged_started_ledger;finalist_absent_from_checked_family", "UNRESOLVED_HOLDOUT_LINEAGE_INVALID"),
 )
 
 
@@ -374,6 +376,15 @@ def run_failure_fixtures(
     selection_family_mismatch = begin_protected_holdout(ledger, different_selection, request)
     reused_id_family_mismatch = begin_protected_holdout(ledger, reused_id_selection, request)
     forged_hash_family_mismatch = begin_protected_holdout(ledger, forged_hash_selection, request)
+    forged_ledger = replace(
+        ledger,
+        finalist_id="outside-family",
+        finalist_revision_id="outside-family-v1",
+        accesses=(ProtectedHoldoutAccess("outside-family", "outside-family-v1", "ACCESS_STARTED"),),
+    )
+    forged_ledger_finalist_outside_family = resolve_protected_holdout(
+        forged_ledger, pvalue=Decimal("0.01"), outcome_control_test_hash=ledger.outcome_control_test_hash,
+    )
     zero_missing = summarize_comparison(FrozenComparison("zero-missing", (
         ScheduledObservation("z0", "TRIGGERED", Decimal(0)),
         ScheduledObservation("z1", "TRIGGERED", None, "SYNTHETIC_MISSING"),
@@ -398,6 +409,7 @@ def run_failure_fixtures(
         "holdout_selection_family_mismatch": selection_family_mismatch.status,
         "holdout_reused_id_family_mismatch": reused_id_family_mismatch.status,
         "holdout_forged_hash_family_mismatch": forged_hash_family_mismatch.status,
+        "holdout_forged_ledger_finalist_outside_family": forged_ledger_finalist_outside_family.decision.status,
     }
 
 

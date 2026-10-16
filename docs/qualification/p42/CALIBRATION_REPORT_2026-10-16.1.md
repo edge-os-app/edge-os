@@ -7,7 +7,8 @@ admission, a formal-support claim, or trading authority.
 ## Frozen inputs and execution
 
 This run executes profile `edge-os.stat-q01-qprep/2026-10-16.1` and the frozen
-plan in [`CALIBRATION_PLAN.md`](CALIBRATION_PLAN.md). Its exact source candidate
+plan in [`CALIBRATION_PLAN_2026-10-16.1.md`](CALIBRATION_PLAN_2026-10-16.1.md).
+Its exact source candidate
 is `dee4aeeaa6aeda64c9559aae517d4affb390ffeb`; the evidence-only child commit
 adds this report and result without changing that source, profile, or plan. The
 calculation intentionally has no network, provider, model, wallet, market-data,
@@ -17,8 +18,8 @@ Run from `apps/api` on 2026-10-16:
 
 ```sh
 uv run --frozen python -m edge_os_api.research.statistical_calibration \
-  --plan ../../docs/qualification/p42/CALIBRATION_PLAN.md \
-  --output ../../docs/qualification/p42/CALIBRATION_RESULT.json
+  --plan ../../docs/qualification/p42/CALIBRATION_PLAN_2026-10-16.1.md \
+  --output ../../docs/qualification/p42/CALIBRATION_RESULT_2026-10-16.1.json
 ```
 
 | Recorded input or output | SHA-256 |

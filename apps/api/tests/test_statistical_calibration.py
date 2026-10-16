@@ -119,6 +119,7 @@ def test_failure_fixtures_cover_required_unresolved_and_holdout_governance_paths
         "holdout_selection_family_mismatch": "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH",
         "holdout_reused_id_family_mismatch": "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH",
         "holdout_forged_hash_family_mismatch": "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH",
+        "holdout_forged_ledger_finalist_outside_family": "UNRESOLVED_HOLDOUT_LINEAGE_INVALID",
     }
 
 

@@ -302,6 +302,7 @@ def _ledger_is_usable(ledger: object) -> bool:
         and _comparison_ids_are_usable(ledger.comparison_ids)
         and _is_identity(ledger.protected_partition_id)
         and _is_identity(ledger.finalist_id)
+        and ledger.finalist_id in ledger.comparison_ids
         and _is_identity(ledger.finalist_revision_id)
         and ledger.alpha == FROZEN_HOLDOUT_ALPHA
         and isinstance(ledger.accesses, tuple)
