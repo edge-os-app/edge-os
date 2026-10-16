@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -38,7 +37,6 @@ from scripts.privy_unfunded_proof.specimens import (
 
 MAX_REPLY_BYTES = 16384
 MAX_CONTENT_TYPE_CHARS = 128
-_MEDIA_TYPE = re.compile(r"[a-z0-9][a-z0-9.+-]{0,63}/[a-z0-9][a-z0-9.+-]{0,63}")
 
 
 class Outcome(StrEnum):
@@ -151,11 +149,11 @@ def _metadata(reply: object) -> tuple[int | None, str | None, bytes, bool]:
 
 
 def _media_type(content_type: str | None) -> str | None:
-    """Return only a validated lowercase media type. Parameters are never saved."""
+    """Return a fixed media classification. Reply text is never saved."""
     if content_type is None:
         return None
     media = content_type.split(";")[0].strip().lower()
-    return media if _MEDIA_TYPE.fullmatch(media) else None
+    return "application/json" if media == "application/json" else "OTHER"
 
 
 class _Attempt:
@@ -253,7 +251,10 @@ def _classify_success(
         return attempt.finish(Outcome.UNKNOWN, "DECODE_FAILED")
     want = {**specimen.transaction, "wallet": WALLETS[specimen.wallet_id]}
     # Only frozen specimen values are saved, never values taken from the reply.
-    matches = {key: _normalized(decoded.get(key)) == _normalized(value) for key, value in sorted(want.items())}
+    try:
+        matches = {key: bool(_normalized(decoded.get(key)) == _normalized(value)) for key, value in sorted(want.items())}
+    except Exception:  # noqa: BLE001 - a hostile decoded value may raise with reply text; keep a fixed reason
+        return attempt.finish(Outcome.UNKNOWN, "DECODE_FAILED")
     public: dict[str, Any] = {}
     for key, matched in matches.items():
         if matched and key == "data":

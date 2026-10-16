@@ -1263,3 +1263,29 @@ def test_freeze_request_rejects_noncanonical_header_value() -> None:
         with pytest.raises(SpecimenTableError) as caught:
             specimens.freeze_request("synthetic-probe-wallet-a", body_of("raw.baseline"), headers={"privy-request-expiry": value})
         assert caught.value.code == "UNSUPPORTED_HEADER"
+
+
+@pytest.mark.parametrize("content_type", [f"application/x-tok-{HOSTILE.encode().hex()}", f"text/{HOSTILE.lower()}"])
+def test_reply_chosen_media_type_never_saved(store_dir: Path, content_type: str) -> None:
+    result = run("raw.baseline", store_dir, RecordingSend(Reply(200, content_type, b"{}")))
+    assert (result.outcome, result.reason) == (Outcome.UNKNOWN, "NON_JSON")
+    capture = json.loads((store_dir / "raw.baseline.capture.json").read_text())
+    assert capture["media_type"] == "OTHER"
+    saved = all_saved_text(store_dir)
+    assert HOSTILE.encode().hex() not in saved and HOSTILE.lower() not in saved
+
+
+class _RaisingValue:
+    def __eq__(self, other: object) -> bool:
+        raise ValueError(f"comparison leak {HOSTILE}")
+
+    __hash__ = None
+
+
+def test_decoded_value_that_raises_is_unknown(store_dir: Path) -> None:
+    def decoder(raw: bytes) -> dict:
+        return {**signed_fields(), "chain_id": _RaisingValue()}
+
+    result = run("raw.baseline", store_dir, RecordingSend(success_reply(signed_fields())), decoder=decoder)
+    assert (result.outcome, result.reason) == (Outcome.UNKNOWN, "DECODE_FAILED")
+    assert HOSTILE not in all_saved_text(store_dir) and HOSTILE not in repr(result)
