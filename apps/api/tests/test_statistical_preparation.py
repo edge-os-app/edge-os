@@ -210,12 +210,14 @@ def test_validation_family_bootstraps_the_complete_family_and_retains_each_sensi
 
 
 def test_protected_holdout_cannot_promote_a_runner_up_after_finalist_failure() -> None:
+    family = _selection_family("positive", "runner-up", "negative")
     selection = select_validation_finalist(
         {
             "positive": (Decimal("0.80"), True),
             "runner-up": (Decimal("0.60"), True),
             "negative": (Decimal("-0.80"), False),
         },
+        family=family,
     )
 
     failed = confirm_protected_holdout(selection, comparison_id="positive", pvalue=Decimal("0.20"),
@@ -226,6 +228,24 @@ def test_protected_holdout_cannot_promote_a_runner_up_after_finalist_failure() -
     assert selection.finalist_id == "positive"
     assert failed.status == "UNRESOLVED_HOLDOUT_FAILED"
     assert substituted.status == "UNRESOLVED_HOLDOUT_WRONG_FINALIST"
+
+
+def test_finalist_selection_does_not_round_the_ordering_under_caller_precision() -> None:
+    family = _selection_family("a-lower", "z-higher")
+    candidates = {
+        "a-lower": (Decimal("1.00000000000000000000000000001"), True),
+        "z-higher": (Decimal("1.00000000000000000000000000002"), True),
+    }
+
+    with localcontext() as context:
+        context.prec = 28
+        low_precision = select_validation_finalist(candidates, family=family)
+    with localcontext() as context:
+        context.prec = 50
+        high_precision = select_validation_finalist(candidates, family=family)
+
+    assert low_precision == high_precision
+    assert low_precision.finalist_id == "z-higher"
 
 
 def test_validation_evaluation_ignores_the_callers_ambient_decimal_precision() -> None:
@@ -261,6 +281,18 @@ def test_validation_evaluation_ignores_the_callers_ambient_decimal_precision() -
 
     assert low_precision == high_precision
     assert low_precision.status == "EVALUATED"
+
+
+def _selection_family(*comparison_ids: str) -> FrozenComparisonFamily:
+    return FrozenComparisonFamily(
+        "selection-family", "validation-partition", 1_800, 60, 300,
+        tuple(
+            FrozenComparison(
+                comparison_id, (ScheduledObservation("s0", "CONTROL", Decimal(0)),),
+            )
+            for comparison_id in comparison_ids
+        ),
+    )
 
 
 def _reference_ppw(

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from hashlib import sha256
 
 from edge_os_api.research.statistical_preparation import (
     FrozenComparisonFamily,
@@ -15,6 +13,7 @@ from edge_os_api.research.statistical_preparation import (
     ScheduledObservation,
     ValidationFinalist,
     confirm_protected_holdout,
+    frozen_family_sha256,
 )
 
 
@@ -42,6 +41,7 @@ class PartitionValidation:
     family_id: str
     partition_id: str
     family_hash: str
+    comparison_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,7 @@ class ProtectedHoldoutLedger:
     profile_hash: str
     plan_hash: str
     family_hash: str
+    comparison_ids: tuple[str, ...]
     protected_partition_id: str
     finalist_id: str
     finalist_revision_id: str
@@ -111,7 +112,7 @@ def validate_validation_windows(
     if not isinstance(windows, Mapping):
         raise ValueError("outcome windows must be a mapping keyed by canonical slot identity")
     slot_ids = _canonical_schedule(family)
-    family_hash = _family_hash(family)
+    family_hash = frozen_family_sha256(family)
     statuses: dict[str, str] = {}
     reasons: list[str] = []
     expected = set(slot_ids)
@@ -157,6 +158,7 @@ def validate_validation_windows(
     return PartitionValidation(
         status, len(slot_ids), tuple(sorted(set(reasons))), statuses,
         family.family_id, family.partition_id, family_hash,
+        tuple(comparison.comparison_id for comparison in family.comparisons),
     )
 
 
@@ -175,6 +177,8 @@ def prepare_protected_holdout_ledger(
         raise ValueError("a selected finalist contained exactly once in its eligible family is required")
     if not isinstance(partition, PartitionValidation) or partition.status != "VALID" or not _is_sha256(partition.family_hash):
         raise ValueError("a valid schedule-derived partition lineage is required")
+    if not _selection_matches_family(selection, partition.family_hash, partition.comparison_ids):
+        raise ValueError("the selected finalist must be bound to the exact checked family")
     hashes = (profile_hash, plan_hash, partition.family_hash, outcome_control_test_hash)
     if not all(_is_sha256(value) for value in hashes):
         raise ValueError("holdout profile, plan, family, and outcome-test identities must be SHA-256 values")
@@ -182,7 +186,7 @@ def prepare_protected_holdout_ledger(
         raise ValueError("protected partition and finalist revision identities are required")
     assert selection.finalist_id is not None
     return ProtectedHoldoutLedger(
-        profile_hash, plan_hash, partition.family_hash, protected_partition_id, selection.finalist_id,
+        profile_hash, plan_hash, partition.family_hash, partition.comparison_ids, protected_partition_id, selection.finalist_id,
         finalist_revision_id, outcome_control_test_hash, FROZEN_HOLDOUT_ALPHA, (),
     )
 
@@ -197,7 +201,11 @@ def begin_protected_holdout(
         return HoldoutAccessStart("UNRESOLVED_HOLDOUT_LINEAGE_INVALID", ledger)
     if ledger.accesses:
         return HoldoutAccessStart("UNRESOLVED_HOLDOUT_ALREADY_ACCESSED", ledger)
-    if not _selection_is_usable(selection) or selection.finalist_id != ledger.finalist_id:
+    if not _selection_is_usable(selection):
+        return HoldoutAccessStart("UNRESOLVED_NO_FINALIST", ledger)
+    if not _selection_matches_family(selection, ledger.family_hash, ledger.comparison_ids):
+        return HoldoutAccessStart("UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH", ledger)
+    if selection.finalist_id != ledger.finalist_id:
         return HoldoutAccessStart("UNRESOLVED_NO_FINALIST", ledger)
     if not isinstance(request, HoldoutAccessRequest):
         return HoldoutAccessStart("UNRESOLVED_HOLDOUT_LINEAGE_MISMATCH", ledger)
@@ -227,7 +235,7 @@ def resolve_protected_holdout(
             "UNRESOLVED_HOLDOUT_LINEAGE_MISMATCH", ledger.finalist_id, ledger.finalist_id, pvalue,
         )
     else:
-        selection = ValidationFinalist("SELECTED", ledger.finalist_id, (ledger.finalist_id,))
+        selection = ValidationFinalist("SELECTED", ledger.finalist_id, (ledger.finalist_id,), ledger.family_hash)
         decision = confirm_protected_holdout(
             selection, comparison_id=ledger.finalist_id, pvalue=pvalue, alpha=ledger.alpha,
         )
@@ -237,7 +245,7 @@ def resolve_protected_holdout(
 
 def _append_access(ledger: ProtectedHoldoutLedger, access: ProtectedHoldoutAccess) -> ProtectedHoldoutLedger:
     return ProtectedHoldoutLedger(
-        ledger.profile_hash, ledger.plan_hash, ledger.family_hash, ledger.protected_partition_id,
+        ledger.profile_hash, ledger.plan_hash, ledger.family_hash, ledger.comparison_ids, ledger.protected_partition_id,
         ledger.finalist_id, ledger.finalist_revision_id, ledger.outcome_control_test_hash,
         ledger.alpha, ledger.accesses + (access,),
     )
@@ -259,25 +267,6 @@ def _canonical_schedule(family: FrozenComparisonFamily) -> tuple[str, ...]:
     return first
 
 
-def _family_hash(family: FrozenComparisonFamily) -> str:
-    payload = {
-        "family_id": family.family_id,
-        "partition_id": family.partition_id,
-        "target_horizon_seconds": family.target_horizon_seconds,
-        "reference_window_seconds": family.reference_window_seconds,
-        "decision_interval_seconds": family.decision_interval_seconds,
-        "comparisons": [
-            [
-                comparison.comparison_id,
-                [[item.slot_id, item.group, _decimal_text(item.response), item.reason]
-                 for item in comparison.observations],
-            ]
-            for comparison in family.comparisons
-        ],
-    }
-    return sha256(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
-
-
 def _selection_is_usable(selection: object) -> bool:
     return (
         isinstance(selection, ValidationFinalist)
@@ -285,7 +274,22 @@ def _selection_is_usable(selection: object) -> bool:
         and _is_identity(selection.finalist_id)
         and isinstance(selection.eligible_ids, tuple)
         and selection.eligible_ids.count(selection.finalist_id) == 1
+        and len(set(selection.eligible_ids)) == len(selection.eligible_ids)
         and all(_is_identity(candidate_id) for candidate_id in selection.eligible_ids)
+        and _is_sha256(selection.family_hash)
+    )
+
+
+def _selection_matches_family(
+    selection: ValidationFinalist,
+    family_hash: str,
+    comparison_ids: tuple[str, ...],
+) -> bool:
+    return (
+        selection.family_hash == family_hash
+        and _comparison_ids_are_usable(comparison_ids)
+        and selection.finalist_id in comparison_ids
+        and set(selection.eligible_ids).issubset(comparison_ids)
     )
 
 
@@ -295,6 +299,7 @@ def _ledger_is_usable(ledger: object) -> bool:
         and all(_is_sha256(value) for value in (
             ledger.profile_hash, ledger.plan_hash, ledger.family_hash, ledger.outcome_control_test_hash,
         ))
+        and _comparison_ids_are_usable(ledger.comparison_ids)
         and _is_identity(ledger.protected_partition_id)
         and _is_identity(ledger.finalist_id)
         and _is_identity(ledger.finalist_revision_id)
@@ -347,8 +352,13 @@ def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
-def _decimal_text(value: Decimal | None) -> str | None:
-    return format(value, "f") if value is not None else None
+def _comparison_ids_are_usable(value: object) -> bool:
+    return (
+        isinstance(value, tuple)
+        and bool(value)
+        and len(set(value)) == len(value)
+        and all(_is_identity(comparison_id) for comparison_id in value)
+    )
 
 
 def _is_utc(value: object) -> bool:

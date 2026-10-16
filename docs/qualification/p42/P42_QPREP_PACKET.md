@@ -8,21 +8,29 @@ Rebased integration parent before calibration: `c4bc2a405f872ad284639a8de84712f7
 Branch: `quant/p42-statistical-preparation`
 Checkout: `/Users/kaluarunsi_1_2/.codex/worktrees/p42-statistical-preparation/edge-os`
 
-Pre-experiment profile revision: `edge-os.stat-q01-qprep/2026-10-14.2`.
+Pre-experiment profile revision: `edge-os.stat-q01-qprep/2026-10-16.1`.
 Prior `2026-10-13.1` and `2026-10-14.1` proposals were not evaluated. This
 revision freezes the complete-family schedule guard, append-only pre-label
 holdout event, SHA-256 lineage checks, total work cap, ambient-Decimal-safe
-generator, and dependence/nonstationarity assessment rules before calibration
-begins.
+generator, exact-family finalist binding, and per-series/per-history coverage
+assessment before calibration begins.
 
 The first bounded run on source `7e99be8912a03e3224f298532d1b5f8676d8f3f8`
 remained `UNRESOLVED`. A later repeat found that raw artifact SHA-256 included
 volatile elapsed-time and allocation telemetry. Source
-`530c09a3811db8b12124c1d45b3f899a16e15526` adds a schema-v2 deterministic
+`530c09a3811db8b12124c1d45b3f899a16e15526` added a schema-v2 deterministic
 calculation fingerprint without changing the frozen numerical profile, plan,
-seeds, criteria, or limits; the rerun remains `UNRESOLVED`. See
-[`CALIBRATION_REPORT.md`](CALIBRATION_REPORT.md) for both source identities,
-raw-run provenance, and the repeat result.
+seeds, criteria, or limits; that rerun remains `UNRESOLVED`. Its raw result and
+report are retained unchanged as
+[`CALIBRATION_RESULT_2026-10-14.2.json`](CALIBRATION_RESULT_2026-10-14.2.json)
+and
+[`CALIBRATION_REPORT_2026-10-14.2.md`](CALIBRATION_REPORT_2026-10-14.2.md).
+The `/2` coverage Wilson interval incorrectly pooled dependent within-history
+outcomes. This new candidate uses a new profile, frozen plan, result schema `/3`,
+and bounded run; it must not retroactively reinterpret the historical run.
+It preserves the outer seed lists, but its new profile identity intentionally
+changes the derived bootstrap/IID seed namespace; the `/3` run is a separately
+identified experiment.
 
 ## Transport and boundaries
 

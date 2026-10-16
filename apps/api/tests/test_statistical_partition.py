@@ -20,6 +20,7 @@ from edge_os_api.research.statistical_preparation import (
     FrozenComparisonFamily,
     ScheduledObservation,
     ValidationFinalist,
+    select_validation_finalist,
 )
 
 
@@ -38,13 +39,44 @@ def _window(
     return OutcomeWindow(slot_id, starts_at or SPLIT - timedelta(minutes=35), ends_at or SPLIT, revision_id)
 
 
-def _family(slot_ids: tuple[str, ...] = ("s0", "s1")) -> FrozenComparisonFamily:
-    comparison = FrozenComparison(
-        "primary",
-        tuple(ScheduledObservation(slot_id, "CONTROL", Decimal(0)) for slot_id in slot_ids),
-    )
+def _family(
+    slot_ids: tuple[str, ...] = ("s0", "s1"),
+    *,
+    comparison_ids: tuple[str, ...] = ("positive", "runner-up"),
+    family_id: str = "validation-family",
+    partition_id: str = "validation-partition",
+) -> FrozenComparisonFamily:
     return FrozenComparisonFamily(
-        "validation-family", "validation-partition", 1_800, 60, 300, (comparison,),
+        family_id,
+        partition_id,
+        1_800,
+        60,
+        300,
+        tuple(
+            FrozenComparison(
+                comparison_id,
+                tuple(ScheduledObservation(slot_id, "CONTROL", Decimal(0)) for slot_id in slot_ids),
+            )
+            for comparison_id in comparison_ids
+        ),
+    )
+
+
+def _selection(
+    family: FrozenComparisonFamily,
+    *,
+    finalist_id: str = "positive",
+    eligible_ids: tuple[str, ...] = ("positive",),
+):
+    return select_validation_finalist(
+        {
+            comparison.comparison_id: (
+                Decimal("1") if comparison.comparison_id == finalist_id else Decimal(0),
+                comparison.comparison_id in eligible_ids,
+            )
+            for comparison in family.comparisons
+        },
+        family=family,
     )
 
 
@@ -133,9 +165,10 @@ def test_partition_guard_retains_extra_and_malformed_window_evidence_as_unresolv
 
 
 def test_holdout_ledger_allows_one_exact_finalist_revision_and_never_promotes_a_runner_up() -> None:
-    selection = ValidationFinalist("SELECTED", "positive", ("positive", "runner-up"))
+    family = _family()
+    selection = _selection(family, eligible_ids=("positive", "runner-up"))
     partition = validate_validation_windows(
-        _family(), {"s0": _window("s0"), "s1": _window("s1")},
+        family, {"s0": _window("s0"), "s1": _window("s1")},
         validation_starts_at=VALIDATION_START, protected_starts_at=SPLIT,
     )
     ledger = prepare_protected_holdout_ledger(
@@ -165,9 +198,10 @@ def test_holdout_ledger_allows_one_exact_finalist_revision_and_never_promotes_a_
 
 
 def test_holdout_lineage_rejects_unchecked_partitions_mismatch_and_forged_starts() -> None:
-    selection = ValidationFinalist("SELECTED", "positive", ("positive",))
+    family = _family()
+    selection = _selection(family)
     valid = validate_validation_windows(
-        _family(), {"s0": _window("s0"), "s1": _window("s1")},
+        family, {"s0": _window("s0"), "s1": _window("s1")},
         validation_starts_at=VALIDATION_START, protected_starts_at=SPLIT,
     )
     invalid = validate_validation_windows(
@@ -204,9 +238,10 @@ def test_holdout_lineage_rejects_unchecked_partitions_mismatch_and_forged_starts
 
 
 def test_holdout_resolves_success_and_insufficiency_as_append_only_consumed_attempts() -> None:
-    selection = ValidationFinalist("SELECTED", "positive", ("positive",))
+    family = _family()
+    selection = _selection(family)
     partition = validate_validation_windows(
-        _family(), {"s0": _window("s0"), "s1": _window("s1")},
+        family, {"s0": _window("s0"), "s1": _window("s1")},
         validation_starts_at=VALIDATION_START, protected_starts_at=SPLIT,
     )
     ledger = prepare_protected_holdout_ledger(
@@ -229,12 +264,55 @@ def test_holdout_resolves_success_and_insufficiency_as_append_only_consumed_atte
                for result in (success, insufficient))
 
 
+def test_holdout_rejects_a_finalist_from_another_checked_family_before_access() -> None:
+    family = _family(comparison_ids=("primary",))
+    partition = validate_validation_windows(
+        family, {"s0": _window("s0"), "s1": _window("s1")},
+        validation_starts_at=VALIDATION_START, protected_starts_at=SPLIT,
+    )
+    selection = _selection(family, finalist_id="primary", eligible_ids=("primary",))
+    ledger = prepare_protected_holdout_ledger(
+        selection, profile_hash=_hash("profile"), plan_hash=_hash("plan"), partition=partition,
+        protected_partition_id="holdout-v1", finalist_revision_id="primary-v1",
+        outcome_control_test_hash=_hash("outcome"),
+    )
+    different_id_family = _family(comparison_ids=("other",), family_id="other-family")
+    different_id = _selection(different_id_family, finalist_id="other", eligible_ids=("other",))
+    reused_id_family = _family(comparison_ids=("primary",), family_id="other-family")
+    reused_id = _selection(reused_id_family, finalist_id="primary", eligible_ids=("primary",))
+    forged_same_hash = ValidationFinalist("SELECTED", "other", ("other",), partition.family_hash)
+
+    with pytest.raises(ValueError, match="exact checked family"):
+        prepare_protected_holdout_ledger(
+            different_id, profile_hash=_hash("profile"), plan_hash=_hash("plan"), partition=partition,
+            protected_partition_id="holdout-v1", finalist_revision_id="primary-v1",
+            outcome_control_test_hash=_hash("outcome"),
+        )
+    with pytest.raises(ValueError, match="exact checked family"):
+        prepare_protected_holdout_ledger(
+            reused_id, profile_hash=_hash("profile"), plan_hash=_hash("plan"), partition=partition,
+            protected_partition_id="holdout-v1", finalist_revision_id="primary-v1",
+            outcome_control_test_hash=_hash("outcome"),
+        )
+    with pytest.raises(ValueError, match="exact checked family"):
+        prepare_protected_holdout_ledger(
+            forged_same_hash, profile_hash=_hash("profile"), plan_hash=_hash("plan"), partition=partition,
+            protected_partition_id="holdout-v1", finalist_revision_id="primary-v1",
+            outcome_control_test_hash=_hash("outcome"),
+        )
+
+    assert begin_protected_holdout(ledger, different_id, _request(ledger)).status == "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"
+    assert begin_protected_holdout(ledger, reused_id, _request(ledger)).status == "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"
+    assert begin_protected_holdout(ledger, forged_same_hash, _request(ledger)).status == "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"
+    assert ledger.accesses == ()
+
+
 def test_holdout_rejects_a_selected_identifier_absent_from_its_eligible_family() -> None:
     partition = validate_validation_windows(
         _family(), {"s0": _window("s0"), "s1": _window("s1")},
         validation_starts_at=VALIDATION_START, protected_starts_at=SPLIT,
     )
-    invalid_selection = ValidationFinalist("SELECTED", "positive", ("runner-up",))
+    invalid_selection = ValidationFinalist("SELECTED", "positive", ("runner-up",), partition.family_hash)
 
     with pytest.raises(ValueError, match="contained exactly once"):
         prepare_protected_holdout_ledger(

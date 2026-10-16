@@ -9,6 +9,7 @@ from edge_os_api.research.statistical_calibration import (
     CalibrationLimits,
     CalibrationScenario,
     ExperimentResult,
+    IidEvaluation,
     _assess_experiment,
     calculation_result_sha256,
     generate_synthetic_family,
@@ -19,7 +20,7 @@ from edge_os_api.research.statistical_calibration import (
     write_calibration_result,
 )
 from edge_os_api.research.statistical_partition import validate_validation_windows
-from edge_os_api.research.statistical_preparation import ValidationFinalist
+from edge_os_api.research.statistical_preparation import BootstrapEvaluation, ValidationFinalist
 
 
 def test_seeded_generator_preserves_complete_scheduled_history_and_partition_boundary() -> None:
@@ -115,6 +116,9 @@ def test_failure_fixtures_cover_required_unresolved_and_holdout_governance_paths
         "holdout_runner_up": "UNRESOLVED_HOLDOUT_ALREADY_ACCESSED",
         "holdout_revision_mismatch": "UNRESOLVED_HOLDOUT_REVISION_MISMATCH",
         "holdout_reaccess": "UNRESOLVED_HOLDOUT_ALREADY_ACCESSED",
+        "holdout_selection_family_mismatch": "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH",
+        "holdout_reused_id_family_mismatch": "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH",
+        "holdout_forged_hash_family_mismatch": "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH",
     }
 
 
@@ -134,10 +138,10 @@ def test_bounded_calibration_uses_decimal_coverage_and_preserves_its_proposal_st
     )
 
     assert result["status"] == "UNRESOLVED"
-    assert result["schema"] == "edge-os.stat-q01-calibration-result/2"
+    assert result["schema"] == "edge-os.stat-q01-calibration-result/3"
     assert result["calculation_sha256"] == calculation_result_sha256(result)
     assert result["experiments"][0].status == "COMPLETED"
-    assert result["assessments"]["known-effect-v1"]["coverage"]
+    assert result["assessments"]["known-effect-v1"]["coverage_pooled_descriptive"]
 
 
 def test_calibration_limits_refuse_an_unfrozen_parallel_execution_shape() -> None:
@@ -187,9 +191,73 @@ def test_nonstationary_assessment_requires_a_frozen_rule_not_merely_no_finalist(
     assert _assess_experiment(selector_bound)["passed"] is True
 
 
+def test_coverage_wilson_uses_independent_histories_per_declared_series() -> None:
+    scenario = CalibrationScenario("dependent-null-v1", (1, 2))
+    result = ExperimentResult(
+        scenario,
+        "COMPLETED",
+        0,
+        (_coverage_repetition(1, covered=True, iid_covered=True), _coverage_repetition(2, covered=False, iid_covered=False)),
+        0,
+    )
+
+    assessment = _assess_experiment(result)
+
+    assert assessment["coverage_pooled_descriptive"] == {
+        "hits": 9,
+        "total_intervals": 18,
+        "rate": Decimal("0.5"),
+    }
+    assert assessment["coverage_by_series"]["joint/positive/NOMINAL"] == {
+        "hits": 1,
+        "histories": 2,
+        "rate": Decimal("0.5"),
+    }
+    assert "coverage_wilson" not in assessment
+    assert assessment["iid_joint_nominal_coverage"]["positive"] == {
+        "iid_rate": Decimal("0.5"),
+        "joint_nominal_rate": Decimal("0.5"),
+    }
+
+
+def test_coverage_missingness_and_a_failed_series_cannot_hide_in_a_favorable_pool() -> None:
+    incomplete = _coverage_repetition(2, covered=True, iid_covered=True)
+    comparisons = dict(incomplete.comparisons)
+    positive = dict(comparisons["positive"])
+    sensitivities = dict(positive["sensitivities"])
+    del sensitivities["DOUBLE"]
+    positive["sensitivities"] = sensitivities
+    comparisons["positive"] = positive
+    dependent = ExperimentResult(
+        CalibrationScenario("dependent-null-v1", (1, 2)),
+        "COMPLETED",
+        0,
+        (_coverage_repetition(1, covered=True, iid_covered=True), replace(incomplete, comparisons=comparisons)),
+        0,
+    )
+    known = ExperimentResult(
+        CalibrationScenario("known-effect-v1", tuple(range(64))),
+        "COMPLETED",
+        0,
+        tuple(_coverage_repetition(seed, covered=True, failed_series="joint/negative/DOUBLE") for seed in range(64)),
+        0,
+    )
+
+    incomplete_assessment = _assess_experiment(dependent)
+    known_assessment = _assess_experiment(known)
+
+    assert incomplete_assessment["coverage_complete"] is False
+    assert incomplete_assessment["coverage_series_passed"] is False
+    assert "history-1:joint/positive/DOUBLE" in incomplete_assessment["coverage_missing"]
+    assert known_assessment["coverage_complete"] is True
+    assert known_assessment["coverage_series_passed"] is False
+    assert known_assessment["coverage_failed_series"] == ("joint/negative/DOUBLE",)
+    assert known_assessment["passed"] is False
+
+
 def test_calculation_digest_excludes_run_telemetry_but_binds_numerical_content() -> None:
     baseline = {
-        "schema": "edge-os.stat-q01-calibration-result/2",
+        "schema": "edge-os.stat-q01-calibration-result/3",
         "status": "UNRESOLVED",
         "python": "3.13.0",
         "platform": "first-host",
@@ -215,3 +283,58 @@ def test_result_writer_emits_json_without_decimal_or_provider_inputs(tmp_path: P
     write_calibration_result(target, result)
 
     assert target.read_text() == '{\n  "network": false,\n  "profile_id": "proposal",\n  "value": "0.10"\n}\n'
+
+
+def _coverage_repetition(
+    seed: int,
+    *,
+    covered: bool,
+    iid_covered: bool | None = None,
+    failed_series: str | None = None,
+) -> CalibrationRepetition:
+    truth = {"positive": Decimal("0.35"), "null": Decimal(0), "negative": Decimal("-0.35")}
+    comparisons = {}
+    for comparison_id, value in truth.items():
+        sensitivities = {}
+        for sensitivity in ("HALF", "NOMINAL", "DOUBLE"):
+            series_id = f"joint/{comparison_id}/{sensitivity}"
+            contains_truth = covered and series_id != failed_series
+            sensitivities[sensitivity] = {
+                "interval": (value - Decimal(1), value + Decimal(1))
+                if contains_truth else (value + Decimal(1), value + Decimal(2)),
+            }
+        comparisons[comparison_id] = {"sensitivities": sensitivities}
+    selection = ValidationFinalist("SELECTED", "positive", ("positive",))
+    sensitivity_finalists = {
+        sensitivity: ValidationFinalist("SELECTED", "positive", ("positive",))
+        for sensitivity in ("HALF", "NOMINAL", "DOUBLE")
+    }
+    iid = None
+    if iid_covered is not None:
+        iid = IidEvaluation(
+            "EVALUATED",
+            selection,
+            {
+                comparison_id: BootstrapEvaluation(
+                    "EVALUATED",
+                    1,
+                    (value - Decimal(1), value + Decimal(1))
+                    if iid_covered else (value + Decimal(1), value + Decimal(2)),
+                    Decimal("0.5"),
+                )
+                for comparison_id, value in truth.items()
+            },
+            {comparison_id: False for comparison_id in truth},
+        )
+    return CalibrationRepetition(
+        seed,
+        f"history-{seed}",
+        "VALID",
+        "EVALUATED",
+        selection,
+        "SELECTED",
+        sensitivity_finalists,
+        comparisons,
+        iid,
+        truth,
+    )

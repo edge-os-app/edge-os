@@ -15,7 +15,7 @@ from math import isfinite
 from pathlib import Path
 from random import Random
 from time import monotonic
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from edge_os_api.research.statistical_partition import (
     HoldoutAccessRequest,
@@ -47,7 +47,7 @@ from edge_os_api.strategies.compiler import NUMERIC
 SLOT_COUNT = 160
 COMPARISON_IDS = ("positive", "null", "negative")
 UTC = timezone.utc
-PROFILE_ID = "edge-os.stat-q01-qprep/2026-10-14.2"
+PROFILE_ID = "edge-os.stat-q01-qprep/2026-10-16.1"
 _CALCULATION_DIGEST_EXCLUDED_FIELDS = (
     "python",
     "platform",
@@ -155,6 +155,9 @@ _FAILURE_FIXTURE_MANIFEST = (
     ("holdout_runner_up", "consumed_failed_ledger;runner_up_submission", "UNRESOLVED_HOLDOUT_ALREADY_ACCESSED"),
     ("holdout_revision_mismatch", "unconsumed_ledger;finalist_revision_v2", "UNRESOLVED_HOLDOUT_REVISION_MISMATCH"),
     ("holdout_reaccess", "consumed_failed_ledger;repeat_finalist", "UNRESOLVED_HOLDOUT_ALREADY_ACCESSED"),
+    ("holdout_selection_family_mismatch", "unconsumed_ledger;different_id_other_family", "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"),
+    ("holdout_reused_id_family_mismatch", "unconsumed_ledger;reused_id_other_family", "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"),
+    ("holdout_forged_hash_family_mismatch", "unconsumed_ledger;other_id_with_copied_family_hash", "UNRESOLVED_HOLDOUT_SELECTION_FAMILY_MISMATCH"),
 )
 
 
@@ -298,7 +301,10 @@ def run_failure_fixtures(
     except EvaluationDeadlineExceeded:
         return {"CALIBRATION_RUNNER": "LIMIT_TOTAL_WALL_TIME"}
     invalid = holm_rejections({"positive": Decimal("0.01"), "failed": None}, alpha=profile.family_alpha)
-    tie = select_validation_finalist({"beta": (Decimal("0.30"), True), "alpha": (Decimal("0.30"), True)})
+    tie_family = _partition_fixture_family(("tie",), comparison_ids=("alpha", "beta"))
+    tie = select_validation_finalist(
+        {"beta": (Decimal("0.30"), True), "alpha": (Decimal("0.30"), True)}, family=tie_family,
+    )
     bandwidth = select_ppw_stationary_block_length(tuple(Decimal(index) for index in range(128)), overlap_floor=1).status
     boundary_start = datetime(2026, 1, 1, tzinfo=UTC)
     protected_start = boundary_start + timedelta(minutes=60)
@@ -317,8 +323,11 @@ def run_failure_fixtures(
     )
     if _deadline_elapsed(deadline):
         return {"CALIBRATION_RUNNER": "LIMIT_TOTAL_WALL_TIME"}
-    selection = ValidationFinalist("SELECTED", "positive", ("positive", "runner-up"))
-    holdout_family = _partition_fixture_family(("holdout",))
+    holdout_family = _partition_fixture_family(("holdout",), comparison_ids=("positive", "runner-up"))
+    selection = select_validation_finalist(
+        {"positive": (Decimal("0.30"), True), "runner-up": (Decimal("0.20"), True)},
+        family=holdout_family,
+    )
     partition = validate_validation_windows(
         holdout_family,
         {"holdout": OutcomeWindow("holdout", boundary_start, protected_start, "v1")},
@@ -349,6 +358,22 @@ def run_failure_fixtures(
     reaccess = begin_protected_holdout(
         failed.ledger, selection, request,
     )
+    different_family = _partition_fixture_family(
+        ("other",), comparison_ids=("other",), family_id="different-id-family",
+    )
+    different_selection = select_validation_finalist(
+        {"other": (Decimal("0.30"), True)}, family=different_family,
+    )
+    reused_id_family = _partition_fixture_family(
+        ("other",), comparison_ids=("positive",), family_id="reused-id-family",
+    )
+    reused_id_selection = select_validation_finalist(
+        {"positive": (Decimal("0.30"), True)}, family=reused_id_family,
+    )
+    forged_hash_selection = ValidationFinalist("SELECTED", "other", ("other",), ledger.family_hash)
+    selection_family_mismatch = begin_protected_holdout(ledger, different_selection, request)
+    reused_id_family_mismatch = begin_protected_holdout(ledger, reused_id_selection, request)
+    forged_hash_family_mismatch = begin_protected_holdout(ledger, forged_hash_selection, request)
     zero_missing = summarize_comparison(FrozenComparison("zero-missing", (
         ScheduledObservation("z0", "TRIGGERED", Decimal(0)),
         ScheduledObservation("z1", "TRIGGERED", None, "SYNTHETIC_MISSING"),
@@ -370,6 +395,9 @@ def run_failure_fixtures(
         "holdout_runner_up": runner_up.status,
         "holdout_revision_mismatch": revision.status,
         "holdout_reaccess": reaccess.status,
+        "holdout_selection_family_mismatch": selection_family_mismatch.status,
+        "holdout_reused_id_family_mismatch": reused_id_family_mismatch.status,
+        "holdout_forged_hash_family_mismatch": forged_hash_family_mismatch.status,
     }
 
 
@@ -417,7 +445,7 @@ def run_bounded_calibration(
         else "UNRESOLVED"
     )
     result = {
-        "schema": "edge-os.stat-q01-calibration-result/2",
+        "schema": "edge-os.stat-q01-calibration-result/3",
         "status": status,
         "profile": asdict(profile),
         "profile_sha256": _file_hash(_profile_path(plan_path)),
@@ -565,11 +593,14 @@ def _record_repetition(
                                  evaluation.comparisons[item.comparison_id].holm_rejections.get(sensitivity))
             for item in generated.family.comparisons
         }
-        sensitivity_finalists[sensitivity] = select_validation_finalist({
-            key: (contrast, bool(rejected) and contrast is not None and contrast > profile.minimum_relevant_difference)
-            if rejected is not None else (contrast, None)
-            for key, (contrast, rejected) in candidates.items()
-        })
+        sensitivity_finalists[sensitivity] = select_validation_finalist(
+            {
+                key: (contrast, bool(rejected) and contrast is not None and contrast > profile.minimum_relevant_difference)
+                if rejected is not None else (contrast, None)
+                for key, (contrast, rejected) in candidates.items()
+            },
+            family=generated.family,
+        )
     for comparison_id, item in evaluation.comparisons.items():
         comparisons[comparison_id] = {
             "status": item.status,
@@ -592,7 +623,7 @@ def _record_repetition(
         }
     candidates = {comparison_id: (item.summary.contrast, item.candidate_eligible)
                   for comparison_id, item in evaluation.comparisons.items()}
-    selection = select_validation_finalist(candidates)
+    selection = select_validation_finalist(candidates, family=generated.family)
     return CalibrationRepetition(
         seed, generated.history_hash, partition_status, evaluation.status, selection,
         _selection_reason(evaluation, selection, sensitivity_finalists), sensitivity_finalists,
@@ -654,7 +685,7 @@ def _iid_evaluation(
         ) if rejections[comparison.comparison_id] is not None else (summaries[comparison.comparison_id].contrast, None)
         for comparison in family.comparisons
     }
-    finalist = select_validation_finalist(candidates)
+    finalist = select_validation_finalist(candidates, family=family)
     status = "EVALUATED" if all(value is not None for value in rejections.values()) else "UNRESOLVED_FAMILY_INCOMPLETE"
     return IidEvaluation(status, finalist, values, rejections)
 
@@ -726,11 +757,19 @@ def _fixture_family(slots: tuple[str, ...], *, observed_per_group: int, reason: 
     return FrozenComparisonFamily("failure-fixture", "failure-fixture", 1_800, 60, 300, tuple(comparisons))
 
 
-def _partition_fixture_family(slots: tuple[str, ...]) -> FrozenComparisonFamily:
-    comparison = FrozenComparison(
-        "primary", tuple(ScheduledObservation(slot, "CONTROL", Decimal(0)) for slot in slots),
+def _partition_fixture_family(
+    slots: tuple[str, ...],
+    *,
+    comparison_ids: tuple[str, ...] = ("primary",),
+    family_id: str = "partition-fixture",
+) -> FrozenComparisonFamily:
+    comparisons = tuple(
+        FrozenComparison(
+            comparison_id, tuple(ScheduledObservation(slot, "CONTROL", Decimal(0)) for slot in slots),
+        )
+        for comparison_id in comparison_ids
     )
-    return FrozenComparisonFamily("partition-fixture", "partition-fixture", 1_800, 60, 300, (comparison,))
+    return FrozenComparisonFamily(family_id, "partition-fixture", 1_800, 60, 300, comparisons)
 
 
 def _fixture_sha256(value: str) -> str:
@@ -775,64 +814,220 @@ def _assess_experiment(result: ExperimentResult) -> Mapping[str, object]:
         return {"passed": False, "reason": "INSUFFICIENT_VALID_REPETITIONS", "valid": len(valid), "total": len(repetitions)}
     if result.scenario.scenario_id == "dependent-null-v1":
         false = sum(item.selection.status == "SELECTED" for item in valid)
-        coverage = _coverage(valid)
+        coverage = _coverage_summary(valid, sensitivities=("HALF", "NOMINAL", "DOUBLE"))
         iid_false = sum(item.iid is not None and item.iid.finalist.status == "SELECTED" for item in valid)
-        iid_coverage = _iid_coverage(valid)
+        iid_coverage = _iid_coverage_summary(valid)
         upper = _wilson(false, len(valid), Decimal("1.6448536269514722"))[1]
-        interval = _wilson(coverage[0], coverage[1], Decimal("1.959963984540054"))
-        observed_coverage = _rate(coverage)
-        iid_observed_coverage = _rate(iid_coverage)
+        coverage_passed, failed_coverage_series = _coverage_series_passes(coverage, require_target_band=True)
+        iid_matching = _matching_iid_nominal_coverage(coverage, iid_coverage)
         discriminated = (
             iid_false >= false + 2
-            or (
-                iid_observed_coverage is not None
-                and observed_coverage is not None
-                and iid_observed_coverage <= observed_coverage - Decimal("0.05")
-            )
+            or any(item["iid_rate"] <= item["joint_nominal_rate"] - Decimal("0.05")
+                   for item in iid_matching.values())
         )
-        passed = upper is not None and upper <= Decimal("0.15") and observed_coverage is not None and observed_coverage >= Decimal("0.85") \
-            and interval[0] <= Decimal("1.00") and interval[1] >= Decimal("0.90") and discriminated
-        return {"passed": passed, "false_finalists": false, "fwer_upper": upper, "coverage": coverage,
-                "coverage_wilson": interval, "iid_false_finalists": iid_false, "iid_coverage": iid_coverage,
-                "dependence_discriminated": discriminated}
+        passed = upper is not None and upper <= Decimal("0.15") and coverage_passed and discriminated
+        return {
+            "passed": passed,
+            "false_finalists": false,
+            "fwer_upper": upper,
+            **_coverage_evidence(coverage),
+            "coverage_series_passed": coverage_passed,
+            "coverage_failed_series": failed_coverage_series,
+            "iid_false_finalists": iid_false,
+            "iid_coverage_pooled_descriptive": iid_coverage["pooled_descriptive"],
+            "iid_coverage_by_comparison": iid_coverage["by_series"],
+            "iid_coverage_complete": iid_coverage["complete"],
+            "iid_coverage_missing": iid_coverage["missing"],
+            "iid_joint_nominal_coverage": iid_matching,
+            "dependence_discriminated": discriminated,
+        }
     if result.scenario.scenario_id == "known-effect-v1":
         positive = sum(item.selection.finalist_id == "positive" for item in valid)
         negative = sum(item.selection.finalist_id == "negative" for item in valid)
-        coverage = _coverage(valid)
+        coverage = _coverage_summary(valid, sensitivities=("HALF", "NOMINAL", "DOUBLE"))
         stable = sum(len({finalist.finalist_id for finalist in item.sensitivity_finalists.values()}) == 1 for item in valid)
         lower = _wilson(positive, len(valid), Decimal("1.6448536269514722"))[0]
-        observed_coverage = _rate(coverage)
-        passed = lower is not None and lower >= Decimal("0.50") and negative == 0 and observed_coverage is not None and observed_coverage >= Decimal("0.85") \
+        coverage_passed, failed_coverage_series = _coverage_series_passes(coverage, require_target_band=False)
+        passed = lower is not None and lower >= Decimal("0.50") and negative == 0 and coverage_passed \
             and Decimal(stable) / Decimal(len(valid)) >= Decimal("0.80")
-        return {"passed": passed, "positive_finalists": positive, "positive_lower": lower,
-                "negative_finalists": negative, "coverage": coverage, "stable": stable}
+        return {
+            "passed": passed,
+            "positive_finalists": positive,
+            "positive_lower": lower,
+            "negative_finalists": negative,
+            **_coverage_evidence(coverage),
+            "coverage_series_passed": coverage_passed,
+            "coverage_failed_series": failed_coverage_series,
+            "stable": stable,
+        }
     raise ValueError("unknown frozen calibration scenario")
 
 
-def _coverage(repetitions: Sequence[CalibrationRepetition]) -> tuple[int, int]:
-    hits = total = 0
-    for item in repetitions:
-        for comparison_id, comparison in item.comparisons.items():
-            for sensitivity in comparison["sensitivities"].values():
-                interval = sensitivity["interval"]
-                truth = item.truth[comparison_id]
-                if interval is not None and truth is not None:
-                    total += 1
-                    hits += interval[0] <= truth <= interval[1]
-    return hits, total
-
-
-def _iid_coverage(repetitions: Sequence[CalibrationRepetition]) -> tuple[int, int]:
-    hits = total = 0
-    for item in repetitions:
-        if item.iid is None:
+def _coverage_summary(
+    repetitions: Sequence[CalibrationRepetition],
+    *,
+    sensitivities: tuple[str, ...],
+) -> Mapping[str, object]:
+    """Count one pointwise coverage observation per declared series/history."""
+    comparison_ids = _declared_comparison_ids(repetitions)
+    series_ids = tuple(
+        f"joint/{comparison_id}/{sensitivity}"
+        for comparison_id in comparison_ids
+        for sensitivity in sensitivities
+    )
+    observations: dict[str, list[bool]] = {series_id: [] for series_id in series_ids}
+    missing: list[str] = []
+    for history_index, item in enumerate(repetitions):
+        if set(item.truth) != set(comparison_ids) or set(item.comparisons) != set(comparison_ids):
+            missing.extend(f"history-{history_index}:comparison-family" for _ in series_ids)
             continue
-        for comparison_id, result in item.iid.comparisons.items():
+        for comparison_id in comparison_ids:
             truth = item.truth[comparison_id]
-            if result.interval is not None and truth is not None:
-                total += 1
-                hits += result.interval[0] <= truth <= result.interval[1]
-    return hits, total
+            comparison = item.comparisons[comparison_id]
+            sensitivity_values = comparison.get("sensitivities") if isinstance(comparison, Mapping) else None
+            for sensitivity in sensitivities:
+                series_id = f"joint/{comparison_id}/{sensitivity}"
+                sensitivity_result = sensitivity_values.get(sensitivity) if isinstance(sensitivity_values, Mapping) else None
+                interval = sensitivity_result.get("interval") if isinstance(sensitivity_result, Mapping) else None
+                if not _usable_coverage_input(truth, interval):
+                    missing.append(f"history-{history_index}:{series_id}")
+                    continue
+                assert isinstance(truth, Decimal) and isinstance(interval, tuple)
+                observations[series_id].append(interval[0] <= truth <= interval[1])
+    return _coverage_summary_from_observations(observations, len(repetitions), tuple(sorted(missing)))
+
+
+def _iid_coverage_summary(repetitions: Sequence[CalibrationRepetition]) -> Mapping[str, object]:
+    """Record IID diagnostic coverage by matching comparison, never as pooled evidence."""
+    comparison_ids = _declared_comparison_ids(repetitions)
+    observations: dict[str, list[bool]] = {comparison_id: [] for comparison_id in comparison_ids}
+    missing: list[str] = []
+    for history_index, item in enumerate(repetitions):
+        if set(item.truth) != set(comparison_ids) or item.iid is None or set(item.iid.comparisons) != set(comparison_ids):
+            missing.extend(f"history-{history_index}:iid/{comparison_id}" for comparison_id in comparison_ids)
+            continue
+        for comparison_id in comparison_ids:
+            truth = item.truth[comparison_id]
+            iid_result = item.iid.comparisons[comparison_id]
+            interval = iid_result.interval if isinstance(iid_result, BootstrapEvaluation) else None
+            if not _usable_coverage_input(truth, interval):
+                missing.append(f"history-{history_index}:iid/{comparison_id}")
+                continue
+            assert isinstance(truth, Decimal) and isinstance(interval, tuple)
+            observations[comparison_id].append(interval[0] <= truth <= interval[1])
+    return _coverage_summary_from_observations(observations, len(repetitions), tuple(sorted(missing)))
+
+
+def _coverage_summary_from_observations(
+    observations: Mapping[str, Sequence[bool]],
+    expected_histories: int,
+    missing: tuple[str, ...],
+) -> Mapping[str, object]:
+    per_series = {
+        series_id: {
+            "hits": sum(values),
+            "histories": len(values),
+            "rate": _rate((sum(values), len(values))),
+        }
+        for series_id, values in sorted(observations.items())
+    }
+    intervals = {
+        series_id: {
+            "lower": _wilson(sum(values), len(values), Decimal("1.959963984540054"))[0],
+            "upper": _wilson(sum(values), len(values), Decimal("1.959963984540054"))[1],
+        }
+        for series_id, values in sorted(observations.items())
+    }
+    pooled_hits = sum(item["hits"] for item in per_series.values())
+    pooled_total = sum(item["histories"] for item in per_series.values())
+    complete = bool(observations) and not missing and all(
+        item["histories"] == expected_histories for item in per_series.values()
+    )
+    return {
+        "pooled_descriptive": {
+            "hits": pooled_hits,
+            "total_intervals": pooled_total,
+            "rate": _rate((pooled_hits, pooled_total)),
+        },
+        "by_series": per_series,
+        "wilson_by_series": intervals,
+        "complete": complete,
+        "missing": missing,
+    }
+
+
+def _declared_comparison_ids(repetitions: Sequence[CalibrationRepetition]) -> tuple[str, ...]:
+    return tuple(sorted(repetitions[0].truth)) if repetitions else ()
+
+
+def _usable_coverage_input(truth: object, interval: object) -> bool:
+    return (
+        isinstance(truth, Decimal)
+        and truth.is_finite()
+        and isinstance(interval, tuple)
+        and len(interval) == 2
+        and all(isinstance(bound, Decimal) and bound.is_finite() for bound in interval)
+        and interval[0] <= interval[1]
+    )
+
+
+def _coverage_evidence(summary: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "coverage_pooled_descriptive": summary["pooled_descriptive"],
+        "coverage_by_series": summary["by_series"],
+        "coverage_wilson_by_series": summary["wilson_by_series"],
+        "coverage_complete": summary["complete"],
+        "coverage_missing": summary["missing"],
+    }
+
+
+def _coverage_series_passes(
+    summary: Mapping[str, object],
+    *,
+    require_target_band: bool,
+) -> tuple[bool, tuple[str, ...]]:
+    if summary["complete"] is not True:
+        return False, tuple(sorted(str(item) for item in summary["missing"]))
+    failed: list[str] = []
+    series = summary["by_series"]
+    intervals = summary["wilson_by_series"]
+    assert isinstance(series, Mapping) and isinstance(intervals, Mapping)
+    for series_id, evidence in series.items():
+        assert isinstance(evidence, Mapping)
+        rate = evidence["rate"]
+        if not isinstance(rate, Decimal) or rate < Decimal("0.85"):
+            failed.append(str(series_id))
+            continue
+        if require_target_band:
+            interval = intervals[series_id]
+            assert isinstance(interval, Mapping)
+            lower, upper = interval["lower"], interval["upper"]
+            if not isinstance(lower, Decimal) or not isinstance(upper, Decimal) or lower > Decimal("1.00") or upper < Decimal("0.90"):
+                failed.append(str(series_id))
+    return not failed, tuple(sorted(failed))
+
+
+def _matching_iid_nominal_coverage(
+    joint: Mapping[str, object],
+    iid: Mapping[str, object],
+) -> Mapping[str, Mapping[str, Decimal]]:
+    if joint["complete"] is not True or iid["complete"] is not True:
+        return {}
+    joint_series = joint["by_series"]
+    iid_series = iid["by_series"]
+    assert isinstance(joint_series, Mapping) and isinstance(iid_series, Mapping)
+    matching: dict[str, Mapping[str, Decimal]] = {}
+    for comparison_id, iid_evidence in iid_series.items():
+        nominal = joint_series.get(f"joint/{comparison_id}/NOMINAL")
+        if not isinstance(iid_evidence, Mapping) or not isinstance(nominal, Mapping):
+            continue
+        iid_rate, nominal_rate = iid_evidence.get("rate"), nominal.get("rate")
+        if isinstance(iid_rate, Decimal) and isinstance(nominal_rate, Decimal):
+            matching[str(comparison_id)] = {
+                "iid_rate": iid_rate,
+                "joint_nominal_rate": nominal_rate,
+            }
+    return matching
 
 
 def _wilson(successes: int, total: int, z: Decimal) -> tuple[Decimal | None, Decimal | None]:

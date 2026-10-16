@@ -3,7 +3,7 @@
 Status: **PROPOSED numerical-preparation profile; not adopted and not a
 formal-support method.**
 
-Identity: `edge-os.stat-q01-qprep/2026-10-14.2`
+Identity: `edge-os.stat-q01-qprep/2026-10-16.1`
 Assignment: `P42-QPREP-20261013-01` / issue #28
 Scope: isolated calculation and authored calibration only. It does not read a
 market holdout, alter P09, create a research job, call a provider, or make an
@@ -11,11 +11,15 @@ operational or financial claim.
 
 This profile freezes the candidate choices used by the accompanying bounded
 calibration plan. Revisions `2026-10-13.1` and `2026-10-14.1` were never
-evaluated. This identity adds the complete-family schedule binding, append-only
-pre-label holdout ledger, exact lineage hashes, total static-work cap, and
-ambient-Decimal-independent generator requirements identified before any
-experiment. A later revision must receive a new identity, plan, and evidence;
-calibration criteria are not changed after inspecting a result.
+evaluated. Historical revision `2026-10-14.2` and its failed `/2` evidence are
+preserved in `docs/qualification/p42/*_2026-10-14.2.*`; it used an invalid
+pooled-Wilson denominator and is not reinterpreted by this revision.
+
+This identity adds exact-family finalist binding, precision-invariant finalist
+ordering, and per-series, per-history coverage uncertainty. It freezes those
+repairs before a new run. A later revision must receive a new identity, plan,
+and evidence; calibration criteria are not changed after inspecting that
+revision's result.
 
 ## Claim and input boundary
 
@@ -148,8 +152,13 @@ A comparison is only candidate-eligible when it is directionally favorable,
 Holm-rejected at all three frozen sensitivities, and every family member is
 valid. The single validation finalist is the eligible comparison with the
 largest observed primary contrast; an exact tie is broken by ascending frozen
-comparison ID. This rule is fixed before calibration outcomes. There is no
-runner-up substitution.
+comparison ID. Ordering compares exact Decimal contrasts directly; it does not
+negate or round them in a caller's ambient Decimal context. The selection stores
+the canonical SHA-256 fingerprint of its complete frozen comparison family, and
+candidate IDs must be exactly that family. The holdout guard independently
+checks every finalist and eligible ID against the partition's retained canonical
+family IDs; a copied hash alone is not sufficient. This rule is fixed before
+calibration outcomes. There is no runner-up substitution.
 
 One protected holdout confirmation may be recorded only for that exact finalist,
 using the same direction and the frozen `alpha=0.05`. Before any outcome
@@ -159,10 +168,27 @@ outcome/control/test identities; protected partition and finalist revision
 identities; and a successful schedule-boundary validation. Resolution appends a
 second event rather than replacing the start. A failed, missing, insufficient,
 or lineage-mismatched confirmation consumes that attempt as `UNRESOLVED`; it
-cannot expose a runner-up or relabelled revision to the same holdout. The pure
-value-state is a fixture for later persistence, not proof of durable one-shot
-enforcement; an adopted runtime must persist the transition before reading the
-label and independently verify its source lineage.
+cannot expose a runner-up, a relabelled revision, or a finalist from a different
+frozen family (including one that reuses the same comparison ID) to the same
+holdout. The pure value-state is a fixture for later persistence, not proof of
+durable one-shot enforcement; an adopted runtime must persist the transition
+before reading the label and independently verify its source lineage.
+
+## Calibration coverage accounting
+
+A declared joint coverage series is one fixed comparison ID and one fixed
+sensitivity (`HALF`, `NOMINAL`, or `DOUBLE`). One generated history contributes
+at most one Bernoulli interval-coverage observation to that series. The 64
+generated histories are the uncertainty units; the nine pointwise outcomes in a
+single history are correlated and must never be treated as 576 independent
+trials. The report retains a pooled interval hit/total only as descriptive
+output, without a pooled Wilson interval.
+
+Each declared series must retain one usable finite truth and interval for every
+planned history. A missing family member, sensitivity, truth, or interval makes
+coverage incomplete and the relevant criterion `UNRESOLVED`; it is not silently
+dropped. The IID diagnostic is compared only with the same comparison's joint
+`NOMINAL` series, never with an unmatched pooled average.
 
 ## Boundaries and sources
 

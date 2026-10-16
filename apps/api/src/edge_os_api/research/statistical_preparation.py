@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN, Decimal, localcontext
@@ -160,6 +161,7 @@ class ValidationFinalist:
     status: str
     finalist_id: str | None
     eligible_ids: tuple[str, ...]
+    family_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -438,20 +440,67 @@ def evaluate_validation_family(
 
 def select_validation_finalist(
     validation_candidates: Mapping[str, tuple[Decimal | None, bool | None]],
+    *,
+    family: FrozenComparisonFamily,
 ) -> ValidationFinalist:
-    """Apply the frozen effect-size/ID rule without accepting any holdout data."""
+    """Apply the frozen effect-size/ID rule and bind it to one exact family."""
     if not validation_candidates:
         raise ValueError("finalist selection needs the complete frozen validation family")
+    family_hash = frozen_family_sha256(family)
+    family_ids = {comparison.comparison_id for comparison in family.comparisons}
+    if set(validation_candidates) != family_ids:
+        raise ValueError("finalist candidates must name the complete exact frozen family")
     if any(contrast is None or eligible is None for contrast, eligible in validation_candidates.values()):
-        return ValidationFinalist("UNRESOLVED_FAMILY_INCOMPLETE", None, ())
+        return ValidationFinalist("UNRESOLVED_FAMILY_INCOMPLETE", None, (), family_hash)
     eligible = tuple(
         comparison_id for comparison_id, (contrast, allowed) in validation_candidates.items()
         if allowed is True and contrast is not None
     )
     if not eligible:
-        return ValidationFinalist("UNRESOLVED_NO_FINALIST", None, ())
-    finalist_id = min(eligible, key=lambda comparison_id: (-validation_candidates[comparison_id][0], comparison_id))
-    return ValidationFinalist("SELECTED", finalist_id, tuple(sorted(eligible)))
+        return ValidationFinalist("UNRESOLVED_NO_FINALIST", None, (), family_hash)
+    highest_contrast = max(validation_candidates[comparison_id][0] for comparison_id in eligible)
+    finalist_id = min(
+        comparison_id for comparison_id in eligible
+        if validation_candidates[comparison_id][0] == highest_contrast
+    )
+    return ValidationFinalist("SELECTED", finalist_id, tuple(sorted(eligible)), family_hash)
+
+
+def frozen_family_sha256(family: FrozenComparisonFamily) -> str:
+    """Return the canonical lineage fingerprint for one complete frozen family."""
+    if not isinstance(family, FrozenComparisonFamily) or not _is_identity(family.family_id) or not _is_identity(family.partition_id):
+        raise ValueError("a frozen family with non-empty canonical identities is required")
+    if not family.comparisons or len({item.comparison_id for item in family.comparisons}) != len(family.comparisons):
+        raise ValueError("the frozen family needs uniquely named comparisons")
+    schedules: list[tuple[str, ...]] = []
+    for comparison in family.comparisons:
+        if not isinstance(comparison, FrozenComparison) or not _is_identity(comparison.comparison_id):
+            raise ValueError("the frozen family needs non-empty comparison identities")
+        slots: set[str] = set()
+        for observation in comparison.observations:
+            _validate_observation(observation, slots)
+        schedule = tuple(observation.slot_id for observation in comparison.observations)
+        if not schedule:
+            raise ValueError("the frozen family needs a non-empty canonical scheduled sequence")
+        schedules.append(schedule)
+    if any(schedule != schedules[0] for schedule in schedules[1:]):
+        raise ValueError("every frozen comparison must retain the same canonical ordered schedule")
+    payload = {
+        "family_id": family.family_id,
+        "partition_id": family.partition_id,
+        "target_horizon_seconds": family.target_horizon_seconds,
+        "reference_window_seconds": family.reference_window_seconds,
+        "decision_interval_seconds": family.decision_interval_seconds,
+        "comparisons": [
+            [
+                comparison.comparison_id,
+                [[item.slot_id, item.group, format(item.response, "f") if item.response is not None else None, item.reason]
+                 for item in comparison.observations],
+            ]
+            for comparison in family.comparisons
+        ],
+    }
+    return sha256(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 
 
 def confirm_protected_holdout(
@@ -646,6 +695,10 @@ def _validate_observation(observation: ScheduledObservation, slot_ids: set[str])
     elif not isinstance(observation.response, Decimal) or not observation.response.is_finite():
         raise ValueError("an observed response must be a finite Decimal")
     slot_ids.add(observation.slot_id)
+
+
+def _is_identity(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and value.strip() == value
 
 
 def _mean(values: list[Decimal]) -> Decimal | None:
