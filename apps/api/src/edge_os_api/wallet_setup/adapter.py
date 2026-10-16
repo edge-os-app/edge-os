@@ -90,6 +90,10 @@ def build_wallet_provider(mode: str) -> UnavailableWalletProvider | FixtureWalle
 
 def provider_info(provider: object) -> dict[str, object]:
     """The active provider mode and, for the local fixture, its independent call counters."""
+    from edge_os_api.wallet_setup.lookup_client import OwnerBoundLookupProvider
+
+    if isinstance(provider, OwnerBoundLookupProvider):  # browser creation, owner-bound lookup; no counters to report
+        return {"provider": "privy_lookup", "create_calls": None, "lookup_calls": None}
     if isinstance(provider, FixtureWalletProvider):
         return {"provider": FIXTURE_MODE, "create_calls": provider.create_calls,
                 "lookup_calls": provider.lookup_calls}

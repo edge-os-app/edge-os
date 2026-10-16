@@ -234,7 +234,7 @@ def cancel_setup(session: Any, principal: Principal, *, agent_id: str) -> SetupR
 
 
 def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, wallet_id: str,
-                          provider: WalletCreationPort) -> SetupRecord:
+                          provider: WalletCreationPort, address: str | None = None) -> SetupRecord:
     """Record a wallet id returned by owner-linked browser creation, then bind it only after independent lookup.
 
     The browser's wallet id is an untrusted claim, retained as evidence before the lookup. The browser keeps its
@@ -269,7 +269,8 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
         _mark_dispatch_intent(session, row)
     insert_event(session, row, SetupEventType.RESULT_RETURNED,
                  {"wallet_id": wallet_id, "owner_id": str(principal.user_id), "chain_type": "ethereum",
-                  "address": None, "source": "BROWSER_COMPLETION", "trusted": False})
+                  "address": None, "claimed_address": address if isinstance(address, str) else None,
+                  "source": "BROWSER_COMPLETION", "trusted": False})
     session.commit()
     looked_up = lookup_wallet_evidence(provider, wallet_id)
     locked = load_setup(session, principal.user_id, agent_id, lock=True)
@@ -280,7 +281,8 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
     if looked_up is None:
         return mark_unknown(session, locked, SetupReason.RECONCILE_NO_MATCH.value)
     if not (looked_up.wallet_id == wallet_id and looked_up.owner_id == locked.owner_id
-            and looked_up.chain_type == "ethereum"):
+            and looked_up.chain_type == "ethereum"
+            and (address is None or looked_up.address.lower() == address.lower())):
         record_denial(session, locked.owner_id, locked.agent_id, "BROWSER_RESULT_WRONG_IDENTITY",
                       {"returned_wallet_id": wallet_id})
         return mark_unknown(session, locked, SetupReason.RECONCILE_WRONG_IDENTITY.value)
