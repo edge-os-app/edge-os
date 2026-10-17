@@ -66,6 +66,12 @@ The 10:15 source decides at the exclusive end and is excluded. Gain/loss is −4
 
 `apps/api/tests/test_delayed_history_replay.py` covers the example arithmetic, availability equality, one-microsecond late and unknown refusal, a hidden Boolean branch, lag warm-up and the shifted first index, missing first-decision coverage, an empty or unavailable next close with one release and no substitution, the exclusive end, unknown profiles, fingerprint separation and policy binding, the unchanged default fingerprint and the four-bucket outcome set. `apps/api/tests/test_spot_replay.py` remains the unchanged P12 oracle.
 
-## Lane 2 handoff and limits
+## Lane 2 wiring and limits
 
-Existing callers (`replay/saved_runs.py`, `replay/history_inputs.py` and their tests) call the default profile and are unaffected. Lane 2 owns explicit profile selection, saved-configuration identity, retrieval, labels and protected-partition enforcement. This profile alone does not wire the application, prove persistence, qualify real data, qualify fills or costs, or grant execution permission.
+`SpotReplayBody.timing_profile` is optional. It accepts `p12.spot-replay/1` or `edge-os.delayed-history-replay/1`. An omitted value and an explicit default share the original request fingerprint, the saved configuration identity and the output. An unknown or non-string value is refused with `UNSUPPORTED_TIMING_PROFILE` at `/timing_profile` before anything is saved.
+
+A delayed run saves `timing_profile` and `timing_policy` inside `inputs`. The saved configuration identity and the record therefore carry the profile. A repeated idempotency key with a different profile is a conflict. The same `run_configuration_id` with a different profile is the existing configuration conflict. `GET /v1/spot-replays/{replay_id}` returns the saved profile and policy unchanged after an API restart. The delayed run passes the same protected-partition refusal as the default run.
+
+The web control offers the delayed option and preselects the default. The panel and the saved result show `Delayed hypothetical replay (300 s decision delay)` and each fill's `fill_label`. The result shows `FILL_UNAVAILABLE` and `NO_NEXT_BUCKET` as recorded order events, not as failures of the run.
+
+This wiring still does not qualify real data, prove fills or costs, or grant execution permission.

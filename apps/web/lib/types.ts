@@ -371,6 +371,15 @@ export interface SpotReplayDependency {
   offset_buckets: number;
 }
 
+export type SpotReplayTimingProfile = "p12.spot-replay/1" | "edge-os.delayed-history-replay/1";
+
+export interface SpotReplayTimingPolicy {
+  schema_version: string;
+  decision_delay_seconds: number;
+  fill_rule: string;
+  fill_label: string;
+}
+
 export interface SpotReplayBody {
   idempotency_key: string;
   strategy_id: string;
@@ -382,6 +391,7 @@ export interface SpotReplayBody {
   initial_cash_quote: string;
   initial_base_amount: string;
   initial_basis_quote: string;
+  timing_profile?: SpotReplayTimingProfile;
   essential_fields: {
     entry: { state: "BOUND" | "UNBOUND"; essential_dependencies?: SpotReplayDependency[] };
     exit: { state: "BOUND" | "UNBOUND"; essential_dependencies?: SpotReplayDependency[] };
@@ -425,6 +435,8 @@ export function payloadBindingText(state: (PayloadBindingLineage & { reason?: st
 export interface SpotReplayInputSnapshot {
   profile_version: string;
   profile_sha256?: string;
+  timing_profile?: SpotReplayTimingProfile;
+  timing_policy?: SpotReplayTimingPolicy;
   strategy_revision_id: string;
   strategy_id: string;
   strategy_sha256: string;

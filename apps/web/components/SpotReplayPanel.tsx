@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { payloadBindingText, payloadBindingUsable } from "../lib/types";
 import type { DatasetSummary, HistorySpotReplayBody } from "../lib/api";
-import type { SpotReplayBody, SpotReplayDependency, SpotReplayRecord, Strategy } from "../lib/types";
+import type { SpotReplayBody, SpotReplayDependency, SpotReplayRecord, SpotReplayTimingProfile, Strategy } from "../lib/types";
 import { ReplayResult } from "./ReplayResult";
 
 type FieldName = "entry" | "exit";
@@ -13,9 +13,13 @@ type Dependencies = Record<FieldName, SpotReplayDependency[]>;
 
 interface Props { strategy: Strategy; strategyId: string; strategyRevisionId: string }
 
+const DEFAULT_TIMING_PROFILE: SpotReplayTimingProfile = "p12.spot-replay/1";
+const DELAYED_TIMING_PROFILE: SpotReplayTimingProfile = "edge-os.delayed-history-replay/1";
+
 function emptyDependencies(): Dependencies { return { entry: [], exit: [] }; }
 
-function makeBody(strategyId: string, revisionId: string, dependencies: Dependencies): SpotReplayBody {
+function makeBody(strategyId: string, revisionId: string, dependencies: Dependencies,
+                  timingProfile: SpotReplayTimingProfile): SpotReplayBody {
   return {
     idempotency_key: `p13-${crypto.randomUUID()}`,
     strategy_id: strategyId,
@@ -27,6 +31,7 @@ function makeBody(strategyId: string, revisionId: string, dependencies: Dependen
     initial_cash_quote: "1000",
     initial_base_amount: "0",
     initial_basis_quote: "0",
+    ...(timingProfile === DELAYED_TIMING_PROFILE ? { timing_profile: timingProfile } : {}),
     essential_fields: {
       entry: { state: "BOUND", essential_dependencies: dependencies.entry },
       exit: { state: "BOUND", essential_dependencies: dependencies.exit },
@@ -81,6 +86,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
   const [record, setRecord] = useState<SpotReplayRecord | null>(null);
   const [replayId, setReplayId] = useState("");
   const [loadNotice, setLoadNotice] = useState("");
+  const [timingProfile, setTimingProfile] = useState<SpotReplayTimingProfile>(DEFAULT_TIMING_PROFILE);
   const [pendingBody, setPendingBody] = useState<SpotReplayBody | HistorySpotReplayBody | null>(null);
 
   const updateDependency = (field: FieldName, index: number, changes: Partial<SpotReplayDependency>) => {
@@ -101,7 +107,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
   const save = async () => {
     if (busy || !reviewed.entry || !reviewed.exit) return;
     setBusy(true); setError(""); setLoadNotice("");
-    const fixtureBody = makeBody(strategyId, strategyRevisionId, dependencies);
+    const fixtureBody = makeBody(strategyId, strategyRevisionId, dependencies, timingProfile);
     const body = pendingBody ?? (dataset ? historyBody(fixtureBody, dataset, windowStart, windowEnd) : fixtureBody);
     setPendingBody(body);
     try {
@@ -134,6 +140,17 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       <h2 id="spot-replay-title">Test the saved strategy on synthetic prices</h2>
       <p className="muted">The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
       <h3>New run settings (editable)</h3>
+      <div className="field">
+        <label htmlFor="spot-replay-timing-profile">Timing profile</label>
+        <select id="spot-replay-timing-profile" className="input" value={timingProfile} disabled={busy}
+          onChange={(event) => setTimingProfile(event.target.value as SpotReplayTimingProfile)}>
+          <option value={DEFAULT_TIMING_PROFILE}>Default replay (p12.spot-replay/1)</option>
+          <option value={DELAYED_TIMING_PROFILE}>Delayed hypothetical replay (300 s decision delay)</option>
+        </select>
+      </div>
+      {timingProfile === DELAYED_TIMING_PROFILE ? (
+        <p className="muted" data-testid="spot-replay-delayed-note">The delayed profile decides each source bucket 300 seconds after it ends. Each fill uses the next bucket&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p>
+      ) : null}
       <div className="field">
         <label htmlFor="spot-replay-source">Price data</label>
         <select id="spot-replay-source" className="input" value={source} onChange={(event) => chooseSource(event.target.value)}>
