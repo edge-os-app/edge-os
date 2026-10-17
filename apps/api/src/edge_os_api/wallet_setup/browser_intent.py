@@ -60,7 +60,9 @@ def resume_retained_claim(session: Any, principal: Principal, *, agent_id: str,
     if (row.state == SetupState.CONFIRMED.value or not isinstance(retained, dict)
             or retained.get("source") != "BROWSER_COMPLETION" or not isinstance(claimed, str)):
         return service.resume_setup(session, principal, agent_id=agent_id, provider=provider)
-    wallet_id = retained.get("wallet_id")
+    wallet_id, index, chain = (retained.get(key) for key in ("wallet_id", "claimed_wallet_index", "claimed_chain_type"))
     return service.complete_from_browser(session, principal, agent_id=agent_id,
                                          wallet_id=wallet_id if isinstance(wallet_id, str) else None,
-                                         provider=provider, address=claimed)
+                                         provider=provider, address=claimed,
+                                         wallet_index=index if isinstance(index, int) else None,
+                                         chain_type=chain if isinstance(chain, str) else None)

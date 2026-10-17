@@ -22,7 +22,7 @@ vi.mock("../lib/wallet-setup-api", async (importOriginal) => {
     completeBrowserCreation: (...args: unknown[]) => mocks.complete(...args),
   } };
 });
-const auth = vi.hoisted(() => ({ userId: "user-a" }));
+const auth = vi.hoisted(() => ({ userId: "user-a" as string | null }));
 vi.mock("../lib/auth", () => ({ useOptionalAuth: () => ({ userId: auth.userId, createEmbeddedWallet: (...args: unknown[]) => mocks.sdk(...args) }) }));
 
 const ADDRESS = "0x" + "ab".repeat(20);
@@ -61,7 +61,7 @@ describe("actual Privy wallet creation", () => {
     await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Wallet confirmed"));
     expect(mocks.begin.mock.invocationCallOrder[0]).toBeLessThan(mocks.sdk.mock.invocationCallOrder[0]);
     expect(mocks.sdk).toHaveBeenCalledTimes(1);
-    expect(mocks.complete).toHaveBeenCalledWith("agent-a", { wallet_id: "wallet-1", address: ADDRESS, wallet_index: 1 });
+    expect(mocks.complete).toHaveBeenCalledWith("agent-a", { wallet_id: "wallet-1", address: ADDRESS, wallet_index: 1, chain_type: "ethereum" });
     expect(mocks.dispatch).not.toHaveBeenCalled(); // the fixture dispatch is never used on the actual path
   });
 
@@ -79,7 +79,7 @@ describe("actual Privy wallet creation", () => {
     mocks.complete.mockResolvedValue(confirmed);
     await clickCreate();
     await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Wallet confirmed"));
-    expect(mocks.complete).toHaveBeenCalledWith("agent-a", { wallet_id: null, address: ADDRESS, wallet_index: 1 });
+    expect(mocks.complete).toHaveBeenCalledWith("agent-a", { wallet_id: null, address: ADDRESS, wallet_index: 1, chain_type: "ethereum" });
     expect(mocks.sdk).toHaveBeenCalledTimes(1);
   });
 
@@ -105,7 +105,7 @@ describe("actual Privy wallet creation", () => {
     await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Wallet confirmed"));
     expect(mocks.sdk).toHaveBeenCalledTimes(1);
     expect(mocks.complete).toHaveBeenCalledTimes(2);
-    expect(mocks.complete.mock.calls[1]).toEqual(["agent-a", { wallet_id: "wallet-1", address: ADDRESS, wallet_index: 1 }]);
+    expect(mocks.complete.mock.calls[1]).toEqual(["agent-a", { wallet_id: "wallet-1", address: ADDRESS, wallet_index: 1, chain_type: "ethereum" }]);
   });
 
   it("a refreshed page resumes from the retained claim without beginning or creating", async () => {
@@ -124,5 +124,40 @@ describe("actual Privy wallet creation", () => {
     render(<WalletSetup agentId="agent-a" />);
     await screen.findByTestId("wallet-setup-state");
     expect(screen.queryByRole("button", { name: "Create wallet now" })).toBeNull();
+  });
+
+  it("refuses before begin or any SDK call when browser storage cannot keep the claim", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    try {
+      await clickCreate();
+      expect(await screen.findByRole("alert")).toHaveTextContent("cannot keep");
+      expect(mocks.begin).not.toHaveBeenCalled();
+      expect(mocks.sdk).not.toHaveBeenCalled();
+    } finally { setItem.mockRestore(); }
+  });
+
+  it("sends the exact returned wallet even when keeping the copy fails after creation", async () => {
+    const original = Storage.prototype.setItem;
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key.startsWith("edge-os:wallet-claim:")) throw new Error("quota");
+      return original.call(this, key, value);
+    });
+    mocks.begin.mockResolvedValue({ ...pending, create_permitted: true });
+    mocks.sdk.mockResolvedValue({ ...WALLET, id: null });
+    mocks.complete.mockResolvedValue(confirmed);
+    try {
+      await clickCreate();
+      await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Wallet confirmed"));
+      expect(mocks.complete).toHaveBeenCalledWith("agent-a", { wallet_id: null, address: ADDRESS, wallet_index: 1, chain_type: "ethereum" });
+      expect(mocks.sdk).toHaveBeenCalledTimes(1);
+    } finally { setItem.mockRestore(); }
+  });
+
+  it("does not begin without a verified owner, so the only permission is never used up", async () => {
+    auth.userId = null;
+    await clickCreate();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sign in");
+    expect(mocks.begin).not.toHaveBeenCalled();
+    expect(mocks.sdk).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { useOptionalAuth } from "../lib/auth";
 import type { WalletSetupRecord } from "../lib/types";
-import { forgetClaim, retainClaim, retainedClaim, walletProviderMode, walletSetupApi, type WalletProviderMode } from "../lib/wallet-setup-api";
+import { claimStorageWorks, forgetClaim, retainClaim, retainedClaim, walletProviderMode, walletSetupApi, type CreatedWallet, type WalletProviderMode } from "../lib/wallet-setup-api";
 
 export interface WalletSetupRevision { strategyId: string; strategyRevisionId: string }
 
@@ -25,6 +25,8 @@ const REASON_COPY: Record<string, string> = {
   CONFLICTING_WALLET: "That wallet already belongs to another agent of this owner. It was not bound.",
 };
 
+const STORAGE_BLOCKED = "This browser cannot keep the new wallet's details, so no wallet was created. Allow site storage and try again.";
+const SIGN_IN_FIRST = "Sign in with Privy before creating this agent's wallet. Nothing was created.";
 const UNSUPPORTED_WALLET = "The wallet that came back is not an Ethereum wallet. Nothing was bound and no second wallet is created.";
 
 function stateTitle(record: WalletSetupRecord): string {
@@ -169,11 +171,11 @@ export function WalletSetup({ agentId, revision, onClose }: {
 
   // Send the retained returned wallet for the server's independent lookup. It never creates. Without a claim kept
   // in this browser for this owner, the server resumes from the claim it retained itself.
-  const completeRetained = async (agentId: string): Promise<WalletSetupRecord> => {
-    const claim = retainedClaim(ownerId, agentId);
+  const completeRetained = async (agentId: string, returned?: CreatedWallet): Promise<WalletSetupRecord> => {
+    const claim = returned ?? retainedClaim(ownerId, agentId);
     if (!claim) return api.resumeWalletSetup(agentId);
     if (claim.chainType !== "ethereum") { setError(UNSUPPORTED_WALLET); return api.walletSetup(agentId); }
-    const saved = await walletSetupApi.completeBrowserCreation(agentId, { wallet_id: claim.id, address: claim.address, wallet_index: claim.walletIndex });
+    const saved = await walletSetupApi.completeBrowserCreation(agentId, { wallet_id: claim.id, address: claim.address, wallet_index: claim.walletIndex, chain_type: claim.chainType });
     if (saved.state === "CONFIRMED" && ownerId) forgetClaim(ownerId, agentId);
     return saved;
   };
@@ -181,11 +183,14 @@ export function WalletSetup({ agentId, revision, onClose }: {
   // The server commits the intent first and permits one SDK call only. A refused or repeated begin creates nothing.
   const createActual = async (agentId: string): Promise<WalletSetupRecord> => {
     if (retainedClaim(ownerId, agentId)) return completeRetained(agentId);
+    // Checked before begin: a missing owner or a blocked store must never use up the only permission.
+    if (!ownerId || !createEmbeddedWallet) { setError(SIGN_IN_FIRST); return api.walletSetup(agentId); }
+    if (!claimStorageWorks()) { setError(STORAGE_BLOCKED); return api.walletSetup(agentId); }
     const begun = await walletSetupApi.beginBrowserCreation(agentId);
-    if (!begun.create_permitted || !createEmbeddedWallet || !ownerId) return begun;
+    if (!begun.create_permitted) return begun;
     const wallet = await createEmbeddedWallet();
-    retainClaim(ownerId, agentId, wallet);
-    return completeRetained(agentId);
+    retainClaim(ownerId, agentId, wallet); // a copy for refresh; completion uses the wallet held in memory
+    return completeRetained(agentId, wallet);
   };
   const blocked = busy || uncertain;
 

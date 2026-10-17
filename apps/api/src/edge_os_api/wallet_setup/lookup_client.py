@@ -18,7 +18,9 @@ from edge_os_api.wallet_setup.lookup_matching import valid_address, valid_did, v
 from edge_os_api.wallet_setup.provider import CreationRequest, WalletEvidence, WalletProviderUnavailable
 
 LOOKUP_OPERATION = "lookup_embedded_wallet"
-DEADLINE_SECONDS = 15.0
+# Per socket operation. Longer than the lookup process's two fixed provider reads (2 x 10 s), so a slow but valid
+# lookup is not cut off; a slower one still ends as UNKNOWN.
+DEADLINE_SECONDS = 25.0
 
 
 @dataclass

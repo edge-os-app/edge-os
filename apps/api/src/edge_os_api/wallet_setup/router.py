@@ -2,7 +2,9 @@
 
 Owner-scoped prepare, read, dispatch, cancel and resume over the verified `Principal`. The
 creation-capable provider comes from `app.state.wallet_provider`: the authored local fixture in
-local/test configuration, or the fail-closed unavailable provider in production. A foreign or
+local/test configuration, or the fail-closed unavailable provider in production. With
+`EDGE_OS_WALLET_LOOKUP_SOCKET` set, `get_provider` builds the owner-bound lookup for the verified owner instead;
+the browser creates and the server only looks up. A foreign or
 absent setup is a `404`; the owner is never read from the request body.
 """
 
@@ -34,6 +36,7 @@ class BrowserCompletionBody(StrictModel):
     # An address-only claim (the SDK returned no ID) is resolved by the server's own lookup.
     wallet_index: int | None = Field(default=None, ge=0, le=2_147_483_647)
     address: str | None = Field(default=None, min_length=42, max_length=42)
+    chain_type: str | None = Field(default=None, min_length=1, max_length=32)
 
 
 def serialize(record: SetupRecord) -> dict[str, Any]:
@@ -118,7 +121,7 @@ def complete(agent_id: str, data: BrowserCompletionBody, principal: Principal = 
         provider = provider.with_claim(data.address)
     return serialize(service.complete_from_browser(session, principal, agent_id=agent_id, wallet_id=data.wallet_id,
                                                    provider=provider, address=data.address,
-                                                   wallet_index=data.wallet_index))
+                                                   wallet_index=data.wallet_index, chain_type=data.chain_type))
 
 
 @router.get("/agents/{agent_id}")

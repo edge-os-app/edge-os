@@ -23,7 +23,7 @@ export const walletSetupApi = {
   beginBrowserCreation: (agentId: string) =>
     request<WalletSetupRecord & { create_permitted: boolean }>(path(agentId, "browser-begin"), { method: "POST" })
       .then((r) => r.body),
-  completeBrowserCreation: (agentId: string, wallet: { wallet_id: string | null; address: string; wallet_index: number | null }) =>
+  completeBrowserCreation: (agentId: string, wallet: { wallet_id: string | null; address: string; wallet_index: number | null; chain_type: string }) =>
     request<WalletSetupRecord>(path(agentId, "complete"), { method: "POST", body: JSON.stringify(wallet) })
       .then((r) => r.body),
 };
@@ -33,6 +33,12 @@ export const walletSetupApi = {
  * without creating. A different signed-in owner never reads it. The server also retains the claim.
  */
 const claimKey = (ownerId: string, agentId: string) => `edge-os:wallet-claim:${ownerId}:${agentId}`;
+
+/** True when this browser can keep a claim copy. Checked before creation, so a blocked store never loses a wallet. */
+export function claimStorageWorks(): boolean {
+  const probe = "edge-os:wallet-claim-probe";
+  try { window.localStorage.setItem(probe, "1"); window.localStorage.removeItem(probe); return true; } catch { return false; }
+}
 
 export function retainClaim(ownerId: string, agentId: string, wallet: CreatedWallet): void {
   try { window.localStorage.setItem(claimKey(ownerId, agentId), JSON.stringify(wallet)); } catch { /* storage blocked */ }

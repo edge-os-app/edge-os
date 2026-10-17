@@ -10,17 +10,26 @@ delegation, signer, policy, funding, signature or broadcast. No actual Privy acc
    dispatch and no cancellation, commits `DISPATCH_INTENT` (state `PENDING`) and answers `create_permitted: true`.
    Every other begin (duplicate, second tab, retry after a lost reply, cancelled, confirmed, unknown) answers
    `false` and changes nothing.
-3. Only after `create_permitted: true`, the browser calls pinned `@privy-io/react-auth` 3.47.0
+3. Before begin, the browser requires a verified user id and working site storage; otherwise it refuses with no
+   begin and no SDK call, so the only permission is never used up. Only after `create_permitted: true`, the browser
+   calls pinned `@privy-io/react-auth` 3.47.0
    `useCreateWallet().createWallet({ createAdditional: true })`. The installed declaration returns
-   `Wallet { id?: string | null; address; chainType; walletIndex: number | null }`.
-4. The browser keeps the exact returned wallet in `localStorage` (`edge-os:wallet-claim:<agent>`) before it calls
-   `complete`. A refresh or API restart resumes from that claim; it never begins or creates again.
-5. `POST .../complete {wallet_id, address}` retains the untrusted claim (`RESULT_RETURNED`, `claimed_address`) and
+   `Wallet { id?: string | null; address; chainType; walletIndex: number | null }`. Precondition from the pinned
+   types: `createAdditional: true` throws when the user has no Ethereum embedded wallet yet (`privy-config.ts` uses
+   `createOnLogin: "off"`). Begin has then used the setup's only permission with no wallet created; it stays
+   `PENDING`/`UNKNOWN` and is never retried. The owner needs a main embedded wallet first.
+4. The browser sends the exact returned wallet, held in memory, to `complete`, and keeps a copy in `localStorage`
+   (`edge-os:wallet-claim:<verified user id>:<agent>`) for a refresh. A refresh or API restart resumes from a claim;
+   it never begins or creates again.
+5. `POST .../complete {wallet_id, address, wallet_index, chain_type}` refuses a chain type other than `ethereum`,
+   retains the untrusted claim (`RESULT_RETURNED`: `claimed_address`, `claimed_wallet_index`, `claimed_chain_type`) and
    then asks the owner-bound lookup. It binds only when the lookup matches the same ID and address.
 6. A returned wallet without `id` is sent as an address-only claim; the server resolves the ID itself (below).
    A non-Ethereum result, a lookup failure or any mismatch stays `PENDING`/`UNKNOWN`.
 7. `resume` with the owner-bound lookup re-runs completion from the claim the server retained (`claimed_address`,
-   `claimed_wallet_index`, any returned ID), so an API restart or another browser needs no local storage. Without
+   `claimed_wallet_index`, `claimed_chain_type`, any returned ID), so an API restart or another browser needs no local
+   storage. A repeat of the bound claim (same ID, or for an address-only claim the bound address) is idempotent and
+   records no denial; a different wallet records `CONFLICTING_RESULT`. Without
    a retained claim it uses the existing reconciliation, which never creates. The browser keeps its own copy under
    `edge-os:wallet-claim:<verified user id>:<agent>`, so another signed-in owner never reads it.
 
@@ -31,8 +40,11 @@ delegation, signer, policy, funding, signature or broadcast. No actual Privy acc
   It never creates; `create_wallet` raises `WalletProviderUnavailable`.
 - `scripts/privy_wallet_lookup/lookup_server.py` is the separate trusted process. It alone reads `PRIVY_APP_ID` and
   `PRIVY_APP_SECRET` at explicit startup. Its one operation is `lookup_embedded_wallet`: fixed
-  `GET https://api.privy.io/v1/users/{did}`, default certificate validation, no redirect, no retry, 10 s deadline,
-  256 KiB response cap. The socket directory must be owned by the user with mode 0700; the socket is 0600; peers
+  `GET https://api.privy.io/v1/users/{did}`, default certificate validation, no redirect, no retry, a 10 s timeout per
+  blocking operation of each provider read (not a whole-request deadline) and a 256 KiB response cap. Any failed read
+  or unexpected error answers a code (`LOOKUP_UNAVAILABLE`, `LOOKUP_FAILED`) and the process keeps serving. The
+  API client waits 25 s per socket operation, longer than the two possible provider reads. The socket directory
+  must be owned by the user with mode 0700; the socket is 0600; peers
   must run as the same user. Frames: 4-byte length + JSON object, at most 4096 bytes.
 - `wallet_setup/lookup_matching.py` matches exactly one linked account with `type=wallet`,
   `wallet_client_type=privy`, `chain_type=ethereum`, the claimed address and the claimed ID, in the user record
@@ -53,4 +65,7 @@ the fixture and unavailable behavior. `provider_info` answers `privy_lookup` for
 
 - REST field names come from current docs, not a pinned runtime sample; an unsupported shape stays UNKNOWN.
 - The macOS same-user peer check (`LOCAL_PEERCRED`) and all live socket behavior are untested until the IPC slot.
-- A begin permitted while the browser has no verified user id makes no SDK call and leaves the setup PENDING.
+- Timeouts bound each blocking operation, so a slow-drip peer or provider is bounded by the response and frame caps,
+  not by one total deadline. A slower lookup ends as UNKNOWN.
+- The lookup process imports the shared `edge_os_api.wallet_setup` matching and framing modules (one rule, no copy).
+  That also loads the package's SQLAlchemy models into the process; it opens no database and holds no API secret.

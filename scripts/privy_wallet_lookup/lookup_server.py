@@ -3,14 +3,17 @@
 Run explicitly: `python -m lookup_server <socket_path>` with PRIVY_APP_ID and PRIVY_APP_SECRET in this process's
 environment only. The API never imports this module and never sees the secret. The one operation fetches
 `GET https://api.privy.io/v1/users/{did}` for the DID the API verified and matches the exact embedded Ethereum
-wallet (`lookup_matching.match_claim`). There is no caller-chosen URL, method, header, payload, creation,
-signer, policy or signing operation. HTTPS uses default certificate validation, no redirect, no retry, a
-finite deadline and a capped response. Errors and logs carry codes only, never provider bodies or secrets.
+wallet (`lookup_matching.match_claim`). Only when that linked wallet has no ID does it also make the fixed read-only
+`POST https://api.privy.io/v1/wallets/address` with exactly `{"address": ...}` to resolve the ID. There is no
+caller-chosen URL, method, header, payload, creation, signer, policy or signing operation. HTTPS uses default
+certificate validation, no redirect, no retry, a per-operation timeout and a capped response. One failed lookup
+answers a code and the process keeps serving. Errors and logs carry codes only, never provider bodies or secrets.
 """
 
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import socket
@@ -79,7 +82,7 @@ class PrivyUserReader:
                 if response.status != 200:
                     return None
                 body = response.read(MAX_RESPONSE + 1)
-        except (urllib.error.URLError, OSError, ValueError):
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
             return None
         if len(body) > MAX_RESPONSE:
             return None
@@ -141,7 +144,11 @@ def handle(conn: socket.socket, fetch_user: FetchUser, fetch_wallet: FetchWallet
         except (FrameError, OSError):
             conn.sendall(encode_frame({"status": "unknown", "reason": "MALFORMED_FRAME"}))
             return
-        conn.sendall(encode_frame(answer(message, fetch_user, fetch_wallet)))
+        try:
+            reply = answer(message, fetch_user, fetch_wallet)
+        except Exception:  # noqa: BLE001 - one failed lookup must not stop the process; the caller stays UNKNOWN
+            reply = {"status": "unknown", "reason": "LOOKUP_FAILED"}
+        conn.sendall(encode_frame(reply))
     except OSError:
         return
 

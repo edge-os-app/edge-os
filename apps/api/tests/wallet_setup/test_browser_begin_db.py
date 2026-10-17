@@ -203,6 +203,19 @@ def test_late_completion_never_replaces_a_confirmed_binding(lookup_client, signe
     assert "CONFLICTING_RESULT" in pg.psql("select string_agg(code, ',') from wallet_setup_denials")
 
 
+def test_address_only_retry_after_binding_is_idempotent_and_records_no_denial(lookup_client, signer, records, pg):
+    """A F1 / B MINOR-1: the lost-completion retry of the same address-only claim leaves no false conflict."""
+    did, headers = _owner(signer)
+    records.link(did, linked_id=None)
+    records.wallets[ADDRESS] = {"id": "resolved-wallet-2", "address": ADDRESS, "chain_type": "ethereum"}
+    _prepare(lookup_client, headers, "retry")
+    _begin(lookup_client, headers, "retry")
+    first = _complete(lookup_client, headers, "retry", wallet_id=None, address=ADDRESS, chain_type="ethereum")
+    again = _complete(lookup_client, headers, "retry", wallet_id=None, address=ADDRESS, chain_type="ethereum")
+    assert (first["wallet_id"], again["wallet_id"]) == ("resolved-wallet-2", "resolved-wallet-2")
+    assert pg.psql("select count(*) from wallet_setup_denials") == "0"
+
+
 def test_retained_claim_resumes_in_a_new_application_without_browser_storage(lookup_settings, wallet_schema,
                                                                             signer, records):
     did, headers = _owner(signer)

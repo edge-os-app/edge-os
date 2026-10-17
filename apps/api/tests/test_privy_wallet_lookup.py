@@ -479,8 +479,8 @@ def test_address_only_claim_binds_the_independently_resolved_id(monkeypatch):
     assert lookup.calls == [(ADDR, None)]
     retained = [e.content for e in session.added if e.event_type == SetupEventType.RESULT_RETURNED.value]
     assert retained == [{"wallet_id": None, "owner_id": str(row.owner_id), "chain_type": "ethereum", "address": None,
-                         "claimed_address": ADDR, "claimed_wallet_index": None, "source": "BROWSER_COMPLETION",
-                         "trusted": False}]
+                         "claimed_address": ADDR, "claimed_wallet_index": None, "claimed_chain_type": None,
+                         "source": "BROWSER_COMPLETION", "trusted": False}]
 
 
 def test_address_only_claim_without_match_stays_unknown(monkeypatch):
@@ -605,3 +605,166 @@ def test_ipc_absent_socket_or_timeout_is_unavailable(short_private_dir):
     absent = OwnerBoundLookupProvider(str(short_private_dir / "absent.sock"), uuid.uuid4(), DID, timeout=0.5)
     with pytest.raises(WalletProviderUnavailable):
         absent.with_claim(ADDR).lookup_wallet(WID)
+
+
+# Repair 1 regressions (RED first) ---------------------------------------------------------------------------------
+
+def _confirmed_row(monkeypatch, bound_address: str = ADDR):
+    row = _row(state=SetupState.CONFIRMED.value, creation_dispatched=True, wallet_id="resolved-wallet-1")
+    session = _Session()
+    monkeypatch.setattr(service, "load_setup", lambda *a, **k: row)
+    bound = {"wallet_id": "resolved-wallet-1", "evidence": {"owner_id": str(row.owner_id), "chain_type": "ethereum",
+                                                            "address": bound_address}}
+    monkeypatch.setattr(service, "latest_event",
+                        lambda s, r, kind: bound if kind == SetupEventType.WALLET_BOUND else None)
+    return row, session
+
+
+def test_address_only_retry_on_the_bound_address_records_no_conflict(monkeypatch):
+    """A F1 / B MINOR-1: the lost-completion retry of the same address-only claim is idempotent."""
+    row, session = _confirmed_row(monkeypatch)
+    same_address_other_case = "0x" + ADDR[2:].upper()
+    record = service.complete_from_browser(session, Principal(row.owner_id, DID), agent_id="agent-1", wallet_id=None,
+                                           provider=_ClaimLookup("resolved-wallet-1"), address=same_address_other_case)
+    assert record.wallet_id == "resolved-wallet-1"
+    assert [type(a).__name__ for a in session.added] == []  # no denial row, no event
+
+
+def test_address_only_claim_for_another_address_on_a_bound_setup_records_a_conflict(monkeypatch):
+    row, session = _confirmed_row(monkeypatch)
+    service.complete_from_browser(session, Principal(row.owner_id, DID), agent_id="agent-1", wallet_id=None,
+                                  provider=_ClaimLookup(None), address="0x" + "cd" * 20)
+    assert [d.code for d in session.added] == ["CONFLICTING_RESULT"]
+
+
+def test_retained_claim_keeps_the_browser_chain_type(monkeypatch):
+    """A F2: the server keeps the chain type the browser reported instead of writing a fixed value."""
+    row, session = _service_row(monkeypatch)
+    lookup = _ClaimLookup(None)
+    lookup.owner_id = row.owner_id
+    service.complete_from_browser(session, Principal(row.owner_id, DID), agent_id="agent-1", wallet_id=None,
+                                  provider=lookup, address=ADDR, chain_type="ethereum")
+    retained = [e.content for e in session.added if e.event_type == SetupEventType.RESULT_RETURNED.value]
+    assert retained[0]["claimed_chain_type"] == "ethereum"
+
+
+def test_non_ethereum_browser_claim_is_refused_before_retention(monkeypatch):
+    row, session = _service_row(monkeypatch)
+    with pytest.raises(Exception) as error:
+        service.complete_from_browser(session, Principal(row.owner_id, DID), agent_id="agent-1", wallet_id=None,
+                                      provider=_ClaimLookup(None), address=ADDR, chain_type="solana")
+    assert getattr(error.value, "status", None) == 422 or "422" in repr(error.value)
+    assert session.added == []
+
+
+def test_resume_keeps_the_retained_wallet_index_and_chain(monkeypatch):
+    """B MINOR-3: resume re-sends the retained index and chain, so the newest retained claim does not lose them."""
+    row, session = _service_row(monkeypatch)
+    retained = {"wallet_id": None, "owner_id": str(row.owner_id), "chain_type": "ethereum", "address": None,
+                "claimed_address": ADDR, "claimed_wallet_index": 2, "claimed_chain_type": "ethereum",
+                "source": "BROWSER_COMPLETION", "trusted": False}
+    monkeypatch.setattr(browser_intent, "load_setup", lambda *a, **k: row)
+    monkeypatch.setattr(browser_intent, "latest_event", lambda *a, **k: retained)
+    lookup = _ClaimLookup(None)
+    lookup.owner_id = row.owner_id
+    browser_intent.resume_retained_claim(session, Principal(row.owner_id, DID), agent_id="agent-1", provider=lookup)
+    new = [e.content for e in session.added if e.event_type == SetupEventType.RESULT_RETURNED.value]
+    assert (new[0]["claimed_wallet_index"], new[0]["claimed_chain_type"]) == (2, "ethereum")
+
+
+def test_reader_maps_a_malformed_http_response_to_none():
+    """B MAJOR-2: http.client.HTTPException is not OSError or URLError; it must not escape the reader."""
+    import http.client
+
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+
+    def opener(request: object, timeout: float) -> object:
+        raise http.client.BadStatusLine("garbage")
+
+    reader._opener = SimpleNamespace(open=opener)
+    assert reader.wallet_by_address(ADDR) is None
+    assert reader(DID) is None
+
+
+class _FakeConn:
+    """Minimal stand-in for an accepted socket: records what the server sends."""
+
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+
+    def settimeout(self, value: float) -> None:
+        pass
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+
+def test_handle_answers_a_code_when_a_lookup_raises(monkeypatch):
+    """B MAJOR-2: one failing lookup answers UNKNOWN and returns, so the serve loop keeps running."""
+    monkeypatch.setattr(lookup_server, "same_user_peer", lambda conn: True)
+    message = {"op": "lookup_embedded_wallet", "did": DID, "address": ADDR, "wallet_id": None}
+    monkeypatch.setattr(lookup_server, "read_frame", lambda conn: message)
+
+    def broken(did: str) -> object:
+        raise RuntimeError("provider exploded with secret-marker-9b")
+
+    conn = _FakeConn()
+    lookup_server.handle(conn, broken)
+    assert [decode_body(frame[4:]) for frame in conn.sent] == [{"status": "unknown", "reason": "LOOKUP_FAILED"}]
+
+
+def test_handle_sends_nothing_to_a_foreign_peer(monkeypatch):
+    """A F6 / B MINOR-6: a peer that is not this user gets no answer and no lookup."""
+    monkeypatch.setattr(lookup_server, "same_user_peer", lambda conn: False)
+    calls: list[str] = []
+    conn = _FakeConn()
+    lookup_server.handle(conn, lambda did: calls.append(did))
+    assert conn.sent == [] and calls == []
+
+
+def test_same_user_peer_refuses_a_foreign_uid_or_unreadable_credentials():
+    import os
+    import struct
+
+    class Peer:
+        def __init__(self, raw: bytes | None) -> None:
+            self.raw = raw
+
+        def getsockopt(self, *args: object) -> bytes:
+            if self.raw is None:
+                raise OSError("no credentials")
+            return self.raw
+
+    foreign = os.getuid() + 1
+    if hasattr(lookup_server.socket, "SO_PEERCRED"):
+        raw = struct.pack("3i", 1, foreign, 0)
+    else:
+        raw = struct.pack("Ii", 0, foreign) + b"\0" * 68
+    assert lookup_server.same_user_peer(Peer(raw)) is False
+    assert lookup_server.same_user_peer(Peer(None)) is False
+
+
+def test_client_timeout_budget_covers_both_fixed_server_reads():
+    """B MINOR-5: the client waits longer than the server's two bounded provider reads."""
+    from edge_os_api.wallet_setup import lookup_client
+
+    assert lookup_client.DEADLINE_SECONDS > 2 * lookup_server.DEADLINE_SECONDS
+
+
+def test_ipc_client_times_out_on_a_silent_server(short_private_dir):
+    """A F6 / B MINOR-6: a server that accepts but never answers ends as unavailable within the client timeout."""
+    import socket as _socket
+    import time
+
+    path = short_private_dir / "silent.sock"
+    server = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        server.bind(str(path))
+        server.listen(1)
+        provider = OwnerBoundLookupProvider(str(path), uuid.uuid4(), DID, timeout=0.5).with_claim(ADDR)
+        started = time.monotonic()
+        with pytest.raises(WalletProviderUnavailable):
+            provider.lookup_wallet(WID)
+        assert time.monotonic() - started < 5
+    finally:
+        server.close()
