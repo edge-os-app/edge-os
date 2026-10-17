@@ -132,6 +132,8 @@ def test_a_delayed_replay_saves_its_profile_and_reopens_after_a_restart(client, 
     strategy, revision = _saved_revision(client, owner_a)
     body = _body(strategy, revision, key=f"delayed-{uuid.uuid4()}")
     body["timing_profile"] = DELAYED
+    # The saved strategy needs three warm-up buckets; the delayed first source is one bucket earlier.
+    body["window_start"] = "2026-10-01T12:10:00Z"
 
     created = client.post("/v1/spot-replays", headers=owner_a, json=body)
 
@@ -153,6 +155,20 @@ def test_a_delayed_replay_saves_its_profile_and_reopens_after_a_restart(client, 
 
     assert reopened.status_code == 200, reopened.text
     assert reopened.json() == saved
+
+
+def test_the_delayed_fixture_refuses_a_window_without_its_warmup(client, owner_a) -> None:
+    strategy, revision = _saved_revision(client, owner_a)
+    body = _body(strategy, revision, key=f"delayed-warmup-{uuid.uuid4()}")
+    body["timing_profile"] = DELAYED
+
+    created = client.post("/v1/spot-replays", headers=owner_a, json=body)
+
+    assert created.status_code == 201, created.text
+    content = created.json()["content"]
+    assert content["inputs"]["timing_profile"] == DELAYED
+    assert content["result"]["status"] == "UNAVAILABLE"
+    assert content["result"]["reason"]["code"] == "DATASET_COVERAGE_UNPROVEN"
 
 
 def test_the_default_saved_record_adds_no_timing_keys_and_keeps_its_result(client, owner_a) -> None:

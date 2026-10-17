@@ -72,6 +72,6 @@ The 10:15 source decides at the exclusive end and is excluded. Gain/loss is −4
 
 A delayed run saves `timing_profile` and `timing_policy` inside `inputs`. The saved configuration identity and the record therefore carry the profile. A repeated idempotency key with a different profile is a conflict. The same `run_configuration_id` with a different profile is the existing configuration conflict. `GET /v1/spot-replays/{replay_id}` returns the saved profile and policy unchanged after an API restart. The delayed run passes the same protected-partition refusal as the default run.
 
-The web control offers the delayed option and preselects the default. The panel and the saved result show `Delayed hypothetical replay (300 s decision delay)` and each fill's `fill_label`. The result shows `FILL_UNAVAILABLE` and `NO_NEXT_BUCKET` as recorded order events, not as failures of the run.
+The web control offers the delayed option and preselects the default. For the authored fixture the control starts the window at 12:10, one bucket later than the default, so the first delayed decision keeps its full warm-up. For a saved dataset the window comes from the existing history source control. The panel and the saved result show `Delayed hypothetical replay (300 s decision delay)` and each fill's `fill_label`. The result shows `FILL_UNAVAILABLE` and `NO_NEXT_BUCKET` as recorded order events, not as failures of the run.
 
 This wiring still does not qualify real data, prove fills or costs, or grant execution permission.

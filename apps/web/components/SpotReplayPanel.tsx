@@ -26,7 +26,7 @@ function makeBody(strategyId: string, revisionId: string, dependencies: Dependen
     strategy_revision_id: revisionId,
     dataset_fixture_id: "p13.wc01/1",
     run_configuration_id: `p13-config-${crypto.randomUUID()}`,
-    window_start: "2026-10-01T12:05:00Z",
+    window_start: timingProfile === DELAYED_TIMING_PROFILE ? "2026-10-01T12:10:00Z" : "2026-10-01T12:05:00Z",
     window_end: "2026-10-01T12:35:00Z",
     initial_cash_quote: "1000",
     initial_base_amount: "0",
@@ -138,7 +138,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
   return (
     <section className="panel spot-replay" aria-labelledby="spot-replay-title" data-testid="spot-replay">
       <h2 id="spot-replay-title">Test the saved strategy on synthetic prices</h2>
-      <p className="muted">The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
+      <p className="muted">The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. The delayed profile starts at 12:10 so its first delayed decision keeps that warm-up. Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
       <h3>New run settings (editable)</h3>
       <div className="field">
         <label htmlFor="spot-replay-timing-profile">Timing profile</label>
@@ -149,7 +149,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
         </select>
       </div>
       {timingProfile === DELAYED_TIMING_PROFILE ? (
-        <p className="muted" data-testid="spot-replay-delayed-note">The delayed profile decides each source bucket 300 seconds after it ends. Each fill uses the next bucket&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p>
+        <p className="muted" data-testid="spot-replay-delayed-note">The delayed profile decides each source bucket 300 seconds after it ends. Its window starts one bucket later than the default, so the first delayed decision keeps its full warm-up. Each fill uses the next bucket&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p>
       ) : null}
       <div className="field">
         <label htmlFor="spot-replay-source">Price data</label>
@@ -180,7 +180,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       ) : null}
       <dl className="kv">
         <dt>Data</dt><dd className="mono">{dataset ? `${dataset.source_id} · simulated fills` : "p13.wc01/1 · synthetic only"}</dd>
-        <dt>Window</dt><dd>{dataset ? `${windowStart} to ${windowEnd}` : "2026-10-01 12:05 to 12:35 UTC"}</dd>
+        <dt>Window</dt><dd>{dataset ? `${windowStart} to ${windowEnd}` : timingProfile === DELAYED_TIMING_PROFILE ? "2026-10-01 12:10 to 12:35 UTC" : "2026-10-01 12:05 to 12:35 UTC"}</dd>
         <dt>Starting capital (quote)</dt><dd>1000. This fixed amount will be used for a new run.</dd>
         <dt>Starting base amount</dt><dd>0</dd>
         <dt>Starting cost basis</dt><dd>0</dd>

@@ -121,6 +121,18 @@ describe("delayed replay selection", () => {
 
     await screen.findByTestId("spot-replay-result");
     expect("timing_profile" in mocks.create.mock.calls[0][0]).toBe(false);
+    expect(mocks.create.mock.calls[0][0].window_start).toBe("2026-10-01T12:05:00Z");
+  });
+
+  it("starts the fixture window one bucket later for the delayed profile", async () => {
+    const user = userEvent.setup();
+    panel();
+    await user.selectOptions(screen.getByLabelText("Timing profile"), DELAYED);
+    await reviewAndSave(user);
+
+    await screen.findByTestId("spot-replay-result");
+    expect(mocks.create.mock.calls[0][0].window_start).toBe("2026-10-01T12:10:00Z");
+    expect(mocks.create.mock.calls[0][0].window_end).toBe("2026-10-01T12:35:00Z");
   });
 
   it("disables the profile control while a save is in flight", async () => {
