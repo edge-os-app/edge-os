@@ -8,6 +8,9 @@ secret isolation, settings selection and the once-only browser creation permissi
 from __future__ import annotations
 
 import datetime as dt
+import http.client
+import json
+import socket as _socket
 import sys
 import uuid
 from pathlib import Path
@@ -33,6 +36,139 @@ import lookup_server  # noqa: E402
 DID = "did:privy:owner-a"
 ADDR = "0x" + "ab" * 20
 WID = "wallet-id-1"
+
+
+# Deadline doubles (F1): deterministic clocks and sockets for the total-budget controls ---------------------------------
+
+class _Clock:
+    """A deterministic monotonic clock; tests advance it by hand."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self._value = start
+        self.start = start
+
+    def __call__(self) -> float:
+        return self._value
+
+    def value(self) -> float:
+        return self._value
+
+    def advance(self, seconds: float) -> None:
+        self._value += seconds
+
+
+class _DrippingSocket:
+    """A frame socket that delivers one byte per virtual step, like the frozen gate probe (1 byte / 6 s)."""
+
+    def __init__(self, payload: bytes, clock: _Clock, step: float) -> None:
+        self._payload = payload
+        self._clock = clock
+        self._step = step
+        self.received = 0
+        self.timeouts: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
+
+    def recv(self, size: int) -> bytes:
+        self._clock.advance(self._step)
+        if self.received >= len(self._payload):
+            return b""
+        chunk = self._payload[self.received:self.received + 1]
+        self.received += 1
+        return chunk
+
+
+class _FakeSock:
+    def shutdown(self, how: int) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeClientSocket:
+    """A stand-in Unix socket that records the timeout arming of connect, send and the reply read."""
+
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+        self.sent: list[bytes] = []
+        self.connected = False
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
+
+    def connect(self, path: str) -> None:
+        self.connected = True
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def __enter__(self) -> "_FakeClientSocket":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+class _FakeHttpResponse:
+    def __init__(self, body: bytes, *, fragments: int, clock: "_Clock | None", step: float) -> None:
+        self.status = 200
+        self._body = body
+        self._fragments = max(1, fragments)
+        self._piece = max(1, (len(body) + self._fragments - 1) // self._fragments)
+        self._clock = clock
+        self._step = step
+
+    def read(self, size: int) -> bytes:
+        if not self._body:
+            return b""
+        if self._clock is not None:
+            self._clock.advance(self._step)
+        take = min(self._piece, len(self._body))
+        chunk, self._body = self._body[:take], self._body[take:]
+        return chunk
+
+    def close(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeConnection:
+    """Stands in for one bounded ``http.client`` connection; records the one fixed request."""
+
+    def __init__(self, *, status: int = 200, body: bytes = b"", fragments: int = 1,
+                 clock: "_Clock | None" = None, step: float = 0.0,
+                 raise_on_getresponse: BaseException | None = None) -> None:
+        self.requests: list[tuple[str, str, bytes | None, dict[str, str]]] = []
+        self.sock = _FakeSock()
+        self._status, self._body, self._fragments = status, body, fragments
+        self._clock, self._step, self._raise = clock, step, raise_on_getresponse
+
+    def request(self, method: str, path: str, body: bytes | None = None,
+                headers: dict[str, str] | None = None) -> None:
+        self.requests.append((method, path, body, dict(headers or {})))
+
+    def getresponse(self) -> _FakeHttpResponse:
+        if self._raise is not None:
+            raise self._raise
+        response = _FakeHttpResponse(self._body, fragments=self._fragments, clock=self._clock, step=self._step)
+        response.status = self._status
+        return response
+
+    def close(self) -> None:
+        pass
+
+
+def _reader_with(connection: _FakeConnection, clock: "_Clock | None" = None) -> object:
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+    reader._connect = lambda timeout: connection  # type: ignore[method-assign]
+    if clock is not None:
+        reader._clock = clock  # type: ignore[method-assign]
+    return reader
+
 
 
 def _wallet(**overrides: object) -> dict[str, object]:
@@ -91,6 +227,27 @@ def test_frames_are_bounded_objects():
         assert "secret-marker" not in str(error.value)  # errors never repeat received bytes
 
 
+def test_framing_shared_deadline_bounds_a_paced_reply():
+    """F1: one byte per virtual step must end as a frame error inside the budget, never be accepted at 838 s."""
+    from edge_os_api.wallet_setup.lookup_framing import read_frame
+
+    clock = _Clock(start=0.0)
+    payload = encode_frame({"status": "matched", "wallet_id": WID, "address": ADDR, "chain_type": "ethereum"})
+    sock = _DrippingSocket(payload, clock, step=6.0)
+    with pytest.raises(FrameError):
+        read_frame(sock, deadline=25.0, clock=clock)
+    assert clock.value() <= 25.0 + 6.0  # a paced receive may overshoot by at most one step
+    assert sock.received < len(payload)  # the paced reply was never fully accepted
+
+
+def test_framing_without_a_deadline_keeps_reading_the_whole_frame():
+    """Characterisation: with no deadline the reader keeps its previous unbounded behaviour."""
+    from edge_os_api.wallet_setup.lookup_framing import read_frame
+
+    clock = _Clock(start=0.0)
+    assert read_frame(_DrippingSocket(encode_frame({"ok": 1}), clock, step=6.0)) == {"ok": 1}
+
+
 # Lookup executable: one fixed operation ------------------------------------------------------------------------
 
 
@@ -125,7 +282,8 @@ def test_credential_reader_hides_secret_and_refuses_redirects():
     reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
     assert "fake-secret-value" not in repr(reader) and "fake-secret-value" not in str(vars(reader).keys())
     assert lookup_server.API_BASE == "https://api.privy.io/v1/users/"
-    assert lookup_server._NoRedirect().redirect_request() is None
+    reader._connect = lambda timeout: _FakeConnection(status=301)  # type: ignore[method-assign]
+    assert reader.wallet_by_address(ADDR) is None  # a redirect status is never followed
     with pytest.raises(SystemExit):
         lookup_server.PrivyUserReader("app-id-fake", "")
 
@@ -351,38 +509,16 @@ def test_answer_uses_address_lookup_only_after_the_user_link_matches():
     assert stranger["status"] == "unknown" and calls == []  # no address lookup for a wallet the user does not link
 
 
-class _FakeResponse:
-    status = 200
-
-    def __init__(self, body: bytes) -> None:
-        self._body = body
-
-    def read(self, size: int) -> bytes:
-        return self._body[:size]
-
-    def __enter__(self) -> "_FakeResponse":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        return None
-
-
 def test_reader_address_lookup_is_one_fixed_post():
-    import json as _json
-
-    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
-    sent: list[object] = []
-
-    def opener(request: object, timeout: float) -> _FakeResponse:
-        sent.append((request, timeout))
-        return _FakeResponse(_json.dumps(RECORD).encode())
-
-    reader._opener = SimpleNamespace(open=opener)
+    conn = _FakeConnection(status=200, body=json.dumps(RECORD).encode())
+    reader = _reader_with(conn)
     assert reader.wallet_by_address(ADDR) == RECORD
-    (request, timeout), = sent
-    assert (request.full_url, request.get_method()) == ("https://api.privy.io/v1/wallets/address", "POST")
-    assert _json.loads(request.data) == {"address": ADDR} and timeout == lookup_server.DEADLINE_SECONDS
-    assert reader.wallet_by_address("0x12") is None and len(sent) == 1
+    (method, path, body, headers), = conn.requests
+    assert (method, path) == ("POST", "/v1/wallets/address")
+    assert json.loads(body) == {"address": ADDR}
+    assert headers["privy-app-id"] == "app-id-fake" and headers["Content-Type"] == "application/json"
+    assert headers["Authorization"].startswith("Basic ")
+    assert reader.wallet_by_address("0x12") is None and len(conn.requests) == 1
 
 
 def test_existing_socket_target_is_refused_not_unlinked(short_private_dir):
@@ -607,6 +743,96 @@ def test_ipc_absent_socket_or_timeout_is_unavailable(short_private_dir):
         absent.with_claim(ADDR).lookup_wallet(WID)
 
 
+def test_ipc_client_shared_deadline_drops_a_paced_lookup_reply(short_private_dir):
+    """F1: a real peer that drips one whole frame past the budget is unavailable, not parsed late."""
+    import socket as _socket
+    import threading
+    import time as _time
+
+    path = short_private_dir / "paced.sock"
+    frame = encode_frame({"status": "unknown", "reason": "NO_MATCH"})
+    ready = threading.Event()
+    stop = threading.Event()
+
+    def _drip():
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as server:
+            server.bind(str(path))
+            server.listen(1)
+            ready.set()
+            conn, _ = server.accept()
+            with conn:
+                conn.recv(4096)
+                for byte in frame:
+                    if stop.is_set():
+                        break
+                    try:
+                        conn.sendall(bytes([byte]))
+                    except OSError:
+                        break
+                    _time.sleep(0.05)
+
+    thread = threading.Thread(target=_drip, daemon=True)
+    thread.start()
+    assert ready.wait(2.0)
+    provider = OwnerBoundLookupProvider(str(path), uuid.uuid4(), DID, timeout=0.5).with_claim(ADDR)
+    started = _time.monotonic()
+    try:
+        with pytest.raises(WalletProviderUnavailable):
+            provider.lookup_wallet(WID)
+        elapsed = _time.monotonic() - started
+    finally:
+        stop.set()
+    assert elapsed < 3.0, f"the shared deadline did not bound the paced reply ({elapsed:.2f}s)"
+
+
+def test_ipc_reader_bounds_a_real_paced_provider_body(monkeypatch):
+    """F1: a real HTTP peer that drips the body past the one blessed deadline resolves to unknown."""
+    import http.server
+    import threading
+    import time as _time
+
+    payload = json.dumps({"id": WID, "address": ADDR, "chain_type": "ethereum", "owner_id": "quorum-x"}).encode()
+
+    class _Paced(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self._drip()
+
+        def do_POST(self):
+            self._drip()
+
+        def _drip(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            for index in range(0, len(payload), 4):
+                try:
+                    self.wfile.write(payload[index:index + 4])
+                    self.wfile.flush()
+                except OSError:
+                    return
+                _time.sleep(0.1)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Paced)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.4)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+    reader._connect = lambda timeout: http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    started = _time.monotonic()
+    try:
+        assert reader.wallet_by_address(ADDR) is None
+        elapsed = _time.monotonic() - started
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert elapsed < 3.0, f"the deadline watchdog did not bound the paced body ({elapsed:.2f}s)"
+
+
 # Repair 1 regressions (RED first) ---------------------------------------------------------------------------------
 
 def _confirmed_row(monkeypatch, bound_address: str = ADDR):
@@ -673,17 +899,29 @@ def test_resume_keeps_the_retained_wallet_index_and_chain(monkeypatch):
 
 
 def test_reader_maps_a_malformed_http_response_to_none():
-    """B MAJOR-2: http.client.HTTPException is not OSError or URLError; it must not escape the reader."""
-    import http.client
-
-    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
-
-    def opener(request: object, timeout: float) -> object:
-        raise http.client.BadStatusLine("garbage")
-
-    reader._opener = SimpleNamespace(open=opener)
+    """B MAJOR-2: http.client.HTTPException is not OSError; it must not escape the reader."""
+    reader = _reader_with(_FakeConnection(raise_on_getresponse=http.client.BadStatusLine("garbage")))
     assert reader.wallet_by_address(ADDR) is None
     assert reader(DID) is None
+
+
+def test_reader_bounds_open_and_body_by_one_deadline():
+    """F1: paced body chunks must not be aggregated past the 10 s read budget."""
+    clock = _Clock(start=0.0)
+    conn = _FakeConnection(body=json.dumps(RECORD).encode(), fragments=5, clock=clock, step=6.0)
+    reader = _reader_with(conn, clock)
+    assert reader.wallet_by_address(ADDR) is None  # two 6 s chunks already cross the 10 s budget
+    assert clock.value() >= lookup_server.DEADLINE_SECONDS
+    assert clock.value() < 2 * lookup_server.DEADLINE_SECONDS  # it stopped early, unlike the 20 s defect
+
+
+def test_reader_accepts_a_body_within_the_deadline():
+    """Characterisation: a genuinely fast reply is still parsed inside the same budget."""
+    clock = _Clock(start=0.0)
+    conn = _FakeConnection(body=json.dumps(RECORD).encode(), fragments=2, clock=clock, step=2.0)
+    reader = _reader_with(conn, clock)
+    assert reader.wallet_by_address(ADDR) == RECORD
+    assert clock.value() < lookup_server.DEADLINE_SECONDS
 
 
 class _FakeConn:
@@ -703,7 +941,7 @@ def test_handle_answers_a_code_when_a_lookup_raises(monkeypatch):
     """B MAJOR-2: one failing lookup answers UNKNOWN and returns, so the serve loop keeps running."""
     monkeypatch.setattr(lookup_server, "same_user_peer", lambda conn: True)
     message = {"op": "lookup_embedded_wallet", "did": DID, "address": ADDR, "wallet_id": None}
-    monkeypatch.setattr(lookup_server, "read_frame", lambda conn: message)
+    monkeypatch.setattr(lookup_server, "read_frame", lambda conn, deadline=None: message)
 
     def broken(did: str) -> object:
         raise RuntimeError("provider exploded with secret-marker-9b")
@@ -749,6 +987,30 @@ def test_client_timeout_budget_covers_both_fixed_server_reads():
     from edge_os_api.wallet_setup import lookup_client
 
     assert lookup_client.DEADLINE_SECONDS > 2 * lookup_server.DEADLINE_SECONDS
+
+
+def test_client_uses_one_deadline_across_connect_send_and_frame(monkeypatch):
+    """F1: connect, send and the frame read share one 25 s deadline, not a per-operation timeout."""
+    from edge_os_api.wallet_setup import lookup_client
+
+    clock = _Clock(start=500.0)
+    monkeypatch.setattr(lookup_client, "time", SimpleNamespace(monotonic=clock))
+    sock = _FakeClientSocket()
+    monkeypatch.setattr(lookup_client, "socket", SimpleNamespace(
+        AF_UNIX=_socket.AF_UNIX, SOCK_STREAM=_socket.SOCK_STREAM, socket=lambda *a, **k: sock))
+    seen: dict[str, float] = {}
+
+    def read_frame(reader_sock: object, deadline: float) -> dict[str, object]:
+        seen["deadline"] = deadline
+        return {"status": "matched", "wallet_id": WID, "address": ADDR, "chain_type": "ethereum"}
+
+    monkeypatch.setattr(lookup_client, "read_frame", read_frame)
+    provider = OwnerBoundLookupProvider("/tmp/unused.sock", uuid.uuid4(), DID).with_claim(ADDR)
+    evidence = provider.lookup_wallet(WID)
+    assert evidence is not None and evidence.wallet_id == WID
+    assert seen["deadline"] == 500.0 + lookup_client.DEADLINE_SECONDS
+    assert sock.connected and sock.sent
+    assert sock.timeouts and max(sock.timeouts) <= lookup_client.DEADLINE_SECONDS
 
 
 def test_ipc_client_times_out_on_a_silent_server(short_private_dir):

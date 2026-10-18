@@ -6,7 +6,10 @@ environment only. The API never imports this module and never sees the secret. T
 wallet (`lookup_matching.match_claim`). Only when that linked wallet has no ID does it also make the fixed read-only
 `POST https://api.privy.io/v1/wallets/address` with exactly `{"address": ...}` to resolve the ID. There is no
 caller-chosen URL, method, header, payload, creation, signer, policy or signing operation. HTTPS uses default
-certificate validation, no redirect, no retry, a per-operation timeout and a capped response. One failed lookup
+certificate validation, no redirect, no retry, one absolute deadline for each fixed read and a capped
+response. Each read's connect, request, header and body phases share that single deadline: a per-call
+watchdog shuts the socket down at the deadline and the body is streamed in capped chunks with a remaining
+check between them, so a paced provider reply cannot exceed the budget. One failed lookup
 answers a code and the process keeps serving. Errors and logs carry codes only, never provider bodies or secrets.
 """
 
@@ -20,9 +23,9 @@ import socket
 import ssl
 import stat
 import sys
-import urllib.error
+import threading
+import time
 import urllib.parse
-import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -33,8 +36,12 @@ from edge_os_api.wallet_setup.lookup_matching import (linked_wallet, match_claim
 
 API_BASE = "https://api.privy.io/v1/users/"
 WALLET_BY_ADDRESS = "https://api.privy.io/v1/wallets/address"
+_PRIVY_HOST = urllib.parse.urlsplit(API_BASE).hostname or "api.privy.io"
+_USERS_PATH = urllib.parse.urlsplit(API_BASE).path
+_WALLETS_BY_ADDRESS_PATH = urllib.parse.urlsplit(WALLET_BY_ADDRESS).path
 DEADLINE_SECONDS = 10.0
 MAX_RESPONSE = 256 * 1024
+_CHUNK_BYTES = 65_536
 CONNECTION_TIMEOUT = 20.0
 OPERATION = "lookup_embedded_wallet"
 
@@ -42,9 +49,9 @@ FetchUser = Callable[[str], object]
 FetchWallet = Callable[[str], object]
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
-        return None
+def _default_connect(timeout: float) -> http.client.HTTPSConnection:
+    """One HTTPS connection to the fixed provider host with default certificate validation, no redirect."""
+    return http.client.HTTPSConnection(_PRIVY_HOST, timeout=timeout, context=ssl.create_default_context())
 
 
 class PrivyUserReader:
@@ -55,8 +62,8 @@ class PrivyUserReader:
             raise SystemExit("lookup: credential not configured")
         self._app_id = app_id
         self._auth = "Basic " + base64.b64encode(f"{app_id}:{app_secret}".encode()).decode("ascii")
-        self._opener = urllib.request.build_opener(
-            _NoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+        self._connect = _default_connect
+        self._clock = time.monotonic
 
     def __repr__(self) -> str:
         return "PrivyUserReader(<redacted>)"
@@ -64,32 +71,95 @@ class PrivyUserReader:
     def __call__(self, did: str) -> object:
         if not valid_did(did):
             return None
-        return self._fetch(urllib.request.Request(API_BASE + urllib.parse.quote(did, safe=""), method="GET",
-                                                  headers={"Authorization": self._auth,
-                                                           "privy-app-id": self._app_id}))
+        return self._fetch("GET", _USERS_PATH + urllib.parse.quote(did, safe=""), None)
 
     def wallet_by_address(self, address: str) -> object:
         """Read-only fixed lookup: POST {address} to the wallets-by-address endpoint. No create or policy call."""
         if not valid_address(address):
             return None
-        body = json.dumps({"address": address}).encode("ascii")
-        return self._fetch(urllib.request.Request(WALLET_BY_ADDRESS, data=body, method="POST", headers={
-            "Authorization": self._auth, "privy-app-id": self._app_id, "Content-Type": "application/json"}))
+        return self._fetch("POST", _WALLETS_BY_ADDRESS_PATH, json.dumps({"address": address}).encode("ascii"),
+                           {"Content-Type": "application/json"})
 
-    def _fetch(self, request: urllib.request.Request) -> object:
+    def _fetch(self, method: str, path: str, body: bytes | None,
+               extra_headers: dict[str, str] | None = None) -> object:
+        """One fixed read under one absolute deadline. Connect, request, header and body share it."""
+        headers = {"Authorization": self._auth, "privy-app-id": self._app_id}
+        if extra_headers:
+            headers.update(extra_headers)
+        deadline = self._clock() + DEADLINE_SECONDS
+        connection: http.client.HTTPSConnection | None = None
+        response: Any = None
+        watchdog: threading.Timer | None = None
+        expired = False
+        holder: dict[str, Any] = {"sock": None}
+
+        def _expire() -> None:
+            nonlocal expired
+            expired = True
+            sock = holder["sock"] or getattr(connection, "sock", None)
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
         try:
-            with self._opener.open(request, timeout=DEADLINE_SECONDS) as response:
-                if response.status != 200:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                return None
+            # A socket timeout bounds one wait, not the whole read: a paced reply resets it on every
+            # receive. Arm the deadline watchdog before the connection so it covers the connect, request,
+            # header and body phases; a fired deadline shuts the live socket.
+            watchdog = threading.Timer(remaining, _expire)
+            watchdog.daemon = True
+            watchdog.start()
+            connection = self._connect(remaining)
+            connection.request(method, path, body=body, headers=headers)
+            raw = getattr(connection, "sock", None)
+            if raw is not None:
+                holder["sock"] = raw
+            if expired:
+                return None
+            response = connection.getresponse()
+            if response.status != 200:
+                return None
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                if expired or self._clock() >= deadline:
                     return None
-                body = response.read(MAX_RESPONSE + 1)
-        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
+                chunk = response.read(_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_RESPONSE:
+                    return None
+                chunks.append(chunk)
+            try:
+                return json.loads(b"".join(chunks))
+            except ValueError:
+                return None
+        except (http.client.HTTPException, OSError, ValueError):
             return None
-        if len(body) > MAX_RESPONSE:
-            return None
-        try:
-            return json.loads(body)
-        except ValueError:
-            return None
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+            if response is not None:
+                try:
+                    response.close()
+                except OSError:
+                    pass
+            if connection is not None:
+                try:
+                    connection.close()
+                except OSError:
+                    pass
+            raw = holder["sock"]
+            if raw is not None:
+                try:
+                    raw.close()
+                except OSError:
+                    pass
 
 
 def answer(message: dict[str, Any], fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None) -> dict[str, Any]:
@@ -140,7 +210,7 @@ def handle(conn: socket.socket, fetch_user: FetchUser, fetch_wallet: FetchWallet
         if not same_user_peer(conn):
             return
         try:
-            message = read_frame(conn)
+            message = read_frame(conn, time.monotonic() + CONNECTION_TIMEOUT)
         except (FrameError, OSError):
             conn.sendall(encode_frame({"status": "unknown", "reason": "MALFORMED_FRAME"}))
             return

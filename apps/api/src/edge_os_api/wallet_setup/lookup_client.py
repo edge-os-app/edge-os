@@ -4,12 +4,14 @@ The API holds no Privy app secret. It asks the separate trusted lookup process o
 the verified owner's DID user record hold this exact embedded Ethereum wallet? The provider is built per
 request from the verified `Principal`, never from a request body. It never creates a wallet: the browser
 creates, and `create_wallet` raises `WalletProviderUnavailable`. Any socket, frame or reply failure is
-`WalletProviderUnavailable`, which the service keeps as `UNKNOWN`.
+`WalletProviderUnavailable`, which the service keeps as `UNKNOWN`. One absolute deadline bounds the
+connect, the send and the reply read together, so a paced peer cannot keep the call open past the budget.
 """
 
 from __future__ import annotations
 
 import socket
+import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -18,8 +20,10 @@ from edge_os_api.wallet_setup.lookup_matching import valid_address, valid_did, v
 from edge_os_api.wallet_setup.provider import CreationRequest, WalletEvidence, WalletProviderUnavailable
 
 LOOKUP_OPERATION = "lookup_embedded_wallet"
-# Per socket operation. Longer than the lookup process's two fixed provider reads (2 x 10 s), so a slow but valid
-# lookup is not cut off; a slower one still ends as UNKNOWN.
+# Total budget for one lookup exchange. Connect, send and the frame read share this single deadline
+# (re-armed before each socket operation and each receive), so a paced peer cannot hold the call past
+# it. Longer than the lookup process's two fixed provider reads (2 x 10 s), so a slow but valid lookup
+# is not cut off; a slower one still ends as UNKNOWN.
 DEADLINE_SECONDS = 25.0
 
 
@@ -60,11 +64,24 @@ class OwnerBoundLookupProvider:
                               address=found_address)
 
     def _ask(self, request: dict[str, object]) -> dict[str, object]:
+        deadline = time.monotonic() + self.timeout
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(self.timeout)
+                if not _arm(sock, deadline):
+                    raise WalletProviderUnavailable()
                 sock.connect(self.socket_path)
+                if not _arm(sock, deadline):
+                    raise WalletProviderUnavailable()
                 sock.sendall(encode_frame(request))
-                return read_frame(sock)
+                return read_frame(sock, deadline)
         except (OSError, FrameError):
             raise WalletProviderUnavailable() from None
+
+
+def _arm(sock: socket.socket, deadline: float) -> bool:
+    """Re-arm the socket timeout to the remaining budget. False once the deadline has passed."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return False
+    sock.settimeout(remaining)
+    return True
