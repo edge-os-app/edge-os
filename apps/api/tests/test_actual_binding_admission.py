@@ -59,6 +59,47 @@ def test_actual_admitted_through_operating_release_history_check(tmp_path, monke
     _check_history("ACTUAL", history_for(anchor))
 
 
+@pytest.mark.parametrize("contradiction", ["release-profile", "reanchored-handoff"])
+def test_actual_admission_refuses_contradictory_pool_token_order(tmp_path, monkeypatch, contradiction):
+    anchor, _, expected = graph(tmp_path, monkeypatch)
+    history = history_for(anchor)
+    if contradiction == "release-profile":
+        profile = copy.deepcopy(history.profile)
+        profile["pool_tokens"].reverse()
+        history = replace(history, profile=profile)
+    else:
+        handoff = json.loads(anchor["handoff_json"])
+        handoff["market"]["token0"], handoff["market"]["token1"] = (
+            handoff["market"]["token1"], handoff["market"]["token0"])
+        anchor, _ = reanchor(anchor, expected, handoff=handoff)
+        history = replace(history, provider_facts={**history.provider_facts, BINDING_FACT: anchor})
+    handoff = json.loads(anchor["handoff_json"])
+    binding.checker(2).check_artifacts(anchor["handoff_json"].encode(), anchor["provenance_json"].encode(),
+                                     {**anchor, "recorder_attempt_id": handoff["attempt_id"]})
+    with pytest.raises(ReleaseRefused) as caught:
+        _check_history("ACTUAL", history)
+    assert caught.value.code == "forward_history_binding_invalid"
+
+
+@pytest.mark.parametrize("reverse_pool", [False, True])
+def test_actual_admission_preserves_generic_pool_order_and_base_quote_roles(tmp_path, monkeypatch, reverse_pool):
+    from edge_os_api.research_history import qualification_engine as engine
+
+    anchor, _, expected = graph(tmp_path, monkeypatch)
+    if reverse_pool:
+        handoff = json.loads(anchor["handoff_json"])
+        handoff["market"]["token0"], handoff["market"]["token1"] = (
+            handoff["market"]["token1"], handoff["market"]["token0"])
+        anchor, _ = reanchor(anchor, expected, handoff=handoff)
+    history = history_for(anchor)
+    if reverse_pool:
+        history.profile["pool_tokens"].reverse()
+    _check_history("ACTUAL", history)
+    market = json.loads(anchor["handoff_json"])["market"]
+    assert [token["address"] for token in history.profile["pool_tokens"]] == [market["token0"], market["token1"]]
+    assert engine._P07["research_binding_view"](history.profile)["token_order"] == [market["base"], market["quote"]]
+
+
 @pytest.mark.parametrize("field", ["schema_version", "provenance_sha256", "receipts_sha256"])
 def test_incomplete_versioned_anchor_refused(tmp_path, monkeypatch, field):
     anchor, _, _ = graph(tmp_path, monkeypatch)

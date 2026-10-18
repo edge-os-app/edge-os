@@ -210,6 +210,8 @@ def _check_actual_definition(value: Any, history: HistoryRelease) -> None:
             or h["window"]["start_utc"] != window.get("start_utc") or h["window"]["end_utc"] != window.get("end_utc")
             or h["network"]["chain_id"] != (profile.get("network") or {}).get("chain_id")
             or h["market"]["pool"] != (profile.get("venue") or {}).get("pool_address")
+            or [token.get("address") for token in profile.get("pool_tokens", [])] != [
+                h["market"]["token0"], h["market"]["token1"]]
             or h["market"]["base"] != roles.get("BASE") or h["market"]["quote"] != roles.get("QUOTE")
             or profile.get("orientation") != "QUOTE_PER_BASE"):
         raise _refused("the artifact market, source, window or scan differs from the release")
