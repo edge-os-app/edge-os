@@ -6,9 +6,10 @@ byte, time and credit limits. Nothing here performs I/O or reads a credential.
 
 Two kinds exist. A `STAND_IN` release points only at loopback or `.invalid` hosts and is served by a recording or an
 owned loopback server; it is refused in production. An `ACTUAL` release points at real provider hosts and is usable
-only when `APPROVED_RELEASES` records its exact SHA-256. That registry is empty: no actual release is approved, and no
-setting, environment value, file or request can add one. See
-`docs/qualification/research-provider-composition/CONTRACT.md`.
+only when `APPROVED_RELEASES` records its exact SHA-256. Exactly one actual release is approved; no setting, environment
+value, file or request can add or change one. See
+`docs/qualification/research-provider-composition/CONTRACT.md` and, for the registered release,
+`NANSEN_ACTUAL_RELEASE.md` beside it.
 
 A history part may name one frozen forward-history recorder handoff for saved-payload binding; admission validates it
 here, before any credential read (`research/history_payload_binding.py`, `PAYLOAD_BINDING.md`).
@@ -29,9 +30,12 @@ RELEASE_VERSION = "edge-os.research-operating-release/1"
 SOURCE_VERSION = "envio-hypersync/1"
 RPC_METHODS = ("eth_chainId", "eth_getTransactionReceipt")
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
-# Approved ACTUAL release id -> its exact release SHA-256. Empty: nothing is approved. Adding an entry is a reviewed
-# code change that cites the builder's recorded approval of that exact release.
-APPROVED_RELEASES: Mapping[str, str] = {}
+# Approved ACTUAL release id -> its exact release SHA-256. Exactly one release is approved below. Adding, changing or
+# removing an entry is a reviewed code change that cites the builder's recorded approval of that exact release.
+APPROVED_RELEASES: Mapping[str, str] = {
+    "actual-moe-nansen-demo-20261018/1":
+        "dce1e05ffdecf72eedaf340e55fad0e2a4271c1ea7860d15aed17fd2c1b1d743",
+}
 # The reserved `HistoryRelease.provider_facts` key of an optional frozen recorder handoff: {handoff_json, handoff_sha256}.
 BINDING_FACT = "forward_history_binding"
 
