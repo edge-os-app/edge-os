@@ -128,3 +128,37 @@ test("every primary button keeps text contrast of at least 4.5:1 at rest, on hov
     expect(hover.backgroundColor, `${label} hover differs from rest`).not.toBe(rest.backgroundColor);
   }
 });
+
+// The round stamp must not cover any lettering of the compact slip header. The stamp is a circle, so the check uses the real rendered
+// circle (center of its box, half its width) against the real text rectangles, not the larger box of the rotated square.
+const circleHitsRect = (circle, rect) => {
+  const nearestX = Math.max(rect.left, Math.min(circle.x, rect.right));
+  const nearestY = Math.max(rect.top, Math.min(circle.y, rect.bottom));
+  return Math.hypot(circle.x - nearestX, circle.y - nearestY) < circle.r;
+};
+
+test("the compact slip stamp covers neither the title nor the Illustrative label at 1280, 924 and 390 px", async ({ page }, info) => {
+  test.skip(info.project.name !== "desktop", "one pass sets all three widths itself");
+  for (const width of [1280, 924, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+    await page.evaluate(() => document.fonts.ready);
+    const slip = page.locator(".lp-slip-compact");
+    await slip.scrollIntoViewIfNeeded();
+    await expect(slip).toHaveCSS("opacity", "1");
+    await page.waitForTimeout(900);
+    const geometry = await page.evaluate(() => {
+      const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
+      const stamp = document.querySelector(".lp-stamp-small");
+      const s = stamp.getBoundingClientRect();
+      const label = document.querySelector(".lp-slip-compact .lp-slip-meta");
+      const range = document.createRange(); range.selectNodeContents(label);
+      return { circle: { x: s.left + s.width / 2, y: s.top + s.height / 2, r: stamp.offsetWidth / 2 },
+        label: box(label), labelText: label.textContent, labelLines: range.getClientRects().length,
+        title: box(document.querySelector(".lp-slip-compact .lp-slip-title")) };
+    });
+    expect(geometry.labelText, `${width}px label text`).toContain("Illustrative");
+    expect(circleHitsRect(geometry.circle, geometry.label), `${width}px: stamp covers the Illustrative label`).toBe(false);
+    expect(circleHitsRect(geometry.circle, geometry.title), `${width}px: stamp covers the slip title`).toBe(false);
+  }
+});

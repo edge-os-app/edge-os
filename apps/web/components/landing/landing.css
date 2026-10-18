@@ -215,7 +215,7 @@ html:has(.edge-os-landing) { scroll-behavior: smooth; }
 
 /* Compact slip (step 3) */
 .edge-os-landing .lp-slip-compact { max-width: 440px; box-shadow: 0 1px 2px rgba(46, 43, 37, .14), 0 12px 32px rgba(46, 43, 37, .18); transform: rotate(1.2deg); }
-.edge-os-landing .lp-slip-compact .lp-slip-head { padding: 18px 22px 13.2px; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 13.2px; flex-wrap: wrap; }
+.edge-os-landing .lp-slip-compact .lp-slip-head { padding: 18px 22px 13.2px; flex-direction: column; align-items: flex-start; gap: 0; }
 .edge-os-landing .lp-slip-compact .lp-slip-title { font-size: 21px; line-height: 1.55; }
 .edge-os-landing .lp-slip-compact .lp-slip-meta { font-size: 11px; }
 .edge-os-landing .lp-slip-compact .lp-tear { margin: 0 13.2px; }
