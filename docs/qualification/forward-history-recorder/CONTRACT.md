@@ -6,6 +6,11 @@ Status: LOCAL implementation contract for task `FORWARD-HISTORY-RECORDER-L4-2026
 authorizes no provider, credential, chain, account, wallet or recording operation. All tests use synthetic transports,
 fake clocks and sentinel credentials.
 
+The versioned ACTUAL successor is defined in
+[ACTUAL_HISTORY_PAYLOAD_BINDING.md](../../implementation/ACTUAL_HISTORY_PAYLOAD_BINDING.md). It adds an internally owned
+`run_actual_attempt`, `/2` handoff/report and saved-data admission. The `/1` behavior described below remains unchanged;
+its artifacts stay synthetic and cannot be promoted. The successor grants no provider operation or release activation.
+
 ## Versions and predecessor
 
 | Identity | Value |

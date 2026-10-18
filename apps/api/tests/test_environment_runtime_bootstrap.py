@@ -63,6 +63,7 @@ IMPORT_ENVIRON = _fake_environ()
 _real_environ, os.environ = os.environ, IMPORT_ENVIRON  # type: ignore[assignment]
 try:
     import operating_release_stand_in as stand_in
+    from test_actual_binding_admission import authored_actual_history
     from edge_os_api.core.research import environment_credentials, operating_release, released_runtime_bootstrap
     from edge_os_api.core.research.environment_credentials import EnvironmentCredentialSource
     from edge_os_api.core.research.operating_release import OperatingRelease, ReleaseRefused, release_sha256
@@ -82,7 +83,8 @@ def synthetic_release(*, release_id: str = "synthetic-bootstrap/1",
     """A synthetic ACTUAL definition over `.example` hosts with the given credential slots. No job runs over it."""
     base = stand_in.stand_in_release(envio_endpoint="https://hypersync.bootstrap-test.example",
                                      quicknode_host=QUICKNODE_HOST, nansen_endpoint=NANSEN_ORIGIN)
-    history = dataclasses.replace(base.history, envio_credential_slot=slots[0], quicknode_credential_slot=slots[1])
+    history = authored_actual_history(dataclasses.replace(
+        base.history, envio_credential_slot=slots[0], quicknode_credential_slot=slots[1]))
     nansen = dataclasses.replace(base.nansen, credential_slot=slots[2])
     return OperatingRelease(release_id, "ACTUAL", history=history, nansen=nansen)
 

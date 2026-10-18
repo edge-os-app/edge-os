@@ -37,6 +37,8 @@ from edge_os_api.nansen_research import NansenResponse, NansenTimeout, run_resea
 from edge_os_api.nansen_research.http_transport import NANSEN_ORIGIN
 from edge_os_api.research import investigation_jobs, nansen_reports
 
+from test_actual_binding_admission import authored_actual_history
+
 LOCAL = type("Local", (), {"env": "local"})()
 QUESTION = "Which holder records does MOE return, and what do basic flow records show?"
 ACTUAL_ENVIO, ACTUAL_QUICKNODE = "https://hypersync.actual-test.example", "quicknode.actual-test.example"
@@ -47,7 +49,8 @@ def actual_release(*, history: bool = True, nansen: bool = True, nansen_endpoint
     """An ACTUAL definition for composition checks only. Its hosts are `.example`; no job runs over it."""
     base = stand_in.stand_in_release(envio_endpoint=ACTUAL_ENVIO, quicknode_host=ACTUAL_QUICKNODE, history=history,
                                      nansen=nansen, nansen_endpoint=nansen_endpoint)
-    return OperatingRelease(release_id, "ACTUAL", history=base.history, nansen=base.nansen)
+    return OperatingRelease(release_id, "ACTUAL",
+                            history=None if base.history is None else authored_actual_history(base.history), nansen=base.nansen)
 
 
 def approve(monkeypatch, *releases: OperatingRelease) -> None:
