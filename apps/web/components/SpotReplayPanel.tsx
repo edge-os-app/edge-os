@@ -18,6 +18,16 @@ const DELAYED_TIMING_PROFILE: SpotReplayTimingProfile = "edge-os.delayed-history
 
 function emptyDependencies(): Dependencies { return { entry: [], exit: [] }; }
 
+const KNOWN_SYNTHETIC_CLASSES = new Set([
+  "SYNTHETIC_FIXTURE", "RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE",
+  "AUTHORED_HTTP_RESPONSE", "RELEASE_STAND_IN_RESPONSE",
+]);
+
+function datasetProvenance(dataset: DatasetSummary): "provider" | "synthetic" | "unknown" {
+  if (dataset.evidence_class === "PROVIDER_ACTUAL") return "provider";
+  return KNOWN_SYNTHETIC_CLASSES.has(dataset.evidence_class) ? "synthetic" : "unknown";
+}
+
 function makeBody(strategyId: string, revisionId: string, dependencies: Dependencies,
                   timingProfile: SpotReplayTimingProfile): SpotReplayBody {
   return {
@@ -67,6 +77,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
     return () => { current = false; };
   }, []);
   const dataset = datasets.find((item) => item.dataset_id === source) ?? null;
+  const datasetClass = dataset ? datasetProvenance(dataset) : "unknown";
   const chooseSource = (value: string) => {
     setSource(value); setPendingBody(null);
     const chosen = datasets.find((item) => item.dataset_id === value);
@@ -137,8 +148,8 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
 
   return (
     <section className="panel spot-replay" aria-labelledby="spot-replay-title" data-testid="spot-replay">
-      <h2 id="spot-replay-title">Test the saved strategy on synthetic prices</h2>
-      <p className="muted">The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. The delayed profile starts at 12:10 so its first delayed decision keeps that warm-up. Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
+      <h2 id="spot-replay-title">Test the saved strategy on price data</h2>
+      <p className="muted">{source === "fixture" ? "The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. The delayed profile starts at 12:10 so its first delayed decision keeps that warm-up. " : "The replay runs on the selected saved price data. "}Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
       <h3>New run settings (editable)</h3>
       <div className="field">
         <label htmlFor="spot-replay-timing-profile">Timing profile</label>
@@ -166,7 +177,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       ) : null}
       {dataset ? (
         <div className="stack" data-testid="spot-replay-history-source" style={{ overflowWrap: "anywhere" }}>
-          <p className="status stop">Simulated fills on saved recorded-history dataset {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. These prices are synthetic recorded responses, not observed market history. The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
+          <p className="status stop">Simulated fills on {datasetClass === "provider" ? "saved provider history dataset" : datasetClass === "synthetic" ? "saved recorded-history dataset" : "saved history dataset"} {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. {datasetClass === "provider" ? "These prices are saved provider history, not synthetic." : datasetClass === "synthetic" ? "These prices are synthetic recorded responses, not observed market history." : `${dataset.evidence_class} is an unrecognized saved evidence class, so this view claims neither observed history nor synthetic prices.`} The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
           <p data-testid="spot-replay-history-binding">{payloadBindingText(dataset.payload_binding)}</p>
           <div className="field">
             <label htmlFor="spot-replay-window-start">Window start (UTC)</label>

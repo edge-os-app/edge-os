@@ -428,3 +428,133 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
     expect(screen.getByTestId("spot-replay-saved-profile")).toHaveTextContent(`p12.spot-replay/1 · ${"p".repeat(64)}`);
   });
 });
+
+describe("RG05 replay source-aware labels", () => {
+  const recordedDataset = { dataset_id: "d0000000-0000-4000-8000-000000000001", source_id: "recorded-syn-qualified/1",
+    evidence_class: "RECORDED_RESPONSE", content_label: "SYNTHETIC_FIXTURE", binding_state: "QUALIFIED_BINDING",
+    profile_evidence_class: "SYNTHETIC_FIXTURE", verdict: { overall: "QUALIFIED" }, window_start: "2026-09-25T10:00:00Z",
+    window_end: "2026-09-25T12:00:00Z", readable_until: "2026-09-25T11:00:00Z" };
+  const actualDataset = { ...recordedDataset, dataset_id: "d0000000-0000-4000-8000-0000000000a1",
+    source_id: "actual-provider-history/1", evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_ACTUAL",
+    profile_evidence_class: "PROVIDER_ACTUAL" };
+  const unknownDataset = { ...recordedDataset, dataset_id: "d0000000-0000-4000-8000-0000000000b1",
+    source_id: "experimental-origin/1", evidence_class: "EXPERIMENTAL_LABEL", content_label: "UNRECOGNIZED",
+    profile_evidence_class: "EXPERIMENTAL_LABEL" };
+  const passingBinding = { status: "PASS", required_by: "RELEASE_BINDING", reason: null, evidence_class: "SYNTHETIC",
+    handoff_sha256: "e".repeat(64), report_sha256: "9".repeat(64), checker_sha256: "1".repeat(64),
+    claim_limit: "Payload binding only." };
+
+  function panel() {
+    return render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"],
+      sizing: { amount: "50", unit: "QUOTE:0xbb" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
+  }
+
+  function savedOnHistory(inputs: Record<string, unknown>, resultClass: string): any {
+    const saved = JSON.parse(JSON.stringify(replay)) as any;
+    Object.assign(saved.content.inputs, inputs);
+    saved.content.result.evidence_class = resultClass;
+    return saved;
+  }
+
+  it("describes a selected provider-actual dataset as saved provider history, not synthetic", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...actualDataset, payload_binding: passingBinding }] });
+    panel();
+    await screen.findByRole("option", { name: /actual-provider-history/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), actualDataset.dataset_id);
+
+    const source = screen.getByTestId("spot-replay-history-source");
+    expect(source).toHaveTextContent("saved provider history");
+    expect(source).not.toHaveTextContent(/synthetic recorded responses|not observed market history/i);
+    expect(source).toHaveTextContent(/Simulated fills/i);
+    expect(source).toHaveTextContent(/Data after 2026-09-25T11:00:00Z is protected/);
+  });
+
+  it("keeps a selected recorded-synthetic dataset explicitly synthetic", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...recordedDataset, payload_binding: passingBinding }] });
+    panel();
+    await screen.findByRole("option", { name: /recorded-syn-qualified/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), recordedDataset.dataset_id);
+
+    const source = screen.getByTestId("spot-replay-history-source");
+    expect(source).toHaveTextContent("synthetic recorded responses");
+    expect(source).not.toHaveTextContent("saved provider history");
+  });
+
+  it("shows an unrecognized dataset evidence class literally without a provenance claim", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...unknownDataset, payload_binding: passingBinding }] });
+    panel();
+    await screen.findByRole("option", { name: /experimental-origin/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), unknownDataset.dataset_id);
+
+    const source = screen.getByTestId("spot-replay-history-source");
+    expect(source).toHaveTextContent("EXPERIMENTAL_LABEL");
+    expect(source).not.toHaveTextContent(/saved provider history|synthetic recorded responses/);
+  });
+
+  it("shows the fixture window and warm-up copy only while the fixture is selected", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...actualDataset, payload_binding: passingBinding }] });
+    panel();
+
+    expect(screen.queryByRole("heading", { name: /synthetic/i })).toBeNull();
+    expect(screen.getByText(/authored synthetic fixture/)).toBeInTheDocument();
+    expect(screen.getByText(/Fills are assumptions/)).toBeInTheDocument();
+    await screen.findByRole("option", { name: /actual-provider-history/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), actualDataset.dataset_id);
+
+    expect(screen.queryByText(/authored synthetic fixture/)).toBeNull();
+    expect(screen.getByText(/Fills are assumptions/)).toBeInTheDocument();
+  });
+
+  it("labels a saved provider-actual replay from its own saved evidence", () => {
+    const saved = savedOnHistory({ evidence_class: "PROVIDER_ACTUAL", history_input: {
+      dataset_id: "d0000000-0000-4000-8000-0000000000a1", source_id: "actual-provider-history/1",
+      content_label: "PROVIDER_ACTUAL", source_evidence_class: "PROVIDER_ACTUAL", profile_evidence_class: "PROVIDER_ACTUAL",
+      declaration_id: "decl-1", job_id: "job-1", dataset_market_binding_id: "m".repeat(64),
+      strategy_market_binding_id: "m".repeat(64), fill_label: "simulated fills", dataset_content_sha256: "h".repeat(64) } },
+      "PROVIDER_ACTUAL");
+    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+
+    expect(screen.getByText(/saved provider history/)).toBeInTheDocument();
+    expect(screen.queryByText(/saved recorded-history dataset/)).toBeNull();
+  });
+
+  it("keeps a saved recorded-synthetic replay synthetic when the current catalog claims provider history", async () => {
+    const user = userEvent.setup();
+    const saved = savedOnHistory({ history_input: {
+      dataset_id: recordedDataset.dataset_id, source_id: recordedDataset.source_id,
+      content_label: "SYNTHETIC_FIXTURE", source_evidence_class: "RECORDED_RESPONSE",
+      profile_evidence_class: "SYNTHETIC_FIXTURE", declaration_id: "decl-1", job_id: "job-1",
+      dataset_market_binding_id: "m".repeat(64), strategy_market_binding_id: "m".repeat(64),
+      fill_label: "simulated fills", dataset_content_sha256: "h".repeat(64) } }, "SYNTHETIC_FIXTURE");
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...actualDataset, payload_binding: passingBinding }] });
+    mocks.get.mockResolvedValueOnce(saved as SpotReplayRecord);
+    panel();
+
+    await user.type(screen.getByRole("textbox", { name: "Saved replay ID" }), saved.replay_id);
+    await user.click(screen.getByRole("button", { name: "Load saved replay" }));
+
+    expect(await screen.findByTestId("spot-replay-result")).toBeInTheDocument();
+    expect(screen.getByText(/saved recorded-history dataset/)).toBeInTheDocument();
+    expect(screen.queryByText(/saved provider history/)).toBeNull();
+  });
+
+  it("shows an unrecognized saved evidence class literally without promoting it", () => {
+    const saved = savedOnHistory({ history_input: {
+      dataset_id: "d0000000-0000-4000-8000-0000000000b1", source_id: "experimental-origin/1",
+      content_label: "UNRECOGNIZED", source_evidence_class: "EXPERIMENTAL_LABEL",
+      profile_evidence_class: "EXPERIMENTAL_LABEL", declaration_id: "decl-1", job_id: "job-1",
+      dataset_market_binding_id: "m".repeat(64), strategy_market_binding_id: "m".repeat(64),
+      fill_label: "simulated fills", dataset_content_sha256: "h".repeat(64) } }, "EXPERIMENTAL_LABEL");
+    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+
+    expect(screen.getByText(/EXPERIMENTAL_LABEL/)).toBeInTheDocument();
+    expect(screen.queryByText(/saved provider history/)).toBeNull();
+    expect(screen.queryByText(/saved recorded-history dataset/)).toBeNull();
+  });
+});
