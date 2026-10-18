@@ -19,8 +19,8 @@ export interface CurrentHoldings {
 /** The owner's view of the original transaction: identities and stages, never signed bytes. */
 export interface OriginalTransaction {
   stage: string; reason?: string; reasons?: string[]; evidence_class: string; chain_id: number;
-  wallet_address: string; candidate_hash?: string; transaction_hash?: string; nonce?: number;
-  fee_envelope?: { gas_limit: number; max_fee_per_gas: number; max_priority_fee_per_gas: number };
+  wallet_address: string; candidate_hash?: string; transaction_hash?: string; nonce?: number | string;
+  fee_envelope?: { gas_limit: number | string; max_fee_per_gas: number | string; max_priority_fee_per_gas: number | string };
   signing_request_id?: string; signed_bytes_sha256?: string; signed_bytes_length?: number;
   broadcast_returned?: string | null; stages: { stage: string; at: string }[];
   scope?: string; release_id?: string; release_sha256?: string; binding_sha256?: string; approved_minimum?: Amount;
@@ -55,7 +55,7 @@ export interface Activation {
 export interface ControlledAction {
   scope: string; release_id: string; release_sha256: string; binding_sha256: string; evidence_class: string;
   input: Amount; minimum_output: Amount; recipient: string; entrypoint: string; method: string; allowance_raw: string;
-  gas: { gas_limit: number; max_fee_per_gas: number; max_priority_fee_per_gas: number; budget_raw: string };
+  gas: { gas_limit: string; max_fee_per_gas: string; max_priority_fee_per_gas: string; budget_raw: string };
   fees: { fee_bps: number; referrer_fee_bps: number; fee_collector_address: string; referrer_address: string; is_in_token_fee: boolean };
   expires_at: string; signer_id: string; policy_id: string; policy_content_sha256: string;
   recurring: "UNAVAILABLE"; exit_execution: "UNAVAILABLE";

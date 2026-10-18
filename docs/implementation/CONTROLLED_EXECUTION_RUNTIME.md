@@ -18,7 +18,7 @@ The existing ledger still reserves entry and intended-exit gas and two attempt s
 
 ## Saved attempt and one send
 
-`ExecutionService` remains the owner of the queue, claim, admission transition, attempt and journal. No new table or queue exists. `OriginalTransactionTransport` calls the controlled attempt hook only after it receives the saved attempt. The hook verifies the exact IN_FLIGHT attempt, active claim and submission-owned admission before any credential or provider operation.
+`ExecutionService` remains the owner of the queue, claim, admission transition, attempt and journal. No new table or queue exists. `OriginalTransactionTransport` calls the controlled attempt hook only after it receives the saved attempt. The hook verifies the exact IN_FLIGHT attempt, active claim and submission-owned admission before any credential or provider operation. A prior saved attempt for that exact adopted consent prevents another controlled client attempt, including after a definite refusal.
 
 The Kuru client loads its token only inside that saved-attempt boundary. Preparation uses the released raw minimum exactly. The preliminary action terms identify an APPROVED_MINIMUM, not a provider estimate. The actual quote/build request occurs once during original preparation. Elapsed quote and input ages are checked after the response. Provider quote creation time remains unknown.
 
@@ -32,9 +32,11 @@ Current execution inputs use `MarketObservationPort` and `ForwardObservation`. A
 
 Release-bound holdings require the exact owner, wallet, network, assets, decimals and independent finalized observer. Reads stay at the selected block, whose hash remains in the source reference. Unknown deposit-reference and signer-removal schemas remain unavailable. Balance changes and local flags cannot prove those effects.
 
-Recovery checks refusal, in-flight and missing-hash states before acquiring any observer. A saved hash is observed without constructing execution clients or loading worker credentials. Controlled settlement verifies the saved release, full original bytes, chain 143, wallet, target, canonical receipt block and independently qualified finalized boundary. It requires complete supported ERC20 effects and bound, non-removed logs. Missing or conflicting evidence stays UNKNOWN, with reservations held.
+Recovery checks refusal, in-flight and missing-hash states before acquiring any observer. A saved hash is observed without constructing execution clients or loading worker credentials. Controlled settlement verifies the saved release, full original bytes, chain 143, wallet, target, canonical receipt block and independently qualified finalized boundary. It requires complete supported ERC20 effects and bound, non-removed logs. Transfers of unsupported wallet assets and conflicting log transaction identities also stay UNKNOWN. Missing or conflicting evidence keeps reservations held.
 
 Monad gas uses the signed gas limit multiplied by `min(base fee + signed priority fee, signed maximum fee)`. Receipt gas used is not the charged limit. Saved authored original actions retain their legacy fixture meaning and labels. An unbound controlled envelope cannot fall back to receipt presence.
+
+Controlled public gas amounts and nonces use decimal strings, preserving integers beyond the browser number limit. The consent card shows the raw input, minimum, fees, gas, expiry and exact signer/policy. Action views distinguish actual, synthetic and authored evidence and show current source identity, receipt cost, pending exposure and recovery.
 
 ## Required proof and remaining limits
 

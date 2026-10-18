@@ -732,6 +732,14 @@ def owner_projection(envelope: Mapping[str, Any] | None) -> dict[str, Any] | Non
     if not envelope:
         return None
     view = {key: value for key, value in envelope.items() if key in OWNER_FIELDS}
+    if "binding_sha256" in envelope:
+        # Browser JSON numbers cannot preserve a uint256 nonce or gas amount.
+        if type(view.get("nonce")) is int:
+            view["nonce"] = str(view["nonce"])
+        fees = view.get("fee_envelope")
+        if isinstance(fees, Mapping):
+            view["fee_envelope"] = {key: str(fees[key]) for key in (
+                "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas") if type(fees.get(key)) is int}
     returned = envelope.get("broadcast_returned")
     view["broadcast_returned"] = returned if is_hash(returned) and returned == envelope.get("transaction_hash") else None
     request = envelope.get("signing_request")

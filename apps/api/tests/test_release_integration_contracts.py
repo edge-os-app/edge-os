@@ -241,6 +241,8 @@ def test_controlled_terms_projection_is_owner_scoped_and_contains_no_client_conf
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(financial=SimpleNamespace(
         ports=SimpleNamespace(controlled={"agent-1":runtime})))))
     result = controlled_profile(request, SimpleNamespace(user_id=identity["owner_id"]), agent)
+    assert result["gas"]["gas_limit"] == "300000"
+    assert result["gas"]["max_fee_per_gas"] == "3000000000"
     assert result["input"]["raw"] == "100000000"
     assert result["minimum_output"]["raw"] == "49500000000000000000"
     assert result["recurring"] == "UNAVAILABLE" and result["exit_execution"] == "UNAVAILABLE"

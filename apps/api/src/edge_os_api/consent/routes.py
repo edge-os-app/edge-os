@@ -71,7 +71,8 @@ def controlled_profile(request: Request, principal: Principal, agent: Any) -> di
         "evidence_class": release["evidence_class"], "input": amount(route["input_asset"], route["approved_input_raw"]),
         "minimum_output": amount(route["output_asset"], route["approved_min_output_raw"]),
         "recipient": route["recipient"], "entrypoint": route["entrypoint_address"], "method": route["method"],
-        "allowance_raw": route["approved_allowance_raw"], "gas": release["gas"], "fees": route["fees"],
+        "allowance_raw": route["approved_allowance_raw"],
+        "gas": {key: str(value) for key, value in release["gas"].items()}, "fees": route["fees"],
         "expires_at": release["valid_until"], "signer_id": release["signer_id"], "policy_id": release["policy_id"],
         "policy_content_sha256": release["policy_content_sha256"], "recurring": "UNAVAILABLE", "exit_execution": "UNAVAILABLE"}
 
