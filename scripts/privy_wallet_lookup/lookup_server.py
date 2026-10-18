@@ -50,31 +50,69 @@ OPERATION = "lookup_embedded_wallet"
 FetchUser = Callable[[str], object]
 FetchWallet = Callable[[str], object]
 
+# The lookup process is serial: one outstanding connector is enough. Further reads answer UNKNOWN rather
+# than start another thread while an unresolved connect holds the budget.
+_CONNECTOR_LOCK = threading.Lock()
+_CONNECTOR_BUSY = False
+
 
 def _default_connect(timeout: float) -> http.client.HTTPSConnection:
     """One HTTPS connection to the fixed provider host with default certificate validation, no redirect.
 
-    DNS and the TCP/TLS connect happen here under a bounded wait. `socket.create_connection` resolves the
-    host before it can honour a socket timeout, so an unjoined `getaddrinfo` would otherwise let a stalled
-    resolver push this fixed read past its total deadline.
+    DNS and the TCP/TLS connect run under a bounded wait, so a stalled resolver cannot push this fixed read
+    past its total deadline. At most ONE connector may be outstanding: `socket.create_connection` resolves
+    the host before it can honour a socket timeout, so an abandoned wait is the only way to stop reading,
+    and a second blocked read must not add another thread. A connector that finishes after its caller has
+    given up is closed here, never handed to a caller that is gone.
     """
+    global _CONNECTOR_BUSY
+    with _CONNECTOR_LOCK:
+        if _CONNECTOR_BUSY:
+            raise TimeoutError("provider connect already outstanding")
+        _CONNECTOR_BUSY = True
     connection = http.client.HTTPSConnection(_PRIVY_HOST, timeout=timeout, context=ssl.create_default_context())
     done = threading.Event()
     failure: list[BaseException] = []
+    state = "connecting"  # connecting -> ready | failed | abandoned | closed | taken, decided under the lock
+    stale = False
 
     def _connect() -> None:
+        nonlocal state
+        global _CONNECTOR_BUSY
         try:
             connection.connect()
-        except BaseException as exc:  # noqa: BLE001 - re-raised on the reading thread
+        except BaseException as exc:  # noqa: BLE001 - reported to the reading thread
             failure.append(exc)
-        finally:
-            done.set()
+        with _CONNECTOR_LOCK:
+            _CONNECTOR_BUSY = False
+            if state == "abandoned":
+                state = "closed"
+                stale = True
+            else:
+                state = "failed" if failure else "ready"
+        if stale:
+            try:
+                connection.close()
+            except OSError:
+                pass
+        done.set()
 
     worker = threading.Thread(target=_connect, daemon=True)
     worker.start()
     if not done.wait(timeout):
-        # shortcut: a stalled resolver thread may outlive the deadline until getaddrinfo returns;
-        # upgrade to a resolver with a native timeout if the platform offers one.
+        with _CONNECTOR_LOCK:
+            if state == "connecting":
+                state = "abandoned"  # the connector closes itself when it finally finishes
+            elif state == "ready":
+                state = "closed"  # it finished inside the deadline; the caller that is leaving owns the close
+                stale = True
+        if stale:
+            try:
+                connection.close()
+            except OSError:
+                pass
+        # shortcut: a stalled resolver thread outlives the deadline until getaddrinfo returns; upgrade to a
+        # resolver with a native timeout if the platform offers one.
         raise TimeoutError("provider connect deadline exceeded")
     if failure:
         raise failure[0]
@@ -141,6 +179,8 @@ class PrivyUserReader:
             watchdog.daemon = True
             watchdog.start()
             connection = self._connect(remaining)
+            if expired or self._clock() >= deadline:
+                return None  # the connect phase spent the budget: send nothing
             connection.request(method, path, body=body, headers=headers)
             raw = getattr(connection, "sock", None)
             if raw is not None:

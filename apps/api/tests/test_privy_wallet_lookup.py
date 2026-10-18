@@ -948,7 +948,80 @@ def test_reader_bounds_the_dns_and_connect_phase_by_the_same_deadline(monkeypatc
         elapsed = _time.monotonic() - started
     finally:
         release.set()
-    assert elapsed < 1.5, elapsed
+    assert elapsed < 1.5, elapsed  # harness scheduler tolerance above the 0.3 s product budget, not a product budget
+
+
+def test_reader_keeps_one_outstanding_connector_and_further_reads_fail_unknown(monkeypatch):
+    """Gate resource bound: an unresolved connect must not let the process accumulate connectors.
+
+    The break this catches: `_default_connect` starts a fresh connector thread on every read, so repeated
+    reads while the resolver is stalled stack threads and sockets and a late connector is never closed.
+    """
+    import threading as _threading
+    import time as _time
+
+    made: list[object] = []
+
+    class _BlockingConnector:
+        """Credential-free stand-in whose connect blocks until the test releases it."""
+
+        def __init__(self, host: str, timeout: float, context: object = None) -> None:
+            self.entered = _threading.Event()
+            self.release = _threading.Event()
+            self.closed = False
+            self.requests: list[tuple[str, str]] = []
+            self.sock = None
+            made.append(self)
+
+        def connect(self) -> None:
+            self.entered.set()
+            self.release.wait(5.0)
+
+        def request(self, method: str, path: str, body: object = None, headers: object = None) -> None:
+            self.requests.append((method, path))
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(lookup_server.http.client, "HTTPSConnection", _BlockingConnector)
+    monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.2)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+
+    threads_before = _threading.active_count()
+    assert reader(DID) is None  # gives up at the deadline; the one connector is still blocked
+    assert len(made) == 1
+    connector = made[0]
+    assert connector.entered.wait(2.0)
+    assert _threading.active_count() <= threads_before + 1  # exactly the one connector thread
+
+    for _ in range(3):
+        assert reader(ADDR) is None  # further reads answer UNKNOWN while the connect is outstanding
+    assert len(made) == 1  # no new connector work was started
+    assert _threading.active_count() <= threads_before + 1
+
+    connector.release.set()  # the late connector may now finish
+    stop = _time.monotonic() + 3.0  # harness scheduler tolerance, not a product budget
+    while _threading.active_count() > threads_before and _time.monotonic() < stop:
+        _time.sleep(0.01)
+    assert connector.closed is True  # a connector finishing after UNKNOWN is explicitly closed
+    assert connector.requests == []  # and never sends an HTTP request
+    assert _threading.active_count() <= threads_before  # no leftover connector thread
+
+
+def test_expired_connect_never_sends_a_request():
+    """Gate phase boundary: a connect that spends the whole budget must not then send a request."""
+    clock = _Clock(start=0.0)
+    connection = _FakeConnection(body=b"{}", clock=clock)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+    reader._clock = clock  # type: ignore[method-assign]
+
+    def _connect(timeout: float) -> object:
+        clock.advance(lookup_server.DEADLINE_SECONDS + 1.0)  # the connect phase consumes the whole budget
+        return connection
+
+    reader._connect = _connect  # type: ignore[method-assign]
+    assert reader(DID) is None
+    assert connection.requests == []
 
 
 class _FakeConn:
