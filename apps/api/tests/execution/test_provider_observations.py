@@ -184,3 +184,11 @@ def test_original_envelope_rejects_type_drift_even_when_python_values_compare_eq
     envelope["unsigned"][field] = value
     result = charge(envelope)
     assert result.state == "UNAVAILABLE" and result.raw is None
+
+
+@pytest.mark.parametrize("data", [305419896, b"\x12\x34\x56\x78", "12345678", "0x1234567", None])
+def test_original_calldata_requires_an_even_length_prefixed_hex_string(data):
+    envelope = original()
+    envelope["unsigned"]["data"] = data
+    result = charge(envelope)
+    assert result.state == "UNAVAILABLE" and result.raw is None
