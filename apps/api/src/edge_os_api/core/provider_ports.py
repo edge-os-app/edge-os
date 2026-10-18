@@ -19,24 +19,28 @@ from __future__ import annotations
 import datetime as dt
 import json
 import threading
+import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from types import MappingProxyType
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from edge_os_api.execution.current_holdings import HoldingsObservation, HoldingsUnavailable, read_rpc_holdings
-from edge_os_api.execution.original_recordings import OriginalRecordings
+from edge_os_api.execution.original_recordings import OriginalRecordings, RecordedObservationRpc
 from edge_os_api.execution.original_transaction import (EVIDENCE_CLASS, OriginalClients, RouteProfile,
-                                                        wallet_address)
+                                                        OriginalContext, RpcError, validate_signed, wallet_address)
+from edge_os_api.execution.operating_release import BoundRelease, ReleaseRefused
 from edge_os_api.execution.transport import FixtureAcknowledgementLost, PreparedSubmission, TransportOutcome
 from edge_os_api.execution.types import AssetAmount, EvaluationInputs, InputObservation
 from edge_os_api.funding.observation import DepositObservation, ObservationUnavailable
 from edge_os_api.funding.persistence import FundingCreditRow, FundingFlowRow
 from edge_os_api.funding.types import FlowState, ObservationStatus
+from edge_os_api.research.forward_observation import ForwardObservation
 
 FIXTURE_EVIDENCE = "SYNTHETIC_FIXTURE"
 FIXTURE_MODE, UNAVAILABLE_MODE = "fixture", "unavailable"
@@ -86,6 +90,7 @@ class MarketObservationRequest:
 class MarketObservations:
     inputs: EvaluationInputs
     provenance: dict[str, Any]
+    forward: ForwardObservation | None = None
 
 
 class MarketObservationPort(Protocol):
@@ -146,6 +151,7 @@ class QuoteResult:
     observed_at: dt.datetime
     expires_at: dt.datetime
     source_ref: str
+    basis: str = "ESTIMATE"
 
 
 class ActionQuotePort(Protocol):
@@ -392,7 +398,7 @@ class RecordedOriginalHoldings:
         if address is None:
             raise ProviderUnavailable("holdings")
         try:
-            return read_rpc_holdings(self._recordings.clients(self._clock).observer, wallet_address=address,
+            return read_rpc_holdings(RecordedObservationRpc(self._recordings, self._clock), wallet_address=address,
                                      assets=assets, source=self.source_id, evidence_class=EVIDENCE_CLASS)
         except HoldingsUnavailable:
             raise ProviderUnavailable("holdings") from None
@@ -454,6 +460,230 @@ class FixtureRemovalObserver:
 
 # ------------------------------------------------------------------------------ the bundle
 
+@dataclass(frozen=True)
+class ControlledRuntime:
+    """Server-owned release and injected transports. Construction reads no credential and makes no request."""
+
+    binding: BoundRelease
+    http: Any = field(repr=False)
+    quote_token: Callable[[], str] | None = field(default=None, repr=False)
+    signer_access: Callable[[], Mapping[str, Any]] | None = field(default=None, repr=False)
+    clock: Callable[[], dt.datetime] = utc_now
+    monotonic: Callable[[], float] = time.monotonic
+    synthetic_bindings: Mapping[str, str] | None = field(default=None, repr=False)
+    market_source: MarketObservationPort | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.synthetic_bindings is not None:
+            object.__setattr__(self, "synthetic_bindings", MappingProxyType(dict(self.synthetic_bindings)))
+
+    def read_only(self) -> "ControlledRuntime":
+        return replace(self, quote_token=None, signer_access=None)
+
+    def observe_market(self, request: MarketObservationRequest) -> MarketObservations:
+        profile, identity = self.binding.market_profile(), self.binding.identity()
+        if (profile is None or self.market_source is None or request.agent_id != identity["agent_id"]
+                or request.market_binding_id != identity["market_binding_id"]
+                or request.warmup_buckets != profile["warmup_buckets"]):
+            raise ProviderUnavailable("current_observations")
+        result = None
+        try:
+            self.binding.admit(identity, now=self.clock(), synthetic_bindings=self.synthetic_bindings)
+            observed = self.market_source.observe(request)
+            now = self.clock()  # collection age is checked after the source returns
+            f, p = observed.forward, observed.provenance
+            route = self.binding.release.content()["route"]
+            evidence = self.binding.release.content()["evidence_class"]
+            collected = dt.datetime.fromisoformat(f.collected_at.replace("Z", "+00:00"))
+            count = request.warmup_buckets + 1
+            ends = [request.decision_time - dt.timedelta(minutes=5 * (count - 1 - i)) for i in range(count)]
+            good = (isinstance(f, ForwardObservation) and f.availability == "AVAILABLE" and f.reason is None
+                and f.network == identity["network_id"] and f.market_binding_id == identity["market_binding_id"]
+                and f.base_asset == route["output_asset"]["asset_id"] and f.quote_asset == route["input_asset"]["asset_id"]
+                and f.units == "QUOTE_PER_BASE" and type(f.event) is str and bool(f.event)
+                and f.observed_at == request.decision_time.isoformat() and f.finality == profile["finality"]
+                and f.coverage == "COMPLETE" and f.evidence_class == evidence
+                and type(f.age_seconds) is int and 0 <= f.age_seconds <= profile["max_collection_age_seconds"]
+                and request.decision_time <= collected <= now
+                and (now - collected).total_seconds() <= profile["max_collection_age_seconds"]
+                and p.get("evidence_class") == evidence and p.get("binding_sha256") == self.binding.sha256
+                and p.get("source") == profile["source_id"] and p.get("finality") == profile["finality"]
+                and p.get("qualification_proof_sha256") == self.binding.proofs()["market_proof_sha256"]
+                and p.get("delivery_profile_sha256") == profile["delivery_profile_sha256"]
+                and p.get("availability_basis") == "FORWARD_OBSERVED" and p.get("warmup_buckets") == request.warmup_buckets
+                and p.get("collected_at") == f.collected_at and p.get("market_binding_id") == request.market_binding_id
+                and observed.inputs.observed_at() == request.decision_time and observed.inputs.position == count - 1
+                and observed.inputs.position_open == request.position_open
+                and observed.inputs.scheduled_bucket_ends == [iso(end) for end in ends]
+                and all(len(rows) == count and all(row is not None and row.qualified and row.bucket_end == iso(end)
+                    for row, end in zip(rows, ends)) for rows in (observed.inputs.prices, observed.inputs.quote_volumes)))
+            if good:
+                saved = {key: p[key] for key in ("source", "evidence_class", "market_binding_id", "collected_at",
+                    "availability_basis", "finality", "binding_sha256", "qualification_proof_sha256",
+                    "delivery_profile_sha256", "warmup_buckets")}
+                result = MarketObservations(observed.inputs, {**saved, "forward_observation": asdict(f)}, f)
+        except Exception:
+            pass
+        if result is None:
+            raise ProviderUnavailable("current_observations")
+        return result
+
+    def profile(self) -> RouteProfile:
+        release = self.binding.release.content()
+        route, gas, freshness = release["route"], release["gas"], release["route"]["freshness"]
+        return RouteProfile(chain_id=143, entrypoint=route["entrypoint_address"], method=route["method"],
+            selector=route["selector"], program_hex=route["approved_program_hex"],
+            fee_bps=route["fees"]["fee_bps"], referrer_fee_bps=route["fees"]["referrer_fee_bps"],
+            fee_collector=route["fees"]["fee_collector_address"], referrer=route["fees"]["referrer_address"],
+            is_in_token_fee=route["fees"]["is_in_token_fee"], min_output_bps=10000,
+            max_quote_age_seconds=freshness["max_quote_age_seconds"], max_input_age_seconds=freshness["max_input_age_seconds"],
+            gas_limit=gas["gas_limit"], max_fee_per_gas=gas["max_fee_per_gas"],
+            max_priority_fee_per_gas=gas["max_priority_fee_per_gas"])
+
+    def observer(self) -> Any:
+        """One finite read-only plan per recovery or holdings reading, with a shared absolute deadline."""
+        from edge_os_api.execution.transaction_rpc_client import TransactionRpcClient
+
+        release = self.binding.release.content()
+        destination, limits = release["observer"], release["limits"]
+        deadline = self.monotonic() + limits["deadline_seconds"]
+        runtime = self.read_only()
+
+        class Observer:
+            count = 0
+
+            def call(self, method: str, params: list[Any]) -> Any:
+                if self.count >= limits["observer_requests"]:
+                    raise RpcError("OBSERVER_LIMIT_REACHED")
+                self.count += 1
+                client = None
+                try:
+                    client = TransactionRpcClient(role="observer", destination_id=destination["destination_id"],
+                        endpoint=destination["endpoint"], plan=[(method, params)], http=runtime.http,
+                        deadline_monotonic=deadline, connect_timeout_seconds=limits["deadline_seconds"],
+                        max_request_bytes=limits["max_request_bytes"], max_response_bytes=limits["max_response_bytes"],
+                        monotonic=runtime.monotonic)
+                except ValueError:
+                    pass
+                if client is None:
+                    raise RpcError("OBSERVER_CALL_REFUSED")
+                return client.call(method, params)
+
+        return Observer()
+
+    def clients(self, factory: sessionmaker[Session], context: OriginalContext,
+                controls: Callable[[], list[str]], *, role: str) -> OriginalClients:
+        """Mount the accepted clients; load credentials only after the saved ownership checks."""
+        if role != "worker" or self.quote_token is None or self.signer_access is None:
+            raise ProviderUnavailable("transport")
+        identity = {**context.identity, "owner_id": context.owner_id, "agent_id": context.agent_id,
+                    "wallet_id": context.wallet_id, "wallet_address": context.wallet_address, "network_id": context.network_id}
+        identity = {key: identity.get(key) for key in self.binding.identity()}
+        try:
+            self.binding.admit(identity, now=self.clock(), synthetic_bindings=self.synthetic_bindings)
+        except ReleaseRefused:
+            raise ProviderUnavailable("release") from None
+        from edge_os_api.execution.kuru_quote_client import KuruQuoteClient
+        from edge_os_api.execution.privy_signer import PrivySignerClient
+        from edge_os_api.execution.transaction_rpc_client import TransactionRpcClient
+        from edge_os_api.execution.models import ClaimRow, SubmissionAttemptRow
+        from edge_os_api.admission.models import DecisionRow as AdmissionDecisionRow
+        from edge_os_api.kuru_flow.types import parse_utc
+
+        release = self.binding.release.content()
+        limits = release["limits"]
+        deadline = self.monotonic() + limits["deadline_seconds"]
+        stopped = lambda: bool(controls())
+        holder: dict[str, Any] = {}
+
+        def saved(stage: str | None) -> dict[str, Any]:
+            original = None
+            try:
+                with factory() as session:
+                    attempt = session.execute(select(SubmissionAttemptRow).where(
+                        SubmissionAttemptRow.owner_id == uuid.UUID(context.owner_id),
+                        SubmissionAttemptRow.attempt_id == uuid.UUID(holder["attempt_id"]))).scalar_one_or_none()
+                    if (attempt is None or attempt.state != "IN_FLIGHT" or attempt.transport_id != "original-transaction/1"
+                            or (str(attempt.owner_id), str(attempt.attempt_id), attempt.agent_id, attempt.action_id,
+                                attempt.wallet_id, attempt.network_id, attempt.payload_hash) != (
+                                context.owner_id, holder["attempt_id"], context.agent_id, context.action_id,
+                                context.wallet_id, context.network_id, context.payload_hash)):
+                        raise ValueError("attempt mismatch")
+                    claim = session.execute(select(ClaimRow).where(
+                        ClaimRow.owner_id == attempt.owner_id, ClaimRow.queue_id == attempt.queue_id,
+                        ClaimRow.action_id == context.action_id, ClaimRow.agent_id == context.agent_id,
+                        ClaimRow.wallet_id == context.wallet_id, ClaimRow.network_id == context.network_id,
+                        ClaimRow.state == "ACTIVE", ClaimRow.released_at.is_(None))).scalar_one_or_none()
+                    admission = session.execute(select(AdmissionDecisionRow).where(
+                        AdmissionDecisionRow.owner_id == attempt.owner_id, AdmissionDecisionRow.action_id == context.action_id,
+                        AdmissionDecisionRow.agent_id == context.agent_id, AdmissionDecisionRow.wallet_id == context.wallet_id,
+                        AdmissionDecisionRow.network_id == context.network_id)).scalar_one_or_none()
+                    value = attempt.content.get("original_transaction") or {}
+                    if (claim is None or claim.state != "ACTIVE" or admission is None
+                            or admission.status != "SUBMISSION_UNKNOWN" or value.get("stage") != stage):
+                        raise ValueError("ownership mismatch")
+                    if stage is not None:
+                        self.binding.qualify_original(value, synthetic_bindings=self.synthetic_bindings)
+                        if value.get("attempt_id") != holder["attempt_id"]:
+                            raise ValueError("saved identity mismatch")
+                    original = dict(value)
+            except Exception:
+                pass
+            if original is None:
+                raise RpcError("SAVED_ATTEMPT_UNAVAILABLE")
+            return original
+
+        def begin(prepared: PreparedSubmission) -> None:
+            if holder:
+                raise RpcError("ATTEMPT_ALREADY_USED")
+            holder["attempt_id"] = prepared.attempt_id
+            saved(None)
+
+        runtime = self
+
+        class AttemptRoute:
+            def quote(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
+                saved(None)
+                if "quote" not in holder:
+                    runtime.binding.admit(identity, now=runtime.clock(), synthetic_bindings=runtime.synthetic_bindings)
+                    holder["quote"] = KuruQuoteClient(endpoint=release["quote"]["endpoint"], bearer_token=runtime.quote_token(),
+                        accepted_request={"chain_id":143, "sell_token":context.sell.token, "buy_token":context.buy.token,
+                                          "amount":str(context.sell.raw), "user":context.wallet_address},
+                        slippage_bps=release["quote"]["slippage_bps"], http=runtime.http, deadline_monotonic=deadline,
+                        connect_timeout_seconds=limits["deadline_seconds"], max_request_bytes=limits["max_request_bytes"],
+                        max_response_bytes=limits["max_response_bytes"],
+                        evidence_class="SYNTHETIC_FIXTURE" if release["kind"] == "SYNTHETIC_FIXTURE" else "PROVIDER_UNQUALIFIED",
+                        cancel=stopped, wall_clock=runtime.clock, monotonic=runtime.monotonic)
+                return holder["quote"].quote(request)
+
+        def signer(prepared: PreparedSubmission) -> Any:
+            saved("SIGN_REQUESTED")
+            self.binding.admit(identity, now=self.clock(), synthetic_bindings=self.synthetic_bindings)
+            if stopped():
+                raise RpcError("SIGNER_STOPPED")
+            access = self.signer_access()
+            return PrivySignerClient(app_id=access["app_id"], app_secret=access["app_secret"], authorize=access["authorize"],
+                request_id=prepared.attempt_id, request_expiry_ms=int(parse_utc(release["transaction"]["request_expires_at"]).timestamp()*1000),
+                http=self.http, connect_timeout_seconds=limits["deadline_seconds"], deadline_monotonic=deadline,
+                max_response_bytes=limits["max_response_bytes"], cancel=stopped,
+                wall_clock_ms=lambda: int(self.clock().timestamp()*1000), monotonic=self.monotonic)
+
+        def original_bytes() -> str:
+            value = saved("BROADCAST_REQUESTED")
+            tx_hash, reasons = validate_signed(value.get("signed_bytes"), value["unsigned"], context.wallet_address)
+            if reasons or tx_hash != value.get("transaction_hash"):
+                raise RpcError("SAVED_BYTES_MISMATCH")
+            return value["signed_bytes"]
+
+        destination = release["broadcast"]
+        broadcast = TransactionRpcClient(role="broadcast", destination_id=destination["destination_id"], endpoint=destination["endpoint"],
+            plan=[("eth_getTransactionCount", [context.wallet_address, "pending"]), ("eth_sendRawTransaction", None)],
+            http=self.http, deadline_monotonic=deadline, connect_timeout_seconds=limits["deadline_seconds"],
+            max_request_bytes=limits["max_request_bytes"], max_response_bytes=limits["max_response_bytes"],
+            cancel=stopped, monotonic=self.monotonic, original_bytes=original_bytes)
+        return OriginalClients(route=AttemptRoute(), signer=None, broadcast=broadcast, observer=self.observer(),
+                               signer_for_attempt=signer, begin_attempt=begin)
+
 class _Unavailable:
     """A fail-closed port. Its refusal names the port, so a saved reason reads e.g. HOLDINGS_UNAVAILABLE."""
 
@@ -464,6 +694,71 @@ class _Unavailable:
         def refuse(*_: Any, **__: Any) -> Any:
             raise ProviderUnavailable(self._port)
         return refuse
+
+
+class _ControlledMarkets:
+    def __init__(self, runtimes: Mapping[str, ControlledRuntime]) -> None:
+        self._runtimes = runtimes
+
+    def observe(self, request: MarketObservationRequest) -> MarketObservations:
+        runtime = self._runtimes.get(request.agent_id)
+        if runtime is None:
+            raise ProviderUnavailable("current_observations")
+        return runtime.observe_market(request)
+
+
+class _ControlledQuotes:
+    def __init__(self, runtimes: Mapping[str, ControlledRuntime]) -> None:
+        self._runtimes = runtimes
+
+    def quote(self, request: QuoteRequest) -> QuoteResult:
+        matches = []
+        for runtime in self._runtimes.values():
+            route = runtime.binding.release.content()["route"]
+            if (request.operation == "ENTRY" and request.base_input_raw is None
+                    and (request.quote_asset_id, request.quote_decimals, request.base_asset_id, request.base_decimals,
+                         request.quote_input_raw) == (route["input_asset"]["asset_id"], route["input_asset"]["decimals"],
+                         route["output_asset"]["asset_id"], route["output_asset"]["decimals"], route["approved_input_raw"])):
+                matches.append(runtime)
+        if len(matches) != 1:
+            raise ProviderUnavailable("approved_minimum")
+        runtime = matches[0]
+        try:
+            runtime.binding.admit(runtime.binding.identity(), now=runtime.clock(), synthetic_bindings=runtime.synthetic_bindings)
+        except ReleaseRefused:
+            raise ProviderUnavailable("release") from None
+        from edge_os_api.kuru_flow.types import parse_utc
+
+        release = runtime.binding.release.content()
+        route = release["route"]
+        return QuoteResult(AssetAmount(asset_id=route["output_asset"]["asset_id"], decimals=route["output_asset"]["decimals"],
+            raw=route["approved_min_output_raw"]), runtime.clock(), parse_utc(release["valid_until"]),
+            "approved-minimum:" + runtime.binding.sha256, "APPROVED_MINIMUM")
+
+
+class _ControlledHoldings:
+    def __init__(self, runtimes: Mapping[str, ControlledRuntime]) -> None:
+        self._runtimes = runtimes
+
+    def observe(self, *, owner_id: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
+                assets: list[tuple[str, int]]) -> HoldingsObservation:
+        runtime = self._runtimes.get(agent_id)
+        if runtime is None:
+            raise ProviderUnavailable("holdings")
+        identity = runtime.binding.identity()
+        if (str(owner_id), agent_id, wallet_id, network_id) != (
+                identity["owner_id"], identity["agent_id"], identity["wallet_id"], identity["network_id"]):
+            raise ProviderUnavailable("holdings_identity")
+        from edge_os_api.execution.provider_observations import RpcHoldingsObserver
+
+        release = runtime.binding.release.content()
+        return RpcHoldingsObserver(observer=runtime.observer(), wallet_address=identity["wallet_address"], chain_id=143,
+            assets=assets, source=release["observer"]["destination_id"], evidence_class=release["evidence_class"],
+            clock=runtime.clock, binding=runtime.binding, synthetic_bindings=runtime.synthetic_bindings).read()
+
+
+# Populated only by a separately reviewed server release. A mode or environment value cannot register authority.
+CONTROLLED_RUNTIMES: Mapping[str, ControlledRuntime] = MappingProxyType({})
 
 
 @dataclass
@@ -481,6 +776,17 @@ class ProviderPorts:
     labels: dict[str, str] = field(default_factory=dict)
     original: OriginalRecordings | None = None
     clock: Callable[[], dt.datetime] = utc_now  # the recorded original clients' replay clock
+    role: str = "api"
+    controlled: Mapping[str, ControlledRuntime] = field(default_factory=dict)
+
+    def for_role(self, role: str) -> "ProviderPorts":
+        if self.mode == "controlled":
+            return build_provider_ports("controlled", None, role=role, controlled=self.controlled)
+        ports = replace(self, role=role)
+        if self.original is not None and isinstance(self.holdings, RecordedOriginalHoldings):
+            ports.holdings = RecordedOriginalHoldings(self.holdings._factory, self.original, self.holdings._fallback,
+                                                     lambda: ports.clock())
+        return ports
 
     def transport(self, *, agent_id: str, plan: PlannedFixtureEffect, operation: str) -> Any:
         if self.chain is None:
@@ -489,9 +795,17 @@ class ProviderPorts:
 
     def original_clients(self, agent_id: str) -> tuple[OriginalClients, RouteProfile] | None:
         """The injected original-transaction clients for a reserved `fx-original` agent, else None."""
-        if self.original is None or MARKER_ORIGINAL not in agent_id:
+        if self.role != "worker" or self.original is None or MARKER_ORIGINAL not in agent_id:
             return None
         return self.original.clients(self.clock), self.original.profile
+
+    def original_observer(self, agent_id: str) -> Any:
+        """Recovery constructs only an observer, regardless of the process's execution role."""
+        if agent_id in self.controlled:
+            return self.controlled[agent_id].observer()
+        if self.original is None or MARKER_ORIGINAL not in agent_id:
+            raise ProviderUnavailable("receipt")
+        return RecordedObservationRpc(self.original, self.clock)
 
     def describe(self) -> dict[str, Any]:
         return {"mode": self.mode, "evidence_class": FIXTURE_EVIDENCE if self.mode == FIXTURE_MODE else None,
@@ -499,7 +813,10 @@ class ProviderPorts:
 
 
 def build_provider_ports(mode: str, factory: sessionmaker[Session], effects_path: str | None = None,
-                         original_dir: str | None = None) -> ProviderPorts:
+                         original_dir: str | None = None, *, role: str = "api",
+                         controlled: Mapping[str, ControlledRuntime] | None = None) -> ProviderPorts:
+    if role not in ("api", "worker", "recurring"):
+        raise ValueError("unknown financial service role")
     if mode == FIXTURE_MODE:
         chain = FixtureChain(effects_path)
         holdings: Any = FixtureHoldings(factory, chain)
@@ -507,10 +824,19 @@ def build_provider_ports(mode: str, factory: sessionmaker[Session], effects_path
         ports = ProviderPorts(mode=FIXTURE_MODE, market=FixtureMarketObservations(), quotes=FixtureQuotes(),
                               holdings=holdings, receipts=FixtureReceipts(chain),
                               deposits=FixtureDepositObserver(factory), removals=FixtureRemovalObserver(),
-                              chain=chain, original=original)
+                              chain=chain, original=original, role=role)
         if original is not None:  # the recorded holdings follow the ports' replay clock
             ports.holdings = RecordedOriginalHoldings(factory, original, holdings, lambda: ports.clock())
         return ports
-    return ProviderPorts(mode=UNAVAILABLE_MODE, market=_Unavailable("observations"), quotes=_Unavailable("quote"),
+    runtimes = MappingProxyType({key: runtime if role == "worker" else runtime.read_only()
+        for key, runtime in (CONTROLLED_RUNTIMES if controlled is None else controlled).items()}) if mode == "controlled" else {}
+    if mode == "controlled":
+        from edge_os_api.execution.provider_observations import UnqualifiedDepositObserver, UnqualifiedRemovalObserver
+
+        return ProviderPorts(mode="controlled", market=_ControlledMarkets(runtimes), quotes=_ControlledQuotes(runtimes),
+            holdings=_ControlledHoldings(runtimes), receipts=_Unavailable("receipt"), deposits=UnqualifiedDepositObserver(),
+            removals=UnqualifiedRemovalObserver(), role=role, controlled=runtimes)
+    return ProviderPorts(mode="controlled" if mode == "controlled" else UNAVAILABLE_MODE,
+                         market=_Unavailable("observations"), quotes=_Unavailable("quote"),
                          holdings=_Unavailable("holdings"), receipts=_Unavailable("receipt"),
-                         deposits=UnavailableDepositObserver(), removals=_Unavailable("removal"))
+                         deposits=UnavailableDepositObserver(), removals=_Unavailable("removal"), role=role, controlled=runtimes)

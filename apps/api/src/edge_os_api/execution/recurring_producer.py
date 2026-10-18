@@ -50,7 +50,7 @@ def build_producer(factory: Any, settings: Any, clock: Callable[[], dt.datetime]
     """Compose the producer over the accepted services, with one clock for the scheduler and its worker pass."""
     from edge_os_api.core.financial_services import build_financial_services
 
-    services = build_financial_services(factory, settings)
+    services = build_financial_services(factory, settings, role="recurring")
     connected = ConnectedExecution(factory, services, services.ports, qualification=services.ports.mode, clock=clock)
     services.connected = connected
     return RecurringOperation(factory, services, connected, clock=clock)

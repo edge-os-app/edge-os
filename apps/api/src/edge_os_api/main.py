@@ -175,7 +175,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     app.state.research_runtime = research_runtime
     # One composition of the accepted financial services. Its provider ports follow `execution_mode`:
     # authored fixtures in local/test configuration, fail-closed unavailable ports in production.
-    app.state.financial = build_financial_services(session_factory, settings)
+    app.state.financial = build_financial_services(session_factory, settings, role="api")
     install_handlers(app)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
                        allow_headers=["Authorization", "Content-Type"], allow_credentials=False)

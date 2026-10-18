@@ -8,6 +8,7 @@ before submission ownership. The trusted provider ports come from the configured
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -40,9 +41,13 @@ class FinancialServices:
 
 
 def build_financial_services(factory: sessionmaker[Session], settings: Settings,
-                             ports: ProviderPorts | None = None) -> FinancialServices:
-    ports = ports or build_provider_ports(settings.execution_mode, factory, settings.fixture_effects_path,
-                                          settings.original_recordings_dir)
+                             ports: ProviderPorts | None = None, *,
+                             role: Literal["api", "worker", "recurring"] = "api") -> FinancialServices:
+    if role not in ("api", "worker", "recurring"):
+        raise ValueError("unknown financial service role")
+    ports = (ports.for_role(role) if ports is not None else
+             build_provider_ports(settings.execution_mode, factory, settings.fixture_effects_path,
+                                  settings.original_recordings_dir, role=role))
     stops = StopService(factory)
     removals = RemovalService(factory)
     # Stops, removal, the one-position-per-wallet limit and an ended recurring deployment share the single
