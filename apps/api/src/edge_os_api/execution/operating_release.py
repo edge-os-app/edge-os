@@ -163,7 +163,8 @@ def check_release(release: OperatingRelease, *, expected_sha256: str, now: dt.da
     elif synthetic_approvals is None or synthetic_approvals.get(content["release_id"]) != digest:
         raise ReleaseRefused("SYNTHETIC_EXECUTION_RELEASE_NOT_APPROVED")
     if (not isinstance(now, dt.datetime) or now.tzinfo is None or now.utcoffset() != dt.timedelta(0)
-            or now >= parse_utc(content["valid_until"])):
+            or now >= parse_utc(content["valid_until"])
+            or now >= parse_utc(content["transaction"]["request_expires_at"])):
         raise ReleaseRefused("EXECUTION_RELEASE_EXPIRED")
     for control in content["controls"].values():
         if (control["state"] != "ENFORCED" or control["evidence_class"] != content["evidence_class"]

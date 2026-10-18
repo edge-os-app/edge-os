@@ -142,3 +142,17 @@ def test_hash_covers_nested_route_limits_policy_and_control_proof():
         changed = copy.deepcopy(original)
         change(changed)
         assert release_sha256(OperatingRelease(changed)) != digest
+
+
+@pytest.mark.parametrize("seconds,admitted", [(-1, False), (0, False), (1, True)])
+def test_signer_request_expiry_is_enforced_before_release_expiry(seconds, admitted):
+    source = definition()
+    source["transaction"]["request_expires_at"] = (NOW + dt.timedelta(seconds=seconds)).isoformat()
+    release = OperatingRelease(source)
+    digest = release_sha256(release)
+    options = {"expected_sha256": digest, "now": NOW, "synthetic_approvals": {source["release_id"]: digest}}
+    if admitted:
+        assert check_release(release, **options) == digest
+    else:
+        with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_EXPIRED"):
+            check_release(release, **options)

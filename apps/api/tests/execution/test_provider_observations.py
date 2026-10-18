@@ -175,3 +175,12 @@ def test_holdings_composes_the_role_bound_rpc_wire_client():
         max_response_bytes=4096, monotonic=lambda: 10)
     assert holdings(client).read().assets["monad:143/" + token].raw == "123"
     assert len(calls) == 4
+
+
+@pytest.mark.parametrize("field,value", [("nonce", False), ("value", False), ("type", True), ("type", 4),
+    ("authorization_list", [])])
+def test_original_envelope_rejects_type_drift_even_when_python_values_compare_equal(field, value):
+    envelope = original()
+    envelope["unsigned"][field] = value
+    result = charge(envelope)
+    assert result.state == "UNAVAILABLE" and result.raw is None

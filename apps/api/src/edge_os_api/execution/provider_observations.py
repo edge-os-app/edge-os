@@ -52,12 +52,14 @@ def observe_monad_charge(*, original: Mapping[str, Any], receipt: Mapping[str, A
             reason = "FINALITY_UNQUALIFIED"
         else:
             unsigned = original["unsigned"]
-            fields = ("gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas")
-            if not all(type(unsigned.get(x)) is int and 0 <= unsigned[x] < 2**256 for x in fields):
+            fields = ("type", "chain_id", "nonce", "value", "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas")
+            if (not isinstance(unsigned, Mapping) or set(unsigned) != {*fields, "to", "data"}
+                    or not all(type(unsigned.get(x)) is int and 0 <= unsigned[x] < 2**256 for x in fields)
+                    or unsigned["type"] != 2):
                 reason = "ORIGINAL_GAS_UNAVAILABLE"
             else:
                 tx_hash, errors = validate_signed(original["signed_bytes"], unsigned, original["wallet_address"])
-                limit, cap, priority = (unsigned[x] for x in fields)
+                limit, cap, priority = (unsigned[x] for x in ("gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas"))
                 number, boundary = _quantity(receipt.get("blockNumber")), _quantity(finalized_block.get("number"))
                 price, used = _quantity(receipt.get("effectiveGasPrice")), _quantity(receipt.get("gasUsed"))
                 base = _quantity(canonical_block.get("baseFeePerGas"))
