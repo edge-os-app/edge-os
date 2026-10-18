@@ -3,9 +3,9 @@ server bootstrap that the API and the worker share.
 
 Host only: no database, Docker, browser or network outside 127.0.0.1. Keys are the stand-in sentinels. The loopback
 provider is an owned 127.0.0.1 server; only an injected connector moves the adapter's fixed `https://api.nansen.ai`
-origin to it, so it can never be the network factory. No actual release is approved and no actual request runs.
-Contract: `docs/qualification/research-provider-composition/CONTRACT.md` section 12; credential delivery:
-`CREDENTIAL_DELIVERY.md` beside it.
+origin to it, so it can never be the network factory. An actual Nansen release is registered in the code-owned default,
+but this module makes no actual provider request. Contract: `docs/qualification/research-provider-composition/CONTRACT.md`
+section 12; credential delivery: `CREDENTIAL_DELIVERY.md` beside it.
 """
 
 from __future__ import annotations
