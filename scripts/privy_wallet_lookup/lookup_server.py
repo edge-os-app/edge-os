@@ -66,14 +66,14 @@ def _default_connect(timeout: float) -> http.client.HTTPSConnection:
     given up is closed here, never handed to a caller that is gone.
     """
     global _CONNECTOR_BUSY
+    connection = http.client.HTTPSConnection(_PRIVY_HOST, timeout=timeout, context=ssl.create_default_context())
     with _CONNECTOR_LOCK:
         if _CONNECTOR_BUSY:
             raise TimeoutError("provider connect already outstanding")
         _CONNECTOR_BUSY = True
-    connection = http.client.HTTPSConnection(_PRIVY_HOST, timeout=timeout, context=ssl.create_default_context())
     done = threading.Event()
     failure: list[BaseException] = []
-    state = "connecting"  # connecting -> ready | failed | abandoned | closed | taken, decided under the lock
+    state = "connecting"  # connecting -> ready | failed | abandoned | closed, decided under the lock
     stale = False
 
     def _connect() -> None:
@@ -85,20 +85,25 @@ def _default_connect(timeout: float) -> http.client.HTTPSConnection:
             failure.append(exc)
         with _CONNECTOR_LOCK:
             _CONNECTOR_BUSY = False
-            if state == "abandoned":
+            close_now = state == "abandoned"
+            if close_now:
                 state = "closed"
-                stale = True
             else:
                 state = "failed" if failure else "ready"
-        if stale:
+        if close_now:
             try:
                 connection.close()
             except OSError:
                 pass
         done.set()
 
-    worker = threading.Thread(target=_connect, daemon=True)
-    worker.start()
+    try:
+        worker = threading.Thread(target=_connect, daemon=True)
+        worker.start()
+    except BaseException:  # nothing exists yet: never leave the single-connector slot held
+        with _CONNECTOR_LOCK:
+            _CONNECTOR_BUSY = False
+        raise
     if not done.wait(timeout):
         with _CONNECTOR_LOCK:
             if state == "connecting":

@@ -988,24 +988,29 @@ def test_reader_keeps_one_outstanding_connector_and_further_reads_fail_unknown(m
     reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
 
     threads_before = _threading.active_count()
-    assert reader(DID) is None  # gives up at the deadline; the one connector is still blocked
-    assert len(made) == 1
-    connector = made[0]
-    assert connector.entered.wait(2.0)
-    assert _threading.active_count() <= threads_before + 1  # exactly the one connector thread
+    connector = None
+    try:
+        assert reader(DID) is None  # gives up at the deadline; the one connector is still blocked
+        assert len(made) == 1
+        connector = made[0]
+        assert connector.entered.wait(2.0)
+        assert _threading.active_count() <= threads_before + 1  # exactly the one connector thread
 
-    for _ in range(3):
-        assert reader(ADDR) is None  # further reads answer UNKNOWN while the connect is outstanding
-    assert len(made) == 1  # no new connector work was started
-    assert _threading.active_count() <= threads_before + 1
+        for _ in range(3):
+            assert reader(ADDR) is None  # further reads answer UNKNOWN while the connect is outstanding
+        assert len(made) == 1  # no new connector work was started
+        assert _threading.active_count() <= threads_before + 1
 
-    connector.release.set()  # the late connector may now finish
-    stop = _time.monotonic() + 3.0  # harness scheduler tolerance, not a product budget
-    while _threading.active_count() > threads_before and _time.monotonic() < stop:
-        _time.sleep(0.01)
-    assert connector.closed is True  # a connector finishing after UNKNOWN is explicitly closed
-    assert connector.requests == []  # and never sends an HTTP request
-    assert _threading.active_count() <= threads_before  # no leftover connector thread
+        connector.release.set()  # the late connector may now finish
+        stop = _time.monotonic() + 3.0  # harness scheduler tolerance, not a product budget
+        while _threading.active_count() > threads_before and _time.monotonic() < stop:
+            _time.sleep(0.01)
+        assert connector.closed is True  # a connector finishing after UNKNOWN is explicitly closed
+        assert connector.requests == []  # and never sends an HTTP request
+        assert _threading.active_count() <= threads_before  # no leftover connector thread
+    finally:
+        if connector is not None:
+            connector.release.set()  # always release the owned thread, even on assertion failure
 
 
 def test_expired_connect_never_sends_a_request():
@@ -1022,6 +1027,121 @@ def test_expired_connect_never_sends_a_request():
     reader._connect = _connect  # type: ignore[method-assign]
     assert reader(DID) is None
     assert connection.requests == []
+
+
+def _fast_connector(monkeypatch: pytest.MonkeyPatch, made: list) -> None:
+    """Replace only the class the real `_default_connect` builds, so its own signalling runs for real."""
+    import json as _json
+
+    class _FastConnector:
+        def __init__(self, host: str, timeout: float, context: object = None) -> None:
+            self.host = host
+            self.requests: list[tuple[str, str]] = []
+            self.closed = False
+            self.sock = None
+            made.append(self)
+
+        def connect(self) -> None:
+            pass
+
+        def request(self, method: str, path: str, body: object = None, headers: object = None) -> None:
+            self.requests.append((method, path))
+
+        def getresponse(self) -> object:
+            return _FakeHttpResponse(_json.dumps(RECORD).encode(), fragments=1, clock=None, step=0.0)
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(lookup_server.http.client, "HTTPSConnection", _FastConnector)
+
+
+def test_reader_returns_a_fast_successful_connect_through_the_real_connector(monkeypatch):
+    """Gate 11: a working provider connection must reach the reader, not become UNKNOWN.
+
+    The break this catches: the connector's own success path raised UnboundLocalError and never set its
+    done event, so a real fast connect waited out the whole deadline and answered UNKNOWN.
+    """
+    made: list[object] = []
+    _fast_connector(monkeypatch, made)
+    monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.5)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+
+    assert reader(DID) == RECORD  # the real connector path returns the parsed record
+    assert len(made) == 1
+    assert made[0].requests == [("GET", "/v1/users/did%3Aprivy%3Aowner-a")]
+
+
+def test_reader_recovers_after_a_connect_error_and_releases_the_connector(monkeypatch):
+    """Control: a failed connect answers UNKNOWN and must not keep the one-connector slot forever."""
+    import socket as _sock
+
+    made: list[object] = []
+    _fast_connector(monkeypatch, made)
+    first = made
+
+    class _ErrorConnector:
+        def __init__(self, host: str, timeout: float, context: object = None) -> None:
+            self.sock = None
+            first.append(self)
+
+        def connect(self) -> None:
+            raise _sock.gaierror(-2, "connect refused")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(lookup_server.http.client, "HTTPSConnection", _ErrorConnector)
+    monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.5)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+    assert reader(DID) is None  # the connector error is UNKNOWN
+
+    _fast_connector(monkeypatch, [])  # a later healthy connector must still be allowed
+    assert reader(DID) == RECORD
+
+
+def test_reader_does_not_strand_the_connector_when_construction_or_start_fails(monkeypatch):
+    """Inspected risk: a construction or thread-start failure must not leave the process-wide slot busy."""
+    import threading as _threading
+
+    made: list[object] = []
+    state = {"fail_construction": True, "fail_start": True}
+
+    class _ConstructionFails:
+        def __init__(self, host: str, timeout: float, context: object = None) -> None:
+            if state["fail_construction"]:
+                state["fail_construction"] = False
+                raise OSError("connection construction failed")
+
+    monkeypatch.setattr(lookup_server.http.client, "HTTPSConnection", _ConstructionFails)
+    monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.5)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+    assert reader(DID) is None  # construction failed before any connector existed
+
+    _fast_connector(monkeypatch, made)
+    assert reader(DID) == RECORD  # the slot was not stranded
+    assert len(made) == 1
+
+    real_thread = _threading.Thread
+
+    class _StartFails:
+        def __init__(self, target: object = None, daemon: bool | None = None) -> None:
+            self._target = target
+
+        def start(self) -> None:
+            if state["fail_start"]:
+                state["fail_start"] = False
+                raise RuntimeError("thread start failed")
+            real_thread(target=self._target, daemon=True).start()
+
+    monkeypatch.setattr(lookup_server.threading, "Thread", _StartFails)
+    with pytest.raises(RuntimeError):
+        reader(DID)
+    monkeypatch.setattr(lookup_server.threading, "Thread", real_thread)
+    made.clear()
+    _fast_connector(monkeypatch, made)
+    assert reader(DID) == RECORD  # a later read still works after a start failure
+    assert len(made) == 1
 
 
 class _FakeConn:
