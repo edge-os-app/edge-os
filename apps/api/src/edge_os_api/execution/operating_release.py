@@ -1,0 +1,172 @@
+"""Pure immutable financial authority. No actual release is approved or mounted."""
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any
+from urllib.parse import urlsplit
+
+from edge_os_api.research_history.http_clients.client_config import validate_endpoint
+from edge_os_api.kuru_flow.types import ApprovedAdapterConfiguration, canonical_bytes, canonical_raw, parse_utc
+
+SCHEMA = "edge-os.controlled-execution-release/1"
+CONTROLS = frozenset({"chain", "wallet_signer_binding", "entrypoint_method", "input_output_assets", "raw_input",
+    "recipient", "minimum_output", "fees", "approvals", "gas_action_capacity", "expiry_freshness", "opaque_program"})
+APPROVED_ACTUAL_RELEASES: Mapping[str, str] = MappingProxyType({})
+_FIELDS = frozenset({"release_id", "kind", "evidence_class", "purpose", "chain_id", "wallet_id", "wallet_address",
+    "signer_id", "policy_id", "policy_owner_id", "policy_content_sha256", "independent_proof_sha256", "deployment",
+    "route", "quote", "broadcast", "observer", "gas", "transaction", "limits", "valid_until", "finality", "controls"})
+
+
+class ReleaseRefused(ValueError):
+    """A stable pre-I/O admission refusal."""
+
+
+def _require(condition: bool) -> None:
+    if not condition:
+        raise ReleaseRefused("EXECUTION_RELEASE_INVALID")
+
+
+def _text(value: Any) -> bool:
+    return type(value) is str and re.fullmatch(r"[A-Za-z0-9._:/-]{1,200}", value) is not None and value.upper() not in {
+        "UNKNOWN", "UNSET", "UNSUPPORTED", "NONE", "NULL", "PLACEHOLDER"}
+
+
+def _hash(value: Any, length: int = 64) -> bool:
+    return type(value) is str and re.fullmatch(r"[0-9a-f]{" + str(length) + "}", value) is not None
+
+
+def _json_domain(value: Any, depth: int = 0) -> None:
+    _require(depth <= 16)
+    if type(value) is dict:
+        _require(len(value) <= 64 and all(type(key) is str for key in value))
+        for item in value.values():
+            _json_domain(item, depth + 1)
+    elif type(value) is list:
+        _require(len(value) <= 128)
+        for item in value:
+            _json_domain(item, depth + 1)
+    else:
+        _require(value is None or type(value) is bool or (type(value) is int and 0 <= value < 2**256)
+                 or (type(value) is str and len(value) <= 32768))
+
+
+def _validate(value: dict[str, Any]) -> None:
+    _require(set(value) == _FIELDS)
+    _json_domain(value)
+    _require(value["kind"] in ("SYNTHETIC_FIXTURE", "ACTUAL") and value["purpose"] == "CONTROLLED_ONE_ACTION_QUALIFICATION")
+    _require(value["evidence_class"] == ("SYNTHETIC_FIXTURE" if value["kind"] == "SYNTHETIC_FIXTURE" else "PROVIDER_ACTUAL"))
+    _require(all(_text(value[x]) for x in ("release_id", "wallet_id", "signer_id", "policy_id", "policy_owner_id")))
+    _require(value["policy_owner_id"] != value["signer_id"])
+    _require(all(_hash(value[x]) for x in ("policy_content_sha256", "independent_proof_sha256")))
+    route = ApprovedAdapterConfiguration.model_validate(value["route"])
+    _require(type(value["chain_id"]) is int and value["chain_id"] == route.chain_id == 143)
+    _require(route.recipient == value["wallet_address"] and int(route.recipient, 16) != 0)
+    _require(not route.input_is_native() and not route.output_asset.is_native())
+    for asset in (route.input_asset, route.output_asset):
+        _require(asset.asset_id.lower() == f"monad:143/{asset.token_address.lower()}")
+    _require(route.input_asset.token_address.lower() != route.output_asset.token_address.lower())
+    _require(int(route.approved_input_raw) > 0 and int(route.approved_min_output_raw) > 0
+             and route.approved_allowance_raw == route.approved_input_raw
+             and route.supported_schema_variants == ["TRANSACTION_CALLDATA"])
+    freshness = value["route"]["freshness"]
+    _require(set(freshness) == {"max_quote_age_seconds", "max_input_age_seconds", "intent_expires_at", "mandate_expires_at"})
+    _require(all(type(freshness[x]) is int and freshness[x] > 0 for x in ("max_quote_age_seconds", "max_input_age_seconds")))
+    expiry = parse_utc(value["valid_until"])
+    _require(expiry <= parse_utc(freshness["intent_expires_at"]) <= parse_utc(freshness["mandate_expires_at"]))
+    deployment = value["deployment"]
+    _require(set(deployment) == {"source_commit", "entrypoint_code_sha256", "router_address", "router_code_sha256", "abi_sha256", "mutable_router_proof_sha256"})
+    _require(_hash(deployment["source_commit"], 40) and all(_hash(deployment[x]) for x in (
+        "entrypoint_code_sha256", "router_code_sha256", "abi_sha256", "mutable_router_proof_sha256")))
+    _require(type(deployment["router_address"]) is str and re.fullmatch(r"0x[0-9a-fA-F]{40}", deployment["router_address"]) is not None)
+    quote = value["quote"]
+    _require(set(quote) == {"endpoint", "credential_slot", "slippage_bps"} and _text(quote["credential_slot"]))
+    _require(type(quote["slippage_bps"]) is int and 1 <= quote["slippage_bps"] <= 10000)
+    _require(urlsplit(quote["endpoint"]).path == "/api/quote")
+    for role in ("broadcast", "observer"):
+        destination = value[role]
+        _require(set(destination) == {"role", "destination_id", "endpoint", "credential_slot"}
+                 and destination["role"] == role and _text(destination["destination_id"]) and _text(destination["credential_slot"]))
+    _require(value["broadcast"]["endpoint"] != value["observer"]["endpoint"]
+             and value["broadcast"]["destination_id"] != value["observer"]["destination_id"])
+    limits = value["limits"]
+    _require(set(limits) == {"actions", "attempts", "broadcasts", "quote_requests", "signer_requests", "observer_requests",
+        "max_request_bytes", "max_response_bytes", "deadline_seconds"})
+    _require(all(type(x) is int and x > 0 for x in limits.values()))
+    _require(all(limits[x] == 1 for x in ("actions", "attempts", "broadcasts", "quote_requests", "signer_requests")))
+    for endpoint in (quote["endpoint"], value["broadcast"]["endpoint"], value["observer"]["endpoint"]):
+        validate_endpoint(endpoint)
+        parts = urlsplit(endpoint)
+        _require(parts.scheme == "https" and not parts.query and parts.path in ("/api/quote", "/rpc"))
+        _require((parts.hostname.endswith(".invalid")) == (value["kind"] == "SYNTHETIC_FIXTURE"))
+    transaction = value["transaction"]
+    _require(set(transaction) == {"type", "value_raw", "signer_method", "request_expires_at"}
+             and type(transaction["type"]) is int and transaction["type"] == 2 and transaction["value_raw"] == "0"
+             and transaction["signer_method"] == "eth_signTransaction")
+    _require(parse_utc(transaction["request_expires_at"]) <= expiry)
+    gas = value["gas"]
+    _require(set(gas) == {"gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas", "budget_raw"})
+    _require(all(type(gas[x]) is int and gas[x] > 0 for x in ("gas_limit", "max_fee_per_gas")))
+    _require(type(gas["max_priority_fee_per_gas"]) is int and 0 <= gas["max_priority_fee_per_gas"] <= gas["max_fee_per_gas"])
+    _require(type(gas["budget_raw"]) is str and canonical_raw(gas["budget_raw"])
+             and gas["gas_limit"] * gas["max_fee_per_gas"] <= int(gas["budget_raw"]))
+    _require(value["finality"] == "finalized" and set(value["controls"]) == CONTROLS)
+    for control in value["controls"].values():
+        _require(type(control) is dict and set(control) == {"state", "evidence_class", "proof_sha256"})
+        _require(control["state"] in ("ENFORCED", "UNKNOWN", "UNSUPPORTED", "UNSET"))
+        _require(control["evidence_class"] in ("SYNTHETIC_FIXTURE", "DOCUMENTED", "SOURCE_INSPECTED", "LOCAL_TESTED", "PROVIDER_ACTUAL", "NOT_RUN"))
+        _require(control["proof_sha256"] is None or _hash(control["proof_sha256"]))
+
+
+@dataclass(frozen=True, init=False)
+class OperatingRelease:
+    _bytes: bytes = field(repr=False)
+
+    def __init__(self, definition: Mapping[str, Any]) -> None:
+        wire = None
+        try:
+            value = dict(definition)
+            _validate(value)
+            wire = canonical_bytes({"schema": SCHEMA, **value})
+            if len(wire) > 65536:
+                wire = None
+        except Exception:
+            pass
+        if wire is None:
+            raise ReleaseRefused("EXECUTION_RELEASE_INVALID")
+        object.__setattr__(self, "_bytes", wire)
+
+    def content(self) -> dict[str, Any]:
+        """A fresh view; changing it cannot change authority or its hash."""
+        return json.loads(self._bytes)
+
+
+def release_sha256(release: OperatingRelease) -> str:
+    return hashlib.sha256(release._bytes).hexdigest()
+
+
+def check_release(release: OperatingRelease, *, expected_sha256: str, now: dt.datetime,
+                  synthetic_approvals: Mapping[str, str] | None = None) -> str:
+    """Admit only exact test-owned synthetic authority; ACTUAL has no override seam."""
+    digest = release_sha256(release)
+    content = release.content()
+    if digest != expected_sha256:
+        raise ReleaseRefused("EXECUTION_RELEASE_HASH_MISMATCH")
+    if content["kind"] == "ACTUAL":
+        if synthetic_approvals is not None or APPROVED_ACTUAL_RELEASES.get(content["release_id"]) != digest:
+            raise ReleaseRefused("ACTUAL_EXECUTION_RELEASE_NOT_APPROVED")
+    elif synthetic_approvals is None or synthetic_approvals.get(content["release_id"]) != digest:
+        raise ReleaseRefused("SYNTHETIC_EXECUTION_RELEASE_NOT_APPROVED")
+    if (not isinstance(now, dt.datetime) or now.tzinfo is None or now.utcoffset() != dt.timedelta(0)
+            or now >= parse_utc(content["valid_until"])):
+        raise ReleaseRefused("EXECUTION_RELEASE_EXPIRED")
+    for control in content["controls"].values():
+        if (control["state"] != "ENFORCED" or control["evidence_class"] != content["evidence_class"]
+                or control["proof_sha256"] is None):
+            raise ReleaseRefused("EXECUTION_CONTROL_UNQUALIFIED")
+    return digest
