@@ -84,17 +84,27 @@ def _default_connect(timeout: float) -> http.client.HTTPSConnection:
         except BaseException as exc:  # noqa: BLE001 - reported to the reading thread
             failure.append(exc)
         with _CONNECTOR_LOCK:
-            _CONNECTOR_BUSY = False
-            close_now = state == "abandoned"
-            if close_now:
+            close_now = state == "abandoned" or bool(failure)
+            if state == "abandoned":
                 state = "closed"
             else:
                 state = "failed" if failure else "ready"
+        # A failed connect may already own a socket, and the caller never receives the connection, so close it
+        # here while this thread still owns it - before the slot is released. Exactly one close, and the
+        # assigned socket is closed even if connection.close() itself raises.
         if close_now:
+            sock = getattr(connection, "sock", None)
             try:
                 connection.close()
             except OSError:
                 pass
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+        with _CONNECTOR_LOCK:
+            _CONNECTOR_BUSY = False
         done.set()
 
     try:

@@ -1144,6 +1144,104 @@ def test_reader_does_not_strand_the_connector_when_construction_or_start_fails(m
     assert len(made) == 1
 
 
+def test_reader_closes_the_connection_when_connect_fails_after_the_socket_is_assigned(monkeypatch):
+    """Gate 3/3: a post-socket connect failure must close the connection and its socket before UNKNOWN.
+
+    The break this catches: the connector closed only on the abandoned path, so a connect that raised with
+    `self.sock` already set left the connection and socket to garbage collection.
+    """
+    made: list[object] = []
+
+    class _Socket:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+        def shutdown(self, how: int) -> None:
+            pass
+
+    class _SocketThenFails:
+        """Faithful http.client stand-in: the socket exists before `connect` raises; `close` clears it first."""
+
+        def __init__(self, host: str, timeout: float, context: object = None) -> None:
+            self.sock = _Socket()
+            self.the_sock = self.sock
+            self.close_calls = 0
+            self.requests: list[tuple] = []
+            made.append(self)
+
+        def connect(self) -> None:
+            raise OSError("connect failed after the socket was assigned")
+
+        def request(self, *args: object, **kwargs: object) -> None:
+            self.requests.append(args)
+
+        def close(self) -> None:
+            self.close_calls += 1
+            sock, self.sock = self.sock, None
+            if sock is not None:
+                sock.close()
+
+    monkeypatch.setattr(lookup_server.http.client, "HTTPSConnection", _SocketThenFails)
+    monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.5)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+
+    assert reader(DID) is None  # the failed connect is UNKNOWN
+    assert len(made) == 1
+    connector = made[0]
+    assert connector.requests == []  # nothing was sent
+    assert connector.close_calls == 1  # closed exactly once
+    assert connector.the_sock.close_calls >= 1  # and the assigned socket was closed
+
+
+def test_reader_closes_the_socket_even_when_close_raises_and_does_not_strand_the_slot(monkeypatch):
+    """Gate 3/3: a failing close must still close the socket and must not block later reads."""
+    made: list[object] = []
+
+    class _Socket:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+        def shutdown(self, how: int) -> None:
+            pass
+
+    class _SocketThenFailsCloseRaises:
+        def __init__(self, host: str, timeout: float, context: object = None) -> None:
+            self.sock = _Socket()
+            self.the_sock = self.sock
+            self.close_calls = 0
+            made.append(self)
+
+        def connect(self) -> None:
+            raise OSError("connect failed after the socket was assigned")
+
+        def request(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("no request may be sent")
+
+        def close(self) -> None:
+            self.close_calls += 1
+            raise OSError("close failed")  # the socket is still assigned after this
+
+    monkeypatch.setattr(lookup_server.http.client, "HTTPSConnection", _SocketThenFailsCloseRaises)
+    monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.5)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+
+    assert reader(DID) is None
+    assert len(made) == 1
+    assert made[0].close_calls == 1
+    assert made[0].the_sock.close_calls >= 1  # the socket is closed even though close() raised
+
+    made.clear()
+    _fast_connector(monkeypatch, made)
+    assert reader(DID) == RECORD  # the slot was not stranded by the failed close
+    assert len(made) == 1
+
+
 class _FakeConn:
     """Minimal stand-in for an accepted socket: records what the server sends."""
 
