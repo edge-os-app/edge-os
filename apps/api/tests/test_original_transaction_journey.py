@@ -451,11 +451,15 @@ def test_the_exit_is_one_more_original_transaction_with_the_next_nonce(original,
     original.post(f"/v1/actions/{entry['action_id']}/reconcile", headers=owner_a)
     connected, ports = original.app.state.execution_worker.connected, original.app.state.execution_worker.ports
     clock, ports_clock = connected._clock, ports.clock
+    api = original.app.state.financial
+    api_clock, api_ports_clock = api.connected._clock, api.ports.clock
     connected._clock = ports.clock = lambda: clock() + dt.timedelta(minutes=5)
+    api.connected._clock = api.ports.clock = connected._clock
     try:
         exit_job = run_job(original, ff.schedule(original, owner_a, "exit-fx-original", "exit-slot").json())
     finally:
         connected._clock, ports.clock = clock, ports_clock
+        api.connected._clock, api.ports.clock = api_clock, api_ports_clock
     body = action(original, owner_a, exit_job["action_id"])
     assert body["operation"] == "EXIT"
     assert (original_of(body)["nonce"], original_of(body)["transaction_hash"]) == (1, EXIT_NONCE1_HASH)

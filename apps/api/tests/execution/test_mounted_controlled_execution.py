@@ -175,6 +175,7 @@ def mounted(original, owner_a, tmp_path, settings):
     transport, data, _ = pure_original(seed, None)
     prior, _ = bound_original(transport)
     release = prior.release.content()
+    release.pop("schema")
     release.update(valid_until=expiry)
     release["transaction"]["request_expires_at"] = expiry
     release["route"]["freshness"].update(intent_expires_at=expiry, mandate_expires_at=expiry)
@@ -196,8 +197,9 @@ def mounted(original, owner_a, tmp_path, settings):
         identity = saved_release_identity(agent, consent, address)
     release.update(wallet_id=agent.wallet_id, wallet_address=address)
     release["route"]["recipient"] = address
-    binding = BoundRelease(OperatingRelease(release), identity, **prior.proofs(),
-        exit_capacity_proof_sha256="a"*64, valuation_proof_sha256="b"*64, cost_model_proof_sha256="c"*64,
+    proofs = {**prior.proofs(), "exit_capacity_proof_sha256":"a"*64,
+              "valuation_proof_sha256":"b"*64, "cost_model_proof_sha256":"c"*64}
+    binding = BoundRelease(OperatingRelease(release), identity, **proofs,
         market_profile={"source_id":"test-current/1", "delivery_profile_sha256":"d"*64,
             "finality":"finalized", "warmup_buckets":agent.revision.warmup_buckets, "max_collection_age_seconds":30})
     http = MountedHttp(factory, data.data, clock)

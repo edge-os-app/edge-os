@@ -156,3 +156,26 @@ def test_missing_attempt_id_cannot_construct_signer_or_read_quote(tmp_path):
                                        lambda stage, values: stages.append((stage, values)))
     assert result.detail == "SAVED_ATTEMPT_REQUIRED"
     assert recordings.call_counts() == {}
+
+
+def test_mandate_expiry_during_quote_preserves_exact_refusal(tmp_path):
+    import datetime as dt
+    transport, recordings, stages = original(tmp_path, client(FakeHttp(signed_reply(recorded_signature("ENTRY", 0)))))
+    start = transport._clock()
+    now = [start]
+    transport._context = dataclasses.replace(transport._context,
+        mandate_expires_at=(start + dt.timedelta(seconds=10)).isoformat())
+    route = transport._clients.route
+
+    class ExpiringQuote:
+        def quote(self, request):
+            reply = route.quote(request)
+            now[0] = start + dt.timedelta(seconds=11)
+            return reply
+
+    transport._clients = dataclasses.replace(transport._clients, route=ExpiringQuote())
+    transport._clock = lambda: now[0]
+    result = submit(transport, stages)
+    assert result.detail == "MANDATE_EXPIRED"
+    assert recordings.call_counts().get("broadcast.eth_getTransactionCount", 0) == 0
+    assert recordings.call_counts().get("signer.rpc", 0) == 0

@@ -431,6 +431,9 @@ class OriginalTransactionTransport:
         received_at = self._clock()
         if received_at < now:
             return envelope, "ROUTE_CLOCK_INVALID"
+        refusal = self._recheck()
+        if refusal is not None:
+            return envelope, refusal
         envelope["quote_observation"] = {"requested_at": _iso(now), "received_at": _iso(received_at),
                                           "provider_created_at": None,
                                           "elapsed_seconds": math.ceil((received_at - now).total_seconds())}
