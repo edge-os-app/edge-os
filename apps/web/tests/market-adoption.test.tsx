@@ -37,6 +37,10 @@ const qualified = {
 const limited = { ...qualified, dataset_id: "d0000000-0000-4000-8000-000000000002", verdict: { overall: "LIMITED" },
   binding_state: "UNAVAILABLE_LIMITED_DATA", unavailable_states: ["PARTIAL_COVERAGE"], market_binding: null, quote_unit: null,
   source_id: "recorded-syn-provider-failure/1" };
+const actual = { ...qualified, dataset_id: "d0000000-0000-4000-8000-0000000000a1", source_id: "actual-provider-history/1",
+  evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY", profile_evidence_class: "PROVIDER_ACTUAL" };
+const unknown = { ...qualified, dataset_id: "d0000000-0000-4000-8000-0000000000b1", source_id: "experimental-origin/1",
+  evidence_class: "EXPERIMENTAL_LABEL", content_label: "UNRECOGNIZED", profile_evidence_class: "EXPERIMENTAL_LABEL" };
 
 function renderAdoption(reload = vi.fn(async (): Promise<string | null> => "draft-new")) {
   render(<MarketAdoption intakeId="intake-1" interpretationRevisionId="rev-1" parentRevisionId="revision-1"
@@ -139,5 +143,30 @@ describe("recorded market adoption", () => {
     mocks.datasets.mockResolvedValue({ datasets: [limited] });
     renderAdoption();
     expect(await screen.findByText(/No qualified recorded dataset is saved/)).toBeInTheDocument();
+  });
+
+  it("keeps the general introduction neutral and labels an actual dataset as saved provider history", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [actual, limited] });
+    renderAdoption();
+    expect(screen.queryByText(/Recorded responses are synthetic/)).toBeNull();
+    await user.selectOptions(await screen.findByLabelText("Saved dataset"), actual.dataset_id);
+    const provenance = screen.getByTestId("market-adoption-provenance");
+    expect(provenance).toHaveTextContent("Saved provider history");
+    expect(provenance).not.toHaveTextContent(/synthetic/i);
+    expect(screen.getByTestId("market-adoption-review")).toHaveTextContent("PROVIDER_ACTUAL");
+  });
+
+  it("keeps a synthetic dataset explicitly synthetic and an unknown class unrecognized", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [qualified, unknown] });
+    renderAdoption();
+    await user.selectOptions(await screen.findByLabelText("Saved dataset"), qualified.dataset_id);
+    expect(screen.getByTestId("market-adoption-provenance")).toHaveTextContent("Synthetic recorded responses");
+    await user.selectOptions(screen.getByLabelText("Saved dataset"), unknown.dataset_id);
+    const provenance = screen.getByTestId("market-adoption-provenance");
+    expect(provenance).toHaveTextContent("EXPERIMENTAL_LABEL");
+    expect(provenance).toHaveTextContent(/unrecognized evidence class/i);
+    expect(provenance).not.toHaveTextContent(/saved provider history|synthetic recorded responses/i);
   });
 });
