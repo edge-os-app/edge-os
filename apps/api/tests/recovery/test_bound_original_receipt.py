@@ -129,3 +129,14 @@ def test_api_recovery_passes_only_saved_release_and_observer_without_execution_c
             "strategy_revision":"execution-a", "mandate_id":"mandate-a"}})
     result = connected._reconcile_original("owner-1", intent, envelope)
     assert result.outcome == "CONFIRMED" and result.actual_gas.raw == "600000000000000"
+
+
+@pytest.mark.parametrize("missing", ["transaction_hash", "wallet_address", "chain_id", "candidate_hash"])
+def test_missing_saved_identity_stays_unknown_without_observer_io(tmp_path, missing):
+    envelope, binding, approvals, _ = submitted_original(tmp_path)
+    envelope.pop(missing)
+    class NoObserver:
+        def call(self, *args):
+            pytest.fail("malformed saved identity reached the observer")
+    result = read_original_receipt(envelope, NoObserver(), binding=binding, synthetic_bindings=approvals)
+    assert result.outcome == "SUBMISSION_UNKNOWN"

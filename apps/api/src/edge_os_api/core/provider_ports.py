@@ -7,6 +7,8 @@ reads each one through a port chosen by configuration:
   the service records the missing qualification instead of a success.
 - `fixture` (local and test only, refused in production): authored adapters return SYNTHETIC_FIXTURE
   evidence. They are never provider, chain or financial evidence.
+- `controlled` (local and test only): only an exact registered release can supply bounded clients.
+  The actual registry is empty; selecting this mode grants no authority.
 
 Fixture fault scenarios are selected by reserved markers in the agent id, the same convention the accepted
 wallet fixture uses. The fixture records every submission effect in an append-only `FixtureChain`, outside the
@@ -586,7 +588,7 @@ class ControlledRuntime:
         from edge_os_api.execution.kuru_quote_client import KuruQuoteClient
         from edge_os_api.execution.privy_signer import PrivySignerClient
         from edge_os_api.execution.transaction_rpc_client import TransactionRpcClient
-        from edge_os_api.execution.models import ClaimRow, SubmissionAttemptRow
+        from edge_os_api.execution.models import ClaimRow, IntentRow, SubmissionAttemptRow
         from edge_os_api.admission.models import DecisionRow as AdmissionDecisionRow
         from edge_os_api.kuru_flow.types import parse_utc
 
@@ -638,6 +640,24 @@ class ControlledRuntime:
                 raise RpcError("ATTEMPT_ALREADY_USED")
             holder["attempt_id"] = prepared.attempt_id
             saved(None)
+            available = False
+            try:
+                with factory() as session:
+                    prior = session.execute(select(SubmissionAttemptRow.attempt_id).join(IntentRow,
+                        (IntentRow.owner_id == SubmissionAttemptRow.owner_id)
+                        & (IntentRow.action_id == SubmissionAttemptRow.action_id)).where(
+                            SubmissionAttemptRow.owner_id == uuid.UUID(context.owner_id),
+                            SubmissionAttemptRow.agent_id == context.agent_id,
+                            SubmissionAttemptRow.wallet_id == context.wallet_id,
+                            SubmissionAttemptRow.network_id == context.network_id,
+                            IntentRow.mandate_id == identity["consent_adoption_id"],
+                            SubmissionAttemptRow.attempt_id != uuid.UUID(prepared.attempt_id)).limit(1)
+                    ).scalar_one_or_none()
+                    available = prior is None
+            except Exception:
+                pass
+            if not available:
+                raise RpcError("RELEASE_ATTEMPT_ALREADY_USED")
 
         runtime = self
 

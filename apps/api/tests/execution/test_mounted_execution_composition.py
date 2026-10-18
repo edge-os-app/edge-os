@@ -95,7 +95,8 @@ def test_controlled_runtime_cannot_supply_signing_or_broadcast_to_read_only_role
         runtime.clients(no_io, transport._context, no_io, role=role)
 
 
-def test_runtime_mounts_accepted_clients_with_same_saved_attempt_and_original_bytes(tmp_path):
+@pytest.mark.parametrize("prior_attempt", [False, True])
+def test_runtime_mounts_accepted_clients_with_same_saved_attempt_and_original_bytes(tmp_path, prior_attempt):
     import dataclasses
     import json
     import uuid
@@ -121,6 +122,8 @@ def test_runtime_mounts_accepted_clients_with_same_saved_attempt_and_original_by
         def __enter__(self): return self
         def __exit__(self, *args): pass
         def execute(self, statement):
+            if statement.column_descriptions[0]["name"] == "attempt_id":
+                return SimpleNamespace(scalar_one_or_none=lambda: uuid.uuid4() if prior_attempt else None)
             entity = statement.column_descriptions[0]["entity"].__name__
             value = {"SubmissionAttemptRow": row, "ClaimRow": claim, "DecisionRow": admission}[entity]
             return SimpleNamespace(scalar_one_or_none=lambda: value)
@@ -161,6 +164,10 @@ def test_runtime_mounts_accepted_clients_with_same_saved_attempt_and_original_by
         row.content["original_transaction"].update(values, stage=stage)
     result = mounted.submit_original(PreparedSubmission(context.action_id, context.owner_id, context.wallet_id,
         context.network_id, context.operation, context.payload_hash, str(attempt_id)), journal)
+    if prior_attempt:
+        assert result.outcome == "DEFINITELY_UNSENT"
+        assert acquired == [] and http.calls == []
+        return
     assert result.detail == "BROADCAST_RETURNED", (result, [(url, body.get("method", "quote")) for url,body,_ in http.calls])
     assert acquired == [str(attempt_id)]
     assert [body.get("method", "quote") for _,body,_ in http.calls] == ["quote", "eth_getTransactionCount", "eth_signTransaction", "eth_sendRawTransaction"]

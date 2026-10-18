@@ -567,10 +567,15 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient, *,
                           binding: BoundRelease | None = None,
                           synthetic_bindings: Mapping[str, str] | None = None) -> ReceiptReading:
     """Read the receipt for the saved transaction hash and normalize it with the saved identity."""
-    tx_hash = str(envelope["transaction_hash"])
-    wallet = str(envelope["wallet_address"]).lower()
-    expected_chain = int(envelope["chain_id"])
-    candidate_hash = str(envelope["candidate_hash"])
+    tx_hash = envelope.get("transaction_hash") or ""
+    wallet = envelope.get("wallet_address") or ""
+    expected_chain = envelope.get("chain_id")
+    candidate_hash = envelope.get("candidate_hash") or ""
+    valid_identity = (is_hash(tx_hash) and isinstance(wallet, str) and _ADDRESS.fullmatch(wallet) is not None
+                      and type(expected_chain) is int and isinstance(candidate_hash, str) and bool(candidate_hash))
+    wallet = wallet.lower() if isinstance(wallet, str) else ""
+    expected_chain = expected_chain if type(expected_chain) is int else 0
+    candidate_hash = candidate_hash if isinstance(candidate_hash, str) else ""
     source_ref = f"original-receipt:{tx_hash}"
 
     def normalized(observation: ObservationInput) -> ReceiptReading:
@@ -578,6 +583,9 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient, *,
                                         expected_chain_id=expected_chain, expected_wallet=wallet,
                                         expected_tx_hash=tx_hash)
         return ReceiptReading(verdict=verdict, source_ref=source_ref)
+
+    if not valid_identity:
+        return normalized(ObservationInput(timeout=True))
 
     controlled = binding is not None or "binding_sha256" in envelope or "release_sha256" in envelope
     if controlled:
