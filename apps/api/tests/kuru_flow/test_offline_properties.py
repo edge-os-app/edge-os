@@ -62,9 +62,13 @@ def test_no_sha3_substitution_for_ethereum_keccak():
     assert "Keccak" in combined
 
 
-# The one authorized read-only application consumer (#58 ORIGINAL-LOCAL amendment A1, 2026-10-12), compared by
-# its full package-relative path. The offline-stage property (no application reference at all) held until then.
-AUTHORIZED_CONSUMERS = {"execution/original_transaction.py"}
+# Exact LOCAL consumers under ORIGINAL-LOCAL A1 and CONTROLLED-EXECUTION-CLIENTS lease amendment 3.
+# The two new parser/model consumers are unmounted; this grants no network capability to the offline package.
+AUTHORIZED_CONSUMERS = {
+    "execution/original_transaction.py",
+    "execution/kuru_quote_client.py",
+    "execution/operating_release.py",
+}
 
 
 def _application_references(app_root: Path) -> list[str]:
@@ -85,11 +89,14 @@ def test_application_composition_references_the_package_only_from_its_authorized
 
 def test_the_consumer_exception_does_not_cover_another_path(tmp_path):
     app_root = tmp_path / "edge_os_api"
-    for relative in ("execution/original_transaction.py", "research/original_transaction.py", "worker.py"):
+    allowed = ("execution/original_transaction.py", "execution/kuru_quote_client.py", "execution/operating_release.py")
+    refused = ("research/original_transaction.py", "research/kuru_quote_client.py", "research/operating_release.py", "worker.py")
+    for relative in (*allowed, *refused):
         (app_root / relative).parent.mkdir(parents=True, exist_ok=True)
         (app_root / relative).write_text("from edge_os_api.kuru_flow import normalize_observation\n")
-    offenders = [path for path in _application_references(app_root) if path not in AUTHORIZED_CONSUMERS]
-    assert sorted(offenders) == ["research/original_transaction.py", "worker.py"]
+    references = _application_references(app_root)
+    assert sorted(path for path in references if path in AUTHORIZED_CONSUMERS) == sorted(allowed)
+    assert sorted(path for path in references if path not in AUTHORIZED_CONSUMERS) == sorted(refused)
 
 
 def test_candidate_is_frozen_and_immutable():
