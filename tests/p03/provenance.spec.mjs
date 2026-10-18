@@ -28,7 +28,7 @@ test("saved tiny-threshold provenance stays readable for both signs", async ({ p
   const negativeMeasure = await openProvenanceAndMeasure(page, negative.expectedProvenance);
   await page.screenshot({ path: path.join(evidence, "screenshots", `${project}-tiny-negative-provenance-open.png`), fullPage: true });
 
-  await page.goto("/");
+  await page.goto("/app");
   await page.getByLabel("Your words", { exact: true }).fill(TINY_POSITIVE_RULE);
   await page.getByRole("radio", { name: "Specific rule or thesis" }).check();
   await page.getByRole("button", { name: "Prepare request" }).click();

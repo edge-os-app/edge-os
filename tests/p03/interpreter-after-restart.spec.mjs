@@ -25,7 +25,7 @@ test("saved attempts and states reopen unchanged in a fresh context", async ({ b
   const page = await context.newPage();
   page.on("request", (request) => { if (request.method() !== "GET") posts.push(`${request.method()} ${request.url()}`); });
   await injectAuth(page, tokens.a);
-  const open = async (id) => { await page.goto(`/#/research/${id}`); await expect(outcome(page)).toBeVisible({ timeout: 30_000 }); };
+  const open = async (id) => { await page.goto(`/app#/research/${id}`); await expect(outcome(page)).toBeVisible({ timeout: 30_000 }); };
 
   const failure = results[`p05-failure-retry-${project}`];
   await open(failure.id);

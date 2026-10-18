@@ -180,7 +180,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   expect(savedLongMonitoring.network_id).toBe(longMonitoring.identity.networkId);
   expect(savedLongMonitoring.next_work).toBe(longMonitoring.nextWork);
   expect(savedLongMonitoring.blocking_reason).toBe(longMonitoring.blockingReason);
-  await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${longMonitoring.recordId}`);
+  await page.goto(`${process.env.P03_WEB_URL}/app#/agents?record=${longMonitoring.recordId}`);
   const reopenedLongMonitoring = page.locator(`#record-${longMonitoring.recordId}`);
   await expect(reopenedLongMonitoring).toHaveCount(1);
   await expect(reopenedLongMonitoring).toBeVisible();
@@ -220,7 +220,7 @@ test("after an API restart the saved rules reopen with their exact review text",
     headers: { Authorization: `Bearer ${tokens.a}` },
   });
   expect(reopenedResearch.status()).toBe(200);
-  await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${p19.sourceActionId}`);
+  await page.goto(`${process.env.P03_WEB_URL}/app#/agents?record=${p19.sourceActionId}`);
   const restartedSourceAction = page.locator(`#record-${p19.sourceActionId}`);
   const restartedSourcePosition = page.locator(`#record-${p19.sourcePositionId}`);
   await expect(restartedSourceAction).toHaveCount(1);
@@ -240,7 +240,7 @@ test("after an API restart the saved rules reopen with their exact review text",
     });
     expect(exactSourceResolver.status()).toBe(200);
     expect((await exactSourceResolver.json()).destination_record_id).toBe(sourceId);
-    await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${sourceId}`);
+    await page.goto(`${process.env.P03_WEB_URL}/app#/agents?record=${sourceId}`);
     const reopenedExactSource = page.locator(`#record-${sourceId}`);
     await expect(reopenedExactSource).toHaveCount(1);
     await expect(reopenedExactSource).toBeVisible();

@@ -37,7 +37,7 @@ test("native report, transport facts, market adoption, publication and labelled 
   expect((await apiGet(page, tokens.b, `/v1/research/history-datasets/${datasetId}`)).status).toBe(404);
 
   // A strategy request on the same owner: save the fixture-market revision, then adopt the native market.
-  await page.goto("/");
+  await page.goto("/app");
   await sample(page, "Specific thesis").click();
   await page.getByRole("button", { name: "Prepare request" }).click();
   await page.getByRole("button", { name: "Adopt these settings" }).first().click();

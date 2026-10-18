@@ -17,7 +17,7 @@ const MIN = 44;
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
 
