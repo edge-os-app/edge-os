@@ -124,3 +124,5 @@ transport receipt loopback checks, PostgreSQL saved pipeline/restart checks, rea
 runtime checks require their separate resource grants. An unrun boundary remains required proof.
 
 Job admission rechecks the ACTUAL graph and executed checker before reservation and before worker credentials. It recomputes the release digest and compares it with both the composed and frozen release identities. A different valid graph needs a new declaration. STAND_IN and Nansen-only admission keep their existing behavior.
+
+ACTUAL source labels and P07 profile classes have distinct roles. The source is `PROVIDER_ACTUAL`; P07 receives its canonical `REAL_SOURCE` profile and keeps all page-digest, finality and qualification checks. The saved dataset records `REAL_SOURCE` unchanged. After owner/hash/payload-binding checks, replay maps it to its existing `PROVIDER_ACTUAL` runtime class only when the saved source is `PROVIDER_ACTUAL` and saved release kind is `ACTUAL`. Replay snapshots retain both saved classes. Missing or contradictory release/source identity refuses; no bucket, timing, verdict or hash is rewritten. STAND_IN stays `SYNTHETIC_FIXTURE`.

@@ -186,7 +186,7 @@ def history_source(runtime: ReleasedSourceRuntime) -> dict[str, Any]:
     history = runtime.release.history
     assert history is not None
     stand_in = runtime.release.kind == "STAND_IN"
-    profile = {**history.profile, "evidence_class": "SYNTHETIC_FIXTURE" if stand_in else ACTUAL_CLASS}
+    profile = {**history.profile, "evidence_class": "SYNTHETIC_FIXTURE" if stand_in else "REAL_SOURCE"}
     return {"source_id": history.source_id, "title": history.title, "evidence_class": runtime.evidence_class,
             "content_label": "SYNTHETIC_FIXTURE" if stand_in else "PROVIDER_HISTORY",
             "profile": profile, "scan": dict(history.scan), "provider_facts": dict(history.provider_facts),

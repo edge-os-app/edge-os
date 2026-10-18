@@ -176,7 +176,7 @@ def test_actual_job_boundary_refuses_before_reservation_and_worker_effects(setti
     assert effects.reads == effects.requests == []
 
 
-def test_authored_actual_journey_fixture_qualifies_and_binds_without_runtime_effects():
+def test_authored_actual_journey_fixture_qualifies_and_binds_without_runtime_effects(monkeypatch):
     """Pure: native recorded clients only; no runtime, credentials, API, DB or socket."""
     import json
     from edge_os_api.research import native_history_collection
@@ -184,9 +184,38 @@ def test_authored_actual_journey_fixture_qualifies_and_binds_without_runtime_eff
 
     history, source = authored_journey_history()
     _check_history("ACTUAL", history)
+    from types import SimpleNamespace
+    from edge_os_api.core.research import operating_release
+    from edge_os_api.core.research.released_source_runtime import history_source, open_released_runtime
+    from edge_os_api.research_history.http_clients import StdlibHttpTransport
+    release_definition = operating_release.OperatingRelease("authored-journey-actual/2", "ACTUAL", history=history)
+    monkeypatch.setattr(operating_release, "APPROVED_RELEASES", {
+        release_definition.release_id: operating_release.release_sha256(release_definition)})
+
+    class NoCredentials:
+        def read(self, slot):
+            raise AssertionError("pure recorded-client qualification must not read credentials")
+
+    runtime = open_released_runtime(SimpleNamespace(env="test"), release_definition,
+        credentials=NoCredentials(), http_transport=StdlibHttpTransport)
+    source.update(history_source(runtime))
+    assert source["profile"]["evidence_class"] == "REAL_SOURCE"
     collection, normalized, transport = native_history_collection.collect_native(
         source, history.limits, None, lambda: False, lambda: source["profile"]["dataset"]["collection"]["collected_at_utc"])
     assert collection["status"] == "COMPLETE" and normalized["qualification"]["overall"] == "QUALIFIED"
+    assert normalized["bound_profile"]["dataset"]["dataset_revision"]["basis"] == "PAGE_DIGESTS"
+    from edge_os_api.research_history.qualification_engine import BindingNotEmittable, qualify
+    from edge_os_api.research_history.history_normalizer import project_binding
+    for basis in ("NONE", "PRIVATE_NOT_PORTABLE"):
+        nonportable = copy.deepcopy(normalized["bound_profile"])
+        nonportable["dataset"]["pages"] = []
+        nonportable["dataset"]["dataset_revision"] = {"basis": basis, "manifest_sha256": None,
+                                                     "page_count": 0, "row_count": None}
+        refusal = qualify(nonportable, normalized["observations"])
+        assert refusal["overall"] in {"LIMITED", "UNRESOLVED"}
+        assert "COVERAGE_PROOF_NOT_PORTABLE" in json.dumps(refusal)
+        with pytest.raises(BindingNotEmittable):
+            project_binding(nonportable, refusal)
     owner, dataset, job, attempt, declaration = [uuid.UUID(int=n) for n in range(1, 6)]
     content = history_dataset.dataset_content(dataset_id=dataset, owner_id=owner, declaration_id=declaration,
         job_id=job, attempt_id=attempt, source=source, collection=collection, normalized=normalized, transport=transport)
@@ -334,7 +363,8 @@ def test_authored_actual_api_worker_adoption_delayed_replay_reopen_and_tamper(se
         content = single["content"]
         assert (content["verdict"]["overall"], content["binding_state"], content["operating_release"]["kind"]) == (
             "QUALIFIED", "QUALIFIED_BINDING", "ACTUAL")
-        assert content["evidence_class"] == content["profile_evidence_class"] == "PROVIDER_ACTUAL"
+        assert content["evidence_class"] == "PROVIDER_ACTUAL"
+        assert content["profile_evidence_class"] == "REAL_SOURCE"
         assert single["payload_binding"]["status"] == "PASS"
         assert content["payload_binding_requirement"] == binding.requirement(anchor)
         assert content["binding_view"]["quote_asset"] == next(token["address"] for token in history.profile["pool_tokens"]
@@ -358,6 +388,8 @@ def test_authored_actual_api_worker_adoption_delayed_replay_reopen_and_tamper(se
         inputs, result = replay["content"]["inputs"], replay["content"]["result"]
         assert inputs["history_input"]["payload_binding"] == lineage
         assert inputs["history_input"]["source_evidence_class"] == "PROVIDER_ACTUAL"
+        assert inputs["history_input"]["profile_evidence_class"] == "REAL_SOURCE"
+        assert result["evidence_class"] == "PROVIDER_ACTUAL"
         assert inputs["timing_policy"] == dict(delayed_history_profile.POLICY)
         assert inputs["timing_policy"]["decision_delay_seconds"] == 300
         assert result["status"] == "COMPLETE", result
@@ -439,3 +471,34 @@ def test_authored_actual_api_worker_adoption_delayed_replay_reopen_and_tamper(se
         assert bound_events(reopened, job_id) == saved_before[1]
         assert reopened.get(f"/v1/spot-replays/{replay['replay_id']}", headers=owner_a).json() == replay
     assert creds.reads == reads and peer.requests == requests
+
+
+@pytest.mark.parametrize("profile", ["REAL_SOURCE", "PROVIDER_ACTUAL"])
+@pytest.mark.parametrize("release,outer", [(None, "PROVIDER_ACTUAL"), ({"kind": "STAND_IN"}, "PROVIDER_ACTUAL"),
+                                           ({"kind": "ACTUAL"}, "RELEASE_STAND_IN_RESPONSE")])
+def test_actual_replay_profile_requires_consistent_saved_source_and_release(profile, release, outer):
+    from types import SimpleNamespace
+    from edge_os_api.replay.history_inputs import replay_dataset
+    content = {"profile_evidence_class": profile, "evidence_class": outer, "operating_release": release,
+               "market_binding_id": "authored-market", "buckets": [], "verdict": {"overall": "QUALIFIED"},
+               "status": "COMPLETE", "coverage": {"covers_requested_scan": True}}
+    with pytest.raises(AppError) as caught:
+        replay_dataset(SimpleNamespace(content=content, dataset_id=uuid.UUID(int=1)), dt.datetime.now(dt.timezone.utc))
+    assert caught.value.code == "evidence_class_inconsistent"
+
+
+@pytest.mark.parametrize("profile,outer,kind,expected", [
+    ("REAL_SOURCE", "PROVIDER_ACTUAL", "ACTUAL", "PROVIDER_ACTUAL"),
+    ("PROVIDER_ACTUAL", "PROVIDER_ACTUAL", "ACTUAL", "PROVIDER_ACTUAL"),
+    ("SYNTHETIC_FIXTURE", "RELEASE_STAND_IN_RESPONSE", "STAND_IN", "SYNTHETIC_FIXTURE"),
+])
+def test_replay_profile_mapping_keeps_saved_classes_and_fixture_behavior(profile, outer, kind, expected):
+    from types import SimpleNamespace
+    from edge_os_api.replay.history_inputs import replay_dataset
+    content = {"profile_evidence_class": profile, "evidence_class": outer, "operating_release": {"kind": kind},
+               "market_binding_id": "authored-market", "buckets": [], "verdict": {"overall": "QUALIFIED"},
+               "status": "COMPLETE", "coverage": {"covers_requested_scan": True}}
+    before = copy.deepcopy(content)
+    result = replay_dataset(SimpleNamespace(content=content, dataset_id=uuid.UUID(int=1)), dt.datetime.now(dt.timezone.utc))
+    assert result.evidence_class == expected
+    assert content == before
