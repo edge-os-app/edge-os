@@ -665,7 +665,7 @@ def test_codes_classify(store_dir: Path) -> None:
     allow_baseline(store_dir)
     policy = run_actual("raw.wrong_chain", store_dir, RecordingTransport(code_reply(400, "test_policy_violation")))
     assert (policy.outcome, policy.matches_expectation) == (Outcome.POLICY_DENY, True)
-    authz = run_actual("raw.foreign_wallet", store_dir,
+    authz = run_actual("raw.post_removal", store_dir,
                        RecordingTransport(code_reply(403, "test_wallet_not_authorized")))
     assert (authz.outcome, authz.matches_expectation) == (Outcome.AUTHORIZATION_DENY, True)
     schema = run_actual("raw.gas_limit", store_dir, RecordingTransport(code_reply(400, "test_invalid_field")))
@@ -979,6 +979,15 @@ def test_runner_refuses_transport_without_binding(store_dir: Path) -> None:
     with pytest.raises(SpecimenRefused) as caught:
         run_actual("raw.baseline", store_dir, NoBinding(), auto_binding=False)
     assert caught.value.code == "TRANSPORT_NOT_BOUND"
+
+
+def test_foreign_wallet_destination_unqualified(store_dir: Path) -> None:
+    allow_baseline(store_dir)
+    transport = RecordingTransport(code_reply(403, "test_wallet_not_authorized"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.foreign_wallet", store_dir, transport)
+    assert caught.value.code == "DESTINATION_UNQUALIFIED"
+    assert transport.requests == []
 
 
 def test_unsupported_request_profile_refused_before_effect(store_dir: Path) -> None:

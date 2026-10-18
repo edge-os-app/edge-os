@@ -355,6 +355,11 @@ def _admit(
         # The accepted authorizer accepts only the narrow type-2 eth_signTransaction shape.
         # Every other negative-request profile stays refused/unqualified.
         raise SpecimenRefused("REQUEST_PROFILE_UNQUALIFIED", specimen_id)
+    if request.url != packet.signing_url:
+        # One packet binds one approved wallet route. A specimen that targets another wallet
+        # (the foreign-wallet negative) cannot be exercised through this route and stays
+        # refused/unqualified rather than reported from a callback-only double.
+        raise SpecimenRefused("DESTINATION_UNQUALIFIED", specimen_id)
     state = store.state(specimen_id)
     if state is AttemptState.TERMINAL:
         raise SpecimenRefused("ALREADY_CLAIMED")

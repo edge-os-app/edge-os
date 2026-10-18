@@ -34,6 +34,7 @@ The synthetic driver keeps its boundary. `run_specimen` still accepts only `SYNT
 6. Check the accepted manifest, the specimen identity, the exact request bytes, the canonical headers and the request byte ceiling.
 7. Keep type 4 `NOT_RUN` without a valid owner-bound authority.
 8. Refuse any request outside the accepted type-2 `eth_signTransaction` profile with `REQUEST_PROFILE_UNQUALIFIED`. The accepted authorizer accepts only that narrow shape, so type 0, type 1, type 4 and `personal_sign` negatives stay refused/unqualified until a separately accepted route exists.
+   Refuse any request whose destination is not the packet's single approved wallet route with `DESTINATION_UNQUALIFIED`. The `raw.foreign_wallet` negative targets another wallet, so it stays refused/unqualified under this route and is never reported from a callback-only double.
 9. Refuse a terminal, uncertain, stopped or blocked attempt, or a positive control not bound to this packet, request and policy.
 10. Claim the immutable one-use intent with `O_EXCL` and `fsync`.
 11. Recheck the stop marker after the claim and before the send.

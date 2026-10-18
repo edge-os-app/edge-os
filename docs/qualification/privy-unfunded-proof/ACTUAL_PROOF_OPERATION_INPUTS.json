@@ -47,6 +47,7 @@
     {"input": "valid owner-bound type-4 authority", "required": "A concrete owner self-authorization before the type-4 negative test", "current": "MISSING"},
     {"input": "idempotency and resend decision", "required": "The exact Privy idempotency semantics for the wallet RPC route", "current": "MISSING"},
     {"input": "accepted non-type-2 request route", "required": "A separately accepted authorizer profile for the type-0, type-1, type-4 and personal_sign negatives; they now refuse REQUEST_PROFILE_UNQUALIFIED", "current": "UNQUALIFIED"},
+    {"input": "per-specimen approved destination route", "required": "A separately accepted multi-wallet route to exercise the raw.foreign_wallet negative; it now refuses DESTINATION_UNQUALIFIED under the single approved route", "current": "UNQUALIFIED"},
     {"input": "qualified full-key and exact-type signed decoder", "required": "Complete decoded key-set and exact value-type validation (gate F6, PhaseB owner)", "current": "UNRESOLVED"},
     {"input": "deployed ABI and selector", "required": "Reviewed entrypoint bytecode and the real selector", "current": "MISSING"},
     {"input": "historical uncertainty", "required": "Reconcile the uncertain policy POST and the stopped 403 without a retry or bypass", "current": "UNRESOLVED"},
