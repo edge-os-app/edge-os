@@ -61,7 +61,7 @@ const asOfText = (asOf) => (asOf ? `${asOf.time} (${asOf.table} ${asOf.id} ${asO
 
 async function directAndConversationAgree(page, project, request, token, agentId) {
   const health = await apiHealth(request, token, agentId);
-  await page.goto(`/#/agents?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/agents?agent=${encodeURIComponent(agentId)}`);
   const panel = page.getByRole("region", { name: "Agent health" });
   await expect(panel.getByTestId("health-digest")).toHaveText(health.snapshot_digest);
   await expect(panel.getByTestId("health-as-of")).toHaveText(asOfText(health.as_of));
@@ -130,7 +130,7 @@ test("health intruder: another owner cannot read or retarget either agent", asyn
     expect(response.status()).toBe(404);
   }
   await injectAuth(page, intruder);
-  await page.goto(`/#/agents?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/agents?agent=${encodeURIComponent(agentId)}`);
   await expect(page.getByRole("region", { name: "Agent health" }).getByRole("alert")).toBeVisible();
   const convo = await conversation(page, project);
   await convo.getByRole("button", { name: "What did it last do?" }).click();

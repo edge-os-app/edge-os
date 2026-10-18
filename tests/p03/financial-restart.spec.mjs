@@ -13,20 +13,20 @@ test("restarted services reopen the confirmed, the reconciled and the original-t
   await injectAuth(page, tokens.a);
   for (const [key, receipts] of [[`main-${project}`, "CONFIRMED"], [`lost-ack-${project}`, "SUBMISSION_UNKNOWN → CONFIRMED"]]) {
     const { agentId } = saved[key];
-    await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+    await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
     const actions = page.getByRole("region", { name: "Agent actions" });
     await expect(actions.getByTestId("actions-jobs")).toContainText("SUBMITTED_CONFIRMED");
     await actions.getByRole("button", { name: /Open action/ }).first().click();
     await expect(actions.getByTestId("action-receipts")).toHaveText(receipts);
   }
   const original = saved[`original-${project}`];
-  await page.goto(`/#/positions?agent=${encodeURIComponent(original.agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(original.agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
   await expect(actions.getByTestId("actions-jobs")).toContainText("SUBMITTED_CONFIRMED");
   await actions.getByRole("button", { name: /Open action/ }).first().click();
   await expect(actions.getByTestId("action-original-hash")).toHaveText(original.transactionHash);
   await expect(actions.getByTestId("action-receipts")).toHaveText("SUBMISSION_UNKNOWN → CONFIRMED");
   const stop = saved[`stop-${project}`];
-  await page.goto(`/#/positions?agent=${encodeURIComponent(stop.agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(stop.agentId)}`);
   await expect(page.getByRole("region", { name: "Agent actions" }).getByTestId("actions-stops")).toContainText("HALT_ALL_SWAPS");
 });

@@ -46,7 +46,7 @@ async function shot(page, project, name) {
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
 
@@ -145,7 +145,7 @@ test("unusable model output and an unknown outcome are named apart, and an unkno
   await expect(page.getByRole("button", { name: "Try the interpreter again" })).toBeVisible();
   await inspect(page, project, "malformed");
 
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   script({ case: "provider-hang" });
   const unknown = await submit(page, THESIS);
@@ -207,7 +207,7 @@ test("a reply with two values is a conflict, and a reply that would change a cho
   await shot(page, project, "conflict");
   await inspect(page, project, "conflict");
 
-  await page.goto("/");
+  await page.goto("/app");
   script({ case: "rough-hunch" }, { follow_up: "reply-overwrites-chosen-entry" });
   const rejectedId = await submit(page, HUNCH, /Rough hunch/);
   await asked(page).getByRole("radio", { name: /Price up more than 1% over the last 15 minutes/ }).check();
@@ -240,7 +240,7 @@ test("an unsupported capability is not a failure, and another owner cannot open 
   const other = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
   const foreign = await other.newPage();
   await injectAuth(foreign, tokens.b);
-  await foreign.goto(`/#/research/${id}`);
+  await foreign.goto(`/app#/research/${id}`);
   await expect(foreign.getByText("This request was not found.")).toBeVisible();
   await expect(foreign.getByTestId("attempts")).toHaveCount(0);
   await other.close();
@@ -270,7 +270,7 @@ test("a request whose outcome was not saved is worded from its attempt, offers t
 
   // A settled provider failure: the retry button must be there.
   await withoutOutcome(page, id, () => {});
-  await page.goto(`/#/research/${id}`);
+  await page.goto(`/app#/research/${id}`);
   await page.reload();
   await expect(outcome(page)).toHaveAttribute("data-reading", "FAILED");
   await expect(page.getByRole("heading", { name: "The interpreter did not answer" })).toBeVisible();
@@ -365,7 +365,7 @@ test("the saved-requests list tags each request from its latest attempt and neve
   await open(page, tokens.a);
   script({ case: "provider-503" });
   const id = await submit(page, THESIS);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   const card = page.locator(`#req-${id}`);
   await expect(card).toContainText("Interpreter did not answer");

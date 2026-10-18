@@ -34,7 +34,7 @@ async function openAttempts(page) {
 }
 async function submit(page, token, text) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   await page.getByLabel("Your words", { exact: true }).fill(text);
   await page.getByRole("radio", { name: /Specific rule or thesis/ }).check();
@@ -90,7 +90,7 @@ test("a request runs the mounted Hermes once, shows its attempt and usage, is sa
   const writes = [];
   reopened.on("request", (request) => { if (request.method() !== "GET") writes.push(`${request.method()} ${request.url()}`); });
   await injectAuth(reopened, tokens.a);
-  await reopened.goto(`/#/research/${id}`);
+  await reopened.goto(`/app#/research/${id}`);
   await expect(reopened.getByTestId("revision-id")).toHaveText(revision, { timeout: 30_000 });
   await openAttempts(reopened);
   await expect(rows(reopened)).toHaveCount(1);
@@ -102,7 +102,7 @@ test("a request runs the mounted Hermes once, shows its attempt and usage, is sa
   const other = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
   const foreign = await other.newPage();
   await injectAuth(foreign, tokens.b);
-  await foreign.goto(`/#/research/${id}`);
+  await foreign.goto(`/app#/research/${id}`);
   await expect(foreign.getByText("This request was not found.")).toBeVisible();
   await expect(foreign.getByTestId("attempts")).toHaveCount(0);
   await other.close();

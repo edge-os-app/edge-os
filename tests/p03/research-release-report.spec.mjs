@@ -78,7 +78,7 @@ test("release report, stand-in facts, market adoption, publication and labelled 
   record(`release-${project}`, { nansenReportId, nansenReportSha256: nansenReport.content_sha256 });
 
   // A strategy request on the same owner: save the fixture-market revision, then adopt the release dataset's market.
-  await page.goto("/");
+  await page.goto("/app");
   await sample(page, "Specific thesis").click();
   await page.getByRole("button", { name: "Prepare request" }).click();
   await page.getByRole("button", { name: "Adopt these settings" }).first().click();

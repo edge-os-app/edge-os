@@ -29,7 +29,7 @@ test("the saved revision and mounted attempts reopen unchanged after the mount p
   await injectAuth(page, tokens.a);
 
   const completed = results[`mount-completed-${project}`];
-  await page.goto(`/#/research/${completed.id}`);
+  await page.goto(`/app#/research/${completed.id}`);
   await expect(page.getByTestId("revision-id")).toHaveText(completed.revision, { timeout: 30_000 });
   await openAttempts(page);
   await expect(rows(page)).toHaveCount(1);
@@ -37,7 +37,7 @@ test("the saved revision and mounted attempts reopen unchanged after the mount p
   await expect(rows(page).first()).toContainText("1,423 in, 611 out");
 
   const lost = results[`mount-lost-${project}`];
-  await page.goto(`/#/research/${lost.id}`);
+  await page.goto(`/app#/research/${lost.id}`);
   await expect(page.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeVisible({ timeout: 30_000 });
   await openAttempts(page);
   await expect(rows(page).first()).toHaveAttribute("data-attempt", lost.attempt);

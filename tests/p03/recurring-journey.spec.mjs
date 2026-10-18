@@ -49,7 +49,7 @@ test("save a revision, set up the agent wallet, adopt terms and start recurring 
   expect(token, "the verifier mints one recurring owner per width").toBeTruthy();
   const agentId = agentFor(project);
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByTestId("fixture-banner")).toContainText("TEST AUTH FIXTURE");
 
   // A revision of this owner's own thesis.
@@ -81,14 +81,14 @@ test("save a revision, set up the agent wallet, adopt terms and start recurring 
   await expect(funding.getByTestId("funding-credited")).toContainText("1000 credited");
 
   // Exact terms, adopted inactive; the server derives the fixture qualification.
-  await page.goto(`/#/agents?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/agents?agent=${encodeURIComponent(agentId)}`);
   const authority = page.getByRole("region", { name: "Agent authority" });
   await authority.getByRole("button", { name: "Review exact terms" }).click();
   await authority.getByRole("button", { name: "Adopt these exact terms (inactive)" }).click();
   await expect(authority.getByTestId("activation-state")).toContainText("SYNTHETIC_FIXTURE_QUALIFICATION");
 
   // Explicit recurring authorization, bound to the exact adopted terms.
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const recurring = page.getByRole("region", { name: "Recurring operation" });
   const start = recurring.getByRole("button", { name: "Start recurring operation" });
   await expect(start).toBeDisabled();

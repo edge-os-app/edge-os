@@ -29,7 +29,7 @@ async function shot(page, project, name) {
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByTestId("fixture-banner")).toContainText("TEST AUTH FIXTURE");
 }
 
@@ -75,7 +75,7 @@ async function readyAgent(page, thesisUrl, agentId, project) {
   await expect(funding.getByTestId("funding-holdings")).toContainText("SYNTHETIC_FIXTURE");
   await noSidewaysScroll(page);
 
-  await page.goto(`/#/agents?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/agents?agent=${encodeURIComponent(agentId)}`);
   const authority = page.getByRole("region", { name: "Agent authority" });
   await authority.getByRole("button", { name: "Review exact terms" }).click();
   await expect(authority.getByTestId("consent-review")).toContainText("Review hash");
@@ -87,7 +87,7 @@ async function readyAgent(page, thesisUrl, agentId, project) {
 }
 
 async function runOnce(page, agentId) {
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
   await actions.getByRole("button", { name: "Run one bounded evaluation" }).click();
   await expect(actions.getByRole("status").filter({ hasText: "Evaluation saved" })).toBeVisible();
@@ -169,7 +169,7 @@ test("a stop denies new work before admission and a lost reply pauses new reques
   const agentId = `fin-${project}-stop`;
   await open(page, tokens.a);
   await readyAgent(page, thesis.url, agentId, project);
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
   await actions.getByRole("button", { name: "Halt all swaps" }).click();
   await expect(actions.getByTestId("actions-stops")).toContainText("HALT_ALL_SWAPS");
@@ -195,7 +195,7 @@ test("a requested removal denies the next evaluation before any reservation or e
   const agentId = `fin-${project}-removed`;
   await open(page, tokens.a);
   await readyAgent(page, thesis.url, agentId, project);
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
   await actions.getByRole("button", { name: "Request removal" }).click();
   await expect(actions.getByTestId("actions-removal")).toContainText("Removal REQUESTED");
@@ -212,7 +212,7 @@ test("another owner sees none of these agents or actions", async ({ page }, info
   const saved = JSON.parse(fs.readFileSync(financialFile, "utf8"))[`main-${project}`];
   await open(page, tokens.b);
   for (const area of ["funds", "agents", "positions"]) {
-    await page.goto(`/#/${area}?agent=${encodeURIComponent(saved.agentId)}`);
+    await page.goto(`/app#/${area}?agent=${encodeURIComponent(saved.agentId)}`);
     await expect(page.getByText(/No confirmed wallet|no confirmed wallet|AGENT_NOT_READY|confirmed wallet bound/).first()).toBeVisible();
   }
   await expect(page.getByText(saved.actionId)).toHaveCount(0);
