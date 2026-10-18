@@ -76,9 +76,20 @@ def no_sockets(monkeypatch):
 
 # --------------------------------------------------------------------------------------------- bootstrap
 
-def test_the_default_server_composes_no_release_reads_no_key_and_opens_no_socket(no_sockets):
+def test_the_default_server_composes_the_one_approved_release_and_reads_no_key_or_opens_no_socket(no_sockets):
+    # The code-owned default now carries exactly the one accepted Nansen-only ACTUAL release and its approved SHA-256.
+    assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == set(operating_release.APPROVED_RELEASES)
+    assert released_runtime_bootstrap.RELEASE_DEFINITIONS != {}
     creds = stand_in.credentials()
-    assert released_runtime_bootstrap.RELEASE_DEFINITIONS == {} and operating_release.APPROVED_RELEASES == {}
+    runtime = released_runtime_bootstrap.server_research_runtime(LOCAL, credentials=creds)
+    assert runtime is not None and runtime.release.history is None and runtime.release.nansen is not None
+    assert runtime.release_sha256 == operating_release.APPROVED_RELEASES[runtime.release.release_id]
+    assert creds.reads == [] and no_sockets == []
+
+
+def test_an_explicitly_emptied_registry_composes_no_release_reads_no_key_and_opens_no_socket(monkeypatch, no_sockets):
+    monkeypatch.setattr(released_runtime_bootstrap, "RELEASE_DEFINITIONS", {})
+    creds = stand_in.credentials()
     assert released_runtime_bootstrap.server_research_runtime(LOCAL, credentials=creds) is None
     assert released_runtime_bootstrap.server_research_runtime(LOCAL) is None
     assert creds.reads == [] and no_sockets == []

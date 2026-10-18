@@ -77,3 +77,9 @@ uses the existing path:
   permission for Nansen data.
 - This registration does not run a job and does not grant provider, credential, account or spending authority. An
   operator grant within the existing shared USD 2 remains necessary.
+
+## Earlier milestone statements
+
+`CONTRACT.md`, `PAYLOAD_BINDING.md` and the `README.md` milestone section describe the registry as empty. Those are
+historical milestone records and do not describe the current default. `CREDENTIAL_DELIVERY.md` and
+`docs/implementation/RESEARCH_ENVIRONMENT_CREDENTIALS.md` carry the current state.
