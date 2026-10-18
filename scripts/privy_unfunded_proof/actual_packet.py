@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -76,9 +77,16 @@ PACKET_CEILING_INVALID = "PACKET_CEILING_INVALID"
 REQUEST_COUNT_EXCEEDED = "REQUEST_COUNT_EXCEEDED"
 REQUEST_OVER_BOUND = "REQUEST_OVER_BOUND"
 TIME_CEILING_EXCEEDED = "TIME_CEILING_EXCEEDED"
+REQUEST_PROFILE_UNQUALIFIED = "REQUEST_PROFILE_UNQUALIFIED"
+TRANSPORT_NOT_BOUND = "TRANSPORT_NOT_BOUND"
+TRANSPORT_BINDING_MISMATCH = "TRANSPORT_BINDING_MISMATCH"
+STOPPED_AFTER_UNKNOWN = "STOPPED_AFTER_UNKNOWN"
 OWNER_AUTHORITY_ABSENT = "OWNER_AUTHORITY_ABSENT"
 AUTHORITY_NOT_OWNER_BOUND = "AUTHORITY_NOT_OWNER_BOUND"
 SYNTHETIC_AUTHORITY_NOT_PROOF = "SYNTHETIC_AUTHORITY_NOT_PROOF"
+
+
+_AUTH_HEADER_EXPIRY = re.compile(r"[0-9]{13}")
 
 
 class ControlState(StrEnum):
@@ -224,13 +232,11 @@ def resolve_type4_authority(
     authority_id: str | None,
     *,
     owner_id: str,
-    authorities: Mapping[str, OwnerBoundType4Authority] | None = None,
 ) -> OwnerBoundType4Authority:
-    """Return the owner-bound authority, or refuse with a fixed NOT_RUN detail."""
+    """Return the code-owned owner-bound authority, or refuse with a fixed NOT_RUN detail."""
     if authority_id is None:
         raise SpecimenRefused("NOT_RUN", OWNER_AUTHORITY_ABSENT)
-    registry = CODE_OWNED_TYPE4_AUTHORITIES if authorities is None else authorities
-    authority = registry.get(authority_id)
+    authority = CODE_OWNED_TYPE4_AUTHORITIES.get(authority_id)
     if authority is None:
         raise SpecimenRefused("NOT_RUN", SYNTHETIC_AUTHORITY_NOT_PROOF)
     if authority.owner_id != owner_id:
@@ -302,7 +308,6 @@ def resolve_approved_packet(
     *,
     now_epoch: int,
     table: SpecimenTable = FROZEN_TABLE,
-    approvals: Mapping[str, ActualProofPacket] | None = None,
 ) -> ActualProofPacket:
     """Return the code-approved packet, or refuse before any effect.
 
@@ -312,8 +317,7 @@ def resolve_approved_packet(
     position-inventory obligation, and a specimen manifest that does not cover
     the accepted matrix.
     """
-    registry = CODE_OWNED_PACKET_APPROVALS if approvals is None else approvals
-    packet = registry.get(packet_id)
+    packet = CODE_OWNED_PACKET_APPROVALS.get(packet_id)
     if packet is None:
         raise SpecimenRefused(ACTUAL_PACKET_NOT_APPROVED)
     if packet.packet_id != packet_id or packet.packet_sha256() != packet_id:
@@ -321,6 +325,8 @@ def resolve_approved_packet(
     if now_epoch >= packet.expires_at_epoch:
         raise SpecimenRefused(ACTUAL_PACKET_EXPIRED)
     _check_administration(packet)
+    if _AUTH_HEADER_EXPIRY.fullmatch(packet.auth_header_expiry) is None:
+        raise SpecimenRefused(ACTUAL_PACKET_MISMATCH, "auth_header_expiry")
     _check_profile_policies(packet)
     _check_controls(packet)
     _check_ceilings(packet, table)

@@ -17,6 +17,14 @@ The decoder reuses ``edge_os_api.execution.original_transaction.validate_signed`
 as the accepted qualified decoder; that helper checks the type-2 fields, the
 sender and the canonical encoding and returns the Keccak-256 hash of the whole
 signed serialization.
+
+Unresolved shared dependency (gate F6): ``validate_signed`` compares selected
+decoded fields and does not yet validate the complete decoded key set or exact
+value types. That helper is outside this worker's lease and stays unchanged, so
+no decoder is registered as fully qualified here. The registry stays empty and
+an actual run refuses until the PhaseB owner lands the complete-key/type check
+through a recorded accepted-helper handoff. Do not register an arbitrary callable
+as a qualified decoder.
 """
 
 from __future__ import annotations
@@ -115,12 +123,9 @@ def accepted_signed_decoder(unsigned: Mapping[str, Any], wallet: str) -> Callabl
 QUALIFIED_ACTUAL_PROFILES: Mapping[str, QualifiedActualProfile] = {}
 
 
-def resolve_qualified_profile(
-    profile_id: str, *, profiles: Mapping[str, QualifiedActualProfile] | None = None
-) -> QualifiedActualProfile:
+def resolve_qualified_profile(profile_id: str) -> QualifiedActualProfile:
     """Return the code-registered qualified profile, or refuse before any effect."""
-    registry = QUALIFIED_ACTUAL_PROFILES if profiles is None else profiles
-    profile = registry.get(profile_id)
+    profile = QUALIFIED_ACTUAL_PROFILES.get(profile_id)
     if profile is None or profile.qualification != "QUALIFIED":
         raise SpecimenRefused(ACTUAL_PROFILE_UNQUALIFIED, profile_id)
     return profile

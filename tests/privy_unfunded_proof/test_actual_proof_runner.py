@@ -28,6 +28,8 @@ from _actual_support import (
     allow_baseline,
     clock,
     code_reply,
+    expected_binding,
+    injected,
     make_packet,
     make_profile,
     mismatched_factory,
@@ -94,7 +96,7 @@ def run_child(code: str, timeout: float = 60.0) -> subprocess.CompletedProcess:
 def test_default_actual_run_refused_before_effect(store_dir: Path) -> None:
     transport = RecordingTransport(success_reply())
     with pytest.raises(SpecimenRefused) as caught:
-        run_actual("raw.baseline", store_dir, transport, approvals={})
+        run_actual("raw.baseline", store_dir, transport, inject=False)
     assert caught.value.code == "ACTUAL_PACKET_NOT_APPROVED"
     assert transport.requests == []
     assert list(store_dir.iterdir()) == []
@@ -143,7 +145,7 @@ def test_actual_module_run_refused(module: str) -> None:
 def test_unapproved_packet_refused(store_dir: Path) -> None:
     transport = RecordingTransport(success_reply())
     with pytest.raises(SpecimenRefused) as caught:
-        run_actual("raw.baseline", store_dir, transport, approvals={})
+        run_actual("raw.baseline", store_dir, transport, inject=False)
     assert caught.value.code == "ACTUAL_PACKET_NOT_APPROVED"
     assert transport.requests == []
 
@@ -152,7 +154,7 @@ def test_packet_content_hash_mismatch_refused(store_dir: Path) -> None:
     packet = dataclasses.replace(make_packet(), packet_id="0" * 64)
     transport = RecordingTransport(success_reply())
     with pytest.raises(SpecimenRefused) as caught:
-        run_actual("raw.baseline", store_dir, transport, packet=packet, approvals={packet.packet_id: packet})
+        run_actual("raw.baseline", store_dir, transport, packet=packet)
     assert caught.value.code == "ACTUAL_PACKET_MISMATCH"
     assert transport.requests == []
 
@@ -278,7 +280,7 @@ def test_request_over_packet_byte_bound_refused(store_dir: Path) -> None:
 def test_unregistered_profile_refused(store_dir: Path) -> None:
     transport = RecordingTransport(success_reply())
     with pytest.raises(SpecimenRefused) as caught:
-        run_actual("raw.baseline", store_dir, transport, profiles={})
+        run_actual("raw.baseline", store_dir, transport, profiles_override={})
     assert caught.value.code == "ACTUAL_PROFILE_UNQUALIFIED"
     assert transport.requests == []
 
@@ -298,8 +300,7 @@ def test_profile_rejects_a_non_outcome_value() -> None:
 def test_profile_that_does_not_match_specimen_refused(store_dir: Path) -> None:
     transport = RecordingTransport(success_reply())
     with pytest.raises(SpecimenRefused) as caught:
-        run_actual("raw.baseline", store_dir, transport,
-                   profiles={"test.raw": make_profile("decoded")})
+        run_actual("raw.baseline", store_dir, transport, profile=make_profile("decoded"))
     assert caught.value.code == "ACTUAL_PROFILE_UNQUALIFIED"
     assert transport.requests == []
 
@@ -391,7 +392,7 @@ def test_type4_not_run_without_authority(store_dir: Path) -> None:
     assert transport.requests == []
 
 
-def test_type4_negative_runs_with_owner_bound_authority(store_dir: Path) -> None:
+def test_type4_with_authority_but_unsupported_profile_refused(store_dir: Path) -> None:
     allow_baseline(store_dir)
     base = make_packet()
     type4_request = freeze_request("synthetic-probe-wallet-a", {
@@ -403,10 +404,12 @@ def test_type4_negative_runs_with_owner_bound_authority(store_dir: Path) -> None
         specimen_expected={**base.specimen_expected, "raw.type4_envelope": "POLICY_DENY"},
     )
     authority = OwnerBoundType4Authority("auth-1", "owner-1")
-    result = run_actual("raw.type4_envelope", store_dir,
-                        RecordingTransport(code_reply(400, "test_policy_violation")), packet=packet,
-                        type4_authority_id="auth-1", type4_authorities={"auth-1": authority})
-    assert result.outcome is Outcome.POLICY_DENY
+    transport = RecordingTransport(code_reply(400, "test_policy_violation"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.type4_envelope", store_dir, transport, packet=packet,
+                   type4_authority_id="auth-1", type4_authorities={"auth-1": authority})
+    assert caught.value.code == "REQUEST_PROFILE_UNQUALIFIED"
+    assert transport.requests == []
 
 
 def test_type4_authority_not_owner_bound_refused(store_dir: Path) -> None:
@@ -525,14 +528,21 @@ def test_transport_loss_keeps_a_distinct_reason(store_dir: Path) -> None:
 
 def test_concurrent_threads_send_once(store_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(AttemptStore, "state", lambda self, specimen_id: AttemptState.NOT_SENT)
+    packet = make_packet()
+    profile = make_profile("raw")
+    monkeypatch.setattr(actual_packet, "CODE_OWNED_PACKET_APPROVALS", {packet.packet_id: packet})
+    monkeypatch.setattr(actual_profile, "QUALIFIED_ACTUAL_PROFILES", {"test.raw": profile})
     barrier = threading.Barrier(8)
     refusals: list[str] = []
     lock = threading.Lock()
 
     def worker() -> None:
+        transport = RecordingTransport(success_reply(), binding=expected_binding(packet, "raw.baseline"))
         barrier.wait()
         try:
-            run_actual("raw.baseline", store_dir, RecordingTransport(success_reply()))
+            actual_runner.run_actual_specimen(
+                "raw.baseline", store=AttemptStore(store_dir), transport=transport, packet_id=packet.packet_id,
+                profile_id="test.raw", clock=clock, now_epoch=NOW, started_at_epoch=NOW)
         except SpecimenRefused as error:
             with lock:
                 refusals.append(error.code)
@@ -550,12 +560,18 @@ CHILD_PRELUDE = f"""
 import json, os, sys
 sys.path.insert(0, {str(TESTS_DIR)!r})
 from pathlib import Path
-from _actual_support import NOW, code_reply, make_packet, make_profile
+from _actual_support import NOW, code_reply, expected_binding, make_packet, make_profile
 from scripts.privy_unfunded_proof import actual_runner
+import scripts.privy_unfunded_proof.actual_packet as ap
+import scripts.privy_unfunded_proof.actual_profile as apr
 from scripts.privy_unfunded_proof.specimens import AttemptStore
 root = Path(sys.argv[1]); markers = Path(sys.argv[2])
 packet = make_packet(); profile = make_profile("raw")
+ap.CODE_OWNED_PACKET_APPROVALS = {{packet.packet_id: packet}}
+apr.QUALIFIED_ACTUAL_PROFILES = {{"test.raw": profile}}
 class T:
+    def binding(self):
+        return expected_binding(packet, "raw.baseline")
     def send(self, request):
         (markers / ("sent-" + str(os.getpid()))).write_text("x")
         if sys.argv[3] == "die":
@@ -564,7 +580,7 @@ class T:
 try:
     result = actual_runner.run_actual_specimen("raw.baseline", store=AttemptStore(root), transport=T(),
         packet_id=packet.packet_id, profile_id="test.raw", clock=lambda: "2026-10-18T00:00:00Z",
-        now_epoch=NOW, started_at_epoch=NOW, approvals={{packet.packet_id: packet}}, profiles={{"test.raw": profile}})
+        now_epoch=NOW, started_at_epoch=NOW)
     print("RESULT", result.outcome)
 except Exception as error:
     print("REFUSED", type(error).__name__, getattr(error, "code", ""))
@@ -666,13 +682,21 @@ def test_success_on_negative_is_breach(store_dir: Path) -> None:
     assert (store_dir / "STOP.json").exists()
 
 
-def test_personal_sign_success_is_breach(store_dir: Path) -> None:
-    allow_baseline(store_dir)
-    body = json.dumps({"method": "personal_sign",
-                       "data": {"signature": "0x" + "ab" * 65, "encoding": "hex"}}).encode()
-    result = run_actual("raw.personal_sign", store_dir, RecordingTransport(Reply(200, "application/json", body)))
-    assert result.outcome is Outcome.BREACH
-    assert ("ab" * 65) not in all_saved_text(store_dir)
+def test_personal_sign_profile_refused(store_dir: Path) -> None:
+    transport = RecordingTransport(success_reply())
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.personal_sign", store_dir, transport)
+    assert caught.value.code == "REQUEST_PROFILE_UNQUALIFIED"
+    assert transport.requests == []
+
+
+def test_envelope_variant_profile_refused(store_dir: Path) -> None:
+    for specimen_id in ("raw.type1_envelope", "raw.type0_envelope"):
+        transport = RecordingTransport(success_reply())
+        with pytest.raises(SpecimenRefused) as caught:
+            run_actual(specimen_id, store_dir, transport)
+        assert caught.value.code == "REQUEST_PROFILE_UNQUALIFIED"
+        assert transport.requests == []
 
 
 def test_signed_field_mismatch_is_breach(store_dir: Path) -> None:
@@ -724,7 +748,9 @@ def test_capture_saved_before_parse(store_dir: Path, monkeypatch: pytest.MonkeyP
     real_loads = json.loads
 
     def watching_loads(text, *args, **kwargs):  # noqa: ANN001
-        seen.setdefault("capture_exists_at_parse", (store_dir / "raw.baseline.capture.json").exists())
+        blob = text if isinstance(text, (str, bytes)) else b""
+        if "signed_transaction" in blob or '"code"' in blob:
+            seen.setdefault("capture_exists_at_parse", (store_dir / "raw.baseline.capture.json").exists())
         return real_loads(text, *args, **kwargs)
 
     monkeypatch.setattr(actual_runner.json, "loads", watching_loads)
@@ -825,10 +851,10 @@ def _transport(http, **overrides):  # noqa: ANN001
         "http": http,
         "destination": URL_A,
         "wallet_id": "synthetic-probe-wallet-a",
-        "app_id": "app-1",
+        "app_id": "app-test-1",
         "app_secret": "secret-1",
         "authorize": lambda payload: "signature",
-        "request_id": "attempt-1",
+        "request_id": "attempt-1:raw.baseline",
         "request_expiry_ms": 1_792_000_000_000,
         "connect_timeout_seconds": 5.0,
         "deadline_monotonic": 10.0,
@@ -871,7 +897,7 @@ def test_transport_refuses_wrong_destination() -> None:
     request = specimens.FROZEN_TABLE.get("raw.baseline").request
     other = "https://api.privy.io/v1/wallets/synthetic-probe-wallet-b/rpc"
     with pytest.raises(TransportRefused) as caught:
-        _transport(_FakeHttp(), destination=other).send(request)
+        _transport(_FakeHttp(), destination=other, wallet_id="synthetic-probe-wallet-b").send(request)
     assert caught.value.code == "DESTINATION_NOT_APPROVED"
 
 
@@ -908,3 +934,172 @@ def test_transport_constructor_rejects_bad_arguments() -> None:
     for overrides in ({"app_id": ""}, {"request_expiry_ms": 0}, {"destination": 5}):
         with pytest.raises((ValueError, TypeError)):
             _transport(_FakeHttp(), **overrides)
+
+
+# ---------------------------------------------------------------- gate REVISE1 repairs (F1-F5, F7)
+
+
+def test_public_run_has_no_caller_approval_parameters() -> None:
+    import inspect
+
+    params = inspect.signature(actual_runner.run_actual_specimen).parameters
+    for name in ("approvals", "profiles", "type4_authorities"):
+        assert name not in params
+    assert "approvals" not in inspect.signature(actual_packet.resolve_approved_packet).parameters
+    assert "profiles" not in inspect.signature(actual_profile.resolve_qualified_profile).parameters
+
+
+def test_caller_packet_cannot_dispatch_with_empty_registries(store_dir: Path) -> None:
+    packet = make_packet()
+    transport = RecordingTransport(success_reply())
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.baseline", store_dir, transport, packet=packet, inject=False)
+    assert caught.value.code == "ACTUAL_PACKET_NOT_APPROVED"
+    assert transport.requests == []
+    assert list(store_dir.iterdir()) == []
+
+
+def test_runner_refuses_transport_binding_mismatch(store_dir: Path) -> None:
+    packet = make_packet()
+    wrong = expected_binding(packet, "raw.baseline")
+    wrong["app_id"] = "other-app"
+    transport = RecordingTransport(success_reply(), binding=wrong)
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.baseline", store_dir, transport, packet=packet, auto_binding=False)
+    assert caught.value.code == "TRANSPORT_BINDING_MISMATCH"
+    assert transport.requests == []
+    assert list(store_dir.iterdir()) == []
+
+
+def test_runner_refuses_transport_without_binding(store_dir: Path) -> None:
+    class NoBinding:
+        def send(self, request):  # noqa: ANN001
+            raise AssertionError("must not send")
+
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.baseline", store_dir, NoBinding(), auto_binding=False)
+    assert caught.value.code == "TRANSPORT_NOT_BOUND"
+
+
+def test_unsupported_request_profile_refused_before_effect(store_dir: Path) -> None:
+    for specimen_id in ("raw.type1_envelope", "raw.type0_envelope", "raw.personal_sign"):
+        transport = RecordingTransport(success_reply())
+        with pytest.raises(SpecimenRefused) as caught:
+            run_actual(specimen_id, store_dir, transport)
+        assert caught.value.code == "REQUEST_PROFILE_UNQUALIFIED"
+        assert transport.requests == []
+        assert list(store_dir.iterdir()) == []
+
+
+def test_failed_stop_write_blocks_later_send(store_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing_stop(self, record):  # noqa: ANN001
+        raise OSError("stop disk failure")
+
+    monkeypatch.setattr(AttemptStore, "stop", failing_stop)
+    first = run_actual("raw.baseline", store_dir, RecordingTransport(error=TimeoutError("lost")))
+    assert (first.outcome, first.reason) == (Outcome.UNKNOWN, "SEND_FAILED")
+    transport = RecordingTransport(code_reply(400, "test_policy_violation"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.wrong_chain", store_dir, transport)
+    assert caught.value.code == "UNRESOLVED_ATTEMPT_IN_STORE"
+    assert transport.requests == []
+
+
+def test_saved_unknown_without_stop_blocks(store_dir: Path) -> None:
+    store = AttemptStore(store_dir)
+    store.claim_record("raw.baseline", {"specimen_id": "raw.baseline", "state": "INTENT_SAVED"})
+    store.write_outcome("raw.baseline", {"specimen_id": "raw.baseline", "outcome": "UNKNOWN", "reason": "SEND_FAILED"})
+    assert not (store_dir / "STOP.json").exists()
+    transport = RecordingTransport(code_reply(400, "test_policy_violation"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.wrong_chain", store_dir, transport)
+    assert caught.value.code == "STOPPED_AFTER_UNKNOWN"
+    assert transport.requests == []
+
+
+def test_stale_positive_control_refused(store_dir: Path) -> None:
+    allow_baseline(store_dir)
+    changed = make_packet(profile_policies={"raw": "policy-raw-2", "decoded": "policy-decoded-2"},
+                          profile_policy_sha256={"raw": "sha-raw-2", "decoded": "sha-decoded-2"})
+    transport = RecordingTransport(code_reply(400, "test_policy_violation"))
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.wrong_chain", store_dir, transport, packet=changed)
+    assert caught.value.code == "POSITIVE_CONTROL_NOT_QUALIFIED"
+    assert transport.requests == []
+
+
+def test_request_identity_is_the_actual_request(store_dir: Path) -> None:
+    base = make_packet()
+    transaction = dict(specimens.BASELINE_TRANSACTION)
+    transaction["nonce"] = 7
+    alt = freeze_request("synthetic-probe-wallet-a",
+                         {"method": "eth_signTransaction", "params": {"transaction": transaction}})
+    packet = make_packet(requests={**base.requests, "raw.baseline": alt})
+    transport = RecordingTransport(success_reply())
+    result = run_actual("raw.baseline", store_dir, transport, packet=packet)
+    assert result.outcome is Outcome.ALLOW
+    assert transport.requests[0] is alt
+    intent = json.loads((store_dir / "raw.baseline.intent.json").read_text())
+    capture = json.loads((store_dir / "raw.baseline.capture.json").read_text())
+    outcome = json.loads((store_dir / "raw.baseline.outcome.json").read_text())
+    table_hash = specimens.FROZEN_TABLE.get("raw.baseline").request.request_sha256
+    assert alt.request_sha256 != table_hash
+    assert intent["request_sha256"] == capture["request_sha256"] == outcome["request_sha256"] == alt.request_sha256
+    assert outcome["policy_id"] == packet.profile_policies["raw"]
+    assert outcome["policy_sha256"] == packet.profile_policy_sha256["raw"]
+
+
+def test_transport_refuses_broadcast_operation() -> None:
+    base = specimens.FROZEN_TABLE.get("raw.baseline").request
+    off = replace_request(base, body=specimens.canonical_json({"method": "eth_sendTransaction", "params": {}}))
+    http = _FakeHttp()
+    with pytest.raises(TransportRefused) as caught:
+        _transport(http).send(off)
+    assert caught.value.code == "OPERATION_NOT_APPROVED"
+    assert http.calls == []
+
+
+def test_transport_refuses_unsupported_request_profile() -> None:
+    transaction = {"type": 1, "chain_id": 143, "nonce": 0, "to": "0x" + "11" * 20, "value": 0,
+                   "data": "0x", "gas_limit": 1, "gas_price": 1}
+    off = freeze_request("synthetic-probe-wallet-a",
+                         {"method": "eth_signTransaction", "params": {"transaction": transaction}})
+    http = _FakeHttp()
+    with pytest.raises(TransportRefused) as caught:
+        _transport(http).send(off)
+    assert caught.value.code == "REQUEST_PROFILE_UNQUALIFIED"
+    assert http.calls == []
+
+
+def test_transport_rejects_non_wallet_destination() -> None:
+    with pytest.raises(ValueError):
+        _transport(_FakeHttp(), destination="https://api.privy.io/v1/wallets/synthetic-probe-wallet-a/admin")
+
+
+def test_transport_uses_frozen_expiry_header() -> None:
+    from edge_os_api.research_history.http_clients.http_transport import HttpResponse
+
+    request = specimens.FROZEN_TABLE.get("raw.request_expiry").request
+    http = _FakeHttp(response=HttpResponse(status=200, headers={}, body=b"{}"))
+    transport = _transport(http, request_expiry_ms=1_700_000_000_000, wall_clock_ms=lambda: 1_600_000_000_000)
+    transport.send(request)
+    assert http.calls[0]["headers"]["privy-request-expiry"] == "1792000000000"
+
+
+def test_transport_failures_have_no_context() -> None:
+    request = specimens.FROZEN_TABLE.get("raw.baseline").request
+
+    def failing(payload):  # noqa: ANN001
+        raise ValueError(f"canary {CANARY}")
+
+    cases = [
+        (_transport(_FakeHttp(), authorize=failing), TransportRefused),
+        (_transport(_FakeHttp(error=TimeoutError(CANARY))), TransportLost),
+    ]
+    for transport, expected in cases:
+        with pytest.raises(expected) as caught:
+            transport.send(request)
+        assert caught.value.__context__ is None
+        assert caught.value.__cause__ is None
+        assert CANARY not in repr(caught.value)
+        assert CANARY not in str(caught.value)

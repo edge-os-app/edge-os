@@ -38,6 +38,34 @@ _APP_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,256}")
 _SIGNATURE = re.compile(r"[A-Za-z0-9+/=,]+")
 _EXPIRY = re.compile(r"[1-9][0-9]*")
+_RPC_URL = re.compile(r"https://api\.privy\.io/v1/wallets/([A-Za-z0-9_-]{1,128})/rpc")
+_ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
+_DATA = re.compile(r"0x(?:[0-9a-fA-F]{2})*")
+TRANSACTION_FIELDS = frozenset({"type", "chain_id", "nonce", "to", "value", "data", "gas_limit",
+                                "max_fee_per_gas", "max_priority_fee_per_gas"})
+QUANTITY_FIELDS = ("chain_id", "nonce", "value", "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas")
+MAX_SAFE_INTEGER = 2**53 - 1
+
+
+def accepted_request_profile(body: Any) -> bool:
+    """The narrow accepted authorizer profile: exactly one type-2 eth_signTransaction body."""
+    if not isinstance(body, Mapping) or set(body) != {"method", "params"}:
+        return False
+    if body["method"] != "eth_signTransaction":
+        return False
+    params = body["params"]
+    if not isinstance(params, Mapping) or set(params) != {"transaction"}:
+        return False
+    transaction = params["transaction"]
+    if not isinstance(transaction, Mapping) or set(transaction) != TRANSACTION_FIELDS:
+        return False
+    if not _is_int(transaction["type"]) or transaction["type"] != 2:
+        return False
+    for name in QUANTITY_FIELDS:
+        value = transaction[name]
+        if not _is_int(value) or not (1 if name == "chain_id" else 0) <= value <= MAX_SAFE_INTEGER:
+            return False
+    return (_ADDRESS.fullmatch(transaction["to"]) is not None and _DATA.fullmatch(transaction["data"]) is not None)
 
 
 class TransportRefused(Exception):
@@ -87,8 +115,11 @@ class ActualSignOnlyTransport:
             raise ValueError("app_secret must be non-empty printable ASCII without spaces")
         if not isinstance(wallet_id, str) or _WALLET_ID.fullmatch(wallet_id) is None:
             raise ValueError("wallet_id must be 1-128 characters of [A-Za-z0-9_-]")
-        if not isinstance(destination, str) or not destination.startswith("https://") or " " in destination:
-            raise ValueError("destination must be an exact https URL")
+        match = _RPC_URL.fullmatch(destination) if isinstance(destination, str) else None
+        if match is None:
+            raise ValueError("destination must be the exact approved wallet RPC URL")
+        if match.group(1) != wallet_id:
+            raise ValueError("destination wallet id must equal wallet_id")
         if not callable(authorize):
             raise ValueError("authorize must be callable")
         if not isinstance(request_id, str) or _REQUEST_ID.fullmatch(request_id) is None:
@@ -129,6 +160,12 @@ class ActualSignOnlyTransport:
         return (f"ActualSignOnlyTransport(destination={self._destination!r}, "
                 f"max_response_bytes={self._max_response_bytes})")
 
+    def binding(self) -> dict[str, object]:
+        """The non-secret wire identity the runner binds to the approved packet and specimen."""
+        return {"method": "POST", "destination": self._destination, "wallet_id": self._wallet_id,
+                "app_id": self._app_id, "request_id": self._request_id,
+                "request_expiry_ms": self._expiry_ms}
+
     def _stop(self) -> str | None:
         try:
             if self._cancel is not None and self._cancel():
@@ -145,7 +182,9 @@ class ActualSignOnlyTransport:
         """Send the one allowed request and return the raw bounded reply.
 
         Raises ``TransportRefused`` when nothing was sent and ``TransportLost``
-        when a send may have happened. Neither carries provider text.
+        when a send may have happened. Every failure is raised outside its
+        handler with a fixed code, so no provider or authorizer text is retained
+        in ``__cause__`` or ``__context__``.
         """
         if self._used:
             raise TransportRefused("TRANSPORT_ALREADY_USED")
@@ -156,27 +195,44 @@ class ActualSignOnlyTransport:
             raise TransportRefused("DESTINATION_NOT_APPROVED")
         if len(request.body) > REQUEST_BYTES_LIMIT:
             raise TransportRefused("REQUEST_TOO_LARGE")
+        body_object: Any = None
         try:
             body_object = json.loads(request.body.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
-            raise TransportRefused("BODY_INVALID") from None
+            body_object = None
+        if body_object is None:
+            raise TransportRefused("BODY_INVALID")
+        if not isinstance(body_object, dict) or body_object.get("method") != "eth_signTransaction":
+            raise TransportRefused("OPERATION_NOT_APPROVED")
+        if not accepted_request_profile(body_object):
+            raise TransportRefused("REQUEST_PROFILE_UNQUALIFIED")
         if canonical_json(body_object) != request.body:
             raise TransportRefused("BODY_NOT_CANONICAL")
         stop = self._stop()
         if stop is not None:
             raise TransportRefused(stop)
 
+        frozen = {name: value for name, value in request.headers}
+        expiry = frozen.get("privy-request-expiry", self._expiry)
         privy_headers = {"privy-app-id": self._app_id, "privy-idempotency-key": self._request_id,
-                         "privy-request-expiry": self._expiry}
+                         "privy-request-expiry": expiry}
         payload = {"version": 1, "method": "POST", "url": request.url, "body": body_object,
                    "headers": privy_headers}
         given = copy.deepcopy(payload)
         signature: Any = None
+        authorized = True
         try:
             signature = self._authorize(given)
         except Exception:  # noqa: BLE001 - any authorizer failure sends nothing; its text is not kept
-            raise TransportRefused("AUTHORIZATION_FAILED") from None
-        if canonical_json(given) != canonical_json(payload):
+            authorized = False
+        if not authorized:
+            raise TransportRefused("AUTHORIZATION_FAILED")
+        changed = True
+        try:
+            changed = canonical_json(given) != canonical_json(payload)
+        except Exception:  # noqa: BLE001 - a payload the callback made unencodable was changed
+            changed = True
+        if changed:
             raise TransportRefused("AUTHORIZATION_PAYLOAD_CHANGED")
         if (not isinstance(signature, str) or len(signature) > SIGNATURE_LIMIT
                 or _SIGNATURE.fullmatch(signature) is None):
@@ -187,14 +243,22 @@ class ActualSignOnlyTransport:
 
         headers = {"authorization": f"Basic {self._basic}", "content-type": "application/json",
                    "privy-authorization-signature": signature, **privy_headers}
+        response: Any = None
+        refused = False
+        lost = False
         try:
-            return self._http.request(method="POST", url=request.url, headers=headers, body=request.body,
-                                      timeout=self._connect_timeout, deadline=self._deadline,
-                                      max_response_bytes=self._max_response_bytes, cancel=self._cancel)
+            response = self._http.request(method="POST", url=request.url, headers=headers, body=request.body,
+                                          timeout=self._connect_timeout, deadline=self._deadline,
+                                          max_response_bytes=self._max_response_bytes, cancel=self._cancel)
         except HttpProviderError:
-            raise TransportLost("TRANSPORT_REFUSED") from None
+            refused = True
         except Exception:  # noqa: BLE001 - after a possible dispatch every failure keeps the liability
-            raise TransportLost("TRANSPORT_LOST") from None
+            lost = True
+        if refused:
+            raise TransportRefused("TRANSPORT_REFUSED")
+        if lost:
+            raise TransportLost("TRANSPORT_LOST")
+        return response
 
 
 if __name__ == "__main__":

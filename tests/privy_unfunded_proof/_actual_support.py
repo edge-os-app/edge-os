@@ -1,15 +1,19 @@
 """Shared doubles and fixtures for the LOCAL actual proof-runner tests.
 
 Everything here is SYNTHETIC. The test packet and profile exist only to exercise
-the runner machinery; they are never registered in the production code-owned
-registries, and every produced result stays LOCAL_TESTED/UNQUALIFIED.
+the runner machinery; the production code-owned registries are empty in the
+checkout. The helper temporarily injects test entries by patching the module
+registries, which is a test-only mutation of code-owned state. Tests cannot pass
+an approval through the public run signature, and every produced result stays
+LOCAL_TESTED/UNQUALIFIED.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from scripts.privy_unfunded_proof import actual_packet, actual_profile, actual_runner, specimens
@@ -61,6 +65,17 @@ def make_packet(**overrides: Any) -> actual_packet.ActualProofPacket:
     return build_packet(**fields)
 
 
+def expected_binding(packet: actual_packet.ActualProofPacket, specimen_id: str) -> dict[str, object]:
+    return {
+        "method": "POST",
+        "destination": packet.signing_url,
+        "wallet_id": packet.wallet_id,
+        "app_id": packet.app_id,
+        "request_id": packet.attempt_identity_for(specimen_id),
+        "request_expiry_ms": int(packet.auth_header_expiry),
+    }
+
+
 def matched_factory(unsigned: Any, wallet: str) -> Callable[[bytes], SignedDecode]:
     def decode(raw: bytes) -> SignedDecode:
         return SignedDecode(True, (), "sha256:" + hashlib.sha256(raw).hexdigest())
@@ -71,13 +86,6 @@ def matched_factory(unsigned: Any, wallet: str) -> Callable[[bytes], SignedDecod
 def mismatched_factory(unsigned: Any, wallet: str) -> Callable[[bytes], SignedDecode]:
     def decode(raw: bytes) -> SignedDecode:
         return SignedDecode(False, ("SIGNED_CHAINID_MISMATCH",), "sha256:" + hashlib.sha256(raw).hexdigest())
-
-    return decode
-
-
-def failing_factory(unsigned: Any, wallet: str) -> Callable[[bytes], SignedDecode]:
-    def decode(raw: bytes) -> SignedDecode:
-        raise ValueError("decoder failure canary")
 
     return decode
 
@@ -115,10 +123,13 @@ def code_reply(status: int, code: str) -> Reply:
 
 
 class RecordingTransport:
-    def __init__(self, reply: Reply | None = None, error: BaseException | None = None) -> None:
+    def __init__(self, reply: Reply | None = None, error: BaseException | None = None,
+                 binding: dict | None = None) -> None:
         self.reply = reply
         self.error = error
         self.requests: list = []
+        if binding is not None:
+            self.binding = lambda: dict(binding)
 
     def send(self, request):  # noqa: ANN001
         self.requests.append(request)
@@ -127,10 +138,20 @@ class RecordingTransport:
         return self.reply
 
 
-def registries(specimen_id: str, *, decoder_factory=matched_factory, codes=None):
-    profile_name = specimen_id.split(".")[0]
-    profile = make_profile(profile_name, decoder_factory=decoder_factory, codes=codes)
-    return {f"test.{profile_name}": profile}, f"test.{profile_name}"
+@contextmanager
+def injected(packet: actual_packet.ActualProofPacket, profiles: dict,
+             type4_authorities=None) -> Iterator[None]:  # noqa: ANN001
+    saved = (actual_packet.CODE_OWNED_PACKET_APPROVALS, actual_profile.QUALIFIED_ACTUAL_PROFILES,
+             actual_packet.CODE_OWNED_TYPE4_AUTHORITIES)
+    actual_packet.CODE_OWNED_PACKET_APPROVALS = {packet.packet_id: packet}
+    actual_profile.QUALIFIED_ACTUAL_PROFILES = dict(profiles)
+    if type4_authorities is not None:
+        actual_packet.CODE_OWNED_TYPE4_AUTHORITIES = type4_authorities
+    try:
+        yield
+    finally:
+        (actual_packet.CODE_OWNED_PACKET_APPROVALS, actual_profile.QUALIFIED_ACTUAL_PROFILES,
+         actual_packet.CODE_OWNED_TYPE4_AUTHORITIES) = saved
 
 
 def run_actual(
@@ -139,20 +160,28 @@ def run_actual(
     transport,
     *,
     packet: actual_packet.ActualProofPacket | None = None,
-    approvals=None,  # noqa: ANN001
-    profiles=None,  # noqa: ANN001
+    profile: QualifiedActualProfile | None = None,
+    profile_id: str | None = None,
     decoder_factory=matched_factory,
     codes=None,
     table=specimens.FROZEN_TABLE,
     type4_authority_id: str | None = None,
     type4_authorities=None,  # noqa: ANN001
+    profiles_override: dict | None = None,
     now_epoch: int = NOW,
     started_at_epoch: int = NOW,
+    inject: bool = True,
+    auto_binding: bool = True,
 ):
     packet = packet if packet is not None else make_packet()
-    default_profiles, profile_id = registries(specimen_id, decoder_factory=decoder_factory, codes=codes)
-    return actual_runner.run_actual_specimen(
-        specimen_id,
+    profile_name = specimen_id.split(".")[0]
+    if profile is None:
+        profile = make_profile(profile_name, decoder_factory=decoder_factory, codes=codes)
+    if profile_id is None:
+        profile_id = f"test.{profile.profile}"
+    if auto_binding and getattr(transport, "binding", None) is None:
+        transport.binding = lambda: expected_binding(packet, specimen_id)
+    call = dict(
         store=AttemptStore(store_dir),
         transport=transport,
         packet_id=packet.packet_id,
@@ -162,10 +191,12 @@ def run_actual(
         started_at_epoch=started_at_epoch,
         table=table,
         type4_authority_id=type4_authority_id,
-        approvals={packet.packet_id: packet} if approvals is None else approvals,
-        profiles=default_profiles if profiles is None else profiles,
-        type4_authorities=type4_authorities,
     )
+    profiles = {profile_id: profile} if profiles_override is None else profiles_override
+    if inject:
+        with injected(packet, profiles, type4_authorities):
+            return actual_runner.run_actual_specimen(specimen_id, **call)
+    return actual_runner.run_actual_specimen(specimen_id, **call)
 
 
 def allow_baseline(store_dir, profile: str = "raw", **kwargs) -> None:  # noqa: ANN001
