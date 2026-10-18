@@ -146,8 +146,15 @@ describe("preparation copy follows the configured interpreter", () => {
 
   it("keeps the fixture interpreter clearly a fixture and not a paid call", async () => {
     render(<ResearchHome userId="user-1" {...props} />);
-    await waitFor(() => expect(mocks.interpreter).toHaveBeenCalled());
     await waitFor(() => expect(note()).toMatch(/fixture/i));
+    expect(note()).not.toMatch(/\bfree\b/i);
+    expect(note()).not.toMatch(/may incur a model cost/i);
+  });
+
+  it("keeps the local fake provider clearly not a real model call", async () => {
+    mocks.interpreter.mockResolvedValue({ interpreter: { kind: "HERMES_LOCAL_FAKE_PROVIDER", id: "x", notice: "local fake notice" }, samples: mocks.samples });
+    render(<ResearchHome userId="user-1" {...props} />);
+    await waitFor(() => expect(note()).toMatch(/local fake provider/i));
     expect(note()).not.toMatch(/\bfree\b/i);
     expect(note()).not.toMatch(/may incur a model cost/i);
   });
