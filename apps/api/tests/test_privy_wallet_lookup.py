@@ -987,27 +987,32 @@ def test_reader_keeps_one_outstanding_connector_and_further_reads_fail_unknown(m
     monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.2)
     reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
 
-    threads_before = _threading.active_count()
+    def _non_timer_threads() -> int:
+        # The product arms one daemon `threading.Timer` watchdog per read; that legitimate thread must not be
+        # counted here, or the check fails on scheduler timing (A3 gate flag, test_privy_wallet_lookup.py:997).
+        return sum(1 for t in _threading.enumerate() if not isinstance(t, _threading.Timer))
+
+    threads_before = _non_timer_threads()
     connector = None
     try:
         assert reader(DID) is None  # gives up at the deadline; the one connector is still blocked
         assert len(made) == 1
         connector = made[0]
         assert connector.entered.wait(2.0)
-        assert _threading.active_count() <= threads_before + 1  # exactly the one connector thread
+        assert _non_timer_threads() <= threads_before + 1  # exactly the one connector thread
 
         for _ in range(3):
             assert reader(ADDR) is None  # further reads answer UNKNOWN while the connect is outstanding
         assert len(made) == 1  # no new connector work was started
-        assert _threading.active_count() <= threads_before + 1
+        assert _non_timer_threads() <= threads_before + 1
 
         connector.release.set()  # the late connector may now finish
         stop = _time.monotonic() + 3.0  # harness scheduler tolerance, not a product budget
-        while _threading.active_count() > threads_before and _time.monotonic() < stop:
+        while _non_timer_threads() > threads_before and _time.monotonic() < stop:
             _time.sleep(0.01)
         assert connector.closed is True  # a connector finishing after UNKNOWN is explicitly closed
         assert connector.requests == []  # and never sends an HTTP request
-        assert _threading.active_count() <= threads_before  # no leftover connector thread
+        assert _non_timer_threads() <= threads_before  # no leftover connector thread
     finally:
         if connector is not None:
             connector.release.set()  # always release the owned thread, even on assertion failure
