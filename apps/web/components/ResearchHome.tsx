@@ -18,6 +18,31 @@ const sameForm = (a: { text: string; kind: string; restrictions: string[]; useMa
   a.text === b.text && a.kind === b.kind && a.useMarket === b.useMarket
   && a.restrictions.length === b.restrictions.length && a.restrictions.every((r, i) => r === b.restrictions[i]);
 
+// The preparation words follow the configured interpreter. A live release can charge for the model call, so it
+// never says the preparation is free. A fixture or local-fake interpreter stays labelled as one. Until the
+// interpreter answers, the words stay neutral and claim neither a cost nor a fixture.
+type RuntimeClass = "LIVE" | "FIXTURE" | "LOCAL_FAKE" | "UNKNOWN";
+
+function runtimeClass(kind: string | null): RuntimeClass {
+  if (kind === "HERMES_LIVE_RELEASE") return "LIVE";
+  if (kind === "FIXTURE") return "FIXTURE";
+  if (kind === "HERMES_LOCAL_FAKE_PROVIDER") return "LOCAL_FAKE";
+  return "UNKNOWN";
+}
+
+const PREPARATION_NOTE: Record<RuntimeClass, string> = {
+  LIVE: "Preparing sends your words to the configured model interpreter. That call may incur a model cost. "
+    + "It does not start a study or authorize a trade. We keep your words and restrictions, ask only what is "
+    + "missing, then show the rules for review.",
+  FIXTURE: "Preparing uses the fixture interpreter, which calls no model. It does not start a study or authorize "
+    + "a trade. We keep your words and restrictions, ask only what is missing, then show the rules for review.",
+  LOCAL_FAKE: "Preparing uses the local fake provider, which calls no real model. It does not start a study or "
+    + "authorize a trade. We keep your words and restrictions, ask only what is missing, then show the rules "
+    + "for review.",
+  UNKNOWN: "Preparing saves your words and restrictions and shows the rules for review. It does not start a study "
+    + "or authorize a trade.",
+};
+
 export function ResearchHome({ userId, go, consumeReturn }: { userId: string | null; go: (hash: string, from?: string) => void; consumeReturn: () => string | null }) {
   const heading = useRef<HTMLHeadingElement>(null);
   const formId = useId();
@@ -28,7 +53,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   const [useMarket, setUseMarket] = useState(false);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [fixtureNotice, setFixtureNotice] = useState("");
-  const [fixtureKind, setFixtureKind] = useState("FIXTURE");
+  const [runtimeKind, setRuntimeKind] = useState<string | null>(null);
   const [samplesError, setSamplesError] = useState(false);
   type FormState = { text: string; kind: InputClass; restrictions: string[]; useMarket: boolean };
   const [undoExample, setUndoExample] = useState<FormState | null>(null);
@@ -41,6 +66,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   const [submitError, setSubmitError] = useState(""); // a failed request, shown beside the button
   const submitMessage = useRef<HTMLParagraphElement>(null);
   const job = KINDS.find((k) => k.id === kind)!.job;
+  const fixtureKind = runtimeKind ?? "FIXTURE";
 
   // Focus returns to the control that opened the request. The saved list loads after mount, so wait for it,
   // and never take focus from a field the person has already moved to.
@@ -89,7 +115,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
 
   useEffect(() => {
     let cancelled = false;
-    api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); setFixtureKind(r.interpreter.kind); } })
+    api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); setRuntimeKind(r.interpreter.kind); } })
       .catch(() => { if (!cancelled) setSamplesError(true); });
     void loadList(true);
     return () => { cancelled = true; };
@@ -226,7 +252,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
 
         <div className="btn-row">
           <button id="start-request" className="btn btn-primary" type="submit" aria-disabled={busy || undefined}>{busy ? "Saving your words…" : "Prepare request"}</button>
-          <span className="muted" style={{ flex: "1 1 260px" }}>Preparing is free. We keep your words and restrictions, ask only what is missing, then show the rules for review. No study runs in this build.</span>
+          <span className="muted" style={{ flex: "1 1 260px" }}>{PREPARATION_NOTE[runtimeClass(runtimeKind)]}</span>
         </div>
         {submitError ? <p role="alert" className="status err" ref={submitMessage} tabIndex={-1}>{submitError}</p> : null}
       </form>
