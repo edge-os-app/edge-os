@@ -127,16 +127,20 @@ def _refused(detail: str) -> ReleaseRefused:
 
 
 def check_definition(kind: str, history: HistoryRelease) -> None:
-    """Validate a release's optional binding definition. Pure: no credential, file write or request. Raises
-    `ReleaseRefused` with a stable code; a release without the field is unchanged."""
+    """Validate a release binding before effects. Pure: no credential, file write or request. Raises
+    `ReleaseRefused` with a stable code; the field remains optional for STAND_IN."""
     value = history.provider_facts.get(BINDING_FACT)
     if value is None:
+        if kind == "ACTUAL":
+            raise ReleaseRefused("forward_history_binding_not_admitted", "ACTUAL history needs a complete /2 binding")
         return
     actual = kind == "ACTUAL"
     if kind not in ("STAND_IN", "ACTUAL"):
         raise ReleaseRefused("forward_history_binding_not_admitted",
-                             "a forward history binding is admitted only on a local stand-in release")
+                             "a forward history binding requires a supported release kind")
     if actual:
+        if isinstance(value, Mapping) and set(value) == {"handoff_json", "handoff_sha256"}:
+            raise ReleaseRefused("forward_history_binding_not_admitted", "legacy binding evidence cannot bind ACTUAL")
         _check_actual_definition(value, history)
         return
     if (not isinstance(value, Mapping) or set(value) != {"handoff_json", "handoff_sha256"}
@@ -194,6 +198,11 @@ def _check_actual_definition(value: Any, history: HistoryRelease) -> None:
         module.check_artifacts(h_body, p_body, {**value, "recorder_attempt_id": h.get("attempt_id")})
     except (module.PayloadError, UnicodeError, AttributeError):
         raise _refused("the ACTUAL artifact graph is incomplete or contradictory") from None
+    if h["status"] != "COMPLETED" or h["clock"]["trusted"] is not True or any(
+            bucket["status"] != "DELIVERED" for bucket in h["buckets"]):
+        raise _refused("ACTUAL admission requires complete delivery evidence and a trusted clock")
+    if h["scan"] is None:
+        raise _refused("ACTUAL admission requires the complete recorded scan")
     profile = history.profile
     window = (profile.get("dataset") or {}).get("window") or {}
     roles = {token.get("role"): token.get("address") for token in profile.get("pool_tokens", [])}

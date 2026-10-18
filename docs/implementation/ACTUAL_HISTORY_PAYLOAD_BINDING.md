@@ -84,7 +84,8 @@ and contract assets. Missing or changed checker/helper bytes produce INCOMPLETE.
 The `/2` checker also checks its helper pins for offline use.
 
 `check_release` reaches `_check_history` and `check_definition` before credential reads. ACTUAL admission requires the
-complete `/2` anchor and consistent source, chain, pool, base/quote roles, window, scan and `QUOTE_PER_BASE` orientation.
+complete `/2` anchor, completed delivery under a trusted clock, and consistent source, chain, pool, base/quote roles,
+window, scan and `QUOTE_PER_BASE` orientation. Missing ACTUAL anchors refuse before effects.
 Generic code checks the supplied identities. It hardcodes no token market. For the accepted MOE/WMON direction, pool
 order remains token0 WMON and token1 MOE, while MOE is BASE and WMON is QUOTE. P02 token order stays `[base, quote]`.
 The public release binding view retains exactly the handoff hash and evidence class. Validation prevents malformed
@@ -121,3 +122,5 @@ partial file writes, strict nested schemas, actual admission, saved reruns, chec
 public-view compatibility. Legacy recorder/checker tests remain required. The application loopback check, enabled
 transport receipt loopback checks, PostgreSQL saved pipeline/restart checks, real Docker context and selected-image
 runtime checks require their separate resource grants. An unrun boundary remains required proof.
+
+Job admission rechecks the ACTUAL graph and executed checker before reservation and before worker credentials. It recomputes the release digest and compares it with both the composed and frozen release identities. A different valid graph needs a new declaration. STAND_IN and Nansen-only admission keep their existing behavior.

@@ -99,3 +99,78 @@ def test_actual_consumer_rereads_saved_rows_and_rejects_rehashed_mutation(persis
     with pytest.raises(AppError) as caught:
         consumer(factory, owner, dataset)
     assert caught.value.code == "payload_binding_mismatch"
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("missing-anchor", "forward_history_binding_not_admitted"),
+    ("changed-checker", "forward_history_checker_unavailable"),
+    ("replacement-graph", "operating_release_changed"),
+])
+def test_actual_job_boundary_refuses_before_reservation_and_worker_effects(settings, owner_a, monkeypatch,
+                                                                          mutation, reason):
+    # AUTHORED TEST graph: this case proves effect ordering, not provider provenance or payload collection.
+    import json
+    from dataclasses import replace
+    from fastapi.testclient import TestClient
+    import forward_history_stand_in as bound
+    from edge_os_api.core.research import operating_release
+    from edge_os_api.core.research.operating_release import BINDING_FACT
+    from edge_os_api.core.research.released_source_runtime import open_released_runtime
+    from edge_os_api.main import create_app
+    from edge_os_api.research_history.http_clients import StdlibHttpTransport
+    from test_actual_binding_admission import authored_actual_history
+    from test_saved_history_payload_binding import counts, job_view, rows, started, worker
+    from tests.test_history_payload_binding_v2 import reanchor
+
+    class NoEffects:
+        def __init__(self):
+            self.reads, self.requests = [], []
+
+        def read(self, slot):
+            self.reads.append(slot)
+            raise AssertionError("refused ACTUAL job must not read credentials")
+
+        def request(self, *args, **kwargs):
+            self.requests.append((args, kwargs))
+            raise AssertionError("refused ACTUAL job must not send")
+
+    effects = NoEffects()
+    history = replace(bound.bound_release(nansen=False).history, envio_endpoint="https://hypersync.example.com",
+                      quicknode_host="quicknode.example.com")
+    release = operating_release.OperatingRelease("authored-boundary-actual/2", "ACTUAL",
+                                                history=authored_actual_history(history))
+    monkeypatch.setattr(operating_release, "APPROVED_RELEASES", {
+        release.release_id: operating_release.release_sha256(release)})
+    runtime = open_released_runtime(settings, release, credentials=effects, http_transport=StdlibHttpTransport)
+    monkeypatch.setattr(StdlibHttpTransport, "request", effects.request)
+    with TestClient(create_app(settings, research_runtime=runtime)) as client:
+        intake, declaration, _ = bound.declare(client, owner_a, runtime.release.history.limits)
+        queued = started(client, owner_a, runtime)
+        before_budget = client.get("/v1/research/budget", headers=owner_a).json()
+        before_counts = counts(client)
+        reservations = rows(client, "select count(*) n from usage_local.usage_reservations")[0]["n"]
+        if mutation == "missing-anchor":
+            monkeypatch.delitem(runtime.release.history.provider_facts, BINDING_FACT)
+        elif mutation == "changed-checker":
+            monkeypatch.setattr(binding, "CHECKER_SHA256_V2", "b" * 64)
+        else:
+            anchor = runtime.release.history.provider_facts[BINDING_FACT]
+            h = json.loads(anchor["handoff_json"])
+            h["evidence_notice"] = "Different internally valid AUTHORED TEST graph"
+            replacement, _ = reanchor(anchor, {}, handoff=h)
+            monkeypatch.setitem(runtime.release.history.provider_facts, BINDING_FACT, replacement)
+            _check_history("ACTUAL", runtime.release.history)
+        from research_flows import jobs_path
+        refused = client.post(jobs_path(intake, declaration), headers=owner_a,
+                              json={"operation_id": str(uuid.uuid4()), "request_key": f"invalid-{uuid.uuid4()}"})
+        assert (refused.status_code, refused.json()["code"]) == (409, reason)
+        assert counts(client) == before_counts
+        assert rows(client, "select count(*) n from usage_local.usage_reservations")[0]["n"] == reservations
+        assert client.get("/v1/research/budget", headers=owner_a).json() == before_budget
+        worker(client, runtime).run_job(uuid.UUID(queued))
+        saved = job_view(client, owner_a, queued)
+        assert (saved["state"], saved["terminal_reason"]) == ("UNAVAILABLE", reason)
+        assert saved["budget"]["released"]["provider_requests"] == runtime.release.history.limits["provider_requests"]
+        assert saved["budget"]["unknown_liability"] == {"provider_requests": 0, "compute_seconds": 0}
+        assert "ATTEMPT_STARTED" not in [event["kind"] for event in saved["events"]]
+    assert effects.reads == effects.requests == []

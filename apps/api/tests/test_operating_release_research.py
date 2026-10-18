@@ -34,6 +34,8 @@ from edge_os_api.research_history.http_clients import HttpResponse, StdlibHttpTr
 from flows import compiled_thesis, publish, submit
 from research_flows import adoption_body, declare, history_body, history_replay_body, investigation_request, jobs_path
 
+from test_actual_binding_admission import authored_actual_history
+
 SOURCE = stand_in.SOURCE_ID
 QUESTION = "Which holder records does MOE return, and what do basic flow records show?"
 
@@ -698,9 +700,9 @@ def test_release_validation_refuses_before_any_credential_read(settings, monkeyp
     for name, (release, kind, transport) in cases.items():
         if kind == "ACTUAL":
             release = operating_release.OperatingRelease(
-                release.release_id, "ACTUAL", history=stand_in.stand_in_release(
+                release.release_id, "ACTUAL", history=authored_actual_history(stand_in.stand_in_release(
                     envio_endpoint="https://hypersync.actual-test.example", quicknode_host="quicknode.actual-test.example",
-                    nansen=False).history)
+                    nansen=False).history))
         with pytest.raises(ReleaseRefused) as refused:
             open_released_runtime(settings, release, credentials=creds, http_transport=transport)
         refusals[name] = refused.value.code
@@ -708,9 +710,9 @@ def test_release_validation_refuses_before_any_credential_read(settings, monkeyp
                         "stand_in_real_host": "stand_in_endpoint_not_local",
                         "unknown_kind": "operating_release_invalid",
                         "limits_too_small": "operating_release_invalid"}
-    actual = operating_release.OperatingRelease("actual-test/1", "ACTUAL", history=stand_in.stand_in_release(
+    actual = operating_release.OperatingRelease("actual-test/1", "ACTUAL", history=authored_actual_history(stand_in.stand_in_release(
         envio_endpoint="https://hypersync.actual-test.example", quicknode_host="quicknode.actual-test.example",
-        nansen=False).history)
+        nansen=False).history))
     monkeypatch.setattr(operating_release, "APPROVED_RELEASES",
                         {"actual-test/1": operating_release.release_sha256(actual)})
     with pytest.raises(ReleaseRefused) as refused:  # an approved actual release never runs over a recording
@@ -729,9 +731,9 @@ def test_release_validation_refuses_before_any_credential_read(settings, monkeyp
 
 def test_an_approved_actual_release_lists_actual_labels_and_no_stand_in_can_claim_them(settings, monkeypatch,
                                                                                          owner_a):
-    actual = operating_release.OperatingRelease("actual-test/1", "ACTUAL", history=stand_in.stand_in_release(
+    actual = operating_release.OperatingRelease("actual-test/1", "ACTUAL", history=authored_actual_history(stand_in.stand_in_release(
         envio_endpoint="https://hypersync.actual-test.example", quicknode_host="quicknode.actual-test.example",
-        nansen=False).history)
+        nansen=False).history))
     monkeypatch.setattr(operating_release, "APPROVED_RELEASES",
                         {"actual-test/1": operating_release.release_sha256(actual)})
     creds = stand_in.credentials()
