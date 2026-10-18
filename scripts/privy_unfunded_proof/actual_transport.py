@@ -1,0 +1,203 @@
+"""One-shot bounded sign-only transport for the unfunded actual proof runner.
+
+LOCAL only. This transport sends at most one ``POST`` to one exact approved
+wallet-RPC destination. It reuses the accepted HTTP transport seam
+(``HttpTransport``/``HttpResponse``/``HttpProviderError``) and the accepted
+compact sorted-key ASCII serialization (``canonical_json``). It never retries,
+follows a redirect, renews an expiry or an idempotency key, falls back to
+another endpoint, or issues a policy-administration or cleanup request.
+
+The authorization signature comes from an injected callable (for production,
+``edge_os_api.execution.privy_signer.make_p256_authorizer``). It signs only the
+exact payload this transport builds; if the callback changes that payload the
+transport refuses before HTTP. Construction reads no environment, file or
+network and holds no default host. A second ``send`` on the same transport
+raises and sends nothing: the first call may have produced a signature.
+"""
+
+from __future__ import annotations
+
+import base64
+import copy
+import json
+import math
+import re
+import time
+from collections.abc import Callable, Mapping
+from typing import Any
+
+from edge_os_api.research_history.http_clients.client_config import HttpProviderError
+from edge_os_api.research_history.http_clients.http_transport import HttpResponse, HttpTransport
+from scripts.privy_unfunded_proof.specimens import FrozenRequest, canonical_json, refuse_module_run
+
+REQUEST_BYTES_LIMIT = 65_536
+SIGNATURE_LIMIT = 4_096
+_PRINTABLE = re.compile(r"[\x21-\x7e]+")
+_WALLET_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_APP_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,256}")
+_SIGNATURE = re.compile(r"[A-Za-z0-9+/=,]+")
+_EXPIRY = re.compile(r"[1-9][0-9]*")
+SUPPORTED_HEADERS = frozenset({"privy-app-id", "privy-idempotency-key", "privy-request-expiry"})
+
+
+class TransportRefused(Exception):
+    """Nothing was sent. ``code`` is a fixed string."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+class TransportLost(Exception):
+    """A request may have been sent and its reply did not arrive. ``code`` is fixed."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+class ActualSignOnlyTransport:
+    """One signed ``eth_signTransaction`` request for one approved wallet RPC route."""
+
+    def __init__(
+        self,
+        *,
+        http: HttpTransport,
+        destination: str,
+        wallet_id: str,
+        app_id: str,
+        app_secret: str,
+        authorize: Callable[[Mapping[str, Any]], str],
+        request_id: str,
+        request_expiry_ms: int,
+        connect_timeout_seconds: float,
+        deadline_monotonic: float,
+        max_response_bytes: int,
+        cancel: Callable[[], bool] | None = None,
+        wall_clock_ms: Callable[[], int] = lambda: time.time_ns() // 1_000_000,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if not isinstance(app_id, str) or _APP_ID.fullmatch(app_id) is None:
+            raise ValueError("app_id must be 1-128 characters of [A-Za-z0-9_-]")
+        if not isinstance(app_secret, str) or _PRINTABLE.fullmatch(app_secret) is None:
+            raise ValueError("app_secret must be non-empty printable ASCII without spaces")
+        if not isinstance(wallet_id, str) or _WALLET_ID.fullmatch(wallet_id) is None:
+            raise ValueError("wallet_id must be 1-128 characters of [A-Za-z0-9_-]")
+        if not isinstance(destination, str) or not destination.startswith("https://") or " " in destination:
+            raise ValueError("destination must be an exact https URL")
+        if not callable(authorize):
+            raise ValueError("authorize must be callable")
+        if not isinstance(request_id, str) or _REQUEST_ID.fullmatch(request_id) is None:
+            raise ValueError("request_id must be 1-256 characters of [A-Za-z0-9._:-]")
+        if not _is_int(request_expiry_ms) or request_expiry_ms <= 0:
+            raise ValueError("request_expiry_ms must be a positive integer")
+        if not isinstance(http, HttpTransport):
+            raise ValueError("http must implement the HttpTransport seam")
+        for name, value in (("connect_timeout_seconds", connect_timeout_seconds),
+                            ("deadline_monotonic", deadline_monotonic)):
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number")
+        if connect_timeout_seconds <= 0:
+            raise ValueError("connect_timeout_seconds must be positive")
+        if not _is_int(max_response_bytes) or max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be a positive integer")
+        for name, value in (("cancel", cancel), ("wall_clock_ms", wall_clock_ms), ("monotonic", monotonic)):
+            if value is not None and not callable(value):
+                raise ValueError(f"{name} must be callable")
+        self._http = http
+        self._destination = destination
+        self._wallet_id = wallet_id
+        self._app_id = app_id
+        self._basic = base64.b64encode(f"{app_id}:{app_secret}".encode("ascii")).decode("ascii")
+        self._secrets = (app_secret, self._basic)
+        self._authorize = authorize
+        self._request_id = request_id
+        self._expiry_ms = request_expiry_ms
+        self._expiry = str(request_expiry_ms)
+        self._connect_timeout = connect_timeout_seconds
+        self._deadline = deadline_monotonic
+        self._max_response_bytes = max_response_bytes
+        self._cancel = cancel
+        self._wall_clock_ms = wall_clock_ms
+        self._monotonic = monotonic
+        self._used = False
+
+    def __repr__(self) -> str:
+        return (f"ActualSignOnlyTransport(destination={self._destination!r}, "
+                f"max_response_bytes={self._max_response_bytes})")
+
+    def _stop(self) -> str | None:
+        try:
+            if self._cancel is not None and self._cancel():
+                return "CANCELLED"
+            if self._monotonic() >= self._deadline:
+                return "DEADLINE_PASSED"
+            if self._wall_clock_ms() >= self._expiry_ms:
+                return "REQUEST_EXPIRED"
+        except Exception:  # noqa: BLE001 - a failing stop check before send sends nothing
+            return "STOP_CHECK_FAILED"
+        return None
+
+    def send(self, request: FrozenRequest) -> HttpResponse:
+        """Send the one allowed request and return the raw bounded reply.
+
+        Raises ``TransportRefused`` when nothing was sent and ``TransportLost``
+        when a send may have happened. Neither carries provider text.
+        """
+        if self._used:
+            raise TransportRefused("TRANSPORT_ALREADY_USED")
+        self._used = True
+        if request.http_method != "POST":
+            raise TransportRefused("METHOD_NOT_APPROVED")
+        if request.url != self._destination:
+            raise TransportRefused("DESTINATION_NOT_APPROVED")
+        if len(request.body) > REQUEST_BYTES_LIMIT:
+            raise TransportRefused("REQUEST_TOO_LARGE")
+        try:
+            body_object = json.loads(request.body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise TransportRefused("BODY_INVALID") from None
+        if canonical_json(body_object) != request.body:
+            raise TransportRefused("BODY_NOT_CANONICAL")
+        stop = self._stop()
+        if stop is not None:
+            raise TransportRefused(stop)
+
+        privy_headers = {"privy-app-id": self._app_id, "privy-idempotency-key": self._request_id,
+                         "privy-request-expiry": self._expiry}
+        payload = {"version": 1, "method": "POST", "url": request.url, "body": body_object,
+                   "headers": privy_headers}
+        given = copy.deepcopy(payload)
+        signature: Any = None
+        try:
+            signature = self._authorize(given)
+        except Exception:  # noqa: BLE001 - any authorizer failure sends nothing; its text is not kept
+            raise TransportRefused("AUTHORIZATION_FAILED") from None
+        if canonical_json(given) != canonical_json(payload):
+            raise TransportRefused("AUTHORIZATION_PAYLOAD_CHANGED")
+        if (not isinstance(signature, str) or len(signature) > SIGNATURE_LIMIT
+                or _SIGNATURE.fullmatch(signature) is None):
+            raise TransportRefused("AUTHORIZATION_INVALID")
+        stop = self._stop()
+        if stop is not None:
+            raise TransportRefused(stop)
+
+        headers = {"authorization": f"Basic {self._basic}", "content-type": "application/json",
+                   "privy-authorization-signature": signature, **privy_headers}
+        try:
+            return self._http.request(method="POST", url=request.url, headers=headers, body=request.body,
+                                      timeout=self._connect_timeout, deadline=self._deadline,
+                                      max_response_bytes=self._max_response_bytes, cancel=self._cancel)
+        except HttpProviderError:
+            raise TransportLost("TRANSPORT_REFUSED") from None
+        except Exception:  # noqa: BLE001 - after a possible dispatch every failure keeps the liability
+            raise TransportLost("TRANSPORT_LOST") from None
+
+
+if __name__ == "__main__":
+    refuse_module_run()
