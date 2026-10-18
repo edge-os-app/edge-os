@@ -213,3 +213,76 @@ def test_the_legacy_fixture_caller_supplies_no_release_and_restores_the_register
         assert operating_release.APPROVED_RELEASES == {RELEASE_ID: RELEASE_SHA256}
     assert released_runtime_bootstrap.server_research_runtime(SETTINGS) is not None  # restored on exit
     assert environ.lookups == [] and no_sockets == []
+
+
+def test_the_default_refuses_but_the_fixture_helper_passes_the_authored_mode_check(
+        monkeypatch: pytest.MonkeyPatch, environ: RecordingEnviron, no_sockets: list[Any]) -> None:
+    from edge_os_api import main
+    from edge_os_api.core.settings import ConfigError
+
+    import harness
+
+    settings = SimpleNamespace(env="local", interpreter="fixture", nansen_research_mode="authored_fixture",
+                               database_url="postgresql+psycopg://postgres:fake@127.0.0.1:1/edge_os_test_fixture",
+                               database_statement_timeout_ms=1000)
+    with pytest.raises(ConfigError, match="research_runtime"):
+        main.create_app(settings)  # the default composes the registered release and the mode refuses it
+
+    class _EngineReached(BaseException):
+        pass
+
+    real = released_runtime_bootstrap.server_research_runtime
+
+    def sentinel(*args: Any, **kwargs: Any) -> None:
+        raise _EngineReached()
+
+    monkeypatch.setattr(main, "make_engine", sentinel)
+    with pytest.raises(_EngineReached):
+        harness.create_app_fixture(settings)  # passes the mode check and reaches the engine sentinel
+    assert released_runtime_bootstrap.server_research_runtime is real  # restored after the exception
+    assert not set(environ.lookups) & {"HYPERSYNC_API_KEY", "QUICKNODE_API_URL", "NANSEN_API_KEY"}
+    assert no_sockets == []
+
+
+def test_the_fixture_helper_forwards_settings_and_runner_and_restores_on_exception(
+        monkeypatch: pytest.MonkeyPatch, environ: RecordingEnviron, no_sockets: list[Any]) -> None:
+    from edge_os_api import main
+
+    import harness
+
+    settings = SimpleNamespace(env="local", interpreter="hermes_local", nansen_research_mode="unavailable")
+    runner = object()
+    recorded: dict[str, Any] = {}
+    real = released_runtime_bootstrap.server_research_runtime
+
+    class _EngineReached(BaseException):
+        pass
+
+    def recording(settings_arg: Any, **kwargs: Any) -> None:
+        recorded.update({"settings": settings_arg,
+                         "override_active": released_runtime_bootstrap.server_research_runtime is not real, **kwargs})
+        raise _EngineReached()
+
+    monkeypatch.setattr(main, "create_app", recording)
+    with pytest.raises(_EngineReached):
+        harness.create_app_fixture(settings, hermes_runner=runner)
+    assert recorded["settings"] is settings and recorded["hermes_runner"] is runner
+    assert recorded["override_active"] is True
+    assert released_runtime_bootstrap.server_research_runtime is real
+    assert not set(environ.lookups) & {"HYPERSYNC_API_KEY", "QUICKNODE_API_URL", "NANSEN_API_KEY"}
+    assert no_sockets == []
+
+
+def test_every_inherited_authored_launcher_selects_the_fixture_composition() -> None:
+    import harness
+
+    root = harness.REPO
+    for relative in ("scripts/p03/runtime_phase.py", "scripts/p03/p05_phase.py",
+                     "scripts/p03/hermes_app_mount_phase.py"):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert 'factory="harness:create_app_fixture"' in text, relative
+        assert "app_dir=harness.P03_DIR" in text, relative
+    for relative in ("scripts/hermes_interpretation/serve_local.py",
+                     "scripts/hermes_app_mount/serve_transport_mount.py"):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "harness.create_app_fixture(" in text, relative

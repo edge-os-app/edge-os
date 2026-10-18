@@ -298,12 +298,15 @@ def no_registered_release() -> Any:
         released_runtime_bootstrap.server_research_runtime = real
 
 
-def create_app_fixture(settings: Any = None) -> Any:
-    """uvicorn factory for the verifier's no-release fixture API (target `harness:create_app_fixture`)."""
+def create_app_fixture(settings: Any = None, **kwargs: Any) -> Any:
+    """Fixture factory for the verifier's no-release API (uvicorn target `harness:create_app_fixture`).
+
+    It forwards the exact supplied settings and runner kwargs to `create_app` inside the scoped no-release override, and
+    the override is restored on return or exception."""
     from edge_os_api.main import create_app
 
     with no_registered_release():
-        return create_app(settings)
+        return create_app(settings, **kwargs)
 
 
 def start_api(env: dict[str, str], port: int, log_dir: Path, name: str = "api",
