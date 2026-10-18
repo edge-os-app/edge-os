@@ -140,3 +140,29 @@ def test_missing_saved_identity_stays_unknown_without_observer_io(tmp_path, miss
             pytest.fail("malformed saved identity reached the observer")
     result = read_original_receipt(envelope, NoObserver(), binding=binding, synthetic_bindings=approvals)
     assert result.outcome == "SUBMISSION_UNKNOWN"
+
+
+@pytest.mark.parametrize("conflict", ["extra-wallet-asset", "log-transaction-index"])
+def test_unsupported_wallet_effects_or_conflicting_log_identity_stay_unknown(tmp_path, conflict):
+    import copy
+    envelope, binding, approvals, receipt = submitted_original(tmp_path)
+    if conflict == "extra-wallet-asset":
+        extra = copy.deepcopy(receipt["logs"][0])
+        extra.update(address="0x" + "99" * 20, logIndex=hex(len(receipt["logs"])))
+        receipt["logs"].append(extra)
+    else:
+        receipt["logs"][0]["transactionIndex"] = "0x1"
+    result = read_original_receipt(envelope, Observer(receipt), binding=binding, synthetic_bindings=approvals)
+    assert result.outcome == "SUBMISSION_UNKNOWN"
+    assert result.verdict.actual_gas is None
+
+
+def test_other_parties_transfers_do_not_invent_an_extra_wallet_effect(tmp_path):
+    import copy
+    envelope, binding, approvals, receipt = submitted_original(tmp_path)
+    extra = copy.deepcopy(receipt["logs"][0])
+    extra.update(address="0x" + "99" * 20, logIndex=hex(len(receipt["logs"])))
+    extra["topics"][1:] = ["0x" + "00" * 12 + "77" * 20, "0x" + "00" * 12 + "88" * 20]
+    receipt["logs"].append(extra)
+    result = read_original_receipt(envelope, Observer(receipt), binding=binding, synthetic_bindings=approvals)
+    assert result.outcome == "CONFIRMED"

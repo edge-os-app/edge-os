@@ -113,6 +113,12 @@ class MountedHttp:
                 for i, log in enumerate(result["logs"])]
             if self.fault == "incomplete-effects":
                 result["logs"] = result["logs"][:1]
+            elif self.fault == "extra-wallet-asset":
+                extra = copy.deepcopy(result["logs"][0])
+                extra.update(address="0x" + "99" * 20, logIndex=hex(len(result["logs"])))
+                result["logs"].append(extra)
+            elif self.fault == "log-transaction-index":
+                result["logs"][0]["transactionIndex"] = "0x1"
         else:
             pytest.fail(f"unexpected fake RPC method {method}")
         return HttpResponse(200, {}, json.dumps({"jsonrpc":"2.0", "id":body["id"], "result":result}).encode())
@@ -263,7 +269,7 @@ def test_mounted_original_and_restart_reconcile_without_credentials(mounted):
     assert case.http.count("eth_signTransaction") == case.http.count("eth_sendRawTransaction") == 1
 
 
-@pytest.mark.parametrize("fault", ["lost-sign", "malformed-sign", "lost-send", "bad-canonical", "incomplete-effects"])
+@pytest.mark.parametrize("fault", ["lost-sign", "malformed-sign", "lost-send", "bad-canonical", "incomplete-effects", "extra-wallet-asset", "log-transaction-index"])
 def test_mounted_uncertainty_keeps_reservations_and_never_repeats_sign_or_send(mounted, fault):
     case = mounted; case.http.fault = fault
     job = submit(case)

@@ -617,10 +617,12 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient, *,
                 finalized_block=finalized, evidence_class=envelope["evidence_class"], finality_qualified=False,
                 binding=binding, synthetic_bindings=synthetic_bindings)
             logs = receipt["logs"]
-            indices = [log["logIndex"] for log in logs]
-            logs_bound = (isinstance(logs, list) and len(set(indices)) == len(indices)
-                and all(log.get("removed") is False and hex_quantity(log["logIndex"]) is not None
-                    and all(log.get(key) == receipt.get(key) for key in ("transactionHash", "blockHash", "blockNumber"))
+            indices = [hex_quantity(log["logIndex"]) for log in logs]
+            logs_bound = (isinstance(logs, list) and None not in indices and len(set(indices)) == len(indices)
+                and hex_quantity(receipt.get("transactionIndex")) is not None
+                and all(_well_formed_log(log) and log.get("removed") is False
+                    and all(log.get(key) == receipt.get(key) for key in (
+                        "transactionHash", "transactionIndex", "blockHash", "blockNumber"))
                     for log in logs))
             if charge.state != "OBSERVED" or not logs_bound:
                 return normalized(ObservationInput(timeout=True))
@@ -640,6 +642,15 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient, *,
     if controlled and receipt.get("status") == "0x1":
         assert binding is not None
         route = binding.release.content()["route"]
+        supported = {sell["token"].lower(), buy["token"].lower()}
+        for log in receipt["logs"]:
+            topics = [item.lower() for item in log["topics"]]
+            if (topics and topics[0] == TRANSFER_TOPIC
+                    and any("0x" + item[-40:] == wallet for item in topics[1:])):
+                if (log["address"].lower() not in supported or len(topics) != 3
+                        or not all(_INDEXED_ADDRESS.fullmatch(item) for item in topics[1:])
+                        or abi_word(log.get("data")) is None):
+                    return normalized(ObservationInput(timeout=True))
         if (spent != int(route["approved_input_raw"]) or received is None
                 or received < int(route["approved_min_output_raw"])
                 or _transfers(receipt, sell["token"], target=wallet) not in (None, 0)
