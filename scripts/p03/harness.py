@@ -9,6 +9,7 @@ Rules (P01 profile, "Isolated instance"):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -31,6 +32,7 @@ WEB_DIR = REPO / "apps" / "web"
 POSTGRES_IMAGE = "postgres:18.6-trixie"
 TEST_APP_ID = "edge-os-test-app"
 LABEL = "edge-os.test=1"
+P03_DIR = Path(__file__).resolve().parent
 
 
 def sh(args: list[str], *, check: bool = True, timeout: int = 120, env: dict[str, str] | None = None
@@ -279,13 +281,40 @@ def migrate(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
                           capture_output=True, text=True, timeout=120)
 
 
-def start_api(env: dict[str, str], port: int, log_dir: Path, name: str = "api") -> Process:
+@contextlib.contextmanager
+def no_registered_release() -> Any:
+    """Fixture-only: compose the app with no operating release for the legacy authored scenario.
+
+    The registered code-owned default composes the approved Nansen release. The authored-transport tests and this
+    verifier run without it, so this scoped override supplies no release for that scenario only. It restores the
+    bootstrap on return or exception and never changes the code-owned registries."""
+    from edge_os_api.core.research import released_runtime_bootstrap
+
+    real = released_runtime_bootstrap.server_research_runtime
+    released_runtime_bootstrap.server_research_runtime = lambda settings: None
+    try:
+        yield
+    finally:
+        released_runtime_bootstrap.server_research_runtime = real
+
+
+def create_app_fixture(settings: Any = None) -> Any:
+    """uvicorn factory for the verifier's no-release fixture API (target `harness:create_app_fixture`)."""
+    from edge_os_api.main import create_app
+
+    with no_registered_release():
+        return create_app(settings)
+
+
+def start_api(env: dict[str, str], port: int, log_dir: Path, name: str = "api",
+              factory: str = "edge_os_api.main:create_app", app_dir: Path | None = None) -> Process:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{name}.log"
     handle = open(log_path, "ab")
-    popen = subprocess.Popen(
-        [api_python(), "-m", "uvicorn", "edge_os_api.main:create_app", "--factory", "--host", "127.0.0.1",
-         "--port", str(port)], cwd=API_DIR, env=env, stdout=handle, stderr=handle, start_new_session=True)
+    command = [api_python(), "-m", "uvicorn", factory, "--factory", "--host", "127.0.0.1", "--port", str(port)]
+    if app_dir is not None:
+        command += ["--app-dir", str(app_dir)]
+    popen = subprocess.Popen(command, cwd=API_DIR, env=env, stdout=handle, stderr=handle, start_new_session=True)
     return Process(name, popen, log_path, handle)
 
 

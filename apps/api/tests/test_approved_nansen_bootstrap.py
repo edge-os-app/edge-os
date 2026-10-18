@@ -197,3 +197,19 @@ def test_a_missing_selected_slot_refuses_at_preparation_before_any_network_and_t
         prepare_nansen(runtime)
     assert refused.value.code == "operating_release_credential_unavailable"
     assert recording.lookups == ["NANSEN_API_KEY"] and no_sockets == []
+
+
+def test_the_legacy_fixture_caller_supplies_no_release_and_restores_the_registered_default(
+        environ: RecordingEnviron, no_sockets: list[Any]) -> None:
+    """The authored-fixture caller chain must run without the registered release; the scoped fixture override supplies
+    no release for that legacy scenario only and restores on exit. The registries are never changed."""
+    import harness  # scripts/p03, on the test path. Its factory helper composes no release.
+
+    assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == {RELEASE_ID}
+    assert released_runtime_bootstrap.server_research_runtime(SETTINGS) is not None  # ordinary default unchanged
+    with harness.no_registered_release():
+        assert released_runtime_bootstrap.server_research_runtime(SETTINGS) is None  # fixture supplies no release
+        assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == {RELEASE_ID}  # registries untouched
+        assert operating_release.APPROVED_RELEASES == {RELEASE_ID: RELEASE_SHA256}
+    assert released_runtime_bootstrap.server_research_runtime(SETTINGS) is not None  # restored on exit
+    assert environ.lookups == [] and no_sockets == []

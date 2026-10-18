@@ -373,7 +373,8 @@ def main() -> int:
         rec.write("alembic-check.log", check.stdout + check.stderr)
         ok &= rec.step("migrations applied; models and migrations agree", migration.returncode == 0 and check.returncode == 0)
 
-        api = harness.start_api(env, api_port, evidence / "logs")
+        api = harness.start_api(env, api_port, evidence / "logs", factory="harness:create_app_fixture",
+                                app_dir=harness.P03_DIR)
         processes.append(api)
         harness.wait_http(f"{api_url}/readyz")
         status, health = http("GET", f"{api_url}/healthz")
@@ -484,7 +485,8 @@ def main() -> int:
                 ok &= rec.step("another owner is denied read and mutation of saved rows (a foreign parent reference is covered by the database test)", denial["all_denied"], denial)
 
                 api.stop()
-                api = harness.start_api(env, api_port, evidence / "logs", name="api-restarted")
+                api = harness.start_api(env, api_port, evidence / "logs", name="api-restarted",
+                                        factory="harness:create_app_fixture", app_dir=harness.P03_DIR)
                 processes.append(api)
                 harness.wait_http(f"{api_url}/readyz")
                 ok &= rec.step("API restarted on the same database", True)
