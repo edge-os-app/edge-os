@@ -5,8 +5,8 @@ authority) against the predecessor read packet ``SOURCE_FACT_PACKET.json`` (sha2
 mechanical amendments and claim limits are in ``docs/qualification/forward-history-recorder/CONTRACT.md``.
 
 A plain CLI invocation validates an input and prints a redacted plan; it reads no credential and sends nothing.
-Network execution exists only as the injected ``run_attempt`` entry: the caller supplies the transport, the clocks and
-the credential source. This ticket authorizes synthetic transports only. P6 (mechanics) is never called here.
+The injected ``run_attempt`` entry stays synthetic. ``run_actual_attempt`` owns one transport construction and writes
+versioned construction evidence. Running it needs separate operator authority. P6 (mechanics) is never called here.
 
 Safety stops end every provider. Other failed reads stay weak evidence and are never retried. Every physical call is
 appended to a private journal with UNKNOWN liability and fsynced before it is sent; an existing attempt is never
@@ -1269,9 +1269,10 @@ def recorder_code_sha256() -> str:
     return digest.hexdigest()
 
 
-def run_attempt(raw_input: Mapping[str, Any], *, transport: HttpTransport, clock: RecorderClock,
-                credentials: Callable[[str], str], cancel: Callable[[], bool] | None = None) -> dict[str, Any]:
-    """Run one attempt through an injected transport. Validates everything before any credential read."""
+def _run_attempt(raw_input: Mapping[str, Any], *, transport: HttpTransport, clock: RecorderClock,
+                credentials: Callable[[str], str], cancel: Callable[[], bool] | None = None,
+                 actual: bool = False) -> dict[str, Any]:
+    """Shared schedule and final writes. The actual wrapper alone supplies the owned transport."""
     value = validate_input(raw_input)
     input_sha256 = hashlib.sha256(canonical_bytes(dict(raw_input))).hexdigest()
     gaps = readiness_gaps(value)
@@ -1304,21 +1305,73 @@ def run_attempt(raw_input: Mapping[str, Any], *, transport: HttpTransport, clock
         for bucket in attempt.buckets:
             attempt._close(bucket, "DESTINATION_MISMATCH")
     handoff = attempt.handoff(input_sha256)
+    if actual:
+        identity = transport_identity(transport)
+        if identity != attempt.wire._binding.identity or identity["construction"] != "OWNED_STDLIB":
+            return {"status": "REFUSED", "code": "forward_history_provenance_injected"}
+        handoff.update(schema_version="edge-os.forward-history-handoff/2", evidence_class="ACTUAL",
+                       requested_evidence_class="ACTUAL", transport=identity,
+                       evidence_notice="Owned transport construction only; not provider authentication or rights.",
+                       claim_limit="Construction and delivery evidence only; not authentication, rights or qualification.")
     body = canonical_bytes(handoff)
     path = directory / "handoff.json"
-    write_exclusive(path, body)
+    try:
+        write_exclusive(path, body)
+    except OSError:
+        if not actual:
+            raise
+        return {"status": "WRITE_FAILED", "code": "forward_history_handoff_missing"}
     handoff_sha256 = hashlib.sha256(body).hexdigest()
     journal.append({"event": "HANDOFF_WRITTEN", "sha256": handoff_sha256})
-    receipts = canonical_bytes(attempt.wire.receipts_document(value["attempt_id"], handoff_sha256))
+    receipts_value = attempt.wire.receipts_document(value["attempt_id"], handoff_sha256)
+    if actual:
+        receipts_value["evidence_class"] = "ACTUAL"
+    receipts = canonical_bytes(receipts_value)
     try:
         write_exclusive(directory / TRANSPORT_RECEIPTS_FILE, receipts)
         receipts_status, receipts_sha256 = "WRITTEN", hashlib.sha256(receipts).hexdigest()
     except OSError:
         # The handoff is already complete. A missing sidecar never changes it and never authorizes a resend.
         receipts_status, receipts_sha256 = "WRITE_FAILED", None
+    if actual:
+        if receipts_status != "WRITTEN":
+            return {"status": "WRITE_FAILED", "code": "forward_history_provenance_missing",
+                    "handoff_sha256": handoff_sha256, "transport_receipts_status": receipts_status}
+        provenance = canonical_bytes({
+            "schema_version": "edge-os.forward-history-provenance/1", "attempt_id": value["attempt_id"],
+            "handoff_sha256": handoff_sha256, "receipts_sha256": receipts_sha256,
+            "recorder_code_sha256": handoff["recorder_code_sha256"], "transport": identity,
+            "receipts_json": receipts.decode("utf-8")})
+        try:
+            write_exclusive(directory / "provenance.json", provenance)
+        except OSError:
+            return {"status": "WRITE_FAILED", "code": "forward_history_provenance_missing",
+                    "handoff_sha256": handoff_sha256, "transport_receipts_sha256": receipts_sha256}
     return {"status": attempt.status, "stop_reason": attempt.stop_reason, "handoff_path": str(path),
             "handoff_sha256": handoff_sha256, "transport_receipts_status": receipts_status,
             "transport_receipts_sha256": receipts_sha256}
+
+
+def run_attempt(raw_input: Mapping[str, Any], *, transport: HttpTransport, clock: RecorderClock,
+                credentials: Callable[[str], str], cancel: Callable[[], bool] | None = None) -> dict[str, Any]:
+    """Run injected evidence through the historical /1 synthetic path."""
+    return _run_attempt(raw_input, transport=transport, clock=clock, credentials=credentials, cancel=cancel)
+
+
+def run_actual_attempt(raw_input: Mapping[str, Any], *, clock: RecorderClock,
+                       credentials: Callable[[str], str], cancel: Callable[[], bool] | None = None) -> dict[str, Any]:
+    """Own exactly one transport and one non-resumable H/R/P write chain. Reads both selected slots at call time."""
+    value = validate_input(raw_input)
+    _require(value["evidence_class"] == "ACTUAL", "ACTUAL_REQUIRED")
+    gaps = readiness_gaps(value)
+    if gaps:
+        return {"status": "NOT_READY", "readiness_gaps": gaps, "sends": 0}
+    transport = owned_stdlib_transport()
+    construction = transport_identity(transport)["construction"]
+    if construction != "OWNED_STDLIB":
+        code = "fixture" if construction == "LOCAL_FIXTURE" else "injected"
+        return {"status": "REFUSED", "code": f"forward_history_provenance_{code}", "sends": 0}
+    return _run_attempt(raw_input, transport=transport, clock=clock, credentials=credentials, cancel=cancel, actual=True)
 
 
 def recover_attempt(directory: Path) -> dict[str, Any]:

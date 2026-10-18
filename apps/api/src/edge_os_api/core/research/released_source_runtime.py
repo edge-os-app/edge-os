@@ -169,8 +169,9 @@ def release_view(runtime: ReleasedSourceRuntime) -> dict[str, Any]:
                            "time_basis": dict(history.time_basis), "required_coverage": history.required_coverage}
         binding = history.provider_facts.get(BINDING_FACT)
         if binding is not None:  # additive: unbound release views are unchanged
-            view["history"]["payload_binding"] = {"handoff_sha256": binding["handoff_sha256"],
-                                                  "evidence_class": "SYNTHETIC"}
+            from edge_os_api.research import history_payload_binding
+
+            view["history"]["payload_binding"] = history_payload_binding.public_definition(runtime.release.kind, history)
     nansen = runtime.release.nansen
     if nansen is not None:
         view["nansen"] = {**nansen_request(nansen), "endpoint_host": endpoint_host(nansen.endpoint),
