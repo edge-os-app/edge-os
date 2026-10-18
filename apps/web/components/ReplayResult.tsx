@@ -4,6 +4,11 @@ import { ReplayBalanceChart } from "./ReplayBalanceChart";
 
 interface Props { replay: SpotReplayRecord }
 
+const KNOWN_SYNTHETIC_CLASSES = new Set([
+  "SYNTHETIC_FIXTURE", "RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE",
+  "AUTHORED_HTTP_RESPONSE", "RELEASE_STAND_IN_RESPONSE",
+]);
+
 function displayUtc(value: string): string {
   const normalized = new Date(value);
   if (Number.isNaN(normalized.valueOf())) return value;
@@ -60,7 +65,11 @@ export function ReplayResult({ replay }: Props) {
         <dt>Replay ID</dt><dd className="mono" data-testid="spot-replay-id">{replay.replay_id}</dd>
         <dt>Saved hash</dt><dd className="mono">{replay.content_sha256}</dd>
         <dt>Evidence</dt><dd>{history
-          ? `${result.evidence_class}. Simulated fills on saved recorded-history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). Not observed market history.`
+          ? `${result.evidence_class}. ${String(result.evidence_class) === "PROVIDER_ACTUAL"
+            ? `Simulated fills on saved provider history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). These prices are saved provider history, not synthetic.`
+            : KNOWN_SYNTHETIC_CLASSES.has(String(result.evidence_class))
+            ? `Simulated fills on saved recorded-history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). Not observed market history.`
+            : `Saved history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}) has an unrecognized evidence class. This view claims neither observed history nor synthetic prices.`}`
           : `${result.evidence_class}. This is an authored fixture, not observed market history.`}</dd>
         <dt>Repeatability</dt><dd className="mono">{result.repeatability_id ?? "Unavailable before replay"}</dd>
       </dl>
