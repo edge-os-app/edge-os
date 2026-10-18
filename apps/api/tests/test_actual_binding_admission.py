@@ -361,3 +361,12 @@ def test_job_admission_rechecks_actual_graph_before_reservation_or_credentials(t
     assert refusal is not None
     assert refusal[0] in {"forward_history_binding_not_admitted", "forward_history_checker_unavailable",
                           "operating_release_changed"}
+
+
+def test_stand_in_public_view_preserves_unavailable_checker_collection_path(monkeypatch):
+    from edge_os_api.core.research.released_source_runtime import release_view
+    runtime, *_ = stand_in.recording_runtime(SimpleNamespace(env="test"), release=stand_in.bound_release(nansen=False))
+    expected_sha = runtime.release.history.provider_facts[BINDING_FACT]["handoff_sha256"]
+    monkeypatch.setattr(binding, "CHECKER_SHA256", "0" * 64)
+    assert release_view(runtime)["history"]["payload_binding"] == {
+        "handoff_sha256": expected_sha, "evidence_class": "SYNTHETIC"}

@@ -216,8 +216,9 @@ def _check_actual_definition(value: Any, history: HistoryRelease) -> None:
 
 
 def public_definition(kind: str, history: HistoryRelease) -> dict[str, str]:
-    """The existing public binding shape, after validating the exact matching artifact version."""
-    check_definition(kind, history)
+    """Keep the legacy public view; revalidate ACTUAL graphs before exposing that class."""
+    if kind == "ACTUAL":
+        check_definition(kind, history)
     value = history.provider_facts[BINDING_FACT]
     return {"handoff_sha256": value["handoff_sha256"], "evidence_class": "ACTUAL" if kind == "ACTUAL" else "SYNTHETIC"}
 
