@@ -262,7 +262,8 @@ def _check_profile_policies(packet: ActualProofPacket) -> None:
         if not _is_identity(policy_id) or not _is_identity(policy_sha):
             raise SpecimenRefused(PROFILE_POLICY_UNBOUND, profile)
         bound += 1
-    if bound != len(PROFILES) or len(set(packet.profile_policies.values())) != len(PROFILES):
+    if (bound != len(PROFILES) or len(set(packet.profile_policies.values())) != len(PROFILES)
+            or len(set(packet.profile_policy_sha256.values())) != len(PROFILES)):
         raise SpecimenRefused(PROFILE_POLICY_NOT_SEPARATED)
 
 
@@ -270,6 +271,11 @@ def _check_matrix(packet: ActualProofPacket, table: SpecimenTable) -> None:
     accepted_ids = {row.specimen_id for row in table.all()}
     if set(packet.specimen_expected) != accepted_ids:
         raise SpecimenRefused(MATRIX_NOT_COVERED, "id-set")
+    # The accepted matrix fixes every expectation except the type-4 placeholder, which a
+    # packet may rebind to a runnable negative control only with owner-bound authority.
+    for row in table.all():
+        if row.expected is not Expected.NOT_RUN and packet.specimen_expected.get(row.specimen_id) != str(row.expected):
+            raise SpecimenRefused(MATRIX_NOT_COVERED, row.specimen_id)
     for specimen_id, expected in packet.specimen_expected.items():
         try:
             Expected(expected)

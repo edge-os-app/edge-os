@@ -211,6 +211,22 @@ def test_profile_policies_not_separated_refused(store_dir: Path) -> None:
     assert caught.value.code == "PROFILE_POLICY_NOT_SEPARATED"
 
 
+def test_profile_policy_hashes_not_separated_refused(store_dir: Path) -> None:
+    packet = make_packet(profile_policy_sha256={"raw": "same", "decoded": "same"})
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.baseline", store_dir, RecordingTransport(success_reply()), packet=packet)
+    assert caught.value.code == "PROFILE_POLICY_NOT_SEPARATED"
+
+
+def test_packet_cannot_rebind_a_denial_to_allow(store_dir: Path) -> None:
+    expected = dict(make_packet().specimen_expected)
+    expected["raw.wrong_chain"] = "ALLOW"
+    packet = make_packet(specimen_expected=expected)
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.baseline", store_dir, RecordingTransport(success_reply()), packet=packet)
+    assert caught.value.code == "MATRIX_NOT_COVERED"
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -272,6 +288,20 @@ def test_profile_construction_requires_qualified() -> None:
         make_profile(qualification="UNQUALIFIED")
     with pytest.raises(ActualProfileUnqualified):
         make_profile(profile="other")
+
+
+def test_profile_rejects_a_non_outcome_value() -> None:
+    with pytest.raises(ActualProfileUnqualified):
+        make_profile(codes={"test_expired": (400, "EXPIRY_REFUSAL", "EXPIRY_REFUSAL")})
+
+
+def test_profile_that_does_not_match_specimen_refused(store_dir: Path) -> None:
+    transport = RecordingTransport(success_reply())
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.baseline", store_dir, transport,
+                   profiles={"test.raw": make_profile("decoded")})
+    assert caught.value.code == "ACTUAL_PROFILE_UNQUALIFIED"
+    assert transport.requests == []
 
 
 def test_accepted_signed_decoder_refuses_garbage() -> None:
@@ -754,6 +784,26 @@ def test_capture_short_write_is_unknown(store_dir: Path, monkeypatch: pytest.Mon
     assert AttemptStore(store_dir).state("raw.baseline") is AttemptState.INTENT_SAVED
 
 
+def test_capture_failure_does_not_hide_breach(store_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    allow_baseline(store_dir)
+
+    def failing_capture(self, specimen_id, record):  # noqa: ANN001
+        raise OSError("capture disk failure")
+
+    monkeypatch.setattr(AttemptStore, "write_capture", failing_capture)
+    result = run_actual("raw.wrong_chain", store_dir, RecordingTransport(success_reply()))
+    assert (result.outcome, result.reason) == (Outcome.BREACH, "ALLOWED_WHERE_DENIAL_REQUIRED")
+
+
+def test_capture_failure_keeps_allow_unqualified(store_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing_capture(self, specimen_id, record):  # noqa: ANN001
+        raise OSError("capture disk failure")
+
+    monkeypatch.setattr(AttemptStore, "write_capture", failing_capture)
+    result = run_actual("raw.baseline", store_dir, RecordingTransport(success_reply()))
+    assert (result.outcome, result.reason) == (Outcome.UNKNOWN, "CAPTURE_FAILED")
+
+
 # ---------------------------------------------------------------- transport
 
 
@@ -801,6 +851,20 @@ def test_transport_sends_once_and_rejects_second_send() -> None:
         transport.send(request)
     assert caught.value.code == "TRANSPORT_ALREADY_USED"
     assert len(http.calls) == 1
+
+
+def test_transport_composes_with_runner(store_dir: Path) -> None:
+    from edge_os_api.research_history.http_clients.http_transport import HttpResponse
+
+    body = success_reply().body
+    http = _FakeHttp(response=HttpResponse(status=200, headers={"content-type": "application/json"}, body=body))
+    transport = _transport(http)
+    result = run_actual("raw.baseline", store_dir, transport)
+    assert result.outcome is Outcome.ALLOW
+    assert len(http.calls) == 1
+    capture = json.loads((store_dir / "raw.baseline.capture.json").read_text())
+    assert capture["media_type"] == "application/json"
+    assert capture["metadata_valid"] is True
 
 
 def test_transport_refuses_wrong_destination() -> None:

@@ -38,7 +38,6 @@ _APP_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,256}")
 _SIGNATURE = re.compile(r"[A-Za-z0-9+/=,]+")
 _EXPIRY = re.compile(r"[1-9][0-9]*")
-SUPPORTED_HEADERS = frozenset({"privy-app-id", "privy-idempotency-key", "privy-request-expiry"})
 
 
 class TransportRefused(Exception):
@@ -114,7 +113,6 @@ class ActualSignOnlyTransport:
         self._wallet_id = wallet_id
         self._app_id = app_id
         self._basic = base64.b64encode(f"{app_id}:{app_secret}".encode("ascii")).decode("ascii")
-        self._secrets = (app_secret, self._basic)
         self._authorize = authorize
         self._request_id = request_id
         self._expiry_ms = request_expiry_ms

@@ -79,8 +79,10 @@ class QualifiedActualProfile:
         for code, entry in self.codes.items():
             if not isinstance(code, str) or len(entry) != 3 or not isinstance(entry[0], int):
                 raise ActualProfileUnqualified("a code entry must be (status, outcome, reason)")
-            if entry[1] not in {outcome.value for outcome in Outcome} and entry[1] not in DENIAL_OUTCOMES:
+            if entry[1] not in {outcome.value for outcome in Outcome}:
                 raise ActualProfileUnqualified(f"unknown outcome {entry[1]!r}")
+            if not isinstance(entry[2], str) or not entry[2]:
+                raise ActualProfileUnqualified("a code entry needs a fixed reason")
         if not callable(self.decoder_factory):
             raise ActualProfileUnqualified("decoder_factory must be callable")
 

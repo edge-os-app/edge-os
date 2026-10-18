@@ -70,6 +70,12 @@ def _hex_bytes(value: object) -> bytes | None:
 def _metadata(reply: object) -> tuple[int | None, str | None, bytes, bool]:
     status = getattr(reply, "status", None)
     content_type = getattr(reply, "content_type", None)
+    if content_type is None:
+        # The accepted HttpTransport seam returns HttpResponse(status, headers, body).
+        headers = getattr(reply, "headers", None)
+        if isinstance(headers, Mapping):
+            content_type = next((value for name, value in headers.items()
+                                 if str(name).lower() == "content-type"), None)
     body = getattr(reply, "body", None)
     status_ok = type(status) is int and 100 <= status <= 599
     type_ok = (
@@ -198,30 +204,53 @@ def _matches(expected: Expected, outcome: Outcome, reason: str) -> bool:
     return outcome.value == expected.value
 
 
-def _classify_success(
+def _success_verdict(
     attempt: _ActualAttempt, data: Mapping[str, Any], unsigned: Mapping[str, Any] | None,
     profile: QualifiedActualProfile,
-) -> RunResult:
+) -> tuple[Outcome, str]:
+    """Classify one success envelope without writing. Used by the normal and failed-capture paths."""
     specimen = attempt.specimen
     signed = _hex_bytes(data.get("signed_transaction"))
     signature = _hex_bytes(data.get("signature"))
     if signed is None and signature is None:
-        return attempt.finish(Outcome.UNKNOWN, "MALFORMED_SUCCESS")
+        return Outcome.UNKNOWN, "MALFORMED_SUCCESS"
     attempt.extra["signed_bytes_sha256"] = hashlib.sha256(
         signed if signed is not None else signature).hexdigest()
     if specimen.expected in _DENIAL_EXPECTATIONS:
-        return attempt.finish(Outcome.BREACH, "ALLOWED_WHERE_DENIAL_REQUIRED")
+        return Outcome.BREACH, "ALLOWED_WHERE_DENIAL_REQUIRED"
     if signed is None or unsigned is None:
-        return attempt.finish(Outcome.UNKNOWN, "MALFORMED_SUCCESS")
+        return Outcome.UNKNOWN, "MALFORMED_SUCCESS"
     try:
         decoded = profile.decoder_factory(unsigned, attempt.packet.wallet_address)(signed)
     except Exception:  # noqa: BLE001 - decoder messages may carry signed bytes; keep a fixed reason
-        return attempt.finish(Outcome.UNKNOWN, "DECODE_FAILED")
+        return Outcome.UNKNOWN, "DECODE_FAILED"
     attempt.extra["signed_bytes_sha256"] = decoded.signed_bytes_sha256
     if not decoded.matched:
         attempt.extra["signed_field_reasons"] = list(decoded.reasons)
-        return attempt.finish(Outcome.BREACH, "SIGNED_FIELDS_MISMATCH")
-    return attempt.finish(Outcome.ALLOW, "SIGNED_FIELDS_MATCH")
+        return Outcome.BREACH, "SIGNED_FIELDS_MISMATCH"
+    return Outcome.ALLOW, "SIGNED_FIELDS_MATCH"
+
+
+def _classify_success(
+    attempt: _ActualAttempt, data: Mapping[str, Any], unsigned: Mapping[str, Any] | None,
+    profile: QualifiedActualProfile,
+) -> RunResult:
+    return attempt.finish(*_success_verdict(attempt, data, unsigned, profile))
+
+
+def _in_memory_success_data(reply: object) -> Mapping[str, Any] | None:
+    """Parse a bounded in-memory success reply without writing, for the failed-capture path."""
+    status, content_type, body, valid = _metadata(reply)
+    if not valid or status != 200 or len(body) > MAX_REPLY_BYTES:
+        return None
+    if content_type is None or content_type.split(";")[0].strip().lower() != "application/json":
+        return None
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return None
+    data = parsed.get("data") if isinstance(parsed, dict) else None
+    return data if isinstance(data, dict) else None
 
 
 def _admit(
@@ -292,6 +321,8 @@ def run_actual_specimen(
     if now_epoch - started_at_epoch > packet.time_ceiling_seconds:
         raise SpecimenRefused("TIME_CEILING_EXCEEDED")
     specimen, request = _admit(specimen_id, packet, store, table, type4_authority_id, type4_authorities)
+    if profile.profile != specimen.profile:
+        raise SpecimenRefused("ACTUAL_PROFILE_UNQUALIFIED", profile_id)
     store.claim_record(specimen_id, {
         "specimen_id": specimen_id,
         "profile": specimen.profile,
@@ -321,6 +352,12 @@ def run_actual_specimen(
         return attempt.finish(Outcome.UNKNOWN, "SEND_FAILED")
     captured = attempt.capture(reply)
     if captured is None:
+        # A failed capture write must not hide a breach-shaped reply still held in memory.
+        data = _in_memory_success_data(reply)
+        if data is not None:
+            verdict = _success_verdict(attempt, data, _frozen_unsigned(request), profile)
+            if verdict[0] is Outcome.BREACH:
+                return attempt.finish(*verdict)
         return RunResult(specimen_id, specimen.profile, specimen.expected.value, Outcome.UNKNOWN,
                          "CAPTURE_FAILED", False, ACTUAL_EVIDENCE_CLASS, PROVIDER_PROOF_UNQUALIFIED)
     status, content_type, body, valid = captured
