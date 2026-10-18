@@ -35,7 +35,7 @@ const SOURCE = { source_id: "release-stand-in/1", title: "Stand-in release over 
   transport: { history_provider: "ENVIO_HYPERSYNC", provider_version: "envio-hypersync/1", corroboration_provider: "QUICKNODE_JSON_RPC",
     corroboration_sample_size: 24, provider_requests_needed: 27, clients: "P07_HTTP_CLIENTS_OPERATING_RELEASE" } };
 const ACTUAL_RELEASE = { ...RELEASE, release_id: "actual-native/1", kind: "ACTUAL", evidence_class: "PROVIDER_ACTUAL",
-  transport_kind: "PROVIDER_HTTP" };
+  transport_kind: "PROVIDER_HTTP", history: { ...RELEASE.history, source_id: "actual-provider/1" } };
 const ACTUAL_SOURCE = { ...SOURCE, source_id: "actual-provider/1", title: "Actual provider source over an approved release",
   evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY", release: ACTUAL_RELEASE };
 const DECLARATION = {
@@ -50,6 +50,15 @@ const DECLARATION = {
         frozen_at: "", operating_release_id: "stand-in-native/1", operating_release_sha256: "a".repeat(64) } } },
   access_history: [{ event: "DECLARATION_SAVED", provider_queries: 0, outcome_labels_read: false }],
 };
+// A saved actual declaration frozen to the actual release, so a saved job keeps its own facts.
+const ACTUAL_DECLARATION = { ...DECLARATION,
+  declaration: { ...DECLARATION.declaration, record_id: "act-decl-1",
+    content: { ...DECLARATION.declaration.content,
+      configuration: { ...DECLARATION.declaration.content.configuration,
+        source: { source_id: ACTUAL_SOURCE.source_id, profile_sha256: ACTUAL_SOURCE.profile_sha256,
+          evidence_class: ACTUAL_SOURCE.evidence_class } },
+      frozen: { ...DECLARATION.declaration.content.frozen, operating_release_id: "actual-native/1",
+        operating_release_sha256: "d".repeat(64) } } } };
 
 describe("operating-release source", () => {
   it("shows the release, fixes the bounds and declares with the release limits exactly", async () => {
@@ -166,10 +175,11 @@ describe("operating-release source", () => {
     expect(transport).not.toHaveTextContent(/recorded responses only/);
   });
 
-  it("labels an actual saved job's chain check against provider responses", async () => {
+  it("keeps a saved actual job's release and transport, not the current catalog", async () => {
     const user = userEvent.setup();
-    mocks.historySources.mockResolvedValue({ label: "PROVIDER", mode: "release", sources: [ACTUAL_SOURCE] });
-    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    // The current catalog offers only the stand-in source; the saved declaration and job keep their own actual facts.
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [ACTUAL_DECLARATION] });
     const dataset = { dataset_id: "ds-actual", content_sha256: "s", hashes_verified: {}, summary: { source_id: ACTUAL_SOURCE.source_id,
       status: "COMPLETE", stop_reason: "COMPLETE", verdict: { overall: "QUALIFIED" }, binding_state: "QUALIFIED_BINDING",
       unavailable_states: [], provider_requests: { ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 25 },
@@ -180,12 +190,14 @@ describe("operating-release source", () => {
         client_classes: { ENVIO_HYPERSYNC: "HttpEnvioQueryClient", QUICKNODE_JSON_RPC: "HttpQuickNodeRpcClient" },
         transport_label: "RELEASE_PROVIDER_HTTP_TRANSPORT", transport_kind: "PROVIDER_HTTP", requests_hashed: 27,
         endpoint_hosts: { ENVIO_HYPERSYNC: "127.0.0.1", QUICKNODE_JSON_RPC: "127.0.0.1" },
-        operating_release: { release_id: "actual-native/1", sha256: "a".repeat(64), kind: "ACTUAL" } } };
-    mocks.jobs.mockResolvedValue({ jobs: [{ job_id: "job-actual", declaration_id: "rel-decl-1", request_key: "k", operation_id: "o",
+        operating_release: { release_id: "actual-native/1", sha256: "d".repeat(64), kind: "ACTUAL" } } };
+    mocks.jobs.mockResolvedValue({ jobs: [{ job_id: "job-actual", declaration_id: "act-decl-1", request_key: "k", operation_id: "o",
       state: "REPORTED", terminal_reason: null, budget: { reserved: { provider_requests: 27 }, consumed: { provider_requests: 27 } },
       deadline_at: "", cancel_requested_at: null, created_at: "", events: [], dataset, report: null }] });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    expect(await screen.findByRole("option", { name: SOURCE.title })).toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    expect(await screen.findByTestId("history-declaration-release")).toHaveTextContent(`actual-native/1 · ${"d".repeat(64)}`);
     const facts = await screen.findByTestId("history-transport");
     expect(facts).toHaveTextContent("Provider responses");
     expect(facts).toHaveTextContent("chain id checked against provider responses: 143 (MONAD)");
