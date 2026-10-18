@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "../lib/api";
+import { ApiError, type DatasetSummary } from "../lib/api";
 import { ReplayResult } from "../components/ReplayResult";
 import { SpotReplayPanel } from "../components/SpotReplayPanel";
 import type { SpotReplayRecord, SpotReplayDependency } from "../lib/types";
@@ -430,32 +430,89 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
 });
 
 describe("RG05 replay source-aware labels", () => {
-  const recordedDataset = { dataset_id: "d0000000-0000-4000-8000-000000000001", source_id: "recorded-syn-qualified/1",
-    evidence_class: "RECORDED_RESPONSE", content_label: "SYNTHETIC_FIXTURE", binding_state: "QUALIFIED_BINDING",
-    profile_evidence_class: "SYNTHETIC_FIXTURE", verdict: { overall: "QUALIFIED" }, window_start: "2026-09-25T10:00:00Z",
-    window_end: "2026-09-25T12:00:00Z", readable_until: "2026-09-25T11:00:00Z" };
-  const actualDataset = { ...recordedDataset, dataset_id: "d0000000-0000-4000-8000-0000000000a1",
-    source_id: "actual-provider-history/1", evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_ACTUAL",
-    profile_evidence_class: "PROVIDER_ACTUAL" };
-  const unknownDataset = { ...recordedDataset, dataset_id: "d0000000-0000-4000-8000-0000000000b1",
-    source_id: "experimental-origin/1", evidence_class: "EXPERIMENTAL_LABEL", content_label: "UNRECOGNIZED",
-    profile_evidence_class: "EXPERIMENTAL_LABEL" };
   const passingBinding = { status: "PASS", required_by: "RELEASE_BINDING", reason: null, evidence_class: "SYNTHETIC",
     handoff_sha256: "e".repeat(64), report_sha256: "9".repeat(64), checker_sha256: "1".repeat(64),
     claim_limit: "Payload binding only." };
+
+  // Complete saved-dataset summaries shaped like history_dataset.list_datasets, so each fixture matches the producer
+  // the panel consumes. The actual-class values are synthetic test inputs, never live provider data.
+  const summary = (overrides: Partial<DatasetSummary>): DatasetSummary => ({
+    dataset_id: "d0000000-0000-4000-8000-000000000000", created_at: "2026-09-25T09:00:00Z",
+    content_sha256: "h".repeat(64), hashes_verified: { normalized: true, collection: true },
+    quote_unit: "QUOTE:0xbb", source_id: "recorded-syn-qualified/1", evidence_class: "RECORDED_RESPONSE",
+    content_label: "SYNTHETIC_FIXTURE", profile_evidence_class: "SYNTHETIC_FIXTURE", status: "COMPLETE",
+    verdict: { overall: "QUALIFIED" }, binding_state: "QUALIFIED_BINDING", unavailable_states: [],
+    market_binding: { quote_unit: "QUOTE:0xbb" }, market_binding_id: "m".repeat(64),
+    window_start: "2026-09-25T10:00:00Z", window_end: "2026-09-25T12:00:00Z",
+    declaration_id: "d0000000-0000-4000-8000-0000000000d1", job_id: "j0000000-0000-4000-8000-0000000000a1",
+    readable_until: "2026-09-25T11:00:00Z",
+    declared_rules: [{ evaluation_id: "e0000000-0000-4000-8000-0000000000e1", variant_id: "v1",
+      price_expression: { kind: "close" }, volume_expression: { kind: "quote_volume" } }],
+    ...overrides,
+  });
+  const recordedDataset = summary({ dataset_id: "d0000000-0000-4000-8000-000000000001" });
+  const actualDataset = summary({ dataset_id: "d0000000-0000-4000-8000-0000000000a1",
+    source_id: "actual-provider-history/1", evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_ACTUAL",
+    profile_evidence_class: "PROVIDER_ACTUAL" });
+  const unknownDataset = summary({ dataset_id: "d0000000-0000-4000-8000-0000000000b1",
+    source_id: "experimental-origin/1", evidence_class: "EXPERIMENTAL_LABEL", content_label: "UNRECOGNIZED",
+    profile_evidence_class: "EXPERIMENTAL_LABEL" });
+
+  // The saved notice matches the saved class, like saved_runs.notice_for. The unknown case is an intentional
+  // unsupported input; its notice names no provenance.
+  const historyNotice = (cls: string) => cls === "PROVIDER_ACTUAL"
+    ? "Hypothetical simulated fills on saved provider history. No gas, spread, additional impact, or capacity model. No statistical support or profitability is claimed. No trading permission."
+    : cls === "EXPERIMENTAL_LABEL"
+    ? "Simulated fills on a saved dataset with an unrecognized evidence class. No gas, spread, additional impact, or capacity model. No trading permission."
+    : "Simulated fills on a saved recorded-history dataset. Synthetic recorded responses, not observed market history. No gas, spread, additional impact, or capacity model. No trading permission.";
+
+  // The saved history lineage, shaped like history_inputs.snapshot.
+  const lineage = (dataset: DatasetSummary) => ({
+    schema_version: "edge-os.history-replay-input/1", dataset_id: dataset.dataset_id,
+    dataset_content_sha256: dataset.content_sha256, normalized_sha256: "n".repeat(64),
+    collection_sha256: "o".repeat(64), declaration_id: dataset.declaration_id, job_id: dataset.job_id,
+    source_id: dataset.source_id, source_evidence_class: dataset.evidence_class,
+    content_label: dataset.content_label, profile_evidence_class: dataset.profile_evidence_class,
+    verdict: dataset.verdict, status: dataset.status, binding_state: dataset.binding_state,
+    dataset_market_binding_id: dataset.market_binding_id, strategy_market_binding_id: "s".repeat(64),
+    window_start: dataset.window_start, window_end: dataset.window_end,
+    rule_linkage: { state: "ENTRY_IS_DECLARED_RULE", evaluation_id: dataset.declared_rules[0].evaluation_id,
+      rule_map_sha256: "r".repeat(64) },
+    fill_label: "simulated fills",
+    fill_assumptions: { price: "bucket close of the decision bucket",
+      costs: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" },
+      not_modeled: ["gas", "spread", "extra price impact", "capacity"] },
+    payload_binding: passingBinding,
+  });
+
+  // A complete saved history run shaped like saved_runs._history_run: no fixture-only input, a full lineage and a
+  // notice that matches the saved class.
+  function savedHistoryRun(dataset: DatasetSummary, resultClass: string): any {
+    const saved = JSON.parse(JSON.stringify(replay)) as any;
+    saved.content.inputs = {
+      profile_version: "p12.spot-replay/1", strategy_revision_id: "saved-revision-9", strategy_id: "strategy-1",
+      strategy_sha256: "c".repeat(64), run_configuration_id: "saved-config-9", dataset_fixture_id: null,
+      history_input: lineage(dataset), dataset_revision_id: dataset.dataset_id,
+      dataset_qualification: dataset.verdict.overall, coverage_complete: true,
+      evidence_class: dataset.profile_evidence_class, profile_sha256: "p".repeat(64),
+      market_binding_id: dataset.market_binding_id, window_start: dataset.window_start, window_end: dataset.window_end,
+      initial_cash_quote: "1250", initial_base_amount: "0", initial_basis_quote: "0",
+      strategy: { sizing: { amount: "250", unit: "QUOTE:WMON" }, warmup_buckets: 3,
+        cost_assumptions: { fee_rate: "0.002", slippage_rate: "0.001", source_ref: "saved-cost-source-9" } },
+      essential_evidence: { fields: {
+        entry: { state: "BOUND", essential_dependencies: [{ series: "price", offset_buckets: 0 }] },
+        exit: { state: "BOUND", essential_dependencies: [{ series: "price", offset_buckets: 0 }] } } },
+    };
+    saved.content.result.evidence_class = resultClass;
+    saved.content.notice = historyNotice(resultClass);
+    return saved;
+  }
 
   function panel() {
     return render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"],
       sizing: { amount: "50", unit: "QUOTE:0xbb" }, warmup_buckets: 3,
       cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
       strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
-  }
-
-  function savedOnHistory(inputs: Record<string, unknown>, resultClass: string): any {
-    const saved = JSON.parse(JSON.stringify(replay)) as any;
-    Object.assign(saved.content.inputs, inputs);
-    saved.content.result.evidence_class = resultClass;
-    return saved;
   }
 
   it("describes a selected provider-actual dataset as saved provider history, not synthetic", async () => {
@@ -512,26 +569,20 @@ describe("RG05 replay source-aware labels", () => {
   });
 
   it("labels a saved provider-actual replay from its own saved evidence", () => {
-    const saved = savedOnHistory({ evidence_class: "PROVIDER_ACTUAL", history_input: {
-      dataset_id: "d0000000-0000-4000-8000-0000000000a1", source_id: "actual-provider-history/1",
-      content_label: "PROVIDER_ACTUAL", source_evidence_class: "PROVIDER_ACTUAL", profile_evidence_class: "PROVIDER_ACTUAL",
-      declaration_id: "decl-1", job_id: "job-1", dataset_market_binding_id: "m".repeat(64),
-      strategy_market_binding_id: "m".repeat(64), fill_label: "simulated fills", dataset_content_sha256: "h".repeat(64) } },
-      "PROVIDER_ACTUAL");
-    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+    render(<ReplayResult replay={savedHistoryRun(actualDataset, "PROVIDER_ACTUAL") as SpotReplayRecord} />);
 
-    expect(screen.getByText(/saved provider history/)).toBeInTheDocument();
-    expect(screen.queryByText(/saved recorded-history dataset/)).toBeNull();
+    const region = screen.getByTestId("spot-replay-result");
+    expect(region).toHaveTextContent("saved provider history");
+    expect(region).not.toHaveTextContent(/saved recorded-history dataset/);
+    // The saved notice and lineage must match the saved class: never the fixture's synthetic-only text or fixture id.
+    expect(region).not.toHaveTextContent(/Synthetic replay only/);
+    expect(region).not.toHaveTextContent(/p13\.wc01\/1/);
+    expect(region).toHaveTextContent(/Hypothetical simulated fills on saved provider history/);
   });
 
   it("keeps a saved recorded-synthetic replay synthetic when the current catalog claims provider history", async () => {
     const user = userEvent.setup();
-    const saved = savedOnHistory({ history_input: {
-      dataset_id: recordedDataset.dataset_id, source_id: recordedDataset.source_id,
-      content_label: "SYNTHETIC_FIXTURE", source_evidence_class: "RECORDED_RESPONSE",
-      profile_evidence_class: "SYNTHETIC_FIXTURE", declaration_id: "decl-1", job_id: "job-1",
-      dataset_market_binding_id: "m".repeat(64), strategy_market_binding_id: "m".repeat(64),
-      fill_label: "simulated fills", dataset_content_sha256: "h".repeat(64) } }, "SYNTHETIC_FIXTURE");
+    const saved = savedHistoryRun(recordedDataset, "SYNTHETIC_FIXTURE");
     mocks.datasets.mockResolvedValue({ datasets: [{ ...actualDataset, payload_binding: passingBinding }] });
     mocks.get.mockResolvedValueOnce(saved as SpotReplayRecord);
     panel();
@@ -539,22 +590,18 @@ describe("RG05 replay source-aware labels", () => {
     await user.type(screen.getByRole("textbox", { name: "Saved replay ID" }), saved.replay_id);
     await user.click(screen.getByRole("button", { name: "Load saved replay" }));
 
-    expect(await screen.findByTestId("spot-replay-result")).toBeInTheDocument();
-    expect(screen.getByText(/saved recorded-history dataset/)).toBeInTheDocument();
-    expect(screen.queryByText(/saved provider history/)).toBeNull();
+    const region = await screen.findByTestId("spot-replay-result");
+    expect(region).toHaveTextContent(/saved recorded-history dataset/);
+    expect(region).not.toHaveTextContent(/saved provider history/);
+    expect(region).not.toHaveTextContent(/Synthetic replay only/);
   });
 
   it("shows an unrecognized saved evidence class literally without promoting it", () => {
-    const saved = savedOnHistory({ history_input: {
-      dataset_id: "d0000000-0000-4000-8000-0000000000b1", source_id: "experimental-origin/1",
-      content_label: "UNRECOGNIZED", source_evidence_class: "EXPERIMENTAL_LABEL",
-      profile_evidence_class: "EXPERIMENTAL_LABEL", declaration_id: "decl-1", job_id: "job-1",
-      dataset_market_binding_id: "m".repeat(64), strategy_market_binding_id: "m".repeat(64),
-      fill_label: "simulated fills", dataset_content_sha256: "h".repeat(64) } }, "EXPERIMENTAL_LABEL");
-    render(<ReplayResult replay={saved as SpotReplayRecord} />);
+    render(<ReplayResult replay={savedHistoryRun(unknownDataset, "EXPERIMENTAL_LABEL") as SpotReplayRecord} />);
 
-    expect(screen.getByText(/EXPERIMENTAL_LABEL/)).toBeInTheDocument();
-    expect(screen.queryByText(/saved provider history/)).toBeNull();
-    expect(screen.queryByText(/saved recorded-history dataset/)).toBeNull();
+    const region = screen.getByTestId("spot-replay-result");
+    expect(region).toHaveTextContent("EXPERIMENTAL_LABEL");
+    expect(region).not.toHaveTextContent(/saved provider history/);
+    expect(region).not.toHaveTextContent(/saved recorded-history dataset/);
   });
 });
