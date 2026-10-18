@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # `fixture` uses the authored local wallet-creation fixture. Production refuses it and uses the
     # fail-closed `unavailable` provider, so no real wallet provider is configured yet.
     wallet_provider: Literal["fixture", "unavailable"] = "unavailable"
+    # Optional absolute path of the private Unix socket served by the separate trusted wallet-lookup process
+    # (scripts/privy_wallet_lookup). It is not a credential. Only with `wallet_provider=unavailable`: the browser
+    # creates and the socket answers one owner-bound lookup. Unset keeps the fixture/unavailable behavior.
+    wallet_lookup_socket: str | None = None
     # `fixture` composes the financial journey over authored local provider fixtures: deposit observations,
     # market observations, action quotes, holdings, submission/receipt effects and removal observations, plus a
     # server-owned fixture qualification that lets an adopted INACTIVE consent drive a fixture action. Production
@@ -162,6 +166,12 @@ class Settings(BaseSettings):
             problems.append("interpreter: only the fixture interpreter is available in production")
         if self.env == "production" and self.wallet_provider != "unavailable":
             problems.append("wallet_provider: only the unavailable provider is allowed in production")
+        if self.wallet_lookup_socket is not None:
+            if self.wallet_provider != "unavailable":
+                problems.append("wallet_lookup_socket: only with the unavailable wallet provider")
+            if not (self.wallet_lookup_socket.startswith("/") and ".." not in self.wallet_lookup_socket.split("/")
+                    and len(self.wallet_lookup_socket) <= 100 and "\x00" not in self.wallet_lookup_socket):
+                problems.append("wallet_lookup_socket: must be a short absolute path without '..'")
         if self.env == "production" and self.execution_mode != "unavailable":
             problems.append("execution_mode: only the unavailable execution mode is allowed in production")
         if self.env == "production" and self.research_history_mode != "unavailable":

@@ -2,7 +2,9 @@
 
 Owner-scoped prepare, read, dispatch, cancel and resume over the verified `Principal`. The
 creation-capable provider comes from `app.state.wallet_provider`: the authored local fixture in
-local/test configuration, or the fail-closed unavailable provider in production. A foreign or
+local/test configuration, or the fail-closed unavailable provider in production. With
+`EDGE_OS_WALLET_LOOKUP_SOCKET` set, `get_provider` builds the owner-bound lookup for the verified owner instead;
+the browser creates and the server only looks up. A foreign or
 absent setup is a `404`; the owner is never read from the request body.
 """
 
@@ -17,8 +19,9 @@ from sqlalchemy.orm import Session
 
 from edge_os_api.core.authentication import Principal, require_principal
 from edge_os_api.core.request_schemas import StrictModel, WalletSetupMutationBody, WalletSetupPrepareBody
-from edge_os_api.wallet_setup import service
+from edge_os_api.wallet_setup import browser_intent, service
 from edge_os_api.wallet_setup.adapter import provider_info
+from edge_os_api.wallet_setup.lookup_client import OwnerBoundLookupProvider
 from edge_os_api.wallet_setup.provider import WalletCreationPort
 from edge_os_api.wallet_setup.types import SetupRecord
 
@@ -28,7 +31,12 @@ router = APIRouter(prefix="/v1/wallet-setup", tags=["wallet setup"])
 class BrowserCompletionBody(StrictModel):
     """The wallet id the owner's browser received from owner-linked creation. Untrusted until looked up."""
 
-    wallet_id: str = Field(min_length=1, max_length=200)
+    wallet_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # The exact address the SDK returned. Untrusted; required for the owner-bound lookup, optional for the fixture.
+    # An address-only claim (the SDK returned no ID) is resolved by the server's own lookup.
+    wallet_index: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    address: str | None = Field(default=None, min_length=42, max_length=42)
+    chain_type: str | None = Field(default=None, min_length=1, max_length=32)
 
 
 def serialize(record: SetupRecord) -> dict[str, Any]:
@@ -49,7 +57,12 @@ def get_session(request: Request) -> Generator[Session, None, None]:
         yield session
 
 
-def get_provider(request: Request) -> WalletCreationPort:
+def get_provider(request: Request, principal: Principal = Depends(require_principal)) -> WalletCreationPort:
+    """The configured provider. With a lookup socket it is bound to the verified owner, never a request body."""
+    socket_path = getattr(request.app.state.settings, "wallet_lookup_socket", None)
+    if socket_path:
+        return OwnerBoundLookupProvider(socket_path=socket_path, owner_id=principal.user_id,
+                                        privy_did=principal.privy_did)
     return request.app.state.wallet_provider
 
 
@@ -76,7 +89,19 @@ def resume(agent_id: str, data: WalletSetupMutationBody | None = Body(default=No
            principal: Principal = Depends(require_principal), session: Session = Depends(get_session),
            provider: WalletCreationPort = Depends(get_provider)) -> dict[str, Any]:
     """Resume or reconcile an existing setup without creating a second wallet."""
+    if isinstance(provider, OwnerBoundLookupProvider):
+        return serialize(browser_intent.resume_retained_claim(session, principal, agent_id=agent_id,
+                                                              provider=provider))
     return serialize(service.resume_setup(session, principal, agent_id=agent_id, provider=provider))
+
+
+@router.post("/agents/{agent_id}/browser-begin")
+def browser_begin(agent_id: str, data: WalletSetupMutationBody | None = Body(default=None),
+                  principal: Principal = Depends(require_principal),
+                  session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Commit dispatch intent before the browser may create. Only the first claim is permitted."""
+    begun = browser_intent.begin_browser_creation(session, principal, agent_id=agent_id)
+    return {**serialize(begun.record), "create_permitted": begun.create_permitted}
 
 
 @router.post("/agents/{agent_id}/cancel")
@@ -92,8 +117,11 @@ def complete(agent_id: str, data: BrowserCompletionBody, principal: Principal = 
              session: Session = Depends(get_session),
              provider: WalletCreationPort = Depends(get_provider)) -> dict[str, Any]:
     """Bind a browser-created wallet only after an independent provider lookup confirms the exact owner."""
+    if isinstance(provider, OwnerBoundLookupProvider):
+        provider = provider.with_claim(data.address)
     return serialize(service.complete_from_browser(session, principal, agent_id=agent_id, wallet_id=data.wallet_id,
-                                                   provider=provider))
+                                                   provider=provider, address=data.address,
+                                                   wallet_index=data.wallet_index, chain_type=data.chain_type))
 
 
 @router.get("/agents/{agent_id}")

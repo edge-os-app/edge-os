@@ -19,7 +19,8 @@ from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding, invalid, not_found
 from edge_os_api.records.models import StrategyRevision
 from edge_os_api.wallet_setup.persistence import (WalletSetupRow, bind_wallet, conflicting_binding, insert_event,
-                                                  load_setup, mark_unknown, record_denial, to_record, utcnow)
+                                                  latest_event, load_setup, mark_unknown, record_denial, to_record,
+                                                  utcnow)
 from edge_os_api.wallet_setup.provider import CreationRequest, WalletCreationPort, WalletEvidence, WalletProviderUnavailable
 from edge_os_api.wallet_setup.recovery import (evidence_is_wellformed, lookup_wallet_evidence, reconcile,
                                                verify_wallet_evidence)
@@ -233,29 +234,63 @@ def cancel_setup(session: Any, principal: Principal, *, agent_id: str) -> SetupR
     return to_record(row)
 
 
-def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, wallet_id: str,
-                          provider: WalletCreationPort) -> SetupRecord:
+def _lookup_browser_claim(provider: Any, wallet_id: str | None, address: str | None) -> WalletEvidence | None:
+    """An owner-bound lookup answers an exact address claim; the fixture answers an exact wallet ID only."""
+    lookup_claim = getattr(provider, "lookup_claim", None)
+    if callable(lookup_claim) and address is not None:
+        try:
+            result = lookup_claim(address, wallet_id)
+        except Exception:  # noqa: BLE001 - any lookup failure stays UNKNOWN
+            return None
+        return result if isinstance(result, WalletEvidence) and evidence_is_wellformed(result) else None
+    return None if wallet_id is None else lookup_wallet_evidence(provider, wallet_id)
+
+
+def _same_bound_wallet(session: Any, row: WalletSetupRow, wallet_id: str | None, address: str | None) -> bool:
+    """A repeat of the bound claim: the same ID, or (address-only) the same address as the bound evidence."""
+    if wallet_id is not None:
+        return row.wallet_id == wallet_id
+    if address is None:
+        return False
+    for kind in (SetupEventType.WALLET_BOUND, SetupEventType.RECONCILED):
+        bound = latest_event(session, row, kind)
+        evidence = bound.get("evidence") if isinstance(bound, dict) else None
+        if isinstance(evidence, dict) and isinstance(evidence.get("address"), str):
+            return evidence["address"].lower() == address.lower()
+    return False
+
+
+def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, wallet_id: str | None,
+                          provider: WalletCreationPort, address: str | None = None,
+                          wallet_index: int | None = None, chain_type: str | None = None) -> SetupRecord:
     """Record a wallet id returned by owner-linked browser creation, then bind it only after independent lookup.
 
-    The browser's wallet id is an untrusted claim, retained as evidence before the lookup. The browser keeps its
-    wallet id, so after a lost lookup reply the browser repeats this completion; `resume_setup` cannot bind it,
-    because the browser claim carries no provider address. The setup binds only when the provider's own
-    record names this verified owner, an Ethereum wallet and no other agent of this owner. A completion for a
-    confirmed setup never replaces its wallet; a completion after a proved pre-dispatch cancellation, or for a
-    setup this owner does not hold, binds nothing. No server-side creation runs on this path.
+    The browser's claim (ID and/or exact address, index, chain type) is untrusted and retained as evidence before
+    the lookup. After a lost reply the browser repeats this completion, or `browser_intent.resume_retained_claim`
+    repeats it from the retained claim; a repeat of the bound claim records no denial. The setup binds only when
+    the provider's own record names this verified owner, an Ethereum wallet and no other agent of this owner.
+    A completion for a confirmed setup never replaces its wallet; a completion after a proved pre-dispatch
+    cancellation, or for a setup this owner does not hold, binds nothing. No server-side creation runs on this path.
     """
     _validate_agent_id(agent_id)
-    if not evidence_is_wellformed(WalletEvidence(wallet_id=wallet_id, owner_id=principal.user_id,
-                                                 chain_type="ethereum", address="claim")) or len(wallet_id) > 200:
+    if wallet_id is None and address is None:
+        raise invalid("/wallet_id", "A wallet ID or an exact address is required.", "invalid_wallet_id")
+    if wallet_id is not None and (not evidence_is_wellformed(WalletEvidence(
+            wallet_id=wallet_id, owner_id=principal.user_id, chain_type="ethereum", address="claim"))
+            or len(wallet_id) > 200):
         raise invalid("/wallet_id", "The wallet ID must be 1 to 200 storable characters.", "invalid_wallet_id")
+    if address is not None and not (isinstance(address, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", address)):
+        raise invalid("/address", "The address must be an exact 0x-prefixed 20-byte hex address.", "invalid_address")
+    if chain_type is not None and chain_type != "ethereum":
+        raise invalid("/chain_type", "Only an Ethereum embedded wallet can be bound.", "invalid_chain_type")
     row = load_setup(session, principal.user_id, agent_id, lock=True)
     if row is None:
         raise not_found(_SQM)
     if row.state == SetupState.CONFIRMED.value:
-        if row.wallet_id != wallet_id:
+        if not _same_bound_wallet(session, row, wallet_id, address):
             record_denial(session, row.owner_id, row.agent_id, "CONFLICTING_RESULT",
                           {"saved_wallet_id": row.wallet_id, "returned_wallet_id": wallet_id,
-                           "source": "BROWSER_COMPLETION"})
+                           "returned_address": address, "source": "BROWSER_COMPLETION"})
             session.commit()
         else:
             session.rollback()
@@ -269,9 +304,12 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
         _mark_dispatch_intent(session, row)
     insert_event(session, row, SetupEventType.RESULT_RETURNED,
                  {"wallet_id": wallet_id, "owner_id": str(principal.user_id), "chain_type": "ethereum",
-                  "address": None, "source": "BROWSER_COMPLETION", "trusted": False})
+                  "address": None, "claimed_address": address if isinstance(address, str) else None,
+                  "claimed_wallet_index": wallet_index if isinstance(wallet_index, int) else None,
+                  "claimed_chain_type": chain_type,
+                  "source": "BROWSER_COMPLETION", "trusted": False})
     session.commit()
-    looked_up = lookup_wallet_evidence(provider, wallet_id)
+    looked_up = _lookup_browser_claim(provider, wallet_id, address)
     locked = load_setup(session, principal.user_id, agent_id, lock=True)
     assert locked is not None
     if locked.state == SetupState.CONFIRMED.value:  # a concurrent completion or resume bound first
@@ -279,8 +317,9 @@ def complete_from_browser(session: Any, principal: Principal, *, agent_id: str, 
         return to_record(locked)
     if looked_up is None:
         return mark_unknown(session, locked, SetupReason.RECONCILE_NO_MATCH.value)
-    if not (looked_up.wallet_id == wallet_id and looked_up.owner_id == locked.owner_id
-            and looked_up.chain_type == "ethereum"):
+    if not ((wallet_id is None or looked_up.wallet_id == wallet_id) and looked_up.owner_id == locked.owner_id
+            and looked_up.chain_type == "ethereum"
+            and (address is None or looked_up.address.lower() == address.lower())):
         record_denial(session, locked.owner_id, locked.agent_id, "BROWSER_RESULT_WRONG_IDENTITY",
                       {"returned_wallet_id": wallet_id})
         return mark_unknown(session, locked, SetupReason.RECONCILE_WRONG_IDENTITY.value)
