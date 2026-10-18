@@ -9,8 +9,10 @@ caller-chosen URL, method, header, payload, creation, signer, policy or signing 
 certificate validation, no redirect, no retry, one absolute deadline for each fixed read and a capped
 response. Each read's connect, request, header and body phases share that single deadline: a per-call
 watchdog shuts the socket down at the deadline and the body is streamed in capped chunks with a remaining
-check between them, so a paced provider reply cannot exceed the budget. One failed lookup
-answers a code and the process keeps serving. Errors and logs carry codes only, never provider bodies or secrets.
+check between them, so a paced provider reply cannot exceed the budget. The DNS lookup and the initial
+connect are waited on under that same budget, so a stalled resolver cannot extend the read either. One
+failed lookup answers a code and the process keeps serving. Errors and logs carry codes only, never
+provider bodies or secrets.
 """
 
 from __future__ import annotations
@@ -50,8 +52,33 @@ FetchWallet = Callable[[str], object]
 
 
 def _default_connect(timeout: float) -> http.client.HTTPSConnection:
-    """One HTTPS connection to the fixed provider host with default certificate validation, no redirect."""
-    return http.client.HTTPSConnection(_PRIVY_HOST, timeout=timeout, context=ssl.create_default_context())
+    """One HTTPS connection to the fixed provider host with default certificate validation, no redirect.
+
+    DNS and the TCP/TLS connect happen here under a bounded wait. `socket.create_connection` resolves the
+    host before it can honour a socket timeout, so an unjoined `getaddrinfo` would otherwise let a stalled
+    resolver push this fixed read past its total deadline.
+    """
+    connection = http.client.HTTPSConnection(_PRIVY_HOST, timeout=timeout, context=ssl.create_default_context())
+    done = threading.Event()
+    failure: list[BaseException] = []
+
+    def _connect() -> None:
+        try:
+            connection.connect()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the reading thread
+            failure.append(exc)
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=_connect, daemon=True)
+    worker.start()
+    if not done.wait(timeout):
+        # shortcut: a stalled resolver thread may outlive the deadline until getaddrinfo returns;
+        # upgrade to a resolver with a native timeout if the platform offers one.
+        raise TimeoutError("provider connect deadline exceeded")
+    if failure:
+        raise failure[0]
+    return connection
 
 
 class PrivyUserReader:

@@ -924,6 +924,33 @@ def test_reader_accepts_a_body_within_the_deadline():
     assert clock.value() < lookup_server.DEADLINE_SECONDS
 
 
+def test_reader_bounds_the_dns_and_connect_phase_by_the_same_deadline(monkeypatch):
+    """Gate REVISE2/3: a stalled resolver must not extend the fixed read past its total budget.
+
+    `socket.create_connection` resolves the host before it can honour any socket timeout, so a blocked
+    `getaddrinfo` used to run past DEADLINE_SECONDS. This exercises the real `_default_connect` (no seam).
+    """
+    import threading as _threading
+    import time as _time
+
+    release = _threading.Event()
+
+    def stalled_getaddrinfo(*_args, **_kwargs):
+        release.wait(5.0)  # a resolver that does not answer inside the read budget
+        raise _socket.gaierror(-2, "stalled resolver")
+
+    monkeypatch.setattr(lookup_server.socket, "getaddrinfo", stalled_getaddrinfo)
+    monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.3)
+    reader = lookup_server.PrivyUserReader("app-id-fake", "fake-secret-value")
+    started = _time.monotonic()
+    try:
+        assert reader(DID) is None
+        elapsed = _time.monotonic() - started
+    finally:
+        release.set()
+    assert elapsed < 1.5, elapsed
+
+
 class _FakeConn:
     """Minimal stand-in for an accepted socket: records what the server sends."""
 
