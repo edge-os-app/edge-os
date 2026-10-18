@@ -394,8 +394,11 @@ def test_authored_actual_api_worker_adoption_delayed_replay_reopen_and_tamper(se
         assert inputs["timing_policy"]["decision_delay_seconds"] == 300
         assert result["status"] == "COMPLETE", result
         decisions = [item for item in result["events"] if item["kind"] == "DECISION"]
-        assert len(decisions) == 1 and decisions[0]["at"] == "2026-09-25T10:20:00Z"
-        assert decisions[0]["source_bucket_end"] == late["bucket_end"]
+        assert len(decisions) == 1
+        assert dt.datetime.fromisoformat(decisions[0]["at"].replace("Z", "+00:00")) == (
+            dt.datetime(2026, 9, 25, 10, 20, tzinfo=dt.timezone.utc))
+        assert dt.datetime.fromisoformat(decisions[0]["source_bucket_end"].replace("Z", "+00:00")) == (
+            dt.datetime.fromisoformat(late["bucket_end"].replace("Z", "+00:00")))
         assert decisions[0]["entry"]["eligible"] is False
         assert {"LATE_INPUT", "FUTURE_INFORMATION:2"} <= set(decisions[0]["entry"]["eligibility_reasons"])
         assert result["trades"] == []
