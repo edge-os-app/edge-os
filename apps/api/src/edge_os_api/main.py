@@ -116,8 +116,9 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     fake provider configuration. A configuration needs its runner and is refused in production.
 
     `research_runtime` is a composed operating release (`core/research/released_source_runtime.py`). Without one, the
-    server bootstrap composes the approved code-owned release, the same one the worker composes; none exists and no
-    setting adds one, so the default reaches no provider.
+    server bootstrap composes the approved code-owned release, the same one the worker composes; exactly one is
+    registered and no setting adds or changes one. The composed release reads no credential until a job prepares it, so
+    the default reaches no provider by itself.
     """
     settings = settings or load_settings()
     if settings.interpreter == "hermes_local" and hermes_runner is None:
