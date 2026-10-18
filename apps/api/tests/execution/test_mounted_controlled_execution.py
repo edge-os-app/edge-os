@@ -350,17 +350,21 @@ def test_mounted_missing_authority_denies_before_credential_io(mounted, failure)
         case.offset[0] = dt.timedelta(minutes=10)
     elif failure == "unapproved":
         case.runtime = dataclasses.replace(case.runtime, synthetic_bindings={})
-        # Replace only the worker's injected registry; no actual registry is modified.
+    else:
+        prior = case.runtime.binding
+        # Reviews are immutable. An approved runtime for a different consent must still refuse this saved adoption.
+        identity = {**prior.identity(), "consent_hash":"sha256:" + "f"*64}
+        binding = BoundRelease(prior.release, identity, **prior.proofs(), market_profile=prior.market_profile())
+        case.source.binding = binding
+        case.runtime = dataclasses.replace(case.runtime, binding=binding,
+            synthetic_bindings={binding.sha256:release_sha256(binding.release)})
+        assert binding.admit(identity, now=case.runtime.clock(),
+                             synthetic_bindings=case.runtime.synthetic_bindings) == binding.sha256
+    if failure != "expired":
+        # Replace only the worker's injected registry; no actual registry or saved consent is modified.
         ports = build_provider_ports("controlled", case.factory, role="worker", controlled={case.agent:case.runtime})
         worker = case.client.app.state.execution_worker
         worker.ports = worker.connected._ports = ports
-    else:
-        changed = {**case.terms, "trial_objective":"changed exact consent"}
-        review = case.client.post(f"/v1/agents/{case.agent}/consent/review", headers=case.headers, json={"terms":changed})
-        assert review.status_code == 200, review.text
-        adopted = case.client.post(f"/v1/agents/{case.agent}/consent/adopt", headers=case.headers,
-            json={"review_id":review.json()["review_id"], "expected_review_hash":review.json()["review_hash"]})
-        assert adopted.status_code == 200, adopted.text
     job = submit(case)
     expected = "EXECUTION_BINDING_MISMATCH" if failure == "consent-changed" else "OBSERVATIONS_UNAVAILABLE"
     assert (job["state"], job["outcome"], job["reason"]) == ("UNAVAILABLE", "UNAVAILABLE", expected), job
