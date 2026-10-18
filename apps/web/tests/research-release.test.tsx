@@ -34,7 +34,8 @@ const SOURCE = { source_id: "release-stand-in/1", title: "Stand-in release over 
   page_requests_recorded: 2, available: true, release: RELEASE,
   transport: { history_provider: "ENVIO_HYPERSYNC", provider_version: "envio-hypersync/1", corroboration_provider: "QUICKNODE_JSON_RPC",
     corroboration_sample_size: 24, provider_requests_needed: 27, clients: "P07_HTTP_CLIENTS_OPERATING_RELEASE" } };
-const ACTUAL_RELEASE = { ...RELEASE, release_id: "actual-native/1", kind: "ACTUAL", evidence_class: "PROVIDER_ACTUAL" };
+const ACTUAL_RELEASE = { ...RELEASE, release_id: "actual-native/1", kind: "ACTUAL", evidence_class: "PROVIDER_ACTUAL",
+  transport_kind: "PROVIDER_HTTP" };
 const ACTUAL_SOURCE = { ...SOURCE, source_id: "actual-provider/1", title: "Actual provider source over an approved release",
   evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY", release: ACTUAL_RELEASE };
 const DECLARATION = {
@@ -177,7 +178,7 @@ describe("operating-release source", () => {
         corroboration: { class: "COMPLETE", sample_size: 24, population_size: 24, mismatches: 0 }, corroboration_reason: null,
         recorded_declarations: ["decimals"], clients: "P07_HTTP_CLIENTS_OPERATING_RELEASE",
         client_classes: { ENVIO_HYPERSYNC: "HttpEnvioQueryClient", QUICKNODE_JSON_RPC: "HttpQuickNodeRpcClient" },
-        transport_label: "RELEASE_LOOPBACK_HTTP_TRANSPORT", transport_kind: "LOOPBACK_HTTP", requests_hashed: 27,
+        transport_label: "RELEASE_PROVIDER_HTTP_TRANSPORT", transport_kind: "PROVIDER_HTTP", requests_hashed: 27,
         endpoint_hosts: { ENVIO_HYPERSYNC: "127.0.0.1", QUICKNODE_JSON_RPC: "127.0.0.1" },
         operating_release: { release_id: "actual-native/1", sha256: "a".repeat(64), kind: "ACTUAL" } } };
     mocks.jobs.mockResolvedValue({ jobs: [{ job_id: "job-actual", declaration_id: "rel-decl-1", request_key: "k", operation_id: "o",

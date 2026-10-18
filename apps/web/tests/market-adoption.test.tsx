@@ -38,9 +38,11 @@ const limited = { ...qualified, dataset_id: "d0000000-0000-4000-8000-00000000000
   binding_state: "UNAVAILABLE_LIMITED_DATA", unavailable_states: ["PARTIAL_COVERAGE"], market_binding: null, quote_unit: null,
   source_id: "recorded-syn-provider-failure/1" };
 const actual = { ...qualified, dataset_id: "d0000000-0000-4000-8000-0000000000a1", source_id: "actual-provider-history/1",
-  evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY", profile_evidence_class: "PROVIDER_ACTUAL" };
+  evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY", profile_evidence_class: "PROVIDER_ACTUAL",
+  market_binding: { ...qualified.market_binding, evidence_class: "PROVIDER_ACTUAL" } };
 const unknown = { ...qualified, dataset_id: "d0000000-0000-4000-8000-0000000000b1", source_id: "experimental-origin/1",
-  evidence_class: "EXPERIMENTAL_LABEL", content_label: "UNRECOGNIZED", profile_evidence_class: "EXPERIMENTAL_LABEL" };
+  evidence_class: "EXPERIMENTAL_LABEL", content_label: "UNRECOGNIZED", profile_evidence_class: "EXPERIMENTAL_LABEL",
+  market_binding: { ...qualified.market_binding, evidence_class: "EXPERIMENTAL_LABEL" } };
 
 function renderAdoption(reload = vi.fn(async (): Promise<string | null> => "draft-new")) {
   render(<MarketAdoption intakeId="intake-1" interpretationRevisionId="rev-1" parentRevisionId="revision-1"
