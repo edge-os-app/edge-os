@@ -289,7 +289,8 @@ def test_mounted_uncertainty_keeps_reservations_and_never_repeats_sign_or_send(m
 def test_mounted_unqualified_current_input_never_loads_credentials(mounted):
     case = mounted; case.source.qualified = False
     job = submit(case)
-    assert job["state"] == "COMPLETED", job
+    assert (job["state"], job["outcome"], job["reason"]) == ("UNAVAILABLE", "UNAVAILABLE", "OBSERVATIONS_UNAVAILABLE"), job
+    assert job["action_id"] is None
     assert case.acquired == [] and case.http.count("quote") == case.http.count("eth_signTransaction") == 0
 
 
@@ -358,7 +359,9 @@ def test_mounted_missing_authority_denies_before_credential_io(mounted, failure)
             json={"review_id":review.json()["review_id"], "expected_review_hash":review.json()["review_hash"]})
         assert adopted.status_code == 200, adopted.text
     job = submit(case)
-    assert job["state"] == "COMPLETED", job
+    expected = "EXECUTION_BINDING_MISMATCH" if failure == "consent-changed" else "OBSERVATIONS_UNAVAILABLE"
+    assert (job["state"], job["outcome"], job["reason"]) == ("UNAVAILABLE", "UNAVAILABLE", expected), job
+    assert job["action_id"] is None
     assert case.acquired == [] and case.http.count("quote") == case.http.count("eth_signTransaction") == 0
 
 
