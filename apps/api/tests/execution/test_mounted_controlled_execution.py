@@ -263,7 +263,7 @@ def test_mounted_original_and_restart_reconcile_without_credentials(mounted):
     api_runtime = case.client.app.state.financial.ports.controlled[case.agent]
     assert api_runtime.signer_access is None and api_runtime.quote_token is None
     result = reconcile(case, job)
-    assert (result["receipt_outcome"], result["case_state"]) == ("CONFIRMED", "CONFIRMED")
+    assert (result["receipt_outcome"], result["case_state"]) == ("CONFIRMED", "CONFIRMED"), result
     receipt = detail(case, job)["receipts"][-1]["content"]
     assert receipt["actual_gas"]["raw"] == "600000000000000"  # gasLIMIT, not the recording's gasUsed
     assert receipt["source_ref"].endswith(":finalized:" + BLOCK)
@@ -373,5 +373,42 @@ def test_mounted_failed_submission_ownership_never_calls_an_execution_client(mou
     monkeypatch.setattr(worker.admission, "acquire_submission", lambda *args: "CANCELLED")
     job = submit(case)
     assert job["state"] == "COMPLETED", job
+    assert case.acquired == []
+    assert case.http.count("quote") == case.http.count("eth_signTransaction") == case.http.count("eth_sendRawTransaction") == 0
+
+
+def test_mounted_failed_ownership_commit_is_durable_and_has_no_execution_effect(mounted, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session
+    from edge_os_api.admission.models import DecisionRow
+    case = mounted
+    commit = Session.commit
+    failures = []
+
+    def fail_ownership(session):
+        acquiring = [row for row in session.dirty if isinstance(row, DecisionRow)
+                     and row.agent_id == case.agent and row.status == "SUBMISSION_UNKNOWN"]
+        if acquiring:
+            failures.append(acquiring[0].action_id)
+            raise OperationalError("test ownership commit", {}, RuntimeError("test database refusal"))
+        return commit(session)
+
+    monkeypatch.setattr(Session, "commit", fail_ownership)
+    queued = ff.schedule(case.client, case.headers, case.agent).json()
+    with pytest.raises(OperationalError):
+        run_job(case.client, queued)
+    assert len(failures) == 1
+    with case.factory() as session:
+        decision = session.execute(select(DecisionRow).where(
+            DecisionRow.action_id == failures[0])).scalar_one()
+        assert decision.status == "ADMITTED"
+        attempts = session.execute(select(SubmissionAttemptRow).where(
+            SubmissionAttemptRow.action_id == failures[0])).scalars().all()
+        assert len(attempts) == 1
+        assert attempts[0].state == "IN_FLIGHT"
+        assert not attempts[0].content.get("original_transaction")
+    case.client.app.state.execution_worker = case.compose("worker")
+    run_job(case.client, queued)
+    assert len(failures) == 1
     assert case.acquired == []
     assert case.http.count("quote") == case.http.count("eth_signTransaction") == case.http.count("eth_sendRawTransaction") == 0

@@ -285,4 +285,7 @@ def _observation_result(method: str, result: Any) -> dict[str, Any]:
                     or not all(_matches(_QUANTITY, log[x]) for x in ("blockNumber", "transactionIndex", "logIndex"))
                     or not all(_matches(_HASH, log[x]) for x in ("blockHash", "transactionHash"))):
                 raise RpcError("RPC_LOG_INVALID")
-    return {key: value for key, value in result.items() if key in required | {"baseFeePerGas"}}
+    retained = required | {"baseFeePerGas"}
+    if not block:
+        retained.add("transactionIndex")
+    return {key: value for key, value in result.items() if key in retained}
