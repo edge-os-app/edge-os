@@ -73,8 +73,8 @@ html:has(.edge-os-landing) { scroll-behavior: smooth; }
   font-weight: 700; font-size: 17px; text-decoration: none;
 }
 .edge-os-landing .lp-btn-small { min-height: 44px; padding: 0 22px; font-size: 15px; }
-.edge-os-landing .lp-btn-primary { background: var(--lp-a600); color: var(--lp-paper); box-shadow: var(--lp-shadow-md); }
-.edge-os-landing .lp-btn-primary:hover { background: var(--lp-a700); color: var(--lp-paper); }
+.edge-os-landing .lp-btn-primary { background: var(--lp-a700); color: var(--lp-paper); box-shadow: var(--lp-shadow-md); }
+.edge-os-landing .lp-btn-primary:hover { background: var(--lp-a800); color: var(--lp-paper); }
 .edge-os-landing .lp-btn-secondary { padding: 0 28px; border: 2px solid var(--lp-ink); color: var(--lp-ink); }
 .edge-os-landing .lp-btn-secondary:hover { background: var(--lp-ink); color: var(--lp-cream); }
 .edge-os-landing .lp-btn-row { display: flex; gap: 13.2px; flex-wrap: wrap; }

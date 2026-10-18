@@ -98,3 +98,33 @@ test("with motion allowed, blocks below the fold fade in as they scroll into vie
   await closing.scrollIntoViewIfNeeded();
   await expect.poll(() => closing.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
 });
+
+// WCAG 2.x contrast from the real computed colors, unrounded: 4.4999 must fail.
+const channel = (value) => { const v = value / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+const luminance = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+const rgbOf = (css) => css.match(/[\d.]+/g).slice(0, 3).map(Number);
+const contrastOf = (style) => { const [hi, lo] = [luminance(rgbOf(style.color)), luminance(rgbOf(style.backgroundColor))].sort((a, b) => b - a); return (hi + 0.05) / (lo + 0.05); };
+const readStyle = (button) => button.evaluate((el) => { const s = getComputedStyle(el); return { color: s.color, backgroundColor: s.backgroundColor, fontSize: s.fontSize }; });
+
+test("every primary button keeps text contrast of at least 4.5:1 at rest, on hover and on keyboard focus", async ({ page }) => {
+  await page.goto("/");
+  const buttons = page.locator(".lp-btn-primary");
+  expect(await buttons.count()).toBe(3);
+  for (let index = 0; index < 3; index += 1) {
+    const button = buttons.nth(index);
+    await button.scrollIntoViewIfNeeded();
+    await page.mouse.move(0, 0);
+    const rest = await readStyle(button);
+    await button.hover();
+    const hover = await readStyle(button);
+    await page.mouse.move(0, 0);
+    await page.keyboard.press("Tab");
+    await button.focus();
+    const focus = await readStyle(button);
+    const label = `primary button ${index} (${rest.fontSize})`;
+    expect(contrastOf(rest), `${label} at rest`).toBeGreaterThanOrEqual(4.5);
+    expect(contrastOf(hover), `${label} on hover`).toBeGreaterThanOrEqual(4.5);
+    expect(contrastOf(focus), `${label} on focus`).toBeGreaterThanOrEqual(4.5);
+    expect(hover.backgroundColor, `${label} hover differs from rest`).not.toBe(rest.backgroundColor);
+  }
+});
