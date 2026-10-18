@@ -264,9 +264,10 @@ def test_mounted_original_and_restart_reconcile_without_credentials(mounted):
     assert api_runtime.signer_access is None and api_runtime.quote_token is None
     result = reconcile(case, job)
     assert (result["receipt_outcome"], result["case_state"]) == ("CONFIRMED", "CONFIRMED"), result
-    receipt = detail(case, job)["receipts"][-1]["content"]
+    reopened = detail(case, job)
+    receipt = reopened["receipts"][-1]["content"]
     assert receipt["actual_gas"]["raw"] == "600000000000000"  # gasLIMIT, not the recording's gasUsed
-    assert receipt["source_ref"].endswith(":finalized:" + BLOCK)
+    assert reopened["recovery"]["evidence"][-1]["source_ref"].endswith(":finalized:" + BLOCK)
     assert reconcile(case, job)["duplicate"] is True
     assert case.http.count("eth_signTransaction") == case.http.count("eth_sendRawTransaction") == 1
 
