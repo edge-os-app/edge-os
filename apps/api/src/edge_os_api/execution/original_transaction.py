@@ -67,6 +67,13 @@ _HEX = re.compile(r"0x(?:[0-9a-fA-F]{2})+")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 _TX_HASH = re.compile(r"0x[0-9a-fA-F]{64}")
 _INDEXED_ADDRESS = re.compile(r"0x0{24}[0-9a-f]{40}")
+_EXPECTED_UNSIGNED_KEYS = frozenset({"type", "chain_id", "nonce", "to", "value", "data", "gas_limit",
+                                     "max_fee_per_gas", "max_priority_fee_per_gas"})
+_SIGNED_FIELDS = frozenset({"chainId", "nonce", "maxPriorityFeePerGas", "maxFeePerGas", "gas", "to", "value",
+                            "data", "accessList", "v", "r", "s", "type"})
+_SIGNED_NUMERIC = ("chainId", "nonce", "maxPriorityFeePerGas", "maxFeePerGas", "gas", "value", "v", "r", "s", "type")
+_UINT256 = 2 ** 256
+_ADDRESS_BYTES = 20
 
 
 class JournalError(Exception):
@@ -219,11 +226,47 @@ def abi_word(value: Any) -> int | None:
     return None
 
 
+def _expected_unsigned(unsigned: Any) -> bool:
+    """The complete frozen unsigned mapping: exact key set, exact types and supported domains before any use."""
+    if not isinstance(unsigned, Mapping) or set(unsigned) != _EXPECTED_UNSIGNED_KEYS:
+        return False
+    if unsigned["type"] != EIP1559_TYPE:
+        return False
+    for name in ("chain_id", "nonce", "value", "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas"):
+        if type(unsigned[name]) is not int or not 0 <= unsigned[name] < _UINT256:
+            return False
+    if type(unsigned["to"]) is not str or _ADDRESS.fullmatch(unsigned["to"]) is None:
+        return False
+    if type(unsigned["data"]) is not str or re.fullmatch(r"0x(?:[0-9a-fA-F]{2})*", unsigned["data"]) is None:
+        return False
+    return True
+
+
+def _decoded_shape(fields: Any) -> bool:
+    """The complete decoded key set and exact locked types; an absent access list is not an empty one."""
+    if not isinstance(fields, Mapping) or set(fields) != _SIGNED_FIELDS:
+        return False
+    for name in _SIGNED_NUMERIC:
+        if type(fields[name]) is not int or not 0 <= fields[name] < _UINT256:
+            return False
+    if fields["type"] != EIP1559_TYPE or fields["v"] not in (0, 1) or fields["r"] == 0 or fields["s"] == 0:
+        return False
+    if type(fields["to"]) not in (bytes, HexBytes) or len(fields["to"]) != _ADDRESS_BYTES:
+        return False
+    if type(fields["data"]) not in (bytes, HexBytes):
+        return False
+    if type(fields["accessList"]) is not tuple or fields["accessList"] != ():
+        return False
+    return True
+
+
 def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -> tuple[str | None, list[str]]:
     """Validate injected signed bytes against the frozen unsigned transaction and wallet.
 
     Returns the Keccak-256 hash of the entire signed serialization and no reasons, or no hash and the reasons.
-    Only EIP-1559 (type 2) is supported; everything else is refused rather than interpreted.
+    Only EIP-1559 (type 2) is supported; everything else is refused rather than interpreted. Both the expected
+    unsigned mapping and the decoded mapping must carry their complete key sets and exact value types before any
+    comparison, so an absent, extra or wrongly typed field is never read as a default.
     """
     if not isinstance(signed_hex, str) or not _HEX.fullmatch(signed_hex):
         return None, ["SIGNED_BYTES_MALFORMED"]
@@ -232,6 +275,10 @@ def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -
         return None, ["SIGNED_BYTES_OVERSIZE"]
     if raw[0] != EIP1559_TYPE:
         return None, ["TRANSACTION_TYPE_UNSUPPORTED"]
+    if not _expected_unsigned(unsigned):
+        return None, ["SIGNED_EXPECTED_MALFORMED"]
+    if type(wallet) is not str or _ADDRESS.fullmatch(wallet) is None:
+        return None, ["SIGNED_WALLET_MALFORMED"]
     try:
         decoded = TypedTransaction.from_bytes(HexBytes(raw))
         fields = decoded.as_dict()
@@ -239,6 +286,8 @@ def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -
         canonical = decoded.encode() == raw
     except Exception:  # noqa: BLE001 - untrusted bytes: any decoder or recovery failure is a refusal
         return None, ["SIGNED_BYTES_MALFORMED"]
+    if not _decoded_shape(fields):
+        return None, ["SIGNED_SHAPE_MALFORMED"]
     reasons = []
     if not canonical:
         reasons.append("SIGNED_BYTES_NON_CANONICAL")
@@ -246,14 +295,12 @@ def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -
                 "gas": unsigned["gas_limit"], "maxFeePerGas": unsigned["max_fee_per_gas"],
                 "maxPriorityFeePerGas": unsigned["max_priority_fee_per_gas"]}
     for name, value in expected.items():
-        if fields.get(name) != value:
+        if fields[name] != value:
             reasons.append(f"SIGNED_{name.upper()}_MISMATCH")
-    if HexBytes(fields.get("to") or b"").hex().lower() != HexBytes(unsigned["to"]).hex().lower():
+    if HexBytes(fields["to"]).hex().lower() != HexBytes(unsigned["to"]).hex().lower():
         reasons.append("SIGNED_TO_MISMATCH")
-    if bytes(fields.get("data") or b"") != bytes(HexBytes(unsigned["data"])):
+    if bytes(fields["data"]) != bytes(HexBytes(unsigned["data"])):
         reasons.append("SIGNED_DATA_MISMATCH")
-    if tuple(fields.get("accessList") or ()) != ():
-        reasons.append("SIGNED_ACCESS_LIST_NOT_EMPTY")
     if sender.lower() != wallet.lower():
         reasons.append("SIGNED_SENDER_MISMATCH")
     if reasons:
@@ -272,6 +319,7 @@ class OriginalTransactionTransport:
                  binding: BoundRelease | None = None, synthetic_bindings: Mapping[str, str] | None = None) -> None:
         self._context, self._clients, self._profile = context, clients, profile
         self._controls, self._clock = controls, clock
+        self._quote_requested_at: dt.datetime | None = None
         self._approved_route = (None if approved_route is None else
                                 ApprovedAdapterConfiguration.model_validate(approved_route.model_dump(mode="json")))
         self._binding = binding
@@ -320,7 +368,7 @@ class OriginalTransactionTransport:
         except JournalError:
             return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
         # After the save, immediately before the signer call: a slow save never grants a grace interval.
-        stop = self._recheck()
+        stop = self._recheck(self._quote_requested_at)
         if stop is not None:
             return self._unsent(journal, stop)
 
@@ -356,7 +404,7 @@ class OriginalTransactionTransport:
         except JournalError:
             return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail="PERSISTENCE_FAILED_AFTER_SIGNING")
         # After the save, immediately before the send: a slow save never grants a grace interval.
-        stop = self._recheck()
+        stop = self._recheck(self._quote_requested_at)
         if stop is not None:
             return self._possible(journal, f"STOPPED_AFTER_SIGNING:{stop}")
 
@@ -422,6 +470,7 @@ class OriginalTransactionTransport:
                 approved_minimum={"asset_id": released["route"]["output_asset"]["asset_id"],
                     "decimals": released["route"]["output_asset"]["decimals"],
                     "raw": released["route"]["approved_min_output_raw"]})
+        self._quote_requested_at = now
         try:
             response = self._clients.route.quote({"chain_id": context.chain_id, "sell_token": context.sell.token,
                                                   "buy_token": context.buy.token, "amount": str(context.sell.raw),
@@ -496,7 +545,7 @@ class OriginalTransactionTransport:
                                 "request_key": signing_request_key(unsigned), "body": body}})
         return envelope, None
 
-    def _recheck(self) -> str | None:
+    def _recheck(self, quote_requested_at: dt.datetime | None = None) -> str | None:
         problem = self._release_problem()
         if problem is not None:
             return problem
@@ -504,6 +553,16 @@ class OriginalTransactionTransport:
         if reasons:
             return ";".join(reasons)
         now = self._clock()
+        # The released quote and input ages are re-derived from the frozen quote request time and the saved
+        # decision slot. Slow nonce, save or signer work never grants an interval past the approved bounds.
+        if quote_requested_at is not None:
+            stale = []
+            if (now - quote_requested_at).total_seconds() > self._profile.max_quote_age_seconds:
+                stale.append("STALE_QUOTE")
+            if (now - self._context.decision_slot).total_seconds() > self._profile.max_input_age_seconds:
+                stale.append("STALE_INPUT")
+            if stale:
+                return ";".join(stale)
         if now >= self._context.intent_expires_at:
             return "INTENT_EXPIRED"
         if now >= parse_utc(self._context.mandate_expires_at):  # the saved mandate, never renewed or replaced

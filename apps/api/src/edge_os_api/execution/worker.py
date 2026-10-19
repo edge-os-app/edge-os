@@ -84,6 +84,7 @@ def observation_problem(provenance: dict[str, Any], slot: dt.datetime, now: dt.d
     if collected is None:
         return "OBSERVATIONS_PROVENANCE_INCOMPLETE", None
     accepted = FORWARD_EVIDENCE.get(qualification, frozenset())
+    collection_limit: int | None = None
     if qualification == "controlled" and runtime is not None:
         from edge_os_api.execution.operating_release import ReleaseRefused
 
@@ -102,9 +103,14 @@ def observation_problem(provenance: dict[str, Any], slot: dt.datetime, now: dt.d
                 and forward.get("availability") == "AVAILABLE" and forward.get("finality") == profile["finality"]
                 and forward.get("evidence_class") == runtime.binding.release.content()["evidence_class"]):
             accepted = frozenset({runtime.binding.release.content()["evidence_class"]})
+            collection_limit = profile["max_collection_age_seconds"]
     if provenance["evidence_class"] not in accepted:
         return "OBSERVATIONS_NOT_FORWARD", collected
     if not slot <= collected <= now or now - collected >= SLOT:
+        return "OBSERVATIONS_STALE", collected
+    # The released collection bound is narrower than the five-minute slot. Intervening holdings, quote and save
+    # work must not replace it with the slot: the same reading is re-aged against the exact bound here.
+    if collection_limit is not None and (now - collected).total_seconds() > collection_limit:
         return "OBSERVATIONS_STALE", collected
     return None, collected
 
