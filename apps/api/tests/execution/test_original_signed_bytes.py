@@ -89,3 +89,13 @@ def test_abi_data_words_are_read_only_as_exact_32_byte_words():
     assert abi_word("0x0000000000000000000000000000000000000000000000000000000005f5e100") == 100000000
     assert abi_word("0x12") is None  # a QUANTITY is not a DATA word
     assert abi_word("0x" + "00" * 33) is None and abi_word(None) is None
+
+
+def test_controlled_owner_gas_and_nonce_use_exact_decimal_strings():
+    from edge_os_api.execution.original_transaction import owner_projection
+    view = owner_projection({"binding_sha256":"a" * 64, "nonce":18014398509481985,
+        "fee_envelope":{"gas_limit":300000, "max_fee_per_gas":18014398509481985,
+                        "max_priority_fee_per_gas":1000000000}})
+    assert view["nonce"] == "18014398509481985"
+    assert view["fee_envelope"] == {"gas_limit":"300000", "max_fee_per_gas":"18014398509481985",
+                                     "max_priority_fee_per_gas":"1000000000"}

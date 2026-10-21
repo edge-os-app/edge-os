@@ -192,3 +192,24 @@ def test_original_calldata_requires_an_even_length_prefixed_hex_string(data):
     envelope["unsigned"]["data"] = data
     result = charge(envelope)
     assert result.state == "UNAVAILABLE" and result.raw is None
+
+
+def test_holdings_finality_is_bound_to_release_proof_and_block_hash(tmp_path):
+    from execution.test_privy_signer import original as transport_fixture
+    from execution.test_saved_attempt_signing import bound_original
+    transport, _, _ = transport_fixture(tmp_path, None)
+    binding, approvals = bound_original(transport)
+    rpc = Rpc(timestamp=int(transport._clock().timestamp()))
+    reader = RpcHoldingsObserver(observer=rpc, wallet_address=transport._context.wallet_address, chain_id=143,
+        assets=[(transport._context.sell.asset_id, 6)], source="observer-a", evidence_class="SYNTHETIC_FIXTURE",
+        clock=transport._clock, binding=binding, synthetic_bindings=approvals)
+    observed = reader.read()
+    assert observed.source == "observer-a:" + BLOCK_HASH
+    assert observed.assets[transport._context.sell.asset_id].raw == "123"
+    reader = RpcHoldingsObserver(observer=rpc, wallet_address=transport._context.wallet_address, chain_id=143,
+        assets=[(transport._context.sell.asset_id, 6)], source="observer-a", evidence_class="SYNTHETIC_FIXTURE",
+        clock=transport._clock, binding=binding, synthetic_bindings={})
+    before = len(rpc.calls)
+    with pytest.raises(HoldingsUnavailable):
+        reader.read()
+    assert len(rpc.calls) == before

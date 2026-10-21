@@ -22,11 +22,12 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import math
 import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from eth_account import Account
 from eth_account.typed_transactions import TypedTransaction
@@ -50,6 +51,9 @@ from edge_os_api.kuru_flow import (
 )
 from edge_os_api.wallet_setup.persistence import WalletSetupEventRow, load_setup
 
+if TYPE_CHECKING:
+    from edge_os_api.execution.operating_release import BoundRelease
+
 SCHEMA = "edge-os.original-transaction/1"
 TRANSPORT_ID = "original-transaction/1"
 EVIDENCE_CLASS = "AUTHORED_RECORDING"
@@ -63,6 +67,13 @@ _HEX = re.compile(r"0x(?:[0-9a-fA-F]{2})+")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 _TX_HASH = re.compile(r"0x[0-9a-fA-F]{64}")
 _INDEXED_ADDRESS = re.compile(r"0x0{24}[0-9a-f]{40}")
+_EXPECTED_UNSIGNED_KEYS = frozenset({"type", "chain_id", "nonce", "to", "value", "data", "gas_limit",
+                                     "max_fee_per_gas", "max_priority_fee_per_gas"})
+_SIGNED_FIELDS = frozenset({"chainId", "nonce", "maxPriorityFeePerGas", "maxFeePerGas", "gas", "to", "value",
+                            "data", "accessList", "v", "r", "s", "type"})
+_SIGNED_NUMERIC = ("chainId", "nonce", "maxPriorityFeePerGas", "maxFeePerGas", "gas", "value", "v", "r", "s", "type")
+_UINT256 = 2 ** 256
+_ADDRESS_BYTES = 20
 
 
 class JournalError(Exception):
@@ -94,9 +105,11 @@ class OriginalClients:
     """The injected clients. The broadcast and observation RPC clients are separate on purpose."""
 
     route: RouteQuoteClient
-    signer: SignerClient
+    signer: SignerClient | None
     broadcast: RpcClient
     observer: RpcClient
+    signer_for_attempt: Callable[[PreparedSubmission], SignerClient] | None = None
+    begin_attempt: Callable[[PreparedSubmission], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -213,11 +226,47 @@ def abi_word(value: Any) -> int | None:
     return None
 
 
+def _expected_unsigned(unsigned: Any) -> bool:
+    """The complete frozen unsigned mapping: exact key set, exact types and supported domains before any use."""
+    if not isinstance(unsigned, Mapping) or set(unsigned) != _EXPECTED_UNSIGNED_KEYS:
+        return False
+    for name in ("type", "chain_id", "nonce", "value", "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas"):
+        if type(unsigned[name]) is not int or not 0 <= unsigned[name] < _UINT256:
+            return False
+    if unsigned["type"] != EIP1559_TYPE:
+        return False
+    if type(unsigned["to"]) is not str or _ADDRESS.fullmatch(unsigned["to"]) is None:
+        return False
+    if type(unsigned["data"]) is not str or re.fullmatch(r"0x(?:[0-9a-fA-F]{2})*", unsigned["data"]) is None:
+        return False
+    return True
+
+
+def _decoded_shape(fields: Any) -> bool:
+    """The complete decoded key set and exact locked types; an absent access list is not an empty one."""
+    if not isinstance(fields, Mapping) or set(fields) != _SIGNED_FIELDS:
+        return False
+    for name in _SIGNED_NUMERIC:
+        if type(fields[name]) is not int or not 0 <= fields[name] < _UINT256:
+            return False
+    if fields["type"] != EIP1559_TYPE or fields["v"] not in (0, 1) or fields["r"] == 0 or fields["s"] == 0:
+        return False
+    if type(fields["to"]) not in (bytes, HexBytes) or len(fields["to"]) != _ADDRESS_BYTES:
+        return False
+    if type(fields["data"]) not in (bytes, HexBytes):
+        return False
+    if type(fields["accessList"]) is not tuple or fields["accessList"] != ():
+        return False
+    return True
+
+
 def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -> tuple[str | None, list[str]]:
     """Validate injected signed bytes against the frozen unsigned transaction and wallet.
 
     Returns the Keccak-256 hash of the entire signed serialization and no reasons, or no hash and the reasons.
-    Only EIP-1559 (type 2) is supported; everything else is refused rather than interpreted.
+    Only EIP-1559 (type 2) is supported; everything else is refused rather than interpreted. Both the expected
+    unsigned mapping and the decoded mapping must carry their complete key sets and exact value types before any
+    comparison, so an absent, extra or wrongly typed field is never read as a default.
     """
     if not isinstance(signed_hex, str) or not _HEX.fullmatch(signed_hex):
         return None, ["SIGNED_BYTES_MALFORMED"]
@@ -226,6 +275,10 @@ def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -
         return None, ["SIGNED_BYTES_OVERSIZE"]
     if raw[0] != EIP1559_TYPE:
         return None, ["TRANSACTION_TYPE_UNSUPPORTED"]
+    if not _expected_unsigned(unsigned):
+        return None, ["SIGNED_EXPECTED_MALFORMED"]
+    if type(wallet) is not str or _ADDRESS.fullmatch(wallet) is None:
+        return None, ["SIGNED_WALLET_MALFORMED"]
     try:
         decoded = TypedTransaction.from_bytes(HexBytes(raw))
         fields = decoded.as_dict()
@@ -233,6 +286,8 @@ def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -
         canonical = decoded.encode() == raw
     except Exception:  # noqa: BLE001 - untrusted bytes: any decoder or recovery failure is a refusal
         return None, ["SIGNED_BYTES_MALFORMED"]
+    if not _decoded_shape(fields):
+        return None, ["SIGNED_SHAPE_MALFORMED"]
     reasons = []
     if not canonical:
         reasons.append("SIGNED_BYTES_NON_CANONICAL")
@@ -240,14 +295,12 @@ def validate_signed(signed_hex: Any, unsigned: Mapping[str, Any], wallet: str) -
                 "gas": unsigned["gas_limit"], "maxFeePerGas": unsigned["max_fee_per_gas"],
                 "maxPriorityFeePerGas": unsigned["max_priority_fee_per_gas"]}
     for name, value in expected.items():
-        if fields.get(name) != value:
+        if fields[name] != value:
             reasons.append(f"SIGNED_{name.upper()}_MISMATCH")
-    if HexBytes(fields.get("to") or b"").hex().lower() != HexBytes(unsigned["to"]).hex().lower():
+    if HexBytes(fields["to"]).hex().lower() != HexBytes(unsigned["to"]).hex().lower():
         reasons.append("SIGNED_TO_MISMATCH")
-    if bytes(fields.get("data") or b"") != bytes(HexBytes(unsigned["data"])):
+    if bytes(fields["data"]) != bytes(HexBytes(unsigned["data"])):
         reasons.append("SIGNED_DATA_MISMATCH")
-    if tuple(fields.get("accessList") or ()) != ():
-        reasons.append("SIGNED_ACCESS_LIST_NOT_EMPTY")
     if sender.lower() != wallet.lower():
         reasons.append("SIGNED_SENDER_MISMATCH")
     if reasons:
@@ -261,14 +314,23 @@ class OriginalTransactionTransport:
     transport_id = TRANSPORT_ID
 
     def __init__(self, context: OriginalContext, clients: OriginalClients, profile: RouteProfile, *,
-                 controls: Callable[[], list[str]], clock: Callable[[], dt.datetime]) -> None:
+                 controls: Callable[[], list[str]], clock: Callable[[], dt.datetime],
+                 approved_route: ApprovedAdapterConfiguration | None = None,
+                 binding: BoundRelease | None = None, synthetic_bindings: Mapping[str, str] | None = None) -> None:
         self._context, self._clients, self._profile = context, clients, profile
         self._controls, self._clock = controls, clock
+        self._quote_requested_at: dt.datetime | None = None
+        self._approved_route = (None if approved_route is None else
+                                ApprovedAdapterConfiguration.model_validate(approved_route.model_dump(mode="json")))
+        self._binding = binding
+        self._synthetic_bindings = None if synthetic_bindings is None else dict(synthetic_bindings)
+        if binding is not None:
+            self._approved_route = ApprovedAdapterConfiguration.model_validate(binding.release.content()["route"])
 
     def original_references(self, prepared: PreparedSubmission) -> dict[str, Any]:
         """IC06 keys, saved with the IN_FLIGHT attempt. The chain identities follow in `original_transaction`."""
         return {"schema_version": "edge-os.original-transaction-references/1", "transport_id": TRANSPORT_ID,
-                "evidence_class": EVIDENCE_CLASS, "signing_request_id": None, "nonce": None, "fee_envelope": None,
+                "evidence_class": self._evidence_class(), "signing_request_id": None, "nonce": None, "fee_envelope": None,
                 "unsigned_bytes": None, "signed_bytes": None, "transaction_hash": None, "provider_reference": None,
                 "absent_reason": "RECORDED_IN_ORIGINAL_TRANSACTION"}
 
@@ -280,9 +342,18 @@ class OriginalTransactionTransport:
     def submit_original(self, prepared: PreparedSubmission,
                         journal: Callable[[str, dict[str, Any]], None]) -> TransportOutcome:
         context = self._context
-        if (prepared.action_id, prepared.payload_hash, prepared.wallet_id) != (
-                context.action_id, context.payload_hash, context.wallet_id):
+        if (prepared.action_id, prepared.payload_hash, prepared.wallet_id, prepared.owner_id,
+                prepared.network_id, prepared.operation) != (
+                context.action_id, context.payload_hash, context.wallet_id, context.owner_id,
+                context.network_id, context.operation):
             return self._unsent(journal, "PREPARED_SUBMISSION_MISMATCH")
+        if self._clients.signer_for_attempt is not None and not prepared.attempt_id:
+            return self._unsent(journal, "SAVED_ATTEMPT_REQUIRED")
+        if self._clients.begin_attempt is not None:
+            try:
+                self._clients.begin_attempt(prepared)
+            except RpcError:
+                return self._unsent(journal, "SAVED_ATTEMPT_UNAVAILABLE")
         prepared_values, refusal = self._prepare(prepared)
         if refusal is not None:
             return self._unsent(journal, refusal, prepared_values)
@@ -297,12 +368,16 @@ class OriginalTransactionTransport:
         except JournalError:
             return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
         # After the save, immediately before the signer call: a slow save never grants a grace interval.
-        stop = self._recheck()
+        stop = self._recheck(self._quote_requested_at)
         if stop is not None:
             return self._unsent(journal, stop)
 
         try:
-            reply = self._clients.signer.rpc(context.wallet_id, prepared_values["signing_request"]["body"])
+            signer = (self._clients.signer_for_attempt(prepared) if self._clients.signer_for_attempt is not None
+                      else self._clients.signer)
+            if signer is None:
+                return self._unsent(journal, "SIGNER_UNAVAILABLE")
+            reply = signer.rpc(context.wallet_id, prepared_values["signing_request"]["body"])
         except (ReplyLost, TimeoutError, OSError, RpcError):
             return self._possible(journal, "SIGNING_UNKNOWN")
         if is_signer_refusal(reply):
@@ -329,7 +404,7 @@ class OriginalTransactionTransport:
         except JournalError:
             return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail="PERSISTENCE_FAILED_AFTER_SIGNING")
         # After the save, immediately before the send: a slow save never grants a grace interval.
-        stop = self._recheck()
+        stop = self._recheck(self._quote_requested_at)
         if stop is not None:
             return self._possible(journal, f"STOPPED_AFTER_SIGNING:{stop}")
 
@@ -349,6 +424,9 @@ class OriginalTransactionTransport:
 
     def _prepare(self, prepared: PreparedSubmission) -> tuple[dict[str, Any] | None, str | None]:
         context, profile = self._context, self._profile
+        refusal = self._release_problem()
+        if refusal is not None:
+            return None, refusal
         if context.chain_id != profile.chain_id:
             return None, "ROUTE_NETWORK_UNSUPPORTED"
         if not context.sell.token or not context.buy.token:
@@ -358,8 +436,17 @@ class OriginalTransactionTransport:
         now = self._clock()
         if now >= context.intent_expires_at:
             return None, "INTENT_EXPIRED"
+        if self._approved_route is not None:
+            route = self._approved_route
+            if (route.network_id, route.input_asset.asset_id, route.input_asset.decimals,
+                    route.output_asset.asset_id, route.output_asset.decimals, route.recipient.lower(),
+                    route.approved_input_raw, route.approved_allowance_raw) != (
+                    context.network_id, context.sell.asset_id, context.sell.decimals,
+                    context.buy.asset_id, context.buy.decimals, context.wallet_address.lower(),
+                    str(context.sell.raw), str(context.allowance_raw)):
+                return None, "APPROVED_ROUTE_BINDING_MISMATCH"
         envelope: dict[str, Any] = {
-            "schema": SCHEMA, "evidence_class": EVIDENCE_CLASS, "transport_id": TRANSPORT_ID, **context.identity,
+            "schema": SCHEMA, "evidence_class": self._evidence_class(), "transport_id": TRANSPORT_ID, **context.identity,
             "owner_id": context.owner_id, "agent_id": context.agent_id, "wallet_id": context.wallet_id,
             "wallet_address": context.wallet_address, "network_id": context.network_id,
             "chain_id": context.chain_id, "action_id": context.action_id, "payload_hash": context.payload_hash,
@@ -369,15 +456,40 @@ class OriginalTransactionTransport:
             "buy": {"asset_id": context.buy.asset_id, "token": context.buy.token,
                     "decimals": context.buy.decimals, "raw": str(context.buy.raw)},
             "gas_asset_id": context.gas_asset_id}
+        if self._binding is not None:
+            from edge_os_api.execution.operating_release import release_sha256
+
+            gas = self._binding.release.content()["gas"]
+            if (profile.gas_limit, profile.max_fee_per_gas, profile.max_priority_fee_per_gas) != (
+                    gas["gas_limit"], gas["max_fee_per_gas"], gas["max_priority_fee_per_gas"]):
+                return envelope, "RELEASE_GAS_MISMATCH"
+            envelope.update(binding_sha256=self._binding.sha256,
+                            release_sha256=release_sha256(self._binding.release), prepared_at=_iso(now))
+            released = self._binding.release.content()
+            envelope.update(scope=released["purpose"], release_id=released["release_id"],
+                approved_minimum={"asset_id": released["route"]["output_asset"]["asset_id"],
+                    "decimals": released["route"]["output_asset"]["decimals"],
+                    "raw": released["route"]["approved_min_output_raw"]})
+        self._quote_requested_at = now
         try:
             response = self._clients.route.quote({"chain_id": context.chain_id, "sell_token": context.sell.token,
                                                   "buy_token": context.buy.token, "amount": str(context.sell.raw),
                                                   "user": context.wallet_address})
         except (ReplyLost, TimeoutError, OSError, RpcError):
             return envelope, "ROUTE_UNAVAILABLE"
-        minimum = context.buy.raw * profile.min_output_bps // 10000
+        received_at = self._clock()
+        if received_at < now:
+            return envelope, "ROUTE_CLOCK_INVALID"
+        refusal = self._recheck()
+        if refusal is not None:
+            return envelope, refusal
+        envelope["quote_observation"] = {"requested_at": _iso(now), "received_at": _iso(received_at),
+                                          "provider_created_at": None,
+                                          "elapsed_seconds": math.ceil((received_at - now).total_seconds())}
+        minimum = (int(self._approved_route.approved_min_output_raw) if self._approved_route is not None else
+                   context.buy.raw * profile.min_output_bps // 10000)
         try:
-            return self._candidate(prepared, envelope, response, minimum, now)
+            return self._candidate(prepared, envelope, response, minimum, received_at)
         except (AdapterError, ValueError):  # a malformed declaration or response is refused before signing
             return envelope, "ROUTE_DECLARATION_INVALID"
 
@@ -402,9 +514,10 @@ class OriginalTransactionTransport:
                        "intent_expires_at": _iso(context.intent_expires_at),
                        "mandate_expires_at": context.mandate_expires_at},
             supported_schema_variants=["TRANSACTION_CALLDATA"])
+        config = self._approved_route or config
         result = prepare_unsigned_transaction(
             quote_response=response if isinstance(response, Mapping) else {}, provenance=ResponseProvenance.AUTHORED,
-            config=config, now=_iso(now), quote_age_seconds=0,
+            config=config, now=_iso(now), quote_age_seconds=envelope["quote_observation"]["elapsed_seconds"],
             input_age_seconds=max(0, int((now - context.decision_slot).total_seconds())))
         if result.outcome != PreparationOutcome.ACCEPTED or result.candidate is None:
             envelope["route_reasons"] = list(result.reasons)
@@ -432,15 +545,47 @@ class OriginalTransactionTransport:
                                 "request_key": signing_request_key(unsigned), "body": body}})
         return envelope, None
 
-    def _recheck(self) -> str | None:
+    def _recheck(self, quote_requested_at: dt.datetime | None = None) -> str | None:
+        problem = self._release_problem()
+        if problem is not None:
+            return problem
         reasons = self._controls()
         if reasons:
             return ";".join(reasons)
         now = self._clock()
+        # The released quote and input ages are re-derived from the frozen quote request time and the saved
+        # decision slot. Slow nonce, save or signer work never grants an interval past the approved bounds.
+        if quote_requested_at is not None:
+            stale = []
+            if (now - quote_requested_at).total_seconds() > self._profile.max_quote_age_seconds:
+                stale.append("STALE_QUOTE")
+            if (now - self._context.decision_slot).total_seconds() > self._profile.max_input_age_seconds:
+                stale.append("STALE_INPUT")
+            if stale:
+                return ";".join(stale)
         if now >= self._context.intent_expires_at:
             return "INTENT_EXPIRED"
         if now >= parse_utc(self._context.mandate_expires_at):  # the saved mandate, never renewed or replaced
             return "MANDATE_EXPIRED"
+        return None
+
+    def _evidence_class(self) -> str:
+        return EVIDENCE_CLASS if self._binding is None else self._binding.release.content()["evidence_class"]
+
+    def _release_problem(self) -> str | None:
+        if self._binding is None:
+            return None
+        from edge_os_api.execution.operating_release import ReleaseRefused
+
+        context = self._context
+        identity = {**context.identity, "owner_id": context.owner_id, "agent_id": context.agent_id,
+                    "wallet_id": context.wallet_id, "wallet_address": context.wallet_address,
+                    "network_id": context.network_id}
+        identity = {key: identity.get(key) for key in self._binding.identity()}
+        try:
+            self._binding.admit(identity, now=self._clock(), synthetic_bindings=self._synthetic_bindings)
+        except ReleaseRefused as error:
+            return str(error)
         return None
 
     @staticmethod
@@ -480,12 +625,19 @@ class ReceiptReading:
         return "REJECTED" if self.verdict.state == ObservationState.REJECTED else RECEIPT_OUTCOMES[self.verdict.state]
 
 
-def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient) -> ReceiptReading:
+def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient, *,
+                          binding: BoundRelease | None = None,
+                          synthetic_bindings: Mapping[str, str] | None = None) -> ReceiptReading:
     """Read the receipt for the saved transaction hash and normalize it with the saved identity."""
-    tx_hash = str(envelope["transaction_hash"])
-    wallet = str(envelope["wallet_address"]).lower()
-    expected_chain = int(envelope["chain_id"])
-    candidate_hash = str(envelope["candidate_hash"])
+    tx_hash = envelope.get("transaction_hash") or ""
+    wallet = envelope.get("wallet_address") or ""
+    expected_chain = envelope.get("chain_id")
+    candidate_hash = envelope.get("candidate_hash") or ""
+    valid_identity = (is_hash(tx_hash) and isinstance(wallet, str) and _ADDRESS.fullmatch(wallet) is not None
+                      and type(expected_chain) is int and isinstance(candidate_hash, str) and bool(candidate_hash))
+    wallet = wallet.lower() if isinstance(wallet, str) else ""
+    expected_chain = expected_chain if type(expected_chain) is int else 0
+    candidate_hash = candidate_hash if isinstance(candidate_hash, str) else ""
     source_ref = f"original-receipt:{tx_hash}"
 
     def normalized(observation: ObservationInput) -> ReceiptReading:
@@ -493,6 +645,18 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient) -> R
                                         expected_chain_id=expected_chain, expected_wallet=wallet,
                                         expected_tx_hash=tx_hash)
         return ReceiptReading(verdict=verdict, source_ref=source_ref)
+
+    if not valid_identity:
+        return normalized(ObservationInput(timeout=True))
+
+    controlled = binding is not None or "binding_sha256" in envelope or "release_sha256" in envelope
+    if controlled:
+        try:
+            if binding is None:
+                return normalized(ObservationInput(timeout=True))
+            binding.qualify_original(envelope, synthetic_bindings=synthetic_bindings)
+        except Exception:  # malformed saved evidence cannot establish a receipt identity
+            return normalized(ObservationInput(timeout=True))
 
     try:
         chain_id = hex_quantity(observer.call("eth_chainId", []))
@@ -504,6 +668,29 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient) -> R
                                            tx_hash=tx_hash))
     if not isinstance(receipt, Mapping):
         return normalized(ObservationInput(chain_id=chain_id))
+    charge = None
+    if controlled:
+        from edge_os_api.execution.provider_observations import observe_monad_charge
+
+        try:
+            finalized = observer.call("eth_getBlockByNumber", ["finalized", False])
+            canonical = observer.call("eth_getBlockByNumber", [receipt["blockNumber"], False])
+            charge = observe_monad_charge(original=envelope, receipt=receipt, canonical_block=canonical,
+                finalized_block=finalized, evidence_class=envelope["evidence_class"], finality_qualified=False,
+                binding=binding, synthetic_bindings=synthetic_bindings)
+            logs = receipt["logs"]
+            indices = [hex_quantity(log["logIndex"]) for log in logs]
+            logs_bound = (isinstance(logs, list) and None not in indices and len(set(indices)) == len(indices)
+                and hex_quantity(receipt.get("transactionIndex")) is not None
+                and all(_well_formed_log(log) and log.get("removed") is False
+                    and all(log.get(key) == receipt.get(key) for key in (
+                        "transactionHash", "transactionIndex", "blockHash", "blockNumber"))
+                    for log in logs))
+            if charge.state != "OBSERVED" or not logs_bound:
+                return normalized(ObservationInput(timeout=True))
+            source_ref = f"original-receipt:{tx_hash}:finalized:{charge.block_hash}"
+        except (ReplyLost, TimeoutError, OSError, RpcError, KeyError, TypeError, ValueError):
+            return normalized(ObservationInput(timeout=True))
     status = {"0x1": "SUCCESS", "0x0": "REVERTED"}.get(str(receipt.get("status")))
     returned_hash = str(receipt.get("transactionHash") or "").lower() or None
     sender = str(receipt.get("from") or "").lower() or None
@@ -514,6 +701,23 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient) -> R
     sell_decimals, buy_decimals = int(sell["decimals"]), int(buy["decimals"])
     spent = _transfers(receipt, sell["token"], source=wallet)
     received = _transfers(receipt, buy["token"], target=wallet)
+    if controlled and receipt.get("status") == "0x1":
+        assert binding is not None
+        route = binding.release.content()["route"]
+        supported = {sell["token"].lower(), buy["token"].lower()}
+        for log in receipt["logs"]:
+            topics = [item.lower() for item in log["topics"]]
+            if (topics and topics[0] == TRANSFER_TOPIC
+                    and any("0x" + item[-40:] == wallet for item in topics[1:])):
+                if (log["address"].lower() not in supported or len(topics) != 3
+                        or not all(_INDEXED_ADDRESS.fullmatch(item) for item in topics[1:])
+                        or abi_word(log.get("data")) is None):
+                    return normalized(ObservationInput(timeout=True))
+        if (spent != int(route["approved_input_raw"]) or received is None
+                or received < int(route["approved_min_output_raw"])
+                or _transfers(receipt, sell["token"], target=wallet) not in (None, 0)
+                or _transfers(receipt, buy["token"], source=wallet) not in (None, 0)):
+            return normalized(ObservationInput(timeout=True))
     gas_used, gas_price = hex_quantity(receipt.get("gasUsed")), hex_quantity(receipt.get("effectiveGasPrice"))
     gas_asset = str(envelope["gas_asset_id"])
     return normalized(ObservationInput(
@@ -523,8 +727,9 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient) -> R
                                                             decimals=sell_decimals),
         actual_output=None if received is None else AssetAmount(asset_id=buy["asset_id"], raw=str(received),
                                                                 decimals=buy_decimals),
-        actual_gas=None if gas_used is None or gas_price is None else AssetAmount(
-            asset_id=gas_asset, raw=str(gas_used * gas_price), decimals=18)))
+        actual_gas=(AssetAmount(asset_id=gas_asset, raw=charge.raw, decimals=18) if charge is not None else
+                    None if gas_used is None or gas_price is None else AssetAmount(
+                        asset_id=gas_asset, raw=str(gas_used * gas_price), decimals=18))))
 
 
 def _transfers(receipt: Mapping[str, Any], token: str, *, source: str | None = None,
@@ -572,6 +777,7 @@ RECEIPT_OUTCOMES = {ObservationState.CONFIRMED: "CONFIRMED", ObservationState.RE
 # The only saved fields the owner sees: identities, codes, digests and stages. Anything else (signed bytes, request
 # bodies, provider replies) stays private, including fields a future stage might add.
 OWNER_FIELDS = frozenset({
+    "scope", "release_id", "release_sha256", "binding_sha256", "approved_minimum", "quote_observation",
     "schema", "evidence_class", "transport_id", "strategy_id", "publication_revision_id", "execution_revision_id",
     "content_hash", "consent_adoption_id", "consent_hash", "policy_binding", "job_id", "owner_id", "agent_id",
     "wallet_id", "wallet_address", "network_id", "chain_id", "action_id", "payload_hash", "operation", "attempt_id",
@@ -588,6 +794,14 @@ def owner_projection(envelope: Mapping[str, Any] | None) -> dict[str, Any] | Non
     if not envelope:
         return None
     view = {key: value for key, value in envelope.items() if key in OWNER_FIELDS}
+    if "binding_sha256" in envelope:
+        # Browser JSON numbers cannot preserve a uint256 nonce or gas amount.
+        if type(view.get("nonce")) is int:
+            view["nonce"] = str(view["nonce"])
+        fees = view.get("fee_envelope")
+        if isinstance(fees, Mapping):
+            view["fee_envelope"] = {key: str(fees[key]) for key in (
+                "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas") if type(fees.get(key)) is int}
     returned = envelope.get("broadcast_returned")
     view["broadcast_returned"] = returned if is_hash(returned) and returned == envelope.get("transaction_hash") else None
     request = envelope.get("signing_request")

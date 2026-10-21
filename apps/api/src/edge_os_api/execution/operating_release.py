@@ -18,6 +18,7 @@ SCHEMA = "edge-os.controlled-execution-release/1"
 CONTROLS = frozenset({"chain", "wallet_signer_binding", "entrypoint_method", "input_output_assets", "raw_input",
     "recipient", "minimum_output", "fees", "approvals", "gas_action_capacity", "expiry_freshness", "opaque_program"})
 APPROVED_ACTUAL_RELEASES: Mapping[str, str] = MappingProxyType({})
+APPROVED_ACTUAL_BINDINGS: Mapping[str, str] = MappingProxyType({})
 _FIELDS = frozenset({"release_id", "kind", "evidence_class", "purpose", "chain_id", "wallet_id", "wallet_address",
     "signer_id", "policy_id", "policy_owner_id", "policy_content_sha256", "independent_proof_sha256", "deployment",
     "route", "quote", "broadcast", "observer", "gas", "transaction", "limits", "valid_until", "finality", "controls"})
@@ -171,3 +172,114 @@ def check_release(release: OperatingRelease, *, expected_sha256: str, now: dt.da
                 or control["proof_sha256"] is None):
             raise ReleaseRefused("EXECUTION_CONTROL_UNQUALIFIED")
     return digest
+
+
+_IDENTITY_FIELDS = frozenset({"owner_id", "agent_id", "wallet_id", "wallet_address", "network_id", "strategy_id",
+    "publication_revision_id", "execution_revision_id", "market_binding_id", "content_sha256", "manifest_sha256",
+    "consent_adoption_id", "consent_hash", "review_hash", "terms_hash"})
+
+
+@dataclass(frozen=True, init=False)
+class BoundRelease:
+    """Immutable saved-identity and independent-proof binding, separately admitted from route authority."""
+
+    release: OperatingRelease
+    _bytes: bytes = field(repr=False)
+
+    def __init__(self, release: OperatingRelease, identity: Mapping[str, str], *,
+                 position_inventory_proof_sha256: str, market_proof_sha256: str,
+                 finality_proof_sha256: str, exit_capacity_proof_sha256: str | None = None,
+                 valuation_proof_sha256: str | None = None, cost_model_proof_sha256: str | None = None,
+                 market_profile: Mapping[str, Any] | None = None) -> None:
+        content = release.content()
+        value = dict(identity)
+        _require(set(value) == _IDENTITY_FIELDS and all(type(x) is str and 0 < len(x) <= 200 for x in value.values()))
+        _require(value["wallet_id"] == content["wallet_id"] and value["wallet_address"] == content["wallet_address"]
+                 and value["network_id"] == "monad:143")
+        _require(all(_hash(value[x]) for x in ("content_sha256", "manifest_sha256")))
+        _require(all(re.fullmatch(r"sha256:[0-9a-f]{64}", value[x]) for x in ("consent_hash", "review_hash", "terms_hash")))
+        _require(all(_hash(x) for x in (position_inventory_proof_sha256, market_proof_sha256, finality_proof_sha256)))
+        _require(all(x is None or _hash(x) for x in (exit_capacity_proof_sha256, valuation_proof_sha256, cost_model_proof_sha256)))
+        profile = None if market_profile is None else dict(market_profile)
+        if profile is not None:
+            _require(set(profile) == {"source_id", "delivery_profile_sha256", "finality", "warmup_buckets", "max_collection_age_seconds"})
+            _require(_text(profile["source_id"]) and _hash(profile["delivery_profile_sha256"]) and profile["finality"] == "finalized"
+                     and type(profile["warmup_buckets"]) is int and 0 <= profile["warmup_buckets"] <= 10000
+                     and type(profile["max_collection_age_seconds"]) is int
+                     and 0 < profile["max_collection_age_seconds"] <= content["route"]["freshness"]["max_input_age_seconds"])
+        wire = canonical_bytes({"schema": "edge-os.controlled-execution-binding/1", "identity": value,
+            "release_sha256": release_sha256(release), "position_inventory_proof_sha256": position_inventory_proof_sha256,
+            "market_proof_sha256": market_proof_sha256, "finality_proof_sha256": finality_proof_sha256,
+            "exit_capacity_proof_sha256": exit_capacity_proof_sha256, "valuation_proof_sha256": valuation_proof_sha256,
+            "cost_model_proof_sha256": cost_model_proof_sha256, "market_profile": profile})
+        object.__setattr__(self, "release", release)
+        object.__setattr__(self, "_bytes", wire)
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self._bytes).hexdigest()
+
+    def identity(self) -> dict[str, str]:
+        return json.loads(self._bytes)["identity"]
+
+    def proofs(self) -> dict[str, str | None]:
+        return {key: value for key, value in json.loads(self._bytes).items() if key.endswith("_proof_sha256")}
+
+    def market_profile(self) -> dict[str, Any] | None:
+        return json.loads(self._bytes)["market_profile"]
+
+    def admit(self, identity: Mapping[str, str], *, now: dt.datetime,
+              synthetic_bindings: Mapping[str, str] | None = None) -> str:
+        if dict(identity) != self.identity():
+            raise ReleaseRefused("EXECUTION_BINDING_MISMATCH")
+        content = self.release.content()
+        digest = release_sha256(self.release)
+        if content["kind"] == "ACTUAL":
+            if synthetic_bindings is not None or APPROVED_ACTUAL_BINDINGS.get(self.sha256) != digest:
+                raise ReleaseRefused("ACTUAL_EXECUTION_BINDING_NOT_APPROVED")
+            approvals = None
+        else:
+            if synthetic_bindings is None or synthetic_bindings.get(self.sha256) != digest:
+                raise ReleaseRefused("SYNTHETIC_EXECUTION_BINDING_NOT_APPROVED")
+            approvals = {content["release_id"]: digest}
+        check_release(self.release, expected_sha256=digest, now=now, synthetic_approvals=approvals)
+        return self.sha256
+
+    def qualify_original(self, original: Mapping[str, Any], *,
+                         synthetic_bindings: Mapping[str, str] | None = None) -> str:
+        """Verify saved authority at preparation time for read-only recovery after its signing expiry."""
+        content = self.release.content()
+        if (original.get("binding_sha256") != self.sha256
+                or original.get("release_sha256") != release_sha256(self.release)
+                or original.get("evidence_class") != content["evidence_class"]):
+            raise ReleaseRefused("ORIGINAL_RELEASE_MISMATCH")
+        self.admit({key: original.get(key) for key in self.identity()},
+                   now=parse_utc(original["prepared_at"]), synthetic_bindings=synthetic_bindings)
+        gas, route, unsigned = content["gas"], content["route"], original["unsigned"]
+        if (original.get("chain_id") != 143 or unsigned.get("chain_id") != 143
+                or unsigned.get("to", "").lower() != route["entrypoint_address"].lower()
+                or unsigned.get("value") != 0
+                or any(unsigned.get(key) != gas[key] for key in ("gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas"))
+                or original["sell"]["raw"] != route["approved_input_raw"]
+                or any(original[leg].get(key) != route[asset].get(route_key)
+                       for leg, asset in (("sell", "input_asset"), ("buy", "output_asset"))
+                       for key, route_key in (("asset_id", "asset_id"), ("token", "token_address"), ("decimals", "decimals")))):
+            raise ReleaseRefused("ORIGINAL_RELEASE_MISMATCH")
+        from edge_os_api.kuru_flow.flow_calldata import decode_flow_call
+        from edge_os_api.kuru_flow.types import candidate_identity
+
+        call = decode_flow_call(data_hex=unsigned["data"], method=route["method"])
+        if (call.selector != route["selector"] or call.program_hex != route["approved_program_hex"]
+                or call.intent.amount_user_sells != route["approved_input_raw"]
+                or call.intent.min_amount_user_buys != route["approved_min_output_raw"]
+                or call.intent.token_user_sells.lower() != route["input_asset"]["token_address"].lower()
+                or call.intent.token_user_buys.lower() != route["output_asset"]["token_address"].lower()
+                or call.fees.model_dump(mode="json") != route["fees"]
+                or (call.receiver is not None and call.receiver.lower() != route["recipient"].lower())):
+            raise ReleaseRefused("ORIGINAL_ROUTE_MISMATCH")
+        candidate = {"chain_id": 143, "to": unsigned["to"], "value_raw": "0", "data_hex": unsigned["data"],
+                     "selector": call.selector, "method": call.method, "intent": call.intent.model_dump(mode="json"),
+                     "fees": call.fees.model_dump(mode="json"), "program_hex": call.program_hex, "receiver": call.receiver}
+        if candidate_identity(candidate) != original["candidate_hash"]:
+            raise ReleaseRefused("ORIGINAL_CANDIDATE_MISMATCH")
+        return content["evidence_class"]

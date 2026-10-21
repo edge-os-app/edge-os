@@ -17,12 +17,13 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from edge_os_api.admission.types import AllowanceCap, ApprovalSnapshot, IdentityBinding
+from edge_os_api.admission.types import AllowanceCap, ApprovalSnapshot, ControlledApproval, IdentityBinding
 from edge_os_api.consent.records import ConsentAdoptionRow, ConsentReviewRow
 from edge_os_api.consent.types import ReviewedTerms, parse_utc
 from edge_os_api.core.provider_ports import FIXTURE_MODE
@@ -32,6 +33,9 @@ from edge_os_api.records.models import StrategyRevision
 from edge_os_api.strategies.compiler import CompilerError
 from edge_os_api.wallet_setup.persistence import load_setup
 from edge_os_api.wallet_setup.types import SetupState
+
+if TYPE_CHECKING:
+    from edge_os_api.execution.operating_release import BoundRelease
 
 NETWORK_NAMES = {143: "monad:143", 10143: "monad-testnet:10143"}
 NATIVE_GAS_DECIMALS = 18
@@ -158,17 +162,42 @@ def _cap(amount: Any) -> AllowanceCap:
     return AllowanceCap(asset_id=amount.asset_id, decimals=amount.decimals, approved_raw=amount.raw)
 
 
+def saved_release_identity(agent: ConnectedAgent, consent: AdoptedConsent, address: str) -> dict[str, str]:
+    return {**agent.identity(), "owner_id": str(agent.owner_id), "wallet_address": address,
+            "consent_adoption_id": str(consent.adoption_id), "consent_hash": consent.consent_hash,
+            "review_hash": consent.review_hash, "terms_hash": consent.terms.content_hash()}
+
+
 def derive_approval(agent: ConnectedAgent, consent: AdoptedConsent, *, qualification: str,
-                    now: dt.datetime) -> tuple[ApprovalSnapshot | None, str | None]:
+                    now: dt.datetime, binding: BoundRelease | None = None, wallet_address: str | None = None,
+                    synthetic_bindings: Mapping[str, str] | None = None) -> tuple[ApprovalSnapshot | None, str | None]:
     """The approval snapshot the server may use for this agent now, or the reason none exists.
 
     Only the fixture qualification profile produces a snapshot, labelled SYNTHETIC. Expired terms, a
     different terms version, an asset outside the revision's market or a missing required limit deny.
     """
-    if qualification != FIXTURE_MODE:
+    controlled = None
+    released = None
+    if qualification == "controlled" and binding is not None and wallet_address is not None:
+        from edge_os_api.execution.operating_release import ReleaseRefused, release_sha256
+
+        try:
+            binding.admit(saved_release_identity(agent, consent, wallet_address), now=now,
+                          synthetic_bindings=synthetic_bindings)
+        except ReleaseRefused as error:
+            return None, str(error)
+        proofs = binding.proofs()
+        if any(proofs.get(key + "_proof_sha256") is None for key in (
+                "position_inventory", "exit_capacity", "valuation", "cost_model")):
+            return None, "OPERATIONAL_QUALIFICATION_UNAVAILABLE"
+        released = binding.release.content()
+        controlled = ControlledApproval(evidence_class=released["evidence_class"], release_sha256=release_sha256(binding.release),
+            binding_sha256=binding.sha256, **{key: value for key, value in proofs.items()
+                if key in ("position_inventory_proof_sha256", "exit_capacity_proof_sha256", "valuation_proof_sha256", "cost_model_proof_sha256")})
+    elif qualification != FIXTURE_MODE:
         return None, "ACTIVATION_UNAVAILABLE"
     terms = consent.terms
-    if terms.terms_version != CONNECTED_TERMS_VERSION:
+    if terms.terms_version != ("connected-one-action/1" if controlled is not None else CONNECTED_TERMS_VERSION):
         return None, "TERMS_VERSION_UNSUPPORTED"
     if parse_utc(terms.expiry) <= now:
         return None, "CONSENT_EXPIRED"
@@ -188,6 +217,20 @@ def derive_approval(agent: ConnectedAgent, consent: AdoptedConsent, *, qualifica
     actions = [action for action in terms.supported_actions if action in ("ENTRY", "EXIT")]
     if not actions:
         return None, "TERMS_INCOMPLETE"
+    if released is not None:
+        route, gas = released["route"], released["gas"]
+        if (terms.supported_actions != ["ENTRY"] or terms.attempt_budget < 2
+                or terms.signer != released["signer_id"] or terms.policy is None
+                or (terms.policy.policy_id, terms.policy.content_sha256) != (released["policy_id"], released["policy_content_sha256"])
+                or terms.route.identity != route["entrypoint_address"]
+                or terms.route.adapter != "KURU_FLOW_FIXED_INPUT" or "KURU_FLOW_FIXED_INPUT" not in terms.supported_routes
+                or set(terms.supported_assets) != {agent.quote.asset_id, agent.base.asset_id}
+                or (route["input_asset"]["asset_id"], route["output_asset"]["asset_id"]) != (agent.quote.asset_id, agent.base.asset_id)
+                or min(int(allocation.raw), int(allowances["quote_input"].raw)) < int(route["approved_input_raw"])
+                or int(allowances["base_inventory"].raw) < int(route["approved_min_output_raw"])
+                or int(allowances["per_action_gas"].raw) < int(gas["budget_raw"])
+                or int(terms.gas_budget.raw) < int(gas["budget_raw"]) + int(allowances["per_exit_gas"].raw)):
+            return None, "CONTROLLED_TERMS_MISMATCH"
     mandate = str(consent.adoption_id)
     approval = ApprovalSnapshot(
         approval_id=mandate,
@@ -197,6 +240,15 @@ def derive_approval(agent: ConnectedAgent, consent: AdoptedConsent, *, qualifica
         allocation_quote=_cap(allocation), quote_allowance=_cap(allowances["quote_input"]),
         base_allowance=_cap(allowances["base_inventory"]), gas=_cap(terms.gas_budget),
         per_action_gas=_cap(allowances["per_action_gas"]), per_exit_gas=_cap(allowances["per_exit_gas"]),
-        attempt_budget=terms.attempt_budget, stops=[], exit_capacity_qualified=True, valuation_qualified=True,
-        cost_model_qualified=True, fixture_label=FIXTURE_QUALIFICATION_LABEL)
+        attempt_budget=terms.attempt_budget, stops=[], exit_capacity_qualified=controlled is None,
+        valuation_qualified=controlled is None, cost_model_qualified=controlled is None, controlled=controlled,
+        fixture_label=("PROVIDER_ACTUAL_QUALIFICATION" if controlled is not None and controlled.evidence_class == "PROVIDER_ACTUAL"
+                       else FIXTURE_QUALIFICATION_LABEL))
+    if released is not None:
+        # Retain the existing entry+exit protection. This release permits only one entry submission.
+        approval = approval.model_copy(update={"quote_allowance": AllowanceCap(asset_id=agent.quote.asset_id,
+            decimals=agent.quote.decimals, approved_raw=released["route"]["approved_input_raw"]),
+            "per_action_gas": AllowanceCap(asset_id=agent.gas.asset_id, decimals=agent.gas.decimals,
+                                          approved_raw=released["gas"]["budget_raw"]),
+            "attempt_budget": 2, "expires_at": min((terms.expiry, released["valid_until"]), key=parse_utc)})
     return approval, None
