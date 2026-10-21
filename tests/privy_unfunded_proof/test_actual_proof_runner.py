@@ -1112,3 +1112,51 @@ def test_transport_failures_have_no_context() -> None:
         assert caught.value.__cause__ is None
         assert CANARY not in repr(caught.value)
         assert CANARY not in str(caught.value)
+
+
+def test_accepted_decoder_refuses_extra_key_and_wrong_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F6: the accepted Phase B helper now refuses an extra decoded key, a wrong-typed field
+    and a wrongly typed expected value at the actual_profile composition seam."""
+    from edge_os_api.execution import original_transaction
+
+    unsigned = dict(specimens.BASELINE_TRANSACTION)
+    fields = {
+        "chainId": 143, "nonce": 0, "maxPriorityFeePerGas": 2000000000, "maxFeePerGas": 100000000000,
+        "gas": 300000, "to": bytes.fromhex(WALLET_A[2:]), "value": 0, "data": b"",
+        "accessList": (), "v": 0, "r": 1, "s": 1, "type": 2,
+    }
+    assert set(fields) == original_transaction._SIGNED_FIELDS
+    raw = b"\x02" + b"\x00" * 10
+
+    class FakeDecoded:
+        def __init__(self, decoded: dict) -> None:
+            self._decoded = decoded
+
+        def as_dict(self) -> dict:
+            return self._decoded
+
+        def encode(self) -> bytes:
+            return raw
+
+    def install(decoded: dict) -> None:
+        monkeypatch.setattr(original_transaction.TypedTransaction, "from_bytes",
+                            staticmethod(lambda _raw: FakeDecoded(decoded)))
+        monkeypatch.setattr(original_transaction.Account, "recover_transaction",
+                            staticmethod(lambda _raw: WALLET_A))
+
+    decode = accepted_signed_decoder(unsigned, WALLET_A)
+    install({**fields, "extra": 1})
+    extra = decode(raw)
+    assert extra.matched is False
+    assert extra.reasons == ("SIGNED_SHAPE_MALFORMED",)
+
+    install({**fields, "nonce": True})
+    wrong_type = decode(raw)
+    assert wrong_type.matched is False
+    assert wrong_type.reasons == ("SIGNED_SHAPE_MALFORMED",)
+
+    install(fields)
+    bool_expected = accepted_signed_decoder({**unsigned, "nonce": True}, WALLET_A)
+    expected_bad = bool_expected(raw)
+    assert expected_bad.matched is False
+    assert expected_bad.reasons == ("SIGNED_EXPECTED_MALFORMED",)
