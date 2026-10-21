@@ -34,22 +34,29 @@ endpoint and the bearer token. The transport makes exactly one client call per `
 
 ### Native response mapping (request pinned 2026-10-12; response observed 2026-10-21)
 
-The client returns a native Envio HyperSync `QueryResponse`. The transport maps:
+The client returns a native Envio HyperSync `QueryResponse`.
 
-The 2026-10-12 first-party documentation describes `data` as one `ResponseData` object. The served replies
-observed on Monad on 2026-10-21 carried `data` as a list of batch objects:
+The full response field set is observed in one Monad reply: the recorder run
+`moe-wmon-fwd20m-actual-20261021b`, call `03-P1-hypersync`, body SHA256
+`b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1`, carried `archive_height`,
+`next_block`, `total_execution_time`, `data` as a list of batch objects (each with `blocks`, `logs`) and an
+optional `rollback_guard`.
 
-- Recorder run `moe-wmon-fwd20m-actual-20261021b`, call `03-P1-hypersync`, body SHA256
-  `b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1`.
-- Pool census, 9 requests: `v2_pool_census.py` SHA256
-  `61b5f8242e59099088dc7de56d8deaa4edbba1f074399219cc177ba68118ae6a`, result `census7.json` SHA256
-  `0c0c39dd02d92b9a16c2606fb1abba15c45a0cc5940e0839a6478b286f5d45d3`.
-- MOE behavior check, 5 query requests: `moe_behavior_check.py` SHA256
-  `b390c38e07f1e8b9f9196d4715739474fb0fa97bf4454247013f78bc5ea34cdf`, result `moe_check1.json` SHA256
-  `d8134a021ef3f7b274c9fdcaa4e7796c552d7e75efa27eb4692a5ffe7293318d`.
+The controller's pool census (9 `/query` requests) and MOE behavior check (4 `/query` requests; 5 HyperSync
+calls including one `/height`) also received `data` as a list of batch objects and read their `logs`. Those
+scripts selected log fields only and kept no reply bodies, so they do not show `blocks`, `archive_height`,
+`total_execution_time` or `rollback_guard`. Their pinned files are `v2_pool_census.py` SHA256
+`61b5f8242e59099088dc7de56d8deaa4edbba1f074399219cc177ba68118ae6a` with `census7.json` SHA256
+`0c0c39dd02d92b9a16c2606fb1abba15c45a0cc5940e0839a6478b286f5d45d3`, and `moe_behavior_check.py` SHA256
+`b390c38e07f1e8b9f9196d4715739474fb0fa97bf4454247013f78bc5ea34cdf` with `moe_check1.json` SHA256
+`d8134a021ef3f7b274c9fdcaa4e7796c552d7e75efa27eb4692a5ffe7293318d`.
 
-The transport follows the served replies. This list shape is observed on Monad across those calls; other chains
-and response fields remain unverified.
+The first-party documentation, read 2026-10-12 and rechecked through Context7 `/enviodev/docs` on
+2026-10-21, describes `data` as one `ResponseData` object. It disagrees with those served replies, and the code
+follows the replies. The full field set is observed on that one P1 reply; other chains and response fields
+remain unverified.
+
+The transport maps:
 
 | Native | Adapter field |
 |---|---|

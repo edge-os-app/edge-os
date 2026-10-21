@@ -18,19 +18,23 @@ NOT verified): a JSON body with ``from_block``,
 ``max_num_*`` limits, against ``<host base>/query``. The bearer token is the
 ``Authorization: Bearer <token>`` header.
 
-The response shape follows observed Monad replies on 2026-10-21. The recorder run
+The full response field set is observed in one Monad reply: the recorder run
 ``moe-wmon-fwd20m-actual-20261021b``, call ``03-P1-hypersync``, body SHA256
-``b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1``, and the
-controller's pool census (9 requests) and MOE behavior check (5 query requests)
-carried ``archive_height``, ``next_block``, ``total_execution_time``, ``data`` as
-a list of batch objects, each with ``blocks`` and ``logs``, and an optional
-``rollback_guard``.
+``b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1``, carried
+``archive_height``, ``next_block``, ``total_execution_time``, ``data`` as a list of
+batch objects (each with ``blocks`` and ``logs``) and an optional ``rollback_guard``.
 
-The first-party documentation, queried through Context7 ``/enviodev/docs`` on
-2026-10-21, describes ``data`` as one ``ResponseData`` object. It disagrees with
-those served replies, and this code follows the replies. This list shape is
-observed on Monad across those calls; other chains and response fields remain not
-verified.
+The controller's pool census (9 ``/query`` requests) and MOE behavior check
+(4 ``/query`` requests; 5 HyperSync calls including one ``/height``) also received
+``data`` as a list of batch objects and read their ``logs``. Those scripts selected
+log fields only and kept no reply bodies, so they do not show ``blocks``,
+``archive_height``, ``total_execution_time`` or ``rollback_guard``.
+
+The first-party documentation, read 2026-10-12 and rechecked through Context7
+``/enviodev/docs`` on 2026-10-21, describes ``data`` as one ``ResponseData`` object.
+It disagrees with those served replies, and this code follows the replies. The full
+field set is observed on that one P1 reply; other chains and response fields remain
+not verified.
 
 The page span is bounded to ``ClientBounds.max_blocks_per_page`` blocks and the log
 count to the request's ``max_rows``, so one page cannot grow without a caller
