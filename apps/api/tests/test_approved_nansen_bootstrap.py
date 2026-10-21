@@ -147,12 +147,14 @@ def test_the_default_composes_the_api_and_worker_runtime_without_reading_or_sock
 
 def test_the_default_is_registered_in_code_not_gated_by_settings_or_environment(
         monkeypatch: pytest.MonkeyPatch, no_sockets: list[Any]) -> None:
-    # Registration is code-owned: production settings and a hostile environment change nothing, and an ACTUAL release
-    # is not refused in production. Nothing is read and no socket opens.
+    # Registration is code-owned: a hostile environment changes nothing and local/test composition stays available.
+    # Production additionally needs an approved hosted deployment record, which is empty here.
     monkeypatch.setenv("EDGE_OS_NANSEN_RELEASE", "actual-attacker/1")
     monkeypatch.setenv("NANSEN_API_KEY", "fake-nansen-SENTINEL-4b5c6d")
-    runtime = released_runtime_bootstrap.server_research_runtime(SimpleNamespace(env="production"))
+    runtime = released_runtime_bootstrap.server_research_runtime(SETTINGS)
     assert runtime is not None and runtime.release_sha256 == RELEASE_SHA256
+    with pytest.raises(ReleaseRefused, match="hosted_deployment_not_matched"):
+        released_runtime_bootstrap.server_research_runtime(SimpleNamespace(env="production"))
     assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == {RELEASE_ID}
     assert operating_release.APPROVED_RELEASES == {RELEASE_ID: RELEASE_SHA256}
     assert nansen_request(runtime.release.nansen) == EXPECTED_REQUEST

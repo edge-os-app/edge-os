@@ -31,6 +31,7 @@ from edge_os_api.replay import saved_runs as spot_replay_api
 from edge_os_api.core.authentication import Principal, Verifier, require_principal
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
 from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
+from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
 from edge_os_api.research.fixture_interpreter import samples
 from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, NansenReportBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
@@ -113,7 +114,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
 
     Only the `hermes_local` setting uses it, and that setting needs it. `hermes_config` is the interpreter configuration
     of the release that runner serves (`research/hermes_relay_composition.py`); without one the runner serves the local
-    fake provider configuration. A configuration needs its runner and is refused in production.
+    fake provider configuration. A configuration needs its runner. In production it also needs an approved hosted
+    deployment record that names its relay release, and a production `hermes_local` without a configuration is refused.
 
     `research_runtime` is a composed operating release (`core/research/released_source_runtime.py`). Without one, the
     server bootstrap composes the approved code-owned release, the same one the worker composes; exactly one is
@@ -121,12 +123,26 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     the default reaches no provider by itself.
     """
     settings = settings or load_settings()
+    deployment = None
+    if settings.env == "production":
+        try:
+            deployment = check_hosted_deployment(settings)
+        except HostedDeploymentRefused as refused:
+            raise ConfigError(f"invalid configuration: hosted_deployment: {refused.code}") from None
     if settings.interpreter == "hermes_local" and hermes_runner is None:
         raise ConfigError("invalid configuration: interpreter: hermes_local needs a Hermes runner")
-    if hermes_config is not None and (settings.interpreter != "hermes_local" or hermes_runner is None
-                                      or settings.env == "production"):
-        raise ConfigError("invalid configuration: interpreter: a Hermes release configuration needs hermes_local, "
-                          "its Hermes runner and a non-production environment")
+    if settings.env == "production" and settings.interpreter == "hermes_local" and hermes_config is None:
+        raise ConfigError("invalid configuration: interpreter: production hermes_local needs the approved relay "
+                          "release configuration")
+    if hermes_config is not None and (settings.interpreter != "hermes_local" or hermes_runner is None):
+        raise ConfigError("invalid configuration: interpreter: a Hermes release configuration needs hermes_local "
+                          "and its Hermes runner")
+    if hermes_config is not None and settings.env == "production":
+        live = hermes_config.live_release
+        if (deployment is None or live is None or hermes_config.runtime_label != "LIVE"
+                or not deployment.admits_hermes_release_id(live.release_id)):
+            raise ConfigError("invalid configuration: interpreter: a production Hermes release configuration needs "
+                              "an approved hosted deployment naming its relay release")
     if research_runtime is None:
         try:
             research_runtime = released_runtime_bootstrap.server_research_runtime(settings)
@@ -135,6 +151,10 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     if research_runtime is not None:
         if research_runtime.release.kind == "STAND_IN" and settings.env == "production":
             raise ConfigError("invalid configuration: research_runtime: a stand-in release is refused in production")
+        if settings.env == "production" and (deployment is None or not deployment.admits_research_release(
+                research_runtime.release.release_id, research_runtime.release_sha256)):
+            raise ConfigError("invalid configuration: research_runtime: no approved hosted deployment record names "
+                              "this exact research release")
         if research_runtime.release.nansen is not None and settings.nansen_research_mode != "unavailable":
             raise ConfigError("invalid configuration: research_runtime: a release Nansen part and "
                               "nansen_research_mode cannot both serve Nansen reports")

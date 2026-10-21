@@ -15,9 +15,10 @@ trusted registry `relay_admission.APPROVED_ACTUAL_RELEASES`. Both name only the 
 Binding it reads no file, and nothing opens an engine, key, socket or Docker command before the operator's handoff for
 exactly that release is read. A ledger cap sees one database only: the shared USD 2.00 ceiling still needs an external
 reconciliation before the first actual call. No setting, environment value, file or request adds a definition.
-Production is refused. The application holds no provider key: the relay holds it. The owner and saved request of each
-grant are read from the saved attempt row and must equal those the RESERVED reservation copied from it; anything else
-gets no grant.
+Production needs an approved hosted deployment record that names this exact release; the registry is empty in this
+candidate, so production stays refused. The application holds no provider key: the relay holds it. The owner and saved
+request of each grant are read from the saved attempt row and must equal those the RESERVED reservation copied from it;
+anything else gets no grant.
 
 Give `app.runner` and `app.config` to `create_app(settings, hermes_runner=..., hermes_config=...)` with
 `EDGE_OS_INTERPRETER=hermes_local`. The lane-1 relay operator starts the relay and owns its shutdown; its one-time
@@ -45,6 +46,7 @@ from typing import Any
 from sqlalchemy import Engine, text
 
 from edge_os_api.core.database import make_engine, make_session_factory, require_head
+from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
 from edge_os_api.core.settings import Settings
 from edge_os_api.research.hermes_interpreter import HermesInterpreterConfig, HermesTurn, HermesTurnRunner, LiveRelease
 # `hermes_transport_mount` (through `provider_spend_ledger`) has already added the accepted runner folders.
@@ -401,19 +403,32 @@ def open_hermes_application(settings: Settings, *, handoff_path: Path, handoff_s
                             close_budget_seconds: float = 2.0) -> HermesApplication | None:
     """The approved application release, opened, or None when none is approved. Raises `MountRefused` before any effect.
 
+    In production the running configuration must also name an approved hosted deployment record that binds this exact
+    relay release and record hash; the registry is empty in this candidate, so production stays refused.
+
     `handoff_path` and `handoff_sha256` are the line the relay operator printed at start, given by the application's
     trusted configuration owner. The handoff is read only after an approved definition is found, and it is never
     written. Each API process uses its own stable `run_id`; a restarted process reuses it to recover its dead turns.
     The application never stops, restarts or removes relay resources: `close` disposes only its own engine.
     """
+    deployment = None
     if settings.env == "production":
-        raise MountRefused("the Hermes relay application is refused in production until its deployment is qualified")
+        try:
+            deployment = check_hosted_deployment(settings)
+        except HostedDeploymentRefused as refused:
+            raise MountRefused(f"the hosted deployment record is refused: {refused.code}") from None
+        if deployment is None:
+            raise MountRefused("the Hermes relay application is refused in production until its deployment is "
+                               "qualified")
     if settings.interpreter != "hermes_local":
         raise MountRefused("the Hermes relay application needs EDGE_OS_INTERPRETER=hermes_local")
     definition = _approved_definition()
     if definition is None:
         return None
     release = bind_release(definition)
+    if settings.env == "production" and (deployment is None or not deployment.admits_hermes_relay(
+            release.actual.release.release_id, definition.record_sha256)):
+        raise MountRefused("the hosted deployment record does not approve this Hermes relay release")
     endpoint, evidence_dir = _handoff(handoff_path, handoff_sha256, release)
     engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     try:

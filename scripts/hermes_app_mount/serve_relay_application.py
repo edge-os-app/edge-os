@@ -1,7 +1,9 @@
 """Start the API on loopback with the approved Hermes relay application release (`open_hermes_application`).
 
 Run it from `apps/api` with the API's Python, the usual EDGE_OS_* environment and EDGE_OS_INTERPRETER=hermes_local
-(refused in production). `--handoff-path` and `--handoff-sha256` are the line the relay operator printed at start;
+(in production it also needs an approved hosted deployment record that binds the exact relay release; the registry is
+empty in this candidate, so production stays refused). `--handoff-path` and `--handoff-sha256` are the line the relay
+operator printed at start;
 `--run-id` is this API process's stable id (a restart reuses it to recover its own dead turns). The relay operator
 started the relay and owns its shutdown: this process never stops it, and on exit closes only its own database engine.
 
