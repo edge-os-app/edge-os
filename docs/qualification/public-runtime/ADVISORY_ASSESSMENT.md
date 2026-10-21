@@ -64,6 +64,7 @@ Fixed copies also present: `ws@7.5.13`, `ws@8.21.0`, `ws@8.21.3`, `ws@8.22.0`.
 - No `uuid.v3(`, `uuid.v5(` or `uuid.v6(` call appears in the client or server output.
 - The installed `next experimental-analyze` hard-codes the `.next` output directory and reports only route names, so it supplied no import-to-chunk map. Marker absence is supporting evidence only.
 - The local fixture browser run (R7) served the build and loaded the landing with no `/v1` call and no Privy script; the 401 fixture path rendered "Sign in to start" and "Signing in does not create a wallet" at desktop and 390 px. The R7 build contains two `createOnLogin: "off"` literals.
+- R7 did not exercise real Privy login, real wallet creation or the public host. It did not run the P17 browser wallet path, because that test needs a thesis revision saved by earlier serial tests in `e2e.spec.mjs` and cannot run alone. "Additional wallet only after server approval" and "logout" rest on the R4 unit regressions (`wallet-setup.test.tsx`, `auth.test.tsx`), not on this browser run.
 
 ### Residual risk: OPEN
 
@@ -73,7 +74,7 @@ No item below is closed. Missing markers cannot prove absence. A later SDK or bu
 |---|---|---|---|
 | `ws` Node implementation (GHSA-96hv-2xvq-fx4p, GHSA-58qx-3vcg-4xpx) | OPEN | Positive stub-chunk identification; zero Node markers; zero NFT paths | The affected copies stay installed. Only the browser stub is emitted today; no import-to-chunk map proves exclusion for every path. |
 | `decode-uri-component` (GHSA-vcc3-ghjq-m6fr) | OPEN | Zero markers; zero NFT paths; tree shows `query-string > decode-uri-component` | `query-string` is declared by `@walletconnect/utils` but no shipped module imports it. No emitted identity or chunk map. |
-| `query-string` | OPEN | Zero markers; no NFT path | Declared dependency; no emitted identity. |
+| `query-string` | OPEN | Zero markers; no NFT path; no import-to-chunk map | Declared dependency; no emitted identity. |
 | `uuid` v3/v5/v6 buffer path (GHSA-w5hq-g745-h8pq) | OPEN | Zero v3/v5/v6 markers; zero `uuid` NFT paths; observed v4 use only | No import-to-chunk map. A fix needs a cross-major override (8/9 to 14), which this ticket does not permit. |
 | `isows` | OPEN | Package export map shows the browser native path and the Node `ws` path; no emitted identity | No import-to-chunk map. |
 
