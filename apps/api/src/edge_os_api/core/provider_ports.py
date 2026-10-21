@@ -590,7 +590,7 @@ class ControlledRuntime:
         from edge_os_api.execution.transaction_rpc_client import TransactionRpcClient
         from edge_os_api.execution.models import ClaimRow, IntentRow, SubmissionAttemptRow
         from edge_os_api.admission.models import DecisionRow as AdmissionDecisionRow
-        from edge_os_api.kuru_flow.types import parse_utc
+        from edge_os_api.admission.types import parse_utc
 
         release = self.binding.release.content()
         limits = release["limits"]
@@ -747,7 +747,7 @@ class _ControlledQuotes:
             runtime.binding.admit(runtime.binding.identity(), now=runtime.clock(), synthetic_bindings=runtime.synthetic_bindings)
         except ReleaseRefused:
             raise ProviderUnavailable("release") from None
-        from edge_os_api.kuru_flow.types import parse_utc
+        from edge_os_api.admission.types import parse_utc
 
         release = runtime.binding.release.content()
         route = release["route"]
