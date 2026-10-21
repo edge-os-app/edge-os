@@ -14,6 +14,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
+
 TEST_APP_ID = "edge-os-test-app"
 FORBIDDEN_ENV_NAMES = ("EDGE_OS_PRIVY_APP_SECRET", "EDGE_OS_AUTH_DISABLED", "EDGE_OS_DEV_AUTH_BYPASS")
 
@@ -39,6 +41,11 @@ class Settings(BaseSettings):
     privy_verification_key_previous: str | None = None
     cors_allowed_origins: str
     build_sha: str | None = None
+    # Hosted activation. The running configuration may name one deployment id and the absolute path of its frozen
+    # record. The record can only match the code-owned `core.hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS`; no
+    # setting, environment value, file or request adds an approval. Both are set together or neither is.
+    hosted_deployment_id: str | None = None
+    hosted_deployment_record_path: str | None = None
     # `fixture` answers scripted requests only. `hermes_local` runs the pinned Hermes against a local fake provider and
     # needs a runner handed to the application factory. No setting reaches a real provider (decision D7).
     interpreter: Literal["fixture", "hermes_local"] = "fixture"
@@ -139,6 +146,13 @@ class Settings(BaseSettings):
 
     def validate_rules(self) -> None:
         problems: list[str] = []
+        deployment = None
+        if self.env == "production":
+            # A named record is validated in every production process. No record keeps the existing refusals.
+            try:
+                deployment = check_hosted_deployment(self)
+            except HostedDeploymentRefused as refused:
+                problems.append(f"hosted_deployment: {refused.code}")
         if not self.cors_origins:
             problems.append("cors_allowed_origins: at least one origin is required")
         for origin in self.cors_origins:
@@ -162,8 +176,9 @@ class Settings(BaseSettings):
                 problems.append("database_url: production needs sslmode=require or stricter")
             if self.fixture_effects_path is not None:
                 problems.append("fixture_effects_path: fixture effects are refused in production")
-        if self.env == "production" and self.interpreter != "fixture":
-            problems.append("interpreter: only the fixture interpreter is available in production")
+        if self.env == "production" and self.interpreter != "fixture" and deployment is None:
+            problems.append("interpreter: only the fixture interpreter is available in production without an "
+                            "approved hosted deployment")
         if self.env == "production" and self.wallet_provider != "unavailable":
             problems.append("wallet_provider: only the unavailable provider is allowed in production")
         if self.wallet_lookup_socket is not None:

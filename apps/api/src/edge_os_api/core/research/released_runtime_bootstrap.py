@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
 from edge_os_api.core.research import operating_release
 from edge_os_api.core.research.environment_credentials import EnvironmentCredentialSource
 from edge_os_api.core.research.operating_release import (
@@ -80,6 +81,17 @@ def server_research_runtime(settings: Any, *,
     if len(approved) > 1:
         raise ReleaseRefused("operating_release_invalid", "a server composes at most one approved release")
     release = approved[0]
+    if settings.env == "production":
+        # The API and the worker share this gate: no approved research release composes without a matching record.
+        try:
+            deployment = check_hosted_deployment(settings)
+        except HostedDeploymentRefused as refused:
+            raise ReleaseRefused(
+                "hosted_deployment_refused",
+                f"the approved research release needs an approved hosted deployment ({refused.code})") from None
+        if deployment is None or not deployment.admits_research_release(release.release_id, release_sha256(release)):
+            raise ReleaseRefused("hosted_deployment_not_matched",
+                                 "no approved hosted deployment record names this exact research release")
     source = EnvironmentCredentialSource() if credentials is None else credentials
     return open_released_runtime(settings, release, credentials=source,
                                  http_transport=StdlibHttpTransport if release.history is not None else None,
