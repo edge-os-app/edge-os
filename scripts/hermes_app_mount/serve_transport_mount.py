@@ -21,12 +21,13 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "hermes_interpretation"))
+sys.path.insert(0, str(REPO / "scripts" / "p03"))
 
 import uvicorn  # noqa: E402
 
 from authored_cases import load_case, provider_script  # noqa: E402
 from edge_os_api.core.settings import load_settings  # noqa: E402
-from edge_os_api.main import create_app  # noqa: E402
+import harness  # noqa: E402
 from edge_os_api.research.hermes_transport_mount import open_transport_mount  # noqa: E402
 from edge_os_api.research.provider_spend_ledger import SpendLimits, TokenPrice  # noqa: E402
 
@@ -66,8 +67,8 @@ def main() -> None:
         credential_file=args.credential_file, timeout_seconds=args.timeout_seconds, recovery_budget_seconds=30.0)
     args.report_file.write_text(json.dumps({"pid": os.getpid(), "startup_recovery": mount.startup_recovery}))
     try:
-        uvicorn.run(create_app(settings, hermes_runner=mount.runner), host="127.0.0.1", port=args.port,
-                    log_level="warning")
+        uvicorn.run(harness.create_app_fixture(settings, hermes_runner=mount.runner), host="127.0.0.1",
+                    port=args.port, log_level="warning")
     finally:
         mount.close()
 

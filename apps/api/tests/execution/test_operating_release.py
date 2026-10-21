@@ -156,3 +156,32 @@ def test_signer_request_expiry_is_enforced_before_release_expiry(seconds, admitt
     else:
         with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_EXPIRED"):
             check_release(release, **options)
+
+
+def test_saved_identity_binding_cannot_retarget_an_approved_release():
+    from edge_os_api.execution.operating_release import BoundRelease
+    identity = {"owner_id": "owner-a", "agent_id": "agent-a", "wallet_id": "synthetic-wallet-a",
+        "wallet_address": "0x" + "1" * 40, "network_id": "monad:143", "strategy_id": "strategy-a",
+        "publication_revision_id": "revision-a", "execution_revision_id": "execution-a",
+        "market_binding_id": "market-a", "content_sha256": "1" * 64, "manifest_sha256": "2" * 64,
+        "consent_adoption_id": "consent-a", "consent_hash": "sha256:" + "3" * 64,
+        "review_hash": "sha256:" + "4" * 64, "terms_hash": "sha256:" + "5" * 64}
+    release = OperatingRelease(definition())
+    bound = BoundRelease(release, identity, position_inventory_proof_sha256="6" * 64,
+                         market_proof_sha256="7" * 64, finality_proof_sha256="8" * 64)
+    approvals = {bound.sha256: release_sha256(release)}
+    assert bound.admit(identity, now=NOW, synthetic_bindings=approvals) == bound.sha256
+    for field in identity:
+        with pytest.raises(ReleaseRefused, match="BINDING_MISMATCH"):
+            bound.admit({**identity, field: "foreign"}, now=NOW, synthetic_bindings=approvals)
+    identity["owner_id"] = "foreign"
+    assert bound.identity()["owner_id"] == "owner-a"
+    with pytest.raises(ReleaseRefused):
+        bound.admit(bound.identity(), now=NOW, synthetic_bindings={})
+
+
+def test_bound_release_requires_independent_inventory_market_and_finality_proofs():
+    from edge_os_api.execution.operating_release import BoundRelease
+    with pytest.raises(ReleaseRefused):
+        BoundRelease(OperatingRelease(definition()), {}, position_inventory_proof_sha256=None,
+                     market_proof_sha256="7" * 64, finality_proof_sha256="8" * 64)

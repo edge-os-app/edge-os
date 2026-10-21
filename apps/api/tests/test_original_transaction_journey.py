@@ -44,8 +44,11 @@ def original(settings, tmp_path, recordings):
         update={"original_recordings_dir": str(recordings)})
     from fastapi.testclient import TestClient
     from edge_os_api.main import create_app
+    from edge_os_api.core.financial_services import build_financial_services
 
     with TestClient(create_app(configured)) as client:
+        client.app.state.execution_worker = build_financial_services(client.app.state.session_factory, configured,
+            client.app.state.financial.ports, role="worker")
         # A fixed start 30 s into a future five-minute decision slot, advancing with real elapsed time: no run can
         # cross a slot boundary and be refused for an expired intent or stale input instead of the case under test.
         from edge_os_api.execution.worker import decision_slot
@@ -55,6 +58,8 @@ def original(settings, tmp_path, recordings):
         clock = lambda: start + dt.timedelta(seconds=time.monotonic() - began)  # noqa: E731
         client.app.state.financial.connected._clock = clock
         client.app.state.financial.ports.clock = clock
+        client.app.state.execution_worker.connected._clock = clock
+        client.app.state.execution_worker.ports.clock = clock
         yield client
 
 
@@ -74,9 +79,15 @@ def ready(client, headers, agent_id: str) -> dict[str, Any]:
     return {**agent, "declaration": declaration, "consent": consent}
 
 
+def run_job(client, job: dict[str, Any]) -> dict[str, Any]:
+    result = client.app.state.execution_worker.connected.run_job(uuid.UUID(job["job_id"]))
+    assert result is not None, "another worker holds this job"
+    return result
+
+
 def submitted(client, headers, agent_id: str) -> dict[str, Any]:
     ready(client, headers, agent_id)
-    return ff.run_job(client, ff.schedule(client, headers, agent_id).json())
+    return run_job(client, ff.schedule(client, headers, agent_id).json())
 
 
 def original_of(action: dict[str, Any]) -> dict[str, Any]:
@@ -142,10 +153,12 @@ class Inject:
     """Replace one injected original client for `fx-original` agents with an authored fault wrapper."""
 
     def __init__(self, client, **wrappers):
-        ports = client.app.state.financial.ports
+        ports = client.app.state.execution_worker.ports
         clients, profile = ports.original.clients(ports.clock), ports.original.profile
         clients = dataclasses.replace(clients, **{name: wrap(getattr(clients, name)) for name, wrap in wrappers.items()})
         ports.original_clients = lambda agent_id: (clients, profile) if "fx-original" in agent_id else None
+        ports.original_observer = lambda agent_id: clients.observer
+        client.app.state.financial.ports.original_observer = lambda agent_id: clients.observer
 
 
 class Delegate:
@@ -201,7 +214,7 @@ def test_a_lost_signer_reply_keeps_the_liability_and_a_restart_makes_no_second_c
     assert original_of(body)["stage"] == "SIGNING_UNKNOWN" and "transaction_hash" not in original_of(body)
     assert "RESERVED" in reservation_states(body)
     before = calls(recordings)
-    rerun = ff.run_job(original, job)
+    rerun = run_job(original, job)
     assert rerun["state"] == "SUBMITTED" and calls(recordings) == before
     settled = original.post(f"/v1/actions/{job['action_id']}/reconcile", headers=owner_a).json()
     assert (settled["receipt_outcome"], settled["case_state"]) == ("SUBMISSION_UNKNOWN", "UNKNOWN")
@@ -241,7 +254,7 @@ def test_signed_bytes_for_another_nonce_are_rejected(original, owner_a, recordin
                                                           ("SIGNED", 1, "SUBMITTED_UNKNOWN"),
                                                           ("BROADCAST_REQUESTED", 1, "SUBMITTED_UNKNOWN")])
 def test_a_failed_save_stops_before_the_next_effect(original, owner_a, recordings, failing_stage, signs, outcome):
-    execution = original.app.state.financial.execution
+    execution = original.app.state.execution_worker.execution
     journal = execution._journal
 
     def failing(owner, attempt_id):
@@ -309,10 +322,10 @@ def test_a_crash_after_signing_leaves_one_original_that_a_restart_never_resends(
     ready(original, owner_a, "crash-fx-original")
     scheduled = ff.schedule(original, owner_a, "crash-fx-original").json()
     with pytest.raises(Crash):
-        original.app.state.financial.connected.run_job(uuid.UUID(scheduled["job_id"]))
+        original.app.state.execution_worker.connected.run_job(uuid.UUID(scheduled["job_id"]))
     before = calls(recordings)
     Inject(original)  # the restarted process uses ordinary recorded clients
-    rerun = ff.run_job(original, scheduled)
+    rerun = run_job(original, scheduled)
     assert rerun["state"] == "SUBMITTED" and calls(recordings) == before
     body = action(original, owner_a, rerun["action_id"])
     assert body["attempts"][-1]["state"] == "IN_FLIGHT" and len(body["attempts"]) == 1
@@ -398,7 +411,7 @@ def word(value: int) -> str:
     # A JSON-RPC `QUANTITY` where an `eth_call` returns a 32-byte `DATA` word is not read as a balance.
     ("quantity-form", lambda h: {**h, "tokens": {**h["tokens"], QUOTE_TOKEN: hex(1000000000)}}, "HOLDINGS_INCOMPLETE")])
 def test_unusable_holdings_admit_nothing_and_show_unavailable(original, owner_a, recordings, case, change, reason):
-    data = original.app.state.financial.ports.original.data
+    data = original.app.state.execution_worker.ports.original.data
     saved = data["holdings"]
     data["holdings"] = change(saved)
     try:
@@ -436,13 +449,17 @@ def test_another_owner_cannot_read_or_reconcile_and_makes_no_call(original, owne
 def test_the_exit_is_one_more_original_transaction_with_the_next_nonce(original, owner_a, recordings):
     entry = submitted(original, owner_a, "exit-fx-original")
     original.post(f"/v1/actions/{entry['action_id']}/reconcile", headers=owner_a)
-    connected, ports = original.app.state.financial.connected, original.app.state.financial.ports
+    connected, ports = original.app.state.execution_worker.connected, original.app.state.execution_worker.ports
     clock, ports_clock = connected._clock, ports.clock
+    api = original.app.state.financial
+    api_clock, api_ports_clock = api.connected._clock, api.ports.clock
     connected._clock = ports.clock = lambda: clock() + dt.timedelta(minutes=5)
+    api.connected._clock = api.ports.clock = connected._clock
     try:
-        exit_job = ff.run_job(original, ff.schedule(original, owner_a, "exit-fx-original", "exit-slot").json())
+        exit_job = run_job(original, ff.schedule(original, owner_a, "exit-fx-original", "exit-slot").json())
     finally:
         connected._clock, ports.clock = clock, ports_clock
+        api.connected._clock, api.ports.clock = api_clock, api_ports_clock
     body = action(original, owner_a, exit_job["action_id"])
     assert body["operation"] == "EXIT"
     assert (original_of(body)["nonce"], original_of(body)["transaction_hash"]) == (1, EXIT_NONCE1_HASH)
@@ -453,7 +470,7 @@ def test_holdings_observed_on_another_chain_admit_nothing(original, owner_a, rec
     ff.confirmed_agent(original, owner_a, "testnet-fx-original", network_id=10143)
     declaration = ff.funded(original, owner_a, "testnet-fx-original")
     ff.adopted(original, owner_a, "testnet-fx-original", declaration)
-    job = ff.run_job(original, ff.schedule(original, owner_a, "testnet-fx-original").json())
+    job = run_job(original, ff.schedule(original, owner_a, "testnet-fx-original").json())
     assert (job["state"], job["reason"], job["action_id"]) == ("UNAVAILABLE", "HOLDINGS_WRONG_CHAIN", None)
     assert calls(recordings).get("route.quote", 0) == 0 and calls(recordings).get("signer.rpc", 0) == 0
 
@@ -484,7 +501,7 @@ def test_an_unrecognized_signer_reply_keeps_the_liability_and_is_never_sent(orig
 
 def test_an_unmarked_placeholder_wallet_is_refused_as_another_signer_and_never_sent(original, owner_a, recordings):
     """Amendment A1: the placeholder fixture address has no key, so the authored signature names another sender."""
-    ports = original.app.state.financial.ports
+    ports = original.app.state.execution_worker.ports
     clients = (ports.original.clients(ports.clock), ports.original.profile)
     ports.original_clients = lambda agent_id: clients
     job = submitted(original, owner_a, "placeholder-wallet")
@@ -519,13 +536,13 @@ def test_concurrent_runs_of_one_job_sign_and_send_once(original, owner_a, record
     first = ff.schedule(original, owner_a, "twice-fx-original", "same").json()
     again = ff.schedule(original, owner_a, "twice-fx-original", "same").json()
     assert again["job_id"] == first["job_id"]
-    connected = original.app.state.financial.connected
+    connected = original.app.state.execution_worker.connected
     threads = [threading.Thread(target=connected.run_job, args=(uuid.UUID(first["job_id"]),)) for _ in range(2)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
-    ff.run_job(original, first)
+    run_job(original, first)
     assert (calls(recordings)["signer.rpc"], calls(recordings)["broadcast.eth_sendRawTransaction"]) == (1, 1)
 
 
@@ -555,17 +572,14 @@ def test_reconciling_a_refused_original_adds_no_evidence(original, owner_a):
     assert settled["case_state"] != "DISCREPANCY"
 
 
-def test_holdings_whose_chain_cannot_be_read_admit_nothing(original, owner_a, recordings):
+def test_holdings_whose_chain_cannot_be_read_admit_nothing(original, owner_a, recordings, monkeypatch):
     Inject(original, observer=lambda inner: Delegate(
         inner, after=lambda result, method, params: "chain-143" if method == "eth_chainId" else result))
-    ports = original.app.state.financial.ports
+    ports = original.app.state.execution_worker.ports
     observer = ports.original_clients("x-fx-original")[0].observer
-    holdings, saved = ports.holdings, ports.holdings._recordings.clients
-    ports.holdings._recordings.clients = lambda clock: dataclasses.replace(saved(clock), observer=observer)
-    try:
-        job = submitted(original, owner_a, "chainless-fx-original")
-    finally:
-        ports.holdings._recordings.clients = saved
+    from edge_os_api.core import provider_ports
+    monkeypatch.setattr(provider_ports, "RecordedObservationRpc", lambda *args: observer)
+    job = submitted(original, owner_a, "chainless-fx-original")
     assert (job["state"], job["reason"], job["action_id"]) == ("UNAVAILABLE", "HOLDINGS_UNAVAILABLE", None)
 
 
@@ -633,7 +647,7 @@ def test_a_mandate_that_expires_during_the_lifecycle_allows_no_next_effect(origi
                                                                            expected):
     from edge_os_api.execution.worker import decision_slot
 
-    connected, ports = original.app.state.financial.connected, original.app.state.financial.ports
+    connected, ports = original.app.state.execution_worker.connected, original.app.state.execution_worker.ports
     start = decision_slot(dt.datetime.now(dt.timezone.utc)) + dt.timedelta(minutes=5, seconds=30)
     moment = {"now": start}
     connected._clock = ports.clock = lambda: moment["now"]
@@ -653,7 +667,7 @@ def test_a_mandate_that_expires_during_the_lifecycle_allows_no_next_effect(origi
     agent = f"expiry-{delay}-fx-original"
     ff.confirmed_agent(original, owner_a, agent, network_id=143)
     ff.adopted(original, owner_a, agent, ff.funded(original, owner_a, agent), expiry=expiry)
-    job = ff.run_job(original, ff.schedule(original, owner_a, agent).json())
+    job = run_job(original, ff.schedule(original, owner_a, agent).json())
     body = action(original, owner_a, job["action_id"])
     outcome, stage, signs = expected
     assert (job["outcome"], original_of(body)["stage"]) == (outcome, stage), job["reason"]
@@ -721,7 +735,7 @@ def test_an_unexpected_client_error_reaches_the_log_without_its_text(original, o
     ready(original, owner_a, "explode-fx-original")
     ff.schedule(original, owner_a, "explode-fx-original")
     with caplog.at_level("INFO"):
-        original.app.state.financial.connected.run_pending(limit=50)
+        original.app.state.execution_worker.connected.run_pending(limit=50)
     assert "worker job" in caplog.text and "ValueError" in caplog.text
     assert signed[2:42] not in caplog.text
 
@@ -738,8 +752,8 @@ def test_an_unexpected_client_error_reaches_the_log_without_its_text(original, o
     ("BROADCAST_REQUESTED", "none", ("SUBMITTED_UNKNOWN", "BROADCAST_RETURNED", 1, None))])
 def test_an_authority_change_during_a_stage_save_allows_no_next_effect(original, owner_a, recordings, stage,
                                                                       change, expected):
-    connected, ports = original.app.state.financial.connected, original.app.state.financial.ports
-    execution = original.app.state.financial.execution
+    connected, ports = original.app.state.execution_worker.connected, original.app.state.execution_worker.ports
+    execution = original.app.state.execution_worker.execution
     start = connected._clock()
     moment = {"now": start}
     connected._clock = ports.clock = lambda: moment["now"]
@@ -768,7 +782,7 @@ def test_an_authority_change_during_a_stage_save_allows_no_next_effect(original,
     try:
         ff.confirmed_agent(original, owner_a, agent, network_id=143)
         ff.adopted(original, owner_a, agent, ff.funded(original, owner_a, agent), expiry=expiry)
-        job = ff.run_job(original, ff.schedule(original, owner_a, agent).json())
+        job = run_job(original, ff.schedule(original, owner_a, agent).json())
     finally:
         execution._journal = journal
     body = action(original, owner_a, job["action_id"])

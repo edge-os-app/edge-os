@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # market observations, action quotes, holdings, submission/receipt effects and removal observations, plus a
     # server-owned fixture qualification that lets an adopted INACTIVE consent drive a fixture action. Production
     # refuses it. `unavailable` keeps every provider port fail-closed, so no funded action can run.
-    execution_mode: Literal["fixture", "unavailable"] = "unavailable"
+    execution_mode: Literal["fixture", "unavailable", "controlled"] = "unavailable"
     # Fixture mode only: an append-only file that records each authored submission effect outside the
     # application database, so a restarted process reconciles the original action and a verifier counts effects
     # independently. Without it the fixture keeps effects in process memory.
