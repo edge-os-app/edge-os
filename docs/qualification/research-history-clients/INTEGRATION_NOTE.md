@@ -62,7 +62,7 @@ implements the accepted `QuickNodeRpcClient.call(method, params)`. Both satisfy 
 
 Pinned wire (public first-party documentation, read 2026-10-12): HyperSync body fields `from_block`,
 `to_block`, `logs[]`, `field_selection`, `include_all_blocks`, `max_num_logs`, `max_num_blocks`; the
-response carries `archive_height`, `next_block`, `total_execution_time`, `data` (`blocks`, `logs`) and
+response carries `archive_height`, `next_block`, `total_execution_time`, `data` (a list of batches, each with `blocks`, `logs`) and
 an optional `rollback_guard`. Monad QuickNode is standard JSON-RPC 2.0. Monad coverage and the exact
 served shape are `NOT_VERIFIED` until a separately authorized run.
 

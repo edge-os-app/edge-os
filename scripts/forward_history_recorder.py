@@ -596,6 +596,28 @@ def _quantity_or(value: Any) -> int | None:
         return None
 
 
+def hypersync_batches(reply: Mapping[str, Any]) -> tuple[list[Any], list[Any]] | None:
+    """Flatten the reply's `data` list of batches in reply order. None means another shape.
+
+    The live HyperSync JSON reply carries `data` as a list of batch objects. Each batch must carry `logs`;
+    an absent `logs` is not proved emptiness. `blocks` may be absent and then contributes nothing. A non-list
+    `data`, a batch that is not an object, or a non-list `logs` or `blocks` is refused."""
+    data = reply.get("data")
+    if not isinstance(data, list):
+        return None
+    blocks: list[Any] = []
+    logs: list[Any] = []
+    for batch in data:
+        if not isinstance(batch, Mapping) or "logs" not in batch:
+            return None
+        batch_logs, batch_blocks = batch["logs"], batch.get("blocks", [])
+        if not isinstance(batch_logs, list) or not isinstance(batch_blocks, list):
+            return None
+        logs.extend(batch_logs)
+        blocks.extend(batch_blocks)
+    return blocks, logs
+
+
 def _word_address(word: Any) -> str | None:
     """A 32-byte ABI word that holds an address: 12 zero bytes then 20 address bytes."""
     if not isinstance(word, str) or len(word) != 66 or not word.startswith("0x"):
@@ -869,11 +891,10 @@ class _Attempt:
         except Exception as error:
             self._classify(error, fatal=True, phase="P1")
             raise _P1Stop() from None
-        data = reply.get("data")
-        logs = data.get("logs") if isinstance(data, Mapping) else None
-        blocks = data.get("blocks") if isinstance(data, Mapping) else None
-        if not isinstance(logs, list) or not isinstance(blocks, list):
+        batches = hypersync_batches(reply)
+        if batches is None:
             raise SafetyStop("P1_HYPERSYNC_SHAPE")
+        blocks, logs = batches
         matches = [log for log in logs if isinstance(log, Mapping)
                    and str(log.get("address", "")).lower() == creation["factory"]
                    and str(log.get("topic0", "")).lower() == creation["topic0"]]
@@ -990,10 +1011,10 @@ class _Attempt:
         """Validate one forward page against the declared native shape; on success extend the chain."""
         start = self.cursor
         archive, next_block = _quantity_or(reply.get("archive_height")), _quantity_or(reply.get("next_block"))
-        data = reply.get("data")
-        if archive is None or next_block is None or next_block <= 0 or not isinstance(data, Mapping):
+        batches = hypersync_batches(reply)
+        if archive is None or next_block is None or next_block <= 0 or batches is None:
             return False
-        blocks, logs = data.get("blocks"), data.get("logs")
+        blocks, logs = batches
         guard = reply.get("rollback_guard")
         if not isinstance(blocks, list) or not isinstance(logs, list) or (guard is not None
                                                                           and not isinstance(guard, Mapping)):

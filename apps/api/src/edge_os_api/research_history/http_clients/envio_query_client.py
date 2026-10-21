@@ -17,8 +17,8 @@ the exact served shape are NOT verified): a JSON body with ``from_block``,
 ``to_block``, ``logs[]``, ``field_selection``, ``include_all_blocks`` and the
 ``max_num_*`` limits, against ``<host base>/query``. The bearer token is the
 ``Authorization: Bearer <token>`` header. The native response carries
-``archive_height``, ``next_block``, ``total_execution_time``, ``data`` (``blocks``,
-``logs``) and an optional ``rollback_guard``.
+``archive_height``, ``next_block``, ``total_execution_time``, ``data`` (a list of batches, each
+with ``blocks`` and ``logs``) and an optional ``rollback_guard``.
 
 The page span is bounded to ``ClientBounds.max_blocks_per_page`` blocks and the log
 count to the request's ``max_rows``, so one page cannot grow without a caller

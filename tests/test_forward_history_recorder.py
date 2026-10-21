@@ -23,6 +23,7 @@ from scripts.forward_history_recorder import (
     AdmissionRefused,
     AttemptExists,
     RecorderInputError,
+    hypersync_batches,
     main,
     recover_attempt,
     run_attempt,
@@ -125,8 +126,8 @@ def creation_page(**log_changes: Any) -> dict[str, Any]:
            "data": "0x" + _addr_word(POOL) + _word(2854)}
     log.update(log_changes)
     return {"archive_height": 5000, "next_block": 901,
-            "data": {"blocks": [{"number": 900, "timestamp": T0 - 86_400, "hash": CREATION_BLOCK_HASH}],
-                     "logs": [log]}}
+            "data": [{"blocks": [{"number": 900, "timestamp": T0 - 86_400, "hash": CREATION_BLOCK_HASH}],
+                      "logs": [log]}]}
 
 
 class SyntheticProviders:
@@ -204,7 +205,7 @@ class SyntheticProviders:
                 log = dict(swap)
                 log["block_hash"] = block_hash(swap["block_number"])
                 logs.append(log)
-        return {"archive_height": head, "next_block": stop, "data": {"blocks": blocks, "logs": logs}}
+        return {"archive_height": head, "next_block": stop, "data": [{"blocks": blocks, "logs": logs}]}
 
 
 def recorder_input(tmp_path: Path, **changes: Any) -> dict[str, Any]:
@@ -360,21 +361,25 @@ def test_never_covered_bucket_closes_incomplete_and_later_replies_do_not_backfil
 
 
 @pytest.mark.parametrize("damage", [
-    lambda page: page["data"].pop("logs"),
-    lambda page: page["data"]["blocks"].pop(3),
-    lambda page: page.update(next_block=page["data"]["blocks"][0]["number"]),
-    lambda page: page["data"]["blocks"][4].update(hash="0x" + "99" * 32) or page["data"]["logs"].append(
-        dict(page["data"]["logs"][0])),
-    lambda page: page["data"]["logs"][0].update(block_hash="0x" + "98" * 32),
-    lambda page: page["data"]["logs"][0].pop("removed"),
-    lambda page: page["data"]["logs"][0].update(removed=True),
-    lambda page: page["data"]["logs"][0].update(topic3="0x" + "00" * 32),
-    lambda page: page["data"]["logs"][0].update(address="0x" + "77" * 20),
-    lambda page: page.update(data=[page["data"]]),
+    lambda page: page["data"][0].pop("logs"),
+    lambda page: page["data"][0]["blocks"].pop(3),
+    lambda page: page.update(next_block=page["data"][0]["blocks"][0]["number"]),
+    lambda page: page["data"][0]["blocks"][4].update(hash="0x" + "99" * 32) or page["data"][0]["logs"].append(
+        dict(page["data"][0]["logs"][0])),
+    lambda page: page["data"][0]["logs"][0].update(block_hash="0x" + "98" * 32),
+    lambda page: page["data"][0]["logs"][0].pop("removed"),
+    lambda page: page["data"][0]["logs"][0].update(removed=True),
+    lambda page: page["data"][0]["logs"][0].update(topic3="0x" + "00" * 32),
+    lambda page: page["data"][0]["logs"][0].update(address="0x" + "77" * 20),
+    lambda page: page.update(data=page["data"][0]),
+    lambda page: page["data"].append("not-an-object"),
+    lambda page: page["data"][0].update(logs={}),
+    lambda page: page["data"][0].update(blocks={}),
     lambda page: page.update(rollback_guard=[1]),
-    lambda page: page["data"]["blocks"][5].update(timestamp=T0 + 2000),
+    lambda page: page["data"][0]["blocks"][5].update(timestamp=T0 + 2000),
 ], ids=["missing-logs", "missing-header", "empty-range", "duplicate-log", "log-hash-differs", "missing-removed",
-        "removed-true", "fourth-topic", "foreign-pool", "array-shape", "guard-not-object", "future-header"])
+        "removed-true", "fourth-topic", "foreign-pool", "object-shape", "batch-not-object", "logs-not-list",
+        "blocks-not-list", "guard-not-object", "future-header"])
 def test_malformed_first_page_gives_no_delivery_and_no_second_read(tmp_path: Path, damage: Callable) -> None:
     def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
         def damaged(call: dict[str, Any]) -> HttpResponse:
@@ -393,7 +398,7 @@ def test_conflicting_anchor_header_is_a_safety_stop(tmp_path: Path) -> None:
     def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
         def conflicting(call: dict[str, Any]) -> HttpResponse:
             page = providers._query(call["body"])
-            page["data"]["blocks"][0]["hash"] = "0x" + "97" * 32
+            page["data"][0]["blocks"][0]["hash"] = "0x" + "97" * 32
             return HttpResponse(200, {}, json.dumps(page).encode())
         providers.overrides[9] = conflicting
     result, providers, _ = run(tmp_path, configure=configure)
@@ -554,6 +559,46 @@ def test_p1_hypersync_null_topic3_is_accepted(tmp_path: Path) -> None:
         providers.overrides[3] = lambda call: HttpResponse(200, {}, json.dumps(creation_page(topic3=None)).encode())
     result, _, _ = run(tmp_path, configure=configure)
     assert result["status"] == "COMPLETED"
+
+
+REAL_REPLY = (Path(__file__).parents[1] / "apps" / "api" / "tests" / "fixtures" / "research_history_native"
+              / "real_hypersync_p1_reply_20261021.json")
+
+
+def test_hypersync_batches_flattens_the_real_reply_data_list() -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    blocks, logs = hypersync_batches(raw)
+    assert [block["number"] for block in blocks] == [107_504_955]
+    assert [log["log_index"] for log in logs] == [6]
+
+
+def test_hypersync_batches_keeps_reply_order_across_batches() -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    first = raw["data"][0]
+    second = {"blocks": [dict(first["blocks"][0], number=107_504_956)], "logs": []}
+    raw["data"] = [first, second]
+    blocks, logs = hypersync_batches(raw)
+    assert [block["number"] for block in blocks] == [107_504_955, 107_504_956]
+    assert [log["log_index"] for log in logs] == [6]
+
+
+def test_hypersync_batches_allows_a_batch_without_blocks_but_refuses_another_shape() -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    raw["data"] = [{"logs": []}]
+    assert hypersync_batches(raw) == ([], [])
+
+
+@pytest.mark.parametrize("damage", [
+    lambda raw: raw.update(data=raw["data"][0]),
+    lambda raw: raw.update(data=["not-an-object"]),
+    lambda raw: raw["data"][0].pop("logs"),
+    lambda raw: raw["data"][0].update(logs={}),
+    lambda raw: raw["data"][0].update(blocks={}),
+], ids=["data-object", "batch-text", "logs-absent", "logs-not-list", "blocks-not-list"])
+def test_hypersync_batches_refuses_every_other_shape(damage: Callable) -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    damage(raw)
+    assert hypersync_batches(raw) is None
 
 
 def test_bytecode_identity_hashes_decoded_bytes_and_empty_code_has_none(tmp_path: Path) -> None:
@@ -939,9 +984,9 @@ def test_rollback_guard_hash_conflict_is_a_safety_stop(tmp_path: Path) -> None:
 def test_consistent_rollback_guard_is_accepted(tmp_path: Path) -> None:
     # GATE1 correction: a guard names the page-end block (source_transport._frame), not an interior block.
     def guard(page: dict[str, Any]) -> None:
-        end = page["data"]["blocks"][-1]
+        end = page["data"][0]["blocks"][-1]
         page["rollback_guard"] = {"block_number": end["number"], "timestamp": end["timestamp"], "hash": end["hash"],
-                                  "first_block_number": page["data"]["blocks"][0]["number"]}
+                                  "first_block_number": page["data"][0]["blocks"][0]["number"]}
     result, providers, _ = run(tmp_path, configure=_page_override(9, guard))
     assert result["status"] == "COMPLETED"
     assert handoff_of(result)["buckets"][0]["status"] == "DELIVERED"
@@ -949,7 +994,7 @@ def test_consistent_rollback_guard_is_accepted(tmp_path: Path) -> None:
 
 def test_later_reply_contradicting_an_earlier_reply_header_is_a_safety_stop(tmp_path: Path) -> None:
     def damage(page: dict[str, Any]) -> None:
-        page["data"]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": "0x" + "95" * 32})
+        page["data"][0]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": "0x" + "95" * 32})
     result, providers, _ = run(tmp_path, configure=_page_override(10, damage))
     assert (result["status"], result["stop_reason"]) == ("SAFETY_STOP", "CONFLICTING_BLOCK_FACT")
     assert len(providers.calls) == 10
@@ -958,7 +1003,7 @@ def test_later_reply_contradicting_an_earlier_reply_header_is_a_safety_stop(tmp_
 
 def test_later_reply_repeating_an_identical_earlier_header_is_rejected_not_stopped(tmp_path: Path) -> None:
     def damage(page: dict[str, Any]) -> None:
-        page["data"]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": block_hash(33)})
+        page["data"][0]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": block_hash(33)})
     result, providers, _ = run(tmp_path, configure=_page_override(10, damage))
     assert result["status"] == "COMPLETED"
     assert handoff_of(result)["buckets"][1]["reason"] == "FIRST_READ_REJECTED"
@@ -1173,9 +1218,9 @@ def test_admission_exactly_at_slot_close_is_refused(tmp_path: Path) -> None:
 
 def _guard_page(**changes: Any) -> Callable[[dict[str, Any]], None]:
     def damage(page: dict[str, Any]) -> None:
-        end = page["data"]["blocks"][-1]
+        end = page["data"][0]["blocks"][-1]
         guard = {"block_number": end["number"], "timestamp": end["timestamp"], "hash": end["hash"],
-                 "first_block_number": page["data"]["blocks"][0]["number"]}
+                 "first_block_number": page["data"][0]["blocks"][0]["number"]}
         guard.update({key: (value(end) if callable(value) else value) for key, value in changes.items()})
         page["rollback_guard"] = guard
     return damage
