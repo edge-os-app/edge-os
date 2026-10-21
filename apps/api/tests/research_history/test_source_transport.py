@@ -7,6 +7,9 @@ authored client. No network, credential or provider is touched.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
@@ -28,6 +31,15 @@ from edge_os_api.research_history import (
 
 _NATIVE_FIELDS = ("address", "topic0", "topic1", "topic2", "data", "block_number", "block_hash",
                   "transaction_hash", "transaction_index", "log_index", "removed")
+REAL_REPLY = (Path(__file__).parents[1] / "fixtures" / "research_history_native"
+              / "real_hypersync_p1_reply_20261021.json")
+REAL_FACTORY = "0xa25b13127e63ddae6d0b35570ff3d39dbd621001"
+REAL_CREATION_TOPIC0 = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
+REAL_REPLY_SHA256 = "b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1"
+
+
+def test_the_real_hypersync_reply_fixture_is_the_saved_body() -> None:
+    assert hashlib.sha256(REAL_REPLY.read_bytes()).hexdigest() == REAL_REPLY_SHA256
 
 
 def _native_log(event: Mapping[str, Any]) -> dict[str, Any]:
@@ -37,14 +49,14 @@ def _native_log(event: Mapping[str, Any]) -> dict[str, Any]:
 def _native_page(from_block: int, next_block: int, logs: list[Any] | None, blocks: list[dict[str, Any]],
                  *, guard: dict[str, Any] | None = None, network: str | None = None,
                  chain_id: int | None = None, include_logs: bool = True) -> dict[str, Any]:
-    data: dict[str, Any] = {"blocks": blocks}
+    batch: dict[str, Any] = {"blocks": blocks}
     if include_logs:
-        data["logs"] = logs if logs is not None else []
+        batch["logs"] = logs if logs is not None else []
     response: dict[str, Any] = {
         "archive_height": support.ARCHIVE_HEIGHT,
         "next_block": next_block,
         "total_execution_time": 3,
-        "data": data,
+        "data": [batch],
     }
     if guard is not None:
         response["rollback_guard"] = guard
@@ -139,6 +151,45 @@ def test_complete_collection_frames_native_pages() -> None:
     assert len(record["content_sha256"]) == 2
 
 
+def test_a_real_hypersync_reply_with_data_as_a_list_of_batches_is_framed() -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    request = HistoryRequest(provider="ENVIO_HYPERSYNC", address=REAL_FACTORY, topic0=REAL_CREATION_TOPIC0,
+                             from_block=107_504_955, to_block_exclusive=107_504_956, cursor_after=None,
+                             max_rows=64)
+    source = EnvioHypersyncSource(FakeClient([raw]))
+
+    page = source.next_response(request)
+
+    assert page["page"]["from_block"] == 107_504_955
+    assert page["page"]["next_block"] == 107_504_956
+    assert [event["block_number"] for event in page["events"]] == [107_504_955]
+
+
+@pytest.mark.parametrize("damage, detail", [
+    pytest.param(lambda raw: raw.update(data=raw["data"][0]), "data is not a list of batches",
+                 id="data-is-an-object"),
+    pytest.param(lambda raw: raw.update(data=["not-an-object"]), "a data batch is not an object",
+                 id="batch-not-object"),
+    pytest.param(lambda raw: raw["data"][0].pop("logs"), "a data batch has no logs", id="logs-absent"),
+    pytest.param(lambda raw: raw["data"][0].update(logs={}), "a data batch logs is not a list",
+                 id="logs-not-list"),
+    pytest.param(lambda raw: raw["data"][0].update(blocks={}), "a data batch blocks is not a list",
+                 id="blocks-not-list"),
+])
+def test_a_real_hypersync_reply_with_another_data_shape_is_refused(damage: Any, detail: str) -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    damage(raw)
+    request = HistoryRequest(provider="ENVIO_HYPERSYNC", address=REAL_FACTORY, topic0=REAL_CREATION_TOPIC0,
+                             from_block=107_504_955, to_block_exclusive=107_504_956, cursor_after=None,
+                             max_rows=64)
+    source = EnvioHypersyncSource(FakeClient([raw]))
+
+    with pytest.raises(SourceContractError) as refused:
+        source.next_response(request)
+    assert refused.value.code == "MALFORMED_PROVIDER_RESPONSE"
+    assert refused.value.detail == detail
+
+
 def test_transport_composes_into_normalize() -> None:
     source = EnvioHypersyncSource(FakeClient([_page1(), _page2()]), clock=lambda: support.COLLECTED_AT)
     collection = collect(support.profile(), source, _scan(), _limits())
@@ -177,10 +228,10 @@ def test_hexadecimal_quantities_are_accepted() -> None:
     def hexify(page: dict[str, Any]) -> dict[str, Any]:
         page = copy.deepcopy(page)
         page["next_block"] = hex(page["next_block"])
-        for block in page["data"]["blocks"]:
+        for block in page["data"][0]["blocks"]:
             block["number"] = hex(block["number"])
             block["timestamp"] = hex(block["timestamp"])
-        for log in page["data"]["logs"]:
+        for log in page["data"][0]["logs"]:
             log["block_number"] = hex(log["block_number"])
         guard = page.get("rollback_guard")
         if guard is not None:

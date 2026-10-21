@@ -35,7 +35,7 @@ log = logging.getLogger("edge_os")
 
 PINNED_HERMES_COMMIT = "54bc5e509c985f37265c3d416bd2c64b10fc77ba"
 PINNED_HERMES_LOCK_SHA256 = "de17d70bc999fb0f8fe50dbf8590ac979f43b5a84cd8320caeac1c695ce63c01"
-PROMPT_VERSION = "p05-interpretation/4"
+PROMPT_VERSION = "p05-interpretation/5"
 RUNTIME_LABELS = ("LOCAL_FAKE_PROVIDER", "LIVE")
 
 RESPONSE_SHAPE = """\
@@ -71,8 +71,9 @@ Rules:
 5. When the idea needs a capability that the supported rules cannot express, set meaning_status to "UNSUPPORTED",
    name the capability in missing_capability, and leave out anything you would substitute. Never swap in an easier idea.
 6. When the user states two values for one field, use CONFLICTING and quote each statement. Do not pick one.
-7. A question must ask about a field you report as MISSING or CONFLICTING. Its text ends with "?". Each option label
-   states every number that its value carries.
+7. A question must ask about a field you report as MISSING or CONFLICTING. Every question has at least one option. If
+   you cannot offer a concrete option for a field, do not ask a question for it: leave that field MISSING. A question
+   text ends with "?". Each option label states every number that its value carries.
    Keep a question text under 500 characters and an option label under 300. Neither may hold control characters.
    Write every question_id and option id with only letters, digits, "-", "_", "." or ":", starting with a letter or
    digit, at most 64 characters. Never begin a question_id with "ask-". The application uses that start for its own

@@ -289,10 +289,10 @@ def authored_journey_history():
     page = source["envio_pages"][0]
     h["headers"] = [{"number": projection.quantity(block["number"], "number"),
                      "timestamp": projection.quantity(block["timestamp"], "timestamp"), "hash": block["hash"]}
-                    for block in page["data"]["blocks"] if block.get("hash")]
+                    for block in page["data"][0]["blocks"] if block.get("hash")]
     timestamps = {header["number"]: header["timestamp"] for header in h["headers"]}
     projected = [projection.project_log(log, block_timestamp=timestamps[log["block_number"]])
-                 for log in page["data"]["logs"]]
+                 for log in page["data"][0]["logs"]]
     h["scan_log_count"] = len(projected)
     p = json.loads(anchor["provenance_json"])
     r = json.loads(p["receipts_json"])

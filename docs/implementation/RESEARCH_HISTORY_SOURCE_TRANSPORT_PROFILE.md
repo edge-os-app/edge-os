@@ -32,14 +32,36 @@ transport and corroboration ship no default client.
 endpoint and the bearer token. The transport makes exactly one client call per `next_response` and never retries.
 `context` fixes the served network, chain id, provider, provider version and endpoint.
 
-### Native response mapping (pinned 2026-10-12)
+### Native response mapping (request pinned 2026-10-12; response observed 2026-10-21)
 
-The client returns a native Envio HyperSync `QueryResponse`. The transport maps:
+The client returns a native Envio HyperSync `QueryResponse`.
+
+The full response field set is observed in one Monad reply: the recorder run
+`moe-wmon-fwd20m-actual-20261021b`, call `03-P1-hypersync`, body SHA256
+`b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1`, carried `archive_height`,
+`next_block`, `total_execution_time`, `data` as a list of batch objects (each with `blocks`, `logs`) and an
+optional `rollback_guard`.
+
+The controller's pool census (9 `/query` requests) and MOE behavior check (4 `/query` requests; 5 HyperSync
+calls including one `/height`) also received `data` as a list of batch objects and read their `logs`. Those
+scripts selected log fields only and kept no reply bodies, so they do not show `blocks`, `archive_height`,
+`total_execution_time` or `rollback_guard`. Their pinned files are `v2_pool_census.py` SHA256
+`61b5f8242e59099088dc7de56d8deaa4edbba1f074399219cc177ba68118ae6a` with `census7.json` SHA256
+`0c0c39dd02d92b9a16c2606fb1abba15c45a0cc5940e0839a6478b286f5d45d3`, and `moe_behavior_check.py` SHA256
+`b390c38e07f1e8b9f9196d4715739474fb0fa97bf4454247013f78bc5ea34cdf` with `moe_check1.json` SHA256
+`d8134a021ef3f7b274c9fdcaa4e7796c552d7e75efa27eb4692a5ffe7293318d`.
+
+The first-party documentation, read 2026-10-12 and rechecked through Context7 `/enviodev/docs` on
+2026-10-21, describes `data` as one `ResponseData` object. It disagrees with those served replies, and the code
+follows the replies. The full field set is observed on that one P1 reply; other chains and response fields
+remain unverified.
+
+The transport maps:
 
 | Native | Adapter field |
 |---|---|
-| `data.logs[]` (`address`,`topic0`..`topic3`,`data`,`block_number`,`block_hash`,`transaction_hash`,`transaction_index`,`log_index`,`removed`) | `events[]` (same keys, `block_number` normalised to an integer) |
-| `data.blocks[].timestamp` joined on `log.block_number` | `event.block_timestamp` (raw integer text) |
+| `data[].logs[]` (`address`,`topic0`..`topic3`,`data`,`block_number`,`block_hash`,`transaction_hash`,`transaction_index`,`log_index`,`removed`) | `events[]` (same keys, `block_number` normalised to an integer) |
+| `data[].blocks[].timestamp` joined on `log.block_number` | `event.block_timestamp` (raw integer text) |
 | `next_block` | `page.next_block` and `cursor.after` |
 | request `cursor_after` (else `from_block`) | `page.from_block` and `cursor.before` |
 | the block at `next_block - 1` (required; must agree with the guard when both are present) | `page.last_block_timestamp` |
@@ -59,8 +81,8 @@ timestamp or hash contradicts the page-end block fact (`PAGE_FACTS_CONFLICT`) is
 page `[from_block, next_block)` (`OUT_OF_RANGE_BLOCK_FACT`) or a duplicate block fact
 that disagrees with itself (`DUPLICATE_BLOCK_FACT`) is refused; the page-start and page-end block facts must be
 present;
-`data.logs` must be present (absence is not proved
-emptiness). The page content hash binds the page bounds, edge hashes and logs, so a source contradiction cannot
+every `data[]` batch must carry `logs` (absence is not proved
+emptiness); a batch may omit `blocks`. The page content hash binds the page bounds, edge hashes and logs, so a source contradiction cannot
 become qualified coverage.
 
 The request/topic/range echo is rebuilt from the `HistoryRequest`, so the accepted collector's `QUERY_MISMATCH`
@@ -78,8 +100,8 @@ time field is passed through unchanged and counted; the reused decoder refuses i
 
 `SourceContractError` subclasses the accepted `SourceFailure`, so the collector records a partial
 `PROVIDER_ERROR` with no retained page, row or byte. Codes: `WRONG_NETWORK` (the response names a different
-network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data`, absent or non-list `logs`,
-non-list `blocks`, a non-object block fact, a non-quantity block number or block timestamp, `next_block` not a
+network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data` list, a batch that is not an object, absent or
+non-list batch `logs`, non-list batch `blocks`, a non-object block fact, a non-quantity block number or block timestamp, `next_block` not a
 positive quantity, a `rollback_guard` that is not an object, a present guard or chain echo that is not a valid
 quantity, or a present block hash or `first_parent_hash` that is not the pinned `0x` + 64-hex block-hash form),
 `PAGE_BOUNDS_CONTRADICTED` (an empty or reversed page, a page past the requested end, or a guard block number

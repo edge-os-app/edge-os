@@ -100,7 +100,7 @@ def test_a_concrete_thesis_is_read_from_the_users_words_and_compiles_only_after_
     assert attempt["parse_result"] == "ACCEPTED" and attempt["request_count"] == 1
     assert attempt["revision_id"] == bundle["head"]["interpretation_revision_id"]
     assert attempt["identity"]["runtime_label"] == "LOCAL_FAKE_PROVIDER"
-    assert attempt["identity"]["prompt_version"] == "p05-interpretation/4"
+    assert attempt["identity"]["prompt_version"] == "p05-interpretation/5"
     assert len(attempt["identity"]["task_sha256"]) == 64
     no_model_text(bundle, '"source_passage"', "Buy when the 15-minute price return is above 1%\", \"value\"")
     assert runner.turns[0].user_message.startswith("{")
