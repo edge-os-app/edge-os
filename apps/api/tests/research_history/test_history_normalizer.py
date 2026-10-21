@@ -273,3 +273,30 @@ def test_normalized_sha256_is_repeatable_binds_the_payload_and_changes() -> None
     assert canonical_sha256(tampered) != first["normalized_sha256"]
     other = _history(profile=support.profile(decimals=(0, 0)), responses=support.single_page([]))
     assert other["normalized_sha256"] != first["normalized_sha256"]
+
+
+def _observed_mechanics() -> dict[str, Any]:
+    return {"state": "QUALIFIED_BY_OBSERVATION", "basis": "OBSERVED_BEHAVIOR", "window_seconds": 43200,
+            "evidence_sha256": "5ad3a7c3e11f48e6f32fe2ab9f1edf7bf968962e4854c98d16e70327cfc9e73b",
+            "source_proof": False}
+
+
+def test_observed_token_mechanics_evidence_reaches_the_qualifier_and_keeps_its_basis() -> None:
+    record = _observed_mechanics()
+    history = _history(evidence=support.evidence_facts(
+        fee_transfer_semantics="QUALIFIED_BY_OBSERVATION", token_mechanics=record))
+    assert history["observations"]["event_meaning"]["token_mechanics"] == record
+    claim = history["qualification"]["claims"]["EVENT_AND_AMOUNT_MEANING"]
+    assert claim["verdict"] == "QUALIFIED"
+    basis = [reason for reason in claim["reasons"] if reason["code"] == "TOKEN_MECHANICS_QUALIFIED_BY_OBSERVATION"]
+    assert len(basis) == 1 and basis[0]["kind"] == "BASIS"
+    for text in ("OBSERVED_BEHAVIOR", "43200", record["evidence_sha256"], "not source proof"):
+        assert text in basis[0]["detail"]
+
+
+def test_observed_state_without_its_evidence_record_is_unresolved() -> None:
+    history = _history(evidence=support.evidence_facts(fee_transfer_semantics="QUALIFIED_BY_OBSERVATION"))
+    claim = history["qualification"]["claims"]["EVENT_AND_AMOUNT_MEANING"]
+    assert claim["verdict"] == "UNRESOLVED"
+    assert "TOKEN_MECHANICS_OBSERVATION_UNBOUND" in {reason["code"] for reason in claim["reasons"]}
+    assert history["overall"] != "QUALIFIED"
