@@ -230,11 +230,11 @@ def _expected_unsigned(unsigned: Any) -> bool:
     """The complete frozen unsigned mapping: exact key set, exact types and supported domains before any use."""
     if not isinstance(unsigned, Mapping) or set(unsigned) != _EXPECTED_UNSIGNED_KEYS:
         return False
-    if unsigned["type"] != EIP1559_TYPE:
-        return False
-    for name in ("chain_id", "nonce", "value", "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas"):
+    for name in ("type", "chain_id", "nonce", "value", "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas"):
         if type(unsigned[name]) is not int or not 0 <= unsigned[name] < _UINT256:
             return False
+    if unsigned["type"] != EIP1559_TYPE:
+        return False
     if type(unsigned["to"]) is not str or _ADDRESS.fullmatch(unsigned["to"]) is None:
         return False
     if type(unsigned["data"]) is not str or re.fullmatch(r"0x(?:[0-9a-fA-F]{2})*", unsigned["data"]) is None:
