@@ -12,13 +12,25 @@ transport does), and performs no I/O at import or construction. The token is onl
 placed in the request ``Authorization`` header; it never appears in an error, a
 message or any returned value.
 
-Pinned wire (public first-party documentation, read 2026-10-12; Monad coverage and
-the exact served shape are NOT verified): a JSON body with ``from_block``,
+Request wire (public first-party documentation, read 2026-10-12; Monad coverage is
+NOT verified): a JSON body with ``from_block``,
 ``to_block``, ``logs[]``, ``field_selection``, ``include_all_blocks`` and the
 ``max_num_*`` limits, against ``<host base>/query``. The bearer token is the
-``Authorization: Bearer <token>`` header. The native response carries
-``archive_height``, ``next_block``, ``total_execution_time``, ``data`` (a list of batches, each
-with ``blocks`` and ``logs``) and an optional ``rollback_guard``.
+``Authorization: Bearer <token>`` header.
+
+The response shape follows observed Monad replies on 2026-10-21. The recorder run
+``moe-wmon-fwd20m-actual-20261021b``, call ``03-P1-hypersync``, body SHA256
+``b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1``, and the
+controller's pool census (9 requests) and MOE behavior check (5 query requests)
+carried ``archive_height``, ``next_block``, ``total_execution_time``, ``data`` as
+a list of batch objects, each with ``blocks`` and ``logs``, and an optional
+``rollback_guard``.
+
+The first-party documentation, queried through Context7 ``/enviodev/docs`` on
+2026-10-21, describes ``data`` as one ``ResponseData`` object. It disagrees with
+those served replies, and this code follows the replies. This list shape is
+observed on Monad across those calls; other chains and response fields remain not
+verified.
 
 The page span is bounded to ``ClientBounds.max_blocks_per_page`` blocks and the log
 count to the request's ``max_rows``, so one page cannot grow without a caller

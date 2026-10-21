@@ -32,9 +32,24 @@ transport and corroboration ship no default client.
 endpoint and the bearer token. The transport makes exactly one client call per `next_response` and never retries.
 `context` fixes the served network, chain id, provider, provider version and endpoint.
 
-### Native response mapping (pinned 2026-10-12)
+### Native response mapping (request pinned 2026-10-12; response observed 2026-10-21)
 
 The client returns a native Envio HyperSync `QueryResponse`. The transport maps:
+
+The 2026-10-12 first-party documentation describes `data` as one `ResponseData` object. The served replies
+observed on Monad on 2026-10-21 carried `data` as a list of batch objects:
+
+- Recorder run `moe-wmon-fwd20m-actual-20261021b`, call `03-P1-hypersync`, body SHA256
+  `b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1`.
+- Pool census, 9 requests: `v2_pool_census.py` SHA256
+  `61b5f8242e59099088dc7de56d8deaa4edbba1f074399219cc177ba68118ae6a`, result `census7.json` SHA256
+  `0c0c39dd02d92b9a16c2606fb1abba15c45a0cc5940e0839a6478b286f5d45d3`.
+- MOE behavior check, 5 query requests: `moe_behavior_check.py` SHA256
+  `b390c38e07f1e8b9f9196d4715739474fb0fa97bf4454247013f78bc5ea34cdf`, result `moe_check1.json` SHA256
+  `d8134a021ef3f7b274c9fdcaa4e7796c552d7e75efa27eb4692a5ffe7293318d`.
+
+The transport follows the served replies. This list shape is observed on Monad across those calls; other chains
+and response fields remain unverified.
 
 | Native | Adapter field |
 |---|---|

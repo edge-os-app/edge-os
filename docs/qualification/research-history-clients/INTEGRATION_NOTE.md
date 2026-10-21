@@ -60,11 +60,18 @@ implements the accepted `QuickNodeRpcClient.call(method, params)`. Both satisfy 
   read-only methods (`READ_ONLY_METHODS`); no signing, broadcast, account or state-changing method can
   be enabled.
 
-Pinned wire (public first-party documentation, read 2026-10-12): HyperSync body fields `from_block`,
-`to_block`, `logs[]`, `field_selection`, `include_all_blocks`, `max_num_logs`, `max_num_blocks`; the
-response carries `archive_height`, `next_block`, `total_execution_time`, `data` (a list of batches, each with `blocks`, `logs`) and
-an optional `rollback_guard`. Monad QuickNode is standard JSON-RPC 2.0. Monad coverage and the exact
-served shape are `NOT_VERIFIED` until a separately authorized run.
+Request wire (public first-party documentation, read 2026-10-12): HyperSync body fields `from_block`,
+`to_block`, `logs[]`, `field_selection`, `include_all_blocks`, `max_num_logs`, `max_num_blocks`.
+
+The response shape follows observed Monad replies on 2026-10-21. The recorder run
+`moe-wmon-fwd20m-actual-20261021b`, call `03-P1-hypersync`, body SHA256
+`b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1`, and the controller's pool census
+(9 requests) and MOE behavior check (5 query requests) carried `archive_height`, `next_block`,
+`total_execution_time`, `data` as a list of batch objects (each with `blocks`, `logs`) and an optional
+`rollback_guard`. The first-party documentation, queried through Context7 `/enviodev/docs` on 2026-10-21,
+describes `data` as one `ResponseData` object; it disagrees with those served replies, and the code follows
+the replies. This list shape is observed on Monad across those calls; other chains and response fields remain
+`NOT_VERIFIED`. Monad QuickNode is standard JSON-RPC 2.0.
 
 ## Accounting and liability
 
