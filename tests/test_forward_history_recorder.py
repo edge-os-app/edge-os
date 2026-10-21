@@ -361,7 +361,7 @@ def test_never_covered_bucket_closes_incomplete_and_later_replies_do_not_backfil
 
 
 @pytest.mark.parametrize("damage", [
-    lambda page: page["data"][0].pop("logs"),
+    lambda page: page["data"][0].clear(),
     lambda page: page["data"][0]["blocks"].pop(3),
     lambda page: page.update(next_block=page["data"][0]["blocks"][0]["number"]),
     lambda page: page["data"][0]["blocks"][4].update(hash="0x" + "99" * 32) or page["data"][0]["logs"].append(
@@ -377,7 +377,7 @@ def test_never_covered_bucket_closes_incomplete_and_later_replies_do_not_backfil
     lambda page: page["data"][0].update(blocks={}),
     lambda page: page.update(rollback_guard=[1]),
     lambda page: page["data"][0]["blocks"][5].update(timestamp=T0 + 2000),
-], ids=["missing-logs", "missing-header", "empty-range", "duplicate-log", "log-hash-differs", "missing-removed",
+], ids=["no-logs-and-no-blocks", "missing-header", "empty-range", "duplicate-log", "log-hash-differs", "missing-removed",
         "removed-true", "fourth-topic", "foreign-pool", "object-shape", "batch-not-object", "logs-not-list",
         "blocks-not-list", "guard-not-object", "future-header"])
 def test_malformed_first_page_gives_no_delivery_and_no_second_read(tmp_path: Path, damage: Callable) -> None:
@@ -561,8 +561,31 @@ def test_p1_hypersync_null_topic3_is_accepted(tmp_path: Path) -> None:
     assert result["status"] == "COMPLETED"
 
 
-REAL_REPLY = (Path(__file__).parents[1] / "apps" / "api" / "tests" / "fixtures" / "research_history_native"
-              / "real_hypersync_p1_reply_20261021.json")
+FIXTURES = Path(__file__).parents[1] / "apps" / "api" / "tests" / "fixtures" / "research_history_native"
+REAL_REPLY = FIXTURES / "real_hypersync_p1_reply_20261021.json"
+# The real replies of `moe-wmon-fwd20m-actual-20261021c` hold one logs-free batch each; observed 2026-10-21.
+LOGS_FREE_REPLIES = {
+    "real_hypersync_logs_free_09_reply_20261021.json":
+        ("99bcb1463afb7599c834a3d1330e3147d52e742754502538708d5d823dc786a5", 1492, 6),
+    "real_hypersync_logs_free_10_reply_20261021.json":
+        ("b641241ab08698050b2b28a3d4caab12b1116323264f8851759852e0fb779f90", 2486, 8),
+    "real_hypersync_logs_free_12_reply_20261021.json":
+        ("c9bf11fb467603dd467ea087c203c50f5cba1832baee42f27b54655aa3fa999d", 994, 4),
+}
+
+
+@pytest.mark.parametrize("name", sorted(LOGS_FREE_REPLIES))
+def test_the_logs_free_reply_fixtures_are_the_saved_bodies(name: str) -> None:
+    assert hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest() == LOGS_FREE_REPLIES[name][0]
+
+
+@pytest.mark.parametrize("name", sorted(LOGS_FREE_REPLIES))
+def test_hypersync_batches_accepts_a_real_logs_free_batch_as_empty(name: str) -> None:
+    _, expected_blocks, expected_logs = LOGS_FREE_REPLIES[name]
+    raw = json.loads((FIXTURES / name).read_bytes())
+    assert any("blocks" in batch and "logs" not in batch for batch in raw["data"])
+    blocks, logs = hypersync_batches(raw)
+    assert (len(blocks), len(logs)) == (expected_blocks, expected_logs)
 
 
 def test_hypersync_batches_flattens_the_real_reply_data_list() -> None:
@@ -582,19 +605,19 @@ def test_hypersync_batches_keeps_reply_order_across_batches() -> None:
     assert [log["log_index"] for log in logs] == [6]
 
 
-def test_hypersync_batches_allows_a_batch_without_blocks_but_refuses_another_shape() -> None:
+def test_hypersync_batches_allows_a_batch_without_blocks_and_one_without_logs() -> None:
     raw = json.loads(REAL_REPLY.read_bytes())
-    raw["data"] = [{"logs": []}]
+    raw["data"] = [{"logs": []}, {"blocks": []}]
     assert hypersync_batches(raw) == ([], [])
 
 
 @pytest.mark.parametrize("damage", [
     lambda raw: raw.update(data=raw["data"][0]),
     lambda raw: raw.update(data=["not-an-object"]),
-    lambda raw: raw["data"][0].pop("logs"),
+    lambda raw: raw.update(data=[{}]),
     lambda raw: raw["data"][0].update(logs={}),
     lambda raw: raw["data"][0].update(blocks={}),
-], ids=["data-object", "batch-text", "logs-absent", "logs-not-list", "blocks-not-list"])
+], ids=["data-object", "batch-text", "no-logs-and-no-blocks", "logs-not-list", "blocks-not-list"])
 def test_hypersync_batches_refuses_every_other_shape(damage: Callable) -> None:
     raw = json.loads(REAL_REPLY.read_bytes())
     damage(raw)

@@ -31,15 +31,29 @@ from edge_os_api.research_history import (
 
 _NATIVE_FIELDS = ("address", "topic0", "topic1", "topic2", "data", "block_number", "block_hash",
                   "transaction_hash", "transaction_index", "log_index", "removed")
-REAL_REPLY = (Path(__file__).parents[1] / "fixtures" / "research_history_native"
-              / "real_hypersync_p1_reply_20261021.json")
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "research_history_native"
+REAL_REPLY = FIXTURES / "real_hypersync_p1_reply_20261021.json"
 REAL_FACTORY = "0xa25b13127e63ddae6d0b35570ff3d39dbd621001"
 REAL_CREATION_TOPIC0 = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
 REAL_REPLY_SHA256 = "b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1"
+# The real replies of `moe-wmon-fwd20m-actual-20261021c` hold one logs-free batch each; observed 2026-10-21.
+LOGS_FREE_REPLIES = {
+    "real_hypersync_logs_free_09_reply_20261021.json":
+        ("99bcb1463afb7599c834a3d1330e3147d52e742754502538708d5d823dc786a5", 6),
+    "real_hypersync_logs_free_10_reply_20261021.json":
+        ("b641241ab08698050b2b28a3d4caab12b1116323264f8851759852e0fb779f90", 8),
+    "real_hypersync_logs_free_12_reply_20261021.json":
+        ("c9bf11fb467603dd467ea087c203c50f5cba1832baee42f27b54655aa3fa999d", 4),
+}
 
 
 def test_the_real_hypersync_reply_fixture_is_the_saved_body() -> None:
     assert hashlib.sha256(REAL_REPLY.read_bytes()).hexdigest() == REAL_REPLY_SHA256
+
+
+@pytest.mark.parametrize("name", sorted(LOGS_FREE_REPLIES))
+def test_the_logs_free_reply_fixtures_are_the_saved_bodies(name: str) -> None:
+    assert hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest() == LOGS_FREE_REPLIES[name][0]
 
 
 def _native_log(event: Mapping[str, Any]) -> dict[str, Any]:
@@ -48,10 +62,8 @@ def _native_log(event: Mapping[str, Any]) -> dict[str, Any]:
 
 def _native_page(from_block: int, next_block: int, logs: list[Any] | None, blocks: list[dict[str, Any]],
                  *, guard: dict[str, Any] | None = None, network: str | None = None,
-                 chain_id: int | None = None, include_logs: bool = True) -> dict[str, Any]:
-    batch: dict[str, Any] = {"blocks": blocks}
-    if include_logs:
-        batch["logs"] = logs if logs is not None else []
+                 chain_id: int | None = None) -> dict[str, Any]:
+    batch: dict[str, Any] = {"blocks": blocks, "logs": logs if logs is not None else []}
     response: dict[str, Any] = {
         "archive_height": support.ARCHIVE_HEIGHT,
         "next_block": next_block,
@@ -69,7 +81,7 @@ def _native_page(from_block: int, next_block: int, logs: list[Any] | None, block
 
 def _page1(logs: list[Any] | None = None, *, guard: dict[str, Any] | None = None,
            network: str | None = None, chain_id: int | None = None,
-           blocks: list[dict[str, Any]] | None = None, include_logs: bool = True) -> dict[str, Any]:
+           blocks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     default_guard = {"block_number": 103, "timestamp": support.P1_LAST_TS, "hash": support.HASH_103,
                      "first_block_number": 100, "first_parent_hash": "0x" + "44" * 32}
     default_blocks = [{"number": 100, "timestamp": support.P1_FIRST_TS},
@@ -78,7 +90,7 @@ def _page1(logs: list[Any] | None = None, *, guard: dict[str, Any] | None = None
     return _native_page(100, 104, logs if logs is not None else [_native_log(support.EVENT_QUOTE_IN)],
                         blocks if blocks is not None else default_blocks,
                         guard=guard if guard is not None else default_guard,
-                        network=network, chain_id=chain_id, include_logs=include_logs)
+                        network=network, chain_id=chain_id)
 
 
 def _page2(logs: list[Any] | None = None, *, guard: dict[str, Any] | None = None,
@@ -165,12 +177,32 @@ def test_a_real_hypersync_reply_with_data_as_a_list_of_batches_is_framed() -> No
     assert [event["block_number"] for event in page["events"]] == [107_504_955]
 
 
+@pytest.mark.parametrize("name", sorted(LOGS_FREE_REPLIES))
+def test_a_real_reply_with_a_logs_free_batch_is_framed_as_zero_logs(name: str) -> None:
+    _, expected_events = LOGS_FREE_REPLIES[name]
+    raw = json.loads((FIXTURES / name).read_bytes())
+    assert any("blocks" in batch and "logs" not in batch for batch in raw["data"])
+    from_block = raw["data"][0]["blocks"][0]["number"]
+    request = HistoryRequest(provider="ENVIO_HYPERSYNC", address=REAL_FACTORY, topic0=REAL_CREATION_TOPIC0,
+                             from_block=from_block, to_block_exclusive=raw["next_block"], cursor_after=None,
+                             max_rows=100_000)
+    source = EnvioHypersyncSource(FakeClient([raw]))
+
+    page = source.next_response(request)
+
+    assert page["page"]["from_block"] == from_block
+    assert page["page"]["next_block"] == raw["next_block"]
+    assert len(page["events"]) == expected_events
+    assert source.transport_record()["records_framed"] == expected_events
+
+
 @pytest.mark.parametrize("damage, detail", [
     pytest.param(lambda raw: raw.update(data=raw["data"][0]), "data is not a list of batches",
                  id="data-is-an-object"),
     pytest.param(lambda raw: raw.update(data=["not-an-object"]), "a data batch is not an object",
                  id="batch-not-object"),
-    pytest.param(lambda raw: raw["data"][0].pop("logs"), "a data batch has no logs", id="logs-absent"),
+    pytest.param(lambda raw: raw.update(data=[{}]), "a data batch has neither logs nor blocks",
+                 id="no-logs-and-no-blocks"),
     pytest.param(lambda raw: raw["data"][0].update(logs={}), "a data batch logs is not a list",
                  id="logs-not-list"),
     pytest.param(lambda raw: raw["data"][0].update(blocks={}), "a data batch blocks is not a list",
@@ -257,8 +289,10 @@ def test_contradictory_guard_bounds_are_refused() -> None:
     assert result["page_count"] == 0
 
 
-def test_missing_logs_list_is_refused_not_proved_empty() -> None:
-    client = FakeClient([_page1(include_logs=False), _page2()])
+def test_a_batch_without_logs_or_blocks_is_refused() -> None:
+    page = _page1()
+    page["data"] = [{}]
+    client = FakeClient([page, _page2()])
     source = EnvioHypersyncSource(client)
     result = collect(support.profile(), source, _scan(), _limits())
     assert result["status"] == "PARTIAL"
