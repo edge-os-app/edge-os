@@ -1,0 +1,66 @@
+{
+  "schema": "edge-os.actual-proof-operation-inputs/1",
+  "task": "ACTUAL-POLICY-PROOF-L3-20261018",
+  "status": "NOT_RUN",
+  "evidence_class": "LOCAL_TESTED",
+  "provider_proof": "UNQUALIFIED",
+  "note": "This file lists the exact inputs a future unfunded actual proof run needs. It grants nothing. Missing values block activation. The code-owned approval and qualified-profile registries are empty in this unit.",
+  "packet_fields": [
+    {"field": "packet_id", "required": "SHA-256 of the frozen packet projection", "current": "MISSING"},
+    {"field": "app_id", "required": "The exact Privy application identity", "current": "MISSING"},
+    {"field": "executor_id", "required": "The executor identity that must not own the policy resource", "current": "MISSING"},
+    {"field": "owner_id", "required": "The builder-controlled wallet owner identity", "current": "MISSING"},
+    {"field": "policy_resource_owner_id", "required": "A concrete policy-resource owner outside executor control", "current": "MISSING"},
+    {"field": "wallet_id", "required": "The unfunded probe wallet id", "current": "MISSING"},
+    {"field": "wallet_address", "required": "The exact probe wallet address", "current": "MISSING"},
+    {"field": "network_id", "required": "One network identity per approval", "current": "MISSING"},
+    {"field": "chain_id", "required": "143 or 10143, with reviewed Flow support", "current": "MISSING"},
+    {"field": "signing_url", "required": "The exact approved wallet RPC destination", "current": "MISSING"},
+    {"field": "signing_method", "required": "eth_signTransaction only", "current": "MISSING"},
+    {"field": "profile_policies", "required": "One separate authorized policy id per profile (raw, decoded)", "current": "MISSING"},
+    {"field": "profile_policy_sha256", "required": "One policy content hash per profile", "current": "MISSING"},
+    {"field": "source_code_id", "required": "The approved source identity", "current": "MISSING"},
+    {"field": "deployed_code_id", "required": "The approved deployed-code identity", "current": "MISSING"},
+    {"field": "expires_at_epoch", "required": "A bounded packet expiry", "current": "MISSING"},
+    {"field": "auth_header_expiry", "required": "The exact 13-digit privy-request-expiry value", "current": "MISSING"},
+    {"field": "attempt_identity", "required": "The one-use idempotency/attempt identity", "current": "MISSING"},
+    {"field": "requests", "required": "The exact frozen request bytes for every admitted specimen", "current": "MISSING"},
+    {"field": "specimen_expected", "required": "The per-profile positive and negative specimen manifest", "current": "MISSING"},
+    {"field": "request_count_ceiling", "required": "At most 32 specimens per profile", "current": "MISSING"},
+    {"field": "request_byte_ceiling", "required": "At most 4096 request bytes", "current": "MISSING"},
+    {"field": "time_ceiling_seconds", "required": "A bounded run window", "current": "MISSING"},
+    {"field": "controls", "required": "All twelve P21 mandatory controls declarable", "current": "MISSING"},
+    {"field": "position_inventory", "required": "The separate position-inventory obligation", "current": "UNSUPPORTED"}
+  ],
+  "unqualified_controls": [
+    {"control": "opaque_program", "reason": "No reviewed source shows a policy bound on opaque bytes", "state": "UNKNOWN"},
+    {"control": "input_output_assets", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
+    {"control": "raw_input", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
+    {"control": "minimum_output", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
+    {"control": "recipient", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
+    {"control": "fees", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
+    {"control": "position_inventory", "reason": "No reviewed source shows that a wallet policy reads the position ledger", "state": "UNSUPPORTED"}
+  ],
+  "external_inputs": [
+    {"input": "qualified actual reply schema", "required": "An observed and reviewed provider error body shape, with status and code", "current": "MISSING"},
+    {"input": "qualified decoder profile", "required": "A code-registered decoder bound to the exact unsigned transaction and wallet", "current": "MISSING"},
+    {"input": "valid owner-bound type-4 authority", "required": "A concrete owner self-authorization before the type-4 negative test", "current": "MISSING"},
+    {"input": "idempotency and resend decision", "required": "The exact Privy idempotency semantics for the wallet RPC route", "current": "MISSING"},
+    {"input": "accepted non-type-2 request route", "required": "A separately accepted authorizer profile for the type-0, type-1, type-4 and personal_sign negatives; they now refuse REQUEST_PROFILE_UNQUALIFIED", "current": "UNQUALIFIED"},
+    {"input": "per-specimen approved destination route", "required": "A separately accepted multi-wallet route to exercise the raw.foreign_wallet negative; it now refuses DESTINATION_UNQUALIFIED under the single approved route", "current": "UNQUALIFIED"},
+    {"input": "qualified full-key and exact-type signed decoder", "required": "Complete decoded key-set and exact value-type validation (gate F6, PhaseB owner)", "current": "UNRESOLVED"},
+    {"input": "deployed ABI and selector", "required": "Reviewed entrypoint bytecode and the real selector", "current": "MISSING"},
+    {"input": "historical uncertainty", "required": "Reconcile the uncertain policy POST and the stopped 403 without a retry or bypass", "current": "UNRESOLVED"},
+    {"input": "Kuru deployed source", "required": "A reproducible deployed source identity", "current": "NOT_REPRODUCIBLE"}
+  ],
+  "refusal_boundary": {
+    "default_actual_run": "ACTUAL_PACKET_NOT_APPROVED",
+    "no_caller_boolean_or_flag": true,
+    "no_standalone_env_setting": true,
+    "code_owned_registries": [
+      "scripts.privy_unfunded_proof.actual_packet.CODE_OWNED_PACKET_APPROVALS",
+      "scripts.privy_unfunded_proof.actual_profile.QUALIFIED_ACTUAL_PROFILES",
+      "scripts.privy_unfunded_proof.actual_packet.CODE_OWNED_TYPE4_AUTHORITIES"
+    ]
+  }
+}

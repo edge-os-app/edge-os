@@ -464,6 +464,15 @@ class AttemptStore:
             return AttemptState.UNCERTAIN
         return AttemptState.TERMINAL
 
+    def claim_record(self, specimen_id: str, record: Mapping[str, Any]) -> None:
+        """Save one intent record with exclusive create and fsync. One claimant wins."""
+        try:
+            self._create(self._path(specimen_id, "intent"), encode_bounded_record(record))
+        except FileExistsError:
+            raise SpecimenRefused("ALREADY_CLAIMED") from None
+        except (OSError, EvidenceOverBound):
+            raise SpecimenRefused("INTENT_NOT_PERSISTED") from None
+
     def claim(self, specimen: Specimen, at: str) -> None:
         """Save intent with exclusive create and fsync. One claimant wins."""
         if specimen.request is None:
@@ -478,12 +487,7 @@ class AttemptStore:
             "intent_at": at,
             "evidence_class": EVIDENCE_CLASS,
         }
-        try:
-            self._create(self._path(specimen.specimen_id, "intent"), encode_bounded_record(record))
-        except FileExistsError:
-            raise SpecimenRefused("ALREADY_CLAIMED") from None
-        except (OSError, EvidenceOverBound):
-            raise SpecimenRefused("INTENT_NOT_PERSISTED") from None
+        self.claim_record(specimen.specimen_id, record)
 
     def write_capture(self, specimen_id: str, record: Mapping[str, Any]) -> bytes:
         data = encode_bounded_record(record)
