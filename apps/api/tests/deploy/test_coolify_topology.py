@@ -99,6 +99,14 @@ def test_every_service_keeps_the_hardening(compose, name):
     assert service.get("mem_limit")
 
 
+def test_postgres_starts_as_the_image_user_under_cap_drop_all(compose):
+    """The entrypoint cannot chown the data and socket folders without root capabilities."""
+    postgres = compose["services"]["postgres"]
+    assert postgres["cap_drop"] == ["ALL"]
+    assert postgres["user"] == "999:999"
+    assert "uid=999,gid=999" in " ".join(postgres["tmpfs"])
+
+
 @pytest.mark.parametrize("name", sorted(LONG_RUNNING))
 def test_long_running_services_have_a_healthcheck(compose, name):
     assert "healthcheck" in compose["services"][name]

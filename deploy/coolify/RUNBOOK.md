@@ -93,6 +93,8 @@ EDGE_OS_CORS_ALLOWED_ORIGINS=https://app.edgeos.fun
 EDGE_OS_BUILD_SHA=<40-character deployed source commit>
 ```
 
+`POSTGRES_DB` and the database name in the `EDGE_OS_DATABASE_URL` path must be the same. The examples use `edge_os`.
+
 Rules and refusals:
 
 - Do not set `EDGE_OS_PRIVY_APP_SECRET`, `EDGE_OS_AUTH_DISABLED` or `EDGE_OS_DEV_AUTH_BYPASS`. Startup refuses them.
@@ -116,8 +118,9 @@ Never deploy by a floating tag. The workflow artifact `image-digests` holds `api
 
 ## 4. PostgreSQL TLS certificate
 
-Create the certificate on the host. PostgreSQL runs as uid/gid 999 in the official image, so the key must be owned by
-`999:999` and readable by its owner only. The file is mounted read-only; it is not in the image or this repository.
+Create the certificate on the host. PostgreSQL runs as uid/gid 999 in the official image, and `compose.coolify.yml`
+sets `user: "999:999"` so the entrypoint starts without root capabilities. The key must be owned by `999:999` and
+readable by its owner only. The file is mounted read-only; it is not in the image or this repository.
 
 ```sh
 install -d -m 0750 -o 999 -g 999 /etc/edge-os/postgres-tls
@@ -154,6 +157,9 @@ docker compose -f <coolify compose path> run --rm migrate
 ```
 
 Run it exactly once per deploy, before the API takes traffic. Never add an automatic migration to the API command.
+
+If Coolify marks the exited one-shot `migrate` service as degraded, set Coolify's `exclude_from_hc` option for that
+service, or use the terminal command above. This is an install-time check; no unverified Compose key is added here.
 
 ## 6. Host services outside Coolify
 
@@ -210,9 +216,21 @@ EDGE_OS_RELAY_GID=<numeric gid of edge-os-relay>
 EDGE_OS_DOCKER_GID=<numeric group of /var/run/docker.sock>
 ```
 
+The socket-proxy image must be `wollomatic/socket-proxy` v1.12 or newer. This file uses repeated `-allow*` flags, which
+that version introduced; v1.13 also hardens the bind-mount check. An older digest fails closed and breaks the runner.
+
 `/etc/edge-os/research-worker.env` (mode `0600`, owner `root:edge-os-research`) holds the same `EDGE_OS_*` names as the
 API service, plus `DOCKER_HOST=unix:///run/edge-os/research/docker.sock` and
 `TMPDIR=/var/lib/edge-os/research/tmp`. No value is committed.
+
+**Open item: the host research worker has no database route in this topology.** The Coolify `postgres` service is on
+the `private` network (`internal: true`) and publishes no host port. Its certificate SAN is `DNS:postgres`; a host
+process cannot resolve `postgres`, and nothing binds `127.0.0.1:5432`. The unit is therefore **NOT READY** and must not
+be enabled. A future route needs a builder decision and a documented test: (a) a loopback-only published port
+`127.0.0.1:5432`, (b) a fixed private Docker subnet with a static Postgres address and a host route, or (c) run the
+worker as a systemd-managed container on the Coolify private network. Each option changes the accepted
+`expose`-not-`ports` or topology boundary. Record the decision before creating
+`/etc/edge-os/research-worker.enabled`.
 
 `/etc/edge-os/hermes-relay.env` holds `DOCKER_HOST=unix:///run/edge-os/relay/docker.sock` and the relay's non-secret
 paths. The relay operator configuration `/etc/edge-os/relay.json` is described by
@@ -376,3 +394,6 @@ the approval. Do not add the entry in this task.
 - The memory limits are proposals for the 12 GB VPS. The hosted load check (H7) stays `NOT RUN`.
 - The relay and research worker units are prepared but disabled. Do not enable them before an approved hosted
   deployment and provider release.
+- **Open item:** the host research worker has no database route to the private Coolify PostgreSQL. The unit is
+  NOT READY and must stay disabled until the builder chooses and we test one of the routes in §6.3. The Coolify API
+  and both workers in the Coolify stack do have the route (`postgres:5432` on `private`).

@@ -60,14 +60,14 @@ services:
       - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
       # One turn: create, start, attach to its output, wait for its exit and verify it is gone.
       - "-allowGET=(/v1\\.[0-9]+)?/containers/json"
-      - "-allowGET=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/json"
-      - "-allowGET=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/logs"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/(p05-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/json"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/(p05-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/logs"
       - "-allowGET=(/v1\\.[0-9]+)?/images/[A-Za-z0-9_.:/@-]+/json"
       - "-allowPOST=(/v1\\.[0-9]+)?/containers/create"
-      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/start"
-      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/attach"
-      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/wait"
-      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/kill"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(p05-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/start"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(p05-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/attach"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(p05-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/wait"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(p05-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/kill"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /run/edge-os/research:/run/edge-os:rw
@@ -95,8 +95,8 @@ services:
       - "-allowGET=(/v1\\.[0-9]+)?/info"
       - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
       - "-allowGET=(/v1\\.[0-9]+)?/containers/json"
-      - "-allowGET=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/json"
-      - "-allowGET=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/logs"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/(relay-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/json"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/(relay-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/logs"
       - "-allowGET=(/v1\\.[0-9]+)?/images/[A-Za-z0-9_.:/@-]+/json"
       - "-allowGET=(/v1\\.[0-9]+)?/networks"
       - "-allowGET=(/v1\\.[0-9]+)?/networks/[A-Za-z0-9][A-Za-z0-9_.-]*"
@@ -104,8 +104,8 @@ services:
       - "-allowGET=(/v1\\.[0-9]+)?/volumes/[A-Za-z0-9][A-Za-z0-9_.-]*"
       - "-allowGET=(/v1\\.[0-9]+)?/exec/[A-Za-z0-9]+/json"
       - "-allowPOST=(/v1\\.[0-9]+)?/containers/create"
-      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/start"
-      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/kill"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(relay-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/start"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(relay-[A-Za-z0-9][A-Za-z0-9_.-]*|[0-9a-f]{64})/kill"
       - "-allowPOST=(/v1\\.[0-9]+)?/networks/create"
       - "-allowPOST=(/v1\\.[0-9]+)?/volumes/create"
       # Exec is limited to this operation's own relay-* containers; the diagnostic never reaches another service.

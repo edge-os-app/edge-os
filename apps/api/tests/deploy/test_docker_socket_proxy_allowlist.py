@@ -11,7 +11,6 @@ import deploy_support as support
 RESEARCH = "socket-proxy-research"
 RELAY = "socket-proxy-relay"
 VERSION = r"(/v1\.[0-9]+)?"
-CONTAINER = r"[A-Za-z0-9][A-Za-z0-9_.-]*"
 
 
 @pytest.fixture(scope="module")
@@ -27,8 +26,6 @@ def _allowed(rules, method, path):
     return support.allows(rules, method, support.endpoint(method, path)[1])
 
 
-RESEARCH_READ = VERSION + r"/_ping"
-RESEARCH_CONTAINER = VERSION + r"/containers/" + CONTAINER
 
 
 def test_the_proxy_runs_without_a_network_and_with_the_socket_read_only(proxy):
@@ -107,6 +104,9 @@ def test_the_research_proxy_allows_every_guarded_runner_call(proxy):
     ("POST", "/v1.47/volumes/create"),
     ("DELETE", "/v1.47/volumes/x"),
     ("DELETE", "/v1.47/containers/p05-run-01-01"),
+    ("GET", "/v1.47/containers/postgres/json"),
+    ("POST", "/v1.47/containers/postgres/kill"),
+    ("POST", "/v1.47/containers/edge-os-api-1/start"),
 ])
 def test_the_research_proxy_denies_every_extra_call(proxy, method, path):
     assert not _allowed(_rules(proxy, RESEARCH), method, path)
@@ -178,6 +178,9 @@ def test_the_relay_proxy_refuses_exec_into_a_foreign_container(proxy, path):
     ("POST", "/v1.47/swarm/init"),
     ("POST", "/v1.47/services/create"),
     ("DELETE", "/v1.47/containers/postgres"),
+    ("GET", "/v1.47/containers/postgres/json"),
+    ("POST", "/v1.47/containers/postgres/kill"),
+    ("POST", "/v1.47/containers/edge-os-api-1/start"),
     ("DELETE", "/v1.47/networks/abc"),
     ("DELETE", "/v1.47/volumes/data"),
 ])
