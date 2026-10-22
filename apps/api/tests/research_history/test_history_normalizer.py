@@ -308,5 +308,6 @@ def test_declared_feasibility_floors_are_shown_with_their_counts() -> None:
     assert claim["verdict"] == "QUALIFIED"
     basis = [reason for reason in claim["reasons"] if reason["code"] == "DECLARED_FLOORS"]
     assert len(basis) == 1 and basis[0]["kind"] == "BASIS"
-    for text in ("triggered 1", "control 1", "demo floors, not statistical evidence", "usable"):
+    assert "usable 2 of 3" in basis[0]["detail"]
+    for text in ("triggered 1", "control 1", "demo floors, not statistical evidence"):
         assert text in basis[0]["detail"]

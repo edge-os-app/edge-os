@@ -64,10 +64,19 @@ def test_source_catalog_lists_only_labelled_recordings(research, owner_a):
     assert catalog["mode"] == "recorded"
     assert "SYNTHETIC" in catalog["label"]
     # SOURCE-LOCAL adds native-shaped recordings; RESEARCH-PORTS-LOCAL adds the same recording through the HTTP
-    # clients (authored transport). All are local recordings and none is provider-actual.
-    assert {item["evidence_class"] for item in catalog["sources"]} == {
+    # clients (authored transport). All are local recordings and carry the synthetic label. The composed default adds
+    # exactly one other entry: the one approved actual release source, with its release record.
+    released = [item for item in catalog["sources"] if "release" in item]
+    assert len(released) == 1
+    assert released[0]["source_id"] == "actual-moe-wmon-fwd20m/1"
+    assert released[0]["evidence_class"] == "PROVIDER_ACTUAL"
+    assert released[0]["content_label"] == "PROVIDER_HISTORY"
+    assert released[0]["available"] is True
+    assert released[0]["release"]["release_id"] == "actual-moe-history-nansen-20261022/1"
+    recorded = [item for item in catalog["sources"] if "release" not in item]
+    assert {item["evidence_class"] for item in recorded} == {
         "RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE", "AUTHORED_HTTP_RESPONSE"}
-    assert {item["content_label"] for item in catalog["sources"]} == {"SYNTHETIC_FIXTURE"}
+    assert {item["content_label"] for item in recorded} == {"SYNTHETIC_FIXTURE"}
     assert "SYNTHETIC" in catalog["native_label"]
 
 

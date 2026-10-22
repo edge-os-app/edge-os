@@ -1,4 +1,4 @@
-"""The server default registers and composes exactly one approved Nansen-only release (#58 NANSEN-RUNTIME-RELEASE-L4).
+"""The server default registers and composes exactly one approved MOE history plus Nansen release (#58 NANSEN-RUNTIME-RELEASE-L4).
 
 Runs with `--noconftest`: no database, socket or provider. A recording stand-in for `os.environ` holding only literal
 fake sentinels is installed before any project import, so the real environment is never consulted and every looked-up
