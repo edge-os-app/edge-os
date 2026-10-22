@@ -14,9 +14,12 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
-from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
+from edge_os_api.core.hosted_deployment import HostedDeployment, HostedDeploymentRefused, check_hosted_deployment
 
 TEST_APP_ID = "edge-os-test-app"
+# Coolify's own database answers to `postgres` on the shared `coolify` network. A production URL naming that host can
+# reach Coolify's database instead of ours, so production refuses it; compose.coolify.yml gives ours a unique alias.
+COOLIFY_RESERVED_DATABASE_HOSTS = frozenset({"postgres"})
 FORBIDDEN_ENV_NAMES = ("EDGE_OS_PRIVY_APP_SECRET", "EDGE_OS_AUTH_DISABLED", "EDGE_OS_DEV_AUTH_BYPASS")
 
 
@@ -174,6 +177,8 @@ class Settings(BaseSettings):
                 problems.append("database_url: production needs a hosted database, not a loopback host")
             if url.query.get("sslmode") not in {"require", "verify-ca", "verify-full"}:
                 problems.append("database_url: production needs sslmode=require or stricter")
+            if (url.host or "").lower() in COOLIFY_RESERVED_DATABASE_HOSTS:
+                problems.append("database_url: the host is Coolify's own database alias; use edge-os-postgres")
             if self.fixture_effects_path is not None:
                 problems.append("fixture_effects_path: fixture effects are refused in production")
         if self.env == "production" and self.interpreter != "fixture" and deployment is None:
@@ -187,7 +192,11 @@ class Settings(BaseSettings):
             if not (self.wallet_lookup_socket.startswith("/") and ".." not in self.wallet_lookup_socket.split("/")
                     and len(self.wallet_lookup_socket) <= 100 and "\x00" not in self.wallet_lookup_socket):
                 problems.append("wallet_lookup_socket: must be a short absolute path without '..'")
-        if self.env == "production" and self.execution_mode != "unavailable":
+        if self.env == "production" and self.execution_mode == "controlled":
+            refusal = _controlled_execution_refusal(deployment)
+            if refusal is not None:
+                problems.append(f"execution_mode: {refusal}")
+        elif self.env == "production" and self.execution_mode != "unavailable":
             problems.append("execution_mode: only the unavailable execution mode is allowed in production")
         if self.env == "production" and self.research_history_mode != "unavailable":
             problems.append("research_history_mode: recorded synthetic history is refused in production")
@@ -218,6 +227,24 @@ class Settings(BaseSettings):
                                   timeout=5, check=True).stdout.strip() or "unknown"
         except Exception:  # noqa: BLE001
             return "unknown"
+
+
+def _controlled_execution_refusal(deployment: HostedDeployment | None) -> str | None:
+    """Why production refuses controlled execution, or None when the named registered record binds the exact release.
+
+    The release must be the one code-owned approved actual execution release (`APPROVED_ACTUAL_RELEASES`), with the
+    same id and SHA-256 the record binds. A version 1 record binds none. Nothing here holds or reads a secret."""
+    if deployment is None:
+        return "controlled execution needs an approved hosted deployment"
+    if deployment.execution_release_id is None:
+        return "the hosted deployment record binds no execution release"
+    from edge_os_api.execution import operating_release
+
+    approved = operating_release.APPROVED_ACTUAL_RELEASES.get(deployment.execution_release_id)
+    if not isinstance(approved, str) or not deployment.admits_execution_release(
+            deployment.execution_release_id, approved):
+        return "the record's execution release is not the approved actual execution release"
+    return None
 
 
 class _SettingsFromMapping(Settings):

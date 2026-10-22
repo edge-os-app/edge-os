@@ -74,11 +74,14 @@ run and a new image digest.
 | `EDGE_OS_PRIVY_VERIFICATION_KEY` | Coolify runtime | `api`, both workers | No (EC P-256 public key) |
 | `EDGE_OS_CORS_ALLOWED_ORIGINS` | Coolify runtime | `api`, both workers | No |
 | `EDGE_OS_BUILD_SHA` | Coolify runtime | `api`, both workers | No |
-| `EDGE_OS_RESEARCH_BUDGET_*` | Coolify runtime (optional, defaults in the file) | `api`, both workers | No |
-| `EDGE_OS_USAGE_GLOBAL_*` | Coolify runtime (optional, defaults in the file) | `api`, both workers | No |
-| `EDGE_OS_WRITE_RATE_PER_MINUTE` | Coolify runtime (optional) | `api`, both workers | No |
-| `EDGE_OS_RESEARCH_MAX_ACTIVE_JOBS` | Coolify runtime (optional) | `api`, both workers | No |
+| `EDGE_OS_RESEARCH_BUDGET_*` | Coolify runtime (optional, defaults in the file) | `api`, `recurring-producer` | No |
+| `EDGE_OS_USAGE_GLOBAL_*` | Coolify runtime (optional, defaults in the file) | `api`, `recurring-producer` | No |
+| `EDGE_OS_WRITE_RATE_PER_MINUTE` | Coolify runtime (optional) | `api`, `recurring-producer` | No |
+| `EDGE_OS_RESEARCH_MAX_ACTIVE_JOBS` | Coolify runtime (optional) | `api`, `recurring-producer` | No |
 | `EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS` | Coolify runtime (optional) | `api`, both workers | No |
+
+The execution worker has its own environment block, not the API block: it receives only the names it needs (see
+`docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §4).
 
 Set the runtime values:
 
@@ -86,7 +89,7 @@ Set the runtime values:
 POSTGRES_USER=edge_os
 POSTGRES_PASSWORD=<generated, stored only in Coolify>
 POSTGRES_DB=edge_os
-EDGE_OS_DATABASE_URL=postgresql+psycopg://edge_os:<same password>@postgres:5432/edge_os?sslmode=require
+EDGE_OS_DATABASE_URL=postgresql+psycopg://edge_os:<same password>@edge-os-postgres:5432/edge_os?sslmode=require
 EDGE_OS_PRIVY_APP_ID=<public app id>
 EDGE_OS_PRIVY_VERIFICATION_KEY=<public key PEM; newlines may be written as \n>
 EDGE_OS_CORS_ALLOWED_ORIGINS=https://app.edgeos.fun
@@ -95,11 +98,16 @@ EDGE_OS_BUILD_SHA=<40-character deployed source commit>
 
 `POSTGRES_DB` and the database name in the `EDGE_OS_DATABASE_URL` path must be the same. The examples use `edge_os`.
 
+**Alias collision warning.** The URL host is `edge-os-postgres`, never `postgres`. The API joins Coolify's `coolify`
+network, where Coolify's own database answers to `postgres`; a URL naming `postgres` reached Coolify's database in
+the live deployment. Production settings now refuse that host. See
+`docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §2.
+
 Rules and refusals:
 
 - Do not set `EDGE_OS_PRIVY_APP_SECRET`, `EDGE_OS_AUTH_DISABLED` or `EDGE_OS_DEV_AUTH_BYPASS`. Startup refuses them.
 - `EDGE_OS_CORS_ALLOWED_ORIGINS` must be one or more exact `https://` origins. No `*`, no `http://`.
-- The database host must not be loopback and the URL must carry `sslmode=require` or stricter.
+- The database host must not be loopback or `postgres`, and the URL must carry `sslmode=require` or stricter.
 - `EDGE_OS_BUILD_SHA` must be the exact deployed commit.
 - The test app id `edge-os-test-app` is refused.
 - Provider modes stay `unavailable`; the interpreter stays `fixture` until an approved hosted deployment exists.
@@ -144,8 +152,8 @@ readable by its owner only. The file is mounted read-only; it is not in the imag
 install -d -m 0750 -o 999 -g 999 /etc/edge-os/postgres-tls
 cd /etc/edge-os/postgres-tls
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825 \
-  -keyout server.key -out server.crt -subj "/CN=postgres" \
-  -addext "subjectAltName=DNS:postgres" \
+  -keyout server.key -out server.crt -subj "/CN=edge-os-postgres" \
+  -addext "subjectAltName=DNS:edge-os-postgres,IP:127.0.0.1" \
   -addext "basicConstraints=critical,CA:FALSE" \
   -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
   -addext "extendedKeyUsage=serverAuth"
@@ -241,14 +249,11 @@ that version introduced; v1.13 also hardens the bind-mount check. An older diges
 API service, plus `DOCKER_HOST=unix:///run/edge-os/research/docker.sock` and
 `TMPDIR=/var/lib/edge-os/research/tmp`. No value is committed.
 
-**Open item: the host research worker has no database route in this topology.** The Coolify `postgres` service is on
-the `private` network (`internal: true`) and publishes no host port. Its certificate SAN is `DNS:postgres`; a host
-process cannot resolve `postgres`, and nothing binds `127.0.0.1:5432`. The unit is therefore **NOT READY** and must not
-be enabled. A future route needs a builder decision and a documented test: (a) a loopback-only published port
-`127.0.0.1:5432`, (b) a fixed private Docker subnet with a static Postgres address and a host route, or (c) run the
-worker as a systemd-managed container on the Coolify private network. Each option changes the accepted
-`expose`-not-`ports` or topology boundary. Record the decision before creating
-`/etc/edge-os/research-worker.enabled`.
+**Database route for the host research worker (builder decision B2 option a, 2026-10-22).** PostgreSQL publishes
+`127.0.0.1:5432` only, from the `hostdb` bridge, and its certificate carries `IP:127.0.0.1`. The worker URL uses host
+`127.0.0.1`. **Open item:** production settings still refuse a loopback database host, so the unit stays **NOT READY**
+and must not be enabled until a separate reviewed settings change admits that route. See
+`docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §3.
 
 `/etc/edge-os/hermes-relay.env` holds `DOCKER_HOST=unix:///run/edge-os/relay/docker.sock` and the relay's non-secret
 paths. The relay operator configuration `/etc/edge-os/relay.json` is described by
@@ -352,7 +357,9 @@ Manual check: add `$WEB_ORIGIN` to the Privy dashboard's allowed origins. The sc
 
 ## 8. Backup and restore drill
 
-A snapshot is not a backup. Keep the dump off the VPS and encrypted.
+A snapshot is not a backup. Keep the dump off the VPS and encrypted. The adopted plan (Contabo snapshots, an on-VPS
+`pg_dump` and a restore drill into a scratch container) is `docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md`
+§5.
 
 ```sh
 docker compose -f <coolify compose path> exec -T postgres \
@@ -390,13 +397,14 @@ reviewed code change adds its id and canonical SHA-256 to `APPROVED_HOSTED_DEPLO
 
 | Field | Constraint |
 |---|---|
-| `schema_version` | Exactly `edge-os.hosted-deployment/1` |
+| `schema_version` | `edge-os.hosted-deployment/1`, or `edge-os.hosted-deployment/2` with `execution_release` |
 | `deployment_id` | 1-64 characters, `[A-Za-z0-9][A-Za-z0-9._:-]*` |
 | `public_origins` | 1-20 unique HTTPS origins, no wildcard, no path/query/fragment/userinfo |
 | `cors_origins` | 1-20 unique HTTPS origins, each also in `public_origins` |
 | `database_tls_mode` | `require`, `verify-ca` or `verify-full` |
 | `hermes_relay` | Exactly `release_id` and `record_sha256` (lowercase 64-hex) |
 | `research_release` | Exactly `release_id` and `sha256` (lowercase 64-hex) |
+| `execution_release` | Version 2 only, required there: exactly `release_id` and `sha256` (lowercase 64-hex). Production admits `EDGE_OS_EXECUTION_MODE=controlled` only when this equals the code-owned `APPROVED_ACTUAL_RELEASES` entry. A version 1 record grants no execution. |
 | `host_gates` | Exactly `h1_egress`, `h2_runner_isolation`, `h8_provider_spend_cap`, `h10_backup_restore`; each has a `docs/qualification/...` path and a 64-hex SHA-256 |
 | `image_digests` | 1-20 entries; lowercase image name -> `sha256:<64 hex>` |
 | `valid_from`, `valid_until` | UTC whole seconds `YYYY-MM-DDTHH:MM:SSZ`; `valid_until` after `valid_from` |
@@ -412,6 +420,6 @@ the approval. Do not add the entry in this task.
 - The memory limits are proposals for the 12 GB VPS. The hosted load check (H7) stays `NOT RUN`.
 - The relay and research worker units are prepared but disabled. Do not enable them before an approved hosted
   deployment and provider release.
-- **Open item:** the host research worker has no database route to the private Coolify PostgreSQL. The unit is
-  NOT READY and must stay disabled until the builder chooses and we test one of the routes in §6.3. The Coolify API
-  and both workers in the Coolify stack do have the route (`postgres:5432` on `private`).
+- **Open item:** the host research worker's loopback route (`127.0.0.1:5432`, §6.3) is refused by the production
+  loopback rule in settings. The unit is NOT READY and must stay disabled until a reviewed settings change admits it.
+  The Coolify API and both workers in the Coolify stack use `edge-os-postgres:5432` on `private`.

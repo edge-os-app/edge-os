@@ -73,7 +73,7 @@ link, of at most 64 KiB.
 
 | Field | Rule |
 |---|---|
-| `schema_version` | Exactly `edge-os.hosted-deployment/1`. |
+| `schema_version` | `edge-os.hosted-deployment/1`, or `edge-os.hosted-deployment/2` (the v1 fields plus `execution_release`). |
 | `deployment_id` | 1 to 64 characters: letters, digits, `.`, `_`, `:`, `-`; must equal the named id. |
 | `public_origins` | 1 to 20 unique `https` origins. No wildcard, path, query, fragment or user information. |
 | `cors_origins` | 1 to 20 unique `https` origins; each must also be a public origin. Must equal the running `cors_origins` exactly. |
@@ -82,6 +82,7 @@ link, of at most 64 KiB.
 | `hermes_relay.record_sha256` | The relay release record's SHA-256, 64 lower-case hex characters. |
 | `research_release.release_id` | A registered operating release id. |
 | `research_release.sha256` | The operating release SHA-256, 64 lower-case hex characters. |
+| `execution_release` | Version 2 only, and required there: exactly `release_id` and `sha256` (64 lower-case hex). Absent from version 1. |
 | `host_gates` | Exactly the four named gates. Each has exactly `path` and `sha256`. The path starts with `docs/qualification/`; the hash is 64 lower-case hex characters. |
 | `image_digests` | 1 to 20 entries. Each key is 1 to 64 lower-case characters; each value is a Docker image id `sha256:<64 hex>`, not a tag or a registry digest reference. |
 | `valid_from`, `valid_until` | UTC whole seconds, `YYYY-MM-DDTHH:MM:SSZ`. `valid_from < valid_until`; the start-up time must be inside the window. |
@@ -90,7 +91,7 @@ A reference is a path plus SHA-256. A free-text claim is not a reference.
 
 ## 5. What a correct record admits
 
-One production deployment record admits exactly three parts.
+One production deployment record admits exactly three parts; a version 2 record can also admit controlled execution (§5.4).
 
 ### 5.1 The `hermes_local` interpreter
 
@@ -128,6 +129,14 @@ Hermes relay application keeps its production refusal without a record.
 
 `local` and `test` keep the existing composition and read no deployment record.
 
+### 5.4 Controlled execution (record version 2 only)
+
+A version 1 record binds no execution release and grants no execution. In production, `Settings.validate_rules`
+admits `execution_mode=controlled` only when the named registered record is version 2 and its `execution_release`
+equals the code-owned `APPROVED_ACTUAL_RELEASES` entry (`execution/operating_release.py`) by exact id and SHA-256.
+Every other case is refused with a named reason. `EDGE_OS_PRIVY_APP_SECRET` stays refused in every process
+environment. See `docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md`.
+
 ## 6. Refusal codes
 
 Errors name a code, never a configured value.
@@ -154,7 +163,8 @@ Errors name a code, never a configured value.
 A matching record does not widen any of these:
 
 - `wallet_provider` must stay `unavailable`; the fixture provider is refused.
-- `execution_mode` must stay `unavailable`; fixture execution is refused.
+- `execution_mode` must stay `unavailable`, except `controlled` for a version 2 record that binds the exact approved
+  execution release (§5.4); fixture execution is refused.
 - `research_history_mode` must stay `unavailable`; recorded synthetic history is refused.
 - `research_source_clients` must stay `recorded`; the authored HTTP transport is refused.
 - `nansen_research_mode` must stay `unavailable`; the authored Nansen transport is refused.

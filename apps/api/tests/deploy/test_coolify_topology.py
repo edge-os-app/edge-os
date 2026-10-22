@@ -86,8 +86,9 @@ def test_postgres_is_published_on_loopback_only_for_the_host_research_worker(com
 
 def test_postgres_has_a_unique_alias_that_cannot_collide_with_coolify(compose):
     postgres = compose["services"]["postgres"]
-    assert set(postgres["networks"]) == {"private"}
+    assert set(postgres["networks"]) == {"private", "hostdb"}
     assert postgres["networks"]["private"]["aliases"] == [POSTGRES_ALIAS]
+    assert "aliases" not in (postgres["networks"]["hostdb"] or {})
     text = support.COMPOSE_COOLIFY.read_text(encoding="utf-8")
     assert f"@{POSTGRES_ALIAS}:5432/" in text
     assert "@postgres:" not in text
@@ -101,6 +102,16 @@ def test_only_the_execution_worker_joins_the_egress_network(compose):
     assert egress["ipam"]["config"] == [{"subnet": "10.203.0.0/28"}]
     members = {name for name, service in compose["services"].items() if "egress" in service["networks"]}
     assert members == {"execution-worker"}
+
+
+def test_the_loopback_publish_network_has_no_route_out_and_only_postgres(compose):
+    hostdb = compose["networks"]["hostdb"]
+    assert hostdb["driver"] == "bridge"
+    assert hostdb["driver_opts"]["com.docker.network.bridge.name"] == "edgeos-hostdb"
+    assert hostdb["driver_opts"]["com.docker.network.bridge.enable_ip_masquerade"] == "false"
+    assert hostdb["ipam"]["config"] == [{"subnet": "10.203.0.16/28"}]
+    members = {name for name, service in compose["services"].items() if "hostdb" in service["networks"]}
+    assert members == {"postgres"}
 
 
 def test_the_execution_worker_does_not_merge_the_api_environment():
@@ -246,8 +257,9 @@ def test_the_workers_use_a_heartbeat_command(compose):
 def test_api_and_web_join_the_proxy_network(compose):
     for name in ("api", "web"):
         assert set(compose["services"][name]["networks"]) == {"private", "coolify"}
-    for name in ("postgres", "migrate", "recurring-producer"):
+    for name in ("migrate", "recurring-producer"):
         assert set(compose["services"][name]["networks"]) == {"private"}
+    assert set(compose["services"]["postgres"]["networks"]) == {"private", "hostdb"}
     assert set(compose["services"]["execution-worker"]["networks"]) == {"private", "egress"}
     assert compose["networks"]["private"]["internal"] is True
     assert compose["networks"]["coolify"]["external"] is True
