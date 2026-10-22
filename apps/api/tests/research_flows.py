@@ -36,7 +36,9 @@ def source_entry(client, headers, source_id: str = QUALIFIED) -> dict[str, Any]:
 
 def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: str | None = None,
                  direction: str = "OUTPERFORM", rules: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
-                 bounds: dict[str, int] | None = None, partition: str | None = None) -> dict[str, Any]:
+                 bounds: dict[str, int] | None = None, partition: str | None = None,
+                 partitions: list[dict[str, Any]] | None = None, schedule: dict[str, Any] | None = None,
+                 unknowns: list[str] | None = None) -> dict[str, Any]:
     source = source_entry(client, headers, source_id)
     window = source["window"]
     trial = str(uuid.uuid4())
@@ -45,16 +47,17 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
     evaluations = [str(uuid.uuid4()) for _ in rules]
     variants = [f"v{index + 1}" for index in range(len(rules))]
     descriptive = direction == "DESCRIPTIVE"
-    if descriptive:
-        partitions = [{"partition_id": "described", "role": "DESCRIPTIVE", "start": window["start"],
-                       "end": window["end"]}]
-    else:
-        partitions = [
-            {"partition_id": "train", "role": "TRAINING", "start": window["start"], "end": "2026-09-25T11:00:00Z"},
-            {"partition_id": "validate", "role": "VALIDATION", "start": "2026-09-25T11:00:00Z",
-             "end": "2026-09-25T11:30:00Z"},
-            {"partition_id": "holdout", "role": "HOLDOUT", "start": "2026-09-25T11:30:00Z", "end": window["end"]},
-        ]
+    if partitions is None:
+        if descriptive:
+            partitions = [{"partition_id": "described", "role": "DESCRIPTIVE", "start": window["start"],
+                           "end": window["end"]}]
+        else:
+            partitions = [
+                {"partition_id": "train", "role": "TRAINING", "start": window["start"], "end": "2026-09-25T11:00:00Z"},
+                {"partition_id": "validate", "role": "VALIDATION", "start": "2026-09-25T11:00:00Z",
+                 "end": "2026-09-25T11:30:00Z"},
+                {"partition_id": "holdout", "role": "HOLDOUT", "start": "2026-09-25T11:30:00Z", "end": window["end"]},
+            ]
     first_partition = partition or partitions[0]["partition_id"]
     return {
         "operation_id": str(uuid.uuid4()), "idempotency_key": key or f"rg01-{uuid.uuid4()}",
@@ -68,7 +71,7 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
                               "criteria": "No outcome claim." if descriptive else
                               "The triggered minus control mean is not positive."},
             "alternatives": ["Short-term noise explains any difference."],
-            "unknowns": ["Recorded responses are synthetic; no real pool behaviour is measured."],
+            "unknowns": unknowns or ["Recorded responses are synthetic; no real pool behaviour is measured."],
         },
         "configuration": {
             "question": bundle["intake"]["content"]["original_request"],
@@ -83,8 +86,8 @@ def history_body(client, headers, bundle, *, source_id: str = QUALIFIED, key: st
             "evaluation_plan": [{"evaluation_id": evaluation, "trial_id": trial, "variant_id": variant,
                                  "horizon": {"value": 5, "unit": "MINUTES"}, "partition_ids": [first_partition]}
                                 for evaluation, variant in zip(evaluations, variants)],
-            "schedule": {"version": "p09.decision-clock/1", "start": "2026-09-25T10:15:00Z",
-                         "end": "2026-09-25T11:50:00Z", "interval_seconds": 300},
+            "schedule": schedule or {"version": "p09.decision-clock/1", "start": "2026-09-25T10:15:00Z",
+                                     "end": "2026-09-25T11:50:00Z", "interval_seconds": 300},
             "rule_map": {"schema_version": "edge-os.hypothesis-rule-map/1", "control": "UNTRIGGERED_DECISIONS",
                          "incremental_volume_declared": True,
                          "rules": [{"evaluation_id": evaluation, "trial_id": trial, "variant_id": variant,
