@@ -17,9 +17,10 @@ from sqlalchemy.exc import ArgumentError
 from edge_os_api.core.hosted_deployment import HostedDeployment, HostedDeploymentRefused, check_hosted_deployment
 
 TEST_APP_ID = "edge-os-test-app"
-# Coolify's own database answers to `postgres` on the shared `coolify` network. A production URL naming that host can
-# reach Coolify's database instead of ours, so production refuses it; compose.coolify.yml gives ours a unique alias.
-COOLIFY_RESERVED_DATABASE_HOSTS = frozenset({"postgres"})
+# Coolify's own database answers to `postgres` and `coolify-db` on the shared `coolify` network. A production URL naming
+# either host can reach Coolify's database instead of ours, so production refuses both; compose.coolify.yml gives ours
+# the unique alias `edge-os-postgres`.
+COOLIFY_RESERVED_DATABASE_HOSTS = frozenset({"postgres", "coolify-db"})
 FORBIDDEN_ENV_NAMES = ("EDGE_OS_PRIVY_APP_SECRET", "EDGE_OS_AUTH_DISABLED", "EDGE_OS_DEV_AUTH_BYPASS")
 
 
@@ -177,7 +178,7 @@ class Settings(BaseSettings):
                 problems.append("database_url: production needs a hosted database, not a loopback host")
             if url.query.get("sslmode") not in {"require", "verify-ca", "verify-full"}:
                 problems.append("database_url: production needs sslmode=require or stricter")
-            if (url.host or "").lower() in COOLIFY_RESERVED_DATABASE_HOSTS:
+            if (url.host or "").rstrip(".").lower() in COOLIFY_RESERVED_DATABASE_HOSTS:
                 problems.append("database_url: the host is Coolify's own database alias; use edge-os-postgres")
             if self.fixture_effects_path is not None:
                 problems.append("fixture_effects_path: fixture effects are refused in production")

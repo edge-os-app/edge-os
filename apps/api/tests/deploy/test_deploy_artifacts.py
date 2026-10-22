@@ -121,3 +121,19 @@ def test_the_coolify_runbook_uses_the_unique_database_alias():
     assert "DNS:edge-os-postgres" in text
     assert "edge-os.hosted-deployment/2" in text
     assert "HOSTED_RECORD_V2_RUNBOOK.md" in text
+
+
+def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
+    host = support.REPO / "deploy" / "host"
+    script = host / "edge-os-egress-firewall.sh"
+    assert os.access(script, os.X_OK)
+    text = script.read_text(encoding="utf-8")
+    for rule in ("-i edgeos-hostdb -j DROP", "! -i edgeos-egress -j RETURN", '-m set --match-set "$SET" dst -j RETURN',
+                 '-A "$fwd" -j DROP', '-A "$in_egress" -j DROP', '-A "$in_db" -j DROP', "hook DOCKER-USER",
+                 "hook INPUT", "conntrack -D -s"):
+        assert rule in text, rule
+    assert "ipset flush" not in text and "ipset swap" not in text
+    unit = (host / "edge-os-egress-firewall.service").read_text(encoding="utf-8")
+    assert "Before=docker.service" in unit and "RequiredBy=docker.service" in unit
+    timer = (host / "edge-os-egress-refresh.timer").read_text(encoding="utf-8")
+    assert "OnUnitActiveSec=5min" in timer

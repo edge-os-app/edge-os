@@ -10,7 +10,7 @@
 # Our PostgreSQL therefore answers to the unique alias `edge-os-postgres`, and EDGE_OS_DATABASE_URL must name it:
 #   postgresql+psycopg://edge_os:${POSTGRES_PASSWORD}@edge-os-postgres:5432/edge_os?sslmode=require
 # with the password URL-encoded. The value lives in Coolify, never here.
-# Production settings refuse a database host named `postgres`.
+# Production settings refuse a database host named `postgres` or `coolify-db`.
 #
 # Fail closed: every secret and every image is a required variable (`:?`). A missing value stops `docker compose
 # config`/`up`; there is no local, fixture or in-memory fallback. Values live in Coolify, never in this file.
@@ -302,10 +302,10 @@ networks:
   # The execution worker's only route out, intended for https://api.privy.io and the Monad RPC endpoint only. Docker
   # cannot restrict by host name: this network alone allows every destination. The host firewall (DOCKER-USER chain
   # on the fixed bridge `edgeos-egress`, subnet 10.203.0.0/28) or an egress gateway enforces the two destinations;
-  # the exact rule is in docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md. Do not enable controlled
-  # execution before that rule is installed and tested.
+  # the rule is deploy/host/edge-os-egress-firewall.sh, described in HOSTED_RECORD_V2_RUNBOOK.md §4.1. Install it
+  # before the first deploy that creates this network.
   # PostgreSQL's loopback publish only. Masquerade is off, so the database has no route out of the host; the host
-  # firewall also drops forwarded traffic from this bridge (see the runbook).
+  # firewall also drops forwarded traffic from this bridge and its traffic to the host (see the runbook).
   hostdb:
     driver: bridge
     driver_opts:

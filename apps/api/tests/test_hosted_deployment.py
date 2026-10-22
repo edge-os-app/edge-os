@@ -445,7 +445,6 @@ def test_create_app_refuses_a_passed_runtime_with_another_research_hash(
         create_app(settings, research_runtime=local)
 
 
-
 # --- Record v2: the execution release, and the production gate for controlled execution -----------------------------
 
 EXECUTION_ID = "inapp-wmon-moe-20261023/1"

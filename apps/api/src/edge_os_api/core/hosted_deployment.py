@@ -252,7 +252,7 @@ def _parse(value: dict[str, Any], digest: str) -> HostedDeployment:
     relay = _pair(value["hermes_relay"], "release_id", "record_sha256")
     research = _pair(value["research_release"], "release_id", "sha256")
     execution = (_pair(value["execution_release"], "release_id", "sha256")
-                 if value["schema_version"] == RECORD_VERSION_2 else (None, None))
+                 if version == RECORD_VERSION_2 else (None, None))
     gates = _host_gates(value["host_gates"])
     images = _images(value["image_digests"])
     start = _timestamp(value["valid_from"])

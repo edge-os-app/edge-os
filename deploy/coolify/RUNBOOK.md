@@ -107,7 +107,8 @@ Rules and refusals:
 
 - Do not set `EDGE_OS_PRIVY_APP_SECRET`, `EDGE_OS_AUTH_DISABLED` or `EDGE_OS_DEV_AUTH_BYPASS`. Startup refuses them.
 - `EDGE_OS_CORS_ALLOWED_ORIGINS` must be one or more exact `https://` origins. No `*`, no `http://`.
-- The database host must not be loopback or `postgres`, and the URL must carry `sslmode=require` or stricter.
+- The database host must not be loopback, `postgres` or `coolify-db`, and the URL must carry `sslmode=require` or
+  stricter.
 - `EDGE_OS_BUILD_SHA` must be the exact deployed commit.
 - The test app id `edge-os-test-app` is refused.
 - Provider modes stay `unavailable`; the interpreter stays `fixture` until an approved hosted deployment exists.

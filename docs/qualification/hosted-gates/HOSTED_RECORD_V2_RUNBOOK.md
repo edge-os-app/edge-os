@@ -58,8 +58,9 @@ the alias `postgres`, and our API resolved `postgres` to it.
 - `compose.coolify.yml` gives our PostgreSQL the unique alias `edge-os-postgres` on `private`.
 - `EDGE_OS_DATABASE_URL` must name that host:
   `postgresql+psycopg://edge_os:<URL-encoded password>@edge-os-postgres:5432/edge_os?sslmode=require`.
-- Production settings refuse a database host named `postgres` (`database_url: the host is Coolify's own database
-  alias; use edge-os-postgres`). A deploy that still carries the old URL fails at start, before any query.
+- Production settings refuse a database host named `postgres` or `coolify-db`, case-insensitive and with or without
+  a trailing dot (`database_url: the host is Coolify's own database alias; use edge-os-postgres`). A deploy that still
+  carries the old URL fails at start, before any query.
 
 Host check after the deploy (expect an address from the `private` network, never Coolify's database):
 
@@ -120,6 +121,9 @@ The execution worker has its own environment block (`x-worker-environment`), not
 `EDGE_OS_ENV`, `EDGE_OS_DATABASE_URL`, `EDGE_OS_PRIVY_APP_ID`, `EDGE_OS_PRIVY_VERIFICATION_KEY`,
 `EDGE_OS_CORS_ALLOWED_ORIGINS`, `EDGE_OS_BUILD_SHA`, `EDGE_OS_EXECUTION_MODE` (pinned `unavailable`) and
 `EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS`, plus the three masked `POSTGRES_*` names. It names no Privy app secret.
+This guarantee covers the Compose file. If Coolify writes every variable into one shared runtime file, optional
+non-secret names such as `EDGE_OS_RESEARCH_BUDGET_*` can still reach the worker; the worker does not read them, and
+they cannot be masked with a placeholder because the settings parse them as integers.
 Worker signing settings belong to the execution lanes; activating them is a later reviewed change.
 
 The worker alone joins `egress`: a bridge with the fixed name `edgeos-egress` and subnet `10.203.0.0/28`. It is
@@ -131,57 +135,73 @@ pass.
 
 ### 4.1 The exact host rule (iptables backend)
 
-`DOCKER-USER` exists with Docker's iptables firewall backend. With the nftables backend, write the same rules in an
-nftables `forward` hook chain at a priority before Docker's. The rule allows DNS to the resolver Docker uses and HTTPS
-to the resolved addresses of the two host names; it drops everything else from `edgeos-egress`, including traffic to
-the host itself.
+The rule is `deploy/host/edge-os-egress-firewall.sh`, run as root. It needs Docker's iptables firewall backend
+(`DOCKER-USER`); with the nftables backend, write the same rules in an nftables `forward` and `input` hook chain at a
+priority before Docker's. The networks are IPv4-only; if IPv6 is enabled in Docker, add the same rules with
+`ip6tables`.
+
+What `apply` installs:
+
+| Chain (hooked from) | Rules, in order |
+|---|---|
+| `EDGE_OS_FWD_A/B` (first rule of `DOCKER-USER`) | `-i edgeos-hostdb -j DROP`; `! -i edgeos-egress -j RETURN`; `ESTABLISHED,RELATED -j RETURN`; UDP and TCP 53 to each upstream resolver `-j RETURN`; TCP to `EDGE_OS_EGRESS_PORTS` (default 443) with `--match-set edgeos-egress-allow dst -j RETURN`; `-j DROP` |
+| `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+| `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+
+- The upstream resolvers are every IPv4 `nameserver` in `/run/systemd/resolve/resolv.conf` (or `/etc/resolv.conf`),
+  without loopback stubs. Docker's embedded resolver forwards from the container's namespace, so these queries cross
+  `edgeos-egress`.
+- `edgeos-egress-allow` is a `hash:ip` set with a 900-second entry timeout. `refresh` resolves
+  `EDGE_OS_EGRESS_HOSTS` on the host and only adds addresses; an empty answer never clears the set, and an address
+  the providers stop using expires. A missing address fails closed (dropped), never open.
+- Each re-run builds the idle `_A`/`_B` chain, hooks it first and only then removes the old one, so no hook is ever
+  left pointing at an empty chain.
+- After `apply`, conntrack entries from `10.203.0.0/28` are deleted, so a connection opened before the rules does not
+  survive on the `ESTABLISHED` allowance.
+- The `INPUT` chains keep both bridges off host services (SSH, Coolify, the loopback database). Replies to the
+  loopback publish still arrive (`ESTABLISHED`).
+
+Install (before the first deploy that puts the worker on `egress`):
 
 ```sh
-RESOLVER=<the upstream resolver IP Docker uses; see /run/systemd/resolve/resolv.conf>
-RPC_HOST=<the Monad RPC host name in the approved execution release>
-
-ipset create edgeos-egress-allow hash:ip family inet -exist
-
-iptables -N EDGE_OS_EGRESS 2>/dev/null || iptables -F EDGE_OS_EGRESS
-iptables -A EDGE_OS_EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-iptables -A EDGE_OS_EGRESS -p udp -d "$RESOLVER" --dport 53 -j RETURN
-iptables -A EDGE_OS_EGRESS -p tcp -d "$RESOLVER" --dport 53 -j RETURN
-iptables -A EDGE_OS_EGRESS -p tcp --dport 443 -m set --match-set edgeos-egress-allow dst -j RETURN
-iptables -A EDGE_OS_EGRESS -j DROP
-iptables -C DOCKER-USER -i edgeos-egress -j EDGE_OS_EGRESS 2>/dev/null \
-  || iptables -I DOCKER-USER -i edgeos-egress -j EDGE_OS_EGRESS
-iptables -C DOCKER-USER -i edgeos-hostdb -j DROP 2>/dev/null || iptables -I DOCKER-USER -i edgeos-hostdb -j DROP
-
-# Nothing from the worker bridge to the host itself (SSH, Coolify, the loopback database).
-iptables -C INPUT -i edgeos-egress -j DROP 2>/dev/null || iptables -I INPUT -i edgeos-egress -j DROP
-iptables -C INPUT -i edgeos-egress -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \
-  || iptables -I INPUT -i edgeos-egress -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
-# Refresh the allowed addresses (CDN addresses change). Run now and from a root systemd timer every 5 minutes.
-ipset create edgeos-egress-next hash:ip family inet -exist
-ipset flush edgeos-egress-next
-for host in api.privy.io "$RPC_HOST"; do
-  getent ahostsv4 "$host" | awk '{print $1}' | sort -u | xargs -r -n1 ipset -exist add edgeos-egress-next
-done
-ipset swap edgeos-egress-next edgeos-egress-allow
-ipset destroy edgeos-egress-next
+apt-get install -y ipset conntrack
+install -m 0600 -o root -g root /dev/null /etc/edge-os/egress.env
+cat > /etc/edge-os/egress.env <<'ENV'
+EDGE_OS_EGRESS_HOSTS="api.privy.io <the Monad RPC host name in the approved execution release>"
+EDGE_OS_EGRESS_PORTS="443"
+ENV
+install -m 0644 /opt/edge-os/deploy/host/edge-os-egress-firewall.service \
+  /opt/edge-os/deploy/host/edge-os-egress-refresh.service \
+  /opt/edge-os/deploy/host/edge-os-egress-refresh.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now edge-os-egress-firewall.service edge-os-egress-refresh.timer
 ```
 
-Persist the rules with the host's firewall persistence (for example `netfilter-persistent save`) or a root oneshot
-unit ordered `After=docker.service`. The networks are IPv4-only; if IPv6 is enabled on Docker, add the same rules with
-`ip6tables` and an `inet6` set.
+If the Monad RPC endpoint is not served on 443, add its port to `EDGE_OS_EGRESS_PORTS`. The firewall unit runs before
+`docker.service` and is `RequiredBy` it, so after a reboot no container starts before the rules exist. If `apply`
+fails (for example, no upstream resolver found), Docker and therefore Coolify do not start; this is deliberate
+fail-closed behavior. Fix the cause and run `systemctl start edge-os-egress-firewall docker`. No `ipset` or iptables
+persistence package is needed; the unit rebuilds both at every boot.
 
-Limit: an address allowlist admits every name that shares a CDN address with `api.privy.io`. A TLS-inspecting or
-SNI-allowlisting egress gateway is stricter; if one is used, route `edgeos-egress` through it and keep the final
-`DROP`.
+Limits:
 
-Checks (record the output):
+- An address allowlist admits every name that shares a CDN address with `api.privy.io` or the RPC host. A
+  TLS-inspecting or SNI-allowlisting egress gateway is stricter; if one is used, route `edgeos-egress` through it and
+  keep the final `DROP`.
+- DNS to the upstream resolvers allows any query, so DNS tunnelling remains possible from the worker. This is an
+  accepted limit. A filtering resolver that answers only for the allowed names would remove it.
+
+Checks (record the output; repeat after a reboot):
 
 ```sh
+iptables -S DOCKER-USER | head -3; iptables -S INPUT | head -3; ipset list edgeos-egress-allow | head
 W=$(docker ps --filter label=com.docker.compose.service=execution-worker --format '{{.Names}}' | head -1)
 docker exec "$W" python -c "import urllib.request as u; print(u.urlopen('https://api.privy.io', timeout=5).status)"  # any HTTP status
 docker exec "$W" python -c "import urllib.request as u; u.urlopen('https://example.com', timeout=5)"   # must time out
-docker exec "$W" python -c "import socket; s=socket.create_connection(('10.203.0.1', 22), 3)"       # must fail
+docker exec "$W" python -c "import socket; socket.create_connection(('10.203.0.1', 22), 3)"         # must fail
+PG=$(docker ps --filter label=com.docker.compose.service=postgres --format '{{.Names}}' | head -1)
+docker exec "$PG" bash -c 'exec 3<>/dev/tcp/10.203.0.17/22' && echo "OPEN: fix" || echo "host closed to postgres"
+docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/1.1.1.1/443"' && echo "OPEN: fix" || echo "no route out"
 ```
 
 ## 5. Backups and the restore drill
@@ -219,9 +239,10 @@ IMAGE=<the deployed postgres image, by digest>
 DUMP=/var/backups/edge-os/edge_os-<STAMP>.dump
 docker run -d --name edge-os-restore-drill --network none \
   -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" -e POSTGRES_DB=edge_os_restore "$IMAGE"
-until docker exec edge-os-restore-drill pg_isready -U postgres -d edge_os_restore; do sleep 1; done
+# Over TCP: the image's temporary init server listens on the Unix socket only, so this waits for the real server.
+until docker exec edge-os-restore-drill pg_isready -h 127.0.0.1 -U postgres -d edge_os_restore; do sleep 1; done
 START=$(date +%s)
-docker exec -i edge-os-restore-drill pg_restore -U postgres -d edge_os_restore --no-owner --exit-on-error < "$DUMP"
+docker exec -i edge-os-restore-drill pg_restore -h 127.0.0.1 -U postgres -d edge_os_restore --no-owner --exit-on-error < "$DUMP"
 echo "restore seconds: $(( $(date +%s) - START ))"
 docker exec edge-os-restore-drill psql -U postgres -d edge_os_restore -tAc 'select version_num from alembic_version'
 docker exec "$PG" psql -U edge_os -d edge_os -tAc 'select version_num from alembic_version'
@@ -244,10 +265,11 @@ is visible, in the evidence file the record's `h8_provider_spend_cap` gate refer
 ## 7. Operator order
 
 1. Snapshot (§5.1), dump (§5.2) and pass the restore drill (§5.3).
-2. Recreate the PostgreSQL certificate with the SANs (§3.1).
-3. Change `EDGE_OS_DATABASE_URL` in Coolify to host `edge-os-postgres` (§2), deploy the new compose file, and run the
-   alias and loopback checks (§2, §3).
-4. Install the egress rule and run its checks (§4.1).
+2. Install and enable the host firewall (§4.1) **before** any deploy that puts the worker on `egress`. iptables
+   accepts `-i <bridge>` before the bridge exists, so the rules are in place when Docker creates it.
+3. Recreate the PostgreSQL certificate with the SANs (§3.1).
+4. Change `EDGE_OS_DATABASE_URL` in Coolify to host `edge-os-postgres` (§2), deploy the new compose file, and run the
+   alias, loopback (§2, §3) and firewall (§4.1) checks.
 5. Record the evidence files, then hand the record v2 for builder approval. Registration of the record and of the
    execution release are separate reviewed code changes. The host research worker stays disabled until the open
    settings item (§3.2) is resolved.
