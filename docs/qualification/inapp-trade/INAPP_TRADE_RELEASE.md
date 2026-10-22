@@ -47,10 +47,13 @@ document file hash is not used. Reasons:
   key comes from it.
 - Code recomputes it. `actual_packet.CODE_OWNED_PACKET_APPROVALS` admits the packet only when its recomputed id
   equals `SEALED_PACKET_SHA256`. A test checks that the release carries that exact value.
-- A document file hash changes with any wording edit. `UNFUNDED_POLICY_PACKET.md` still says the v3 live result is
-  "pending". The 19/19 result was reported by the builder on 2026-10-22 and is not yet recorded in the repository.
+- A document file hash changes with any wording edit.
 
-The same hash is the proof for the four controls owned by the policy.
+The packet hash is the proof input, not the provider outcome. The builder reported the 19/19 v3 live result on
+2026-10-22, but the repository does not record it yet. `UNFUNDED_POLICY_PACKET.md` still says "pending". The four
+policy-owned controls therefore cite the packet hash with evidence class `LOCAL_TESTED`, which is the packet's recorded
+status. They are not marked `PROVIDER_ACTUAL`. They can move to `PROVIDER_ACTUAL` only after the v3 result is recorded
+in the repository (pending step 1 below), with that recorded result's hash as their proof.
 
 ## USD ceiling arithmetic (including gas)
 
@@ -61,7 +64,8 @@ wrap, which a WMON start does not run.
 gas      = (60000 + 70000 + 700000 + 70000) x 202 gwei = 900000 x 202e9 wei = 0.1818 MON
 input    = 10 WMON                                                        = 10.0000 MON
 worst    = 10.1818 MON
-at the documented MON price 0.02 USD (operator-trade/trade.example.json):
+at the documented MON price 0.02 USD (operator-trade/trade.example.json, an unapproved example; it agrees with
+the M-GAS figure, where 0.02 MON is about USD 0.0005, so MON is about USD 0.025):
 worst    = 10.1818 x 0.02 = USD 0.203636  <=  USD 2.00
 ```
 
@@ -90,44 +94,48 @@ The rule is `gas_limit >= ceil(eth_estimateGas x 1.2)`, computed in integers as 
 ## Controls: honest states, and why the release cannot be admitted yet
 
 `check_release` admits an ACTUAL release only if each of its 12 controls is `ENFORCED`, carries evidence class
-`PROVIDER_ACTUAL` and has a proof hash. This release keeps the states that the sealed packet recorded. No control is
-relaxed.
+`PROVIDER_ACTUAL` and has a proof hash. This release keeps the states that the repository records. No control is
+relaxed, and no control claims a provider proof that the repository does not hold. A test checks that.
 
 | # | Control | State / evidence | Proof |
 | --- | --- | --- | --- |
-| 1 | `chain` | `ENFORCED` / `PROVIDER_ACTUAL` | packet `8255d003…` |
-| 2 | `wallet_signer_binding` | `ENFORCED` / `PROVIDER_ACTUAL` | packet |
-| 3 | `entrypoint_method` | `ENFORCED` / `PROVIDER_ACTUAL` | packet |
+| 1 | `chain` | `ENFORCED` / `LOCAL_TESTED` | packet `8255d003…` (proof input) |
+| 2 | `wallet_signer_binding` | `ENFORCED` / `LOCAL_TESTED` | packet (proof input) |
+| 3 | `entrypoint_method` | `ENFORCED` / `LOCAL_TESTED` | packet (proof input) |
 | 4 | `input_output_assets` | `UNKNOWN` / `NOT_RUN` | none |
 | 5 | `raw_input` | `ENFORCED` / `SOURCE_INSPECTED` | none |
 | 6 | `recipient` | `ENFORCED` / `SOURCE_INSPECTED` | none |
 | 7 | `minimum_output` | `ENFORCED` / `SOURCE_INSPECTED` | none |
 | 8 | `fees` | `ENFORCED` / `SOURCE_INSPECTED` | none |
-| 9 | `approvals` | `ENFORCED` / `PROVIDER_ACTUAL` | packet |
+| 9 | `approvals` | `ENFORCED` / `LOCAL_TESTED` | packet (proof input) |
 | 10 | `gas_action_capacity` | `UNSET` / `NOT_RUN` | none |
 | 11 | `expiry_freshness` | `ENFORCED` / `DOCUMENTED` | none |
 | 12 | `opaque_program` | `UNKNOWN` / `NOT_RUN` | none |
 
-Even with the registry lines added, this release is refused with `EXECUTION_CONTROL_UNQUALIFIED`. The eight
-controls 4-8 and 10-12 need provider-actual proof first. Each needs a new proof artifact, which changes the release
+Even with the registry lines added, this release is refused with `EXECUTION_CONTROL_UNQUALIFIED`. All 12 controls
+need a recorded provider-actual proof first: controls 1-3 and 9 from the recorded v3 live result, and controls 4-8 and
+10-12 from new evidence. Each needs a new proof artifact, which changes the release
 hash. A test shows the exact refusal. Another test shows that a copy with every control proven, plus the registry
 entry, admits its exact hash and refuses any changed control. That copy is a hypothetical in the test only. It is not
 in the authored file.
 
 ## Pending builder and controller steps, in order
 
-1. **Control evidence (builder decision).** Produce provider-actual proof for controls 4-8 and 10-12, or decide
+1. **Record the v3 live result (controller).** Commit the 19/19 v3 result store, or its summary hash bound to packet
+   `8255d003…`, and update `UNFUNDED_POLICY_PACKET.md`. Then set controls 1-3 and 9 to `PROVIDER_ACTUAL` with that
+   recorded hash.
+2. **Control evidence (builder decision).** Produce provider-actual proof for controls 4-8 and 10-12, or decide
    otherwise. The module rule cannot be met without one of these. A decision to change the rule is a product decision
    and a separate reviewed change. It is not part of this task.
-2. **Dry run (controller).** Run the operator dry run with `"start": "WMON"`, `input_raw`
+3. **Dry run (controller).** Run the operator dry run with `"start": "WMON"`, `input_raw`
    `10000000000000000000` and the authored step limits. Record the pool reserves with their block, and record the
    estimate for each of approve, swap and revoke.
-3. **Fill (controller).** Write `docs/qualification/inapp-trade/release.fill.json` with exactly these keys:
+4. **Fill (controller).** Write `docs/qualification/inapp-trade/release.fill.json` with exactly these keys:
 
    | Key | Value |
    | --- | --- |
-   | `reserves` | `{"block_number": <int>, "reserve_wmon": "<raw>", "reserve_moe": "<raw>"}` from step 2 |
-   | `gas_estimates` | `{"approve": <int>, "swap": <int>, "revoke": <int>}` from step 2 |
+   | `reserves` | `{"block_number": <int>, "reserve_wmon": "<raw>", "reserve_moe": "<raw>"}` from step 3 |
+   | `gas_estimates` | `{"approve": <int>, "swap": <int>, "revoke": <int>}` from step 3 |
    | `quote_endpoint`, `broadcast_endpoint`, `observer_endpoint` | Keyless `https://<host>/rpc` URLs for the `/rpc` relay. Two different endpoints are required for broadcast and observer. The relay belongs to another lane. |
    | `valid_until` | The signing cutoff (RFC 3339 UTC). It is also used as the intent and signer-request expiry. |
    | `mandate_expires_at` | Not before `valid_until`. |
@@ -136,12 +144,17 @@ in the authored file.
 
    The minimum output is never supplied by hand. It is computed as
    `floor(floor(x * 984000 * R_moe / (R_wmon * 10**6 + x * 984000)) * 9900 / 10000)`, which is the quote client's own
-   floor. If the pool moves against the trade after the recorded read, the app's quote is refused
-   (`QUOTE_SLIPPAGE_EXCEEDED`) before signing. A new read then needs a new fill and a new hash.
-4. **Sign-in (builder).** Sign in to the local app. Confirm the agent wallet `bsb2feecuxl81dl5jz4u9xxo`, publish
+   floor. **Expect a refusal on an active pool.** Before signing there is no tolerance against the recorded read.
+   If the pool moves even one unit against the trade after that read, the app's quote is refused
+   (`QUOTE_SLIPPAGE_EXCEEDED`) before signing. The 100 bps protects only on-chain execution. The time between the
+   read and the run covers the fill, the hash, approval and the registry commit, so this is the likely outcome. A new
+   read then needs a new fill and a new hash. A builder decision could add an explicit tolerance against the
+   recorded read. That would be a separate reviewed change, because the quote client compares the live floor with
+   the release minimum.
+5. **Sign-in (builder).** Sign in to the local app. Confirm the agent wallet `bsb2feecuxl81dl5jz4u9xxo`, publish
    the MOE strategy revision and adopt the `connected-one-action/1` consent. `owner_id`, `agent_id` and
    `consent_adoption_id` exist only after this step. No value is authored for them.
-5. **Identity (controller).** Read the identity from the builder's saved records with the same derivation that the
+6. **Identity (controller).** Read the identity from the builder's saved records with the same derivation that the
    worker compares:
 
    ```sh
@@ -158,11 +171,13 @@ in the authored file.
    ```
 
    It refuses `SAVED_IDENTITY_UNAVAILABLE` until the agent is confirmed and the consent is adopted. It refuses
-   `SAVED_IDENTITY_WALLET_MISMATCH` for any wallet other than the release wallet. Put the printed object under
+   `SAVED_IDENTITY_WALLET_MISMATCH` for any wallet other than the release wallet. The comparison is exact and
+   case-sensitive, as `BoundRelease` requires. A saved address stored in a different letter case also refuses. That
+   is fail-safe, but the stored case has not been checked yet. Put the printed object under
    `identity` in `docs/qualification/inapp-trade/binding.fill.json`. Add the six proof keys and `market_profile`.
    `position_inventory`, `market` and `finality` are required. `derive_approval` also requires `exit_capacity`,
    `valuation` and `cost_model`. Market observation requires `market_profile`. None of these proofs exists yet.
-6. **Hashes (controller).**
+7. **Hashes (controller).**
 
    ```sh
    cd apps/api && .venv/bin/python -m edge_os_api.execution.inapp_trade_release \
@@ -173,7 +188,7 @@ in the authored file.
 
    The command prints `release_sha256`, `binding_sha256`, `unqualified_controls` and the two `registry_lines`. It
    makes no request.
-7. **Registration (builder approval of both exact hashes).** Replace `operating_release.py` lines 20-21 with the
+8. **Registration (builder approval of both exact hashes).** Replace `operating_release.py` lines 20-21 with the
    two printed lines:
 
    ```python
@@ -197,7 +212,7 @@ in the authored file.
        assert check_release(release, expected_sha256="<RELEASE_SHA256>", now=<a time before valid_until>) == "<RELEASE_SHA256>"
    ```
 
-   The last assertion passes only after step 1.
+   The last assertion passes only after steps 1 and 2.
 
 ## What else must exist before the app can run the action
 

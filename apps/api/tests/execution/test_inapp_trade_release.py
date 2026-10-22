@@ -32,7 +32,8 @@ MOE = "0xd8e004acba279417c04c0633cb5a21ceca207777"
 POOL = "0x97199b34564911936bc850ac45ede785892b5aad"
 ENTRYPOINT = "0xb3e6778480b2E488385E8205eA05E20060B813cb"
 WALLET = "0x91BB52A63c91986813288965e4681FF111De1b63"
-PROVEN = {"chain", "wallet_signer_binding", "entrypoint_method", "approvals"}
+# Policy-owned controls: the sealed packet is LOCAL_TESTED until its v3 live result is recorded in the repository.
+POLICY_OWNED = {"chain", "wallet_signer_binding", "entrypoint_method", "approvals"}
 # Test inputs only. Real reserves, estimates, endpoints and proofs come from the controller's recorded reads.
 RESERVE_WMON, RESERVE_MOE = 4_000 * 10**18, 9_000_000 * 10**18
 
@@ -127,6 +128,14 @@ def test_authored_release_names_the_one_builder_wallet_policy_and_pinned_route()
     assert release["gas"]["gas_limit"] == facts["gas_limits"]["swap"]
 
 
+def test_no_control_claims_provider_proof_the_repository_does_not_record():
+    controls = authored()["release"]["controls"]
+    assert all(control["evidence_class"] != "PROVIDER_ACTUAL" for control in controls.values())
+    for name in POLICY_OWNED:
+        assert controls[name] == {"state": "ENFORCED", "evidence_class": "LOCAL_TESTED",
+                                  "proof_sha256": actual_packet.SEALED_PACKET_SHA256}
+
+
 def test_owner_agent_and_consent_ids_are_never_authored():
     text = AUTHORED_PATH.read_text(encoding="utf-8")
     for name in ("owner_id", "agent_id", "consent_adoption_id"):
@@ -149,7 +158,7 @@ def test_pending_registry_line_reaches_the_control_check_and_the_honest_controls
     register(monkeypatch, release)
     with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
         check_release(release, expected_sha256=release_sha256(release), now=NOW)
-    assert inapp.unqualified_controls(release) == sorted(CONTROLS - PROVEN)
+    assert inapp.unqualified_controls(release) == sorted(CONTROLS)
 
 
 def test_release_admits_its_exact_hash_once_registered_and_every_control_is_proven(monkeypatch):
@@ -282,6 +291,24 @@ def test_a_malformed_or_extra_fill_refuses(change):
         inapp.complete_release(authored(), value)
 
 
+@pytest.mark.parametrize("change", [
+    lambda a: a["facts"].update(gas_margin="1.1"), lambda a: a["release"].pop("route"),
+    lambda a: a["release"].update(quote=None), lambda a: a.update(facts=[]),
+])
+def test_a_malformed_authored_file_refuses_with_a_stable_code(change):
+    source = authored()
+    change(source)
+    with pytest.raises(ReleaseRefused, match="INAPP_AUTHORED_INVALID"):
+        inapp.complete_release(source, fill())
+
+
+def test_an_oversized_reserve_refuses_with_a_stable_code():
+    value = fill()
+    value["reserves"]["reserve_moe"] = "9" * 5000
+    with pytest.raises(ReleaseRefused, match="INAPP_FILL_INVALID"):
+        inapp.complete_release(authored(), value)
+
+
 def test_an_unfilled_marker_or_changed_authoring_schema_refuses():
     source = authored()
     source["release"]["policy_id"] = {"$fill": "policy_id"}
@@ -375,7 +402,7 @@ def test_command_prints_the_release_hash_and_registry_lines(tmp_path, capsys):
     release = inapp.complete_release(authored(), fill())
     assert printed["release_sha256"] == release_sha256(release)
     assert printed["release"] == release.content()
-    assert printed["unqualified_controls"] == sorted(CONTROLS - PROVEN)
+    assert printed["unqualified_controls"] == sorted(CONTROLS)
     assert "binding_sha256" not in printed
     assert inapp.main(["--authored", str(AUTHORED_PATH), "--fill", str(fill_path),
                        "--binding-fill", str(binding_path)]) == 0

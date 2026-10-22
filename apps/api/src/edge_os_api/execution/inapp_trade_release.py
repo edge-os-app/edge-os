@@ -20,9 +20,8 @@ from typing import Any
 
 from edge_os_api.execution.connected_identity import adopted_consent, resolve_agent, saved_release_identity
 from edge_os_api.execution.direct_route_quote_client import PROGRAM_FEE_SCALE
-from edge_os_api.execution.operating_release import BoundRelease, OperatingRelease, ReleaseRefused
+from edge_os_api.execution.operating_release import BoundRelease, OperatingRelease, ReleaseRefused, release_sha256
 from edge_os_api.execution.original_transaction import wallet_address
-from edge_os_api.kuru_flow.types import canonical_raw
 
 AUTHORED_SCHEMA = "edge-os.inapp-trade-authoring/1"
 FILL_FIELDS = frozenset({"quote_endpoint", "broadcast_endpoint", "observer_endpoint", "valid_until",
@@ -33,10 +32,12 @@ BINDING_FILL_FIELDS = frozenset({"identity", "position_inventory_proof_sha256", 
 GAS_STEPS = ("wrap", "approve", "swap", "revoke")
 MAX_USD_CEILING = Decimal("2.00")
 WEI_PER_MON = 10**18
+GAS_MARGIN = "1.2"  # the rule below is ceil(estimate * 6 / 5)
+_RAW = re.compile(r"0|[1-9][0-9]{0,77}")
 
 
-def _refuse(code: str) -> ReleaseRefused:
-    return ReleaseRefused(code)
+def _raw(value: Any) -> bool:
+    return type(value) is str and _RAW.fullmatch(value) is not None
 
 
 def required_gas_limit(estimate: int) -> int:
@@ -47,7 +48,7 @@ def required_gas_limit(estimate: int) -> int:
 def check_gas_limits(limits: Mapping[str, int], estimates: Mapping[str, int], steps: Sequence[str]) -> None:
     for step in steps:
         if limits[step] < required_gas_limit(estimates[step]):
-            raise _refuse("GAS_LIMIT_TOO_LOW")
+            raise ReleaseRefused("GAS_LIMIT_TOO_LOW")
 
 
 def minimum_output_raw(*, input_raw: int, reserve_in: int, reserve_out: int, fee_ppm: int, slippage_bps: int) -> int:
@@ -63,24 +64,27 @@ def _decimal(value: Any) -> Decimal:
     except InvalidOperation:
         number = None
     if number is None or not number.is_finite() or number <= 0:
-        raise _refuse("INAPP_AUTHORED_INVALID")
+        raise ReleaseRefused("INAPP_AUTHORED_INVALID")
     return number
 
 
 def _facts(authored: Mapping[str, Any]) -> dict[str, Any]:
     if type(authored) is not dict or set(authored) != {"schema", "facts", "release"} \
             or authored["schema"] != AUTHORED_SCHEMA or type(authored["release"]) is not dict:
-        raise _refuse("INAPP_AUTHORED_INVALID")
+        raise ReleaseRefused("INAPP_AUTHORED_INVALID")
     facts = authored["facts"]
     limits = facts.get("gas_limits") if type(facts) is dict else None
-    gas = authored["release"].get("gas")
-    if (type(limits) is not dict or set(limits) != set(GAS_STEPS)
+    release = authored["release"]
+    gas = release.get("gas")
+    if (type(facts) is not dict or not all(type(release.get(part)) is dict for part in ("gas", "route", "quote"))
+            or facts.get("gas_margin") != GAS_MARGIN
+            or type(limits) is not dict or set(limits) != set(GAS_STEPS)
             or not all(type(x) is int and x > 0 for x in limits.values())
             or facts.get("start") != "WMON" or facts.get("active_steps") != ["approve", "swap", "revoke"]
             or type(facts.get("recorded_swap_estimate")) is not int or facts["recorded_swap_estimate"] <= 0
-            or type(gas) is not dict or gas.get("gas_limit") != limits["swap"]
+            or gas.get("gas_limit") != limits["swap"]
             or _decimal(facts.get("usd_ceiling")) > MAX_USD_CEILING):
-        raise _refuse("INAPP_AUTHORED_INVALID")
+        raise ReleaseRefused("INAPP_AUTHORED_INVALID")
     _decimal(facts.get("mon_usd_price"))
     return facts
 
@@ -93,8 +97,8 @@ def worst_case_usd(authored: Mapping[str, Any]) -> Decimal:
     facts = _facts(authored)
     release = authored["release"]
     max_fee, input_raw = release["gas"].get("max_fee_per_gas"), release["route"].get("approved_input_raw")
-    if type(max_fee) is not int or max_fee <= 0 or type(input_raw) is not str or not canonical_raw(input_raw):
-        raise _refuse("INAPP_AUTHORED_INVALID")
+    if type(max_fee) is not int or max_fee <= 0 or type(input_raw) is not str or not _raw(input_raw):
+        raise ReleaseRefused("INAPP_AUTHORED_INVALID")
     worst_wei = int(input_raw) + sum(facts["gas_limits"].values()) * max_fee
     return Decimal(worst_wei) * _decimal(facts["mon_usd_price"]) / Decimal(WEI_PER_MON)
 
@@ -104,7 +108,7 @@ def _substitute(value: Any, fills: Mapping[str, Any], used: set[str]) -> Any:
         if set(value) == {"$fill"}:
             name = value["$fill"]
             if type(name) is not str or name not in fills:
-                raise _refuse("INAPP_FILL_INVALID")
+                raise ReleaseRefused("INAPP_FILL_INVALID")
             used.add(name)
             return fills[name]
         return {key: _substitute(item, fills, used) for key, item in value.items()}
@@ -114,8 +118,8 @@ def _substitute(value: Any, fills: Mapping[str, Any], used: set[str]) -> Any:
 
 
 def _positive_raw(value: Any) -> int:
-    if type(value) is not str or not canonical_raw(value) or int(value) <= 0:
-        raise _refuse("INAPP_FILL_INVALID")
+    if not _raw(value) or int(value) <= 0:
+        raise ReleaseRefused("INAPP_FILL_INVALID")
     return int(value)
 
 
@@ -123,19 +127,19 @@ def complete_release(authored: Mapping[str, Any], fill: Mapping[str, Any]) -> Op
     """The exact release for one frozen fill. Every refusal happens before any read, signature or send."""
     facts = _facts(authored)
     if type(fill) is not dict or set(fill) != FILL_FIELDS:
-        raise _refuse("INAPP_FILL_INVALID")
+        raise ReleaseRefused("INAPP_FILL_INVALID")
     reserves, estimates = fill["reserves"], fill["gas_estimates"]
     steps = facts["active_steps"]
     if (type(reserves) is not dict or set(reserves) != {"block_number", "reserve_wmon", "reserve_moe"}
             or type(reserves["block_number"]) is not int or reserves["block_number"] <= 0
             or type(estimates) is not dict or set(estimates) != set(steps)
             or not all(type(x) is int and x > 0 for x in estimates.values())):
-        raise _refuse("INAPP_FILL_INVALID")
+        raise ReleaseRefused("INAPP_FILL_INVALID")
     reserve_wmon, reserve_moe = _positive_raw(reserves["reserve_wmon"]), _positive_raw(reserves["reserve_moe"])
     check_gas_limits(facts["gas_limits"], estimates, steps)
     check_gas_limits(facts["gas_limits"], {"swap": facts["recorded_swap_estimate"]}, ["swap"])
     if worst_case_usd(authored) > _decimal(facts["usd_ceiling"]):
-        raise _refuse("USD_CEILING_EXCEEDED")
+        raise ReleaseRefused("USD_CEILING_EXCEEDED")
     release = authored["release"]
     route, quote = release.get("route"), release.get("quote")
     try:
@@ -146,20 +150,20 @@ def complete_release(authored: Mapping[str, Any], fill: Mapping[str, Any]) -> Op
     except (KeyError, TypeError, ValueError):
         valid = False
     if not valid:
-        raise _refuse("INAPP_AUTHORED_INVALID")
+        raise ReleaseRefused("INAPP_AUTHORED_INVALID")
     minimum = minimum_output_raw(input_raw=input_raw, reserve_in=reserve_wmon, reserve_out=reserve_moe,
                                  fee_ppm=fee_ppm, slippage_bps=slippage)
     if minimum <= 0:
-        raise _refuse("MINIMUM_OUTPUT_ZERO")
+        raise ReleaseRefused("MINIMUM_OUTPUT_ZERO")
     fills = {key: fill[key] for key in FILL_FIELDS - {"reserves", "gas_estimates"}}
     fills["approved_min_output_raw"] = str(minimum)
     if not all(type(fill[key]) is str and re.fullmatch(r"[0-9a-f]{64}", fill[key])
                for key in ("abi_sha256", "mutable_router_proof_sha256")):
-        raise _refuse("INAPP_FILL_INVALID")
+        raise ReleaseRefused("INAPP_FILL_INVALID")
     used: set[str] = set()
     definition = _substitute(release, fills, used)
     if used != set(fills):
-        raise _refuse("INAPP_AUTHORED_INVALID")
+        raise ReleaseRefused("INAPP_AUTHORED_INVALID")
     return OperatingRelease(definition)
 
 
@@ -175,14 +179,14 @@ def bind_release(release: OperatingRelease, binding_fill: Mapping[str, Any]) -> 
     """The saved-identity binding. Its identity must be read from the builder's records, never authored."""
     if type(binding_fill) is not dict or set(binding_fill) != BINDING_FILL_FIELDS \
             or type(binding_fill["identity"]) is not dict:
-        raise _refuse("INAPP_BINDING_FILL_INVALID")
+        raise ReleaseRefused("INAPP_BINDING_FILL_INVALID")
     try:
         return BoundRelease(release, binding_fill["identity"], **{
             key: binding_fill[key] for key in BINDING_FILL_FIELDS - {"identity"}})
     except ReleaseRefused:
         raise
-    except Exception:
-        raise _refuse("INAPP_BINDING_FILL_INVALID") from None
+    except (KeyError, TypeError, ValueError):
+        raise ReleaseRefused("INAPP_BINDING_FILL_INVALID") from None
 
 
 def saved_identity_for_release(session: Any, owner_id: uuid.UUID, agent_id: str,
@@ -192,18 +196,16 @@ def saved_identity_for_release(session: Any, owner_id: uuid.UUID, agent_id: str,
     consent = adopted_consent(session, agent) if agent is not None else None
     address = wallet_address(session, owner_id, agent_id, agent.wallet_id) if consent is not None else None
     if address is None:
-        raise _refuse("SAVED_IDENTITY_UNAVAILABLE")
+        raise ReleaseRefused("SAVED_IDENTITY_UNAVAILABLE")
     identity = saved_release_identity(agent, consent, address)
     content = release.content()
     if (identity.get("wallet_id"), identity.get("wallet_address")) != (content["wallet_id"], content["wallet_address"]):
-        raise _refuse("SAVED_IDENTITY_WALLET_MISMATCH")
+        raise ReleaseRefused("SAVED_IDENTITY_WALLET_MISMATCH")
     return identity
 
 
 def registry_lines(release: OperatingRelease, binding: BoundRelease) -> list[str]:
     """The exact replacement lines for `operating_release.py`; adding them needs the builder's recorded approval."""
-    from edge_os_api.execution.operating_release import release_sha256
-
     digest = release_sha256(release)
     return [
         f'APPROVED_ACTUAL_RELEASES: Mapping[str, str] = MappingProxyType({{"{release.content()["release_id"]}": "{digest}"}})',
@@ -217,8 +219,6 @@ def _read(path: str) -> Any:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    from edge_os_api.execution.operating_release import release_sha256
-
     parser = argparse.ArgumentParser(prog="python -m edge_os_api.execution.inapp_trade_release")
     parser.add_argument("--authored", required=True)
     parser.add_argument("--fill", required=True)
