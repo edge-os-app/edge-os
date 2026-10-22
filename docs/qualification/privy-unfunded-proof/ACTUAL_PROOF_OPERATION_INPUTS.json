@@ -1,57 +1,768 @@
 {
   "schema": "edge-os.actual-proof-operation-inputs/1",
-  "task": "ACTUAL-POLICY-PROOF-L3-20261018",
-  "status": "NOT_RUN",
+  "task": "UNFUNDED-POLICY-PROOF-L3-20261022",
+  "status": "FROZEN",
   "evidence_class": "LOCAL_TESTED",
   "provider_proof": "UNQUALIFIED",
-  "note": "This file lists the exact inputs a future unfunded actual proof run needs. It grants nothing. Missing values block activation. The code-owned approval and qualified-profile registries are empty in this unit.",
+  "note": "The frozen policy-layer packet is registered in the code-owned registries. The live proof is not run. This file grants nothing and approves no trade, funding, broadcast or policy change.",
   "packet_fields": [
-    {"field": "packet_id", "required": "SHA-256 of the frozen packet projection", "current": "MISSING"},
-    {"field": "app_id", "required": "The exact Privy application identity", "current": "MISSING"},
-    {"field": "executor_id", "required": "The executor identity that must not own the policy resource", "current": "MISSING"},
-    {"field": "owner_id", "required": "The builder-controlled wallet owner identity", "current": "MISSING"},
-    {"field": "policy_resource_owner_id", "required": "A concrete policy-resource owner outside executor control", "current": "MISSING"},
-    {"field": "wallet_id", "required": "The unfunded probe wallet id", "current": "MISSING"},
-    {"field": "wallet_address", "required": "The exact probe wallet address", "current": "MISSING"},
-    {"field": "network_id", "required": "One network identity per approval", "current": "MISSING"},
-    {"field": "chain_id", "required": "143 or 10143, with reviewed Flow support", "current": "MISSING"},
-    {"field": "signing_url", "required": "The exact approved wallet RPC destination", "current": "MISSING"},
-    {"field": "signing_method", "required": "eth_signTransaction only", "current": "MISSING"},
-    {"field": "profile_policies", "required": "One separate authorized policy id per profile (raw, decoded)", "current": "MISSING"},
-    {"field": "profile_policy_sha256", "required": "One policy content hash per profile", "current": "MISSING"},
-    {"field": "source_code_id", "required": "The approved source identity", "current": "MISSING"},
-    {"field": "deployed_code_id", "required": "The approved deployed-code identity", "current": "MISSING"},
-    {"field": "expires_at_epoch", "required": "A bounded packet expiry", "current": "MISSING"},
-    {"field": "auth_header_expiry", "required": "The exact 13-digit privy-request-expiry value", "current": "MISSING"},
-    {"field": "attempt_identity", "required": "The one-use idempotency/attempt identity", "current": "MISSING"},
-    {"field": "requests", "required": "The exact frozen request bytes for every admitted specimen", "current": "MISSING"},
-    {"field": "specimen_expected", "required": "The per-profile positive and negative specimen manifest", "current": "MISSING"},
-    {"field": "request_count_ceiling", "required": "At most 32 specimens per profile", "current": "MISSING"},
-    {"field": "request_byte_ceiling", "required": "At most 4096 request bytes", "current": "MISSING"},
-    {"field": "time_ceiling_seconds", "required": "A bounded run window", "current": "MISSING"},
-    {"field": "controls", "required": "All twelve P21 mandatory controls declarable", "current": "MISSING"},
-    {"field": "position_inventory", "required": "The separate position-inventory obligation", "current": "UNSUPPORTED"}
+    {
+      "field": "packet_id",
+      "required": "SHA-256 of the frozen packet projection",
+      "current": "3c24e0448c290cb85edb4894bd85585ca5deb4d6f3caf0a835a6f6513b4df138"
+    },
+    {
+      "field": "app_id",
+      "required": "The exact Privy application identity",
+      "current": "cmuyj4smt00tw0dla2j19tlu7"
+    },
+    {
+      "field": "executor_id",
+      "required": "The executor identity that must not own the policy resource",
+      "current": "zu1qjdfqlbcq1ct7sdxendgg"
+    },
+    {
+      "field": "owner_id",
+      "required": "The builder-controlled wallet owner identity",
+      "current": "a5gwmgrsn6903ac09lphyv9a"
+    },
+    {
+      "field": "policy_resource_owner_id",
+      "required": "A concrete policy-resource owner outside executor control",
+      "current": "a5gwmgrsn6903ac09lphyv9a",
+      "note": "One human builder owns the wallet and the policy; the executor is separate. The packet records this and refuses only a policy owner that is the executor."
+    },
+    {
+      "field": "wallet_id",
+      "required": "The unfunded probe wallet id",
+      "current": "bsb2feecuxl81dl5jz4u9xxo"
+    },
+    {
+      "field": "wallet_address",
+      "required": "The exact probe wallet address",
+      "current": "0x91BB52A63c91986813288965e4681FF111De1b63"
+    },
+    {
+      "field": "network_id",
+      "required": "One network identity per approval",
+      "current": "eip155:143"
+    },
+    {
+      "field": "chain_id",
+      "required": "143 or 10143, with reviewed Flow support",
+      "current": 143
+    },
+    {
+      "field": "signing_url",
+      "required": "The exact approved wallet RPC destination",
+      "current": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc"
+    },
+    {
+      "field": "signing_method",
+      "required": "eth_signTransaction only",
+      "current": "eth_signTransaction"
+    },
+    {
+      "field": "profile_policies",
+      "required": "One separate authorized policy id per profile (raw, decoded)",
+      "current": {
+        "raw": "c30racyru6duaipj815cvjce"
+      }
+    },
+    {
+      "field": "profile_policy_sha256",
+      "required": "One policy content hash per profile",
+      "current": {
+        "raw": "cd543346a75ab342e04282f4fd5764ff0f19e1d7a354d5f09d208e53ad0d7477"
+      }
+    },
+    {
+      "field": "profile_id",
+      "required": "The code-registered reply/decoder profile",
+      "current": "privy.raw.v1"
+    },
+    {
+      "field": "source_code_id",
+      "required": "The approved source identity",
+      "current": "UNRESOLVED_KURU_SOURCE",
+      "state": "UNKNOWN"
+    },
+    {
+      "field": "deployed_code_id",
+      "required": "The approved deployed-code identity",
+      "current": "UNRESOLVED_KURU_DEPLOYED_CODE",
+      "state": "UNKNOWN"
+    },
+    {
+      "field": "expires_at_epoch",
+      "required": "A bounded packet expiry",
+      "current": 1793836800
+    },
+    {
+      "field": "auth_header_expiry",
+      "required": "The exact 13-digit privy-request-expiry value",
+      "current": "1793836800000"
+    },
+    {
+      "field": "attempt_identity",
+      "required": "The one-use idempotency/attempt identity",
+      "current": "unfunded-policy-proof-1"
+    },
+    {
+      "field": "requests",
+      "required": "The exact frozen request bytes for every admitted specimen",
+      "current": [
+        {
+          "specimen_id": "raw.allow_deposit_1_mon",
+          "expected": "ALLOW",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xd0e30db0",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": "0xde0b6b3a7640000"
+              }
+            }
+          },
+          "body_sha256": "3b1efab4b1ef58b7c559f86a744c3144dd4c52448399062af1d88f2057fff0f9",
+          "request_sha256": "f3a177f244b7df7cb97a19b0b448f0c28207e4d799981dc586f94c685b45fbc5"
+        },
+        {
+          "specimen_id": "raw.allow_deposit_at_cap",
+          "expected": "ALLOW",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xd0e30db0",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": "0x3cb71f51fc5580000"
+              }
+            }
+          },
+          "body_sha256": "2bca795cc65733eb18dd3605d7f3010710d0a6ccaf1639d3589935334a7d6774",
+          "request_sha256": "ac375d66c36cf3d7499cd1624808035ab853d6316423fe43330430a96926db34"
+        },
+        {
+          "specimen_id": "raw.allow_approve_at_cap",
+          "expected": "ALLOW",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0x095ea7b3000000000000000000000000b3e6778480b2e488385e8205ea05e20060b813cb000000000000000000000000000000000000000000000003cb71f51fc5580000",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "0754ee7fc6694a3ffaf8f22a758bc8cf10efb10b41b67fb762d72bc2bfc2200b",
+          "request_sha256": "31d39674e5e49b16f918179dd3a8326cbfb4c15fc66a8f35e575336ed708cf81"
+        },
+        {
+          "specimen_id": "raw.allow_swap_zero_value",
+          "expected": "ALLOW",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xd38afb110000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000",
+                "gas_limit": 500000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0xb3e6778480b2e488385e8205ea05e20060b813cb",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "512b6ae4fc0c4a61d13bb8b1a5e1fa5094a4ba96d8d8dce342cbc4d0e5f61ad0",
+          "request_sha256": "702c622c280bbf6d596873be8a92ee127ed08abe8e3ea2284fa07df817472863"
+        },
+        {
+          "specimen_id": "raw.deny_deposit_wrong_chain",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 10143,
+                "data": "0xd0e30db0",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": "0xde0b6b3a7640000"
+              }
+            }
+          },
+          "body_sha256": "c06a5a31e06d1783ced341c04e9e6daddb1eeec21a884f676e4917b8149b77f5",
+          "request_sha256": "e46b5391dd3454334bc4449ed96442c6fd20ad3cd3f7ce06e1f75d5b1b7460f2"
+        },
+        {
+          "specimen_id": "raw.deny_approve_wrong_chain",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 10143,
+                "data": "0x095ea7b3000000000000000000000000b3e6778480b2e488385e8205ea05e20060b813cb000000000000000000000000000000000000000000000003cb71f51fc5580000",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "16ec6a794345b9e4331c5efa0dcc99abee26aea2add002ce82dae56666f5da86",
+          "request_sha256": "3ed7df166475122dde27d7aeec4dac97ac29f208d5b321dc85d9fdb3be768f3f"
+        },
+        {
+          "specimen_id": "raw.deny_swap_wrong_chain",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 10143,
+                "data": "0xd38afb110000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000",
+                "gas_limit": 500000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0xb3e6778480b2e488385e8205ea05e20060b813cb",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "35ab2323043389eca3450757ca5cc35c23e1ed2a3adb2609e1a5e13a63b21ff2",
+          "request_sha256": "22b7a29c96e67811b31665aaef305228056e527054b83259ca225856c9a3227d"
+        },
+        {
+          "specimen_id": "raw.deny_deposit_wrong_to",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xd0e30db0",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x000000000000000000000000000000000000dead",
+                "type": 2,
+                "value": "0xde0b6b3a7640000"
+              }
+            }
+          },
+          "body_sha256": "0e4d4aaf7f9d0ad2a28c993cd848c94d5972d1d4c85b6b8f4439ac75b35966b9",
+          "request_sha256": "4a06afc533a587960769c568f5462d0a98312d797c08fdb92778859433a75761"
+        },
+        {
+          "specimen_id": "raw.deny_approve_wrong_to",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0x095ea7b3000000000000000000000000b3e6778480b2e488385e8205ea05e20060b813cb000000000000000000000000000000000000000000000003cb71f51fc5580000",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x000000000000000000000000000000000000dead",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "d2df4f3c571ff70a8e39bf8708e14f78d1f8631d8219707d0dc7346770a4d8de",
+          "request_sha256": "d0969fa5c4bf781539446ae164fc02dfc9d0ae3540a4c52fb25d63b173480315"
+        },
+        {
+          "specimen_id": "raw.deny_swap_wrong_to",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xd38afb110000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000",
+                "gas_limit": 500000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x000000000000000000000000000000000000dead",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "a27794d09bac6dbf63fd57b991b35e9827e1cb16b443b0ade8dd02c6535dc6cf",
+          "request_sha256": "a37c694eb67bf9a6cf7fe55fc3efd4fc2e20616ed0261d8c40dae93312257744"
+        },
+        {
+          "specimen_id": "raw.deny_wmon_wrong_function",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead0000000000000000000000000000000000000000000000000000000000000001",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "555d9f3d82404925285e7032ce11410e50b4e7b470365e069e89c12307a0cf4b",
+          "request_sha256": "6810d9fe5ecf519d5ca4f3aa4a435c6658f8500f8ef34d24eee0da633935b0d3"
+        },
+        {
+          "specimen_id": "raw.deny_entrypoint_wrong_function",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xd0e30db0",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0xb3e6778480b2e488385e8205ea05e20060b813cb",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "6536ac88cd372b66757ebac34f05b9b953328d021d175abe16b3a320d164c3c7",
+          "request_sha256": "c76af7e72ead99978fac762a685ceafd687ca3cb04bdce92bc5d9250befc35af"
+        },
+        {
+          "specimen_id": "raw.deny_approve_other_spender",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0x095ea7b3000000000000000000000000000000000000000000000000000000000000dead000000000000000000000000000000000000000000000003cb71f51fc5580000",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "3c3227957f46ce2159681701ec42c0b70e68ec4a183699b273d73a47e6949a44",
+          "request_sha256": "622e80643d6c122968bab33068b48c6665c0a8e8a363cf7baa5990617220a5af"
+        },
+        {
+          "specimen_id": "raw.deny_approve_above_cap",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0x095ea7b3000000000000000000000000b3e6778480b2e488385e8205ea05e20060b813cb000000000000000000000000000000000000000000000003cb71f51fc5580001",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "1e403f62ddc525fac0e49c77af891eff3a1f73e23de735b405aaeb501e792a9e",
+          "request_sha256": "9e632b9f5be6a385f12525926e55dbbcffb4bdfe9e3e3077236e8f404998b526"
+        },
+        {
+          "specimen_id": "raw.deny_approve_with_value",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0x095ea7b3000000000000000000000000b3e6778480b2e488385e8205ea05e20060b813cb000000000000000000000000000000000000000000000003cb71f51fc5580000",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": 1
+              }
+            }
+          },
+          "body_sha256": "d8b05dfc8f21584589540fdc4228dac8aba226d7dc2a6aa92e567ba6121d893d",
+          "request_sha256": "47bd9c58d2ce5ea6112f807fa9bbbd80a197789cacc413e535917eca395ed3d4"
+        },
+        {
+          "specimen_id": "raw.deny_deposit_above_cap",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xd0e30db0",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+                "type": 2,
+                "value": "0x3cb71f51fc5580001"
+              }
+            }
+          },
+          "body_sha256": "59b79f1a65469f5673d05228f72794087582a0215882cb7a5dd61f90e3fe61c5",
+          "request_sha256": "a8b918f8066bba734aea573f4ac6359a8056aa9bbcddf21b0170226729e14f50"
+        },
+        {
+          "specimen_id": "raw.deny_swap_with_mon",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xd38afb110000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000",
+                "gas_limit": 500000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0xb3e6778480b2e488385e8205ea05e20060b813cb",
+                "type": 2,
+                "value": 1
+              }
+            }
+          },
+          "body_sha256": "13c0f9ecf3023351466b515b380bb02bde53570ebf8d812e3afd0ca311719738",
+          "request_sha256": "b776dde8402c2a60b52dab45409cb3fd09912ac86dc4987456b5dab1874cd9bf"
+        },
+        {
+          "specimen_id": "raw.deny_plain_mon_transfer",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0x",
+                "gas_limit": 100000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0x000000000000000000000000000000000000dead",
+                "type": 2,
+                "value": 1
+              }
+            }
+          },
+          "body_sha256": "d8a2f5f1c3009d64f21a9fb96f111e93125b574dc815e7b7bbb354d7713d8c4e",
+          "request_sha256": "24445a29234ebac7936acaa2c2ca4eb0f8867d122af7303a5afb48dcafe1dae4"
+        }
+      ]
+    },
+    {
+      "field": "specimen_expected",
+      "required": "The per-profile positive and negative specimen manifest",
+      "current": {
+        "raw.allow_deposit_1_mon": "ALLOW",
+        "raw.allow_deposit_at_cap": "ALLOW",
+        "raw.allow_approve_at_cap": "ALLOW",
+        "raw.allow_swap_zero_value": "ALLOW",
+        "raw.deny_deposit_wrong_chain": "POLICY_DENY",
+        "raw.deny_approve_wrong_chain": "POLICY_DENY",
+        "raw.deny_swap_wrong_chain": "POLICY_DENY",
+        "raw.deny_deposit_wrong_to": "POLICY_DENY",
+        "raw.deny_approve_wrong_to": "POLICY_DENY",
+        "raw.deny_swap_wrong_to": "POLICY_DENY",
+        "raw.deny_wmon_wrong_function": "POLICY_DENY",
+        "raw.deny_entrypoint_wrong_function": "POLICY_DENY",
+        "raw.deny_approve_other_spender": "POLICY_DENY",
+        "raw.deny_approve_above_cap": "POLICY_DENY",
+        "raw.deny_approve_with_value": "POLICY_DENY",
+        "raw.deny_deposit_above_cap": "POLICY_DENY",
+        "raw.deny_swap_with_mon": "POLICY_DENY",
+        "raw.deny_plain_mon_transfer": "POLICY_DENY"
+      }
+    },
+    {
+      "field": "request_count_ceiling",
+      "required": "At most 32 specimens per profile",
+      "current": 32
+    },
+    {
+      "field": "request_byte_ceiling",
+      "required": "At most 4096 request bytes",
+      "current": 4096
+    },
+    {
+      "field": "time_ceiling_seconds",
+      "required": "A bounded run window",
+      "current": 3600
+    },
+    {
+      "field": "controls",
+      "required": "All twelve P21 mandatory controls declarable",
+      "current": {
+        "approvals": "SOURCE_INSPECTED",
+        "chain": "DOCUMENTED",
+        "entrypoint_method": "DOCUMENTED",
+        "expiry_freshness": "DOCUMENTED",
+        "fees": "SOURCE_INSPECTED",
+        "gas_action_capacity": "UNSET",
+        "input_output_assets": "UNKNOWN",
+        "minimum_output": "SOURCE_INSPECTED",
+        "opaque_program": "UNKNOWN",
+        "raw_input": "SOURCE_INSPECTED",
+        "recipient": "SOURCE_INSPECTED",
+        "wallet_signer_binding": "SOURCE_INSPECTED"
+      }
+    },
+    {
+      "field": "position_inventory",
+      "required": "The separate position-inventory obligation",
+      "current": "UNSUPPORTED"
+    },
+    {
+      "field": "proof_scope",
+      "required": "The exact claim this packet proves",
+      "current": "POLICY_LAYER"
+    },
+    {
+      "field": "quantity_wire_form",
+      "required": "The exact quantity encoding above the safe-integer bound",
+      "current": "a value above 2**53 - 1 is a canonical lowercase 0x string with no leading zeros; a smaller value is a JSON number"
+    }
   ],
   "unqualified_controls": [
-    {"control": "opaque_program", "reason": "No reviewed source shows a policy bound on opaque bytes", "state": "UNKNOWN"},
-    {"control": "input_output_assets", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
-    {"control": "raw_input", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
-    {"control": "minimum_output", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
-    {"control": "recipient", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
-    {"control": "fees", "reason": "Tuple/component path support is unproven", "state": "UNKNOWN"},
-    {"control": "position_inventory", "reason": "No reviewed source shows that a wallet policy reads the position ledger", "state": "UNSUPPORTED"}
+    {
+      "control": "opaque_program",
+      "reason": "No reviewed source shows a policy bound on opaque bytes",
+      "state": "UNKNOWN",
+      "scope": "OUT_OF_SCOPE_FOR_POLICY_LAYER"
+    },
+    {
+      "control": "input_output_assets",
+      "reason": "The real policy has no tuple or component condition",
+      "state": "UNKNOWN",
+      "scope": "OUT_OF_SCOPE_FOR_POLICY_LAYER"
+    },
+    {
+      "control": "raw_input",
+      "reason": "The contract and host own the exact input amount",
+      "state": "SOURCE_INSPECTED",
+      "scope": "OUT_OF_SCOPE_FOR_POLICY_LAYER"
+    },
+    {
+      "control": "minimum_output",
+      "reason": "The contract and host own the minimum received",
+      "state": "SOURCE_INSPECTED",
+      "scope": "OUT_OF_SCOPE_FOR_POLICY_LAYER"
+    },
+    {
+      "control": "recipient",
+      "reason": "The contract owns the recipient method",
+      "state": "SOURCE_INSPECTED",
+      "scope": "OUT_OF_SCOPE_FOR_POLICY_LAYER"
+    },
+    {
+      "control": "fees",
+      "reason": "The contract owns the fee values and addresses",
+      "state": "SOURCE_INSPECTED",
+      "scope": "OUT_OF_SCOPE_FOR_POLICY_LAYER"
+    },
+    {
+      "control": "gas_action_capacity",
+      "reason": "The host budget is UNSET; this sign-only proof sets no budget",
+      "state": "UNSET",
+      "scope": "OUT_OF_SCOPE_FOR_POLICY_LAYER"
+    },
+    {
+      "control": "position_inventory",
+      "reason": "No reviewed source shows that a wallet policy reads the position ledger",
+      "state": "UNSUPPORTED",
+      "scope": "OUT_OF_SCOPE_FOR_POLICY_LAYER"
+    }
   ],
   "external_inputs": [
-    {"input": "qualified actual reply schema", "required": "An observed and reviewed provider error body shape, with status and code", "current": "MISSING"},
-    {"input": "qualified decoder profile", "required": "A code-registered decoder bound to the exact unsigned transaction and wallet", "current": "MISSING"},
-    {"input": "valid owner-bound type-4 authority", "required": "A concrete owner self-authorization before the type-4 negative test", "current": "MISSING"},
-    {"input": "idempotency and resend decision", "required": "The exact Privy idempotency semantics for the wallet RPC route", "current": "MISSING"},
-    {"input": "accepted non-type-2 request route", "required": "A separately accepted authorizer profile for the type-0, type-1, type-4 and personal_sign negatives; they now refuse REQUEST_PROFILE_UNQUALIFIED", "current": "UNQUALIFIED"},
-    {"input": "per-specimen approved destination route", "required": "A separately accepted multi-wallet route to exercise the raw.foreign_wallet negative; it now refuses DESTINATION_UNQUALIFIED under the single approved route", "current": "UNQUALIFIED"},
-    {"input": "qualified full-key and exact-type signed decoder", "required": "Complete decoded key-set and exact value-type validation (gate F6, PhaseB owner)", "current": "UNRESOLVED"},
-    {"input": "deployed ABI and selector", "required": "Reviewed entrypoint bytecode and the real selector", "current": "MISSING"},
-    {"input": "historical uncertainty", "required": "Reconcile the uncertain policy POST and the stopped 403 without a retry or bypass", "current": "UNRESOLVED"},
-    {"input": "Kuru deployed source", "required": "A reproducible deployed source identity", "current": "NOT_REPRODUCIBLE"}
+    {
+      "input": "qualified actual reply schema",
+      "required": "An observed and reviewed provider error body shape, with status and code",
+      "current": "DOCUMENTED_AND_BOOTSTRAP_PENDING",
+      "note": "Privy documents HTTP 400 with code policy_violation. The first negative confirms the observed status and body path; a mismatch stops the run."
+    },
+    {
+      "input": "qualified decoder profile",
+      "required": "A code-registered decoder bound to the exact unsigned transaction and wallet",
+      "current": "privy.raw.v1"
+    },
+    {
+      "input": "valid owner-bound type-4 authority",
+      "required": "A concrete owner self-authorization before the type-4 negative test",
+      "current": "NOT_REQUIRED",
+      "note": "The packet has no type-4 specimen."
+    },
+    {
+      "input": "idempotency and resend decision",
+      "required": "The exact Privy idempotency semantics for the wallet RPC route",
+      "current": "ONE_USE_NO_RETRY",
+      "note": "One attempt identity per specimen; the runner never retries."
+    },
+    {
+      "input": "accepted non-type-2 request route",
+      "required": "A separately accepted authorizer profile for the type-0, type-1, type-4 and personal_sign negatives",
+      "current": "NOT_REQUIRED",
+      "note": "Every packet row is a type-2 eth_signTransaction."
+    },
+    {
+      "input": "per-specimen approved destination route",
+      "required": "A separately accepted multi-wallet route to exercise the raw.foreign_wallet negative",
+      "current": "NOT_REQUIRED",
+      "note": "Every packet row targets the single approved wallet route."
+    },
+    {
+      "input": "qualified full-key and exact-type signed decoder",
+      "required": "Complete decoded key-set and exact value-type validation (gate F6, PhaseB owner)",
+      "current": "RESOLVED",
+      "note": "The accepted validate_signed helper now checks the complete expected key set, the complete decoded key set and exact types."
+    },
+    {
+      "input": "deployed ABI and selector",
+      "required": "Reviewed entrypoint bytecode and the real selector",
+      "current": "SELECTOR_COMPUTED_SOURCE_UNRESOLVED",
+      "note": "executeSwap selector d38afb11 matches the policy ABI; the deployed source identity stays unresolved."
+    },
+    {
+      "input": "historical uncertainty",
+      "required": "Reconcile the uncertain policy POST and the stopped 403 without a retry or bypass",
+      "current": "UNRESOLVED",
+      "note": "Preserved; this packet does not retry or bypass it."
+    },
+    {
+      "input": "Kuru deployed source",
+      "required": "A reproducible deployed source identity",
+      "current": "NOT_REPRODUCIBLE"
+    },
+    {
+      "input": "operator unfunded preflight",
+      "required": "An independent zero-balance read before the live run",
+      "current": "REQUIRED_BY_COMMAND",
+      "note": "The live command refuses without --confirm-unfunded."
+    },
+    {
+      "input": "operator run command",
+      "required": "One exact command that runs the packet once",
+      "current": "python -m scripts.privy_unfunded_proof.actual_run"
+    },
+    {
+      "input": "large quantity wire form",
+      "required": "The exact encoding above the safe-integer bound",
+      "current": "CANONICAL_HEX_ABOVE_2**53_MINUS_1",
+      "note": "The signer and the transport send a larger value as a lowercase 0x string; the body never carries a JSON number above 2**53 - 1."
+    }
   ],
   "refusal_boundary": {
     "default_actual_run": "ACTUAL_PACKET_NOT_APPROVED",
@@ -60,7 +771,8 @@
     "code_owned_registries": [
       "scripts.privy_unfunded_proof.actual_packet.CODE_OWNED_PACKET_APPROVALS",
       "scripts.privy_unfunded_proof.actual_profile.QUALIFIED_ACTUAL_PROFILES",
-      "scripts.privy_unfunded_proof.actual_packet.CODE_OWNED_TYPE4_AUTHORITIES"
+      "scripts.privy_unfunded_proof.actual_packet.CODE_OWNED_TYPE4_AUTHORITIES",
+      "scripts.privy_unfunded_proof.specimens.CODE_OWNED_ACTUAL_MANIFESTS"
     ]
   }
 }

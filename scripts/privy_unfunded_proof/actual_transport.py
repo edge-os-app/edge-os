@@ -45,10 +45,33 @@ TRANSACTION_FIELDS = frozenset({"type", "chain_id", "nonce", "to", "value", "dat
                                 "max_fee_per_gas", "max_priority_fee_per_gas"})
 QUANTITY_FIELDS = ("chain_id", "nonce", "value", "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas")
 MAX_SAFE_INTEGER = 2**53 - 1
+MAX_UINT256 = 2**256 - 1
+_CANONICAL_QUANTITY_HEX = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)")
+
+
+def wire_quantity(value: int) -> int | str:
+    """The exact wire form: a small quantity stays a number, a larger one is a canonical lowercase hex string."""
+    if not _is_int(value) or not 0 <= value <= MAX_UINT256:
+        raise ValueError("quantity outside the accepted range")
+    return value if value <= MAX_SAFE_INTEGER else hex(value)
+
+
+def decode_wire_quantity(value: object) -> int | None:
+    """The exact integer from a wire number or a canonical lowercase hex string, or None."""
+    if _is_int(value) and 0 <= value <= MAX_SAFE_INTEGER:
+        return value
+    if isinstance(value, str) and _CANONICAL_QUANTITY_HEX.fullmatch(value):
+        parsed = int(value, 16)
+        return parsed if MAX_SAFE_INTEGER < parsed <= MAX_UINT256 else None
+    return None
 
 
 def accepted_request_profile(body: Any) -> bool:
-    """The narrow accepted authorizer profile: exactly one type-2 eth_signTransaction body."""
+    """The narrow accepted authorizer profile: exactly one type-2 eth_signTransaction body.
+
+    A quantity at or below 2**53 - 1 is a JSON number. A larger quantity is a canonical lowercase ``0x`` string
+    with no leading zeros, so the transport never emits a JSON number above 2**53 - 1.
+    """
     if not isinstance(body, Mapping) or set(body) != {"method", "params"}:
         return False
     if body["method"] != "eth_signTransaction":
@@ -62,8 +85,8 @@ def accepted_request_profile(body: Any) -> bool:
     if not _is_int(transaction["type"]) or transaction["type"] != 2:
         return False
     for name in QUANTITY_FIELDS:
-        value = transaction[name]
-        if not _is_int(value) or not (1 if name == "chain_id" else 0) <= value <= MAX_SAFE_INTEGER:
+        value = decode_wire_quantity(transaction[name])
+        if value is None or not (1 if name == "chain_id" else 0) <= value <= MAX_UINT256:
             return False
     return (_ADDRESS.fullmatch(transaction["to"]) is not None and _DATA.fullmatch(transaction["data"]) is not None)
 
