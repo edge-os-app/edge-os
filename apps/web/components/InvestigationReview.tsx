@@ -570,6 +570,7 @@ function TransportFacts({ transport }: { transport: TransportSummary }) {
 export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { intakeId: string; interpretationRevisionId: string | null }) {
   const [question, setQuestion] = useState("");
   const [sources, setSources] = useState<HistorySource[]>([]);
+  const [researchUnavailable, setResearchUnavailable] = useState(false);
   const [budget, setBudget] = useState<ResearchBudget | null>(null);
   const [declarations, setDeclarations] = useState<HistoryDeclaration[]>([]);
   const [selected, setSelected] = useState<HistoryDeclaration | null>(null);
@@ -608,7 +609,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
       const [catalog, saved, request] = await Promise.all([api.historySources(), api.historyInvestigations(intakeId),
         api.get(intakeId)].map((call) => Promise.resolve(call))) as [Awaited<ReturnType<typeof api.historySources>>,
         Awaited<ReturnType<typeof api.historyInvestigations>>, Awaited<ReturnType<typeof api.get>>];
-      setSources(catalog.sources); setDeclarations(saved.declarations); setQuestion(request.intake.content.original_request);
+      setSources(catalog.sources);
+      setResearchUnavailable(catalog.mode === "unavailable" && !catalog.operating_release);
+      setDeclarations(saved.declarations); setQuestion(request.intake.content.original_request);
       await refreshBudget();
     } catch (cause) { setLoadError(cause instanceof ApiError ? cause.detail : "Recorded-history research could not be loaded."); }
   };
@@ -739,7 +742,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
     <section className="stack" aria-labelledby="history-title" data-testid="history-investigation"
       style={{ overflowWrap: "anywhere" }}>
       <h3 id="history-title">Recorded-history investigation</h3>
-      {sources.some((item) => sourceRelease(item)?.kind === "ACTUAL")
+      {researchUnavailable
+        ? <p className="status stop" data-testid="research-unavailable" role="status">Research is not available here yet. This server composes no research release, so a new study cannot start. Saved studies still open below; nothing is read or sent.</p>
+        : sources.some((item) => sourceRelease(item)?.kind === "ACTUAL")
         ? <p className="status stop">This server composes an approved actual operating release: its source calls the named provider within the listed fixed limits. Every other source is a SYNTHETIC recording. Results are descriptive and grant no trading permission.</p>
         : <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>}
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p><button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>Retry</button></div> : null}
@@ -800,7 +805,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         </div>
       ) : null}
 
-      <details open={declarations.length === 0}>
+      {researchUnavailable ? null : <details open={declarations.length === 0}>
         <summary>Declare a new recorded-history investigation</summary>
         <div className="stack">
           <div className="field">
@@ -886,7 +891,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
             {busy ? "Saving…" : "Save history declaration"}
           </button>
         </div>
-      </details>
+      </details>}
     </section>
   );
 }

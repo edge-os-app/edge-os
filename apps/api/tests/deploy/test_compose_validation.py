@@ -19,7 +19,6 @@ def coolify_values() -> dict[str, str]:
         "EDGE_OS_PRIVY_VERIFICATION_KEY": "placeholder",
         "EDGE_OS_CORS_ALLOWED_ORIGINS": "https://app.edgeos.fun",
         "EDGE_OS_BUILD_SHA": "0" * 40,
-        "EDGE_OS_POSTGRES_TLS_DIR": "/etc/edge-os/postgres-tls",
     }
 
 

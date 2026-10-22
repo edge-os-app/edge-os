@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import logging
 import os
 import socket
 from collections.abc import Iterator
@@ -146,15 +147,16 @@ def test_the_default_composes_the_api_and_worker_runtime_without_reading_or_sock
 
 
 def test_the_default_is_registered_in_code_not_gated_by_settings_or_environment(
-        monkeypatch: pytest.MonkeyPatch, no_sockets: list[Any]) -> None:
+        monkeypatch: pytest.MonkeyPatch, no_sockets: list[Any], caplog: pytest.LogCaptureFixture) -> None:
     # Registration is code-owned: a hostile environment changes nothing and local/test composition stays available.
-    # Production additionally needs an approved hosted deployment record, which is empty here.
+    # Production names no hosted deployment record here, so research stays off and the server still starts.
     monkeypatch.setenv("EDGE_OS_NANSEN_RELEASE", "actual-attacker/1")
     monkeypatch.setenv("NANSEN_API_KEY", "fake-nansen-SENTINEL-4b5c6d")
     runtime = released_runtime_bootstrap.server_research_runtime(SETTINGS)
     assert runtime is not None and runtime.release_sha256 == RELEASE_SHA256
-    with pytest.raises(ReleaseRefused, match="hosted_deployment_not_matched"):
-        released_runtime_bootstrap.server_research_runtime(SimpleNamespace(env="production"))
+    with caplog.at_level(logging.INFO, logger="edge_os"):
+        assert released_runtime_bootstrap.server_research_runtime(SimpleNamespace(env="production")) is None
+    assert "no hosted deployment is named" in caplog.text
     assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == {RELEASE_ID}
     assert operating_release.APPROVED_RELEASES == {RELEASE_ID: RELEASE_SHA256}
     assert nansen_request(runtime.release.nansen) == EXPECTED_REQUEST

@@ -128,8 +128,9 @@ def test_postgres_runs_with_tls_from_a_read_only_mount(compose):
     mounts = support.mounts(postgres)
     tls = [mount for mount in mounts if "postgres-tls" in mount["target"]]
     assert len(tls) == 1
-    assert "EDGE_OS_POSTGRES_TLS_DIR" in tls[0]["source"]
+    assert tls[0]["source"] == "/etc/edge-os/postgres-tls"
     assert tls[0]["read_only"] is True
+    assert "EDGE_OS_POSTGRES_TLS_DIR" not in support.COMPOSE_COOLIFY.read_text(encoding="utf-8")
     database = [mount for mount in mounts if mount["target"] == "/var/lib/postgresql"]
     assert len(database) == 1
 

@@ -113,7 +113,18 @@ inherits this rule.
 `server_research_runtime` (`core/research/released_runtime_bootstrap.py`) composes the code-owned approved ACTUAL
 release for both entry points: the API (`create_app`) and the investigation worker (`investigation_jobs.main`). In
 production it requires an approved deployment record whose `research_release.release_id` and `research_release.sha256`
-equal the composed release's exact id and SHA-256. Without a record, no approved research release composes.
+equal the composed release's exact id and SHA-256.
+
+A production configuration that names no record (both `EDGE_OS_HOSTED_DEPLOYMENT_ID` and
+`EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH` are unset) composes no research release and starts. Research is then
+unavailable: the server logs one line that research is off because no hosted deployment is named, saved-result reads,
+sign-in and every other API route keep working, and a research job request is refused on the existing unavailable path
+(`operating_release_unavailable`, or `history_source_unavailable` for a recorded source). Nothing runs and no
+credential is read.
+
+A named record still refuses startup exactly as before when it is incomplete, unapproved, unreadable, invalid, bound to
+other origins or another TLS mode, outside its validity window, or does not name the exact research release. The
+Hermes relay application keeps its production refusal without a record.
 
 `local` and `test` keep the existing composition and read no deployment record.
 
@@ -183,11 +194,14 @@ Pure tests, no database, Docker or network:
 - `apps/api/tests/test_hosted_deployment.py`: empty registry, no record, incomplete pair, unregistered record,
   relative path, matching record, canonical hash, changed field, origin mismatch, TLS mismatch, expired window,
   malformed records, repeated keys, symbolic link, oversized file, part predicates, settings admission, retained
-  refusals, local behaviour, `create_app` refusal, worker refusal.
+  refusals, local behaviour, production `create_app` and worker startup with research off and one log line, and named
+  incomplete, unapproved, expired or non-admitting records still refused at composition.
 - `apps/api/tests/test_hosted_relay_admission.py`: production without a record, fixture interpreter, bound relay
   release admitted to the handoff, another release id refused, another record hash refused, local admission unchanged.
 - `apps/api/tests/test_approved_nansen_bootstrap.py`: the code-owned default stays registered; `local` composes it;
-  `production` refuses without a hosted record.
+  `production` composes nothing and logs one line when no hosted record is named.
+- `apps/api/tests/test_operating_release_research.py`: a saved release job with an absent runtime ends
+  `UNAVAILABLE` on `operating_release_unavailable` before any provider request.
 
 Mounted tests in the existing suite cover the relay composition and the settings routes. The full API suite is the
 submission check.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -354,12 +355,76 @@ def test_a_record_with_another_research_hash_is_refused_at_composition(
         server_research_runtime(settings)
 
 
-# --- Both research entry points refuse without a matching record -------------------------------------------------------
+# --- A production server with no named record starts with research off -----------------------------------------------
 
 
-def test_create_app_refuses_the_approved_research_release_without_a_record() -> None:
-    with pytest.raises(ConfigError, match="research_runtime: hosted_deployment"):
-        create_app(load_settings(production_env()))
+def test_no_record_in_production_composes_nothing_and_logs(caplog: pytest.LogCaptureFixture) -> None:
+    from edge_os_api.core.research.released_runtime_bootstrap import server_research_runtime
+
+    settings = running(deployment_id=None)
+    settings.env = "production"
+    with caplog.at_level(logging.INFO, logger="edge_os"):
+        assert server_research_runtime(settings) is None
+    assert "research is off: no hosted deployment is named" in caplog.text
+
+
+def test_create_app_starts_with_research_off_when_no_record_is_named(
+        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    from edge_os_api import main as main_module
+
+    monkeypatch.setattr(main_module, "make_engine", lambda *_a, **_k: SimpleNamespace(dispose=lambda: None))
+    monkeypatch.setattr(main_module, "require_head", lambda _engine: None)
+    monkeypatch.setattr(main_module, "make_session_factory", lambda _engine: (lambda: SimpleNamespace()))
+    with caplog.at_level(logging.INFO, logger="edge_os"):
+        app = create_app(load_settings(production_env()))
+    assert app.state.research_runtime is None
+    assert "research is off: no hosted deployment is named" in caplog.text
+
+
+def test_the_worker_main_starts_without_research_when_no_record_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    from edge_os_api.core import database, settings as settings_module, worker_loop
+    from edge_os_api.research import investigation_jobs
+
+    configured = load_settings(production_env())
+    monkeypatch.setattr(settings_module, "load_settings", lambda: configured)
+    monkeypatch.setattr(database, "make_engine", lambda *_a, **_k: object())
+    monkeypatch.setattr(database, "make_session_factory", lambda _engine: object())
+    captured: dict[str, Any] = {}
+
+    class RecordingWorker:
+        def __init__(self, _factory: Any, _settings: Any, *, research_runtime: Any = None, **_kwargs: Any) -> None:
+            captured["runtime"] = research_runtime
+
+        def run_pending(self, limit: int = 20) -> list[Any]:
+            return []
+
+    monkeypatch.setattr(investigation_jobs, "InvestigationWorker", RecordingWorker)
+    monkeypatch.setattr(worker_loop, "run", lambda *_a, **_k: 0)
+    monkeypatch.setattr(worker_loop, "exit_with", lambda _code: None)
+    monkeypatch.setattr("sys.argv", ["worker", "--once"])
+    investigation_jobs.main()
+    assert captured.get("runtime") is None
+
+
+@pytest.mark.parametrize("case", ["incomplete", "unapproved", "expired"])
+def test_a_named_record_that_cannot_be_used_is_still_refused_at_composition(
+        case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from edge_os_api.core.research.operating_release import ReleaseRefused
+    from edge_os_api.core.research.released_runtime_bootstrap import server_research_runtime
+
+    if case == "incomplete":
+        settings = running(deployment_id=DEPLOYMENT)
+    elif case == "unapproved":
+        path, _sha = write_record(tmp_path, record())
+        settings = running(record_path=path)
+    else:
+        value = record(valid_from="2020-01-01T00:00:00Z", valid_until="2020-01-02T00:00:00Z")
+        path, sha = write_record(tmp_path, value)
+        approve(monkeypatch, value, sha)
+        settings = running(record_path=path)
+    settings.env = "production"
+    with pytest.raises(ReleaseRefused, match="hosted_deployment_refused"):
+        server_research_runtime(settings)
 
 
 def test_create_app_refuses_a_passed_runtime_with_another_research_hash(
@@ -379,16 +444,3 @@ def test_create_app_refuses_a_passed_runtime_with_another_research_hash(
     with pytest.raises(ConfigError, match="no approved hosted deployment record names"):
         create_app(settings, research_runtime=local)
 
-
-def test_the_worker_main_refuses_before_it_runs_without_a_record(monkeypatch: pytest.MonkeyPatch) -> None:
-    from edge_os_api.core import database, settings as settings_module
-    from edge_os_api.core.research.operating_release import ReleaseRefused
-    from edge_os_api.research import investigation_jobs
-
-    configured = load_settings(production_env())
-    monkeypatch.setattr(settings_module, "load_settings", lambda: configured)
-    monkeypatch.setattr(database, "make_engine", lambda *_a, **_k: object())
-    monkeypatch.setattr(database, "make_session_factory", lambda _engine: object())
-    monkeypatch.setattr("sys.argv", ["worker", "--once"])
-    with pytest.raises(ReleaseRefused, match="hosted_deployment"):
-        investigation_jobs.main()
