@@ -19,13 +19,13 @@ from typing import Any
 
 import pytest
 
-RELEASE_ID = "actual-moe-nansen-demo-20261018/1"
-RELEASE_SHA256 = "dce1e05ffdecf72eedaf340e55fad0e2a4271c1ea7860d15aed17fd2c1b1d743"
+RELEASE_ID = "actual-moe-history-nansen-20261022/1"
+RELEASE_SHA256 = "2223a33eae122c6958c03ff08351144f6b3c87d46c1b201594be1bf66aa25b66"
 # The one report request the release permits, pinned independently of the definition it must match.
 EXPECTED_REQUEST: dict[str, Any] = {
     "token_address": "0xd8e004acba279417c04c0633cb5a21ceca207777",
     "token_symbol": "MOE",
-    "window": {"start_utc": "2026-10-17T12:00:00Z", "end_utc": "2026-10-18T12:00:00Z"},
+    "window": {"start_utc": "2026-10-21T07:55:00Z", "end_utc": "2026-10-22T07:55:00Z"},
     "operations": ["holders", "flows"],
     "holder_query": {"label_type": "all_holders", "aggregate_by_entity": False, "order_field": "token_amount",
                      "value_usd_min": None},
@@ -118,7 +118,7 @@ def test_the_registries_carry_exactly_the_one_accepted_nansen_only_release() -> 
     assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == {RELEASE_ID}
     assert operating_release.APPROVED_RELEASES == {RELEASE_ID: RELEASE_SHA256}
     definition = _definition()
-    assert definition.kind == "ACTUAL" and definition.history is None and definition.nansen is not None
+    assert definition.kind == "ACTUAL" and definition.history is not None and definition.nansen is not None
     assert definition.nansen.endpoint == "https://api.nansen.ai"
     assert definition.nansen.credential_slot == "NANSEN_API_KEY"
     assert release_sha256(definition) == RELEASE_SHA256
@@ -134,10 +134,10 @@ def test_the_default_composes_the_api_and_worker_runtime_without_reading_or_sock
     worker = released_runtime_bootstrap.server_research_runtime(SETTINGS)
     assert api is not None and worker is not None
     assert api.release_sha256 == worker.release_sha256 == RELEASE_SHA256
-    assert api.release.history is None and worker.release.history is None
+    assert api.release.history is not None and worker.release.history is not None
     assert (api.evidence_class, api.transport_kind, api.nansen_transport_kind) == (
         "PROVIDER_ACTUAL", "PROVIDER_HTTP", "PROVIDER_HTTP")
-    assert api.network_transport is False and api.nansen_network is True
+    assert api.network_transport is True and api.nansen_network is True
     assert isinstance(api.nansen_transport, NansenHttpFactory) and api.nansen_transport.network
     assert nansen_request(api.release.nansen) == EXPECTED_REQUEST
     with pytest.raises(dataclasses.FrozenInstanceError):
