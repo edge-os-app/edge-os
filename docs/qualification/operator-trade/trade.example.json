@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "chain_id": 143,
+  "wallet_address": "0x91BB52A63c91986813288965e4681FF111De1b63",
+  "wallet_id": "bsb2feecuxl81dl5jz4u9xxo",
+  "wmon": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+  "moe": "0xd8e004acba279417c04c0633cb5a21ceca207777",
+  "pool": "0x97199b34564911936bc850ac45ede785892b5aad",
+  "entrypoint": "0xb3e6778480b2E488385E8205eA05E20060B813cb",
+  "token0": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+  "token1": "0xd8e004acba279417c04c0633cb5a21ceca207777",
+  "direction": 0,
+  "program_fee_ppm": 16000,
+  "input_raw": "50000000000000000000",
+  "slippage_bps": 100,
+  "usd_ceiling": "2.00",
+  "mon_usd_price": "0.02",
+  "gas_limits": {
+    "wrap": 60000,
+    "approve": 60000,
+    "swap": 400000,
+    "revoke": 60000
+  },
+  "code_sha256": {
+    "entrypoint": "da214086b3c9bc283c9fe99966baf01a5b97ad8f6f3a7313d37f89008594e1cf",
+    "wmon": "0000000000000000000000000000000000000000000000000000000000000000",
+    "pool": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "receipt_timeout_seconds": 120,
+  "receipt_poll_seconds": 2
+}
