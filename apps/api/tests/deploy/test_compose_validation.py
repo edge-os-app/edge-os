@@ -12,7 +12,7 @@ def coolify_values() -> dict[str, str]:
         "EDGE_OS_API_IMAGE": f"ghcr.io/edge-os-app/edge-os-api@sha256:{DUMMY}",
         "EDGE_OS_WEB_IMAGE": f"ghcr.io/edge-os-app/edge-os-web@sha256:{DUMMY}",
         "EDGE_OS_POSTGRES_IMAGE": f"postgres:18.6-trixie@sha256:{DUMMY}",
-        "EDGE_OS_DATABASE_URL": "postgresql+psycopg://edge_os:placeholder@postgres:5432/edge_os?sslmode=require",
+        "EDGE_OS_DATABASE_URL": "postgresql+psycopg://edge_os:placeholder@edge-os-postgres:5432/edge_os?sslmode=require",
         "POSTGRES_PASSWORD": "placeholder",
         "POSTGRES_DB": "edge_os",
         "EDGE_OS_PRIVY_APP_ID": "placeholder",

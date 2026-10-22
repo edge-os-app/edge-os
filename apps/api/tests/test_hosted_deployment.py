@@ -444,3 +444,140 @@ def test_create_app_refuses_a_passed_runtime_with_another_research_hash(
     with pytest.raises(ConfigError, match="no approved hosted deployment record names"):
         create_app(settings, research_runtime=local)
 
+
+
+# --- Record v2: the execution release, and the production gate for controlled execution -----------------------------
+
+EXECUTION_ID = "inapp-wmon-moe-20261023/1"
+EXECUTION_SHA = "4" * 64
+
+
+def record_v2(**changes: Any) -> dict[str, Any]:
+    value = record(schema_version=hosted_deployment.RECORD_VERSION_2,
+                   execution_release={"release_id": EXECUTION_ID, "sha256": EXECUTION_SHA})
+    value.update(changes)
+    return value
+
+
+def approve_actual(monkeypatch: pytest.MonkeyPatch, releases: dict[str, str]) -> None:
+    from edge_os_api.execution import operating_release
+
+    monkeypatch.setattr(operating_release, "APPROVED_ACTUAL_RELEASES", releases)
+
+
+def controlled_env(path: Path, **changes: str) -> dict[str, str]:
+    return production_env(EDGE_OS_EXECUTION_MODE="controlled", EDGE_OS_HOSTED_DEPLOYMENT_ID=DEPLOYMENT,
+                          EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=str(path), **changes)
+
+
+def test_a_v2_record_binds_its_exact_execution_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    loaded = hosted_deployment.check_hosted_deployment(running(record_path=path))
+    assert loaded is not None
+    assert (loaded.execution_release_id, loaded.execution_release_sha256) == (EXECUTION_ID, EXECUTION_SHA)
+    assert loaded.admits_execution_release(EXECUTION_ID, EXECUTION_SHA)
+    assert not loaded.admits_execution_release(EXECUTION_ID, "5" * 64)
+    assert not loaded.admits_execution_release("another-release/1", EXECUTION_SHA)
+    assert loaded.admits_research_release(RESEARCH_ID, RESEARCH_SHA)
+
+
+def test_a_v1_record_still_parses_and_grants_no_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    loaded = hosted_deployment.check_hosted_deployment(running(record_path=path))
+    assert loaded is not None
+    assert loaded.execution_release_id is None and loaded.execution_release_sha256 is None
+    assert not loaded.admits_execution_release(EXECUTION_ID, EXECUTION_SHA)
+    assert not loaded.admits_execution_release("", "")
+
+
+@pytest.mark.parametrize("value", [
+    record(execution_release={"release_id": EXECUTION_ID, "sha256": EXECUTION_SHA}),
+    {key: item for key, item in record_v2().items() if key != "execution_release"},
+    record_v2(execution_release=None),
+    record_v2(execution_release={"release_id": EXECUTION_ID}),
+    record_v2(execution_release={"release_id": EXECUTION_ID, "sha256": EXECUTION_SHA, "extra": "x"}),
+    record_v2(execution_release={"release_id": EXECUTION_ID, "sha256": "A" * 64}),
+    record_v2(execution_release={"release_id": "", "sha256": EXECUTION_SHA}),
+    record_v2(schema_version="edge-os.hosted-deployment/3"),
+])
+def test_a_malformed_execution_binding_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                  value: dict[str, Any]) -> None:
+    path, sha = write_record(tmp_path, value)
+    approve(monkeypatch, value, sha)
+    with pytest.raises(HostedDeploymentRefused, match="hosted_deployment_invalid"):
+        hosted_deployment.check_hosted_deployment(running(record_path=path))
+
+
+def test_production_refuses_controlled_execution_without_a_named_record() -> None:
+    with pytest.raises(ConfigError, match="execution_mode: controlled execution needs an approved hosted deployment"):
+        load_settings(production_env(EDGE_OS_EXECUTION_MODE="controlled"))
+
+
+def test_production_refuses_controlled_execution_for_an_unregistered_record(tmp_path: Path) -> None:
+    path, _ = write_record(tmp_path, record_v2())
+    with pytest.raises(ConfigError) as caught:
+        load_settings(controlled_env(path))
+    assert "hosted_deployment: hosted_deployment_not_approved" in str(caught.value)
+    assert "execution_mode: controlled execution needs an approved hosted deployment" in str(caught.value)
+
+
+def test_production_refuses_controlled_execution_for_a_v1_record(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    with pytest.raises(ConfigError, match="execution_mode: the hosted deployment record binds no execution release"):
+        load_settings(controlled_env(path))
+
+
+@pytest.mark.parametrize("actual", [{}, {EXECUTION_ID: "5" * 64}, {"another-release/1": EXECUTION_SHA}])
+def test_production_refuses_a_bound_release_that_is_not_the_approved_execution_release(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, actual: dict[str, str]) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    approve_actual(monkeypatch, actual)
+    with pytest.raises(ConfigError, match="execution_mode: the record's execution release is not the approved "
+                                          "actual execution release"):
+        load_settings(controlled_env(path))
+
+
+def test_production_admits_controlled_execution_only_for_the_exact_bound_release(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    settings = load_settings(controlled_env(path))
+    assert settings.execution_mode == "controlled"
+
+
+def test_controlled_execution_never_admits_the_privy_app_secret(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    with pytest.raises(ConfigError) as caught:
+        load_settings({**controlled_env(path), "EDGE_OS_PRIVY_APP_SECRET": "do-not-print"})
+    assert "EDGE_OS_PRIVY_APP_SECRET" in str(caught.value)
+    assert "do-not-print" not in str(caught.value)
+
+
+def test_a_v2_record_does_not_admit_fixture_execution_or_other_modes(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    base = controlled_env(path)
+    for change, message in (
+            ({"EDGE_OS_EXECUTION_MODE": "fixture"}, "execution_mode"),
+            ({"EDGE_OS_WALLET_PROVIDER": "fixture"}, "wallet_provider"),
+            ({"EDGE_OS_RESEARCH_HISTORY_MODE": "recorded"}, "research_history_mode")):
+        with pytest.raises(ConfigError, match=message):
+            load_settings({**base, **change})
+
+
+def test_the_approved_actual_execution_releases_stay_empty() -> None:
+    from edge_os_api.execution import operating_release
+
+    assert dict(operating_release.APPROVED_ACTUAL_RELEASES) == {}

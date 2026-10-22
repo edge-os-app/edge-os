@@ -31,12 +31,21 @@ API_MASKS = {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"}
 WEB_MASKS = {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "EDGE_OS_ENV", "EDGE_OS_DATABASE_URL",
              "EDGE_OS_PRIVY_APP_ID", "EDGE_OS_PRIVY_VERIFICATION_KEY", "EDGE_OS_CORS_ALLOWED_ORIGINS",
              "EDGE_OS_BUILD_SHA"}
+# The execution worker has its own block: only the settings `load_settings()` requires and the worker reads. It never
+# shares the API block, so no research, budget or interpreter value and no future API-only name reaches it.
+WORKER_SETTINGS = {
+    "EDGE_OS_ENV", "EDGE_OS_DATABASE_URL", "EDGE_OS_PRIVY_APP_ID", "EDGE_OS_PRIVY_VERIFICATION_KEY",
+    "EDGE_OS_CORS_ALLOWED_ORIGINS", "EDGE_OS_BUILD_SHA", "EDGE_OS_EXECUTION_MODE",
+    "EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS",
+}
+POSTGRES_ALIAS = "edge-os-postgres"
+EGRESS_BRIDGE = "edgeos-egress"
 ENV_ALLOW = {
     "postgres": {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"} | POSTGRES_MASKS,
     "migrate": {"EDGE_OS_DATABASE_URL"} | MIGRATE_MASKS,
     "api": API_SETTINGS | API_MASKS,
     "web": WEB_MASKS,
-    "execution-worker": API_SETTINGS | API_MASKS,
+    "execution-worker": WORKER_SETTINGS | API_MASKS,
     "recurring-producer": API_SETTINGS | API_MASKS,
 }
 SECRET_OWNERS = {
@@ -57,9 +66,49 @@ def test_services_are_the_reviewed_set(compose):
     assert set(compose["services"]) == SERVICES
 
 
-@pytest.mark.parametrize("name", sorted(SERVICES))
-def test_no_service_publishes_a_host_port(compose, name):
+@pytest.mark.parametrize("name", sorted(SERVICES - {"postgres"}))
+def test_no_other_service_publishes_a_host_port(compose, name):
     assert "ports" not in compose["services"][name]
+
+
+def test_postgres_is_published_on_loopback_only_for_the_host_research_worker(compose):
+    ports = compose["services"]["postgres"]["ports"]
+    assert len(ports) == 1
+    port = ports[0]
+    assert port["host_ip"] == "127.0.0.1"
+    assert str(port["published"]) == "5432"
+    assert port["target"] == 5432
+    assert port.get("protocol", "tcp") == "tcp"
+    text = support.COMPOSE_COOLIFY.read_text(encoding="utf-8")
+    assert "0.0.0.0" not in text
+    assert not re.search(r'(?m)^\s*-\s*"?5432(:5432)?"?\s*$', text)
+
+
+def test_postgres_has_a_unique_alias_that_cannot_collide_with_coolify(compose):
+    postgres = compose["services"]["postgres"]
+    assert set(postgres["networks"]) == {"private"}
+    assert postgres["networks"]["private"]["aliases"] == [POSTGRES_ALIAS]
+    text = support.COMPOSE_COOLIFY.read_text(encoding="utf-8")
+    assert f"@{POSTGRES_ALIAS}:5432/" in text
+    assert "@postgres:" not in text
+
+
+def test_only_the_execution_worker_joins_the_egress_network(compose):
+    egress = compose["networks"]["egress"]
+    assert egress.get("internal") is not True
+    assert egress["driver"] == "bridge"
+    assert egress["driver_opts"]["com.docker.network.bridge.name"] == EGRESS_BRIDGE
+    assert egress["ipam"]["config"] == [{"subnet": "10.203.0.0/28"}]
+    members = {name for name, service in compose["services"].items() if "egress" in service["networks"]}
+    assert members == {"execution-worker"}
+
+
+def test_the_execution_worker_does_not_merge_the_api_environment():
+    text = support.COMPOSE_COOLIFY.read_text(encoding="utf-8")
+    worker = text.split("  execution-worker:", 1)[1].split("\n  recurring-producer:", 1)[0]
+    assert "*api-environment" not in worker
+    assert "x-worker-environment: &worker-environment" in text
+    assert "environment: *worker-environment" in worker
 
 
 def test_only_the_web_and_api_ports_are_exposed(compose):
@@ -176,6 +225,9 @@ def test_production_modes_are_pinned(compose):
     assert values["EDGE_OS_RESEARCH_HISTORY_MODE"] == "unavailable"
     assert values["EDGE_OS_RESEARCH_SOURCE_CLIENTS"] == "recorded"
     assert values["EDGE_OS_NANSEN_RESEARCH_MODE"] == "unavailable"
+    worker = support.environment_values(compose["services"]["execution-worker"])
+    assert worker["EDGE_OS_ENV"] == "production"
+    assert worker["EDGE_OS_EXECUTION_MODE"] == "unavailable"
 
 
 def test_the_workers_use_a_heartbeat_command(compose):
@@ -194,8 +246,9 @@ def test_the_workers_use_a_heartbeat_command(compose):
 def test_api_and_web_join_the_proxy_network(compose):
     for name in ("api", "web"):
         assert set(compose["services"][name]["networks"]) == {"private", "coolify"}
-    for name in ("postgres", "migrate", "execution-worker", "recurring-producer"):
+    for name in ("postgres", "migrate", "recurring-producer"):
         assert set(compose["services"][name]["networks"]) == {"private"}
+    assert set(compose["services"]["execution-worker"]["networks"]) == {"private", "egress"}
     assert compose["networks"]["private"]["internal"] is True
     assert compose["networks"]["coolify"]["external"] is True
 

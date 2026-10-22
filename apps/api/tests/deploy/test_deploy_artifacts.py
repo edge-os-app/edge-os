@@ -98,3 +98,26 @@ def test_the_hosted_deployment_registry_is_unchanged():
     text = (support.REPO / "apps" / "api" / "src" / "edge_os_api" / "core" / "hosted_deployment.py").read_text(
         encoding="utf-8")
     assert "APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {}" in text
+
+
+HOSTED_RECORD_V2 = support.REPO / "docs" / "qualification" / "hosted-gates" / "HOSTED_RECORD_V2_RUNBOOK.md"
+
+
+def test_the_hosted_record_v2_runbook_covers_every_host_step():
+    text = HOSTED_RECORD_V2.read_text(encoding="utf-8")
+    for topic in ("edge-os-postgres", "alias", "127.0.0.1:5432", "IP:127.0.0.1", "DNS:edge-os-postgres",
+                  "0.0.0.0", "edgeos-egress", "DOCKER-USER", "api.privy.io", "cannot restrict by host name",
+                  "Contabo", "snapshot", "pg_dump", "pg_restore", "scratch", "sponsored", "execution_release",
+                  "edge-os.hosted-deployment/2", "APPROVED_HOSTED_DEPLOYMENTS", "APPROVED_ACTUAL_RELEASES",
+                  "EDGE_OS_PRIVY_APP_SECRET"):
+        assert topic in text, topic
+    assert "This candidate registers no hosted deployment" in text
+
+
+def test_the_coolify_runbook_uses_the_unique_database_alias():
+    text = RUNBOOK.read_text(encoding="utf-8")
+    assert "@edge-os-postgres:5432/edge_os?sslmode=require" in text
+    assert "@postgres:5432" not in text
+    assert "DNS:edge-os-postgres" in text
+    assert "edge-os.hosted-deployment/2" in text
+    assert "HOSTED_RECORD_V2_RUNBOOK.md" in text
