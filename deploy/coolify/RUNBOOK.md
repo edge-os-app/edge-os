@@ -16,7 +16,7 @@ Do not add an entry and do not present a deployment as approved because this run
 | `EDGE_OS_API_IMAGE` | API image by digest | `ghcr.io/edge-os-app/edge-os-api@sha256:<64 hex>` |
 | `EDGE_OS_WEB_IMAGE` | Web image by digest | `ghcr.io/edge-os-app/edge-os-web@sha256:<64 hex>` |
 | `EDGE_OS_POSTGRES_IMAGE` | PostgreSQL image by digest | `postgres:18.6-trixie@sha256:<64 hex>` |
-| `EDGE_OS_POSTGRES_TLS_DIR` | Host folder with the PostgreSQL certificate and key | `/etc/edge-os/postgres-tls` |
+| (literal path) | Host folder with the PostgreSQL certificate and key | `/etc/edge-os/postgres-tls` |
 | `COOLIFY_NETWORK` | Coolify's Traefik network name | `coolify` |
 
 The builder chooses the final host names. If the web uses the apex, set `WEB_ORIGIN=https://edgeos.fun` and adjust the
@@ -110,11 +110,29 @@ The image variables are also runtime values:
 EDGE_OS_API_IMAGE=ghcr.io/edge-os-app/edge-os-api@sha256:<digest from the workflow artifact>
 EDGE_OS_WEB_IMAGE=ghcr.io/edge-os-app/edge-os-web@sha256:<digest from the workflow artifact>
 EDGE_OS_POSTGRES_IMAGE=postgres:18.6-trixie@sha256:<digest pinned in compose.local.yml or a reviewed newer pin>
-EDGE_OS_POSTGRES_TLS_DIR=/etc/edge-os/postgres-tls
 ```
 
 Never deploy by a floating tag. The workflow artifact `image-digests` holds `api.digest`, `web.digest` and
 `image-digests.json`.
+
+### Coolify 4.4.7 does not substitute the image variables
+
+Coolify 4.4.7 does not list or substitute the `${EDGE_OS_*_IMAGE:?}` variables from the environment page. The file
+keeps those required variables so a local `docker compose config` still refuses a missing or floating image. Write the
+three digests literally into the deployed compose file.
+
+Exact step: in the Coolify Compose editor, replace each `image:` line with the digest literal. Do not paste secrets.
+
+```text
+api:      image: ghcr.io/edge-os-app/edge-os-api@sha256:<api.digest from image-digests.json>
+web:      image: ghcr.io/edge-os-app/edge-os-web@sha256:<web.digest from image-digests.json>
+postgres: image: postgres:18.6-trixie@sha256:<pinned postgres digest>
+```
+
+Check that every `image:` line ends with `@sha256:<64 hex>` and that no `image:` line still holds `${`. The PostgreSQL
+TLS mount already uses the literal host path `/etc/edge-os/postgres-tls`; Coolify 4.4.7 refuses a volume source that
+contains `${`. Keep the edited file as `compose.deployed.yml` outside the repository and paste it into Coolify. Do not
+commit it.
 
 ## 4. PostgreSQL TLS certificate
 

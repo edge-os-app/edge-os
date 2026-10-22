@@ -79,8 +79,9 @@ services:
     volumes:
       - database:/var/lib/postgresql
       # The server certificate and key are created on the host and owned by the postgres uid/gid with the key at
-      # 0600. The mount is read-only; the key never enters the image or this file.
-      - ${EDGE_OS_POSTGRES_TLS_DIR:?set EDGE_OS_POSTGRES_TLS_DIR to the host TLS folder}:/etc/edge-os/postgres-tls:ro
+      # 0600. The mount is read-only; the key never enters the image or this file. The host path is literal because
+      # Coolify 4.4.7 refuses a volume source that contains `${`.
+      - /etc/edge-os/postgres-tls:/etc/edge-os/postgres-tls:ro
     tmpfs:
       - /tmp
       - /var/run/postgresql:uid=999,gid=999,mode=0755

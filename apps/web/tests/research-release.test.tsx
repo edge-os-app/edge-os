@@ -175,6 +175,17 @@ describe("operating-release source", () => {
     expect(transport).not.toHaveTextContent(/recorded responses only/);
   });
 
+  it("shows a clear research-unavailable state when the server composes no release", async () => {
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "unavailable", operating_release: null,
+      sources: [SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    const notice = await screen.findByTestId("research-unavailable");
+    expect(notice).toHaveTextContent("Research is not available here yet");
+    expect(screen.queryByText("Declare a new recorded-history investigation")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open this declaration" })).toBeInTheDocument();
+  });
+
   it("keeps a saved actual job's release and transport, not the current catalog", async () => {
     const user = userEvent.setup();
     // The current catalog offers only the stand-in source; the saved declaration and job keep their own actual facts.

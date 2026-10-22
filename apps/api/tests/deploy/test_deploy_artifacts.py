@@ -59,7 +59,8 @@ def test_the_runbook_covers_every_approved_step():
     text = RUNBOOK.read_text(encoding="utf-8")
     for topic in ("DNS", "Build Variable", "runtime", "TLS", "migrate", "systemd", "socket",
                   "Smoke", "backup", "restore", "Rollback", "hosted-deployment",
-                  "APPROVED_HOSTED_DEPLOYMENTS", "api.edgeos.fun", "app.edgeos.fun"):
+                  "APPROVED_HOSTED_DEPLOYMENTS", "api.edgeos.fun", "app.edgeos.fun",
+                  "Coolify 4.4.7 does not substitute", "compose.deployed.yml", "Never deploy by a floating tag"):
         assert topic in text, topic
     assert "This candidate does not approve a hosted deployment" in text
 

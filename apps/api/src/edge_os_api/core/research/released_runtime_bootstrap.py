@@ -8,7 +8,8 @@ A release is composed only from a code-owned ACTUAL definition in `RELEASE_DEFIN
 `operating_release.APPROVED_RELEASES`. Exactly one such release is registered (the MOE history plus Nansen
 `actual-moe-history-nansen-20261022/1`), so the default server composes that one release: no release is read from a
 setting, environment value, file or request, and composition reads no credential and opens no socket. Removing the
-definition makes the default compose nothing again. See
+definition makes the default compose nothing again. In production, the server starts with research off when no hosted
+deployment is named; a named record must still approve the exact release. See
 `docs/qualification/research-provider-composition/MOE_HISTORY_ACTUAL_RELEASE.md`.
 
 The history part binds the completed recorder run `moe-wmon-fwd20m-actual-20261022m` through anchor A: the exact
@@ -22,6 +23,7 @@ blank slot refuses there, before any provider attempt. See
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -43,6 +45,8 @@ from edge_os_api.core.research.released_source_runtime import (
     open_released_runtime,
 )
 from edge_os_api.research_history.http_clients import StdlibHttpTransport
+
+log = logging.getLogger("edge_os")
 
 WMON = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a"
 MOE = "0xd8e004acba279417c04c0633cb5a21ceca207777"
@@ -199,14 +203,18 @@ def server_research_runtime(settings: Any, *,
         raise ReleaseRefused("operating_release_invalid", "a server composes at most one approved release")
     release = approved[0]
     if settings.env == "production":
-        # The API and the worker share this gate: no approved research release composes without a matching record.
+        # The API and the worker share this gate: no research release composes without a matching record. A
+        # configuration that names no record starts with research off; a named record that cannot be used stays fatal.
         try:
             deployment = check_hosted_deployment(settings)
         except HostedDeploymentRefused as refused:
             raise ReleaseRefused(
                 "hosted_deployment_refused",
                 f"the approved research release needs an approved hosted deployment ({refused.code})") from None
-        if deployment is None or not deployment.admits_research_release(release.release_id, release_sha256(release)):
+        if deployment is None:
+            log.warning("research is off: no hosted deployment is named")
+            return None
+        if not deployment.admits_research_release(release.release_id, release_sha256(release)):
             raise ReleaseRefused("hosted_deployment_not_matched",
                                  "no approved hosted deployment record names this exact research release")
     source = EnvironmentCredentialSource() if credentials is None else credentials
