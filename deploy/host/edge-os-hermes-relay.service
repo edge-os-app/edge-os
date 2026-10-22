@@ -1,0 +1,38 @@
+[Unit]
+Description=Edge OS Hermes provider relay (host-side supervisor)
+Documentation=file:/opt/edge-os/deploy/coolify/RUNBOOK.md
+Requires=edge-os-socket-proxy.service
+After=edge-os-socket-proxy.service
+# Fail closed until an approved ACTUAL relay release exists. This candidate has none.
+ConditionPathExists=/etc/edge-os/hermes-relay.enabled
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=edge-os-relay
+Group=edge-os-relay
+WorkingDirectory=/opt/edge-os
+EnvironmentFile=/etc/edge-os/hermes-relay.env
+Environment=DOCKER_HOST=unix:///run/edge-os/relay/docker.sock
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/opt/edge-os/apps/api/src:/opt/edge-os/scripts/hermes_job_support:/opt/edge-os/scripts/hermes_interpretation:/opt/edge-os/scripts/hermes_provider_relay
+ExecStart=/opt/edge-os/apps/api/.venv/bin/python /opt/edge-os/scripts/hermes_provider_relay/relay_operator.py /etc/edge-os/relay.json start
+ExecStop=/opt/edge-os/apps/api/.venv/bin/python /opt/edge-os/scripts/hermes_provider_relay/relay_operator.py /etc/edge-os/relay.json stop
+TimeoutStartSec=180
+TimeoutStopSec=180
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/edge-os/relay
+
+[Install]
+WantedBy=multi-user.target

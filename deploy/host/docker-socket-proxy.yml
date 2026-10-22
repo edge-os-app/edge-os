@@ -1,0 +1,111 @@
+# Host-side Docker socket proxies for the two services that run outside Coolify.
+#
+# The proxy is the ONLY process on this host that reads /var/run/docker.sock for these services. Each service gets its
+# own proxy, its own Unix socket and its own allow-list. The list is derived from the runner source:
+#
+#   Research worker (`scripts/hermes_interpretation/guarded_docker_runner.py`): run, inspect, kill, ps.
+#   Hermes relay (`scripts/hermes_provider_relay/relay_supervisor.py`, `relay_operator.py`): run, inspect, kill, rm,
+#   ps, logs, exec inside its own `relay-*` containers, bridge-network create/remove/list, tmpfs-volume
+#   create/remove/list and image inspect.
+#
+# Both proxies deny image pull, image build, image removal, container update, commit, export, archive, secret/config,
+# swarm, service, node, plugin and system endpoints. They are not reachable over TCP; the client uses a Unix socket
+# whose mode is 0660 and whose group is the one service group.
+#
+# No image or value here is a secret. The operator sets EDGE_OS_SOCKET_PROXY_IMAGE to a digest-pinned
+# wollomatic/socket-proxy image and the three uid/gid values before install.
+
+name: edge-os-host-proxy
+
+x-proxy-hardening: &proxy-hardening
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  network_mode: none
+  mem_limit: 64m
+  pids_limit: 64
+  restart: unless-stopped
+  healthcheck:
+    test: ["./healthcheck"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+
+services:
+  socket-proxy-research:
+    image: ${EDGE_OS_SOCKET_PROXY_IMAGE:?set EDGE_OS_SOCKET_PROXY_IMAGE to a digest-pinned wollomatic/socket-proxy image}
+    <<: *proxy-hardening
+    container_name: edge-os-socket-proxy-research
+    user: "${EDGE_OS_PROXY_RESEARCH_UID:?}:${EDGE_OS_RESEARCH_GID:?}"
+    command:
+      - "-loglevel=info"
+      - "-socketpath=/var/run/docker.sock"
+      - "-proxysocketendpoint=/run/edge-os/docker.sock"
+      - "-proxysocketendpointfilemode=0660"
+      - "-allowbindmountfrom=/opt/edge-os,/var/lib/edge-os/research"
+      - "-allowhealthcheck"
+      - "-watchdoginterval=60"
+      - "-stoponwatchdog"
+      - "-shutdowngracetime=5"
+      # Read-only basics.
+      - "-allowGET=(/v1\\.[0-9]+)?/_ping"
+      - "-allowGET=(/v1\\.[0-9]+)?/version"
+      - "-allowGET=(/v1\\.[0-9]+)?/info"
+      - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
+      # One turn: create, start, attach to its output, wait for its exit and verify it is gone.
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/json"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/json"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/logs"
+      - "-allowGET=(/v1\\.[0-9]+)?/images/[A-Za-z0-9_.:/@-]+/json"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/create"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/start"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/attach"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/wait"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/kill"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/edge-os/research:/run/edge-os:rw
+
+  socket-proxy-relay:
+    image: ${EDGE_OS_SOCKET_PROXY_IMAGE:?set EDGE_OS_SOCKET_PROXY_IMAGE to a digest-pinned wollomatic/socket-proxy image}
+    <<: *proxy-hardening
+    container_name: edge-os-socket-proxy-relay
+    user: "${EDGE_OS_PROXY_RELAY_UID:?}:${EDGE_OS_RELAY_GID:?}"
+    command:
+      - "-loglevel=info"
+      - "-socketpath=/var/run/docker.sock"
+      - "-proxysocketendpoint=/run/edge-os/docker.sock"
+      - "-proxysocketendpointfilemode=0660"
+      - "-allowbindmountfrom=/opt/edge-os,/var/lib/edge-os,/etc/edge-os/relay"
+      - "-allowhealthcheck"
+      - "-watchdoginterval=60"
+      - "-stoponwatchdog"
+      - "-shutdowngracetime=5"
+      # Read-only basics and the Docker-side state the operator verifies.
+      - "-allowGET=(/v1\\.[0-9]+)?/_ping"
+      - "-allowGET=(/v1\\.[0-9]+)?/version"
+      - "-allowGET=(/v1\\.[0-9]+)?/info"
+      - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/json"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/json"
+      - "-allowGET=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/logs"
+      - "-allowGET=(/v1\\.[0-9]+)?/images/[A-Za-z0-9_.:/@-]+/json"
+      - "-allowGET=(/v1\\.[0-9]+)?/networks"
+      - "-allowGET=(/v1\\.[0-9]+)?/networks/[A-Za-z0-9][A-Za-z0-9_.-]*"
+      - "-allowGET=(/v1\\.[0-9]+)?/volumes"
+      - "-allowGET=(/v1\\.[0-9]+)?/volumes/[A-Za-z0-9][A-Za-z0-9_.-]*"
+      - "-allowGET=(/v1\\.[0-9]+)?/exec/[A-Za-z0-9]+/json"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/create"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/start"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*/kill"
+      - "-allowPOST=(/v1\\.[0-9]+)?/networks/create"
+      - "-allowPOST=(/v1\\.[0-9]+)?/volumes/create"
+      # Exec is limited to this operation's own relay-* containers; the diagnostic never reaches another service.
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/relay-[A-Za-z0-9][A-Za-z0-9_.-]*/exec"
+      - "-allowPOST=(/v1\\.[0-9]+)?/exec/[A-Za-z0-9]+/start"
+      - "-allowDELETE=(/v1\\.[0-9]+)?/containers/[A-Za-z0-9][A-Za-z0-9_.-]*"
+      - "-allowDELETE=(/v1\\.[0-9]+)?/networks/[A-Za-z0-9][A-Za-z0-9_.-]*"
+      - "-allowDELETE=(/v1\\.[0-9]+)?/volumes/[A-Za-z0-9][A-Za-z0-9_.-]*"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/edge-os/relay:/run/edge-os:rw
