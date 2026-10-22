@@ -548,7 +548,8 @@ class ConnectedExecution:
             quoted = self._ports.quotes.quote(QuoteRequest(
                 operation="ENTRY", quote_asset_id=agent.quote.asset_id, quote_decimals=agent.quote.decimals,
                 base_asset_id=agent.base.asset_id, base_decimals=agent.base.decimals, quote_input_raw=quote_raw,
-                base_input_raw=None, observed_at=now))
+                base_input_raw=None, observed_at=now, owner_id=str(agent.owner_id), agent_id=agent.agent_id,
+                consent_adoption_id=mandate))
             quote_input = AssetAmount(asset_id=agent.quote.asset_id, raw=quote_raw, decimals=agent.quote.decimals)
             terms = IntentTerms(operation="ENTRY", position_id=self.entry_position_id(agent, decision_id),
                                 policy_binding=policy,
@@ -562,7 +563,8 @@ class ConnectedExecution:
         quoted = self._ports.quotes.quote(QuoteRequest(
             operation="EXIT", quote_asset_id=agent.quote.asset_id, quote_decimals=agent.quote.decimals,
             base_asset_id=agent.base.asset_id, base_decimals=agent.base.decimals, quote_input_raw=None,
-            base_input_raw=base_raw, observed_at=now))
+            base_input_raw=base_raw, observed_at=now, owner_id=str(agent.owner_id), agent_id=agent.agent_id,
+            consent_adoption_id=mandate))
         terms = IntentTerms(operation="EXIT", position_id=position.position_id, policy_binding=policy,
                             mandate_id=mandate, quote_asset_id=agent.quote.asset_id,
                             quantity=AssetAmount(asset_id=agent.base.asset_id, raw=base_raw,
@@ -638,7 +640,8 @@ class ConnectedExecution:
                 operation=intent.operation, quote_asset_id=agent.quote.asset_id, quote_decimals=agent.quote.decimals,
                 base_asset_id=agent.base.asset_id, base_decimals=agent.base.decimals,
                 quote_input_raw=(payload["input"]["quote_input"] or {}).get("raw"),
-                base_input_raw=payload["quantity"]["raw"] if intent.operation == "EXIT" else None, observed_at=now))
+                base_input_raw=payload["quantity"]["raw"] if intent.operation == "EXIT" else None, observed_at=now,
+                owner_id=str(job.owner_id), agent_id=agent.agent_id, consent_adoption_id=str(job.consent_adoption_id)))
         except ProviderUnavailable as error:
             # A submission-stage outage keeps the saved action queued; a later pass ticks the same action.
             self._update(job.job_id, reason=f"WAITING:{str(error).upper() or 'PROVIDER'}_UNAVAILABLE")

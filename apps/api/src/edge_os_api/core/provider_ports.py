@@ -143,6 +143,10 @@ class QuoteRequest:
     quote_input_raw: str | None
     base_input_raw: str | None
     observed_at: dt.datetime
+    # The saved owner, agent and consent the quote is for. A controlled quote answers only from their own binding.
+    owner_id: str | None = None
+    agent_id: str | None = None
+    consent_adoption_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -746,17 +750,18 @@ class _ControlledQuotes:
         self._runtimes = runtimes
 
     def quote(self, request: QuoteRequest) -> QuoteResult:
-        matches = []
-        for runtime in self._runtimes.values():
-            route = runtime.binding.release.content()["route"]
-            if (request.operation == "ENTRY" and request.base_input_raw is None
-                    and (request.quote_asset_id, request.quote_decimals, request.base_asset_id, request.base_decimals,
-                         request.quote_input_raw) == (route["input_asset"]["asset_id"], route["input_asset"]["decimals"],
-                         route["output_asset"]["asset_id"], route["output_asset"]["decimals"], route["approved_input_raw"])):
-                matches.append(runtime)
-        if len(matches) != 1:
+        # Only the requesting agent's own runtime, and only when its binding names the same owner, agent and consent.
+        runtime = None if request.agent_id is None else self._runtimes.get(request.agent_id)
+        identity = None if runtime is None else runtime.binding.identity()
+        route = None if runtime is None else runtime.binding.release.content()["route"]
+        if (identity is None or request.owner_id is None or request.consent_adoption_id is None
+                or (str(request.owner_id), request.agent_id, str(request.consent_adoption_id)) != (
+                    identity["owner_id"], identity["agent_id"], identity["consent_adoption_id"])
+                or request.operation != "ENTRY" or request.base_input_raw is not None
+                or (request.quote_asset_id, request.quote_decimals, request.base_asset_id, request.base_decimals,
+                    request.quote_input_raw) != (route["input_asset"]["asset_id"], route["input_asset"]["decimals"],
+                    route["output_asset"]["asset_id"], route["output_asset"]["decimals"], route["approved_input_raw"])):
             raise ProviderUnavailable("approved_minimum")
-        runtime = matches[0]
         try:
             runtime.binding.admit(runtime.binding.identity(), now=runtime.clock(), synthetic_bindings=runtime.synthetic_bindings)
         except ReleaseRefused:
@@ -812,10 +817,13 @@ class ProviderPorts:
     clock: Callable[[], dt.datetime] = utc_now  # the recorded original clients' replay clock
     role: str = "api"
     controlled: Mapping[str, ControlledRuntime] = field(default_factory=dict)
+    # The unreduced runtimes `controlled` was built from, so another role is never built from a read-only copy.
+    controlled_source: Mapping[str, ControlledRuntime] | None = field(default=None, repr=False)
 
     def for_role(self, role: str) -> "ProviderPorts":
         if self.mode == "controlled":
-            return build_provider_ports("controlled", None, role=role, controlled=self.controlled)
+            source = self.controlled if self.controlled_source is None else self.controlled_source
+            return build_provider_ports("controlled", None, role=role, controlled=source)
         ports = replace(self, role=role)
         if self.original is not None and isinstance(self.holdings, RecordedOriginalHoldings):
             ports.holdings = RecordedOriginalHoldings(self.holdings._factory, self.original, self.holdings._fallback,
@@ -862,14 +870,15 @@ def build_provider_ports(mode: str, factory: sessionmaker[Session], effects_path
         if original is not None:  # the recorded holdings follow the ports' replay clock
             ports.holdings = RecordedOriginalHoldings(factory, original, holdings, lambda: ports.clock())
         return ports
+    source = MappingProxyType(dict(CONTROLLED_RUNTIMES if controlled is None else controlled))
     runtimes = MappingProxyType({key: runtime if role == "worker" else runtime.read_only()
-        for key, runtime in (CONTROLLED_RUNTIMES if controlled is None else controlled).items()}) if mode == "controlled" else {}
+        for key, runtime in source.items()}) if mode == "controlled" else {}
     if mode == "controlled":
         from edge_os_api.execution.provider_observations import UnqualifiedDepositObserver, UnqualifiedRemovalObserver
 
         return ProviderPorts(mode="controlled", market=_ControlledMarkets(runtimes), quotes=_ControlledQuotes(runtimes),
             holdings=_ControlledHoldings(runtimes), receipts=_Unavailable("receipt"), deposits=UnqualifiedDepositObserver(),
-            removals=UnqualifiedRemovalObserver(), role=role, controlled=runtimes)
+            removals=UnqualifiedRemovalObserver(), role=role, controlled=runtimes, controlled_source=source)
     return ProviderPorts(mode="controlled" if mode == "controlled" else UNAVAILABLE_MODE,
                          market=_Unavailable("observations"), quotes=_Unavailable("quote"),
                          holdings=_Unavailable("holdings"), receipts=_Unavailable("receipt"),
