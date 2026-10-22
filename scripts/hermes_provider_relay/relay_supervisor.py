@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from egress_gateway import AllowedTarget
-from relay_admission import ActualRelease, ProviderDestination, RelayRelease
+from relay_admission import ActualRelease, ProviderDestination, RelayRelease, load_actual_release
 from relay_turn_runner import RelayEndpoint
 
 __all__ = ["RelaySupervisor", "make_provider_tls"]
@@ -109,8 +109,11 @@ class RelaySupervisor:
         if self.actual is not None:
             if self.actual.release != self.release or self.release_record is None or self.ca_bundle_file is None:
                 raise ValueError("an ACTUAL supervisor needs its approved record, the record file and its CA bundle")
-            if hashlib.sha256(self.release_record.read_bytes()).hexdigest() != self.actual.record_sha256:
+            record = self.release_record.read_bytes()
+            if hashlib.sha256(record).hexdigest() != self.actual.record_sha256:
                 raise ValueError("the release record file is not the approved record")
+            if load_actual_release(record, self.actual.record_sha256) != self.actual:  # the gateway's target is its own
+                raise ValueError("the ACTUAL release is not the one its approved record file gives")
             if hashlib.sha256(self.ca_bundle_file.read_bytes()).hexdigest() != self.actual.ca_bundle_sha256:
                 raise ValueError("the CA bundle file does not have the record's hash")
             if stat.S_IMODE(self.provider_key_file.stat().st_mode) & 0o077:
@@ -118,6 +121,7 @@ class RelaySupervisor:
             self.online = True
         elif self.release.kind != "AUTHORED":
             raise ValueError("an ACTUAL release is supervised only with its approved release record")
+        AllowedTarget(self.destination().host, self.destination().port)  # refused here, before any Docker resource
         self.names = {"relay": f"relay-{self.run_id}", "provider": f"relay-provider-{self.run_id}",
                       "gateway": f"relay-gateway-{self.run_id}", "egress": f"relay-egress-{self.run_id}"}
 

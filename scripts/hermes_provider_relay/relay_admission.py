@@ -15,6 +15,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
 import math
 import re
@@ -113,6 +114,12 @@ class ProviderDestination:
     def __post_init__(self) -> None:
         if not isinstance(self.host, str) or len(self.host) > 253 or not HOST.fullmatch(self.host):
             raise ValueError("host must be a lower-case DNS name")
+        try:
+            ipaddress.ip_address(self.host)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("host must be a name, not an address")  # the gateway admits names only
         _bounded(self.port, "port", 1, 65_535)
         if (not isinstance(self.path, str) or not self.path.startswith("/") or len(self.path) > 200
                 or any(c in self.path for c in "?#% \t\r\n")):

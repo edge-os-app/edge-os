@@ -174,7 +174,8 @@ def test_a_private_name_answer_is_refused_by_a_dns_mode_gateway_before_any_conne
     receipts = online_relay.path("gateway", "dns-receipts")
     receipts.mkdir(mode=0o700)
     config = online_relay.path("gateway-dns-config.json")
-    config.write_text(json.dumps({"socket": "/egress/gateway-dns.sock", "receipts": "/gateway/receipts"}))
+    config.write_text(json.dumps({"socket": "/egress/gateway-dns.sock", "receipts": "/gateway/receipts",
+                                   "destination": {"host": "openrouter.ai", "port": 443}}))  # A8: its one target
     mount = online_relay._mount  # noqa: SLF001 - the supervisor's own exact mount form
     try:
         docker(*online_relay._common(name, online_relay.names["egress"]),  # noqa: SLF001

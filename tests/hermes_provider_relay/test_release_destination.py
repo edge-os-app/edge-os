@@ -7,6 +7,7 @@ is refused; and the relay's TLS server name and CONNECT target are the record's 
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import socket
@@ -253,3 +254,30 @@ def test_the_relay_connects_and_verifies_tls_for_the_approved_records_host(
                                   gateway_socket=relay.gateway_socket, attempt_id="att-1")
     assert b"".join(sent).startswith(b"CONNECT chat.provider-synthetic.example:8443 HTTP/1.1\r\n")
     assert names == ["chat.provider-synthetic.example"]
+
+
+def test_an_actual_supervisor_refuses_a_release_whose_destination_is_not_its_record_files(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    actual, path, bundle = approved_other(tmp_path, monkeypatch)
+    key = tmp_path / "provider-key"
+    key.write_text(SENTINEL)
+    key.chmod(0o400)
+    moved = dataclasses.replace(actual, destination=relay_admission.ProviderDestination("elsewhere.example", 443, "/x"))
+    with pytest.raises(ValueError, match="not the one its approved record file gives"):
+        RelaySupervisor(tmp_path / "relay", actual.release, "pinned:test", "hpr-unit", key, {}, online=True,
+                        actual=moved, release_record=path, ca_bundle_file=bundle)
+
+
+@pytest.mark.parametrize("host", ["10.0.0.1", "104.18.2.115"])
+def test_a_record_naming_an_address_is_refused_at_load_not_at_gateway_start(host: str) -> None:
+    raw, sha = raw_of(record(destination={**OTHER, "host": host}))
+    with pytest.raises(ValueError, match="not an address"):
+        load_actual_release(raw, sha, approved=frozenset({sha}))
+
+
+def test_the_dns_mode_docker_gateway_config_names_the_one_target() -> None:
+    """The config `test_relay_through_egress_gateway.py` writes for its DNS-mode gateway, checked without Docker."""
+    source = (Path(__file__).parent / "test_relay_through_egress_gateway.py").read_text()
+    assert '"destination": {"host": "openrouter.ai", "port": 443}' in source
+    assert allowed_target({"socket": "/egress/gateway-dns.sock", "receipts": "/gateway/receipts",
+                           "destination": {"host": "openrouter.ai", "port": 443}}) == AllowedTarget("openrouter.ai", 443)
