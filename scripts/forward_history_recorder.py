@@ -180,6 +180,11 @@ def window_limits(bucket_count: int) -> tuple[dict[str, dict[str, int]], dict[st
     return phase, provider
 
 
+def scan_log_limit(window_seconds: int) -> int:
+    """The accepted 20-minute 61-log bound scaled by whole windows: 61 for 1200 s, 366 for 7200 s."""
+    return SCAN_LOG_LIMIT * (window_seconds // 1200)
+
+
 def _address(value: Any, code: str) -> str:
     try:
         return hex_value(value, 20, code).lower()
@@ -675,6 +680,7 @@ class _Attempt:
         self.window_end = value["window_end"]
         self.bucket_count = value["bucket_count"]
         self.phase_limits, self.provider_limits = window_limits(self.bucket_count)
+        self.scan_log_limit = scan_log_limit(value["window_seconds"])
         self.attempt_deadline = self.window_end + LATE_PHASE_SECONDS
         self.status = "COMPLETED"
         self.stop_reason: str | None = None
@@ -1258,8 +1264,8 @@ class _Attempt:
                             if delivery else None,
                             "reason": None if bucket["status"] == "DELIVERED" else bucket["reason"]})
         weaker = []
-        if scan is not None and len(in_scan) > SCAN_LOG_LIMIT:
-            weaker.append("SCAN_LOG_COUNT_EXCEEDS_61")
+        if scan is not None and len(in_scan) > self.scan_log_limit:
+            weaker.append(f"SCAN_LOG_COUNT_EXCEEDS_{self.scan_log_limit}")
         unknown = sum(self.journal.provider_counts.values()) - self.journal.resolved
         value = self.value
         return {

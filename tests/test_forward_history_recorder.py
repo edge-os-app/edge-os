@@ -1183,6 +1183,20 @@ def test_more_than_61_scan_logs_is_weaker_evidence_and_later_phases_still_run(
     assert (count(providers, "quicknode"), count(providers, "hypersync")) == (17, 5)
 
 
+@pytest.mark.parametrize("extra,flagged", [(364, False), (365, True)])
+def test_two_hour_scan_log_bound_is_366_not_61(tmp_path: Path, extra: int, flagged: bool) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.swaps = [ORACLE_SWAP, BOUNDARY_SWAP] + [
+            dict(ORACLE_SWAP, block_number=2 + index, log_index=index + 1,
+                 transaction_hash="0x" + "%064x" % (index + 1))
+            for index in range(extra)]
+    result, _, _ = run(tmp_path, configure=configure, window_seconds=7200)
+    handoff = handoff_of(result)
+    assert handoff["scan_log_count"] == extra + 2
+    assert handoff["weaker_evidence"] == (["SCAN_LOG_COUNT_EXCEEDS_366"] if flagged else [])
+    assert result["status"] == "COMPLETED"
+
+
 @pytest.mark.parametrize("call_number,returned", [(15, MOE), (16, WMON)])
 def test_wrong_pool_token_order_at_b_start_is_a_safety_stop(tmp_path: Path, call_number: int,
                                                               returned: str) -> None:

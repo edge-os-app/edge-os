@@ -127,6 +127,8 @@ decision replaces operating packet decision D1 for that attempt only. The existi
   7200 s.
 - `scripts/history_payload_binding_v2.py` derives the bucket count from the window. The four-bucket ceilings and receipt
   caps stay identical, so the 20-minute anchor admits byte-for-byte.
+- The scan weaker-evidence bound also follows the shape: 61 Swap logs for 1200 s (unchanged) and 366 for 7200 s. The 366
+  value is the 61 bound scaled by six windows, about 4.0x the recorded 36-46 swaps per hour.
 - The prepared input `PACKET/root/INPUT14.json` (`moe-wmon-fwd2h-actual-20261022a`, source
   `actual-moe-wmon-fwd2h/1`) passes every input rule with a placeholder T0 only. It is not run.
 
