@@ -99,6 +99,9 @@ The slot bound is enforced again at the durable admission boundary, after pacing
 call whose admission time is at or after `due+1s` is refused before its journal record. It adds no liability and no
 send, and the read is recorded `MISSED`. The reply deadline stays separate.
 
+Before each scheduled read the recorder waits until the observed UTC time reaches the due time. A timer return before
+that target does not admit the read; the recorder observes UTC again and sleeps only the positive remainder.
+
 A second P3 read is made only after a valid first reply proves insufficient coverage. A failed, rejected, missed or
 expired first read never allows it. The first read's deadline is the second event. A wake outside a slot records
 `MISSED` and continues to the next event. Pacing is at least one monotonic second between admissions to one provider;
