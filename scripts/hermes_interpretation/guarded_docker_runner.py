@@ -58,10 +58,12 @@ MAX_STDOUT_BYTES = 1024 * 1024  # the host keeps at most this much of the job's 
 MAX_CREDENTIAL_BYTES = 64 * 1024
 MAX_RESULT_BYTES = 256 * 1024  # a result file larger than this is not read: the turn ends as UNKNOWN (real ones: ~6 KiB)
 # Parsing, checking, mapping and freeing a result cannot be stopped part way, so it starts only when the time left
-# covers its worst case: deeply nested lists measured up to 0.06 s per MiB to parse under load, and about as much to
-# free; this allows about twice that sum. With less time left the result is not read and the turn ends as UNKNOWN.
-RESULT_SECONDS_PER_BYTE = 0.25 / (1024 * 1024)
-RESULT_MIN_SECONDS = 0.005
+# covers its worst case. A 256 KiB invalid nested result measured 0.363 s to parse inside the test process under load
+# on 2026-10-22 (0.008-0.022 s in a quiet standalone process); the scan and the mapping after it add a little. This
+# allows about twice that measured sum, and RESULT_MIN_SECONDS covers the small-result tail. With less time left the
+# result is not read and the turn ends as UNKNOWN.
+RESULT_SECONDS_PER_BYTE = 3.0 / (1024 * 1024)
+RESULT_MIN_SECONDS = 0.02
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
 JOB_FILES_FOLDER = PurePosixPath("/opt/p05job")  # the one folder a different job entry may add read-only files to
