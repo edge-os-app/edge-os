@@ -72,7 +72,9 @@ def make_provider_tls(folder: Path, hosts: tuple[str, ...]) -> None:
     def openssl(*args: str) -> None:
         subprocess.run(["openssl", *args], cwd=folder, capture_output=True, check=True, timeout=60)
 
-    curve = ("-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes")
+    # The digest is named: LibreSSL (macOS `openssl`) signs `x509 -req` with SHA-1 for an EC key by default, and the
+    # provider's OpenSSL refuses a SHA-1 signature when it loads the certificate (CA_MD_TOO_WEAK).
+    curve = ("-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-sha256")
     openssl("req", "-x509", *curve, "-keyout", "ca.key", "-out", "ca.pem", "-days", "2", "-subj", "/CN=relay-test-ca",
             "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
     openssl("req", "-new", *curve, "-keyout", "server.key", "-out", "server.csr", "-subj", f"/CN={hosts[0]}")
@@ -80,7 +82,7 @@ def make_provider_tls(folder: Path, hosts: tuple[str, ...]) -> None:
         f"subjectAltName={','.join(f'DNS:{host}' for host in hosts)}\nbasicConstraints=critical,CA:FALSE\n"
         "keyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nauthorityKeyIdentifier=keyid\n"
         "subjectKeyIdentifier=hash\n", encoding="utf-8")
-    openssl("x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+    openssl("x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-sha256",
             "-out", "server.pem", "-days", "2", "-extfile", "server.ext")
     for name in ("ca.key", "server.csr", "server.ext", "ca.srl"):
         (folder / name).unlink(missing_ok=True)
