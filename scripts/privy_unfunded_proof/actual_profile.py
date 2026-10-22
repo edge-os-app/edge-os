@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from edge_os_api.execution.original_transaction import validate_signed
+from edge_os_api.execution.privy_policy_reply import POLICY_DENIAL_CODE, POLICY_DENIAL_STATUS
 from scripts.privy_unfunded_proof.evidence import Outcome
 from scripts.privy_unfunded_proof.specimens import PROFILES, SpecimenRefused
 
@@ -120,7 +121,7 @@ def accepted_signed_decoder(unsigned: Mapping[str, Any], wallet: str) -> Callabl
 # for a denied signing request; the first negative in the frozen packet confirms
 # the observed status and body path before any later specimen runs.
 PRIVY_POLICY_CODES: Mapping[str, tuple[int, str, str]] = {
-    "policy_violation": (400, Outcome.POLICY_DENY.value, "PRIVY_POLICY_VIOLATION"),
+    POLICY_DENIAL_CODE: (POLICY_DENIAL_STATUS, Outcome.POLICY_DENY.value, "PRIVY_POLICY_VIOLATION"),
     "request_expired": (400, Outcome.UNKNOWN.value, "EXPIRY_REFUSAL"),
     "zero_correct_authorization_signatures": (
         401, Outcome.AUTHORIZATION_DENY.value, "PRIVY_AUTHORIZATION_DENIED",

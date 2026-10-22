@@ -213,6 +213,29 @@ The command prints one JSON line with `status: REFUSED` and a stable code. Impor
 - `SIGNER_REFUSED`, `SIGNER_REPLY_LOST`, `SIGNER_REPLY_INVALID`
 - `BROADCAST_UNKNOWN`, `RECEIPT_TIMEOUT`, `RECEIPT_STATUS_FAILED`
 
+## Policy denial classification
+
+Privy returns HTTP `400` with the JSON error code `policy_violation` when the wallet
+policy denies a signing request. Live proof v3 recorded that status and code for all 15
+denials. `edge_os_api.execution.privy_policy_reply` is the one classifier. The proof in
+`scripts/privy_unfunded_proof/` imports the same function.
+
+Only the exact status `400` with code `policy_violation` is a definite refusal. The app
+then records `WALLET_POLICY_REFUSED`, releases the reservation and shows "Refused by the
+wallet policy." in the action view. The app does not sign or send.
+
+Every other reply is not a refusal:
+
+- a timeout or a lost reply;
+- any status other than `400`;
+- any other error code;
+- a malformed, empty or non-JSON body;
+- an unknown body;
+- a body that also carries a success key (`data` or `method`).
+
+For these replies the app keeps `SUBMISSION_POSSIBLE`, holds the reservation and never
+resends. Only the original receipt can settle the attempt.
+
 ## Who enforces which control
 
 Privy enforces (from `ROOT/.scratch/trade-prep-20261021/PRIVY_SETUP1.json`):

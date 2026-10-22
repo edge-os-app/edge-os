@@ -20,10 +20,11 @@ Outcomes, matched to the caller's existing vocabulary:
 - nothing was sent (invalid input, stop or authorization failure before HTTP) → the `LOCAL_UNSENT` error envelope,
   the only reply `is_signer_refusal` treats as a refusal;
 - a request may have been sent and its reply did not arrive → `ReplyLost`;
-- any reply other than the documented success, including every Privy error → `RpcError`.
-No provider reply becomes a refusal: Privy documents error codes but not an error body shape. Errors carry a stable
-code only and are raised outside exception handlers, so no cause or context keeps provider text, credentials, the
-authorization signature or signed bytes.
+- the exact HTTP 400 `policy_violation` reply → `SignerPolicyDenied`, the one provider reply that proves a refusal;
+- any other reply, including every other Privy error → `RpcError`.
+Only the proof's exact policy-denial status and code become a refusal; a timeout, 5xx, malformed, unknown or
+near-miss reply stays `RpcError`. Errors carry a stable code only and are raised outside exception handlers, so no
+cause or context keeps provider text, credentials, the authorization signature or signed bytes.
 """
 
 from __future__ import annotations
@@ -40,7 +41,8 @@ from typing import Any
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from edge_os_api.execution.original_transaction import SIGNED_BYTES_LIMIT, ReplyLost, RpcError
+from edge_os_api.execution.original_transaction import SIGNED_BYTES_LIMIT, ReplyLost, RpcError, SignerPolicyDenied
+from edge_os_api.execution.privy_policy_reply import is_policy_denial
 from edge_os_api.research_history.http_clients.client_config import HttpProviderError
 from edge_os_api.research_history.http_clients.http_transport import HttpResponse, HttpTransport
 
@@ -224,6 +226,8 @@ class PrivySignerClient:
         if self._echoes(headers, raw, signature):
             raise RpcError("PRIVY_REPLY_ECHOED_CREDENTIAL")
         if status != 200:
+            if _policy_denial(status, headers, raw):
+                raise SignerPolicyDenied("PRIVY_POLICY_VIOLATION")
             raise RpcError("PRIVY_REPLY_STATUS")
         encoding = next((value for name, value in headers.items() if str(name).lower() == "content-encoding"), None)
         if encoding is not None and str(encoding).lower() != "identity":
@@ -336,6 +340,14 @@ def _parse(raw: bytes) -> Any:
         return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
     except (UnicodeDecodeError, ValueError, RecursionError):
         return None
+
+
+def _policy_denial(status: Any, headers: Mapping[Any, Any], raw: bytes) -> bool:
+    """Whether this non-200 reply is the proof's exact policy denial: JSON media type, 400 and code."""
+    content_type = next((value for name, value in headers.items() if str(name).lower() == "content-type"), None)
+    if not isinstance(content_type, str) or content_type.split(";")[0].strip().lower() != "application/json":
+        return False
+    return is_policy_denial(status, _parse(raw))
 
 
 def _quantity(name: str, value: Any) -> int | None:
