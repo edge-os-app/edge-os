@@ -26,7 +26,7 @@ _DATA = re.compile(r"0x(?:[0-9a-fA-F]{2})*")
 _SIGNED = re.compile(r"0x(?:[0-9a-fA-F]{2})+")
 
 READ_ONLY_METHODS = frozenset({
-    "eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_call", "eth_getCode",
+    "eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_call", "eth_estimateGas", "eth_getCode",
     "eth_getTransactionCount", "eth_getBlockByNumber", "eth_getTransactionReceipt",
     "eth_maxPriorityFeePerGas",
 })
@@ -59,7 +59,7 @@ def _allowed(method: str, params: Any) -> bool:
         return len(params) == 2 and _tag(params[0]) and params[1] is False
     if method == "eth_getTransactionReceipt":
         return len(params) == 1 and type(params[0]) is str and _HASH.fullmatch(params[0]) is not None
-    if method == "eth_call":
+    if method in ("eth_call", "eth_estimateGas"):
         if len(params) not in (2, 3) or not _tag(params[1]) or type(params[0]) is not dict:
             return False
         if not _call_shape(params[0]):
@@ -72,14 +72,22 @@ def _allowed(method: str, params: Any) -> bool:
 
 def _call_shape(call: dict[str, Any]) -> bool:
     keys = set(call)
-    if keys not in ({"to", "data"}, {"from", "to", "data"}, {"from", "to", "data", "value"}):
+    allowed = (
+        {"to", "data"}, {"from", "to", "data"}, {"from", "to", "data", "value"},
+        {"to", "data", "gas"}, {"from", "to", "data", "gas"},
+        {"from", "to", "data", "value", "gas"},
+    )
+    if keys not in allowed:
         return False
     if not all(type(call[name]) is str and _ADDRESS.fullmatch(call[name]) is not None
                for name in keys & {"from", "to"}):
         return False
     if type(call["data"]) is not str or _DATA.fullmatch(call["data"]) is None:
         return False
-    return "value" not in call or (type(call["value"]) is str and _QUANTITY.fullmatch(call["value"]) is not None)
+    for name in keys & {"value", "gas"}:
+        if type(call[name]) is not str or _QUANTITY.fullmatch(call[name]) is None:
+            return False
+    return True
 
 
 def _state_overrides(value: Any) -> bool:
@@ -164,7 +172,7 @@ class OperatorRpc:
     @staticmethod
     def _validate(method: str, result: Any) -> Any:
         if method in ("eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_getTransactionCount",
-                      "eth_maxPriorityFeePerGas"):
+                      "eth_maxPriorityFeePerGas", "eth_estimateGas"):
             if _quantity(result) is None:
                 raise OperatorError("RPC_QUANTITY_INVALID", method)
             return result

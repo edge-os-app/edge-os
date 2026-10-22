@@ -24,7 +24,11 @@ FIELDS = frozenset({
     "token0", "token1", "direction", "program_fee_ppm", "input_raw", "slippage_bps", "usd_ceiling",
     "mon_usd_price", "gas_limits", "code_sha256", "receipt_timeout_seconds", "receipt_poll_seconds",
 })
-GAS_FIELDS = frozenset({"wrap", "approve", "swap", "revoke"})
+OPTIONAL_FIELDS = frozenset({"start"})
+STEPS = ("wrap", "approve", "swap", "revoke")
+START_FIELDS = frozenset({"MON", "WMON"})
+DEFAULT_START = "MON"
+GAS_FIELDS = frozenset(STEPS)
 CODE_ROLES = frozenset({"entrypoint", "wmon", "pool"})
 MAX_RAW_DIGITS = 78
 POLICY_MAX_INPUT = 70 * 10**18
@@ -56,12 +60,16 @@ class GasLimits:
     def total(self) -> int:
         return self.wrap + self.approve + self.swap + self.revoke
 
+    def for_steps(self, steps: tuple[str, ...]) -> int:
+        return sum(getattr(self, step) for step in steps)
+
 
 @dataclass(frozen=True)
 class OperatorTrade:
     chain_id: int
     wallet_address: str
     wallet_id: str
+    start: str
     wmon: str
     moe: str
     pool: str
@@ -83,6 +91,13 @@ class OperatorTrade:
     @property
     def usd_ceiling_text(self) -> str:
         return format(self.usd_ceiling, "f")
+
+    @property
+    def steps(self) -> tuple[str, ...]:
+        return STEPS if self.start == "MON" else STEPS[1:]
+
+    def active_gas_total(self) -> int:
+        return self.gas_limits.for_steps(self.steps)
 
 
 def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -141,8 +156,11 @@ def load_trade_file(path: Path) -> OperatorTrade:
 
 
 def parse_trade(value: Any, file_sha256: str) -> OperatorTrade:
-    if type(value) is not dict or set(value) != FIELDS:
+    if type(value) is not dict or not FIELDS <= set(value) or not set(value) <= FIELDS | OPTIONAL_FIELDS:
         raise OperatorError("TRADE_FILE_INVALID", "fields")
+    start = value.get("start", DEFAULT_START)
+    if type(start) is not str or start not in START_FIELDS:
+        raise OperatorError("TRADE_FILE_INVALID", "start")
     addresses = ("wallet_address", "wmon", "moe", "pool", "entrypoint", "token0", "token1")
     if not all(type(value[name]) is str and is_address(value[name]) for name in addresses):
         raise OperatorError("TRADE_FILE_INVALID", "address")
@@ -186,6 +204,7 @@ def parse_trade(value: Any, file_sha256: str) -> OperatorTrade:
         chain_id=value["chain_id"],
         wallet_address=value["wallet_address"],
         wallet_id=value["wallet_id"],
+        start=start,
         wmon=value["wmon"],
         moe=value["moe"],
         pool=value["pool"],

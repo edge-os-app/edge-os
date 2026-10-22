@@ -11,25 +11,51 @@ wallet:
 1. Preflight reads only: chain id, block, MON balance, WMON balance and allowance, pool tokens and
    reserves, code SHA256 of the entrypoint, WMON and pool, nonce, base fee and priority fee.
 2. Plan: expected MOE output with the pinned direct-route formula, the local minimum, and the
-   worst-case cost. The cost is the input value plus gas for all four transactions.
-3. Four type-2 transactions, in order, each signed through `PrivySignerClient.eth_signTransaction`
-   only and sent once with `eth_sendRawTransaction`:
-   - wrap: WMON `deposit()` with value X;
+   worst-case cost. The cost is the input value plus gas for the steps that will run.
+3. Each step gets a gas check and a simulation (see below), then the steps run in order. Each step
+   is signed through `PrivySignerClient.eth_signTransaction` only and sent once with
+   `eth_sendRawTransaction`:
+   - wrap (MON start only): WMON `deposit()` with value X;
    - approve: WMON `approve(entrypoint, X)` exactly;
    - swap: the merged `build_calldata_hex` call for this pool and minimum, value 0;
    - revoke: WMON `approve(entrypoint, 0)`.
 4. Post-checks: allowance is 0, MOE increased by at least the minimum, WMON decreased by exactly X,
    and the entrypoint code SHA256 is unchanged.
 
+A `"start": "WMON"` trade skips the wrap step. It uses WMON already in the wallet, so it needs no
+MON value. It keeps the exact approve, the swap, the revoke to 0 and all post-checks. The nonces are
+`N`, `N+1` and `N+2` for approve, swap and revoke.
+
+## Gas check
+
+Monad charges the gas limit, not the gas used: every receipt shows `gasUsed` equal to the limit.
+A limit below the need makes the step revert, and the wallet still pays the limit. The dry run and
+the live path apply one check before any signature:
+
+- `eth_estimateGas` runs for each step, with the same state overrides as the simulation.
+- `eth_call` runs for each step with the trade file's `gas_limit` in the `gas` field.
+- The plan is refused with `GAS_LIMIT_TOO_LOW` when `gas_limit < ceil(estimate * 1.2)`.
+- The refusal names the step, the limit, the estimate and the required limit.
+- The dry-run output and the live `result.json` report the estimate for each step.
+
+The live path runs this check before it loads the signer key or builds a signer. The check is the
+first external read after the plan; a refusal writes no journal and sends nothing.
+
+The 2026-10-22 15:30Z live evidence shows why this check exists. The swap had `gas_limit` 400000.
+`eth_estimateGas` returns 544967. The swap receipt shows `gasUsed` 400000 of 400000 and status 0.
+`eth_call` with gas 400000 reverts; with gas 600000 it succeeds. The old dry run simulated with
+`eth_call` and no gas field, so it passed a plan that could not run. The wrap, approve and revoke
+steps passed with status 1. Allowance returned to 0.
+
 The swap calldata comes from the merged application module
 `apps/api/src/edge_os_api/execution/direct_route_quote_client.py`. The script does not copy or
 re-implement that builder.
 
-Revoke nonce rule: the four transactions normally use nonces `N`, `N+1`, `N+2` and `N+3`. If the
-swap stops before `eth_sendRawTransaction` (the signer refused or its reply was lost), nonce `N+2`
-is unused, so the script signs the revoke with `N+2`. If the swap was or may have been broadcast
-(sent, unknown outcome, receipt timeout, or status 0), the script keeps `N+3`. The journal records
-the revoke's actual nonce and request hash.
+Revoke nonce rule: a MON start normally uses nonces `N`, `N+1`, `N+2` and `N+3`; a WMON start
+uses `N`, `N+1` and `N+2`. If the swap stops before `eth_sendRawTransaction` (the signer refused or
+its reply was lost), its nonce is unused, so the script signs the revoke with that same nonce. If
+the swap was or may have been broadcast (sent, unknown outcome, receipt timeout, or status 0), the
+script keeps the next nonce. The journal records the revoke's actual nonce and request hash.
 
 ## Honest limits
 
@@ -47,6 +73,10 @@ the revoke's actual nonce and request hash.
 - The dry run uses WMON storage slots `3` (balance) and `4` (allowance) for state overrides. The
   builder's 2026-10-22 live check confirmed this layout. These slots are WMON-specific; they are
   simulation inputs only.
+- The gas estimate is a prediction for the simulation block. The 1.2 margin covers a small state
+  change. It cannot prove the gas need of a later block.
+- A WMON start assumes the wallet already holds the input WMON. The script proves the balance and a
+  zero allowance, but it cannot prove that this WMON came from an earlier wrap or from a transfer.
 - The script uses `latest` reads. Successive reads can span blocks. It cannot prove mempool ordering
   or later pool state.
 - The script uses sequential nonces from one preflight read. It waits for status `1` after each step.
@@ -64,6 +94,7 @@ its SHA256. Unknown fields are refused. A second file with a different amount ne
 | `chain_id` | Must be `143`. |
 | `wallet_address` | The one approved agent wallet. Must match the policy wallet. |
 | `wallet_id` | The one approved Privy wallet id (a public identifier). |
+| `start` | Optional. `MON` (default) wraps MON first. `WMON` skips the wrap and uses WMON already in the wallet. |
 | `wmon`, `moe` | Token addresses. Must match the pinned WMON and MOE. |
 | `pool` | The one pinned Kuru pool. |
 | `entrypoint` | The pinned Kuru Flow entrypoint. |
@@ -81,16 +112,28 @@ its SHA256. Unknown fields are refused. A second file with a different amount ne
 
 The example `trade.example.json` is not approved and not a trade authorization. Its `wmon` and
 `pool` code hashes are zero placeholders. Run the dry run once; on a mismatch the refusal reports
-the observed hash for each role. Freeze the observed hashes in a new file before approval.
+the observed hash for each role. Freeze the observed hashes in a new file before approval. The
+example swap gas limit is `700000`, above `ceil(544967 * 1.2)`, so it passes the check that the
+2026-10-22 trade failed at `400000`.
 
 Worst-case cost, in MON:
 
 ```text
-(input_raw + (wrap + approve + swap + revoke) * max_fee_per_gas) / 10**18
+(input_raw + (active steps) * max_fee_per_gas) / 10**18
 ```
+
+The active steps are `wrap`, `approve`, `swap`, `revoke` for a MON start, and `approve`, `swap`,
+`revoke` for a WMON start. The input value stays in the cost for both starts, because that value
+leaves the wallet as WMON.
 
 `max_fee_per_gas = 2 * base_fee + priority_fee`. The script refuses when the USD value is above the
 trade file ceiling. The ceiling itself is refused above `2.00`.
+
+Preflight also compares the native balance with the worst case of the active steps. A MON start
+needs `input_raw + active gas * max_fee_per_gas`. A WMON start needs only `active gas *
+max_fee_per_gas`. A shortfall is refused with `INSUFFICIENT_NATIVE_BALANCE`. A WMON start also
+refuses a WMON balance below `input_raw` with `INSUFFICIENT_WMON_BALANCE`. The dry-run output and
+`result.json` report the native balance, the required amount and the remaining amount.
 
 ## Commands
 
@@ -125,9 +168,11 @@ Environment variables (live only, except the RPC URL which both modes need):
 
 The script does not read `edge-os/.env` by itself. It reads only the process environment.
 
-`--dry-run` is the default. It builds the four unsigned transactions, simulates them in order with
-`eth_call` and state overrides, prints the plan and cost, and returns. It loads no Privy
-credential, constructs no signer, writes no store and cannot call `eth_sendRawTransaction`.
+`--dry-run` is the default. It builds the unsigned transactions, runs the per-step gas check, and
+simulates each step with `eth_call` that carries the trade file's gas limit and the state overrides.
+It prints the plan, the cost, the balance fit and the estimate for each step, then returns. It loads
+no Privy credential, constructs no signer, writes no store and cannot call
+`eth_sendRawTransaction`.
 
 `--live` requires all of these:
 
@@ -145,8 +190,8 @@ The live store holds two files:
   Events: `prepared`, `before_send`, `sent`, `confirmed`, `sign_refused`, `sign_unknown`,
   `unknown`, `receipt_timeout`. Each step record holds the request hash and nonce; `before_send`
   also holds the signed transaction hash.
-- `result.json`: the plan, every step with nonce, request hash, transaction hash, receipt block and
-  gas used, the post-checks, and the outcome.
+- `result.json`: the plan, the balance fit, the gas estimate for each step, every step with nonce,
+  request hash, transaction hash, receipt block and gas used, the post-checks, and the outcome.
 
 A second run with the same store is refused. The script never sends a step again after an unknown
 outcome. If the swap fails after the approve succeeded, the script attempts the revoke once and
@@ -162,8 +207,9 @@ The command prints one JSON line with `status: REFUSED` and a stable code. Impor
 - `ENV_MISSING`, `KEY_FILE_UNREADABLE`, `KEY_FILE_INVALID`
 - `RPC_ENDPOINT_INVALID`, `RPC_REFUSED`, `RPC_REPLY_LOST`
 - `CHAIN_ID_MISMATCH`, `TOKEN_ORDER_MISMATCH`, `CODE_HASH_MISMATCH`, `ALLOWANCE_NOT_ZERO`
-- `INSUFFICIENT_NATIVE_BALANCE`, `USD_CEILING_EXCEEDED`, `FEE_ABOVE_SIGNER_LIMIT`
-- `SIMULATION_FAILED`, `SIMULATION_BELOW_MINIMUM`
+- `INSUFFICIENT_NATIVE_BALANCE`, `INSUFFICIENT_WMON_BALANCE`, `USD_CEILING_EXCEEDED`,
+  `FEE_ABOVE_SIGNER_LIMIT`
+- `GAS_LIMIT_TOO_LOW`, `SIMULATION_FAILED`, `SIMULATION_BELOW_MINIMUM`
 - `SIGNER_REFUSED`, `SIGNER_REPLY_LOST`, `SIGNER_REPLY_INVALID`
 - `BROADCAST_UNKNOWN`, `RECEIPT_TIMEOUT`, `RECEIPT_STATUS_FAILED`
 
@@ -182,7 +228,8 @@ The script and the host enforce:
 - a zero start allowance;
 - the exact input value and the exact approve amount;
 - the merged calldata builder and the local minimum output;
-- the bounded worst-case cost, including gas for all four transactions, against USD 2.00;
+- the per-step gas estimate against each trade-file gas limit, before any signature;
+- the bounded worst-case cost, including gas for the active steps, against USD 2.00;
 - journal-before-send, no resend, and the bounded receipt wait;
 - revoke to 0, including after a failed swap;
 - the four post-checks.

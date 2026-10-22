@@ -106,7 +106,21 @@ def test_the_simulation_call_shape_is_accepted() -> None:
 
 def test_an_unknown_call_key_is_refused() -> None:
     with pytest.raises(OperatorError) as caught:
-        _rpc(b"{}").call("eth_call", [{"to": ENTRYPOINT, "data": "0x", "gas": "0x1"}, "latest"])
+        _rpc(b"{}").call("eth_call", [{"to": ENTRYPOINT, "data": "0x", "nonce": "0x1"}, "latest"])
+    assert caught.value.code == "RPC_CALL_INVALID"
+
+
+def test_a_call_with_a_gas_limit_and_the_estimate_are_accepted() -> None:
+    call = {"from": ENTRYPOINT, "to": ENTRYPOINT, "value": "0x0", "data": "0x", "gas": "0x61a80"}
+    payload = b'{"jsonrpc":"2.0","id":1,"result":"0x' + b"0" * 64 + b'"}'
+    assert _rpc(payload).call("eth_call", [call, "0x10"]).startswith("0x")
+    estimate = _rpc(b'{"jsonrpc":"2.0","id":1,"result":"0x7a120"}').call("eth_estimateGas", [call, "0x10"])
+    assert estimate == "0x7a120"
+
+
+def test_the_estimate_refuses_an_unknown_call_key() -> None:
+    with pytest.raises(OperatorError) as caught:
+        _rpc(b"{}").call("eth_estimateGas", [{"to": ENTRYPOINT, "data": "0x", "nonce": "0x1"}, "latest"])
     assert caught.value.code == "RPC_CALL_INVALID"
 
 

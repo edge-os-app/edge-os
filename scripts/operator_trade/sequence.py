@@ -1,9 +1,10 @@
-"""The live four-transaction sequence: journal, sign, send once, receipt, next step.
+"""The live transaction sequence: journal, sign, send once, receipt, next step.
 
-The order is fixed: wrap MON to WMON, approve exactly the input, execute the merged direct-route
-swap, revoke the approval to zero. Every send is preceded by an fsynced ``before_send`` record.
-An unknown broadcast stops the run: the same step is never sent again. If the swap fails after the
-approval succeeded, the revoke is attempted once and reported.
+The MON order is fixed: wrap MON to WMON, approve exactly the input, execute the merged direct-route
+swap, revoke the approval to zero. A WMON start runs the last three steps only; the wrap is the one
+step it skips. Every send is preceded by an fsynced ``before_send`` record. An unknown broadcast
+stops the run: the same step is never sent again. If the swap fails after the approval succeeded,
+the revoke is attempted once and reported.
 """
 
 from __future__ import annotations
@@ -153,8 +154,9 @@ def execute(*, rpc: OperatorRpc, trade: OperatorTrade, plan: TradePlan, prefligh
             signer_factory: Callable[[str, int], Any], journal: Journal, now: Callable[[], float] = time.monotonic,
             sleep: Callable[[float], None] = time.sleep) -> SequenceOutcome:
     transactions = build_unsigned(trade, plan, preflight)
+    by_step = {transaction.step: transaction for transaction in transactions}
     steps: list[StepRecord] = []
-    wmon_after_wrap: int | None = None
+    wmon_after_wrap: int | None = preflight.wmon_balance if trade.start == "WMON" else None
     for transaction in transactions:
         try:
             record = _run_step(rpc=rpc, trade=trade, transaction=transaction, signer_factory=signer_factory,
@@ -163,9 +165,9 @@ def execute(*, rpc: OperatorRpc, trade: OperatorTrade, plan: TradePlan, prefligh
             if stopped.record is not None:
                 steps.append(stopped.record)
             if stopped.step == "swap":
-                revoke = transactions[3]
+                revoke = by_step["revoke"]
                 if not stopped.broadcast:
-                    revoke = replace(revoke, nonce=transactions[2].nonce)
+                    revoke = replace(revoke, nonce=by_step["swap"].nonce)
                     journal.append({"event": "revoke_reuses_swap_nonce", "step": "revoke",
                                     "nonce": revoke.nonce, "request_hash": revoke.request_hash(),
                                     "reason": stopped.code, "liability": "NONE"})

@@ -1,4 +1,8 @@
-"""The four unsigned operator transactions and the exact Privy sign request body."""
+"""The unsigned operator transactions and the exact Privy sign request body.
+
+A MON start builds four steps: wrap, approve, swap, revoke. A WMON start builds the last three and
+uses the same nonces in sequence, so the wallet needs no MON value for the swap.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,6 @@ from scripts.operator_trade.calldata import approve_calldata, deposit_calldata, 
 from scripts.operator_trade.plan import TradePlan
 from scripts.operator_trade.trade_file import OperatorTrade
 
-STEPS = ("wrap", "approve", "swap", "revoke")
 SIGNER_METHOD = "eth_signTransaction"
 SIGNER_FIELDS = frozenset({"type", "chain_id", "nonce", "to", "value", "data", "gas_limit",
                            "max_fee_per_gas", "max_priority_fee_per_gas"})
@@ -52,24 +55,25 @@ def _canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
 
+def _step_call(trade: OperatorTrade, plan: TradePlan, step: str) -> tuple[str, int, str]:
+    if step == "wrap":
+        return trade.wmon, plan.input_raw, deposit_calldata()
+    if step == "approve":
+        return trade.wmon, 0, approve_calldata(trade.entrypoint, plan.input_raw)
+    if step == "swap":
+        return trade.entrypoint, 0, swap_calldata(trade, plan.input_raw, plan.minimum_raw)
+    if step == "revoke":
+        return trade.wmon, 0, approve_calldata(trade.entrypoint, 0)
+    raise AssertionError("unknown step")
+
+
 def build_unsigned(trade: OperatorTrade, plan: TradePlan, preflight: Any) -> tuple[UnsignedTransaction, ...]:
     limits = trade.gas_limits
-    nonce = preflight.nonce
-    return (
-        UnsignedTransaction(step="wrap", nonce=nonce, to=trade.wmon, value=plan.input_raw,
-                            data=deposit_calldata(), gas_limit=limits.wrap,
-                            max_fee_per_gas=plan.max_fee_per_gas,
-                            max_priority_fee_per_gas=plan.max_priority_fee_per_gas),
-        UnsignedTransaction(step="approve", nonce=nonce + 1, to=trade.wmon, value=0,
-                            data=approve_calldata(trade.entrypoint, plan.input_raw), gas_limit=limits.approve,
-                            max_fee_per_gas=plan.max_fee_per_gas,
-                            max_priority_fee_per_gas=plan.max_priority_fee_per_gas),
-        UnsignedTransaction(step="swap", nonce=nonce + 2, to=trade.entrypoint, value=0,
-                            data=swap_calldata(trade, plan.input_raw, plan.minimum_raw), gas_limit=limits.swap,
-                            max_fee_per_gas=plan.max_fee_per_gas,
-                            max_priority_fee_per_gas=plan.max_priority_fee_per_gas),
-        UnsignedTransaction(step="revoke", nonce=nonce + 3, to=trade.wmon, value=0,
-                            data=approve_calldata(trade.entrypoint, 0), gas_limit=limits.revoke,
-                            max_fee_per_gas=plan.max_fee_per_gas,
-                            max_priority_fee_per_gas=plan.max_priority_fee_per_gas),
-    )
+    unsigned: list[UnsignedTransaction] = []
+    for index, step in enumerate(trade.steps):
+        to, value, data = _step_call(trade, plan, step)
+        unsigned.append(UnsignedTransaction(
+            step=step, nonce=preflight.nonce + index, to=to, value=value, data=data,
+            gas_limit=getattr(limits, step), max_fee_per_gas=plan.max_fee_per_gas,
+            max_priority_fee_per_gas=plan.max_priority_fee_per_gas))
+    return tuple(unsigned)

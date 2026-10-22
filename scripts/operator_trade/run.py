@@ -1,7 +1,7 @@
 """One operator-run WMON -> MOE trade on Monad chain 143.
 
-Default mode is ``--dry-run``: read the chain, build the four unsigned transactions, simulate them
-with ``eth_call`` and state overrides, print the plan and the worst-case USD cost. It loads no Privy
+Default mode is ``--dry-run``: read the chain, build the unsigned transactions, simulate them with
+``eth_call`` and state overrides, print the plan and the worst-case USD cost. It loads no Privy
 credential, constructs no signer and cannot send.
 
 ``--live`` requires the trade file SHA256, a new empty store directory and environment
@@ -29,7 +29,7 @@ from scripts.operator_trade.credentials import (
     build_signer_factory,
     load_live_environment,
 )
-from scripts.operator_trade.dry_run import simulate
+from scripts.operator_trade.dry_run import Simulation, simulate
 from scripts.operator_trade.errors import OperatorError
 from scripts.operator_trade.journal import Journal, write_result
 from scripts.operator_trade.plan import TradePlan, plan_trade
@@ -70,7 +70,9 @@ def _plan_report(plan: TradePlan) -> dict[str, Any]:
     }
 
 
-def _step_reports(trade: OperatorTrade, plan: TradePlan, preflight: Preflight) -> list[dict[str, Any]]:
+def _step_reports(trade: OperatorTrade, plan: TradePlan, preflight: Preflight,
+                  simulations: tuple[Simulation, ...]) -> list[dict[str, Any]]:
+    estimates = {item.step: item.gas_estimate for item in simulations}
     return [
         {
             "step": transaction.step,
@@ -78,11 +80,28 @@ def _step_reports(trade: OperatorTrade, plan: TradePlan, preflight: Preflight) -
             "to": transaction.to,
             "value": transaction.value,
             "gas_limit": transaction.gas_limit,
+            "gas_estimate": estimates.get(transaction.step),
             "selector": transaction.data[:10],
             "data_sha256": hashlib.sha256(bytes.fromhex(transaction.data[2:])).hexdigest(),
         }
         for transaction in build_unsigned(trade, plan, preflight)
     ]
+
+
+def _gas_estimates(simulations: tuple[Simulation, ...]) -> dict[str, int | None]:
+    return {item.step: item.gas_estimate for item in simulations}
+
+
+def _balance_report(trade: OperatorTrade, plan: TradePlan, preflight: Preflight) -> dict[str, Any]:
+    return {
+        "start": trade.start,
+        "active_steps": list(trade.steps),
+        "gas_limit_total": preflight.active_gas_total,
+        "max_fee_per_gas": plan.max_fee_per_gas,
+        "native_balance_wei": preflight.native_balance,
+        "required_native_wei": preflight.required_native_wei,
+        "remaining_native_wei": preflight.remaining_native_wei,
+    }
 
 
 def run_post_checks(*, rpc: Any, trade: OperatorTrade, plan: TradePlan, preflight: Preflight,
@@ -120,7 +139,7 @@ def run_dry(*, trade: OperatorTrade, environ: dict[str, str], transport: Any, rp
                       reserve_wmon=preflight.reserve_wmon, reserve_moe=preflight.reserve_moe)
     simulations = simulate(rpc, trade, plan, preflight)
     warnings: list[str] = []
-    if plan.input_above_signer_safe_integer:
+    if trade.start == "MON" and plan.input_above_signer_safe_integer:
         warnings.append(
             "wrap value is above 2**53-1: the installed PrivySignerClient refuses it until the lane-3 "
             "signer change; a live run stops before signing the wrap"
@@ -132,8 +151,11 @@ def run_dry(*, trade: OperatorTrade, environ: dict[str, str], transport: Any, rp
         "chain_id": preflight.chain_id,
         "block": preflight.block_number,
         "wallet_address": trade.wallet_address,
+        "start": trade.start,
         "plan": _plan_report(plan),
-        "steps": _step_reports(trade, plan, preflight),
+        "balance": _balance_report(trade, plan, preflight),
+        "steps": _step_reports(trade, plan, preflight, simulations),
+        "gas_estimates": _gas_estimates(simulations),
         "simulations": [asdict(item) for item in simulations],
         "credentials_read": False,
         "signed": 0,
@@ -154,13 +176,15 @@ def run_live(*, trade: OperatorTrade, confirm: str, store: str | None, environ: 
     if not store:
         raise OperatorError("STORE_REQUIRED")
     Journal.check_store(Path(store))
-    environment: LiveEnvironment = load_live_environment(environ)
     rpc = _rpc_from_environment(environ, rpc, transport)
     preflight = read_preflight(rpc, trade)
     plan = plan_trade(trade, base_fee=preflight.base_fee, priority_fee=preflight.priority_fee,
                       reserve_wmon=preflight.reserve_wmon, reserve_moe=preflight.reserve_moe)
-    print_fn(json.dumps({"mode": "LIVE", "trade_file_sha256": trade.file_sha256,
-                         "plan": _plan_report(plan)}, indent=1, sort_keys=True))
+    simulations = simulate(rpc, trade, plan, preflight)
+    environment: LiveEnvironment = load_live_environment(environ)
+    print_fn(json.dumps({"mode": "LIVE", "trade_file_sha256": trade.file_sha256, "start": trade.start,
+                         "plan": _plan_report(plan), "balance": _balance_report(trade, plan, preflight),
+                         "gas_estimates": _gas_estimates(simulations)}, indent=1, sort_keys=True))
     journal = Journal.create(Path(store))
     factory = signer_factory or build_signer_factory(environment, privy_transport or StdlibHttpTransport())
     started = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -189,7 +213,10 @@ def run_live(*, trade: OperatorTrade, confirm: str, store: str | None, environ: 
         "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "chain_id": preflight.chain_id,
         "wallet_address": trade.wallet_address,
+        "start": trade.start,
         "plan": _plan_report(plan),
+        "balance": _balance_report(trade, plan, preflight),
+        "gas_estimates": _gas_estimates(simulations),
         "outcome": "SUCCESS" if outcome.ok and post is not None and post.all_true() else "STOPPED",
         "failed_step": outcome.failed_step,
         "error_code": outcome.error_code,
@@ -201,7 +228,7 @@ def run_live(*, trade: OperatorTrade, confirm: str, store: str | None, environ: 
         "post_checks": asdict(post) if post is not None else None,
         "warnings": ([
             "wrap value is above 2**53-1: the installed PrivySignerClient refuses it until the lane-3 signer change"
-        ] if plan.input_above_signer_safe_integer else []),
+        ] if trade.start == "MON" and plan.input_above_signer_safe_integer else []),
     }
     write_result(Path(store), result)
     print_fn(json.dumps({"mode": "LIVE", "outcome": result["outcome"],
