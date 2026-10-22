@@ -583,6 +583,36 @@ class ObservedTokenMechanics(unittest.TestCase):
         self.assertFalse([r for r in claim["reasons"] if r["code"].startswith("TOKEN_MECHANICS_")])
 
 
+class DeclaredFeasibilityFloors(unittest.TestCase):
+    """A declared floor is shown beside the verdict with its counted slots; no floor adds no reason."""
+
+    def observations(self, status: str, partitions: list) -> dict:
+        observations = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+        observations["feasibility"] = {"status": status, "partitions": partitions}
+        return observations
+
+    def test_a_feasible_partition_shows_its_floors_and_counted_slots(self) -> None:
+        rows = [{"name": "moe-window", "schedule_slots": 4, "usable": 2, "required_triggered": 1,
+                 "required_control": 1, "required_total": 2, "shortfall": 0,
+                 "excluded_outcome_window": 2, "excluded_outcome_coverage": 0, "excluded_availability": 0,
+                 "excluded_warmup": 0}]
+        got = qualify(base_profile(), self.observations("FEASIBLE", rows))
+        claim = got["claims"]["SCHEDULE_FEASIBILITY"]
+        self.assertEqual(claim["verdict"], "QUALIFIED")
+        basis = [r for r in claim["reasons"] if r["code"] == "DECLARED_FLOORS"]
+        self.assertEqual(len(basis), 1)
+        self.assertEqual(basis[0]["kind"], "BASIS")
+        for text in ("moe-window", "triggered 1", "control 1", "demo floors, not statistical evidence",
+                     "usable 2 of 4"):
+            self.assertIn(text, basis[0]["detail"])
+
+    def test_undeclared_floors_stay_unresolved_and_add_no_reason(self) -> None:
+        got = qualify(base_profile(), self.observations("UNDECLARED", []))
+        claim = got["claims"]["SCHEDULE_FEASIBILITY"]
+        self.assertEqual(claim["verdict"], "UNRESOLVED")
+        self.assertNotIn("DECLARED_FLOORS", {r["code"] for r in claim["reasons"]})
+
+
 class PerClaimQualification(unittest.TestCase):
     def run_case(self, case: dict) -> dict:
         profile = real_pages_profile() if case.get("profile") == "SYN_Q0_PAGES" else base_profile()

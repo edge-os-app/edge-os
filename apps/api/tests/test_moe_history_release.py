@@ -28,7 +28,7 @@ from edge_os_api.core.research.operating_release import (
 from edge_os_api.research import history_payload_binding
 
 RELEASE_ID = "actual-moe-history-nansen-20261022/1"
-RELEASE_SHA256 = "2223a33eae122c6958c03ff08351144f6b3c87d46c1b201594be1bf66aa25b66"
+RELEASE_SHA256 = "2d359daca6f9ca131ee6f90ca1efb97a6f12af4aa285104ebd062366648564c5"
 OLD_RELEASE_ID = "actual-moe-nansen-demo-20261018/1"
 WINDOW = {"start_utc": "2026-10-22T07:35:00Z", "end_utc": "2026-10-22T07:55:00Z"}
 SCAN = {"from_block": 115554031, "to_block_exclusive": 115558007}
@@ -123,6 +123,34 @@ def test_a_wrong_scan_is_refused() -> None:
     with pytest.raises(ReleaseRefused) as refused:
         history_payload_binding.check_definition("ACTUAL", changed_history(scan=scan))
     assert refused.value.code == "forward_history_binding_invalid"
+
+
+def test_the_history_limits_are_declarable_and_fit_the_default_owner_caps() -> None:
+    from edge_os_api.core.request_schemas import HistoryResourceBounds
+    from edge_os_api.core.settings import Settings
+
+    limits = history().limits
+    assert HistoryResourceBounds(**limits).model_dump() == limits  # a declaration can carry these exact bounds
+    assert limits == {"provider_requests": 13, "compute_seconds": 600, "max_pages": 4, "max_rows": 2000,
+                      "max_bytes": 4194304, "deadline_seconds": 600}
+    assert history().client_bounds == {"deadline_seconds": 120, "connect_timeout_seconds": 15,
+                                       "max_response_bytes": 2097152, "max_request_bytes": 65536,
+                                       "max_blocks_per_page": 10000}
+    assert history().corroboration_sample_size == 8
+    assert limits["max_pages"] + 1 + history().corroboration_sample_size <= limits["provider_requests"]
+    nansen = definition().nansen
+    assert nansen is not None
+    fields = Settings.model_fields
+    assert (limits["provider_requests"] + nansen.limits["max_requests"]
+            <= fields["research_budget_provider_requests"].default)
+    assert (limits["compute_seconds"] + nansen.compute_seconds
+            <= fields["research_budget_compute_seconds"].default)
+
+
+def test_the_declared_demo_floors_are_recorded_with_their_source() -> None:
+    partitions = history().provider_facts["feasibility_claim"]["partitions"]
+    assert [{"required_triggered": p["required_triggered"], "required_control": p["required_control"]}
+            for p in partitions] == [{"required_triggered": 1, "required_control": 1}]
 
 
 def test_the_release_records_the_observed_token_mechanics_basis_and_never_plain_qualified() -> None:

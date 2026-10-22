@@ -144,12 +144,12 @@ def _moe_history() -> HistoryRelease:
         quicknode_credential_slot="QUICKNODE_API_URL",
         profile=_MOE_PROFILE,
         scan={"from_block": 115554031, "to_block_exclusive": 115558007},
-        corroboration_sample_size=6,
+        corroboration_sample_size=8,
         provider_facts={BINDING_FACT: _MOE_ANCHOR, **_MOE_PROVIDER_FACTS},
-        limits={"provider_requests": 17, "compute_seconds": 900, "max_pages": 8, "max_rows": 10000,
-                "max_bytes": 67108864, "deadline_seconds": 1200},
-        client_bounds={"deadline_seconds": 1200, "connect_timeout_seconds": 15,
-                       "max_response_bytes": 8388608, "max_request_bytes": 65536, "max_blocks_per_page": 10000},
+        limits={"provider_requests": 13, "compute_seconds": 600, "max_pages": 4, "max_rows": 2000,
+                "max_bytes": 4194304, "deadline_seconds": 600},
+        client_bounds={"deadline_seconds": 120, "connect_timeout_seconds": 15,
+                       "max_response_bytes": 2097152, "max_request_bytes": 65536, "max_blocks_per_page": 10000},
     )
 
 

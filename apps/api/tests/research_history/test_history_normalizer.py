@@ -300,3 +300,13 @@ def test_observed_state_without_its_evidence_record_is_unresolved() -> None:
     assert claim["verdict"] == "UNRESOLVED"
     assert "TOKEN_MECHANICS_OBSERVATION_UNBOUND" in {reason["code"] for reason in claim["reasons"]}
     assert history["overall"] != "QUALIFIED"
+
+
+def test_declared_feasibility_floors_are_shown_with_their_counts() -> None:
+    history = _history()
+    claim = history["qualification"]["claims"]["SCHEDULE_FEASIBILITY"]
+    assert claim["verdict"] == "QUALIFIED"
+    basis = [reason for reason in claim["reasons"] if reason["code"] == "DECLARED_FLOORS"]
+    assert len(basis) == 1 and basis[0]["kind"] == "BASIS"
+    for text in ("triggered 1", "control 1", "demo floors, not statistical evidence", "usable"):
+        assert text in basis[0]["detail"]

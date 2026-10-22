@@ -785,7 +785,8 @@ def feasibility(claim: Mapping[str, Any], segments: Sequence[Mapping[str, Any]],
                 usable += 1
         required = None if triggered is None else triggered + control
         report.append({
-            "name": partition["name"], "schedule_slots": len(slots), "usable": usable, "required_total": required,
+            "name": partition["name"], "schedule_slots": len(slots), "usable": usable,
+            "required_triggered": triggered, "required_control": control, "required_total": required,
             "shortfall": None if required is None else max(0, required - usable),
             "excluded_outcome_window": counts["outcome_window"], "excluded_outcome_coverage": counts["outcome_coverage"],
             "excluded_availability": counts["availability"], "excluded_warmup": counts["warmup"],
@@ -1458,6 +1459,14 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
     rows_problem = _feasibility_rows(shown) if status == "FEASIBLE" else None
     if rows_problem is not None:
         schedule.add(*rows_problem)
+    if status == "FEASIBLE" and rows_problem is None:
+        for row in shown:  # the declared floors and the counted slots, shown beside the verdict
+            triggered, control = row.get("required_triggered"), row.get("required_control")
+            if triggered is None or control is None:  # a static observation without the split adds no reason
+                continue
+            schedule.add("BASIS", "DECLARED_FLOORS",
+                         f"{row['name']}: required triggered {triggered} + control {control} "
+                         f"(demo floors, not statistical evidence); usable {row['usable']} of {row['schedule_slots']}")
     if status == "INFEASIBLE":
         schedule.add("FAILED_CHECK", "INFEASIBLE_BEFORE_OUTCOMES", "declared sample floors cannot be met")
     elif status != "FEASIBLE":

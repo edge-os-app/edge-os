@@ -27,7 +27,7 @@ from edge_os_api.main import create_app
 RELAY_ID = "hermes-first-call-1"
 RELAY_SHA = "3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f"
 RESEARCH_ID = "actual-moe-history-nansen-20261022/1"
-RESEARCH_SHA = "2223a33eae122c6958c03ff08351144f6b3c87d46c1b201594be1bf66aa25b66"
+RESEARCH_SHA = "2d359daca6f9ca131ee6f90ca1efb97a6f12af4aa285104ebd062366648564c5"
 IMAGE = "sha256:" + "1" * 64
 GATE_SHA = "2" * 64
 DEPLOYMENT = "hosted-demo-1"

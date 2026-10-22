@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 RELEASE_ID = "actual-moe-history-nansen-20261022/1"
-RELEASE_SHA256 = "2223a33eae122c6958c03ff08351144f6b3c87d46c1b201594be1bf66aa25b66"
+RELEASE_SHA256 = "2d359daca6f9ca131ee6f90ca1efb97a6f12af4aa285104ebd062366648564c5"
 # The one report request the release permits, pinned independently of the definition it must match.
 EXPECTED_REQUEST: dict[str, Any] = {
     "token_address": "0xd8e004acba279417c04c0633cb5a21ceca207777",

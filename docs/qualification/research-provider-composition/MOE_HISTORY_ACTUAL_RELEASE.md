@@ -14,7 +14,7 @@ exact SHA-256 to `core/research/operating_release.py` (`APPROVED_RELEASES`). The
 |---|---|
 | `release_id` | `actual-moe-history-nansen-20261022/1` |
 | `kind` | `ACTUAL` |
-| `release_sha256` | `2223a33eae122c6958c03ff08351144f6b3c87d46c1b201594be1bf66aa25b66` (canonical content, 34,791 bytes) |
+| `release_sha256` | `2d359daca6f9ca131ee6f90ca1efb97a6f12af4aa285104ebd062366648564c5` (canonical content, 34,787 bytes) |
 | history source | `actual-moe-wmon-fwd20m/1` |
 | history window | `2026-10-22T07:35:00Z` to `2026-10-22T07:55:00Z`, fixed from the run |
 | scan | `from_block` `115554031`, `to_block_exclusive` `115558007` |
@@ -64,6 +64,8 @@ therefore reproduce the anchored graph, as the payload checker requires.
 | V2 `Swap` topic0 | `0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822` |
 | P6 source lookup | MonadVision with Sourcify, `https://sourcify-api-monad.blockvision.org/`; MOE source `NOT_VERIFIED` |
 
+Feasibility floors are 1 triggered and 1 control for the 20-minute partition. The qualifier adds a `BASIS` reason to `SCHEDULE_FEASIBILITY` that names those floors, the counted usable slots and that they are demo floors, not statistical evidence. The floors and that reason come from the controller decisions above.
+
 Token mechanics is `QUALIFIED_BY_OBSERVATION`. It requires the evidence SHA-256
 `5ad3a7c3e11f48e6f32fe2ab9f1edf7bf968962e4854c98d16e70327cfc9e73b` (`MOE_BEHAVIOR_FINDINGS1.md`), basis
 `OBSERVED_BEHAVIOR`, a 12-hour window and `source_proof` false. The qualifier shows that basis in every result that
@@ -76,9 +78,10 @@ names token mechanics and never labels it plain `QUALIFIED`.
 | HyperSync endpoint / slot | `https://monad.hypersync.xyz` / `HYPERSYNC_API_KEY` |
 | QuickNode host / slot | `virulent-necessary-patina.monad-mainnet.quiknode.pro` / `QUICKNODE_API_URL` |
 | Nansen endpoint / slot | `https://api.nansen.ai` / `NANSEN_API_KEY` |
-| History limits | requests 17, compute 900 s, pages 8, rows 10000, bytes 67108864, deadline 1200 s |
-| History client bounds | deadline 1200 s, connect 15 s, response 8388608 bytes, request 65536 bytes, 10000 blocks per page |
-| Corroboration sample | 6 receipts |
+| History limits | requests 13, compute 600 s, pages 4, rows 2000, bytes 4194304, deadline 600 s (operating packet §4.1) |
+| History client bounds | deadline 120 s, connect 15 s, response 2097152 bytes, request 65536 bytes, 10000 blocks per page (operating packet §4.1) |
+| Corroboration sample | 8 receipts (operating packet §4.1) |
+| Feasibility floors | `required_triggered` 1 and `required_control` 1 for the 20-minute partition; demo floors, not statistical evidence. Source: controller decision `root/DECISION_B2.md` SHA256 `b3fc7e47a0121c8f510dbe3ff6ece2b7f4ae40409db475302906473179b07af8` |
 | Nansen limits | requests 2, pages 1, bytes 2000000, credits `6`, 100 per page; deadline 300 s, compute 300 s |
 
 The history transport is the accepted `StdlibHttpTransport`. The Nansen transport is the accepted network factory.
@@ -91,7 +94,10 @@ This repository note carries only the sanitized result. The private packet and r
 | Record | SHA-256 |
 |---|---|
 | Ticket packet `COMMON1.md` | `c18ed897e0bd0a1ce0833302dadb9e191afc9ba402fc777a9aa08629a64f22d3` |
+| Limits source `OPERATING_PACKET.md` | `docs/qualification/actual-research-demo/OPERATING_PACKET.md` §4.1 |
 | Amendment `AMEND2.md` | `f2a767b50020cad5efc867cd822e4c7592f2fb7a39ad1b755d3716373c8f71ae` |
+| Floors decision `DECISION_B2.md` | `b3fc7e47a0121c8f510dbe3ff6ece2b7f4ae40409db475302906473179b07af8` |
+| Floors disclosure decision `DECISION_B2_C1.md` | `72a59625de025589217e97473f8769f65fe7cb3b9fdc0ed1f72bad181b00591d` |
 | Token-mechanics evidence | `5ad3a7c3e11f48e6f32fe2ab9f1edf7bf968962e4854c98d16e70327cfc9e73b` |
 
 The builder accepted observed behavior as the token-mechanics proof on 2026-10-21. The controller ran the recorder as

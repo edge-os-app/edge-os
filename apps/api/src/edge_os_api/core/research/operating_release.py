@@ -34,7 +34,7 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 # removing an entry is a reviewed code change that cites the builder's recorded approval of that exact release.
 APPROVED_RELEASES: Mapping[str, str] = {
     "actual-moe-history-nansen-20261022/1":
-        "2223a33eae122c6958c03ff08351144f6b3c87d46c1b201594be1bf66aa25b66",
+        "2d359daca6f9ca131ee6f90ca1efb97a6f12af4aa285104ebd062366648564c5",
 }
 # The reserved `HistoryRelease.provider_facts` key of an optional frozen recorder handoff: {handoff_json, handoff_sha256}.
 BINDING_FACT = "forward_history_binding"
