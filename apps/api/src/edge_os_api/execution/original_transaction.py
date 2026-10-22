@@ -88,6 +88,10 @@ class RpcError(Exception):
     """A JSON-RPC error reply. It proves nothing about whether an effect happened."""
 
 
+class SignerPolicyDenied(RpcError):
+    """The signer refused by wallet policy before signing. Nothing was signed or sent."""
+
+
 class RouteQuoteClient(Protocol):
     def quote(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
@@ -378,6 +382,8 @@ class OriginalTransactionTransport:
             if signer is None:
                 return self._unsent(journal, "SIGNER_UNAVAILABLE")
             reply = signer.rpc(context.wallet_id, prepared_values["signing_request"]["body"])
+        except SignerPolicyDenied:
+            return self._unsent(journal, "WALLET_POLICY_REFUSED")
         except (ReplyLost, TimeoutError, OSError, RpcError):
             return self._possible(journal, "SIGNING_UNKNOWN")
         if is_signer_refusal(reply):

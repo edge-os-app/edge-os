@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy import text
 
 import financial_flows as ff
-from edge_os_api.execution.original_transaction import JournalError, ReplyLost, RpcError
+from edge_os_api.execution.original_transaction import JournalError, ReplyLost, RpcError, SignerPolicyDenied
 
 RECORDINGS = Path(__file__).parent / "fixtures" / "original_transaction" / "original_transaction_v1.json"
 PUBLISHED_SENDER = "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23"  # eth-account docs example key's address
@@ -203,6 +203,21 @@ def test_a_signer_refusal_sends_nothing_and_releases_the_reservations(original, 
     assert (job["state"], job["outcome"]) == ("COMPLETED", "DENIED_UNSENT"), job["reason"]
     body = action(original, owner_a, job["action_id"])
     assert original_of(body)["stage"] == "REFUSED_UNSENT" and original_of(body)["reason"] == "SIGNER_REFUSED"
+    assert "RESERVED" not in reservation_states(body)
+    assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
+
+
+def policy_denied(*_):
+    raise SignerPolicyDenied("PRIVY_POLICY_VIOLATION")
+
+
+def test_a_wallet_policy_denial_exposes_the_refusal_and_releases_the_reservations(original, owner_a, recordings):
+    Inject(original, signer=lambda inner: Delegate(inner, before=policy_denied))
+    job = submitted(original, owner_a, "policy-refuse-fx-original")
+    assert (job["state"], job["outcome"]) == ("COMPLETED", "DENIED_UNSENT"), job["reason"]
+    body = action(original, owner_a, job["action_id"])
+    assert body["refusal"] == {"reason": "WALLET_POLICY_REFUSED", "message": "Refused by the wallet policy."}
+    assert original_of(body)["stage"] == "REFUSED_UNSENT" and original_of(body)["reason"] == "WALLET_POLICY_REFUSED"
     assert "RESERVED" not in reservation_states(body)
     assert calls(recordings).get("broadcast.eth_sendRawTransaction", 0) == 0
 

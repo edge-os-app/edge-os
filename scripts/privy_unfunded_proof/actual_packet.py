@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from edge_os_api.execution.privy_policy_reply import reply_code
 from scripts.privy_unfunded_proof import specimens
 from scripts.privy_unfunded_proof.actual_transport import MAX_SAFE_INTEGER, QUANTITY_FIELDS, wire_quantity
 from scripts.privy_unfunded_proof.specimens import (
@@ -666,28 +667,6 @@ def _sealed_packet_registry(packet: ActualProofPacket, sealed_sha256: str) -> di
 
 UNFUNDED_POLICY_PACKET = _build_unfunded_policy_packet()
 CODE_OWNED_PACKET_APPROVALS = _sealed_packet_registry(UNFUNDED_POLICY_PACKET, SEALED_PACKET_SHA256)
-
-
-def reply_code(body: Any) -> str | None:
-    """Return the Privy error code from a flat or nested error body, or None.
-
-    Privy documents ``policy_violation`` but not one body shape. The accepted
-    runner reads ``code``, ``error.code`` and the string ``error``; it never keeps
-    any other reply text.
-    """
-    if not isinstance(body, Mapping):
-        return None
-    code = body.get("code")
-    if isinstance(code, str):
-        return code
-    error = body.get("error")
-    if isinstance(error, str):
-        return error
-    if isinstance(error, Mapping):
-        nested = error.get("code")
-        if isinstance(nested, str):
-            return nested
-    return None
 
 
 if __name__ == "__main__":
