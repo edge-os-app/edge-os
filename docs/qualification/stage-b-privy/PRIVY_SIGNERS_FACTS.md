@@ -113,7 +113,8 @@ has the same test as `isUnifiedWallet` (`e.recovery_method===\`privy-v2\``). In 
 `if(o.delegated)return{user:e};` runs **before** the "Specifying signers…" throw. So an already-delegated on-device
 wallet resolves successfully **without adding our signer**. Only a read-back of the wallet (L4) detects this. The
 app-level mode values are `'legacy-embedded-wallets-only' | 'user-controlled-server-wallets-only'`
-(`types-Bz_bVOEe.d.ts` line 2327). They decide how new wallets are created.
+(`types-Bz_bVOEe.d.ts` line 2327). They decide how new wallets are created: `dist/esm/useWallets-DrhruOac.mjs`
+branches on `if("user-controlled-server-wallets-only"===s.embeddedWallets.mode)` in the create path.
 
 **1h. Development mode. UNKNOWN.** Privy separates environments by app, not by an SDK flag.
 https://docs.privy.io/basics/get-started/dashboard/create-new-app (search index): "create a new app for each
@@ -205,8 +206,8 @@ https://docs.privy.io/recipes/wallets/conditional-signer-policies (search index)
 transaction, Privy evaluates only that signer's override policy — not the policies of other signers." One search
 summary described a page listing several policy sources per request (wallet policy, owner policies, signer
 overrides). A targeted search did not return that page, so the attribution is unverified. Neither source states
-what happens when a user wallet also has base `policy_ids`, so the precedence is UNKNOWN. *Smallest live check:* L5 (one
-denial-first row on a test user wallet that has no base policy).
+what happens when a user wallet also has base `policy_ids`, so the precedence is UNKNOWN. *Smallest live check:* L5 (positive
+control, then denial rows, on a test user wallet that has no base policy).
 
 **3c. Same enforcement on user wallets. INFERENCE.** Same policy resource (3a), same `/v1/wallets/{id}/rpc` route
 (`@privy-io/routes@0.4.5`: `` xt={path:`/api/v1/wallets/:wallet_id/rpc`,method:`POST`} ``), and user TEE wallets
@@ -244,11 +245,11 @@ opens no modal. In contrast, `delegateWallet` passes `showDelegationUIs:!0`. The
 grants access" (1b). The user's authorization is the user-signer signature over the `PATCH`
 (`signWithUserSigner`). The modal flows are the on-device ones: https://docs.privy.io/wallets/using-wallets/signers/revoke-wallets
 (search index): "When invoked, the revokeWallets method will open a Privy modal where the user can either confirm the
-revocation of their signer." **Our app must build its own consent screen.** The Privy enterprise terms
+revocation of their signer." INFERENCE: **our app must build its own consent screen.** The Privy enterprise terms
 (https://www.privy.io/enterprise-terms-of-service, Section 4, search index) require "describing to the User…
 exactly how the Delegated Action or Server Wallet (as applicable) will function, including the rights that you or
 any third-party will have to sign transactions on behalf of the applicable User." Whether this applies to our
-(non-enterprise) plan is UNKNOWN. It is the right consent content either way. INFERENCE:
+(non-enterprise) plan is UNKNOWN. INFERENCE: it is the right consent content either way. INFERENCE:
 `signWithUserSigner` may raise an MFA prompt if the judge enrolled MFA. Not checked.
 
 ## 5. Rate limits, costs, plans
@@ -312,9 +313,9 @@ Very probably yes, but it is not proven. Current SDKs (`@privy-io/react-auth` �
 call `useSigners().addSigners({ address, signers: [{ signerId: "zu1qjdfqlbcq1ct7sdxendgg", policyIds: ["c30racyru6duaipj815cvjce"] }] })`.
 This becomes a user-signed `PATCH /api/v1/wallets/{id}` that appends
 `{ signer_id, override_policy_ids }`. The policy is referenced by ID. Neither SDK checks who owns it, and the docs
-describe override policies as replacing the wallet's base policy for that signer's requests. Ownership stays where
-we need it: only the builder's owner key can edit or delete `c30r…`, and the judge can only remove or rewrite their
-own signer entry. Four things are not settled by any source available here. (a) Whether the Privy server accepts an
+describe override policies as replacing the wallet's base policy for that signer's requests. Ownership should stay
+where we need it (INFERENCE, 2b; provider negative proof `NOT_RUN`): only the builder's owner key should be able to
+edit or delete `c30r…`, and the judge should only be able to remove or rewrite their own signer entry. Four things are not settled by any source available here. (a) Whether the Privy server accepts an
 override policy owned by a different key quorum than the wallet owner. (b) Whether judges' wallets in app `cmuyj…`
 are TEE wallets, and whether the "Server-side access" toggle also matters for TEE apps. (c) Whether the user-wallet override path enforces the same 19 rows as the server-wallet
 proof, if the proof used wallet `policy_ids`. (d) The precedence if a judge wallet also has a base policy. A judge
