@@ -1,4 +1,4 @@
-"""The Orbio release draft is a record nothing selects; the adopted OpenRouter release is unchanged (CLOUD-ORBIO-RELEASE).
+"""Nothing selects the Orbio release draft, and the adopted OpenRouter release is unchanged (CLOUD-ORBIO-RELEASE).
 
 The draft in docs/qualification/orbio-release/ is read as bytes only. Nothing here opens a socket, reads a key or
 contacts Orbio. See `docs/qualification/orbio-release/ORBIO_RELEASE_DRAFT.md`.
