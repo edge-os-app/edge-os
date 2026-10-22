@@ -25,6 +25,18 @@ def test_amounts_that_floats_would_round_stay_exact() -> None:
     assert cost["settled_usd"] == "0.300000001"  # 0.1 + 0.2 as floats is 0.30000000000000004
 
 
+def test_charges_the_runner_stored_in_exponent_form_add_up_to_a_plain_decimal() -> None:
+    # The runner stores `str(Decimal.normalize())`, which writes very small and round amounts with an exponent.
+    cost = study_model_cost([attempt("SETTLED", "5E-7"), attempt("SETTLED", "1E+1")])
+    assert cost == {"settled_usd": "10.0000005", "settled_calls": 2, "unknown_calls": 0}
+
+
+def test_a_settled_charge_that_is_not_a_finite_amount_is_unknown() -> None:
+    cost = study_model_cost([attempt("SETTLED", "0.5"), attempt("SETTLED", "NaN"), attempt("SETTLED", "not-usd"),
+                             attempt("SETTLED", "-1")])
+    assert cost == {"settled_usd": "0.5", "settled_calls": 1, "unknown_calls": 3}
+
+
 def test_unknown_states_and_missing_records_are_counted_and_never_added() -> None:
     cost = study_model_cost([
         attempt("SETTLED", "0.0074285"),

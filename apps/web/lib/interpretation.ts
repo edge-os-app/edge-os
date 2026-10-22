@@ -52,11 +52,24 @@ export function describeUsage(usage: AttemptUsage): string {
     : "Unknown";
 }
 
-const DECIMAL_USD = /^\d+(\.\d+)?$/;
+const DECIMAL_USD = /^(\d+)(?:\.(\d+))?(?:E([+-]?\d{1,2}))?$/i;
 
-/** A USD amount exactly as the API stored it, never parsed into a float. Anything else is not a known amount. */
+/**
+ * A USD amount from the stored decimal string, never parsed into a float. A plain decimal is shown as stored; the
+ * runner writes very small and round amounts with an exponent ("5E-7", "1E+1"), and those digits are moved, not
+ * rounded, into a plain decimal. Anything else is not a known amount.
+ */
 function usd(amount: string | null): string | null {
-  return amount !== null && DECIMAL_USD.test(amount) ? `$${amount}` : null;
+  const match = amount === null ? null : DECIMAL_USD.exec(amount);
+  if (match === null) return null;
+  const [plain, whole, fraction = "", exponent] = match;
+  if (exponent === undefined) return `$${plain}`;
+  const digits = whole + fraction;
+  const point = whole.length + Number(exponent);
+  const integer = point <= 0 ? "0" : digits.slice(0, point).padEnd(point, "0");
+  const decimals = point <= 0 ? "0".repeat(-point) + digits : digits.slice(point);
+  const trimmed = decimals.replace(/0+$/, "");
+  return `$${integer.replace(/^0+(?=\d)/, "")}${trimmed ? `.${trimmed}` : ""}`;
 }
 
 /** An attempt's model cost: its charge only when the ledger settled it. Unknown, released or missing spend is Unknown. */

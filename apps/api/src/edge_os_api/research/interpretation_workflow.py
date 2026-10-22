@@ -20,7 +20,7 @@ import logging
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select, text
@@ -143,15 +143,27 @@ def public_attempt(view: AttemptView) -> dict[str, Any]:
             "answer_ref": identity.answer_ref, "previous_revision_id": identity.previous_revision_id}}
 
 
+def settled_charge(spend: dict[str, Any]) -> Decimal | None:
+    """The attempt's cost when the ledger SETTLED it with a finite, non-negative charge; otherwise the cost is unknown."""
+    if spend["state"] != "SETTLED" or not isinstance(spend["charge_usd"], str):
+        return None
+    try:
+        charge = Decimal(spend["charge_usd"])
+    except InvalidOperation:
+        return None
+    return charge if charge.is_finite() and charge >= 0 else None
+
+
 def study_model_cost(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """The request's model cost from its public attempts: the exact `Decimal` sum of the SETTLED charges.
 
-    Every other spend state, and an attempt without a spend record, is unknown: it is counted, never added as zero, and
-    the sum is then only a lower bound. With no settled call there is no amount (`None`), not a zero.
+    The charges are the decimal strings the guarded runner saved from the ledger, summed as `Decimal` and returned as a
+    plain decimal string (no exponent, no float). Every other spend state, and an attempt without a spend record, is
+    unknown: it is counted, never added as zero, and the sum is then only a lower bound. With no settled call there is
+    no amount (`None`), not a zero.
     """
-    spends = [a["spend"] for a in attempts]
-    charges = [s["charge_usd"] for s in spends if s["state"] == "SETTLED" and s["charge_usd"] is not None]
-    total = sum((Decimal(c) for c in charges), Decimal(0))
+    charges = [c for c in (settled_charge(a["spend"]) for a in attempts) if c is not None]
+    total = sum(charges, Decimal(0))
     return {"settled_usd": format(total.normalize(), "f") if charges else None, "settled_calls": len(charges),
             "unknown_calls": len(attempts) - len(charges)}
 

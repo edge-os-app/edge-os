@@ -62,10 +62,21 @@ describe("model cost on the saved research result", () => {
     expect(describeAttemptCost(missing)).toBe("Unknown");
     expect(describeAttemptCost({ state: "RELEASED", charge_usd: "0" })).toBe("Unknown");
     expect(describeAttemptCost({ state: "SETTLED", charge_usd: null })).toBe("Unknown");
-    expect(describeAttemptCost({ state: "SETTLED", charge_usd: "1E+1" })).toBe("Unknown");
+    expect(describeAttemptCost({ state: "SETTLED", charge_usd: "-1" })).toBe("Unknown");
     expect(describeModelCost({ settled_usd: "0.0074285", settled_calls: 1, unknown_calls: 1 })).toBe("at least $0.0074285, 1 call unknown");
     expect(describeModelCost({ settled_usd: null, settled_calls: 0, unknown_calls: 1 })).toBe("unknown, 1 call unknown");
     expect(describeModelCost({ settled_usd: "0.3", settled_calls: 2, unknown_calls: 0 })).toBe("$0.3");
+  });
+});
+
+describe("charges the runner stored in exponent form", () => {
+  it("shows them as plain decimals, digit for digit", () => {
+    expect(describeAttemptCost({ state: "SETTLED", charge_usd: "5E-7" })).toBe("$0.0000005");
+    expect(describeAttemptCost({ state: "SETTLED", charge_usd: "1E-9" })).toBe("$0.000000001");
+    expect(describeAttemptCost({ state: "SETTLED", charge_usd: "1E+1" })).toBe("$10");
+    expect(describeAttemptCost({ state: "SETTLED", charge_usd: "1.25E+2" })).toBe("$125");
+    expect(describeAttemptCost({ state: "SETTLED", charge_usd: "1.5E-3" })).toBe("$0.0015");
+    expect(describeAttemptCost({ state: "SETTLED", charge_usd: "1E+999" })).toBe("Unknown"); // not a plausible amount
   });
 });
 
