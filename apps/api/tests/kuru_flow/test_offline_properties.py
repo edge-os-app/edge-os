@@ -68,6 +68,7 @@ AUTHORIZED_CONSUMERS = {
     "execution/original_transaction.py",
     "execution/kuru_quote_client.py",
     "execution/operating_release.py",
+    "execution/direct_route_quote_client.py",
 }
 
 

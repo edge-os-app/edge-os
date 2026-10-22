@@ -72,7 +72,8 @@ def _validate(value: dict[str, Any]) -> None:
     for asset in (route.input_asset, route.output_asset):
         _require(asset.asset_id.lower() == f"monad:143/{asset.token_address.lower()}")
     _require(route.input_asset.token_address.lower() != route.output_asset.token_address.lower())
-    _require(int(route.approved_input_raw) > 0 and int(route.approved_min_output_raw) > 0
+    _require(int(route.approved_input_raw) > 0 and int(route.approved_input_raw) < 2**256
+             and int(route.approved_min_output_raw) > 0 and int(route.approved_min_output_raw) < 2**256
              and route.approved_allowance_raw == route.approved_input_raw
              and route.supported_schema_variants == ["TRANSACTION_CALLDATA"])
     freshness = value["route"]["freshness"]
@@ -86,9 +87,35 @@ def _validate(value: dict[str, Any]) -> None:
         "entrypoint_code_sha256", "router_code_sha256", "abi_sha256", "mutable_router_proof_sha256")))
     _require(type(deployment["router_address"]) is str and re.fullmatch(r"0x[0-9a-fA-F]{40}", deployment["router_address"]) is not None)
     quote = value["quote"]
-    _require(set(quote) == {"endpoint", "credential_slot", "slippage_bps"} and _text(quote["credential_slot"]))
+    _require(type(quote) is dict)
+    source = quote.get("source", "KURU_API")
+    _require(source in ("KURU_API", "DIRECT_V2_PROGRAM"))
     _require(type(quote["slippage_bps"]) is int and 1 <= quote["slippage_bps"] <= 10000)
-    _require(urlsplit(quote["endpoint"]).path == "/api/quote")
+    if source == "KURU_API":
+        _require(set(quote) == {"endpoint", "credential_slot", "slippage_bps"}
+                 or set(quote) == {"source", "endpoint", "credential_slot", "slippage_bps"})
+        _require(_text(quote["credential_slot"]))
+        _require(urlsplit(quote["endpoint"]).path == "/api/quote")
+    else:
+        _require(set(quote) == {"source", "endpoint", "slippage_bps", "pool_address", "token0_address",
+                                "token1_address", "direction", "program_fee_ppm"})
+        _require(all(type(quote[x]) is str and re.fullmatch(r"0x[0-9a-fA-F]{40}", quote[x])
+                     for x in ("pool_address", "token0_address", "token1_address")))
+        _require(type(quote["direction"]) is int and quote["direction"] in (0, 1))
+        _require(type(quote["program_fee_ppm"]) is int and 0 < quote["program_fee_ppm"] < 10**6)
+        _require(urlsplit(quote["endpoint"]).path == "/rpc")
+        _require(route.selector.lower() == "0xce1e7030" and route.method == "EXECUTE_SWAP")
+        _require(quote["token0_address"].lower() != quote["token1_address"].lower())
+        from edge_os_api.execution.direct_route_quote_client import build_program_hex
+        expected0, expected1 = ((route.input_asset.token_address, route.output_asset.token_address)
+                                if quote["direction"] == 0
+                                else (route.output_asset.token_address, route.input_asset.token_address))
+        _require(quote["token0_address"].lower() == expected0.lower()
+                 and quote["token1_address"].lower() == expected1.lower())
+        _require(build_program_hex(input_token=route.input_asset.token_address,
+                                   pool_address=quote["pool_address"], direction=quote["direction"],
+                                   fee_ppm=quote["program_fee_ppm"]).lower()
+                 == route.approved_program_hex.lower())
     for role in ("broadcast", "observer"):
         destination = value[role]
         _require(set(destination) == {"role", "destination_id", "endpoint", "credential_slot"}
