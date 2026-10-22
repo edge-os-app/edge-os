@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from egress_gateway import MAX_TUNNEL_SECONDS
+from egress_gateway import HOST, MAX_TUNNEL_SECONDS
 
 __all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "ActualRelease", "ActualReleaseUnapproved", "ProviderDestination",
            "RelayRelease", "RelaySubject", "channel_refusal", "grant_refusal", "issue_grant", "load_actual_release",
@@ -32,8 +32,9 @@ __all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "ActualRelease", "Actua
 RELEASE_KINDS = ("AUTHORED", "ACTUAL")  # an ACTUAL release exists only through an approved record (CONTRACT A6)
 # SHA256 of approved release records. Every other ACTUAL record fails closed. hermes-first-call-1:
 # docs/qualification/hermes-actual-operation/release/hermes_first_call_record.json
+# The approved record names its own destination (host, port, path; the TLS server name is its host), routing and CA
+# bundle pin: approving its SHA256 approves them. A record naming any other destination is not approved.
 APPROVED_ACTUAL_RELEASES: frozenset[str] = frozenset({"3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f"})
-ACTUAL_DESTINATION = ("openrouter.ai", 443, "/api/v1/chat/completions")
 ACTUAL_BODY_FIELDS = frozenset({"model", "messages", "stream", "response_format", "provider", "reasoning", "max_tokens",
                                 "session_id", "prompt_cache_options"})
 REQUIRED_BODY_FIELDS = frozenset({"model", "messages", "stream", "provider", "max_tokens", "session_id"})
@@ -43,12 +44,13 @@ RECORD_FIELDS = frozenset({"release_id", "route_id", "kind", "approval", "destin
 # Optional: a record that names it sends exactly this value (automatic prompt caching off, no breakpoint); a record
 # without it keeps the earlier shape, where the body must not carry the field.
 PROMPT_CACHE_OPTIONS = {"mode": "explicit"}
-ROUTING_FIELDS = frozenset({"only", "allow_fallbacks", "require_parameters", "data_collection", "max_price"})
+# Every routing field this code can check. A record names its routing fields; one outside this set is refused, never
+# ignored, and none of these may be left out. A provider with other routing fields needs a reviewed change here.
+KNOWN_ROUTING_FIELDS = frozenset({"only", "allow_fallbacks", "require_parameters", "data_collection", "max_price"})
 SHA256 = re.compile(r"[0-9a-f]{64}")
 _LOADING = threading.local()  # set only inside load_actual_release: the one way to build an ACTUAL release
 MAX_REPLY_LIMIT = 1024 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
-HOST = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*")
 CLOCK_SKEW_SECONDS = 2.0  # a grant issued this far in the relay's future is still accepted (host and VM clocks)
 CHANNEL_FIELDS = frozenset({"attempt_id", "route_id", "release_id", "body_b64"})
 GRANT_FIELDS = frozenset({"grant_id", "release_id", "route_id", "run_id", "channel_root", "owner_id", "request_id",
@@ -336,7 +338,8 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
     """The ACTUAL release in `raw`, only if its bytes have this SHA256 and that SHA256 is approved.
 
     `approved` defaults to `APPROVED_ACTUAL_RELEASES`, which names only the adopted record: every other ACTUAL release
-    fails closed. A record that names a test resolver is never a release.
+    fails closed. The destination, routing and CA bundle pin are the approved record's own. A record that names a test
+    resolver is never a release.
     """
     sha = hashlib.sha256(raw).hexdigest()
     if not hmac.compare_digest(sha, expected_sha256):
@@ -354,11 +357,15 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
     for label in ("ca_bundle_sha256", "response_format_sha256", "price_snapshot_sha256"):
         _sha256(value[label], label)
     _sha256(approval["sha256"], "approval sha256")
-    destination = ProviderDestination(**value["destination"])
-    if (destination.host, destination.port, destination.path) != ACTUAL_DESTINATION:
-        raise ValueError("the ACTUAL destination is fixed: https://openrouter.ai:443/api/v1/chat/completions")
+    destination = ProviderDestination(**value["destination"])  # the approved record's own; nothing else is reachable
     routing = value["provider"]
-    if (not isinstance(routing, dict) or set(routing) != ROUTING_FIELDS or not isinstance(routing["only"], list)
+    if not isinstance(routing, dict):
+        raise ValueError("routing must be an object")
+    if set(routing) - KNOWN_ROUTING_FIELDS:
+        raise ValueError(f"unknown routing field refused: {sorted(set(routing) - KNOWN_ROUTING_FIELDS)}")
+    if KNOWN_ROUTING_FIELDS - set(routing):
+        raise ValueError(f"routing field missing: {sorted(KNOWN_ROUTING_FIELDS - set(routing))}")
+    if (not isinstance(routing["only"], list)
             or len(routing["only"]) != 1 or not isinstance(routing["only"][0], str) or routing["allow_fallbacks"] is not False
             or routing["require_parameters"] is not True or not isinstance(routing["max_price"], dict)):
         raise ValueError("routing must name one provider, no fallbacks, required parameters and a price limit")

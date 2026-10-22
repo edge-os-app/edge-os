@@ -1,10 +1,12 @@
 """The keyless egress gateway: the relay's only way out. Standard library only. See CONTRACT.md A6.
 
-It holds no key and no CA. It listens only on a Unix socket in a private folder shared with the relay. For each
-connection it reads ONE `CONNECT openrouter.ai:443` head that names the attempt and the grant expiry, resolves the name
-itself, refuses the whole request if any answer is not globally routable, connects once to the first answer and then
-copies bytes unchanged both ways: TLS stays end to end between the relay and the provider. The tunnel closes at the
-expiry (at most `MAX_TUNNEL_SECONDS`), at `MAX_TUNNEL_BYTES` in either direction, or when either side closes.
+It holds no key and no CA. It listens only on a Unix socket in a private folder shared with the relay. It admits ONE
+destination: the approved release's host and port, which the supervisor writes into its config (for an AUTHORED
+stand-in, the stand-in's). For each connection it reads ONE `CONNECT <that host>:<that port>` head that names the
+attempt and the grant expiry, resolves the name itself, refuses the whole request if any answer is not globally
+routable, connects once to the first answer and then copies bytes unchanged both ways: TLS stays end to end between
+the relay and the provider. The tunnel closes at the expiry (at most `MAX_TUNNEL_SECONDS`), at `MAX_TUNNEL_BYTES` in
+either direction, or when either side closes.
 
 Every connection leaves fsynced lines in `receipts/tunnels.jsonl`: a refusal before it is answered; an `opening` line
 before the one connect (so a gateway killed during a tunnel still leaves its count) and a `tunnel` line when it closes.
@@ -14,8 +16,9 @@ Time: the whole head is read within ONE `HEAD_SECONDS` budget (the expiry is not
 connect and the copy all share ONE budget that ends at the relay's expiry (at most `MAX_TUNNEL_SECONDS`): no phase
 gets a renewed timeout. The clock is this container's wall clock, which is the Docker VM's, the same as the relay's.
 
-Usage: python egress_gateway.py <config.json>. Config: `socket`, `receipts`; optional `test_resolution` (an address
-used instead of DNS, for AUTHORED tests only; an ACTUAL supervisor refuses it).
+Usage: python egress_gateway.py <config.json>. Config: `socket`, `receipts`, `destination` ({host, port}: the only
+target admitted; a config without it starts nothing); optional `test_resolution` (an address used instead of DNS, for
+AUTHORED tests only; an ACTUAL supervisor refuses it).
 """
 
 from __future__ import annotations
@@ -36,9 +39,10 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 
-__all__ = ["ConnectRequest", "Gateway", "Receipts", "address_refusal", "choose_address", "parse_connect", "serve"]
+__all__ = ["AllowedTarget", "ConnectRequest", "Gateway", "Receipts", "address_refusal", "allowed_target",
+           "choose_address", "parse_connect", "serve"]
 
-ALLOWED_HOST, ALLOWED_PORT = "openrouter.ai", 443
+HOST = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*")  # lower-case DNS name
 MAX_HEAD = 1024
 HEAD_SECONDS = 5.0
 CONNECT_SECONDS = 10.0
@@ -59,13 +63,33 @@ ESTABLISHED = b"HTTP/1.1 200 Connection Established\r\n\r\n"
 
 
 @dataclass(frozen=True)
+class AllowedTarget:
+    """The one host and port this gateway admits: the approved release's destination. Never an address."""
+
+    host: str
+    port: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.host, str) or len(self.host) > 253 or not HOST.fullmatch(self.host):
+            raise ValueError("the allowed host must be a lower-case DNS name")
+        try:
+            ipaddress.ip_address(self.host)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("the allowed host must be a name, not an address")
+        if isinstance(self.port, bool) or not isinstance(self.port, int) or not 1 <= self.port <= 65_535:
+            raise ValueError("the allowed port must be a whole number from 1 to 65535")
+
+
+@dataclass(frozen=True)
 class ConnectRequest:
     attempt_id: str
     expires_at: float
 
 
-def parse_connect(head: bytes, *, now: float) -> ConnectRequest | str:
-    """The one admitted CONNECT in `head` (which ends at the blank line), or the refusal reason."""
+def parse_connect(head: bytes, *, now: float, allowed: AllowedTarget) -> ConnectRequest | str:
+    """The one admitted CONNECT in `head` (which ends at the blank line) to `allowed`, or the refusal reason."""
     try:
         text = head.decode("ascii")
     except UnicodeDecodeError:
@@ -89,9 +113,9 @@ def parse_connect(head: bytes, *, now: float) -> ConnectRequest | str:
         return "target_ip_literal"
     except ValueError:
         pass
-    if host != ALLOWED_HOST:
+    if host != allowed.host:
         return "target_name_not_allowed"
-    if int(port) != ALLOWED_PORT or port != str(ALLOWED_PORT):
+    if int(port) != allowed.port or port != str(allowed.port):
         return "target_port_not_allowed"
     headers: dict[str, str] = {}
     for line in lines:
@@ -201,13 +225,14 @@ def _early_bytes(client: Any) -> str | None:
     return "data_before_tunnel" if queued else None
 
 
-def _resolve_within(resolve: Callable[..., list[tuple[Any, ...]]], seconds: float) -> list[tuple[Any, ...]] | str:
+def _resolve_within(resolve: Callable[..., list[tuple[Any, ...]]], allowed: AllowedTarget,
+                    seconds: float) -> list[tuple[Any, ...]] | str:
     """The name lookup, given at most `seconds`: answers, or `dns_timeout` / `dns_failure`. A late lookup is abandoned."""
     outcome: list[Any] = []
 
     def lookup() -> None:
         try:
-            outcome.append(resolve(ALLOWED_HOST, ALLOWED_PORT, type=socket.SOCK_STREAM))
+            outcome.append(resolve(allowed.host, allowed.port, type=socket.SOCK_STREAM))
         except OSError:
             outcome.append("dns_failure")
 
@@ -262,16 +287,19 @@ def _pump(client: Any, upstream: Any, until: float, clock: Callable[[], float]) 
 
 
 class Gateway:
-    """Admits and serves one connection at a time per call to `handle`. Resolver, connector and clock are injectable."""
+    """Admits and serves one connection at a time per call to `handle`, to `allowed` only. Resolver, connector and clock
+    are injectable; the allowed target has no default."""
 
-    def __init__(self, receipts: Receipts, *, test_resolution: str | None = None,
+    def __init__(self, receipts: Receipts, *, allowed: AllowedTarget, test_resolution: str | None = None,
                  resolve: Callable[..., list[tuple[Any, ...]]] = socket.getaddrinfo,
                  connect: Callable[..., Any] = socket.create_connection, clock: Callable[[], float] = time.time) -> None:
         if test_resolution is not None:
             ip = ipaddress.ip_address(test_resolution)  # a bridge address of an AUTHORED stand-in, never loopback
             if not ip.is_private or ip.is_loopback or ip.is_unspecified:
                 raise ValueError("test_resolution must be a private, non-loopback address")
-        self.receipts, self.test_resolution = receipts, test_resolution
+        if not isinstance(allowed, AllowedTarget):
+            raise TypeError("allowed must be an AllowedTarget")
+        self.receipts, self.allowed, self.test_resolution = receipts, allowed, test_resolution
         self.resolve, self.connect, self.clock = resolve, connect, clock
 
     def _refuse(self, client: Any, reason: str, attempt_id: str | None) -> dict[str, Any]:
@@ -318,7 +346,7 @@ class Gateway:
             head = self._read_head(client)
             if isinstance(head, str):
                 return self._refuse(client, head, None)
-            request = parse_connect(head, now=self.clock())
+            request = parse_connect(head, now=self.clock(), allowed=self.allowed)
             if isinstance(request, str):
                 return self._refuse(client, request, None)
             if not self.receipts.admit(request.attempt_id):
@@ -327,7 +355,7 @@ class Gateway:
             if self.test_resolution is not None:
                 address = self.test_resolution
             else:
-                answers = _resolve_within(self.resolve, until - self.clock())
+                answers = _resolve_within(self.resolve, self.allowed, until - self.clock())
                 if isinstance(answers, str):
                     return self._refuse(client, answers, request.attempt_id)
                 try:
@@ -340,7 +368,7 @@ class Gateway:
             self.receipts.write({"attempt_id": request.attempt_id, "outcome": "opening", "reason": None,
                                  "address": address, "test_resolution": self.test_resolution is not None})
             try:
-                upstream = self.connect((address, ALLOWED_PORT), timeout=min(CONNECT_SECONDS, left))
+                upstream = self.connect((address, self.allowed.port), timeout=min(CONNECT_SECONDS, left))
             except OSError:
                 return self._refuse(client, "connect_failed", request.attempt_id)
             opened = self.clock()
@@ -389,10 +417,19 @@ def serve(socket_path: Path, gateway: Gateway) -> None:  # pragma: no cover - ex
         threading.Thread(target=run, daemon=True).start()
 
 
+def allowed_target(config: dict[str, Any]) -> AllowedTarget:
+    """The config's one allowed destination: exactly {host, port}. A config without it admits nothing."""
+    destination = config.get("destination")
+    if not isinstance(destination, dict) or set(destination) != {"host", "port"}:
+        raise ValueError("the gateway config must name its one destination as {host, port}")
+    return AllowedTarget(destination["host"], destination["port"])
+
+
 def main() -> int:  # pragma: no cover - exercised by the Docker tests
     config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    allowed = allowed_target(config)
     receipts = Receipts(Path(config["receipts"]))
-    gateway = Gateway(receipts, test_resolution=config.get("test_resolution"))
+    gateway = Gateway(receipts, allowed=allowed, test_resolution=config.get("test_resolution"))
     Path(config["receipts"], "ready").write_text(json.dumps({"pid": os.getpid(), "at": time.time(),
                                                              "test_resolution": gateway.test_resolution is not None}))
     serve(Path(config["socket"]), gateway)
