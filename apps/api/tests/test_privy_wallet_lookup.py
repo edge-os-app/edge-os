@@ -675,14 +675,49 @@ def served_socket(short_private_dir):
 
     path = short_private_dir / "lookup.sock"
     users = {DID: _user(_wallet())}
-    thread = threading.Thread(target=lookup_server.serve, args=(str(path), users.get, lambda a: None), daemon=True)
+    ready = threading.Event()
+    thread = threading.Thread(target=lookup_server.serve, args=(str(path), users.get, lambda a: None),
+                              kwargs={"ready": ready}, daemon=True)
     thread.start()
-    for _ in range(100):
-        if path.exists():
-            break
-        threading.Event().wait(0.02)
-    assert path.exists(), "lookup socket did not start"
+    assert ready.wait(5.0), "lookup server did not start listening"
     yield path
+
+
+def test_serve_sets_ready_only_after_it_listens(monkeypatch, tmp_path):
+    """The readiness signal is the listening state, not the socket file that `bind()` creates."""
+    order: list[str] = []
+
+    class _Stop(Exception):
+        pass
+
+    class _Server:
+        def bind(self, path: str) -> None:
+            order.append("bind")
+
+        def listen(self, backlog: int) -> None:
+            order.append("listen")
+
+        def accept(self) -> object:
+            raise _Stop()
+
+        def close(self) -> None:
+            order.append("close")
+
+    class _Ready:
+        def set(self) -> None:
+            order.append("ready")
+
+    monkeypatch.setattr(lookup_server.socket, "socket", lambda *a, **k: _Server())
+    monkeypatch.setattr(lookup_server, "prepare_socket_path", lambda path: Path(path))
+    monkeypatch.setattr(lookup_server.os, "chmod", lambda *a: order.append("chmod"))
+    monkeypatch.setattr(lookup_server.os, "umask", lambda mask: 0o022)
+
+    try:
+        lookup_server.serve(str(tmp_path / "ready.sock"), lambda did: None, ready=_Ready())
+    except _Stop:
+        pass
+
+    assert order.index("listen") < order.index("ready"), order
 
 
 def _raw_exchange(path, payload: bytes, *, timeout: float = 2.0) -> bytes:
@@ -948,6 +983,10 @@ def test_reader_bounds_the_dns_and_connect_phase_by_the_same_deadline(monkeypatc
         elapsed = _time.monotonic() - started
     finally:
         release.set()
+        stop = _time.monotonic() + 3.0  # harness scheduler tolerance, not a product budget
+        while lookup_server._CONNECTOR_BUSY and _time.monotonic() < stop:
+            _time.sleep(0.01)
+        assert not lookup_server._CONNECTOR_BUSY, "the test's connector thread did not finish"
     assert elapsed < 1.5, elapsed  # harness scheduler tolerance above the 0.3 s product budget, not a product budget
 
 
@@ -968,6 +1007,7 @@ def test_reader_keeps_one_outstanding_connector_and_further_reads_fail_unknown(m
         def __init__(self, host: str, timeout: float, context: object = None) -> None:
             self.entered = _threading.Event()
             self.release = _threading.Event()
+            self.closed_event = _threading.Event()
             self.closed = False
             self.requests: list[tuple[str, str]] = []
             self.sock = None
@@ -982,6 +1022,7 @@ def test_reader_keeps_one_outstanding_connector_and_further_reads_fail_unknown(m
 
         def close(self) -> None:
             self.closed = True
+            self.closed_event.set()
 
     monkeypatch.setattr(lookup_server.http.client, "HTTPSConnection", _BlockingConnector)
     monkeypatch.setattr(lookup_server, "DEADLINE_SECONDS", 0.2)
@@ -1007,6 +1048,7 @@ def test_reader_keeps_one_outstanding_connector_and_further_reads_fail_unknown(m
         assert _non_timer_threads() <= threads_before + 1
 
         connector.release.set()  # the late connector may now finish
+        assert connector.closed_event.wait(3.0), "the connector did not close after its caller gave up"
         stop = _time.monotonic() + 3.0  # harness scheduler tolerance, not a product budget
         while _non_timer_threads() > threads_before and _time.monotonic() < stop:
             _time.sleep(0.01)
