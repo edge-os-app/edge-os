@@ -438,6 +438,80 @@ def test_admission_at_the_last_instant_of_the_slot_is_allowed(tmp_path: Path) ->
     assert count(providers, "hypersync") == 5
 
 
+# Observed-UTC wake contract: the timer may return before or after the wall-clock target.
+
+
+def test_early_timer_return_before_the_p2_anchor_slot_still_observes_utc(tmp_path: Path) -> None:
+    fired: list[float] = []
+
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        def early(target: float) -> float:
+            if target == T0 - 120 and not fired:  # P2 earliest; the timer returns 2 ms before it
+                fired.append(target)
+                return -0.002
+            return 0.0
+        clock.sleep_hook = early
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert fired == [T0 - 120]
+    assert handoff["phases"]["P2"]["outcome"] == "COMPLETED"
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 4
+    assert count(providers, "hypersync") == 5
+
+
+def test_early_timer_return_before_a_p3_slot_still_observes_utc(tmp_path: Path) -> None:
+    fired: list[float] = []
+    sleeps: list[float] = []
+
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        plain_sleep = clock.sleep
+
+        def tracked_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            plain_sleep(seconds)
+
+        clock.sleep = tracked_sleep
+
+        def early(target: float) -> float:
+            if target == T0 + 330 and not fired:  # bucket-0 first slot; the timer returns 2 ms before it
+                fired.append(target)
+                return -0.002
+            return 0.0
+        clock.sleep_hook = early
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert fired == [T0 + 330]
+    assert handoff["buckets"][0]["status"] == "DELIVERED"
+    assert handoff["buckets"][0]["reason"] is None
+    assert handoff["buckets"][0]["received_at_utc_us"] == (T0 + 330) * 1_000_000 + 250_000
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 4
+    assert min(sleeps) > 0  # every wait request stays positive; no zero-length spin
+
+
+def test_late_timer_return_still_misses_the_p2_anchor_window(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        clock.sleep_hook = lambda target: 116.0 if target == T0 - 120 else 0.0  # wakes at T0-4, after the cutoff
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert handoff["phases"]["P2"]["outcome"] == "MISSED"
+    assert {bucket["reason"] for bucket in handoff["buckets"]} == {"NO_ANCHOR"}
+    assert count(providers, "hypersync") == 1
+
+
+def test_late_timer_return_still_misses_a_p3_slot(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        clock.sleep_hook = lambda target: 1.0 if target == T0 + 330 else 0.0  # wakes at due + 1 second
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert handoff["buckets"][0]["status"] == "INCOMPLETE"
+    assert handoff["buckets"][0]["reason"] == "FIRST_SLOT_MISSED"
+    assert count(providers, "hypersync") == 4
+
+
 def test_clock_reversal_stops_scheduled_sends(tmp_path: Path) -> None:
     def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
         def reverse(call: dict[str, Any]) -> None:

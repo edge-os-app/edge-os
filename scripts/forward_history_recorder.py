@@ -687,8 +687,9 @@ class _Attempt:
 
     def _wait_until(self, target: float) -> None:
         now = self.wire.observe()[0]
-        if target > now:
+        while now < target:
             self.clock.sleep(target - now)
+            now = self.wire.observe()[0]
 
     def _pace(self, provider: str) -> None:
         last = self.journal.last_admission.get(provider)
