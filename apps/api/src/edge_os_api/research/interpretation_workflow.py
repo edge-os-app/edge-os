@@ -20,6 +20,7 @@ import logging
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select, text
@@ -140,6 +141,19 @@ def public_attempt(view: AttemptView) -> dict[str, Any]:
             "runtime_label": identity.runtime_label, "model": identity.config.get("model"),
             "route": identity.config.get("route"), "hermes_commit": identity.config.get("hermes_commit"),
             "answer_ref": identity.answer_ref, "previous_revision_id": identity.previous_revision_id}}
+
+
+def study_model_cost(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """The request's model cost from its public attempts: the exact `Decimal` sum of the SETTLED charges.
+
+    Every other spend state, and an attempt without a spend record, is unknown: it is counted, never added as zero, and
+    the sum is then only a lower bound. With no settled call there is no amount (`None`), not a zero.
+    """
+    spends = [a["spend"] for a in attempts]
+    charges = [s["charge_usd"] for s in spends if s["state"] == "SETTLED" and s["charge_usd"] is not None]
+    total = sum((Decimal(c) for c in charges), Decimal(0))
+    return {"settled_usd": format(total.normalize(), "f") if charges else None, "settled_calls": len(charges),
+            "unknown_calls": len(attempts) - len(charges)}
 
 
 class HermesResearch:
@@ -497,7 +511,8 @@ class HermesResearch:
                       ("PENDING_SAVE" if parse == "ACCEPTED" else "FAILED")),
                      "reason_code": parse.removeprefix("REJECTED:") if parse.startswith("REJECTED:") else None,
                      "attempt_id": last.start.attempt_id}
-        return {"attempts": [public_attempt(v) for v in history],
+        attempts = [public_attempt(v) for v in history]
+        return {"attempts": attempts, "model_cost": study_model_cost(attempts),
                 "late_results": [self._public_late(o) for o in self.ledger.late_results(owner, iid)],
                 "retry": {"allowed": state.allowed, "retry_of": state.retry_of, "reason": state.reason},
                 "reply": reply}

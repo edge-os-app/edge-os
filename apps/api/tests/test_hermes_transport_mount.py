@@ -224,3 +224,32 @@ def test_a_restart_with_a_changed_cap_refuses_new_attempts_before_the_job_until_
     allowed = create(restarted_client, owner_a, "concrete-thesis").json()["attempts"][0]
     assert allowed["spend"]["state"] == "SETTLED" and len(boundary.turns) == 2
     assert first_mount.spend.committed_usd() == EXACT_CHARGE * 2
+
+
+def test_the_saved_result_shows_each_attempts_spend_and_the_study_model_cost(mounted, owner_a) -> None:
+    returned = turn_result(case("concrete-thesis")["provider"])
+    failed = turn_result({"kind": "http_error"})  # one request, usage unknown: the reservation stays UNKNOWN
+    unsent = HermesTurnResult("PROVIDER_FAILED", None, returned.usage.__class__(), 0, {}, "CleanupPending")
+    boundary = Boundary(job_report(returned), job_report(unsent, sent=0), job_report(returned), job_report(failed))
+    _mount, app_client = mounted(boundary)
+
+    def saved(bundle: dict[str, Any]) -> dict[str, Any]:
+        return app_client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a).json()
+
+    settled = saved(create(app_client, owner_a, "concrete-thesis").json())
+    assert [a["spend"] for a in settled["attempts"]] == [{"state": "SETTLED", "charge_usd": str(EXACT_CHARGE)}]
+    assert settled["model_cost"] == {"settled_usd": str(EXACT_CHARGE), "settled_calls": 1, "unknown_calls": 0}
+
+    released = create(app_client, owner_a, "concrete-thesis").json()
+    retry(app_client, owner_a, released, released["attempts"][0]["attempt_id"])
+    lower_bound = saved(released)  # a released attempt is not settled, so the settled retry is only a lower bound
+    assert [a["spend"]["state"] for a in lower_bound["attempts"]] == ["RELEASED", "SETTLED"]
+    assert lower_bound["model_cost"] == {"settled_usd": str(EXACT_CHARGE), "settled_calls": 1, "unknown_calls": 1}
+
+    held = create(app_client, owner_a, "concrete-thesis").json()
+    retry(app_client, owner_a, held, held["attempts"][0]["attempt_id"])  # refused before the ledger: no spend record
+    unknown = saved(held)
+    assert [a["spend"] for a in unknown["attempts"]] == [{"state": "UNKNOWN", "charge_usd": str(RESERVATION)},
+                                                        {"state": None, "charge_usd": None}]
+    assert unknown["model_cost"] == {"settled_usd": None, "settled_calls": 0, "unknown_calls": 2}
+    assert len(boundary.turns) == 4

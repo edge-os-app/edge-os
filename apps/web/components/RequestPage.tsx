@@ -360,7 +360,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
         strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}
 
-      <InterpretationAttempts attempts={bundle.attempts} lateResults={bundle.late_results} currentRevisionId={head.interpretation_revision_id}
+      <InterpretationAttempts attempts={bundle.attempts} modelCost={bundle.model_cost} lateResults={bundle.late_results} currentRevisionId={head.interpretation_revision_id}
         open={Boolean(failure) || Boolean(pending) || Boolean(head.reply) || (lastAttempt !== undefined && lastAttempt.status !== "COMPLETED")} />
 
       <details>

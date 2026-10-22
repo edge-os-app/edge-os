@@ -1,5 +1,5 @@
 import { OUTCOME_COPY } from "./describe";
-import type { Attempt, AttemptStatus, AttemptUsage, Bundle, Finding, ReplyState, RequestSummary } from "./types";
+import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelCost, ReplyState, RequestSummary } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
 export type FailureKind = "MALFORMED_OUTPUT" | "UNAVAILABLE" | "OUTCOME_UNKNOWN";
@@ -50,6 +50,26 @@ export function describeUsage(usage: AttemptUsage): string {
   return usage.source === "PROVIDER_REPORTED"
     ? `${usage.input_tokens?.toLocaleString("en-US")} in, ${usage.output_tokens?.toLocaleString("en-US")} out`
     : "Unknown";
+}
+
+const DECIMAL_USD = /^\d+(\.\d+)?$/;
+
+/** A USD amount exactly as the API stored it, never parsed into a float. Anything else is not a known amount. */
+function usd(amount: string | null): string | null {
+  return amount !== null && DECIMAL_USD.test(amount) ? `$${amount}` : null;
+}
+
+/** An attempt's model cost: its charge only when the ledger settled it. Unknown, released or missing spend is Unknown. */
+export function describeAttemptCost(spend: AttemptSpend): string {
+  return (spend.state === "SETTLED" ? usd(spend.charge_usd) : null) ?? "Unknown";
+}
+
+/** The request's total model cost. With any unknown call it is a lower bound, and with no settled call it is unknown. */
+export function describeModelCost(cost: ModelCost): string {
+  const total = cost.settled_calls > 0 ? usd(cost.settled_usd) : null;
+  if (cost.unknown_calls === 0 && total !== null) return total;
+  const unknown = `${cost.unknown_calls} call${cost.unknown_calls === 1 ? "" : "s"} unknown`;
+  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
 }
 
 export function describeLatency(ms: number | null): string {
