@@ -142,3 +142,20 @@ def test_a_refusal_never_echoes_the_rpc_url(tmp_path: Path, capsys: pytest.Captu
     output = capsys.readouterr().out
     assert code == 1
     assert "key-secret-path" not in output
+
+
+def test_dry_run_completes_through_the_real_rpc_client(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts.operator_trade.rpc import OperatorRpc
+
+    from ._support import RpcTransport
+
+    fake = FakeRpc()
+    rpc = OperatorRpc(transport=RpcTransport(fake), endpoint="https://rpc.invalid/key")
+    path = tmp_path / "trade.json"
+    path.write_text(json.dumps(trade_dict()), encoding="utf-8")
+    code = main(["--trade-file", str(path)], environ={"EDGE_OS_OPERATOR_RPC_URL": "https://rpc.invalid/key"}, rpc=rpc)
+    output = capsys.readouterr().out
+    assert code == 0, output
+    assert '"mode": "DRY_RUN"' in output
+    assert '"simulations"' in output
+    assert fake.sent == []

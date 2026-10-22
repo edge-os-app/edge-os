@@ -41,8 +41,11 @@ re-implement that builder.
 - The dry run uses WMON storage slots `3` (balance) and `4` (allowance) for state overrides. The
   builder's 2026-10-22 live check confirmed this layout. These slots are WMON-specific; they are
   simulation inputs only.
-- The script reads chain state at one block. It cannot prove mempool ordering or later pool state.
+- The script uses `latest` reads. Successive reads can span blocks. It cannot prove mempool ordering
+  or later pool state.
 - The script uses sequential nonces from one preflight read. It waits for status `1` after each step.
+- The second-run refusal is per store. A fresh store can send another trade. Treat each store as one
+  approved trade.
 
 ## Trade file
 
@@ -62,7 +65,7 @@ its SHA256. Unknown fields are refused. A second file with a different amount ne
 | `direction` | Must be `0` (token0 to token1). |
 | `program_fee_ppm` | Must be `16000`. |
 | `input_raw` | Input amount in WMON raw units, as a decimal string. Maximum 70 MON. |
-| `slippage_bps` | Minimum output slippage in basis points. `0` to `10000`. |
+| `slippage_bps` | Minimum output slippage in basis points. `1` to `10000`. |
 | `usd_ceiling` | Worst-case USD ceiling. Must be at most `2.00`. |
 | `mon_usd_price` | MON/USD price used for the cost check, as a decimal string. |
 | `gas_limits` | Object with `wrap`, `approve`, `swap`, `revoke` gas limits. |

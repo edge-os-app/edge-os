@@ -60,14 +60,41 @@ def _allowed(method: str, params: Any) -> bool:
     if method == "eth_getTransactionReceipt":
         return len(params) == 1 and type(params[0]) is str and _HASH.fullmatch(params[0]) is not None
     if method == "eth_call":
-        if len(params) != 2 or not _tag(params[1]) or type(params[0]) is not dict:
+        if len(params) not in (2, 3) or not _tag(params[1]) or type(params[0]) is not dict:
             return False
-        call = params[0]
-        return (set(call) == {"to", "data"} and type(call["to"]) is str and _ADDRESS.fullmatch(call["to"]) is not None
-                and type(call["data"]) is str and _DATA.fullmatch(call["data"]) is not None)
+        if not _call_shape(params[0]):
+            return False
+        return len(params) == 2 or _state_overrides(params[2])
     if method == "eth_sendRawTransaction":
         return len(params) == 1 and type(params[0]) is str and _SIGNED.fullmatch(params[0]) is not None
     return False
+
+
+def _call_shape(call: dict[str, Any]) -> bool:
+    keys = set(call)
+    if keys not in ({"to", "data"}, {"from", "to", "data"}, {"from", "to", "data", "value"}):
+        return False
+    if not all(type(call[name]) is str and _ADDRESS.fullmatch(call[name]) is not None
+               for name in keys & {"from", "to"}):
+        return False
+    if type(call["data"]) is not str or _DATA.fullmatch(call["data"]) is None:
+        return False
+    return "value" not in call or (type(call["value"]) is str and _QUANTITY.fullmatch(call["value"]) is not None)
+
+
+def _state_overrides(value: Any) -> bool:
+    if type(value) is not dict:
+        return False
+    for address, entry in value.items():
+        if type(address) is not str or _ADDRESS.fullmatch(address) is None:
+            return False
+        if type(entry) is not dict or set(entry) != {"stateDiff"} or type(entry["stateDiff"]) is not dict:
+            return False
+        if not all(type(slot) is str and _HASH.fullmatch(slot) is not None
+                   and type(word) is str and _HASH.fullmatch(word) is not None
+                   for slot, word in entry["stateDiff"].items()):
+            return False
+    return True
 
 
 def _quantity(value: Any) -> int | None:

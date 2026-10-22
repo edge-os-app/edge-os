@@ -145,3 +145,18 @@ def test_a_failed_post_check_is_reported(tmp_path: Path, capsys: pytest.CaptureF
     assert code == 1
     result = json.loads((store / "result.json").read_text(encoding="utf-8"))
     assert result["post_checks"]["moe_increase_at_least_minimum"] is False
+
+
+def test_live_run_completes_through_the_real_rpc_client(tmp_path: Path) -> None:
+    from scripts.operator_trade.rpc import OperatorRpc
+
+    from ._support import RpcTransport
+
+    path, digest = _trade(tmp_path)
+    fake = _rpc()
+    rpc = OperatorRpc(transport=RpcTransport(fake), endpoint="https://rpc.invalid/key")
+    transport = FakePrivyTransport([signed_for(step) for step in ("wrap", "approve", "swap", "revoke")])
+    code = main(["--live", "--trade-file", str(path), "--store", str(tmp_path / "store"), "--confirm", digest],
+                environ=_env(tmp_path), rpc=rpc, privy_transport=transport)
+    assert code == 0
+    assert len(fake.sent) == 4

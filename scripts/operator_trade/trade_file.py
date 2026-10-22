@@ -168,7 +168,7 @@ def parse_trade(value: Any, file_sha256: str) -> OperatorTrade:
         raise OperatorError("TRADE_FILE_INVALID", "input_raw")
     if int(value["input_raw"]) > POLICY_MAX_INPUT:
         raise OperatorError("TRADE_FILE_INVALID", "input_raw above the Privy policy limit")
-    if not _int(value["slippage_bps"]) or not 0 <= value["slippage_bps"] <= 10000:
+    if not _int(value["slippage_bps"]) or not 1 <= value["slippage_bps"] <= 10000:
         raise OperatorError("TRADE_FILE_INVALID", "slippage_bps")
     ceiling = _decimal(value["usd_ceiling"])
     if ceiling is None or ceiling <= 0 or ceiling > ABSOLUTE_USD_CEILING:

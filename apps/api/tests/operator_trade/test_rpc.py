@@ -95,6 +95,27 @@ def test_get_code_accepts_empty_code_and_rejects_bad_hex() -> None:
         _rpc(b'{"jsonrpc":"2.0","id":1,"result":"0xzz"}').call("eth_getCode", [ENTRYPOINT, "latest"])
 
 
+def test_the_simulation_call_shape_is_accepted() -> None:
+    slot = "0x" + "1" * 64
+    payload = b'{"jsonrpc":"2.0","id":1,"result":"0x' + b"0" * 64 + b'"}'
+    rpc = _rpc(payload)
+    call = {"from": ENTRYPOINT, "to": ENTRYPOINT, "value": "0x0", "data": "0x"}
+    result = rpc.call("eth_call", [call, "0x10", {ENTRYPOINT: {"stateDiff": {slot: slot}}}])
+    assert result.startswith("0x")
+
+
+def test_an_unknown_call_key_is_refused() -> None:
+    with pytest.raises(OperatorError) as caught:
+        _rpc(b"{}").call("eth_call", [{"to": ENTRYPOINT, "data": "0x", "gas": "0x1"}, "latest"])
+    assert caught.value.code == "RPC_CALL_INVALID"
+
+
+def test_a_malformed_state_override_is_refused() -> None:
+    with pytest.raises(OperatorError) as caught:
+        _rpc(b"{}").call("eth_call", [{"to": ENTRYPOINT, "data": "0x"}, "latest", {ENTRYPOINT: {"state": {}}}])
+    assert caught.value.code == "RPC_CALL_INVALID"
+
+
 def test_the_endpoint_is_not_in_an_invalid_endpoint_error() -> None:
     with pytest.raises(OperatorError) as caught:
         OperatorRpc(transport=FakeTransport(), endpoint="not-a-url/key-secret-path")

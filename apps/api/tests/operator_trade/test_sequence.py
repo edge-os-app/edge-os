@@ -181,3 +181,5 @@ def test_a_failed_revoke_is_reported_and_not_retried(tmp_path: Path) -> None:
     assert outcome.failed_step == "revoke"
     assert len(rpc.sent) == 4
     assert "revoke" in created
+    assert [step.step for step in outcome.steps] == ["wrap", "approve", "swap", "revoke"]
+    assert outcome.steps[-1].status == 0

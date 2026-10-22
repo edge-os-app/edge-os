@@ -14,7 +14,7 @@ from eth_utils import keccak
 from edge_os_api.execution.original_transaction import BALANCE_OF_SELECTOR
 
 from scripts.operator_trade.errors import OperatorError
-from scripts.operator_trade.plan import FEE_BASE_MULTIPLIER
+from scripts.operator_trade.plan import max_fee_per_gas
 from scripts.operator_trade.rpc import OperatorRpc
 from scripts.operator_trade.trade_file import OperatorTrade
 
@@ -104,7 +104,7 @@ def read_preflight(rpc: OperatorRpc, trade: OperatorTrade) -> Preflight:
     block = rpc.call("eth_getBlockByNumber", ["latest", False])
     base_fee = int(block["baseFeePerGas"], 16)
     priority_fee = int(rpc.call("eth_maxPriorityFeePerGas", []), 16)
-    max_fee = FEE_BASE_MULTIPLIER * base_fee + priority_fee
+    max_fee = max_fee_per_gas(base_fee, priority_fee)
     required = trade.input_raw + trade.gas_limits.total() * max_fee
     if native < required:
         raise OperatorError("INSUFFICIENT_NATIVE_BALANCE", f"{native} < {required}")

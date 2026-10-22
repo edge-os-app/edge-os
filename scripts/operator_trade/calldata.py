@@ -7,9 +7,6 @@ are encoded locally; tests compare them with an independent ``eth_abi`` encoding
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
-
 from eth_utils import keccak
 
 from edge_os_api.execution.direct_route_quote_client import (
@@ -18,6 +15,8 @@ from edge_os_api.execution.direct_route_quote_client import (
     build_program_hex,
 )
 from edge_os_api.kuru_flow.types import is_address
+
+from scripts.operator_trade.trade_file import OperatorTrade
 
 PROGRAM_ENDPOINT_PLACEHOLDER = "https://operator-trade.invalid/rpc"
 _UINT256 = 2**256
@@ -51,11 +50,7 @@ def approve_calldata(spender: str, amount: int) -> str:
     return APPROVE_SELECTOR + _address_word(spender) + _uint_word(amount)
 
 
-def _pin(trade: Mapping[str, Any] | Any, name: str) -> Any:
-    return trade[name] if isinstance(trade, Mapping) else getattr(trade, name)
-
-
-def swap_calldata(trade: Mapping[str, Any] | Any, input_raw: int, minimum_raw: int) -> str:
+def swap_calldata(trade: OperatorTrade, input_raw: int, minimum_raw: int) -> str:
     """The exact merged ``executeSwap(SwapIntent,FeeCollection,bytes)`` call for these pins.
 
     ``DirectRoutePins`` validates its read endpoint, but ``build_calldata_hex`` never reads it. A
@@ -63,21 +58,21 @@ def swap_calldata(trade: Mapping[str, Any] | Any, input_raw: int, minimum_raw: i
     """
     pins = DirectRoutePins(
         endpoint=PROGRAM_ENDPOINT_PLACEHOLDER,
-        pool_address=_pin(trade, "pool"),
-        token0_address=_pin(trade, "token0"),
-        token1_address=_pin(trade, "token1"),
-        direction=_pin(trade, "direction"),
-        program_fee_ppm=_pin(trade, "program_fee_ppm"),
+        pool_address=trade.pool,
+        token0_address=trade.token0,
+        token1_address=trade.token1,
+        direction=trade.direction,
+        program_fee_ppm=trade.program_fee_ppm,
         approved_program_hex=build_program_hex(
-            input_token=_pin(trade, "wmon"),
-            pool_address=_pin(trade, "pool"),
-            direction=_pin(trade, "direction"),
-            fee_ppm=_pin(trade, "program_fee_ppm"),
+            input_token=trade.wmon,
+            pool_address=trade.pool,
+            direction=trade.direction,
+            fee_ppm=trade.program_fee_ppm,
         ),
         approved_input_raw=str(input_raw),
         approved_min_output_raw=str(minimum_raw),
-        entrypoint_address=_pin(trade, "entrypoint"),
-        input_token=_pin(trade, "wmon"),
-        output_token=_pin(trade, "moe"),
+        entrypoint_address=trade.entrypoint,
+        input_token=trade.wmon,
+        output_token=trade.moe,
     )
     return build_calldata_hex(pins)

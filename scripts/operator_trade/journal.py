@@ -23,13 +23,18 @@ class Journal:
         self.path = store / JOURNAL_NAME
         self._descriptor = descriptor
 
-    @classmethod
-    def create(cls, store: Path) -> "Journal":
+    @staticmethod
+    def check_store(store: Path) -> None:
         store = Path(store)
         if store.exists():
             if not store.is_dir() or any(store.iterdir()):
                 raise OperatorError("STORE_NOT_EMPTY", store.name)
-        else:
+
+    @classmethod
+    def create(cls, store: Path) -> "Journal":
+        store = Path(store)
+        cls.check_store(store)
+        if not store.exists():
             try:
                 store.mkdir(parents=True, mode=0o700)
             except OSError as error:
@@ -50,6 +55,14 @@ class Journal:
             os.fsync(self._descriptor)
         except OSError as error:
             raise OperatorError("JOURNAL_WRITE_FAILED") from error
+
+    def close(self) -> None:
+        if self._descriptor >= 0:
+            try:
+                os.close(self._descriptor)
+            except OSError:
+                pass
+            self._descriptor = -1
 
     def records(self) -> list[dict[str, Any]]:
         return [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines() if line]

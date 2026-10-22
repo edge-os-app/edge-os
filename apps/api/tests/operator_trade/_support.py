@@ -331,3 +331,33 @@ def make_real_signer_factory(signed: list[str], key_path: Path, transport: FakeP
         )
 
     return factory
+
+
+class RpcTransport:
+    """Bridge the real OperatorRpc JSON-RPC client to the scripted FakeRpc, without a socket.
+
+    This exercises the client's request and reply validation, which a direct FakeRpc injection skips.
+    """
+
+    def __init__(self, rpc: FakeRpc) -> None:
+        self.rpc = rpc
+        self.requests = 0
+
+    def request(self, *, method: str, url: str, headers: dict[str, str], body: bytes,
+                timeout: float, deadline: float, max_response_bytes: int,
+                cancel: Callable[[], bool] | None = None) -> Any:
+        from edge_os_api.execution.original_transaction import RpcError
+        from edge_os_api.research_history.http_clients.http_transport import HttpResponse
+
+        self.requests += 1
+        request = json.loads(body.decode("utf-8"))
+        try:
+            if request["method"] == "eth_sendRawTransaction":
+                result = self.rpc.send_raw(request["params"][0])
+            else:
+                result = self.rpc.call(request["method"], request["params"])
+            payload = {"jsonrpc": "2.0", "id": request["id"], "result": result}
+        except RpcError as error:
+            payload = {"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32000}}
+        return HttpResponse(status=200, headers={"content-type": "application/json"},
+                            body=json.dumps(payload).encode("utf-8"))

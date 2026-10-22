@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from eth_abi import encode as abi_encode
 from eth_utils import keccak
@@ -64,14 +66,14 @@ def test_swap_equals_the_merged_builder_for_the_same_pins() -> None:
         input_token=WMON,
         output_token=MOE,
     )
-    trade = {"pool": POOL, "wmon": WMON, "moe": MOE, "entrypoint": ENTRYPOINT,
-             "token0": WMON, "token1": MOE, "direction": 0, "program_fee_ppm": 16000}
+    trade = SimpleNamespace(pool=POOL, wmon=WMON, moe=MOE, entrypoint=ENTRYPOINT,
+                            token0=WMON, token1=MOE, direction=0, program_fee_ppm=16000)
     assert swap_calldata(trade, INPUT, INPUT // 2) == build_calldata_hex(pins)
 
 
 def test_swap_calldata_decodes_to_the_policy_fields() -> None:
-    trade = {"pool": POOL, "wmon": WMON, "moe": MOE, "entrypoint": ENTRYPOINT,
-             "token0": WMON, "token1": MOE, "direction": 0, "program_fee_ppm": 16000}
+    trade = SimpleNamespace(pool=POOL, wmon=WMON, moe=MOE, entrypoint=ENTRYPOINT,
+                            token0=WMON, token1=MOE, direction=0, program_fee_ppm=16000)
     minimum = 3_700_181_180_921_076_741_233
     call = decode_flow_call(data_hex=swap_calldata(trade, INPUT, minimum), method=METHOD_EXECUTE_SWAP)
     assert call.intent.token_user_buys.lower() == MOE.lower()

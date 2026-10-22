@@ -46,6 +46,7 @@ def test_unknown_field_is_refused(tmp_path: Path) -> None:
         {"input_raw": "7" * 30},
         {"input_raw": str(70 * 10**18 + 1)},
         {"slippage_bps": -1},
+        {"slippage_bps": 0},
         {"slippage_bps": 10001},
         {"usd_ceiling": "2.01"},
         {"mon_usd_price": "0"},

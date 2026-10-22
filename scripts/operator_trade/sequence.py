@@ -169,6 +169,8 @@ def execute(*, rpc: OperatorRpc, trade: OperatorTrade, plan: TradePlan, prefligh
                 except _StepStopped as revoke_stopped:
                     ok = False
                     error_code = revoke_stopped.code
+                    if revoke_stopped.record is not None:
+                        steps.append(revoke_stopped.record)
                 return SequenceOutcome(ok=False, steps=tuple(steps), failed_step="swap",
                                        error_code=stopped.code, wmon_after_wrap=wmon_after_wrap,
                                        revoke_attempted=True, revoke_ok=ok, revoke_error=error_code)

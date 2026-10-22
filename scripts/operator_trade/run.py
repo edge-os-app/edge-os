@@ -153,6 +153,7 @@ def run_live(*, trade: OperatorTrade, confirm: str, store: str | None, environ: 
         raise OperatorError("CONFIRM_MISMATCH")
     if not store:
         raise OperatorError("STORE_REQUIRED")
+    Journal.check_store(Path(store))
     environment: LiveEnvironment = load_live_environment(environ)
     rpc = _rpc_from_environment(environ, rpc, transport)
     preflight = read_preflight(rpc, trade)
@@ -164,12 +165,15 @@ def run_live(*, trade: OperatorTrade, confirm: str, store: str | None, environ: 
     factory = signer_factory or build_signer_factory(environment, privy_transport or StdlibHttpTransport())
     started = dt.datetime.now(dt.timezone.utc).isoformat()
     try:
-        outcome = execute(rpc=rpc, trade=trade, plan=plan, preflight=preflight, signer_factory=factory,
-                          journal=journal, now=time.monotonic, sleep=time.sleep)
-    except Exception:  # noqa: BLE001 - keep the journal and still write the evidence record
-        outcome = SequenceOutcome(ok=False, steps=(), failed_step=None, error_code="UNEXPECTED",
-                                  wmon_after_wrap=None, revoke_attempted=False, revoke_ok=None,
-                                  revoke_error=None)
+        try:
+            outcome = execute(rpc=rpc, trade=trade, plan=plan, preflight=preflight, signer_factory=factory,
+                              journal=journal, now=time.monotonic, sleep=time.sleep)
+        except Exception:  # noqa: BLE001 - keep the journal and still write the evidence record
+            outcome = SequenceOutcome(ok=False, steps=(), failed_step=None, error_code="UNEXPECTED",
+                                      wmon_after_wrap=None, revoke_attempted=False, revoke_ok=None,
+                                      revoke_error=None)
+    finally:
+        journal.close()
     post: PostChecks | None = None
     post_error: str | None = None
     if outcome.ok:

@@ -83,7 +83,8 @@ def simulate(rpc: OperatorRpc, trade: OperatorTrade, plan: TradePlan, preflight:
             results.append(Simulation(step=transaction.step, to=transaction.to, value=transaction.value,
                                       data_sha256=_data_digest(transaction), ok=False, output_raw=None,
                                       error_code=getattr(error, "code", "SIMULATION_ERROR")))
-            raise OperatorError("SIMULATION_FAILED", transaction.step) from error
+            raise OperatorError("SIMULATION_FAILED",
+                                f"{transaction.step}:{getattr(error, 'code', 'SIMULATION_ERROR')}") from error
         raw = int(output[2:], 16) if len(output) >= 66 else None
         if transaction.step == "swap":
             if raw is None or raw < plan.minimum_raw:
