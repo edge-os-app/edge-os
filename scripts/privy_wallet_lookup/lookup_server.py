@@ -319,7 +319,8 @@ def prepare_socket_path(path: str) -> Path:
     return target
 
 
-def serve(path: str, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None) -> None:
+def serve(path: str, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None,
+          ready: threading.Event | None = None) -> None:
     target = prepare_socket_path(path)
     previous = os.umask(0o177)
     try:
@@ -329,6 +330,8 @@ def serve(path: str, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = N
         os.umask(previous)
     os.chmod(target, 0o600)
     server.listen(8)
+    if ready is not None:
+        ready.set()
     try:
         while True:
             conn, _ = server.accept()
