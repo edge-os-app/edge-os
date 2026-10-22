@@ -74,9 +74,9 @@ DECODER_VERSION = "retained-v2-pair-created/1"
 CHAIN_ID = 143
 SWAP_TOPIC0 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
 SELECTORS = {"decimals": "0x313ce567", "token0": "0x0dfe1681", "token1": "0xd21220a7", "factory": "0xc45a0155"}
-WINDOW_SECONDS = 1200
+WINDOW_SHAPES = {1200: 4, 7200: 24}
 BUCKET_SECONDS = 300
-BUCKET_COUNT = 4
+P3_READS_PER_BUCKET = 2
 QUICKNODE_METHODS = frozenset({"eth_chainId", "eth_getTransactionReceipt", "eth_call", "eth_getCode",
                                "eth_getBlockByNumber"})
 PHASE_LIMITS = {"P1": {"quicknode": 6, "hypersync": 1}, "P2": {"quicknode": 1}, "P3": {"hypersync": 8},
@@ -95,6 +95,7 @@ FIRST_READ_OFFSET = 30
 SECOND_READ_OFFSET = 120
 P2_EARLIEST, P2_CUTOFF = 120, 5
 LATE_PHASE_SECONDS = 3600
+P4_POST_WINDOW_SECONDS = LATE_PHASE_SECONDS - 1200  # keeps the original 1200 s P4 cutoff, t0 + 3600
 SCAN_LOG_LIMIT = 61
 QUOTA_SIGNALS = (b"quota", b"rate limit", b"rate-limit", b"ratelimit", b"too many requests", b"request limit",
                  b"requests limit", b"payment",
@@ -170,6 +171,15 @@ def _require(condition: bool, code: str) -> None:
         raise RecorderInputError(code)
 
 
+def window_limits(bucket_count: int) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+    """Caps for the frozen shapes. P3 may read twice per bucket; the 1200 s shape keeps its old values."""
+    phase = {name: dict(limits) for name, limits in PHASE_LIMITS.items()}
+    phase["P3"]["hypersync"] = P3_READS_PER_BUCKET * bucket_count
+    provider = dict(PROVIDER_LIMITS)
+    provider["hypersync"] = PHASE_LIMITS["P1"]["hypersync"] + phase["P3"]["hypersync"]
+    return phase, provider
+
+
 def _address(value: Any, code: str) -> str:
     try:
         return hex_value(value, 20, code).lower()
@@ -234,7 +244,8 @@ def validate_input(raw: Mapping[str, Any]) -> dict[str, Any]:
     except ValueError as error:
         raise RecorderInputError("T0_FORMAT") from error
     _require(t0 % BUCKET_SECONDS == 0, "T0_GRID")
-    _require(raw["window_seconds"] == WINDOW_SECONDS and raw["bucket_seconds"] == BUCKET_SECONDS, "WINDOW_SHAPE")
+    _require(type(raw["window_seconds"]) is int and raw["window_seconds"] in WINDOW_SHAPES
+             and raw["bucket_seconds"] == BUCKET_SECONDS, "WINDOW_SHAPE")
     destinations = raw["destinations"]
     _require(isinstance(destinations, Mapping) and set(destinations) == {"quicknode_host", "hypersync_url"},
              "DESTINATIONS")
@@ -268,7 +279,8 @@ def validate_input(raw: Mapping[str, Any]) -> dict[str, Any]:
                                          "plans", "p6", "credential_slots")},
             "pool": pool, "token0": token0, "token1": token1, "base": base, "quote": quote,
             "expected_decimals": dict(decimals), "creation": normalized_creation, "t0": t0,
-            "window_end": t0 + WINDOW_SECONDS, "quicknode_host": host, "hypersync_url": hypersync,
+            "window_seconds": raw["window_seconds"], "bucket_count": WINDOW_SHAPES[raw["window_seconds"]],
+            "window_end": t0 + raw["window_seconds"], "quicknode_host": host, "hypersync_url": hypersync,
             "output_dir": output}
 
 
@@ -281,9 +293,9 @@ def readiness_gaps(value: Mapping[str, Any]) -> list[str]:
     return gaps
 
 
-def p3_events(t0: int) -> list[tuple[int, str, int]]:
+def p3_events(t0: int, bucket_count: int) -> list[tuple[int, str, int]]:
     events = []
-    for index in range(BUCKET_COUNT):
+    for index in range(bucket_count):
         end = t0 + BUCKET_SECONDS * (index + 1)
         events.append((index, "first", end + FIRST_READ_OFFSET))
         events.append((index, "second", end + SECOND_READ_OFFSET))
@@ -292,12 +304,14 @@ def p3_events(t0: int) -> list[tuple[int, str, int]]:
 
 def plan(value: Mapping[str, Any]) -> dict[str, Any]:
     t0 = value["t0"]
+    phase_limits, provider_limits = window_limits(value["bucket_count"])
     slots = [{"bucket": index, "first": iso_utc(t0 + 300 * (index + 1) + FIRST_READ_OFFSET),
-              "second": iso_utc(t0 + 300 * (index + 1) + SECOND_READ_OFFSET)} for index in range(BUCKET_COUNT)]
+              "second": iso_utc(t0 + 300 * (index + 1) + SECOND_READ_OFFSET)}
+             for index in range(value["bucket_count"])]
     return {"schema_version": INPUT_SCHEMA, "attempt_id": value["attempt_id"], "t0_utc": value["t0_utc"],
             "window_end_utc": iso_utc(value["window_end"]), "readiness_gaps": readiness_gaps(value),
-            "calls_max": {**PROVIDER_LIMITS, "total": sum(PROVIDER_LIMITS.values())},
-            "phase_limits": PHASE_LIMITS, "p2_window_utc": [iso_utc(t0 - P2_EARLIEST), iso_utc(t0 - P2_CUTOFF)],
+            "calls_max": {**provider_limits, "total": sum(provider_limits.values())},
+            "phase_limits": phase_limits, "p2_window_utc": [iso_utc(t0 - P2_EARLIEST), iso_utc(t0 - P2_CUTOFF)],
             "p3_admission_slots_utc": slots, "p3_admission_rule": "[due, due+1s), no catch-up",
             "p5_window_utc": [iso_utc(value["window_end"] + 60), iso_utc(value["window_end"] + LATE_PHASE_SECONDS)],
             "quicknode_host": value["quicknode_host"], "hypersync_url": value["hypersync_url"],
@@ -450,8 +464,12 @@ class RecordingTransport:
     """Admission, durable liability, body receipt, redaction and private audit around the injected transport."""
 
     def __init__(self, inner: HttpTransport, journal: AttemptJournal, clock: RecorderClock, *, quicknode_url: str,
-                 hypersync_url: str, secrets: Sequence[str]) -> None:
+                 hypersync_url: str, secrets: Sequence[str],
+                 phase_limits: Mapping[str, Mapping[str, int]] | None = None,
+                 provider_limits: Mapping[str, int] | None = None) -> None:
         self._binding = _TransportBinding(inner)
+        self._phase_limits = dict(PHASE_LIMITS if phase_limits is None else phase_limits)
+        self._provider_limits = dict(PROVIDER_LIMITS if provider_limits is None else provider_limits)
         self._receipts: dict[str, dict[str, Any]] = {}
         self._journal = journal
         self._clock = clock
@@ -488,9 +506,9 @@ class RecordingTransport:
             raise AdmissionRefused("CANCELLED")
         if provider not in self._urls or url != self._urls[provider]:
             raise AdmissionRefused("UNLISTED_DESTINATION")
-        if journal.counts.get((phase, provider), 0) >= PHASE_LIMITS.get(phase, {}).get(provider, 0):
+        if journal.counts.get((phase, provider), 0) >= self._phase_limits.get(phase, {}).get(provider, 0):
             raise AdmissionRefused("PHASE_CEILING")
-        if journal.admitted(provider) >= PROVIDER_LIMITS[provider]:
+        if journal.admitted(provider) >= self._provider_limits[provider]:
             raise AdmissionRefused("PROVIDER_CEILING")
         if len(body) > MAX_REQUEST_BYTES:
             raise AdmissionRefused("REQUEST_TOO_LARGE")
@@ -655,6 +673,8 @@ class _Attempt:
         self.cancel = cancel
         self.t0 = value["t0"]
         self.window_end = value["window_end"]
+        self.bucket_count = value["bucket_count"]
+        self.phase_limits, self.provider_limits = window_limits(self.bucket_count)
         self.attempt_deadline = self.window_end + LATE_PHASE_SECONDS
         self.status = "COMPLETED"
         self.stop_reason: str | None = None
@@ -671,7 +691,7 @@ class _Attempt:
         self.cursor: int | None = None
         self.buckets = [{"index": index, "start": self.t0 + 300 * index, "end": self.t0 + 300 * (index + 1),
                          "status": "OPEN", "first": None, "delivery": None, "reason": None}
-                        for index in range(BUCKET_COUNT)]
+                        for index in range(self.bucket_count)]
         self.p3_replies: list[dict[str, Any]] = []
         self.trusted_clock = True
 
@@ -950,7 +970,7 @@ class _Attempt:
 
     def _p3(self) -> None:
         outcomes: list[dict[str, Any]] = []
-        for index, kind, due in p3_events(self.t0):
+        for index, kind, due in p3_events(self.t0, self.bucket_count):
             bucket = self.buckets[index]
             if self._stopped():
                 break
@@ -972,7 +992,7 @@ class _Attempt:
                                      "FAILED": "SECOND_READ_FAILED"}.get(outcome, "NOT_COVERED_AFTER_SECOND_READ"))
         self.phases["P3"] = {"outcome": "STOPPED" if self._stopped() else "COMPLETED", "reads": outcomes}
         if not self._stopped():
-            self._wait_until(p3_events(self.t0)[-1][2] + 1)
+            self._wait_until(p3_events(self.t0, self.bucket_count)[-1][2] + 1)
 
     def _p3_read(self, index: int, kind: str, due: int) -> str:
         self._wait_until(due)
@@ -1149,7 +1169,7 @@ class _Attempt:
 
     def _p4(self) -> None:
         start = self.boundaries()["B_START"]
-        cutoff = self.t0 + LATE_PHASE_SECONDS
+        cutoff = self.window_end + P4_POST_WINDOW_SECONDS
         if start is None:
             for role in ("token1", "token0"):
                 self.facts["decimals"]["window_start"][role] = "SKIPPED_NO_B_START"
@@ -1263,9 +1283,10 @@ class _Attempt:
                         for number in sorted(retained) if number in self.headers],
             "phases": self.phases, "p3_replies": self.p3_replies, "facts": self.facts,
             "clock": {"trusted": self.trusted_clock},
-            "accounting": {"admitted": {provider: self.journal.admitted(provider) for provider in PROVIDER_LIMITS},
+            "accounting": {"admitted": {provider: self.journal.admitted(provider)
+                                        for provider in self.provider_limits},
                            "resolved": self.journal.resolved, "unknown_liability": unknown,
-                           "reply_bytes": self.journal.reply_bytes, "ceilings": PROVIDER_LIMITS},
+                           "reply_bytes": self.journal.reply_bytes, "ceilings": self.provider_limits},
             "calls": [dict(call) for call in self.journal.calls.values()],
             "buckets": buckets,
             "delivery_records": {b["start_utc"]: b["received_at_utc"] for b in buckets if b["status"] == "DELIVERED"},
@@ -1320,7 +1341,9 @@ def _run_attempt(raw_input: Mapping[str, Any], *, transport: HttpTransport, cloc
         destination_ok = False
     attempt.quicknode_url = quicknode_url
     attempt.wire = RecordingTransport(transport, journal, clock, quicknode_url=quicknode_url,
-                                      hypersync_url=value["hypersync_url"], secrets=secrets)
+                                      hypersync_url=value["hypersync_url"], secrets=secrets,
+                                      phase_limits=attempt.phase_limits,
+                                      provider_limits=attempt.provider_limits)
     if destination_ok:
         attempt.run()
     else:

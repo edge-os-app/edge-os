@@ -22,6 +22,8 @@ from edge_os_api.research_history.provider_transport import SourceTimeout
 from scripts.forward_history_recorder import (
     AdmissionRefused,
     AttemptExists,
+    MAX_JOURNAL_BYTES,
+    MAX_TOTAL_REPLY_BYTES,
     RecorderInputError,
     hypersync_batches,
     main,
@@ -29,6 +31,7 @@ from scripts.forward_history_recorder import (
     run_attempt,
     validate_input,
 )
+from scripts.history_payload_binding import MAX_HANDOFF_BYTES
 
 T0 = 1_800_000_000
 WE = T0 + 1200
@@ -810,6 +813,65 @@ def test_default_cli_prints_a_redacted_plan_and_sends_nothing(tmp_path: Path,
                                                  "second": "2027-01-15T08:07:00Z"}
     assert plan["sends"] == 0
     assert list((tmp_path / "attempts").iterdir()) == []
+
+
+# Two-hour window (RECORDER-WINDOW-L2)
+
+
+def test_window_shape_accepts_1200_and_7200_seconds_only(tmp_path: Path) -> None:
+    assert validate_input(recorder_input(tmp_path))["bucket_count"] == 4
+    wide = validate_input(recorder_input(tmp_path, window_seconds=7200))
+    assert (wide["window_seconds"], wide["bucket_count"], wide["window_end"] - wide["t0"]) == (7200, 24, 7200)
+    for seconds in (0, 1199, 3600, 7201):
+        with pytest.raises(RecorderInputError) as refused:
+            validate_input(recorder_input(tmp_path, window_seconds=seconds))
+        assert refused.value.code == "WINDOW_SHAPE"
+    with pytest.raises(RecorderInputError) as refused:
+        validate_input(recorder_input(tmp_path, bucket_seconds=60))
+    assert refused.value.code == "WINDOW_SHAPE"
+
+
+def test_two_hour_plan_shows_24_buckets_and_derived_hypersync_ceilings(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "input.json"
+    path.write_text(json.dumps(recorder_input(tmp_path, window_seconds=7200)))
+    assert main(["plan", "--input", str(path)]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert len(plan["p3_admission_slots_utc"]) == 24
+    assert plan["p3_admission_slots_utc"][-1] == {"bucket": 23, "first": "2027-01-15T10:00:30Z",
+                                                  "second": "2027-01-15T10:02:00Z"}
+    assert plan["calls_max"] == {"quicknode": 17, "hypersync": 49, "total": 66}
+    assert plan["phase_limits"]["P3"] == {"hypersync": 48}
+
+
+def test_two_hour_fake_run_completes_all_24_buckets_inside_every_cap(tmp_path: Path) -> None:
+    result, providers, attempt = run(tmp_path, window_seconds=7200)
+    assert result["status"] == "COMPLETED"
+    handoff = handoff_of(result)
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 24
+    assert (count(providers, "quicknode"), count(providers, "hypersync")) == (17, 25)
+    assert handoff["accounting"]["ceilings"] == {"quicknode": 17, "hypersync": 49}
+    assert handoff["accounting"]["reply_bytes"] < MAX_TOTAL_REPLY_BYTES
+    assert (attempt / "journal.jsonl").stat().st_size < MAX_JOURNAL_BYTES
+    assert (attempt / "handoff.json").stat().st_size < MAX_HANDOFF_BYTES
+    assert handoff["facts"]["decimals"]["window_start"] == {"token0": 18, "token1": 18}
+    assert handoff["facts"]["pool_tokens_at_start"] == {"token0": "READ", "token1": "READ"}
+
+
+PACKET = Path(__file__).resolve().parents[4] / ".scratch/recorder-window-l2-20261022"
+
+
+@pytest.mark.skipif(not (PACKET / "root/INPUT14.json").exists(), reason="packet input is outside the repository")
+def test_prepared_two_hour_input_passes_every_rule_except_t0(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    path = PACKET / "root/INPUT14.json"
+    raw = json.loads(path.read_text())
+    assert raw["t0_utc"] == "PLACEHOLDER"
+    assert main(["plan", "--input", str(path)]) == 2
+    assert json.loads(capsys.readouterr().out)["code"] == "T0_FORMAT"
+    raw["t0_utc"] = "2026-10-22T20:00:00Z"
+    value = validate_input(raw)
+    assert (value["window_seconds"], value["bucket_count"]) == (7200, 24)
 
 
 # Bounds and admission ceilings

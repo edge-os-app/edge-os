@@ -44,7 +44,7 @@ CHECKER_PATH = REPO_ROOT / CHECKER_RELATIVE_PATH
 CHECKER_SHA256 = "1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667"
 
 CHECKER_RELATIVE_PATH_V2 = "scripts/history_payload_binding_v2.py"
-CHECKER_SHA256_V2 = "bc17fca11112af2f91b21b0d515c30eacccd928641fa3fee77ed1a65f3d4799d"
+CHECKER_SHA256_V2 = "4c9c58adefeec3cb574701d554c7f059ea055802e057bbf6960ee5018929ca82"
 # All trusted projection, canonicalization and time helpers, including their loaded contract assets.
 CHECKER_DEPENDENCIES_V2 = {'scripts/history_payload_binding.py': '1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667',
  'apps/api/src/edge_os_api/records/contract_adapter.py': '092a87ea75384138e4663aea1d48249d9e7a8cc92a23b1d493887bae560e1b0e',

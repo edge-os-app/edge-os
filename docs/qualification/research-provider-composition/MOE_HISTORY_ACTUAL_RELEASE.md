@@ -111,3 +111,31 @@ operator on 2026-10-22.
 - One 20-minute window and one Nansen 24-hour snapshot are bounded descriptions. They are not complete coverage.
 - Public holder display, retention and licence rights for provider data remain unresolved.
 - The saved-dataset PASS, restart, replay and the live demo remain unproved until an authorized operator run.
+
+## The pending two-hour recorder window (RECORDER-WINDOW-L2)
+
+Status: local recorder and checker change only. It registers no release and runs no recorder.
+
+On 2026-10-22 the builder decided to record one 7200-second MOE/WMON forward-history window for the new attempt. This
+decision replaces operating packet decision D1 for that attempt only. The existing 20-minute release
+`actual-moe-history-nansen-20261022/1` and its run stay valid and unchanged.
+
+- Window shapes are frozen: 1200 s with 4 buckets (unchanged) and 7200 s with 24 buckets. Both use 300-second buckets.
+  No other window or bucket value is accepted.
+- P3 may read twice per bucket, so the derived HyperSync ceiling is `1 + 2 * buckets` calls: 9 for 1200 s and 49 for
+  7200 s. QuickNode stays at 17. The P4 cutoff keeps `t0 + 3600` for 1200 s and keeps the same post-window margin for
+  7200 s.
+- `scripts/history_payload_binding_v2.py` derives the bucket count from the window. The four-bucket ceilings and receipt
+  caps stay identical, so the 20-minute anchor admits byte-for-byte.
+- The prepared input `PACKET/root/INPUT14.json` (`moe-wmon-fwd2h-actual-20261022a`, source
+  `actual-moe-wmon-fwd2h/1`) passes every input rule with a placeholder T0 only. It is not run.
+
+RELEASE-2H must still:
+
+- add and approve a new release definition and SHA-256 with the run's window, scan, delivery records and limits;
+- change or version the pinned four-bucket projection `scripts/history_payload_binding.py` used by saved-export
+  comparison;
+- update the release history limits for 24 buckets and declare the new observed delivery records;
+- rerun release admission and the saved-dataset comparison on the completed two-hour artifacts.
+
+Until then, the two-hour attempt can produce a recorder graph but cannot be registered as a release.
