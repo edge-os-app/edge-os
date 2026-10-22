@@ -43,18 +43,22 @@ def _word(value: int) -> str:
     return "0x" + value.to_bytes(32, "big").hex()
 
 
-def _mapping_slot(wallet: str) -> str:
-    return "0x" + keccak(_address_word(wallet) + BALANCE_SLOT.to_bytes(32, "big")).hex()
+def _mapping_slot(wallet: str, base_slot: int) -> str:
+    return "0x" + keccak(_address_word(wallet) + base_slot.to_bytes(32, "big")).hex()
+
+
+def _balance_slot(wallet: str) -> str:
+    return _mapping_slot(wallet, BALANCE_SLOT)
 
 
 def _allowance_slot(wallet: str, spender: str) -> str:
-    return "0x" + keccak(_address_word(spender) + bytes.fromhex(_mapping_slot(wallet)[2:])).hex()
+    return "0x" + keccak(_address_word(spender) + bytes.fromhex(_mapping_slot(wallet, ALLOWANCE_SLOT)[2:])).hex()
 
 
 def _overrides(trade: OperatorTrade, preflight: Preflight, balances: bool, allowance: bool) -> dict[str, object] | None:
     diff: dict[str, str] = {}
     if balances:
-        diff[_mapping_slot(trade.wallet_address)] = _word(preflight.wmon_balance + trade.input_raw)
+        diff[_balance_slot(trade.wallet_address)] = _word(preflight.wmon_balance + trade.input_raw)
     if allowance:
         diff[_allowance_slot(trade.wallet_address, trade.entrypoint)] = _word(trade.input_raw)
     return {trade.wmon: {"stateDiff": diff}} if diff else None

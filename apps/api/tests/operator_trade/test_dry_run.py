@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from scripts.operator_trade.dry_run import build_unsigned, simulate
+from scripts.operator_trade.dry_run import _allowance_slot, _balance_slot, build_unsigned, simulate
 from scripts.operator_trade.errors import OperatorError
 from scripts.operator_trade.plan import plan_trade
 from scripts.operator_trade.preflight import read_preflight
 from scripts.operator_trade.run import main
 from scripts.operator_trade.trade_file import load_trade_file
 
-from ._support import ENTRYPOINT, INPUT, MOE, WMON, FakeRpc, FakeTransport, trade_dict
+from ._support import ENTRYPOINT, INPUT, MOE, WALLET, WMON, FakeRpc, FakeTransport, trade_dict
 
 
 def _setup(tmp_path: Path, rpc: FakeRpc):
@@ -58,7 +58,19 @@ def test_swap_simulation_carries_state_overrides_for_balance_and_allowance(tmp_p
     assert WMON in overrides
     diff = overrides[WMON]["stateDiff"]
     assert len(diff) == 2
+    assert _allowance_slot(WALLET, ENTRYPOINT) in diff
+    assert _balance_slot(WALLET) in diff
     assert all(value.startswith("0x") and len(value) == 66 for value in diff.values())
+
+
+def test_override_slots_match_the_verified_live_check() -> None:
+    # Values from LIVE_QUOTE_CHECK1.json / live_quote_check.py, verified on chain on 2026-10-22.
+    assert _balance_slot("0x91BB52A63c91986813288965e4681FF111De1b63") == (
+        "0x512122ff3a68042a10b19b8f2998bb3d97fcfce5adceffb9a46b9d83ad080440"
+    )
+    assert _allowance_slot("0x91BB52A63c91986813288965e4681FF111De1b63", ENTRYPOINT) == (
+        "0x796909ea87f663ee5354b522fe6b6c9de2d7ef93623767cfb826d05606973b87"
+    )
 
 
 def test_refuses_a_reverting_swap_simulation(tmp_path: Path) -> None:

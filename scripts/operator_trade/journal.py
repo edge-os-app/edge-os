@@ -45,7 +45,11 @@ class Journal:
             raise OperatorError("STORE_NOT_EMPTY", store.name) from error
         except OSError as error:
             raise OperatorError("STORE_UNAVAILABLE", store.name) from error
-        _fsync_directory(store)
+        try:
+            _fsync_directory(store)
+        except OSError as error:
+            os.close(descriptor)
+            raise OperatorError("STORE_UNAVAILABLE", store.name) from error
         return cls(store, descriptor)
 
     def append(self, record: dict[str, Any]) -> None:

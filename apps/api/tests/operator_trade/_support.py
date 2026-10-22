@@ -26,6 +26,19 @@ INPUT = 50 * 10**18
 FAKE_CODE = {"entrypoint": "0x60016000", "wmon": "0x60026000", "pool": "0x60036000"}
 
 
+def _address_word(value: str) -> bytes:
+    return bytes.fromhex(value[2:].lower().rjust(64, "0"))
+
+
+def balance_slot() -> str:
+    return "0x" + keccak(_address_word(WALLET) + (3).to_bytes(32, "big")).hex()
+
+
+def allowance_slot() -> str:
+    inner = keccak(_address_word(WALLET) + (4).to_bytes(32, "big"))
+    return "0x" + keccak(_address_word(ENTRYPOINT) + inner).hex()
+
+
 def code_sha256(code_hex: str) -> str:
     return hashlib.sha256(bytes.fromhex(code_hex[2:])).hexdigest()
 
@@ -181,6 +194,12 @@ class FakeRpc:
         if data.startswith("0xce1e7030"):
             if self.reverting_swap:
                 raise RpcError("FAKE_REVERT")
+            overrides = params[2] if len(params) >= 3 else {}
+            diff = overrides.get(WMON, {}).get("stateDiff", {}) if isinstance(overrides, dict) else {}
+            if balance_slot() not in diff or allowance_slot() not in diff:
+                raise RpcError("FAKE_SLOT_MISMATCH")
+            if int(diff[allowance_slot()], 16) == 0:
+                raise RpcError("FAKE_ALLOWANCE_ZERO")
             return "0x" + self.simulation_output.to_bytes(32, "big").hex()
         if data.startswith("0xd0e30db0") or data.startswith("0x095ea7b3"):
             return "0x" + "0" * 63 + "1"
