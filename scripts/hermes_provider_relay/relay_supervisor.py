@@ -72,11 +72,15 @@ def make_provider_tls(folder: Path, hosts: tuple[str, ...]) -> None:
     def openssl(*args: str) -> None:
         subprocess.run(["openssl", *args], cwd=folder, capture_output=True, check=True, timeout=60)
 
-    # The digest is named: LibreSSL (macOS `openssl`) signs `x509 -req` with SHA-1 for an EC key by default, and the
-    # provider's OpenSSL refuses a SHA-1 signature when it loads the certificate (CA_MD_TOO_WEAK).
-    curve = ("-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-sha256")
+    # The digest, the named-curve key encoding and the CA's key identifiers are explicit: OpenSSL 3 supplies them by
+    # default, LibreSSL (macOS `openssl`) does not. Without them the provider's OpenSSL refuses a SHA-1 signature
+    # (CA_MD_TOO_WEAK), and Python 3.13+ (VERIFY_X509_STRICT) refuses explicit EC parameters and a CA without a
+    # Subject Key Identifier, which also leaves the server certificate's Authority Key Identifier empty.
+    curve = ("-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-pkeyopt", "ec_param_enc:named_curve",
+             "-nodes", "-sha256")
     openssl("req", "-x509", *curve, "-keyout", "ca.key", "-out", "ca.pem", "-days", "2", "-subj", "/CN=relay-test-ca",
-            "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+            "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+            "-addext", "subjectKeyIdentifier=hash", "-addext", "authorityKeyIdentifier=keyid:always")
     openssl("req", "-new", *curve, "-keyout", "server.key", "-out", "server.csr", "-subj", f"/CN={hosts[0]}")
     (folder / "server.ext").write_text(
         f"subjectAltName={','.join(f'DNS:{host}' for host in hosts)}\nbasicConstraints=critical,CA:FALSE\n"
