@@ -606,6 +606,14 @@ class DeclaredFeasibilityFloors(unittest.TestCase):
                      "usable 2 of 4"):
             self.assertIn(text, basis[0]["detail"])
 
+    def test_a_row_without_the_slot_count_adds_no_reason_and_never_crashes(self) -> None:
+        rows = [{"name": "moe-window", "usable": 2, "required_triggered": 1, "required_control": 1,
+                 "required_total": 2, "shortfall": 0}]
+        got = qualify(base_profile(), self.observations("FEASIBLE", rows))
+        claim = got["claims"]["SCHEDULE_FEASIBILITY"]
+        self.assertEqual(claim["verdict"], "QUALIFIED")
+        self.assertNotIn("DECLARED_FLOORS", {r["code"] for r in claim["reasons"]})
+
     def test_undeclared_floors_stay_unresolved_and_add_no_reason(self) -> None:
         got = qualify(base_profile(), self.observations("UNDECLARED", []))
         claim = got["claims"]["SCHEDULE_FEASIBILITY"]

@@ -1461,12 +1461,13 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
         schedule.add(*rows_problem)
     if status == "FEASIBLE" and rows_problem is None:
         for row in shown:  # the declared floors and the counted slots, shown beside the verdict
-            triggered, control = row.get("required_triggered"), row.get("required_control")
-            if triggered is None or control is None:  # a static observation without the split adds no reason
-                continue
+            triggered, control, slots = (row.get("required_triggered"), row.get("required_control"),
+                                         row.get("schedule_slots"))
+            if triggered is None or control is None or not _is_int(slots):
+                continue  # a row without the split and slot count adds no reason; never a crash
             schedule.add("BASIS", "DECLARED_FLOORS",
                          f"{row['name']}: required triggered {triggered} + control {control} "
-                         f"(demo floors, not statistical evidence); usable {row['usable']} of {row['schedule_slots']}")
+                         f"(demo floors, not statistical evidence); usable {row['usable']} of {slots}")
     if status == "INFEASIBLE":
         schedule.add("FAILED_CHECK", "INFEASIBLE_BEFORE_OUTCOMES", "declared sample floors cannot be met")
     elif status != "FEASIBLE":

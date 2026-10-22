@@ -46,7 +46,7 @@ TRUSTED_DEPENDENCIES = {'scripts/history_payload_binding.py': '1c74d8c9bce020e35
  'docs/contracts/p02/check_contract.py': '06f3820a2ccfcf1445aef8240e5808977f8adc708ab32aecfedf28ef323d8f79',
  'docs/contracts/p02/contract.json': '1ce8a41cc6d6a097f73cf1fbd24cd8fc4d99c685c52ebf25437427a1a7948768',
  'docs/contracts/p02/fixtures/complete-strategy.json': '9ff3ab72c10616aacd37d2381a9a10500789fdbe671f2adb8314ed6a54479771',
- 'docs/qualification/p07/qualification.py': '8431339de2d0456349d4430a93b2bef02274c7eafcc4d0ab067bd91166507938',
+ 'docs/qualification/p07/qualification.py': '2566a07ad60f2e3bdeae89588d44cd0e95c40b3b5cc7bdd7b80ce3e0a3711e28',
  'apps/api/src/edge_os_api/research_history/http_clients/http_transport.py': '89aa0a18442fb1a28a51d31a9a06da2da9fee4f3e2731239e34a00d44c725f0d'}
 TRANSPORT = {"construction": "OWNED_STDLIB",
              "implementation": "edge_os_api.research_history.http_clients.http_transport.StdlibHttpTransport",
