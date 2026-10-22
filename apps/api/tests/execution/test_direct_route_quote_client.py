@@ -161,9 +161,13 @@ def test_direct_release_refuses_drift(change):
         OperatingRelease(source)
 
 
-def test_release_refuses_amounts_above_uint256():
+@pytest.mark.parametrize("change", [
+    {"approved_input_raw": str(2**256), "approved_allowance_raw": str(2**256)},
+    {"approved_min_output_raw": str(2**256)},
+])
+def test_release_refuses_amounts_above_uint256(change):
     source = direct_definition()
-    source["route"].update(approved_input_raw=str(2**256), approved_allowance_raw=str(2**256))
+    source["route"].update(change)
     with pytest.raises(ReleaseRefused):
         OperatingRelease(source)
 
