@@ -8,6 +8,8 @@ import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationPr
 import { EffectComparisonPanel } from "./EffectComparisonPanel";
 import { ResearchNansenReport } from "./ResearchNansenReport";
 import { declarationRelease, describeRelease, releaseBounds, sourceRelease, transportRelease } from "../lib/research-release";
+import { deriveHistoryPlan, historyUnknowns } from "../lib/history-declaration";
+import type { HistoryDirection, HistoryPlan } from "../lib/history-declaration";
 
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
@@ -501,10 +503,6 @@ function expressions(row: RuleRow, quoteUnit: string) {
   };
 }
 
-function shiftMinutes(value: string, minutes: number): string {
-  return new Date(new Date(value).valueOf() + minutes * 60_000).toISOString().replace(".000Z", "Z");
-}
-
 function storedKey(name: string): string {
   try {
     const saved = window.sessionStorage.getItem(name);
@@ -626,9 +624,17 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
   const frozenRelease = selected ? declarationRelease(selected.declaration.content.frozen as unknown as Record<string, unknown>) : null;
   const rulesComplete = rules.every((row) => /^[1-9][0-9]?$/.test(row.lookback) && /^-?[0-9]+(\.[0-9]+)?$/.test(row.threshold)
     && /^[0-9]+(\.[0-9]+)?$/.test(row.volume));
-  const ready = source !== null && question.length > 0 && hypothesis.trim().length > 0 && rulesComplete && adopted;
+  // The longest rule lookback decides how much history a decision needs before the schedule can start.
+  const lookbackBuckets = rules.reduce((longest, row) => {
+    const value = Number(row.lookback);
+    return Number.isInteger(value) && value > longest ? value : longest;
+  }, 0);
+  const plan = source ? deriveHistoryPlan({ window: source.window, direction: direction as HistoryDirection, lookbackBuckets }) : null;
+  const planRefusal = plan && !plan.ok && rulesComplete ? plan.reason : "";
+  const ready = source !== null && question.length > 0 && hypothesis.trim().length > 0 && rulesComplete && adopted
+    && plan !== null && plan.ok;
 
-  const buildDeclaration = (source: HistorySource): Record<string, unknown> => {
+  const buildDeclaration = (source: HistorySource, plan: Extract<HistoryPlan, { ok: true }>): Record<string, unknown> => {
     const release = sourceRelease(source);
     const fixedBounds = release ? releaseBounds(release) : null;
     const quoteUnit = `QUOTE:${source.market.quote_asset}`;
@@ -636,12 +642,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
     const evaluations = rules.map(() => crypto.randomUUID());
     const variants = rules.map((_, index) => `rule-${index + 1}`);
     const descriptive = direction === "DESCRIPTIVE";
-    const { start, end } = source.window;
-    const partitions = descriptive
-      ? [{ partition_id: "described", role: "DESCRIPTIVE", start, end }]
-      : [{ partition_id: "train", role: "TRAINING", start, end: shiftMinutes(start, 60) },
-        { partition_id: "validate", role: "VALIDATION", start: shiftMinutes(start, 60), end: shiftMinutes(start, 90) },
-        { partition_id: "holdout", role: "HOLDOUT", start: shiftMinutes(start, 90), end }];
+    const partitions = plan.partitions;
     return {
       operation_id: crypto.randomUUID(), idempotency_key: `ui-history-${crypto.randomUUID()}`,
       expected_interpretation_revision_id: interpretationRevisionId,
@@ -650,7 +651,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         falsification: descriptive ? { status: "DESCRIPTIVE_ONLY", criteria: "No outcome claim is evaluated." }
           : { status: "DECLARED", criteria: direction === "OUTPERFORM" ? "The triggered minus untriggered mean is not positive." : "The triggered minus untriggered mean is not negative." },
         alternatives: ["Short-term noise explains any difference."],
-        unknowns: ["Recorded responses are synthetic; no real pool behaviour is measured."] },
+        unknowns: historyUnknowns(source.evidence_class, sourceRelease(source)?.release_id ?? null) },
       configuration: {
         question, source: { source_id: source.source_id, profile_sha256: source.profile_sha256, evidence_class: source.evidence_class },
         market: source.market, window: source.window,
@@ -658,7 +659,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         direction, horizons: [{ value: 5, unit: "MINUTES" }], partitions,
         evaluation_plan: evaluations.map((evaluation_id, index) => ({ evaluation_id, trial_id: trial, variant_id: variants[index],
           horizon: { value: 5, unit: "MINUTES" }, partition_ids: [partitions[0].partition_id] })),
-        schedule: { version: "p09.decision-clock/1", start: shiftMinutes(start, 15), end: shiftMinutes(end, -10), interval_seconds: 300 },
+        schedule: plan.schedule,
         rule_map: { schema_version: "edge-os.hypothesis-rule-map/1", control: "UNTRIGGERED_DECISIONS", incremental_volume_declared: true,
           rules: rules.map((row, index) => {
             const built = expressions(row, quoteUnit);
@@ -699,7 +700,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
 
   const declare = () => {
     if (!ready || busy || !source || pendingDeclaration) return;
-    void saveDeclaration(buildDeclaration(source));
+    const current = deriveHistoryPlan({ window: source.window, direction: direction as HistoryDirection, lookbackBuckets });
+    if (!current.ok) return;
+    void saveDeclaration(buildDeclaration(source, current));
   };
 
   const startJob = async (fresh: boolean) => {
@@ -878,6 +881,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               onChange={(event) => setAdopted(event.target.checked)} />
             I reviewed and adopt every setting above before any data is read
           </label>
+          {planRefusal ? <p className="status stop" role="alert" data-testid="history-window-refusal">{planRefusal}</p> : null}
           <button className="btn btn-primary" type="button" onClick={declare} disabled={!ready || pendingDeclaration !== null} aria-disabled={busy || undefined}>
             {busy ? "Saving…" : "Save history declaration"}
           </button>
