@@ -375,7 +375,9 @@ def resolve_approved_packet(
 
 UNFUNDED_POLICY_PROFILE_ID = "privy.raw.v1"
 POLICY_ID = "c30racyru6duaipj815cvjce"
-POLICY_BODY_SHA256 = "cd543346a75ab342e04282f4fd5764ff0f19e1d7a354d5f09d208e53ad0d7477"
+# Version 2 binds the rules-only PATCH body: the live rules returned by Privy,
+# normalized (rule ids removed, address values lower-cased), in canonical JSON.
+POLICY_BODY_SHA256 = "61860d201ecd9ce6d92bff5e7c2122b40164ecb69d1fa375738cb67b17b0892b"
 APP_ID = "cmuyj4smt00tw0dla2j19tlu7"
 POLICY_OWNER_ID = "a5gwmgrsn6903ac09lphyv9a"
 EXECUTOR_ID = "zu1qjdfqlbcq1ct7sdxendgg"
@@ -396,19 +398,47 @@ MAX_FEE_PER_GAS = 100_000_000_000
 MAX_PRIORITY_FEE_PER_GAS = 2_000_000_000
 PACKET_EXPIRES_AT_EPOCH = 1_793_836_800
 PACKET_AUTH_HEADER_EXPIRY = "1793836800000"
-PACKET_ATTEMPT_IDENTITY = "unfunded-policy-proof-1"
+PACKET_ATTEMPT_IDENTITY = "unfunded-policy-proof-2"
 
 # The reviewed identities. The registry admits the packet and the table only when
 # their recomputed hashes equal these literals. A source edit cannot approve a
 # new packet or table without a new reviewed literal.
-SEALED_PACKET_SHA256 = "5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf"
-SEALED_ACTUAL_MANIFEST_SHA256 = "62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01"
+SEALED_PACKET_SHA256 = "a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496"
+SEALED_ACTUAL_MANIFEST_SHA256 = "f485816e431aae37e30d062df038a3e1d62b8cdadac8e510ebb5d0181c827b63"
 
 DEPOSIT_CALLDATA = "0xd0e30db0"
 APPROVE_SELECTOR = "0x095ea7b3"
 TRANSFER_SELECTOR = "0xa9059cbb"
 EXECUTE_SWAP_SELECTOR = "0xce1e7030"
+EXECUTE_SWAP_WITH_RECEIVER_SIGNATURE = (
+    "executeSwapWithReceiver((address,uint256,address,uint256),"
+    "(address,uint256,address,uint256,bool),bytes,address)"
+)
+EXECUTE_SWAP_WITH_RECEIVER_SELECTOR = "0x31343b21"
 SWAP_PROGRAM = "01"
+
+_ADDRESS_VALUE = re.compile(r"0x[0-9a-fA-F]{40}")
+
+
+def normalize_live_policy_rules(rules: Any) -> Any:
+    """Normalize live Privy rules to the reviewed write body.
+
+    Privy returns rule ids and checksum-cased address values. The reviewed PATCH
+    body has neither. Remove every ``id`` key and lower-case every address value,
+    and change no other field, so the canonical hash is stable across reads.
+    """
+    if isinstance(rules, Mapping):
+        return {name: normalize_live_policy_rules(value) for name, value in rules.items() if name != "id"}
+    if isinstance(rules, list):
+        return [normalize_live_policy_rules(value) for value in rules]
+    if isinstance(rules, str) and _ADDRESS_VALUE.fullmatch(rules) is not None:
+        return rules.lower()
+    return rules
+
+
+def policy_body_sha256(live_rules: Any) -> str:
+    """The content hash of one policy rules body, derived as the packet binds it."""
+    return hashlib.sha256(canonical_json({"rules": normalize_live_policy_rules(live_rules)})).hexdigest()
 
 
 def _word(value: int) -> str:
@@ -441,6 +471,19 @@ def _execute_swap_calldata() -> str:
     )
     padded_program = SWAP_PROGRAM + "0" * (64 - len(SWAP_PROGRAM))
     return EXECUTE_SWAP_SELECTOR + head + _word(len(SWAP_PROGRAM) // 2) + padded_program
+
+
+def _execute_swap_with_receiver_calldata(receiver: str) -> str:
+    """The exact receiver variant layout: the same tuples, then bytes offset 352 and one receiver word."""
+    head = (
+        _address_word(WMON) + _word(MON) + _address_word(WMON) + _word(2 * MON)
+        + _address_word(ZERO_ADDRESS) + _word(0)
+        + _address_word(ZERO_ADDRESS) + _word(0) + _word(0)
+        + _word(352) + _address_word(receiver)
+    )
+    padded_program = SWAP_PROGRAM + "0" * (64 - len(SWAP_PROGRAM))
+    return (EXECUTE_SWAP_WITH_RECEIVER_SELECTOR + head
+            + _word(len(SWAP_PROGRAM) // 2) + padded_program)
 
 
 def _transaction(*, to: str, value: int, data: str, chain_id: int = 143, gas_limit: int) -> dict[str, Any]:
@@ -517,6 +560,9 @@ def _policy_rows() -> list[Specimen]:
                                  gas_limit=GAS_TRANSFER)),
         _policy_row("deny_entrypoint_wrong_function", field, deny,
                     _transaction(to=ENTRYPOINT, value=0, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
+        _policy_row("deny_execute_swap_with_receiver", field, deny,
+                    _transaction(to=ENTRYPOINT, value=0,
+                                 data=_execute_swap_with_receiver_calldata(SINK), gas_limit=GAS_SWAP)),
         _policy_row("deny_approve_other_spender", field, deny,
                     _transaction(to=WMON, value=0, data=_approve_calldata(SINK, CAP),
                                  gas_limit=GAS_APPROVE)),
@@ -548,6 +594,7 @@ UNFUNDED_POLICY_ORDER: tuple[str, ...] = (
     "raw.deny_swap_wrong_to",
     "raw.deny_wmon_wrong_function",
     "raw.deny_entrypoint_wrong_function",
+    "raw.deny_execute_swap_with_receiver",
     "raw.deny_approve_other_spender",
     "raw.deny_approve_above_cap",
     "raw.deny_approve_with_value",

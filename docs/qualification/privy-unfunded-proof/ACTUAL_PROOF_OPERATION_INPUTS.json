@@ -1,26 +1,26 @@
 {
   "schema": "edge-os.actual-proof-operation-inputs/1",
-  "task": "UNFUNDED-POLICY-PROOF-L3-20261022",
+  "task": "POLICY-PROOF-V2-L3-20261022",
   "status": "FROZEN",
-  "repair": "GATE1-G1-G2-REPAIR1",
+  "repair": "POLICY-PROOF-V2-L3-20261022-PACKET2",
   "evidence_class": "LOCAL_TESTED",
   "provider_proof": "UNQUALIFIED",
-  "note": "The frozen policy-layer packet is sealed to reviewed SHA-256 literals and registered in the code-owned registries. The live proof is not run. This file grants nothing and approves no trade, funding, broadcast or policy change.",
+  "note": "The frozen policy-layer packet version 2 binds the tightened live R3 policy and is sealed to reviewed SHA-256 literals and registered in the code-owned registries. Packet v1 is refused. The live proof is not run. This file grants nothing and approves no trade, funding, broadcast or policy change.",
   "packet_fields": [
     {
       "field": "packet_id",
       "required": "SHA-256 of the frozen packet projection",
-      "current": "5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf"
+      "current": "a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496"
     },
     {
       "field": "sealed_packet_sha256",
       "required": "The reviewed literal the registry must match",
-      "current": "5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf"
+      "current": "a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496"
     },
     {
       "field": "table_manifest_sha256",
       "required": "The reviewed literal actual table manifest",
-      "current": "62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01"
+      "current": "f485816e431aae37e30d062df038a3e1d62b8cdadac8e510ebb5d0181c827b63"
     },
     {
       "field": "app_id",
@@ -84,7 +84,7 @@
       "field": "profile_policy_sha256",
       "required": "One policy content hash per profile",
       "current": {
-        "raw": "cd543346a75ab342e04282f4fd5764ff0f19e1d7a354d5f09d208e53ad0d7477"
+        "raw": "61860d201ecd9ce6d92bff5e7c2122b40164ecb69d1fa375738cb67b17b0892b"
       }
     },
     {
@@ -117,7 +117,7 @@
     {
       "field": "attempt_identity",
       "required": "The one-use idempotency/attempt identity",
-      "current": "unfunded-policy-proof-1"
+      "current": "unfunded-policy-proof-2"
     },
     {
       "field": "requests",
@@ -424,6 +424,31 @@
           "request_sha256": "c76af7e72ead99978fac762a685ceafd687ca3cb04bdce92bc5d9250befc35af"
         },
         {
+          "specimen_id": "raw.deny_execute_swap_with_receiver",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0x31343b210000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000160000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000",
+                "gas_limit": 500000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0xb3e6778480b2e488385e8205ea05e20060b813cb",
+                "type": 2,
+                "value": 0
+              }
+            }
+          },
+          "body_sha256": "7dfcba973e7cbc43811c8721cff101ccc876881face61d5a1239ea421ea1a1a3",
+          "request_sha256": "cbc7282e3dbbf1737dfc979e55ed9b959d132974f7bf335c384e79469eb716d7"
+        },
+        {
           "specimen_id": "raw.deny_approve_other_spender",
           "expected": "POLICY_DENY",
           "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
@@ -591,6 +616,7 @@
         "raw.deny_swap_wrong_to": "POLICY_DENY",
         "raw.deny_wmon_wrong_function": "POLICY_DENY",
         "raw.deny_entrypoint_wrong_function": "POLICY_DENY",
+        "raw.deny_execute_swap_with_receiver": "POLICY_DENY",
         "raw.deny_approve_other_spender": "POLICY_DENY",
         "raw.deny_approve_above_cap": "POLICY_DENY",
         "raw.deny_approve_with_value": "POLICY_DENY",
@@ -744,7 +770,7 @@
       "input": "deployed ABI and selector",
       "required": "Reviewed entrypoint bytecode and the real selector",
       "current": "SELECTOR_COMPUTED_SOURCE_UNRESOLVED",
-      "note": "executeSwap selector ce1e7030 is the Keccak-256 selector for the 5-field fees tuple with bool isInTokenFee; the deployed source identity stays unresolved."
+      "note": "executeSwap selector ce1e7030 is the Keccak-256 selector for the 5-field fees tuple with bool isInTokenFee; executeSwapWithReceiver selector 31343b21 is recomputed from its full signature in a test. The deployed source identity stays unresolved."
     },
     {
       "input": "historical uncertainty",
