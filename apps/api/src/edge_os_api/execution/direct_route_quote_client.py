@@ -52,7 +52,8 @@ def _uint_word(value: int) -> bytes:
 
 
 def _raw(value: Any) -> bool:
-    return type(value) is str and len(value) <= MAX_RAW_DIGITS and canonical_raw(value) and int(value) > 0
+    return (type(value) is str and len(value) <= MAX_RAW_DIGITS and canonical_raw(value)
+            and 0 < int(value) < 2**256)
 
 
 def build_program_hex(*, input_token: str, pool_address: str, direction: int, fee_ppm: int) -> str:

@@ -72,7 +72,8 @@ def _validate(value: dict[str, Any]) -> None:
     for asset in (route.input_asset, route.output_asset):
         _require(asset.asset_id.lower() == f"monad:143/{asset.token_address.lower()}")
     _require(route.input_asset.token_address.lower() != route.output_asset.token_address.lower())
-    _require(int(route.approved_input_raw) > 0 and int(route.approved_min_output_raw) > 0
+    _require(int(route.approved_input_raw) > 0 and int(route.approved_input_raw) < 2**256
+             and int(route.approved_min_output_raw) > 0
              and route.approved_allowance_raw == route.approved_input_raw
              and route.supported_schema_variants == ["TRANSACTION_CALLDATA"])
     freshness = value["route"]["freshness"]

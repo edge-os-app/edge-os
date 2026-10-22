@@ -161,6 +161,13 @@ def test_direct_release_refuses_drift(change):
         OperatingRelease(source)
 
 
+def test_release_refuses_amounts_above_uint256():
+    source = direct_definition()
+    source["route"].update(approved_input_raw=str(2**256), approved_allowance_raw=str(2**256))
+    with pytest.raises(ReleaseRefused):
+        OperatingRelease(source)
+
+
 def test_the_existing_kuru_api_release_stays_valid():
     release = OperatingRelease(definition())
     assert "source" not in release.content()["quote"]
@@ -295,6 +302,8 @@ def test_oversized_or_mismatched_replies_are_refused():
     lambda p: p.update(approved_program_hex="0xdeadbeef"),
     lambda p: p.update(endpoint="https://quote.invalid/api/quote"),
     lambda p: p.update(approved_min_output_raw="0"),
+    lambda p: p.update(approved_input_raw=str(2**256)),
+    lambda p: p.update(approved_min_output_raw=str(2**256)),
     lambda p: p.update(input_token=OUTPUT),
 ])
 def test_direct_pins_refuse_inconsistent_values(change):
