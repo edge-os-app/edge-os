@@ -126,6 +126,7 @@ def test_revoke_is_attempted_once_after_a_reverted_swap(tmp_path: Path) -> None:
     assert outcome.revoke_attempted is True
     assert outcome.revoke_ok is True
     assert len(rpc.sent) == 4
+    assert _revoke_nonce(created) == 10
     assert created["revoke"].calls[0][1]["params"]["transaction"]["data"] == approve_calldata(ENTRYPOINT, 0)
 
 
@@ -137,6 +138,7 @@ def test_revoke_is_attempted_once_after_an_unknown_swap_broadcast(tmp_path: Path
     assert outcome.revoke_attempted is True
     assert len(rpc.sent) == 4
     assert "revoke" in created
+    assert _revoke_nonce(created) == 10
 
 
 def test_revoke_is_attempted_once_after_a_swap_receipt_timeout(tmp_path: Path) -> None:
@@ -147,6 +149,61 @@ def test_revoke_is_attempted_once_after_a_swap_receipt_timeout(tmp_path: Path) -
     assert outcome.error_code == "RECEIPT_TIMEOUT"
     assert outcome.revoke_attempted is True
     assert len(rpc.sent) == 4
+    assert _revoke_nonce(created) == 10
+
+
+def _revoke_nonce(created: dict[str, FakeSigner]) -> int:
+    return created["revoke"].calls[0][1]["params"]["transaction"]["nonce"]
+
+
+def test_revoke_reuses_the_swap_nonce_after_a_refused_swap_signature(tmp_path: Path) -> None:
+    rpc = FakeRpc(wmon_series=[0, INPUT])
+    trade, preflight, plan, journal, _created, _factory = _setup(tmp_path, rpc)
+    created: dict[str, FakeSigner] = {}
+
+    def factory(step: str, nonce: int):
+        signer = RefusingSigner() if step == "swap" else FakeSigner(signed_for(step))
+        created[step] = signer
+        return signer
+
+    now, sleep = clock_pair()
+    outcome = execute(rpc=rpc, trade=trade, plan=plan, preflight=preflight, signer_factory=factory,
+                      journal=journal, now=now, sleep=sleep)
+    assert outcome.failed_step == "swap"
+    assert outcome.error_code == "SIGNER_REFUSED"
+    assert outcome.revoke_attempted is True
+    assert outcome.revoke_ok is True
+    assert len(rpc.sent) == 3
+    assert _revoke_nonce(created) == preflight.nonce + 2
+    records = [json.loads(line) for line in (tmp_path / "store" / "journal.jsonl").read_text().splitlines()]
+    plan_record = [record for record in records if record["event"] == "revoke_reuses_swap_nonce"][0]
+    assert plan_record["nonce"] == preflight.nonce + 2
+    prepared = [record for record in records if record["event"] == "prepared" and record["step"] == "revoke"][0]
+    assert prepared["nonce"] == preflight.nonce + 2
+
+
+def test_revoke_reuses_the_swap_nonce_after_a_lost_swap_signature(tmp_path: Path) -> None:
+    rpc = FakeRpc(wmon_series=[0, INPUT])
+    trade, preflight, plan, journal, _created, _factory = _setup(tmp_path, rpc)
+    created: dict[str, FakeSigner] = {}
+
+    class LosingSigner:
+        def rpc(self, wallet_id: str, body: dict) -> dict:
+            raise ReplyLost("SIGNER_REPLY_LOST")
+
+    def factory(step: str, nonce: int):
+        signer = LosingSigner() if step == "swap" else FakeSigner(signed_for(step))
+        created[step] = signer  # type: ignore[assignment]
+        return signer
+
+    now, sleep = clock_pair()
+    outcome = execute(rpc=rpc, trade=trade, plan=plan, preflight=preflight, signer_factory=factory,
+                      journal=journal, now=now, sleep=sleep)
+    assert outcome.failed_step == "swap"
+    assert outcome.error_code == "SIGNER_REPLY_LOST"
+    assert outcome.revoke_ok is True
+    assert len(rpc.sent) == 3
+    assert _revoke_nonce(created) == preflight.nonce + 2
 
 
 def test_a_refused_signature_stops_before_send(tmp_path: Path) -> None:

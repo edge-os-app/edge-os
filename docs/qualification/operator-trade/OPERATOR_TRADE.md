@@ -25,6 +25,12 @@ The swap calldata comes from the merged application module
 `apps/api/src/edge_os_api/execution/direct_route_quote_client.py`. The script does not copy or
 re-implement that builder.
 
+Revoke nonce rule: the four transactions normally use nonces `N`, `N+1`, `N+2` and `N+3`. If the
+swap stops before `eth_sendRawTransaction` (the signer refused or its reply was lost), nonce `N+2`
+is unused, so the script signs the revoke with `N+2`. If the swap was or may have been broadcast
+(sent, unknown outcome, receipt timeout, or status 0), the script keeps `N+3`. The journal records
+the revoke's actual nonce and request hash.
+
 ## Honest limits
 
 - This is an **operator-run** command. It is not the app's ACTUAL transaction journey.

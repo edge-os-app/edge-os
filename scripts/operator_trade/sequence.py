@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from eth_utils import keccak
@@ -48,11 +48,15 @@ class SequenceOutcome:
 
 
 class _StepStopped(Exception):
-    def __init__(self, code: str, step: str, record: StepRecord | None = None) -> None:
+    """A stopped step. ``broadcast`` says whether the signed bytes may have reached the node."""
+
+    def __init__(self, code: str, step: str, record: StepRecord | None = None,
+                 broadcast: bool = False) -> None:
         super().__init__(code)
         self.code = code
         self.step = step
         self.record = record
+        self.broadcast = broadcast
 
 
 def _signed_transaction(reply: Any) -> str:
@@ -119,19 +123,19 @@ def _run_step(*, rpc: OperatorRpc, trade: OperatorTrade, transaction: UnsignedTr
         journal.append({"event": "unknown", "step": transaction.step, "nonce": transaction.nonce,
                         "request_hash": request_hash, "tx_hash": signed_hash,
                         "reason": _reason(error), "liability": "UNKNOWN"})
-        raise _StepStopped("BROADCAST_UNKNOWN", transaction.step) from None
+        raise _StepStopped("BROADCAST_UNKNOWN", transaction.step, broadcast=True) from None
     if type(returned) is not str or returned.lower() != signed_hash.lower():
         journal.append({"event": "unknown", "step": transaction.step, "nonce": transaction.nonce,
                         "request_hash": request_hash, "tx_hash": signed_hash,
                         "reason": "HASH_MISMATCH", "liability": "UNKNOWN"})
-        raise _StepStopped("BROADCAST_UNKNOWN", transaction.step)
+        raise _StepStopped("BROADCAST_UNKNOWN", transaction.step, broadcast=True)
     journal.append({"event": "sent", "step": transaction.step, "nonce": transaction.nonce,
                     "tx_hash": signed_hash, "liability": "UNKNOWN"})
     receipt = _wait_for_receipt(rpc, signed_hash, trade, now=now, sleep=sleep)
     if receipt is None:
         journal.append({"event": "receipt_timeout", "step": transaction.step, "nonce": transaction.nonce,
                         "tx_hash": signed_hash, "liability": "UNKNOWN"})
-        raise _StepStopped("RECEIPT_TIMEOUT", transaction.step)
+        raise _StepStopped("RECEIPT_TIMEOUT", transaction.step, broadcast=True)
     status = int(receipt["status"], 16)
     block = int(receipt["blockNumber"], 16)
     gas_used = int(receipt["gasUsed"], 16)
@@ -141,7 +145,7 @@ def _run_step(*, rpc: OperatorRpc, trade: OperatorTrade, transaction: UnsignedTr
     record = StepRecord(step=transaction.step, nonce=transaction.nonce, request_hash=request_hash,
                         tx_hash=signed_hash, receipt_block=block, gas_used=gas_used, status=status)
     if status != 1:
-        raise _StepStopped("RECEIPT_STATUS_FAILED", transaction.step, record)
+        raise _StepStopped("RECEIPT_STATUS_FAILED", transaction.step, record, broadcast=True)
     return record
 
 
@@ -160,6 +164,11 @@ def execute(*, rpc: OperatorRpc, trade: OperatorTrade, plan: TradePlan, prefligh
                 steps.append(stopped.record)
             if stopped.step == "swap":
                 revoke = transactions[3]
+                if not stopped.broadcast:
+                    revoke = replace(revoke, nonce=transactions[2].nonce)
+                    journal.append({"event": "revoke_reuses_swap_nonce", "step": "revoke",
+                                    "nonce": revoke.nonce, "request_hash": revoke.request_hash(),
+                                    "reason": stopped.code, "liability": "NONE"})
                 ok: bool | None = None
                 error_code: str | None = None
                 try:
