@@ -3,9 +3,9 @@
 LOCAL only. The synthetic ``ReplyProfile`` in ``evidence.py`` refuses every
 qualification other than ``SYNTHETIC``. This module is the successor boundary
 for an api where the provider reply schema and the signed-field decoder are
-actually qualified. No qualified profile is registered here: the registry is
-empty, so an actual run refuses with ``ACTUAL_PROFILE_UNQUALIFIED`` before any
-effect.
+actually qualified. Exactly one profile is registered: the Privy raw profile
+for the frozen policy-layer packet. Every other profile id refuses with
+``ACTUAL_PROFILE_UNQUALIFIED`` before any effect.
 
 A profile binds one of the two accepted specimen profiles (``raw`` or
 ``decoded``) to:
@@ -18,12 +18,10 @@ as the accepted qualified decoder; that helper checks the type-2 fields, the
 sender and the canonical encoding and returns the Keccak-256 hash of the whole
 signed serialization.
 
-Unresolved shared dependency (gate F6): ``validate_signed`` compares selected
-decoded fields and does not yet validate the complete decoded key set or exact
-value types. That helper is outside this worker's lease and stays unchanged, so
-no decoder is registered as fully qualified here. The registry stays empty and
-an actual run refuses until the PhaseB owner lands the complete-key/type check
-through a recorded accepted-helper handoff. Do not register an arbitrary callable
+Gate F6 is resolved by the accepted Phase B helper. ``validate_signed`` now
+requires the complete expected key set, the complete decoded key set and the
+exact value types before it compares any field. This module therefore binds that
+helper as the one qualified raw decoder. Do not register an arbitrary callable
 as a qualified decoder.
 """
 
@@ -118,9 +116,26 @@ def accepted_signed_decoder(unsigned: Mapping[str, Any], wallet: str) -> Callabl
     return decode
 
 
-# Code-owned qualified-profile registry. It is empty: no actual reply schema or
-# decoder profile is qualified in this unit.
-QUALIFIED_ACTUAL_PROFILES: Mapping[str, QualifiedActualProfile] = {}
+# The documented Privy refusal codes. Privy documents a 400 ``policy_violation``
+# for a denied signing request; the first negative in the frozen packet confirms
+# the observed status and body path before any later specimen runs.
+PRIVY_POLICY_CODES: Mapping[str, tuple[int, str, str]] = {
+    "policy_violation": (400, Outcome.POLICY_DENY.value, "PRIVY_POLICY_VIOLATION"),
+    "request_expired": (400, Outcome.UNKNOWN.value, "EXPIRY_REFUSAL"),
+    "zero_correct_authorization_signatures": (
+        401, Outcome.AUTHORIZATION_DENY.value, "PRIVY_AUTHORIZATION_DENIED",
+    ),
+}
+
+PRIVY_RAW_V1 = QualifiedActualProfile(
+    profile="raw",
+    qualification="QUALIFIED",
+    codes=PRIVY_POLICY_CODES,
+    decoder_factory=accepted_signed_decoder,
+)
+
+# Code-owned qualified-profile registry. Exactly one profile is registered.
+QUALIFIED_ACTUAL_PROFILES: Mapping[str, QualifiedActualProfile] = {"privy.raw.v1": PRIVY_RAW_V1}
 
 
 def resolve_qualified_profile(profile_id: str) -> QualifiedActualProfile:

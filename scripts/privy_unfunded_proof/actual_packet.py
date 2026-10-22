@@ -7,8 +7,8 @@ credential and holds no transport.
 
 A packet is admitted only when the *code* registers it in
 ``CODE_OWNED_PACKET_APPROVALS``; no caller argument, flag, environment value or
-Boolean can approve one. That registry is empty here, so every default actual
-run refuses with ``ACTUAL_PACKET_NOT_APPROVED``. The packet binds the app, the
+Boolean can approve one. The registry holds exactly one frozen policy-layer
+packet, so every other packet refuses with ``ACTUAL_PACKET_NOT_APPROVED``. The packet binds the app, the
 owner, a policy-resource owner outside executor control, the wallet, the
 network, the signing route, the per-profile policy identities and content
 hashes, the source and deployed code identities, expiry, the auth-header
@@ -30,16 +30,23 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from scripts.privy_unfunded_proof import specimens
+from scripts.privy_unfunded_proof.actual_transport import MAX_SAFE_INTEGER, QUANTITY_FIELDS, wire_quantity
 from scripts.privy_unfunded_proof.specimens import (
+    DESTINATION,
     FROZEN_TABLE,
     MAX_REQUEST_BODY_BYTES,
     MAX_SPECIMENS_PER_PROFILE,
     PROFILES,
+    Category,
     Expected,
     FrozenRequest,
+    Specimen,
     SpecimenRefused,
     SpecimenTable,
+    build_table,
     canonical_json,
+    envelope_sha256,
 )
 
 ACTUAL_EVIDENCE_CLASS = "LOCAL_TESTED"
@@ -62,6 +69,17 @@ MANDATORY_CONTROLS: tuple[str, ...] = (
 )
 POSITION_INVENTORY = "position_inventory"
 
+# A policy-layer packet proves the wallet-provider policy only. It does not claim
+# a real trade: controls enforced by the host, the contract or a later stage stay
+# at their true evidence state and do not block this narrow proof.
+PROOF_SCOPES: tuple[str, ...] = ("TRADE", "POLICY_LAYER")
+POLICY_LAYER_CONTROLS: tuple[str, ...] = (
+    "chain",
+    "wallet_signer_binding",
+    "entrypoint_method",
+    "approvals",
+)
+
 # Refusal codes produced before any effect.
 ACTUAL_PACKET_NOT_APPROVED = "ACTUAL_PACKET_NOT_APPROVED"
 ACTUAL_PACKET_MISMATCH = "ACTUAL_PACKET_MISMATCH"
@@ -73,6 +91,7 @@ POSITION_INVENTORY_UNQUALIFIED = "POSITION_INVENTORY_UNQUALIFIED"
 PROFILE_POLICY_NOT_SEPARATED = "PROFILE_POLICY_NOT_SEPARATED"
 PROFILE_POLICY_UNBOUND = "PROFILE_POLICY_UNBOUND"
 MATRIX_NOT_COVERED = "MATRIX_NOT_COVERED"
+PROOF_SCOPE_INVALID = "PROOF_SCOPE_INVALID"
 PACKET_CEILING_INVALID = "PACKET_CEILING_INVALID"
 REQUEST_COUNT_EXCEEDED = "REQUEST_COUNT_EXCEEDED"
 REQUEST_OVER_BOUND = "REQUEST_OVER_BOUND"
@@ -163,6 +182,7 @@ class ActualProofPacket:
     time_ceiling_seconds: int
     controls: Mapping[str, ControlState]
     position_inventory: ControlState
+    proof_scope: str = "TRADE"
 
     def request_for(self, specimen_id: str) -> FrozenRequest:
         try:
@@ -200,6 +220,7 @@ class ActualProofPacket:
             "time_ceiling_seconds": self.time_ceiling_seconds,
             "controls": {name: str(state) for name, state in sorted(self.controls.items())},
             "position_inventory": str(self.position_inventory),
+            "proof_scope": self.proof_scope,
         }
 
     def packet_sha256(self) -> str:
@@ -222,7 +243,8 @@ class OwnerBoundType4Authority:
     owner_id: str
 
 
-# Code-owned approval registry. It is empty: no packet is approved in this unit.
+# Code-owned approval registry. The frozen policy-layer packet is registered at
+# the end of this module; no other packet is approved.
 CODE_OWNED_PACKET_APPROVALS: Mapping[str, ActualProofPacket] = {}
 
 # Code-owned type-4 authority registry. It is empty: no authority exists here.
@@ -246,31 +268,44 @@ def resolve_type4_authority(
 
 
 def _check_administration(packet: ActualProofPacket) -> None:
+    """The executor must not administer the policy.
+
+    One human builder may own both the wallet and the policy. The party that must
+    stay outside policy administration is the executor that holds the signing key.
+    """
     if not _is_identity(packet.policy_resource_owner_id):
         raise SpecimenRefused(POLICY_ADMIN_OWNER_MISSING)
-    if packet.policy_resource_owner_id in (packet.owner_id, packet.executor_id):
+    if packet.policy_resource_owner_id == packet.executor_id or packet.owner_id == packet.executor_id:
         raise SpecimenRefused(POLICY_ADMIN_NOT_SEPARATED)
 
 
 def _check_controls(packet: ActualProofPacket) -> None:
+    if packet.proof_scope not in PROOF_SCOPES:
+        raise SpecimenRefused(PROOF_SCOPE_INVALID, packet.proof_scope)
     for name in MANDATORY_CONTROLS:
+        if name not in packet.controls:
+            raise SpecimenRefused(MANDATORY_CONTROL_UNQUALIFIED, name)
+    required = POLICY_LAYER_CONTROLS if packet.proof_scope == "POLICY_LAYER" else MANDATORY_CONTROLS
+    for name in required:
         state = packet.controls.get(name)
         if state is None or state in BLOCKING_CONTROL_STATES:
             raise SpecimenRefused(MANDATORY_CONTROL_UNQUALIFIED, name)
-    if packet.position_inventory in BLOCKING_CONTROL_STATES:
+    if packet.proof_scope == "TRADE" and packet.position_inventory in BLOCKING_CONTROL_STATES:
         raise SpecimenRefused(POSITION_INVENTORY_UNQUALIFIED)
 
 
-def _check_profile_policies(packet: ActualProofPacket) -> None:
-    bound = 0
-    for profile in PROFILES:
+def _check_profile_policies(packet: ActualProofPacket, table: SpecimenTable) -> None:
+    """One separate policy id and content hash for every profile the table uses."""
+    active = {row.profile for row in table.all()}
+    if not active or set(packet.profile_policies) != active or set(packet.profile_policy_sha256) != active:
+        raise SpecimenRefused(PROFILE_POLICY_UNBOUND, "profile-set")
+    for profile in active:
         policy_id = packet.profile_policies.get(profile)
         policy_sha = packet.profile_policy_sha256.get(profile)
         if not _is_identity(policy_id) or not _is_identity(policy_sha):
             raise SpecimenRefused(PROFILE_POLICY_UNBOUND, profile)
-        bound += 1
-    if (bound != len(PROFILES) or len(set(packet.profile_policies.values())) != len(PROFILES)
-            or len(set(packet.profile_policy_sha256.values())) != len(PROFILES)):
+    if (len(set(packet.profile_policies.values())) != len(active)
+            or len(set(packet.profile_policy_sha256.values())) != len(active)):
         raise SpecimenRefused(PROFILE_POLICY_NOT_SEPARATED)
 
 
@@ -328,11 +363,284 @@ def resolve_approved_packet(
     _check_administration(packet)
     if _AUTH_HEADER_EXPIRY.fullmatch(packet.auth_header_expiry) is None:
         raise SpecimenRefused(ACTUAL_PACKET_MISMATCH, "auth_header_expiry")
-    _check_profile_policies(packet)
+    _check_profile_policies(packet, table)
     _check_controls(packet)
     _check_ceilings(packet, table)
     _check_matrix(packet, table)
     return packet
+
+
+# ---------------------------------------------------------------- frozen unfunded policy packet
+
+
+UNFUNDED_POLICY_PROFILE_ID = "privy.raw.v1"
+POLICY_ID = "c30racyru6duaipj815cvjce"
+POLICY_BODY_SHA256 = "cd543346a75ab342e04282f4fd5764ff0f19e1d7a354d5f09d208e53ad0d7477"
+APP_ID = "cmuyj4smt00tw0dla2j19tlu7"
+POLICY_OWNER_ID = "a5gwmgrsn6903ac09lphyv9a"
+EXECUTOR_ID = "zu1qjdfqlbcq1ct7sdxendgg"
+WALLET_ID = "bsb2feecuxl81dl5jz4u9xxo"
+WALLET_ADDRESS = "0x91BB52A63c91986813288965e4681FF111De1b63"
+SIGNING_URL = DESTINATION.format(wallet_id=WALLET_ID)
+WMON = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a"
+ENTRYPOINT = "0xb3e6778480b2e488385e8205ea05e20060b813cb"
+SINK = "0x000000000000000000000000000000000000dead"
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+MON = 10**18
+CAP = 70 * MON
+GAS_DEPOSIT = 100_000
+GAS_APPROVE = 100_000
+GAS_TRANSFER = 100_000
+GAS_SWAP = 500_000
+MAX_FEE_PER_GAS = 100_000_000_000
+MAX_PRIORITY_FEE_PER_GAS = 2_000_000_000
+PACKET_EXPIRES_AT_EPOCH = 1_793_836_800
+PACKET_AUTH_HEADER_EXPIRY = "1793836800000"
+PACKET_ATTEMPT_IDENTITY = "unfunded-policy-proof-1"
+
+# The reviewed identities. The registry admits the packet and the table only when
+# their recomputed hashes equal these literals. A source edit cannot approve a
+# new packet or table without a new reviewed literal.
+SEALED_PACKET_SHA256 = "5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf"
+SEALED_ACTUAL_MANIFEST_SHA256 = "62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01"
+
+DEPOSIT_CALLDATA = "0xd0e30db0"
+APPROVE_SELECTOR = "0x095ea7b3"
+TRANSFER_SELECTOR = "0xa9059cbb"
+EXECUTE_SWAP_SELECTOR = "0xce1e7030"
+SWAP_PROGRAM = "01"
+
+
+def _word(value: int) -> str:
+    return f"{value:064x}"
+
+
+def _address_word(address: str) -> str:
+    return "0" * 24 + address[2:].lower()
+
+
+def _approve_calldata(spender: str, amount: int) -> str:
+    return APPROVE_SELECTOR + _address_word(spender) + _word(amount)
+
+
+def _transfer_calldata(recipient: str, amount: int) -> str:
+    return TRANSFER_SELECTOR + _address_word(recipient) + _word(amount)
+
+
+def _execute_swap_calldata() -> str:
+    """The exact executeSwap layout decoded by the accepted Kuru Flow decoder.
+
+    The token pair and program are inert policy sentinels: WMON on both sides and
+    a one-byte program. They are never broadcast and prove no trade route.
+    """
+    head = (
+        _address_word(WMON) + _word(MON) + _address_word(WMON) + _word(2 * MON)
+        + _address_word(ZERO_ADDRESS) + _word(0)
+        + _address_word(ZERO_ADDRESS) + _word(0) + _word(0)
+        + _word(320)
+    )
+    padded_program = SWAP_PROGRAM + "0" * (64 - len(SWAP_PROGRAM))
+    return EXECUTE_SWAP_SELECTOR + head + _word(len(SWAP_PROGRAM) // 2) + padded_program
+
+
+def _transaction(*, to: str, value: int, data: str, chain_id: int = 143, gas_limit: int) -> dict[str, Any]:
+    return {
+        "type": 2,
+        "chain_id": chain_id,
+        "nonce": 0,
+        "to": to,
+        "value": value,
+        "data": data,
+        "gas_limit": gas_limit,
+        "max_fee_per_gas": MAX_FEE_PER_GAS,
+        "max_priority_fee_per_gas": MAX_PRIORITY_FEE_PER_GAS,
+    }
+
+
+def _policy_request(transaction: Mapping[str, Any]) -> FrozenRequest:
+    wire = dict(transaction)
+    for name in QUANTITY_FIELDS:
+        if name == "chain_id":
+            value = transaction[name]
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= MAX_SAFE_INTEGER:
+                raise ValueError("chain_id must stay a safe integer")
+            wire[name] = value
+        else:
+            wire[name] = wire_quantity(transaction[name])
+    body = {"method": "eth_signTransaction", "params": {"transaction": wire}}
+    body_bytes = canonical_json(body)
+    if len(body_bytes) > MAX_REQUEST_BODY_BYTES:
+        raise ValueError("policy request exceeds the frozen request byte bound")
+    headers: tuple[tuple[str, str], ...] = ()
+    return FrozenRequest(SIGNING_URL, "POST", headers, body_bytes,
+                         envelope_sha256(SIGNING_URL, "POST", headers, body_bytes))
+
+
+def _policy_row(name: str, category: Category, expected: Expected,
+                transaction: Mapping[str, Any]) -> Specimen:
+    return Specimen(f"raw.{name}", "raw", category, expected, WALLET_ID,
+                    _policy_request(transaction), dict(transaction))
+
+
+def _policy_rows() -> list[Specimen]:
+    allow, deny = Expected.ALLOW, Expected.POLICY_DENY
+    positive, operation, field = Category.POSITIVE_CONTROL, Category.OPERATION, Category.FIELD_MUTATION
+    swap_data = _execute_swap_calldata()
+    return [
+        _policy_row("allow_deposit_1_mon", positive, allow,
+                    _transaction(to=WMON, value=MON, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
+        _policy_row("allow_deposit_at_cap", operation, allow,
+                    _transaction(to=WMON, value=CAP, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
+        _policy_row("allow_approve_at_cap", operation, allow,
+                    _transaction(to=WMON, value=0, data=_approve_calldata(ENTRYPOINT, CAP),
+                                 gas_limit=GAS_APPROVE)),
+        _policy_row("allow_swap_zero_value", operation, allow,
+                    _transaction(to=ENTRYPOINT, value=0, data=swap_data, gas_limit=GAS_SWAP)),
+        _policy_row("deny_deposit_wrong_to", field, deny,
+                    _transaction(to=SINK, value=MON, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
+        _policy_row("deny_deposit_wrong_chain", field, deny,
+                    _transaction(to=WMON, value=MON, data=DEPOSIT_CALLDATA, chain_id=10143,
+                                 gas_limit=GAS_DEPOSIT)),
+        _policy_row("deny_approve_wrong_chain", field, deny,
+                    _transaction(to=WMON, value=0, data=_approve_calldata(ENTRYPOINT, CAP),
+                                 chain_id=10143, gas_limit=GAS_APPROVE)),
+        _policy_row("deny_swap_wrong_chain", field, deny,
+                    _transaction(to=ENTRYPOINT, value=0, data=swap_data, chain_id=10143,
+                                 gas_limit=GAS_SWAP)),
+        _policy_row("deny_approve_wrong_to", field, deny,
+                    _transaction(to=SINK, value=0, data=_approve_calldata(ENTRYPOINT, CAP),
+                                 gas_limit=GAS_APPROVE)),
+        _policy_row("deny_swap_wrong_to", field, deny,
+                    _transaction(to=SINK, value=0, data=swap_data, gas_limit=GAS_SWAP)),
+        _policy_row("deny_wmon_wrong_function", field, deny,
+                    _transaction(to=WMON, value=0, data=_transfer_calldata(SINK, 1),
+                                 gas_limit=GAS_TRANSFER)),
+        _policy_row("deny_entrypoint_wrong_function", field, deny,
+                    _transaction(to=ENTRYPOINT, value=0, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
+        _policy_row("deny_approve_other_spender", field, deny,
+                    _transaction(to=WMON, value=0, data=_approve_calldata(SINK, CAP),
+                                 gas_limit=GAS_APPROVE)),
+        _policy_row("deny_approve_above_cap", field, deny,
+                    _transaction(to=WMON, value=0, data=_approve_calldata(ENTRYPOINT, CAP + 1),
+                                 gas_limit=GAS_APPROVE)),
+        _policy_row("deny_approve_with_value", field, deny,
+                    _transaction(to=WMON, value=1, data=_approve_calldata(ENTRYPOINT, CAP),
+                                 gas_limit=GAS_APPROVE)),
+        _policy_row("deny_deposit_above_cap", field, deny,
+                    _transaction(to=WMON, value=CAP + 1, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
+        _policy_row("deny_swap_with_mon", field, deny,
+                    _transaction(to=ENTRYPOINT, value=1, data=swap_data, gas_limit=GAS_SWAP)),
+        _policy_row("deny_plain_mon_transfer", field, deny,
+                    _transaction(to=SINK, value=1, data="0x", gas_limit=GAS_TRANSFER)),
+    ]
+
+
+UNFUNDED_POLICY_ORDER: tuple[str, ...] = (
+    "raw.allow_deposit_1_mon",
+    "raw.allow_deposit_at_cap",
+    "raw.allow_approve_at_cap",
+    "raw.allow_swap_zero_value",
+    "raw.deny_deposit_wrong_to",
+    "raw.deny_deposit_wrong_chain",
+    "raw.deny_approve_wrong_chain",
+    "raw.deny_swap_wrong_chain",
+    "raw.deny_approve_wrong_to",
+    "raw.deny_swap_wrong_to",
+    "raw.deny_wmon_wrong_function",
+    "raw.deny_entrypoint_wrong_function",
+    "raw.deny_approve_other_spender",
+    "raw.deny_approve_above_cap",
+    "raw.deny_approve_with_value",
+    "raw.deny_deposit_above_cap",
+    "raw.deny_swap_with_mon",
+    "raw.deny_plain_mon_transfer",
+)
+
+UNFUNDED_POLICY_TABLE = build_table(_policy_rows())
+specimens.CODE_OWNED_ACTUAL_MANIFESTS = frozenset({SEALED_ACTUAL_MANIFEST_SHA256})
+
+
+def _build_unfunded_policy_packet() -> ActualProofPacket:
+    rows = UNFUNDED_POLICY_TABLE.all()
+    requests: dict[str, FrozenRequest] = {}
+    expected: dict[str, str] = {}
+    for row in rows:
+        if row.request is None:
+            raise ValueError("the policy table has a row without a frozen request")
+        requests[row.specimen_id] = row.request
+        expected[row.specimen_id] = str(row.expected)
+    controls = {
+        "chain": ControlState.DOCUMENTED,
+        "wallet_signer_binding": ControlState.SOURCE_INSPECTED,
+        "entrypoint_method": ControlState.DOCUMENTED,
+        "input_output_assets": ControlState.UNKNOWN,
+        "raw_input": ControlState.SOURCE_INSPECTED,
+        "recipient": ControlState.SOURCE_INSPECTED,
+        "minimum_output": ControlState.SOURCE_INSPECTED,
+        "fees": ControlState.SOURCE_INSPECTED,
+        "approvals": ControlState.SOURCE_INSPECTED,
+        "gas_action_capacity": ControlState.UNSET,
+        "expiry_freshness": ControlState.DOCUMENTED,
+        "opaque_program": ControlState.UNKNOWN,
+    }
+    return build_packet(
+        app_id=APP_ID,
+        executor_id=EXECUTOR_ID,
+        owner_id=POLICY_OWNER_ID,
+        policy_resource_owner_id=POLICY_OWNER_ID,
+        wallet_id=WALLET_ID,
+        wallet_address=WALLET_ADDRESS,
+        network_id="eip155:143",
+        chain_id=143,
+        signing_url=SIGNING_URL,
+        signing_method="eth_signTransaction",
+        profile_policies={"raw": POLICY_ID},
+        profile_policy_sha256={"raw": POLICY_BODY_SHA256},
+        source_code_id="UNRESOLVED_KURU_SOURCE",
+        deployed_code_id="UNRESOLVED_KURU_DEPLOYED_CODE",
+        expires_at_epoch=PACKET_EXPIRES_AT_EPOCH,
+        auth_header_expiry=PACKET_AUTH_HEADER_EXPIRY,
+        attempt_identity=PACKET_ATTEMPT_IDENTITY,
+        requests=requests,
+        specimen_expected=expected,
+        request_count_ceiling=MAX_SPECIMENS_PER_PROFILE,
+        request_byte_ceiling=MAX_REQUEST_BODY_BYTES,
+        time_ceiling_seconds=3600,
+        controls=controls,
+        position_inventory=ControlState.UNSUPPORTED,
+        proof_scope="POLICY_LAYER",
+    )
+
+
+def _sealed_packet_registry(packet: ActualProofPacket, sealed_sha256: str) -> dict[str, ActualProofPacket]:
+    """Admit the packet only when its recomputed identity equals the reviewed literal."""
+    return {packet.packet_id: packet} if packet.packet_id == sealed_sha256 else {}
+
+
+UNFUNDED_POLICY_PACKET = _build_unfunded_policy_packet()
+CODE_OWNED_PACKET_APPROVALS = _sealed_packet_registry(UNFUNDED_POLICY_PACKET, SEALED_PACKET_SHA256)
+
+
+def reply_code(body: Any) -> str | None:
+    """Return the Privy error code from a flat or nested error body, or None.
+
+    Privy documents ``policy_violation`` but not one body shape. The accepted
+    runner reads ``code``, ``error.code`` and the string ``error``; it never keeps
+    any other reply text.
+    """
+    if not isinstance(body, Mapping):
+        return None
+    code = body.get("code")
+    if isinstance(code, str):
+        return code
+    error = body.get("error")
+    if isinstance(error, str):
+        return error
+    if isinstance(error, Mapping):
+        nested = error.get("code")
+        if isinstance(nested, str):
+            return nested
+    return None
 
 
 if __name__ == "__main__":

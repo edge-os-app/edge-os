@@ -1,9 +1,9 @@
 """Regression tests for the LOCAL unfunded actual policy-proof runner.
 
 Every result here is LOCAL_TESTED/UNQUALIFIED. No provider request, credential,
-wallet, policy, signature or broadcast is used. The accepted code-owned approval
-registries are empty, so the default actual run refuses. Tests inject their own
-approval only to exercise the machinery.
+wallet, policy, signature or broadcast is used. The code-owned registries hold
+exactly one frozen policy-layer packet and one raw profile, so any other packet
+refuses. Tests inject their own approval only to exercise the machinery.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from eth_account import Account
 
 from _actual_support import (
     NOW,
@@ -102,9 +103,9 @@ def test_default_actual_run_refused_before_effect(store_dir: Path) -> None:
     assert list(store_dir.iterdir()) == []
 
 
-def test_code_owned_registries_are_empty() -> None:
-    assert dict(actual_packet.CODE_OWNED_PACKET_APPROVALS) == {}
-    assert dict(actual_profile.QUALIFIED_ACTUAL_PROFILES) == {}
+def test_code_owned_registries_hold_exactly_one_packet_and_profile() -> None:
+    assert list(actual_packet.CODE_OWNED_PACKET_APPROVALS) == [actual_packet.UNFUNDED_POLICY_PACKET.packet_id]
+    assert list(actual_profile.QUALIFIED_ACTUAL_PROFILES) == [actual_packet.UNFUNDED_POLICY_PROFILE_ID]
     assert dict(actual_packet.CODE_OWNED_TYPE4_AUTHORITIES) == {}
     assert actual_packet.ACTUAL_EVIDENCE_CLASS == "LOCAL_TESTED"
     assert actual_packet.PROVIDER_PROOF_UNQUALIFIED == "UNQUALIFIED"
@@ -174,11 +175,25 @@ def test_missing_policy_owner_refused(store_dir: Path) -> None:
     assert caught.value.code == "POLICY_ADMIN_OWNER_MISSING"
 
 
-def test_owner_not_separated_refused(store_dir: Path) -> None:
-    packet = make_packet(policy_resource_owner_id="owner-1")
+def test_policy_owner_inside_executor_control_refused(store_dir: Path) -> None:
+    packet = make_packet(policy_resource_owner_id="executor-1")
     with pytest.raises(SpecimenRefused) as caught:
         run_actual("raw.baseline", store_dir, RecordingTransport(success_reply()), packet=packet)
     assert caught.value.code == "POLICY_ADMIN_NOT_SEPARATED"
+
+
+def test_executor_cannot_own_the_wallet(store_dir: Path) -> None:
+    packet = make_packet(owner_id="executor-1")
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.baseline", store_dir, RecordingTransport(success_reply()), packet=packet)
+    assert caught.value.code == "POLICY_ADMIN_NOT_SEPARATED"
+
+
+def test_policy_owner_may_equal_the_wallet_owner(store_dir: Path) -> None:
+    packet = make_packet(policy_resource_owner_id="owner-1")
+    transport = RecordingTransport(success_reply())
+    result = run_actual("raw.baseline", store_dir, transport, packet=packet)
+    assert result.outcome is Outcome.ALLOW
 
 
 @pytest.mark.parametrize("control", ["opaque_program", "chain", "expiry_freshness"])
@@ -675,6 +690,20 @@ def test_codes_classify(store_dir: Path) -> None:
     assert not (store_dir / "STOP.json").exists()
 
 
+def test_nested_privy_error_code_is_a_policy_deny(store_dir: Path) -> None:
+    packet = make_packet()
+    profile = make_profile(codes={"policy_violation": (400, "POLICY_DENY", "PRIVY_POLICY_VIOLATION")})
+    positive = run_actual("raw.baseline", store_dir, RecordingTransport(success_reply()),
+                          packet=packet, profile=profile, profile_id="test.raw")
+    assert positive.outcome is Outcome.ALLOW
+    reply = Reply(400, "application/json", b'{"error":{"code":"policy_violation"}}')
+    result = run_actual("raw.wrong_chain", store_dir, RecordingTransport(reply),
+                        packet=packet, profile=profile, profile_id="test.raw")
+    assert (result.outcome, result.reason, result.matches_expectation) == (
+        Outcome.POLICY_DENY, "PRIVY_POLICY_VIOLATION", True,
+    )
+
+
 def test_success_on_negative_is_breach(store_dir: Path) -> None:
     allow_baseline(store_dir)
     result = run_actual("raw.wrong_chain", store_dir, RecordingTransport(success_reply()))
@@ -705,6 +734,24 @@ def test_signed_field_mismatch_is_breach(store_dir: Path) -> None:
     assert (result.outcome, result.reason) == (Outcome.BREACH, "SIGNED_FIELDS_MISMATCH")
     outcome = json.loads((store_dir / "raw.baseline.outcome.json").read_text())
     assert outcome["signed_field_reasons"] == ["SIGNED_CHAINID_MISMATCH"]
+
+
+def test_signed_value_one_wei_above_the_frozen_value_is_breach(store_dir: Path) -> None:
+    account = Account.create()
+    packet = make_packet(wallet_address=account.address)
+    frozen = specimens.BASELINE_TRANSACTION
+    signed = Account.sign_transaction({
+        "type": 2, "chainId": frozen["chain_id"], "nonce": frozen["nonce"], "to": frozen["to"],
+        "value": frozen["value"] + 1, "data": frozen["data"], "gas": frozen["gas_limit"],
+        "maxFeePerGas": frozen["max_fee_per_gas"],
+        "maxPriorityFeePerGas": frozen["max_priority_fee_per_gas"],
+    }, account.key)
+    result = run_actual("raw.baseline", store_dir,
+                        RecordingTransport(success_reply("0x" + signed.raw_transaction.hex())),
+                        packet=packet, decoder_factory=accepted_signed_decoder)
+    assert (result.outcome, result.reason) == (Outcome.BREACH, "SIGNED_FIELDS_MISMATCH")
+    outcome = json.loads((store_dir / "raw.baseline.outcome.json").read_text())
+    assert "SIGNED_VALUE_MISMATCH" in outcome["signed_field_reasons"]
 
 
 def test_decode_failure_on_expected_allow_is_unknown(store_dir: Path) -> None:
