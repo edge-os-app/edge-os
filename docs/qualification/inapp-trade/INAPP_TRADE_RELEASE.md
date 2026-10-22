@@ -220,12 +220,85 @@ These items are outside this task and are owned by other lanes:
 
 - A `ControlledRuntime` mount. No application code builds one today.
 - The `/rpc` relay behind the three endpoints.
-- An exact on-chain approve of 10 WMON to the entrypoint before the swap, and a revoke to 0 after it. The app path
-  signs only the swap. It has no approve or revoke step (`OPERATOR_TRADE.md`, "Honest limits").
+- The worker and runtime wiring for the approve, swap and revoke steps. The transaction seam now runs them (see
+  "In-app approve, swap and revoke" below), but no mounted runtime passes a step plan yet.
 - The signer change for quantities above `2**53-1`, but only if a MON start is wanted.
+
+## In-app approve, swap and revoke (`CLOUD-A6`)
+
+Task `CLOUD-A6`, builder-approved 2026-10-23 (in-app trading T5 option 2). Base
+`82290e203982ee710189c4d983edce9a4ddfba9f`. This section describes the transaction seam only. It grants no trade
+authority and changes no release hash.
+
+### What the release names
+
+The authored `facts` name `start` `WMON`, `active_steps` `["approve", "swap", "revoke"]` and the step gas limits wrap
+`60000`, approve `70000`, swap `700000`, revoke `70000`. `TradeSteps.from_authored` reads exactly these facts. It
+uses the module's own checks (`worst_case_usd`), so any other start, order, gas margin or ceiling is refused. The
+spender is the route's entrypoint `0xb3e6…13cb`, the contract that the swap calls. Policy rule R2 ("approve to the
+Kuru Flow entrypoint") and the operator path (`OPERATOR_TRADE.md`) use the same spender. The
+`deployment.router_address` is never approved.
+
+### Order and journal
+
+With a step plan, `OriginalTransactionTransport.submit_original` runs one action as follows:
+
+1. Checks before step 1. The existing release, route, network and expiry refusals run first. Then the swap gas limit
+   must equal the route's (`STEP_GAS_MISMATCH`). The total of the approve, swap and revoke limits at the fixed
+   maximum fee must fit the approved gas reservation (`FEE_EXCEEDS_GAS_RESERVATION`). The input plus the full limit
+   of all four release steps at that fee, at the release MON price, must not exceed the USD ceiling
+   (`USD_CEILING_EXCEEDED`). This is the release's own ceiling arithmetic above, and it includes the wrap.
+2. One route quote and one pending-nonce read `N`. The approve and the swap are prepared and saved (`PREPARED`,
+   `APPROVE_PREPARED`) before any signature.
+3. Approve: `approve(entrypoint, input_raw)` on the input token, nonce `N`, value 0, gas `70000`.
+4. Swap: the unchanged single-swap transaction, nonce `N+1`.
+5. Revoke: `approve(entrypoint, 0)`, gas `70000`. It uses nonce `N+2` after the swap's own hash was returned. It uses
+   nonce `N+1` after a definite swap refusal, because the swap's nonce is then unused.
+
+Each step goes through the single-swap stages once: sign request saved, recheck, signer, validation of the signed
+bytes, `SIGNED`, `BROADCAST_REQUESTED`, recheck, one `eth_sendRawTransaction`. The approve and revoke save each stage
+in their own record (`approve`, `revoke`; journal stages `APPROVE_*`, `REVOKE_*`). The swap keeps the single-swap
+envelope at the top level, plus a `swap` record. Its receipt reconciliation and `qualify_original` therefore do not
+change. The approve and revoke sign with their own request ids, `<attempt_id>:approve` and `<attempt_id>:revoke`.
+A Privy policy denial on any step maps to `WALLET_POLICY_REFUSED` through the existing `SignerPolicyDenied` path.
+
+### Outcomes and recovery
+
+| Case | Action outcome | Revoke | Allowance (`recovery.allowance.allowance_status`) |
+| --- | --- | --- | --- |
+| Refused before step 1, or the approve definitely refused | `DEFINITELY_UNSENT` (`APPROVE:<reason>` for the approve) | none | `NOT_APPROVED`, not open |
+| Approve unknown (signing or broadcast unknown, error, mismatch, stop after signing, save failure after signing) | `SUBMISSION_POSSIBLE` | `NOT_ATTEMPTED` | `APPROVE_UNKNOWN`, open |
+| Swap unknown | `SUBMISSION_POSSIBLE` | `NOT_ATTEMPTED` | `REVOKE_NOT_SENT`, open |
+| Swap hash returned, or swap definitely refused (`SWAP:<reason>`) | `SUBMISSION_POSSIBLE` (the approve was sent) | sent once | see below |
+| Revoke refused or not saved | same | `REFUSED_UNSENT` / `PREPARED` | `REVOKE_NOT_SENT`, open |
+| Revoke unknown | same | unknown stage | `REVOKE_UNKNOWN`, open |
+| Revoke hash returned | same | `BROADCAST_RETURNED` | `REVOKE_UNCONFIRMED`, open until `read_revoke_receipt` reads its bound status-1 receipt (`CLOSED`) |
+
+No step is resent. The transport refuses a second run (`ACTION_ALREADY_STARTED`). After a crash, the saved attempt
+keeps the action's claim, and a later tick makes no call. The recovery case view (`RecoveryCaseView.allowance`)
+and the owner projection (`allowance`) report the allowance from the saved records. Liability follows the existing
+rule: after the approve was sent, the action stays `SUBMISSION_POSSIBLE`. If the swap never got a hash, nothing can
+settle the action from a receipt. It then stays unknown, with its reservations held, until an operator resolves it.
+
+### Not done here (other lanes or a builder decision)
+
+- **Wiring.** `worker.py` and `ControlledRuntime.clients` (`provider_ports.py`) do not pass a step plan yet. The
+  mounted path still runs the single swap.
+- **Release limits.** The release fixes `signer_requests` `1` and `broadcasts` `1`, and `operating_release.py`
+  requires those values. The mounted signer and broadcast clients also allow one request each. One action with three
+  steps makes three signer requests and three broadcasts. Before a runtime can mount this path, the builder must
+  decide whether these limits count per step, or change the release rule. Either choice is a reviewed change and
+  produces a new release hash.
+- **Revoke confirmation.** The worker's reconciliation reads only the swap receipt. `read_revoke_receipt` exists,
+  but no worker path calls it yet.
+- **Ceiling price.** The USD check uses the release's documented MON price (`0.02`, an unapproved example). The
+  builder still confirms the current price before the run (see above).
 
 ## Checks
 
 ```sh
-cd apps/api && .venv/bin/python -m pytest -q tests/execution/test_inapp_trade_release.py
+cd apps/api && .venv/bin/python -m pytest -q tests/execution/test_inapp_trade_release.py \
+  tests/execution/test_approve_swap_revoke.py tests/recovery/test_approve_swap_revoke_recovery.py
 ```
+
+The recovery test needs Docker for its PostgreSQL container.

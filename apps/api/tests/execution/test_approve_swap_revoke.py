@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 from eth_account import Account
+from eth_account.typed_transactions import TypedTransaction
+from hexbytes import HexBytes
 from eth_utils import keccak
 
 from edge_os_api.execution.original_transaction import (
@@ -87,8 +89,7 @@ class Chain:
         raw = bytes.fromhex(params[0][2:])
         decoded = Account.recover_transaction(raw)
         assert decoded.lower() == PUBLISHED_WALLET.lower()
-        from eth_account.typed_transactions import TypedTransaction
-        fields = TypedTransaction.from_bytes(raw).as_dict()
+        fields = TypedTransaction.from_bytes(HexBytes(raw)).as_dict()
         step = step_of({"data": "0x" + bytes(fields["data"]).hex()})
         self.sent.append((step, fields["nonce"]))
         fault = self.faults.get(step)
@@ -101,6 +102,7 @@ class Chain:
 
 def multi(tmp_path, *, signer: Signer | None = None, chain: Chain | None = None, plan: TradeSteps | None = None,
           **context_changes: Any):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     transport, recordings, stages = original(tmp_path, signer or Signer())
     context = dataclasses.replace(transport._context, **context_changes)
     clients = dataclasses.replace(transport._clients, broadcast=chain or Chain())
@@ -220,7 +222,7 @@ def test_the_ceiling_counts_every_release_gas_limit_including_the_wrap(tmp_path)
     # (60000 + 70000 + 300000 + 70000) * 3 gwei = 0.0015 MON; 100000000 raw input = 1e-10 MON.
     worst = Decimal(500000 * 3_000_000_000 + 100_000_000) / Decimal(10**18)
     price = Decimal("2.00") / worst
-    passing, _, stages = multi(tmp_path / "a", plan=steps(mon_usd_price=price))
+    passing, _, stages = multi(tmp_path / "a", plan=steps(mon_usd_price=price * Decimal("0.9999")))
     assert run(passing, stages).detail == "BROADCAST_RETURNED;REVOKE:BROADCAST_RETURNED"
     refused, _, stages = multi(tmp_path / "b", plan=steps(mon_usd_price=price * Decimal("1.0001")))
     assert run(refused, stages).detail == "USD_CEILING_EXCEEDED"
@@ -373,7 +375,9 @@ def test_an_unknown_or_refused_revoke_is_reported_as_an_open_allowance_and_never
     assert status["state"] == state and status["open"] is True
     view = owner_projection(saved)
     assert view["allowance"] == status
-    assert "signed_bytes" not in json.dumps(view["revoke"]) and "body" not in view["revoke"].get("signing_request", {})
+    assert not {"signed_bytes", "unsigned", "signing_request"} & set(view["revoke"])
+    secret = saved["revoke"].get("signed_bytes")
+    assert secret is None or secret not in json.dumps(view)
 
 
 def test_a_failed_save_before_the_revoke_signature_leaves_it_unsent_and_reported(tmp_path):
@@ -458,3 +462,29 @@ def test_a_single_swap_envelope_has_no_allowance_record(tmp_path):
     saved = envelope(stages)
     assert "steps" not in saved and allowance_status(saved) is None
     assert "allowance" not in owner_projection(saved)
+
+
+def test_a_bound_release_runs_the_steps_and_its_swap_envelope_still_qualifies_for_receipt_recovery(tmp_path):
+    from execution.test_saved_attempt_signing import bound_original
+    signer, chain = Signer(), Chain()
+    base, _, _ = multi(tmp_path, signer=signer, chain=chain)
+    binding, approvals = bound_original(base)
+    context = dataclasses.replace(base._context, identity=binding.identity())
+    transport = OriginalTransactionTransport(context, base._clients, base._profile, controls=lambda: [],
+                                             clock=lambda: NOW, binding=binding, synthetic_bindings=approvals,
+                                             steps=steps())
+    stages: list = []
+    outcome = run(transport, stages)
+    assert outcome.detail == "BROADCAST_RETURNED;REVOKE:BROADCAST_RETURNED"
+    saved = envelope(stages)
+    assert binding.qualify_original(saved, synthetic_bindings=approvals) == "SYNTHETIC_FIXTURE"
+    view = owner_projection(saved)
+    assert view["approve"]["nonce"] == "5" and view["approve"]["fee_envelope"]["gas_limit"] == "70000"
+
+    # The release's own swap gas is still enforced on top of the step plan.
+    other = dataclasses.replace(base._profile, gas_limit=base._profile.gas_limit + 1)
+    mismatched = OriginalTransactionTransport(context, base._clients, other, controls=lambda: [], clock=lambda: NOW,
+        binding=binding, synthetic_bindings=approvals,
+        steps=steps(gas_limits={"wrap": 60000, "approve": 70000, "swap": other.gas_limit, "revoke": 70000}))
+    assert run(mismatched, []).detail == "RELEASE_GAS_MISMATCH"
+    assert len(signer.calls) == 3

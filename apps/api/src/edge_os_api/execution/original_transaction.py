@@ -11,6 +11,13 @@ Nothing is retried, re-quoted, re-nonced, re-fee'd or re-signed, and no second a
 the sequence before the next call. Anything after a signer call that is not a definite refusal keeps the original
 liability (`SUBMISSION_POSSIBLE`); only the independent receipt reconciliation can settle it.
 
+With a release step plan (`TradeSteps`) one approved action runs the release's fixed order instead: an exact
+ERC-20 approve of the input to the swap's entrypoint, the swap, and a revoke to zero. Each step goes through the same
+stages once, in its own journal record (`APPROVE_*`, the swap at the top level as above, `REVOKE_*`). The total gas
+of every step counts against the gas reservation and the release's USD ceiling before the first step. An unknown
+approve or swap stops the action with its liability kept; the revoke runs only after the swap's own hash was
+returned or the swap was definitely refused, and an unknown or unsent revoke stays reported as an open allowance.
+
 Three identities stay distinct: the P20 `candidate_hash` (application SHA-256 of the normalized candidate), the
 `transaction_hash` (Keccak-256 of the entire signed serialization, never `TypedTransaction.hash()`, which is the
 signing preimage) and the provider references (signer request id, broadcast reply). This module holds no key and
@@ -26,7 +33,9 @@ import math
 import re
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol
 
 from eth_account import Account
@@ -62,6 +71,11 @@ EIP1559_TYPE = 2
 TRANSFER_TOPIC = "0x" + keccak(b"Transfer(address,address,uint256)").hex()
 BALANCE_OF_SELECTOR = "0x" + keccak(b"balanceOf(address)")[:4].hex()
 DECIMALS_SELECTOR = "0x" + keccak(b"decimals()")[:4].hex()
+APPROVE_SELECTOR = "0x" + keccak(b"approve(address,uint256)")[:4].hex()
+STEP_ORDER = ("approve", "swap", "revoke")
+STEP_GAS_NAMES = frozenset({"wrap", "approve", "swap", "revoke"})
+WEI_PER_MON = 10**18
+MAX_USD_CEILING = Decimal("2.00")
 NATIVE_SUFFIX = "/native"
 _HEX = re.compile(r"0x(?:[0-9a-fA-F]{2})+")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
@@ -172,6 +186,45 @@ class OriginalContext:
     decision_slot: dt.datetime
     intent_expires_at: dt.datetime
     mandate_expires_at: str
+
+
+@dataclass(frozen=True)
+class TradeSteps:
+    """The release's fixed approve -> swap -> revoke order and every step gas limit the release fixes.
+
+    `gas_limits` keeps all four authored limits, including the wrap a WMON start does not run: the release's USD
+    ceiling counts every one of them (`inapp_trade_release.worst_case_usd`), and so does the check before step 1.
+    """
+
+    gas_limits: Mapping[str, int]
+    usd_ceiling: Decimal
+    mon_usd_price: Decimal
+    order: tuple[str, ...] = STEP_ORDER
+
+    def __post_init__(self) -> None:
+        limits = dict(self.gas_limits)
+        if (set(limits) != STEP_GAS_NAMES or not all(type(x) is int and x > 0 for x in limits.values())
+                or self.order != STEP_ORDER or not isinstance(self.usd_ceiling, Decimal)
+                or not isinstance(self.mon_usd_price, Decimal) or not self.usd_ceiling.is_finite()
+                or not self.mon_usd_price.is_finite() or not 0 < self.usd_ceiling <= MAX_USD_CEILING
+                or self.mon_usd_price <= 0):
+            raise ValueError("TRADE_STEPS_INVALID")
+        object.__setattr__(self, "gas_limits", MappingProxyType(limits))
+
+    @classmethod
+    def from_authored(cls, authored: Mapping[str, Any]) -> "TradeSteps":
+        """The steps an authored in-app release names; its own checks refuse any other start, order or ceiling."""
+        from edge_os_api.execution import inapp_trade_release
+
+        inapp_trade_release.worst_case_usd(authored)  # raises ReleaseRefused (a ValueError) for invalid facts
+        facts = authored["facts"]
+        return cls(gas_limits=dict(facts["gas_limits"]), usd_ceiling=Decimal(facts["usd_ceiling"]),
+                   mon_usd_price=Decimal(facts["mon_usd_price"]))
+
+
+def approve_calldata(spender: str, amount: int) -> str:
+    """ERC-20 `approve(spender, amount)`; amount 0 is the revoke."""
+    return APPROVE_SELECTOR + "0" * 24 + spender[2:].lower() + f"{amount:064x}"
 
 
 def signing_request_key(transaction: Mapping[str, Any]) -> str:
@@ -320,7 +373,8 @@ class OriginalTransactionTransport:
     def __init__(self, context: OriginalContext, clients: OriginalClients, profile: RouteProfile, *,
                  controls: Callable[[], list[str]], clock: Callable[[], dt.datetime],
                  approved_route: ApprovedAdapterConfiguration | None = None,
-                 binding: BoundRelease | None = None, synthetic_bindings: Mapping[str, str] | None = None) -> None:
+                 binding: BoundRelease | None = None, synthetic_bindings: Mapping[str, str] | None = None,
+                 steps: TradeSteps | None = None) -> None:
         self._context, self._clients, self._profile = context, clients, profile
         self._controls, self._clock = controls, clock
         self._quote_requested_at: dt.datetime | None = None
@@ -330,6 +384,8 @@ class OriginalTransactionTransport:
         self._synthetic_bindings = None if synthetic_bindings is None else dict(synthetic_bindings)
         if binding is not None:
             self._approved_route = ApprovedAdapterConfiguration.model_validate(binding.release.content()["route"])
+        self._steps = steps
+        self._started = False
 
     def original_references(self, prepared: PreparedSubmission) -> dict[str, Any]:
         """IC06 keys, saved with the IN_FLIGHT attempt. The chain identities follow in `original_transaction`."""
@@ -345,6 +401,10 @@ class OriginalTransactionTransport:
 
     def submit_original(self, prepared: PreparedSubmission,
                         journal: Callable[[str, dict[str, Any]], None]) -> TransportOutcome:
+        if self._steps is not None:
+            if self._started:  # one action, one run: a step is never prepared, signed or sent a second time
+                return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail="ACTION_ALREADY_STARTED")
+            self._started = True
         context = self._context
         if (prepared.action_id, prepared.payload_hash, prepared.wallet_id, prepared.owner_id,
                 prepared.network_id, prepared.operation) != (
@@ -362,69 +422,147 @@ class OriginalTransactionTransport:
         if refusal is not None:
             return self._unsent(journal, refusal, prepared_values)
         assert prepared_values is not None
+        if self._steps is not None:
+            return self._submit_steps(prepared, prepared_values, journal)
         try:
             journal("PREPARED", prepared_values)
         except JournalError:
             return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
-        unsigned = prepared_values["unsigned"]
+        return self._send(_Stages(journal), prepared, prepared_values, self._quote_requested_at)
+
+    def _submit_steps(self, prepared: PreparedSubmission, swap_values: dict[str, Any],
+                      journal: Callable[[str, dict[str, Any]], None]) -> TransportOutcome:
+        """Approve, swap and revoke in the release's order. Every step is prepared before any signature."""
+        swap_nonce = swap_values["nonce"]
+        approve = self._step_values("approve", prepared, swap_nonce - 1, self._context.sell.raw)
         try:
-            journal("SIGN_REQUESTED", {})
+            journal("PREPARED", {**swap_values, "steps": list(STEP_ORDER), "swap": {"step": "swap", "stage": "PREPARED"}})
+            journal("APPROVE_PREPARED", {"approve": dict(approve)})
+        except JournalError:
+            return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
+
+        result = self._send(_Stages(journal, "approve", approve), self._step_prepared(prepared, "approve"), approve,
+                            self._quote_requested_at)
+        if result.outcome == "DEFINITELY_UNSENT":
+            return self._unsent(journal, f"APPROVE:{result.detail}")  # nothing of this action was sent
+        if result.detail != "BROADCAST_RETURNED":
+            self._revoke_not_attempted(journal, "APPROVE_OUTCOME_UNKNOWN")
+            return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=f"APPROVE:{result.detail}")
+
+        result = self._send(_Stages(journal, "swap", {"step": "swap"}), prepared, swap_values,
+                            self._quote_requested_at)
+        if result.outcome == "DEFINITELY_UNSENT":
+            # The swap was never signed or sent, so its nonce is unused and the revoke takes it.
+            swap_detail, revoke_nonce = f"SWAP:{result.detail}", swap_nonce
+        elif result.detail == "BROADCAST_RETURNED":
+            # The node returned the swap's own hash: the revoke at the next nonce can only follow it.
+            swap_detail, revoke_nonce = result.detail, swap_nonce + 1
+        else:
+            # The swap may or may not be on its way, so neither nonce is safe: the allowance stays reported open.
+            self._revoke_not_attempted(journal, "SWAP_OUTCOME_UNKNOWN")
+            return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=f"{result.detail};REVOKE:NOT_ATTEMPTED")
+
+        revoke = self._step_values("revoke", prepared, revoke_nonce, 0)
+        try:
+            journal("REVOKE_PREPARED", {"revoke": dict(revoke)})
+        except JournalError:
+            revoked = "PERSISTENCE_FAILED_BEFORE_SIGNING"
+        else:
+            revoked = self._send(_Stages(journal, "revoke", revoke), self._step_prepared(prepared, "revoke"), revoke,
+                                 None).detail
+        # The approve was sent, so its liability stays whatever the swap and the revoke did.
+        return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=f"{swap_detail};REVOKE:{revoked}")
+
+    def _send(self, stages: "_Stages", prepared: PreparedSubmission, values: Mapping[str, Any],
+              quote_requested_at: dt.datetime | None) -> TransportOutcome:
+        """Sign request saved -> recheck -> signer -> validate -> SIGNED -> BROADCAST_REQUESTED -> recheck -> send once."""
+        context = self._context
+        unsigned = values["unsigned"]
+        try:
+            stages.save("SIGN_REQUESTED", {})
         except JournalError:
             return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
         # After the save, immediately before the signer call: a slow save never grants a grace interval.
-        stop = self._recheck(self._quote_requested_at)
+        stop = self._recheck(quote_requested_at)
         if stop is not None:
-            return self._unsent(journal, stop)
+            return stages.unsent(stop)
 
         try:
             signer = (self._clients.signer_for_attempt(prepared) if self._clients.signer_for_attempt is not None
                       else self._clients.signer)
             if signer is None:
-                return self._unsent(journal, "SIGNER_UNAVAILABLE")
-            reply = signer.rpc(context.wallet_id, prepared_values["signing_request"]["body"])
+                return stages.unsent("SIGNER_UNAVAILABLE")
+            reply = signer.rpc(context.wallet_id, values["signing_request"]["body"])
         except SignerPolicyDenied:
-            return self._unsent(journal, "WALLET_POLICY_REFUSED")
+            return stages.unsent("WALLET_POLICY_REFUSED")
         except (ReplyLost, TimeoutError, OSError, RpcError):
-            return self._possible(journal, "SIGNING_UNKNOWN")
+            return stages.possible("SIGNING_UNKNOWN")
         if is_signer_refusal(reply):
-            return self._unsent(journal, "SIGNER_REFUSED")
+            return stages.unsent("SIGNER_REFUSED")
         data = reply.get("data") if isinstance(reply, Mapping) else None
         signed_hex = data.get("signed_transaction") if isinstance(data, Mapping) else None
         if signed_hex is None:
             # Not a recognized refusal and no usable bytes: a signature may still exist, so the liability stays.
-            return self._possible(journal, "SIGNED_RESPONSE_REJECTED", {"reasons": ["SIGNER_REPLY_UNRECOGNIZED"]})
+            return stages.possible("SIGNED_RESPONSE_REJECTED", {"reasons": ["SIGNER_REPLY_UNRECOGNIZED"]})
         if data.get("encoding") != "rlp":
-            return self._possible(journal, "SIGNED_RESPONSE_REJECTED", {"reasons": ["SIGNED_ENCODING_UNSUPPORTED"]})
+            return stages.possible("SIGNED_RESPONSE_REJECTED", {"reasons": ["SIGNED_ENCODING_UNSUPPORTED"]})
         transaction_hash, reasons = validate_signed(signed_hex, unsigned, context.wallet_address)
         if transaction_hash is None:
-            return self._possible(journal, "SIGNED_RESPONSE_REJECTED", {"reasons": reasons})
+            return stages.possible("SIGNED_RESPONSE_REJECTED", {"reasons": reasons})
         signed = bytes.fromhex(signed_hex[2:])
         try:
-            journal("SIGNED", {"signed_bytes": signed_hex, "transaction_hash": transaction_hash,
-                               "signed_bytes_sha256": "sha256:" + hashlib.sha256(signed).hexdigest(),
-                               "signed_bytes_length": len(signed)})
+            stages.save("SIGNED", {"signed_bytes": signed_hex, "transaction_hash": transaction_hash,
+                                   "signed_bytes_sha256": "sha256:" + hashlib.sha256(signed).hexdigest(),
+                                   "signed_bytes_length": len(signed)})
         except JournalError:
             return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail="PERSISTENCE_FAILED_AFTER_SIGNING")
         try:
-            journal("BROADCAST_REQUESTED", {})
+            stages.save("BROADCAST_REQUESTED", {})
         except JournalError:
             return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail="PERSISTENCE_FAILED_AFTER_SIGNING")
         # After the save, immediately before the send: a slow save never grants a grace interval.
-        stop = self._recheck(self._quote_requested_at)
+        stop = self._recheck(quote_requested_at)
         if stop is not None:
-            return self._possible(journal, f"STOPPED_AFTER_SIGNING:{stop}")
+            return stages.possible(f"STOPPED_AFTER_SIGNING:{stop}")
 
         try:
             returned = self._clients.broadcast.call("eth_sendRawTransaction", [signed_hex])
         except (ReplyLost, TimeoutError, OSError):
-            return self._possible(journal, "BROADCAST_UNKNOWN")
+            return stages.possible("BROADCAST_UNKNOWN")
         except RpcError:
             # Provider error text is never saved or shown: it can echo the request, including the signed bytes.
-            return self._possible(journal, "BROADCAST_ERROR")
+            return stages.possible("BROADCAST_ERROR")
         if not isinstance(returned, str) or returned.lower() != transaction_hash:
             # A reply other than our own hash is never kept: even a hash-shaped one can be a slice of the signed bytes.
-            return self._possible(journal, "BROADCAST_HASH_MISMATCH")
-        return self._possible(journal, "BROADCAST_RETURNED", {"broadcast_returned": returned.lower()})
+            return stages.possible("BROADCAST_HASH_MISMATCH")
+        return stages.possible("BROADCAST_RETURNED", {"broadcast_returned": returned.lower()})
+
+    def _step_values(self, step: str, prepared: PreparedSubmission, nonce: int, amount: int) -> dict[str, Any]:
+        """One approve or revoke of the exact input token to the swap's entrypoint, with its own fixed gas limit."""
+        assert self._steps is not None
+        context, profile = self._context, self._profile
+        fee_envelope = {"gas_limit": self._steps.gas_limits[step], "max_fee_per_gas": profile.max_fee_per_gas,
+                        "max_priority_fee_per_gas": profile.max_priority_fee_per_gas}
+        unsigned = {"type": EIP1559_TYPE, "chain_id": context.chain_id, "nonce": nonce, "to": context.sell.token,
+                    "value": 0, "data": approve_calldata(profile.entrypoint, amount), **fee_envelope}
+        return {"step": step, "token": context.sell.token, "spender": profile.entrypoint, "amount_raw": str(amount),
+                "nonce": nonce, "fee_envelope": fee_envelope, "unsigned": unsigned,
+                "signing_request": {"request_id": self._step_prepared(prepared, step).attempt_id,
+                                    "route": f"POST /v1/wallets/{context.wallet_id}/rpc",
+                                    "request_key": signing_request_key(unsigned),
+                                    "body": {"method": "eth_signTransaction", "params": {"transaction": unsigned}}}}
+
+    @staticmethod
+    def _step_prepared(prepared: PreparedSubmission, step: str) -> PreparedSubmission:
+        """The approve and revoke sign under their own request id, so a signer never mistakes one for the swap."""
+        return replace(prepared, attempt_id=None if prepared.attempt_id is None else f"{prepared.attempt_id}:{step}")
+
+    @staticmethod
+    def _revoke_not_attempted(journal: Callable[[str, dict[str, Any]], None], reason: str) -> None:
+        try:
+            journal("REVOKE_NOT_ATTEMPTED", {"revoke": {"step": "revoke", "stage": "NOT_ATTEMPTED", "reason": reason}})
+        except JournalError:
+            pass  # the absent revoke record still reads as an open allowance
 
     # ------------------------------------------------------------------------------- stages
 
@@ -439,6 +577,9 @@ class OriginalTransactionTransport:
             return None, "NATIVE_TRADING_UNSUPPORTED"
         if profile.gas_limit * profile.max_fee_per_gas > context.gas_cap_raw:
             return None, "FEE_EXCEEDS_GAS_RESERVATION"
+        refusal = self._steps_problem()
+        if refusal is not None:
+            return None, refusal
         now = self._clock()
         if now >= context.intent_expires_at:
             return None, "INTENT_EXPIRED"
@@ -536,6 +677,10 @@ class OriginalTransactionTransport:
             nonce = None
         if nonce is None:
             return envelope, "NONCE_UNAVAILABLE"
+        if self._steps is not None:
+            if candidate.to.lower() != profile.entrypoint.lower():
+                return envelope, "STEP_SPENDER_MISMATCH"
+            nonce += 1  # the one pending-nonce read: approve N, swap N+1, revoke N+2 (or N+1 if the swap is unsent)
         fee_envelope = {"gas_limit": profile.gas_limit, "max_fee_per_gas": profile.max_fee_per_gas,
                         "max_priority_fee_per_gas": profile.max_priority_fee_per_gas}
         unsigned = {"type": EIP1559_TYPE, "chain_id": context.chain_id, "nonce": nonce, "to": candidate.to,
@@ -550,6 +695,21 @@ class OriginalTransactionTransport:
             "signing_request": {"request_id": prepared.attempt_id, "route": f"POST /v1/wallets/{context.wallet_id}/rpc",
                                 "request_key": signing_request_key(unsigned), "body": body}})
         return envelope, None
+
+    def _steps_problem(self) -> str | None:
+        """Before step 1: the swap gas is the route's, and every step's gas fits the reservation and the USD ceiling."""
+        if self._steps is None:
+            return None
+        context, profile, limits = self._context, self._profile, self._steps.gas_limits
+        if limits["swap"] != profile.gas_limit:
+            return "STEP_GAS_MISMATCH"
+        if sum(limits[step] for step in self._steps.order) * profile.max_fee_per_gas > context.gas_cap_raw:
+            return "FEE_EXCEEDS_GAS_RESERVATION"
+        # The release's arithmetic: the input (valued as MON, 1:1 for WMON) plus the full limit of every step it fixes.
+        worst_wei = context.sell.raw + sum(limits.values()) * profile.max_fee_per_gas
+        if Decimal(worst_wei) * self._steps.mon_usd_price / Decimal(WEI_PER_MON) > self._steps.usd_ceiling:
+            return "USD_CEILING_EXCEEDED"
+        return None
 
     def _recheck(self, quote_requested_at: dt.datetime | None = None) -> str | None:
         problem = self._release_problem()
@@ -608,6 +768,46 @@ class OriginalTransactionTransport:
                   values: dict[str, Any] | None = None) -> TransportOutcome:
         try:
             journal(stage.split(":", 1)[0], {**(values or {}), "reason": stage})
+        except JournalError:
+            pass  # the liability stays; the attempt outcome still records the stage
+        return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=stage)
+
+
+class _Stages:
+    """Where one step saves its stages.
+
+    Without a step name this is the single-swap journal, unchanged. `swap` keeps the swap's envelope at the top level,
+    adds its own `swap` record, and saves its refusal as `SWAP_REFUSED_UNSENT`: a top-level `REFUSED_UNSENT` means the
+    whole action was definitely unsent. `approve` and `revoke` each save one complete record under their own key.
+    """
+
+    def __init__(self, journal: Callable[[str, dict[str, Any]], None], step: str | None = None,
+                 record: dict[str, Any] | None = None) -> None:
+        self._journal, self._step, self._record = journal, step, record if record is not None else {}
+
+    def save(self, stage: str, values: dict[str, Any]) -> None:
+        if self._step is None:
+            self._journal(stage, values)
+            return
+        if self._step == "swap":
+            self._record.update({key: values[key] for key in ("reason",) if key in values}, stage=stage)
+            self._journal("SWAP_REFUSED_UNSENT" if stage == "REFUSED_UNSENT" else stage,
+                          {**values, "swap": dict(self._record)})
+            return
+        self._record.update(values)
+        self._record["stage"] = stage
+        self._journal(f"{self._step.upper()}_{stage}", {self._step: dict(self._record)})
+
+    def unsent(self, reason: str) -> TransportOutcome:
+        try:
+            self.save("REFUSED_UNSENT", {"reason": reason})
+        except JournalError:
+            pass  # nothing was sent; the attempt outcome still records the reason
+        return TransportOutcome(outcome="DEFINITELY_UNSENT", detail=reason)
+
+    def possible(self, stage: str, values: dict[str, Any] | None = None) -> TransportOutcome:
+        try:
+            self.save(stage.split(":", 1)[0], {**(values or {}), "reason": stage})
         except JournalError:
             pass  # the liability stays; the attempt outcome still records the stage
         return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=stage)
@@ -817,4 +1017,39 @@ def owner_projection(envelope: Mapping[str, Any] | None) -> dict[str, Any] | Non
     candidate = envelope.get("candidate")
     if isinstance(candidate, Mapping):
         view["candidate_to"] = candidate.get("to")
+    if "steps" in envelope:
+        from edge_os_api.recovery.allowance import allowance_status
+
+        view["steps"] = envelope["steps"]
+        swap = envelope.get("swap")
+        view["swap"] = ({key: swap[key] for key in ("step", "stage", "reason") if key in swap}
+                        if isinstance(swap, Mapping) else None)
+        for step in ("approve", "revoke"):
+            view[step] = _step_projection(envelope.get(step), bound="binding_sha256" in envelope)
+        view["allowance"] = allowance_status(envelope)
+    return view
+
+
+# The owner-visible fields of one approve or revoke record: never its signed bytes or signing request body.
+STEP_OWNER_FIELDS = frozenset({"step", "stage", "reason", "reasons", "token", "spender", "amount_raw", "nonce",
+                               "fee_envelope", "transaction_hash", "signed_bytes_sha256", "signed_bytes_length"})
+
+
+def _step_projection(record: Any, *, bound: bool) -> dict[str, Any] | None:
+    if not isinstance(record, Mapping):
+        return None
+    view = {key: value for key, value in record.items() if key in STEP_OWNER_FIELDS}
+    if bound:
+        if type(view.get("nonce")) is int:
+            view["nonce"] = str(view["nonce"])
+        fees = view.get("fee_envelope")
+        if isinstance(fees, Mapping):
+            view["fee_envelope"] = {key: str(fees[key]) for key in (
+                "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas") if type(fees.get(key)) is int}
+    returned = record.get("broadcast_returned")
+    view["broadcast_returned"] = returned if is_hash(returned) and returned == record.get("transaction_hash") else None
+    request = record.get("signing_request")
+    if isinstance(request, Mapping):
+        view["signing_request_id"] = request.get("request_id")
+        view["signing_request_key"] = request.get("request_key")
     return view
