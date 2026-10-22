@@ -398,12 +398,12 @@ MAX_FEE_PER_GAS = 100_000_000_000
 MAX_PRIORITY_FEE_PER_GAS = 2_000_000_000
 PACKET_EXPIRES_AT_EPOCH = 1_793_836_800
 PACKET_AUTH_HEADER_EXPIRY = "1793836800000"
-PACKET_ATTEMPT_IDENTITY = "unfunded-policy-proof-2"
+PACKET_ATTEMPT_IDENTITY = "unfunded-policy-proof-3"
 
 # The reviewed identities. The registry admits the packet and the table only when
 # their recomputed hashes equal these literals. A source edit cannot approve a
 # new packet or table without a new reviewed literal.
-SEALED_PACKET_SHA256 = "a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496"
+SEALED_PACKET_SHA256 = "8255d003097fd1a0216a6b64c48637f2ef745c7ebbe73035d0b8929403500528"
 SEALED_ACTUAL_MANIFEST_SHA256 = "f485816e431aae37e30d062df038a3e1d62b8cdadac8e510ebb5d0181c827b63"
 
 DEPOSIT_CALLDATA = "0xd0e30db0"
@@ -599,8 +599,8 @@ UNFUNDED_POLICY_ORDER: tuple[str, ...] = (
     "raw.deny_approve_above_cap",
     "raw.deny_approve_with_value",
     "raw.deny_deposit_above_cap",
-    "raw.deny_swap_with_mon",
     "raw.deny_plain_mon_transfer",
+    "raw.deny_swap_with_mon",
 )
 
 UNFUNDED_POLICY_TABLE = build_table(_policy_rows())

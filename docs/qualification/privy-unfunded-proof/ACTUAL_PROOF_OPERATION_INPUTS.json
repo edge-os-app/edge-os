@@ -1,21 +1,21 @@
 {
   "schema": "edge-os.actual-proof-operation-inputs/1",
-  "task": "POLICY-PROOF-V2-L3-20261022",
+  "task": "POLICY-PROOF-V3-L3-20261022",
   "status": "FROZEN",
-  "repair": "POLICY-PROOF-V2-L3-20261022-PACKET2",
+  "repair": "POLICY-PROOF-V3-L3-20261022-PACKET3",
   "evidence_class": "LOCAL_TESTED",
   "provider_proof": "UNQUALIFIED",
-  "note": "The frozen policy-layer packet version 2 binds the tightened live R3 policy and is sealed to reviewed SHA-256 literals and registered in the code-owned registries. Packet v1 is refused. The live proof is not run. This file grants nothing and approves no trade, funding, broadcast or policy change.",
+  "note": "The frozen policy-layer packet version 3 keeps the version 2 rows and request bodies, runs raw.deny_plain_mon_transfer before raw.deny_swap_with_mon, and is sealed to reviewed SHA-256 literals and registered in the code-owned registries. Packets v1 and v2 are refused. The live proof is not run. This file grants nothing and approves no trade, funding, broadcast or policy change.",
   "packet_fields": [
     {
       "field": "packet_id",
       "required": "SHA-256 of the frozen packet projection",
-      "current": "a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496"
+      "current": "8255d003097fd1a0216a6b64c48637f2ef745c7ebbe73035d0b8929403500528"
     },
     {
       "field": "sealed_packet_sha256",
       "required": "The reviewed literal the registry must match",
-      "current": "a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496"
+      "current": "8255d003097fd1a0216a6b64c48637f2ef745c7ebbe73035d0b8929403500528"
     },
     {
       "field": "table_manifest_sha256",
@@ -117,7 +117,7 @@
     {
       "field": "attempt_identity",
       "required": "The one-use idempotency/attempt identity",
-      "current": "unfunded-policy-proof-2"
+      "current": "unfunded-policy-proof-3"
     },
     {
       "field": "requests",
@@ -549,31 +549,6 @@
           "request_sha256": "a8b918f8066bba734aea573f4ac6359a8056aa9bbcddf21b0170226729e14f50"
         },
         {
-          "specimen_id": "raw.deny_swap_with_mon",
-          "expected": "POLICY_DENY",
-          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
-          "http_method": "POST",
-          "headers": [],
-          "body": {
-            "method": "eth_signTransaction",
-            "params": {
-              "transaction": {
-                "chain_id": 143,
-                "data": "0xce1e70300000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000",
-                "gas_limit": 500000,
-                "max_fee_per_gas": 100000000000,
-                "max_priority_fee_per_gas": 2000000000,
-                "nonce": 0,
-                "to": "0xb3e6778480b2e488385e8205ea05e20060b813cb",
-                "type": 2,
-                "value": 1
-              }
-            }
-          },
-          "body_sha256": "276f2cbb60c9bf754efab4c52da63e1cf74e026fc5c75b622ca4dc013fc901dd",
-          "request_sha256": "ac3277ebd460be8fedf0f1745d163eda5e3d8becea9b0027bf727d18d689b652"
-        },
-        {
           "specimen_id": "raw.deny_plain_mon_transfer",
           "expected": "POLICY_DENY",
           "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
@@ -597,6 +572,31 @@
           },
           "body_sha256": "d8a2f5f1c3009d64f21a9fb96f111e93125b574dc815e7b7bbb354d7713d8c4e",
           "request_sha256": "24445a29234ebac7936acaa2c2ca4eb0f8867d122af7303a5afb48dcafe1dae4"
+        },
+        {
+          "specimen_id": "raw.deny_swap_with_mon",
+          "expected": "POLICY_DENY",
+          "url": "https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc",
+          "http_method": "POST",
+          "headers": [],
+          "body": {
+            "method": "eth_signTransaction",
+            "params": {
+              "transaction": {
+                "chain_id": 143,
+                "data": "0xce1e70300000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000",
+                "gas_limit": 500000,
+                "max_fee_per_gas": 100000000000,
+                "max_priority_fee_per_gas": 2000000000,
+                "nonce": 0,
+                "to": "0xb3e6778480b2e488385e8205ea05e20060b813cb",
+                "type": 2,
+                "value": 1
+              }
+            }
+          },
+          "body_sha256": "276f2cbb60c9bf754efab4c52da63e1cf74e026fc5c75b622ca4dc013fc901dd",
+          "request_sha256": "ac3277ebd460be8fedf0f1745d163eda5e3d8becea9b0027bf727d18d689b652"
         }
       ]
     },

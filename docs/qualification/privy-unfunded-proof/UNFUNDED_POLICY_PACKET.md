@@ -1,16 +1,26 @@
-# Frozen unfunded policy-layer packet, version 2
+# Frozen unfunded policy-layer packet, version 3
 
-Task `POLICY-PROOF-V2-L3-20261022`. Status `LOCAL_TESTED`. Provider proof `UNQUALIFIED` until the controller runs the live proof. This file freezes packet v2 and refuses packet v1. It approves no trade, funding, broadcast or policy change.
+Task `POLICY-PROOF-V3-L3-20261022`. Status `LOCAL_TESTED`. Provider proof `UNQUALIFIED` until the controller runs the live proof. This file freezes packet v3 and refuses packets v1 and v2. It approves no trade, funding, broadcast or policy change.
 
 ## Scope
 
 This packet proves one claim only: the real Privy policy `c30racyru6duaipj815cvjce` refuses the out-of-policy signing requests below and allows the in-policy requests below. The agent wallet `0x91BB52A63c91986813288965e4681FF111De1b63` is unfunded. The runner has no broadcast path. A signed transaction cannot move funds.
 
-The policy changed on 2026-10-22. R3 now allows the function `executeSwap` only. It no longer allows `executeSwapWithReceiver`. Packet v2 binds that tightened policy and adds one refusal row for the receiver variant. Packet v1 bound the older policy body and is no longer approved.
+The policy changed on 2026-10-22. R3 now allows the function `executeSwap` only. It no longer allows `executeSwapWithReceiver`. Packet v3 binds that tightened policy and keeps the receiver refusal row from v2. Packet v1 bound the older policy body and is no longer approved.
+
+Packet v3 keeps the same 19 rows and request bodies as v2. It runs `raw.deny_plain_mon_transfer` before `raw.deny_swap_with_mon`, so the slow row is last. A new attempt identity 3 gives every row a new idempotency key. `raw.deny_swap_with_mon` is sent a third time under this new identity because the v1 and v2 attempts were lost to the client-side socket timeout. Privy's answer for those two attempts is unknown.
 
 ## Version 1 live result (context only)
 
 The first live run of packet v1 on 2026-10-22 at 07:37 UTC matched 16 of 18 rows. The four ALLOW rows signed with matching fields and 12 POLICY_DENY rows were refused by Privy. Row 17 `raw.deny_swap_with_mon` stalled for 15 seconds and ended `UNKNOWN` with reason `SEND_LOST`; the runner wrote `STOP.json` and row 18 did not run. That result is historical evidence. The v1 packet is never run again.
+
+## Version 2 live result and the root cause
+
+The live run of packet v2 on 2026-10-22 at 11:04 UTC matched 17 of 19 rows. The new `raw.deny_execute_swap_with_receiver` row returned `POLICY_DENY`, which proves the tightened R3 function condition. Every row except one took 1.0-6.9 s. Row 18 `raw.deny_swap_with_mon` returned `UNKNOWN` with reason `SEND_LOST` after 16.2 s, the runner wrote `STOP.json`, and row 19 `raw.deny_plain_mon_transfer` did not run.
+
+The root cause is a client-side time bound, not random network loss. `actual_run.py` passed the 15 s connect timeout to the shared HTTP seam as its socket timeout. A socket timeout bounds each individual wait. `http.client` keeps that value on the socket after the TCP connect, so the TLS handshake, the request write and every response read also used 15 s. The 60 s per-request deadline was therefore never reached for this row. A reply that starts after 15 s fails before the deadline.
+
+Packet v3 fixes the seam. The TCP connect stays bounded by the connect timeout. The TLS handshake, request write and response reads are bounded by the remaining per-request deadline, and the accepted shared watchdog still enforces that deadline absolutely. A reply after the deadline stays `UNKNOWN`, and no retry, resend or deadline change exists. The three recorded live results are 16/18 (v1), 17/19 (v2) and pending (v3).
 
 Controls enforced by the host, the Kuru contract or a later stage are outside this proof. The packet records their true states and does not claim them.
 
@@ -29,14 +39,14 @@ Controls enforced by the host, the Kuru contract or a later stage are outside th
 | Network | `eip155:143` (Monad mainnet) |
 | Signing route | `https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc` |
 | Signing method | `eth_signTransaction` |
-| Packet SHA-256 | `a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496` |
+| Packet SHA-256 | `8255d003097fd1a0216a6b64c48637f2ef745c7ebbe73035d0b8929403500528` |
 | Table manifest SHA-256 | `f485816e431aae37e30d062df038a3e1d62b8cdadac8e510ebb5d0181c827b63` |
 | Profile id | `privy.raw.v1` (profile `raw`) |
-| Attempt identity | `unfunded-policy-proof-2` |
+| Attempt identity | `unfunded-policy-proof-3` |
 | Packet expiry | `1793836800` (2026-11-05T00:00:00Z) |
 | Auth-header expiry | `1793836800000` |
 
-The v2 policy body hash is SHA-256 over the canonical JSON of `{"rules": <normalized live rules>}` (sorted keys, compact separators, UTF-8). The source is the live rules in `ROOT/.scratch/trade-prep-20261021/R3_TIGHTEN1_RESULT.json` (SHA-256 `a9276df89ff59f12c5380f981218275f2c0333fedbd26c70eabcf87a4a045a2c`). Normalization removes every `id` key and lower-cases every 40-hex address value, because Privy returns rule ids and checksum-cased addresses. It changes no other field. The normalized live rules equal the PATCH body whose SHA-256 is `61860d20...`. Packet v1 used the older creation body hash `cd543346...`.
+The policy body hash is SHA-256 over the canonical JSON of `{"rules": <normalized live rules>}` (sorted keys, compact separators, UTF-8). The source is the live rules in `ROOT/.scratch/trade-prep-20261021/R3_TIGHTEN1_RESULT.json` (SHA-256 `a9276df89ff59f12c5380f981218275f2c0333fedbd26c70eabcf87a4a045a2c`). Normalization removes every `id` key and lower-cases every 40-hex address value, because Privy returns rule ids and checksum-cased addresses. It changes no other field. The normalized live rules equal the PATCH body whose SHA-256 is `61860d20...`. Packet v1 used the older creation body hash `cd543346...`.
 
 The executor is the only identity outside policy administration. The builder owns both the wallet and the policy. The packet records this honestly: the accepted check refused equality between the wallet owner and the policy owner, but this real setup has one human owner and one agent executor. The check now refuses a policy owner or wallet owner that is the executor. A policy change still needs the builder key.
 
@@ -87,10 +97,10 @@ The runner runs this exact order. The first row is the positive control; no nega
 | 15 | `raw.deny_approve_above_cap` | `POLICY_DENY` | R2 `approve.amount` `lte` 70 MON | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 0 | 100000 | `0x095ea7b3...` (amount 70 MON + 1) | `9e632b9f5be6a385f12525926e55dbbcffb4bdfe9e3e3077236e8f404998b526` |
 | 16 | `raw.deny_approve_with_value` | `POLICY_DENY` | R2 `value` `eq` 0 | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 1 | 100000 | `0x095ea7b3...` (amount 70 MON) | `47bd9c58d2ce5ea6112f807fa9bbbd80a197789cacc413e535917eca395ed3d4` |
 | 17 | `raw.deny_deposit_above_cap` | `POLICY_DENY` | R1 `value` `lte` 70 MON | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 70000000000000000001 | 100000 | `0xd0e30db0` | `a8b918f8066bba734aea573f4ac6359a8056aa9bbcddf21b0170226729e14f50` |
-| 18 | `raw.deny_swap_with_mon` | `POLICY_DENY` | R3 `value` `eq` 0 | 143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 1 | 500000 | `0xce1e7030...` (exact below) | `ac3277ebd460be8fedf0f1745d163eda5e3d8becea9b0027bf727d18d689b652` |
-| 19 | `raw.deny_plain_mon_transfer` | `POLICY_DENY` | No ALLOW rule matches | 143 | `0x000000000000000000000000000000000000dead` | 1 | 100000 | `0x` | `24445a29234ebac7936acaa2c2ca4eb0f8867d122af7303a5afb48dcafe1dae4` |
+| 18 | `raw.deny_plain_mon_transfer` | `POLICY_DENY` | No ALLOW rule matches | 143 | `0x000000000000000000000000000000000000dead` | 1 | 100000 | `0x` | `24445a29234ebac7936acaa2c2ca4eb0f8867d122af7303a5afb48dcafe1dae4` |
+| 19 | `raw.deny_swap_with_mon` | `POLICY_DENY` | R3 `value` `eq` 0 | 143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 1 | 500000 | `0xce1e7030...` (exact below) | `ac3277ebd460be8fedf0f1745d163eda5e3d8becea9b0027bf727d18d689b652` |
 
-The sink `0x000000000000000000000000000000000000dead` is a burn address, not a trade recipient. The swap pair is WMON/WMON with a one-byte program `0x01`; it is an inert policy sentinel, not a route. The new row has a valid five-field fee tuple and a receiver that is not the wallet, so only the R3 function condition explains its refusal.
+The sink `0x000000000000000000000000000000000000dead` is a burn address, not a trade recipient. The swap pair is WMON/WMON with a one-byte program `0x01`; it is an inert policy sentinel, not a route. The new row has a valid five-field fee tuple and a receiver that is not the wallet, so only the R3 function condition explains its refusal. The v3 order puts `raw.deny_plain_mon_transfer` at row 18 and the slow `raw.deny_swap_with_mon` at row 19, so an earlier stop cannot hide the slow row.
 
 ### Exact `executeSwap` data
 
@@ -128,7 +138,7 @@ If the observed status or code differs from the registered profile, the runner c
 
 ## Run commands
 
-The dry run lists packet v2 and all 19 rows. It reads no credential and opens no socket.
+The dry run lists packet v3 and all 19 rows. It reads no credential and opens no socket.
 
 Dry run (no credential, no socket, no file effect):
 
@@ -151,7 +161,7 @@ The command refuses an existing store, a missing confirmation, a missing environ
 - No worker call to Privy, no `edge-os/.env` read and no agent-key use produced this packet.
 - The live run signs only. It never broadcasts. The wallet must be unfunded.
 - A `LOCAL_TESTED` result proves the packet machinery, not Privy enforcement. The live run is the provider proof.
-- The code-owned registry admits exactly one packet, v2. Packet v1 (`5835579c...`) is not approved and every run of it refuses with `ACTUAL_PACKET_NOT_APPROVED`.
-- The attempt identity is `unfunded-policy-proof-2`. No request identity from v1 is reused, so a v2 request cannot be treated as a retry of a v1 request.
+- The code-owned registry admits exactly one packet, v3. Packets v1 (`5835579c...`) and v2 (`a8444072...`) are not approved and every run of them refuses with `ACTUAL_PACKET_NOT_APPROVED`.
+- The attempt identity is `unfunded-policy-proof-3`. No request identity from v1 or v2 is reused. The third `raw.deny_swap_with_mon` attempt is a new request, not a retry: the two earlier attempts have no known provider answer.
 - The packet expires at `1793836800`. A later run needs a new frozen packet and a new review.
 - The Kuru deployed source and deployed-code identity stay `UNRESOLVED_KURU_SOURCE` and `UNRESOLVED_KURU_DEPLOYED_CODE`. This proof does not depend on them.
