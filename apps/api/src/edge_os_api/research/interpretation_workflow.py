@@ -17,10 +17,11 @@ import copy
 import datetime as dt
 import json
 import logging
+import re
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import MAX_EMAX, MIN_EMIN, Decimal, Inexact, localcontext
 from typing import Any
 
 from sqlalchemy import select, text
@@ -143,15 +144,16 @@ def public_attempt(view: AttemptView) -> dict[str, Any]:
             "answer_ref": identity.answer_ref, "previous_revision_id": identity.previous_revision_id}}
 
 
+# The decimal form the guarded runner stores (`str(Decimal.normalize())` of a non-negative cost) and the web reads.
+DECIMAL_USD = re.compile(r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,2})?")
+
+
 def settled_charge(spend: dict[str, Any]) -> Decimal | None:
-    """The attempt's cost when the ledger SETTLED it with a finite, non-negative charge; otherwise the cost is unknown."""
-    if spend["state"] != "SETTLED" or not isinstance(spend["charge_usd"], str):
+    """The attempt's cost when the ledger SETTLED it with a charge in the stored decimal form; otherwise unknown."""
+    charge = spend["charge_usd"]
+    if spend["state"] != "SETTLED" or not isinstance(charge, str) or DECIMAL_USD.fullmatch(charge) is None:
         return None
-    try:
-        charge = Decimal(spend["charge_usd"])
-    except InvalidOperation:
-        return None
-    return charge if charge.is_finite() and charge >= 0 else None
+    return Decimal(charge)
 
 
 def study_model_cost(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -163,8 +165,13 @@ def study_model_cost(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
     no amount (`None`), not a zero.
     """
     charges = [c for c in (settled_charge(a["spend"]) for a in attempts) if c is not None]
-    total = sum(charges, Decimal(0))
-    return {"settled_usd": format(total.normalize(), "f") if charges else None, "settled_calls": len(charges),
+    if not charges:
+        return {"settled_usd": None, "settled_calls": 0, "unknown_calls": len(attempts)}
+    # Enough digits for the exact sum, so neither the sum nor `normalize` rounds; an inexact result would raise.
+    digits = max(c.adjusted() for c in charges) - min(c.as_tuple().exponent for c in charges) + 1 + len(str(len(charges)))
+    with localcontext(prec=digits, Emax=MAX_EMAX, Emin=MIN_EMIN, traps=[Inexact]):
+        total = sum(charges, Decimal(0)).normalize()
+    return {"settled_usd": format(total, "f"), "settled_calls": len(charges),
             "unknown_calls": len(attempts) - len(charges)}
 
 

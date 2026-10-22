@@ -53,3 +53,23 @@ def test_no_settled_call_gives_no_amount_rather_than_zero() -> None:
     assert study_model_cost([attempt("UNKNOWN", "0.054848"), attempt(None, None)]) == {
         "settled_usd": None, "settled_calls": 0, "unknown_calls": 2}
     assert study_model_cost([]) == {"settled_usd": None, "settled_calls": 0, "unknown_calls": 0}
+
+
+def test_a_settled_zero_is_a_known_cost_and_stays_apart_from_unknown() -> None:
+    cost = study_model_cost([attempt("SETTLED", "0"), attempt("UNKNOWN", "0.054848")])
+    assert cost == {"settled_usd": "0", "settled_calls": 1, "unknown_calls": 1}
+
+
+def test_a_charge_outside_the_stored_decimal_form_is_unknown() -> None:
+    # Only the plain or exponent form the runner writes (and the web reads) is an amount; the web shows the rest as
+    # Unknown, so the total counts them as unknown too instead of adding them.
+    charges = ["-0", "+5", ".5", "5.", " 0.5 ", "1_000", "1E-100", "1E+999", "1E+999999999", "٥"]
+    cost = study_model_cost([attempt("SETTLED", "0.5")] + [attempt("SETTLED", c) for c in charges])
+    assert cost == {"settled_usd": "0.5", "settled_calls": 1, "unknown_calls": len(charges)}
+
+
+def test_the_total_keeps_every_digit_beyond_the_default_decimal_precision() -> None:
+    cost = study_model_cost([attempt("SETTLED", "12345678901234567890123456789012345.1"), attempt("SETTLED", "1E+30"),
+                             attempt("SETTLED", "1E-10")])
+    assert cost == {"settled_usd": "12346678901234567890123456789012345.1000000001", "settled_calls": 3,
+                    "unknown_calls": 0}
