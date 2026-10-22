@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import http.client
+import http.server
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -981,6 +984,149 @@ def test_transport_constructor_rejects_bad_arguments() -> None:
     for overrides in ({"app_id": ""}, {"request_expiry_ms": 0}, {"destination": 5}):
         with pytest.raises((ValueError, TypeError)):
             _transport(_FakeHttp(), **overrides)
+
+
+# ---------------------------------------------------------------- per-request time bounds
+
+CONNECT_TIMEOUT = 0.25
+REPLY_DELAY = 0.6
+REQUEST_DEADLINE = 2.5
+
+
+class _DelayedPrivyReply(http.server.BaseHTTPRequestHandler):
+    """A local fake Privy reply that starts after a deliberate delay. No network leaves the host."""
+
+    def do_POST(self) -> None:  # noqa: N802 - the base handler names the HTTP verb
+        self.rfile.read(int(self.headers.get("content-length", "0")))
+        time.sleep(REPLY_DELAY)
+        body = b'{"data":{"signed_transaction":"0xab"}}'
+        try:
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def delayed_privy_port() -> Iterator[int]:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DelayedPrivyReply)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _local_seam(port: int, *, phase_bounded: bool,
+                deadline: float):  # noqa: ANN202 - a StdlibHttpTransport test seam
+    from edge_os_api.research_history.http_clients.http_transport import StdlibHttpTransport
+
+    if phase_bounded:
+        bounded = actual_transport.deadline_bounded_connect(deadline_monotonic=deadline)
+
+        def connect(scheme, host, _port, timeout):  # noqa: ANN001, ANN202
+            return bounded("http", "127.0.0.1", port, timeout)
+    else:
+        def connect(scheme, host, _port, timeout):  # noqa: ANN001, ANN202
+            return http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+
+    return StdlibHttpTransport(connect=connect)
+
+
+def _timed_transport(http, deadline: float, *, connect_timeout: float = CONNECT_TIMEOUT):  # noqa: ANN001
+    return ActualSignOnlyTransport(
+        http=http,
+        destination=URL_A,
+        wallet_id="synthetic-probe-wallet-a",
+        app_id="app-test-1",
+        app_secret="secret-1",
+        authorize=lambda payload: "signature",
+        request_id="attempt-1:raw.baseline",
+        request_expiry_ms=1_792_000_000_000,
+        connect_timeout_seconds=connect_timeout,
+        deadline_monotonic=deadline,
+        max_response_bytes=20000,
+        wall_clock_ms=lambda: 1_700_000_000_000,
+    )
+
+
+def test_phase_bounded_seam_accepts_a_reply_after_the_connect_timeout(delayed_privy_port: int) -> None:
+    """The old seam applies the connect timeout to the reply wait; the bounded seam uses the deadline."""
+    request = specimens.FROZEN_TABLE.get("raw.baseline").request
+    deadline = time.monotonic() + REQUEST_DEADLINE
+    legacy = _timed_transport(
+        _local_seam(delayed_privy_port, phase_bounded=False, deadline=deadline),
+        deadline)
+    started = time.monotonic()
+    with pytest.raises(TransportLost):
+        legacy.send(request)
+    assert time.monotonic() - started < REPLY_DELAY
+    bounded = _timed_transport(
+        _local_seam(delayed_privy_port, phase_bounded=True, deadline=deadline),
+        deadline)
+    assert bounded.send(request).status == 200
+
+
+def test_reply_after_the_request_deadline_stays_unknown(store_dir: Path, delayed_privy_port: int) -> None:
+    deadline = time.monotonic() + 0.35
+    transport = _timed_transport(
+        _local_seam(delayed_privy_port, phase_bounded=True, deadline=deadline),
+        deadline)
+    result = run_actual("raw.baseline", store_dir, transport)
+    assert (result.outcome, result.reason) == (Outcome.UNKNOWN, "SEND_LOST")
+
+
+class _RecordingSocket:
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
+
+
+def _open_test_socket(monkeypatch: pytest.MonkeyPatch, ticks: list[float], *, connect_timeout: float,
+                      deadline: float) -> tuple[list[tuple], _RecordingSocket]:
+    calls: list[tuple] = []
+    sock = _RecordingSocket()
+
+    def fake_create_connection(address, timeout, source_address=None):  # noqa: ANN001, ANN202
+        calls.append((address, timeout, source_address))
+        return sock
+
+    monkeypatch.setattr(actual_transport.socket, "create_connection", fake_create_connection)
+    values = iter(ticks)
+    factory = actual_transport.deadline_bounded_connect(
+        deadline_monotonic=deadline, monotonic=lambda: next(values))
+    connection = factory("http", "127.0.0.1", 8000, connect_timeout)
+    connection._create_connection(("127.0.0.1", 8000), connect_timeout, None)
+    return calls, sock
+
+
+def test_tcp_connect_uses_the_connect_timeout_and_later_phases_use_the_deadline(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    calls, sock = _open_test_socket(monkeypatch, [0.0, 2.0], connect_timeout=15.0, deadline=60.0)
+    assert calls == [(("127.0.0.1", 8000), 15.0, None)]
+    assert sock.timeouts == [58.0]
+
+
+def test_tcp_connect_never_exceeds_the_remaining_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls, sock = _open_test_socket(monkeypatch, [0.0, 1.0], connect_timeout=15.0, deadline=10.0)
+    assert calls == [(("127.0.0.1", 8000), 10.0, None)]
+    assert sock.timeouts == [9.0]
+
+
+def test_a_crossed_deadline_opens_no_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(TimeoutError):
+        _open_test_socket(monkeypatch, [11.0], connect_timeout=15.0, deadline=10.0)
 
 
 # ---------------------------------------------------------------- gate REVISE1 repairs (F1-F5, F7)

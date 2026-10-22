@@ -40,6 +40,7 @@ POLICY_OWNER = "a5gwmgrsn6903ac09lphyv9a"
 EXECUTOR = "zu1qjdfqlbcq1ct7sdxendgg"
 POLICY_BODY_SHA256 = "61860d201ecd9ce6d92bff5e7c2122b40164ecb69d1fa375738cb67b17b0892b"
 V1_PACKET_SHA256 = "5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf"
+V2_PACKET_SHA256 = "a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496"
 SIGNING_URL = f"https://api.privy.io/v1/wallets/{WALLET_ID}/rpc"
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 NEW_RECEIVER_ROW = "raw.deny_execute_swap_with_receiver"
@@ -67,8 +68,8 @@ EXPECTED_ORDER = (
     "raw.deny_approve_above_cap",
     "raw.deny_approve_with_value",
     "raw.deny_deposit_above_cap",
-    "raw.deny_swap_with_mon",
     "raw.deny_plain_mon_transfer",
+    "raw.deny_swap_with_mon",
 )
 EXPECTED_ALLOW = frozenset({
     "raw.allow_deposit_1_mon",
@@ -118,7 +119,7 @@ def test_packet_hash_is_stable_and_self_bound() -> None:
 
 def test_a_changed_packet_field_is_not_admitted() -> None:
     tampered = dataclasses.replace(UNFUNDED_POLICY_PACKET, packet_id="",
-                                   attempt_identity="unfunded-policy-proof-3")
+                                   attempt_identity="unfunded-policy-proof-4")
     tampered = dataclasses.replace(tampered, packet_id=tampered.packet_sha256())
     assert tampered.packet_id != actual_packet.SEALED_PACKET_SHA256
     assert actual_packet._sealed_packet_registry(tampered, actual_packet.SEALED_PACKET_SHA256) == {}
@@ -127,16 +128,17 @@ def test_a_changed_packet_field_is_not_admitted() -> None:
     assert caught.value.code == "ACTUAL_PACKET_NOT_APPROVED"
 
 
-def test_v1_packet_is_refused_and_its_attempt_identity_is_not_reused() -> None:
-    with pytest.raises(SpecimenRefused) as caught:
-        resolve_approved_packet(V1_PACKET_SHA256, now_epoch=NOW, table=UNFUNDED_POLICY_TABLE)
-    assert caught.value.code == "ACTUAL_PACKET_NOT_APPROVED"
-    assert UNFUNDED_POLICY_PACKET.packet_id != V1_PACKET_SHA256
-    assert UNFUNDED_POLICY_PACKET.attempt_identity == "unfunded-policy-proof-2"
+def test_v1_and_v2_packets_are_refused_and_their_attempt_identities_are_not_reused() -> None:
+    for refused_packet in (V1_PACKET_SHA256, V2_PACKET_SHA256):
+        assert UNFUNDED_POLICY_PACKET.packet_id != refused_packet
+        with pytest.raises(SpecimenRefused) as caught:
+            resolve_approved_packet(refused_packet, now_epoch=NOW, table=UNFUNDED_POLICY_TABLE)
+        assert caught.value.code == "ACTUAL_PACKET_NOT_APPROVED"
+    assert UNFUNDED_POLICY_PACKET.attempt_identity == "unfunded-policy-proof-3"
     for specimen_id in UNFUNDED_POLICY_ORDER:
         attempt = UNFUNDED_POLICY_PACKET.attempt_identity_for(specimen_id)
-        assert attempt.startswith("unfunded-policy-proof-2:")
-        assert not attempt.startswith("unfunded-policy-proof-1:")
+        assert attempt.startswith("unfunded-policy-proof-3:")
+        assert not attempt.startswith(("unfunded-policy-proof-1:", "unfunded-policy-proof-2:"))
 
 
 def test_fixture_matches_the_saved_live_result_when_present() -> None:
@@ -240,6 +242,7 @@ def test_actual_manifest_registry_holds_exactly_the_policy_table() -> None:
 
 def test_order_is_the_frozen_order_and_starts_with_the_positive_control() -> None:
     assert UNFUNDED_POLICY_ORDER == EXPECTED_ORDER
+    assert UNFUNDED_POLICY_ORDER[-2:] == ("raw.deny_plain_mon_transfer", "raw.deny_swap_with_mon")
     first = UNFUNDED_POLICY_TABLE.get(UNFUNDED_POLICY_ORDER[0])
     assert first.category is Category.POSITIVE_CONTROL
     assert first.expected is Expected.ALLOW
@@ -466,6 +469,7 @@ def test_dry_run_lists_every_row_in_order(
         assert specimen_id in out
     assert len(UNFUNDED_POLICY_ORDER) == 19
     assert out.index(UNFUNDED_POLICY_ORDER[0]) < out.index(UNFUNDED_POLICY_ORDER[-1])
+    assert out.index("raw.deny_plain_mon_transfer") < out.index("raw.deny_swap_with_mon")
 
 
 def test_live_run_requires_unfunded_confirmation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

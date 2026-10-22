@@ -19,14 +19,16 @@ from __future__ import annotations
 
 import base64
 import copy
+import http.client
 import json
 import math
 import re
+import socket
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from edge_os_api.research_history.http_clients.client_config import HttpProviderError
+from edge_os_api.research_history.http_clients.client_config import ClientConfigError, HttpProviderError
 from edge_os_api.research_history.http_clients.http_transport import HttpResponse, HttpTransport
 from scripts.privy_unfunded_proof.specimens import FrozenRequest, canonical_json, refuse_module_run
 
@@ -115,6 +117,51 @@ class TransportLost(Exception):
 
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def deadline_bounded_connect(
+    *,
+    deadline_monotonic: float,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> Callable[[str, str, int | None, float], Any]:
+    """The connect factory for the live proof seam.
+
+    The shared seam passes ``min(connect_timeout, remaining)`` as the connection
+    timeout, so the TCP connect keeps its own bound. This factory then sets the
+    socket timeout from the remaining request deadline. That value covers the TLS
+    handshake, the request write and every response read. The accepted
+    ``StdlibHttpTransport`` watchdog still enforces the deadline absolutely, so a
+    paced peer cannot extend any phase past it.
+
+    A socket timeout bounds one wait, not the whole call. Setting it from the
+    deadline instead of the connect timeout is the whole difference: a reply that
+    starts after the connect timeout but inside the request deadline still arrives.
+    """
+
+    def connect(scheme: str, host: str, port: int | None, connect_timeout: float) -> Any:
+        if scheme == "https":
+            connection: Any = http.client.HTTPSConnection(host, port, timeout=connect_timeout)
+        elif scheme == "http":
+            connection = http.client.HTTPConnection(host, port, timeout=connect_timeout)
+        else:
+            raise ClientConfigError("transport scheme must be http or https")
+
+        def open_socket(address: Any, timeout: float, source_address: Any = None) -> Any:
+            remaining = deadline_monotonic - monotonic()
+            if remaining <= 0:
+                raise TimeoutError("the request deadline passed before the TCP connect")
+            sock = socket.create_connection(address, min(timeout, remaining), source_address)
+            remaining = deadline_monotonic - monotonic()
+            if remaining <= 0:
+                sock.close()
+                raise TimeoutError("the request deadline passed before the TLS handshake")
+            sock.settimeout(remaining)
+            return sock
+
+        connection._create_connection = open_socket  # type: ignore[attr-defined]
+        return connection
+
+    return connect
 
 
 class ActualSignOnlyTransport:

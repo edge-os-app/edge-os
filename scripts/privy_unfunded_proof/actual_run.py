@@ -31,7 +31,7 @@ from scripts.privy_unfunded_proof.actual_packet import (
 )
 from scripts.privy_unfunded_proof.actual_profile import resolve_qualified_profile
 from scripts.privy_unfunded_proof.actual_runner import run_actual_specimen
-from scripts.privy_unfunded_proof.actual_transport import ActualSignOnlyTransport
+from scripts.privy_unfunded_proof.actual_transport import ActualSignOnlyTransport, deadline_bounded_connect
 from scripts.privy_unfunded_proof.evidence import Outcome
 from scripts.privy_unfunded_proof.specimens import AttemptStore, SpecimenRefused
 
@@ -120,11 +120,12 @@ def main(argv: list[str] | None = None) -> int:
         print("AGENT_KEY_NOT_P256")
         return 2
 
-    http = StdlibHttpTransport()
     args.store.mkdir(parents=True, exist_ok=False)
     store = AttemptStore(args.store)
     started_at_epoch = now_epoch
     for specimen_id in UNFUNDED_POLICY_ORDER:
+        deadline = time.monotonic() + PER_REQUEST_DEADLINE_SECONDS
+        http = StdlibHttpTransport(connect=deadline_bounded_connect(deadline_monotonic=deadline))
         transport = ActualSignOnlyTransport(
             http=http,
             destination=packet.signing_url,
@@ -135,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
             request_id=packet.attempt_identity_for(specimen_id),
             request_expiry_ms=int(packet.auth_header_expiry),
             connect_timeout_seconds=CONNECT_TIMEOUT_SECONDS,
-            deadline_monotonic=time.monotonic() + PER_REQUEST_DEADLINE_SECONDS,
+            deadline_monotonic=deadline,
             max_response_bytes=MAX_RESPONSE_BYTES,
         )
         try:
