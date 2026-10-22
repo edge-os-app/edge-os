@@ -361,7 +361,7 @@ def test_never_covered_bucket_closes_incomplete_and_later_replies_do_not_backfil
 
 
 @pytest.mark.parametrize("damage", [
-    lambda page: page["data"][0].pop("logs"),
+    lambda page: page["data"][0].clear(),
     lambda page: page["data"][0]["blocks"].pop(3),
     lambda page: page.update(next_block=page["data"][0]["blocks"][0]["number"]),
     lambda page: page["data"][0]["blocks"][4].update(hash="0x" + "99" * 32) or page["data"][0]["logs"].append(
@@ -377,7 +377,7 @@ def test_never_covered_bucket_closes_incomplete_and_later_replies_do_not_backfil
     lambda page: page["data"][0].update(blocks={}),
     lambda page: page.update(rollback_guard=[1]),
     lambda page: page["data"][0]["blocks"][5].update(timestamp=T0 + 2000),
-], ids=["missing-logs", "missing-header", "empty-range", "duplicate-log", "log-hash-differs", "missing-removed",
+], ids=["no-logs-and-no-blocks", "missing-header", "empty-range", "duplicate-log", "log-hash-differs", "missing-removed",
         "removed-true", "fourth-topic", "foreign-pool", "object-shape", "batch-not-object", "logs-not-list",
         "blocks-not-list", "guard-not-object", "future-header"])
 def test_malformed_first_page_gives_no_delivery_and_no_second_read(tmp_path: Path, damage: Callable) -> None:
@@ -436,6 +436,80 @@ def test_admission_at_the_last_instant_of_the_slot_is_allowed(tmp_path: Path) ->
         clock.sleep_hook = lambda target: 0.999 if target == T0 + 630 else 0.0
     result, providers, _ = run(tmp_path, configure=configure)
     assert count(providers, "hypersync") == 5
+
+
+# Observed-UTC wake contract: the timer may return before or after the wall-clock target.
+
+
+def test_early_timer_return_before_the_p2_anchor_slot_still_observes_utc(tmp_path: Path) -> None:
+    fired: list[float] = []
+
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        def early(target: float) -> float:
+            if target == T0 - 120 and not fired:  # P2 earliest; the timer returns 2 ms before it
+                fired.append(target)
+                return -0.002
+            return 0.0
+        clock.sleep_hook = early
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert fired == [T0 - 120]
+    assert handoff["phases"]["P2"]["outcome"] == "COMPLETED"
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 4
+    assert count(providers, "hypersync") == 5
+
+
+def test_early_timer_return_before_a_p3_slot_still_observes_utc(tmp_path: Path) -> None:
+    fired: list[float] = []
+    sleeps: list[float] = []
+
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        plain_sleep = clock.sleep
+
+        def tracked_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            plain_sleep(seconds)
+
+        clock.sleep = tracked_sleep
+
+        def early(target: float) -> float:
+            if target == T0 + 330 and not fired:  # bucket-0 first slot; the timer returns 2 ms before it
+                fired.append(target)
+                return -0.002
+            return 0.0
+        clock.sleep_hook = early
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert fired == [T0 + 330]
+    assert handoff["buckets"][0]["status"] == "DELIVERED"
+    assert handoff["buckets"][0]["reason"] is None
+    assert handoff["buckets"][0]["received_at_utc_us"] == (T0 + 330) * 1_000_000 + 250_000
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 4
+    assert min(sleeps) > 0  # every wait request stays positive; no zero-length spin
+
+
+def test_late_timer_return_still_misses_the_p2_anchor_window(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        clock.sleep_hook = lambda target: 116.0 if target == T0 - 120 else 0.0  # wakes at T0-4, after the cutoff
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert handoff["phases"]["P2"]["outcome"] == "MISSED"
+    assert {bucket["reason"] for bucket in handoff["buckets"]} == {"NO_ANCHOR"}
+    assert count(providers, "hypersync") == 1
+
+
+def test_late_timer_return_still_misses_a_p3_slot(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        clock.sleep_hook = lambda target: 1.0 if target == T0 + 330 else 0.0  # wakes at due + 1 second
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert handoff["buckets"][0]["status"] == "INCOMPLETE"
+    assert handoff["buckets"][0]["reason"] == "FIRST_SLOT_MISSED"
+    assert count(providers, "hypersync") == 4
 
 
 def test_clock_reversal_stops_scheduled_sends(tmp_path: Path) -> None:
@@ -561,8 +635,31 @@ def test_p1_hypersync_null_topic3_is_accepted(tmp_path: Path) -> None:
     assert result["status"] == "COMPLETED"
 
 
-REAL_REPLY = (Path(__file__).parents[1] / "apps" / "api" / "tests" / "fixtures" / "research_history_native"
-              / "real_hypersync_p1_reply_20261021.json")
+FIXTURES = Path(__file__).parents[1] / "apps" / "api" / "tests" / "fixtures" / "research_history_native"
+REAL_REPLY = FIXTURES / "real_hypersync_p1_reply_20261021.json"
+# The real replies of `moe-wmon-fwd20m-actual-20261021c` hold one logs-free batch each; observed 2026-10-21.
+LOGS_FREE_REPLIES = {
+    "real_hypersync_logs_free_09_reply_20261021.json":
+        ("99bcb1463afb7599c834a3d1330e3147d52e742754502538708d5d823dc786a5", 1492, 6),
+    "real_hypersync_logs_free_10_reply_20261021.json":
+        ("b641241ab08698050b2b28a3d4caab12b1116323264f8851759852e0fb779f90", 2486, 8),
+    "real_hypersync_logs_free_12_reply_20261021.json":
+        ("c9bf11fb467603dd467ea087c203c50f5cba1832baee42f27b54655aa3fa999d", 994, 4),
+}
+
+
+@pytest.mark.parametrize("name", sorted(LOGS_FREE_REPLIES))
+def test_the_logs_free_reply_fixtures_are_the_saved_bodies(name: str) -> None:
+    assert hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest() == LOGS_FREE_REPLIES[name][0]
+
+
+@pytest.mark.parametrize("name", sorted(LOGS_FREE_REPLIES))
+def test_hypersync_batches_accepts_a_real_logs_free_batch_as_empty(name: str) -> None:
+    _, expected_blocks, expected_logs = LOGS_FREE_REPLIES[name]
+    raw = json.loads((FIXTURES / name).read_bytes())
+    assert any("blocks" in batch and "logs" not in batch for batch in raw["data"])
+    blocks, logs = hypersync_batches(raw)
+    assert (len(blocks), len(logs)) == (expected_blocks, expected_logs)
 
 
 def test_hypersync_batches_flattens_the_real_reply_data_list() -> None:
@@ -582,19 +679,19 @@ def test_hypersync_batches_keeps_reply_order_across_batches() -> None:
     assert [log["log_index"] for log in logs] == [6]
 
 
-def test_hypersync_batches_allows_a_batch_without_blocks_but_refuses_another_shape() -> None:
+def test_hypersync_batches_allows_a_batch_without_blocks_and_one_without_logs() -> None:
     raw = json.loads(REAL_REPLY.read_bytes())
-    raw["data"] = [{"logs": []}]
+    raw["data"] = [{"logs": []}, {"blocks": []}]
     assert hypersync_batches(raw) == ([], [])
 
 
 @pytest.mark.parametrize("damage", [
     lambda raw: raw.update(data=raw["data"][0]),
     lambda raw: raw.update(data=["not-an-object"]),
-    lambda raw: raw["data"][0].pop("logs"),
+    lambda raw: raw.update(data=[{}]),
     lambda raw: raw["data"][0].update(logs={}),
     lambda raw: raw["data"][0].update(blocks={}),
-], ids=["data-object", "batch-text", "logs-absent", "logs-not-list", "blocks-not-list"])
+], ids=["data-object", "batch-text", "no-logs-and-no-blocks", "logs-not-list", "blocks-not-list"])
 def test_hypersync_batches_refuses_every_other_shape(damage: Callable) -> None:
     raw = json.loads(REAL_REPLY.read_bytes())
     damage(raw)

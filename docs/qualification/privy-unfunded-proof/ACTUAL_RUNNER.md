@@ -1,8 +1,8 @@
 # Local unfunded actual proof runner
 
-Task `ACTUAL-POLICY-PROOF-L3-20261018`. Status `LOCAL`. Provider proof `UNQUALIFIED`. Every result is `LOCAL_TESTED`.
+Task `ACTUAL-POLICY-PROOF-L3-20261018`, extended by `UNFUNDED-POLICY-PROOF-L3-20261022`. Status `LOCAL`. Provider proof `UNQUALIFIED`. Every result is `LOCAL_TESTED`.
 
-This document describes the successor of the accepted synthetic driver. It does not approve any actual packet, profile, route, policy or provider request. It does not permit funding.
+This document describes the successor of the accepted synthetic driver. Exactly one policy-layer packet and one raw profile are registered. It does not approve any trade, funding, route, policy change or provider request. The live proof is run only by the controller as operator.
 
 ## Files
 
@@ -12,15 +12,18 @@ This document describes the successor of the accepted synthetic driver. It does 
 | `scripts/privy_unfunded_proof/actual_profile.py` | The qualified reply/decoder profile and its code-owned registry. |
 | `scripts/privy_unfunded_proof/actual_transport.py` | One-shot bounded sign-only transport to the exact approved destination. |
 | `scripts/privy_unfunded_proof/actual_runner.py` | `run_actual_specimen`: admission, one-use intent, bounded capture, classification and stop. |
+| `scripts/privy_unfunded_proof/actual_run.py` | The operator command: dry run, unfunded confirmation, one ordered live run, stop on mismatch. |
 | `tests/privy_unfunded_proof/test_actual_proof_runner.py` | Offline regression evidence. |
+| `tests/privy_unfunded_proof/test_unfunded_policy_packet.py` | Offline evidence for the frozen policy-layer packet, profile and command. |
 | `tests/privy_unfunded_proof/_actual_support.py` | SYNTHETIC doubles used only by these tests. |
-| `docs/qualification/privy-unfunded-proof/ACTUAL_PROOF_OPERATION_INPUTS.json` | The exact missing external inputs. |
+| `docs/qualification/privy-unfunded-proof/UNFUNDED_POLICY_PACKET.md` | The frozen packet, exact bodies, ordered requests and expected-outcome table. |
+| `docs/qualification/privy-unfunded-proof/ACTUAL_PROOF_OPERATION_INPUTS.json` | The exact frozen operation inputs. |
 
 ## Default refusal
 
-The code-owned registries are empty. Therefore a default actual run refuses with `ACTUAL_PACKET_NOT_APPROVED` before any credential read, socket or file effect.
+The code-owned registries hold exactly one frozen policy-layer packet, one raw profile and one actual table manifest. Every other packet, profile or table refuses before any credential read, socket or file effect. An unknown packet refuses with `ACTUAL_PACKET_NOT_APPROVED`.
 
-A caller cannot approve a packet with a Boolean, function argument, flag or environment setting. `run_actual_specimen` takes no approval, profile or authority mapping. Resolution reads only `CODE_OWNED_PACKET_APPROVALS`, `QUALIFIED_ACTUAL_PROFILES` and `CODE_OWNED_TYPE4_AUTHORITIES`. The same rule applies to every entry.
+A caller cannot approve a packet with a Boolean, function argument, flag or environment setting. `run_actual_specimen` takes no approval, profile or authority mapping. Resolution reads only `CODE_OWNED_PACKET_APPROVALS`, `QUALIFIED_ACTUAL_PROFILES`, `CODE_OWNED_TYPE4_AUTHORITIES` and `CODE_OWNED_ACTUAL_MANIFESTS`. The same rule applies to every entry.
 
 The synthetic driver keeps its boundary. `run_specimen` still accepts only `SYNTHETIC_FIXTURE`, and `ACTUAL_RUN_REFUSED` is unchanged.
 
@@ -28,7 +31,7 @@ The synthetic driver keeps its boundary. `run_specimen` still accepts only `SYNT
 
 1. Resolve the code-owned packet.
 2. Bind the transport to the approved packet and specimen: `binding()` must equal the packet route, wallet, app, per-specimen attempt identity and auth-header expiry.
-3. Refuse a content-hash mismatch, an expired packet, a missing or non-separated policy owner, an unbound or unseparated profile policy, an unqualified mandatory control, an unqualified position-inventory obligation, an invalid ceiling and an incomplete specimen manifest.
+3. Refuse a content-hash mismatch, an expired packet, a missing or non-separated policy owner, an unbound or unseparated profile policy, an unqualified mandatory control, an invalid proof scope, an invalid ceiling and an incomplete specimen manifest. A `TRADE` packet also refuses an unqualified position-inventory obligation; a `POLICY_LAYER` packet records that obligation at its true state and does not claim it.
 4. Resolve the code-owned qualified profile.
 5. Enforce the run time ceiling.
 6. Check the accepted manifest, the specimen identity, the exact request bytes, the canonical headers and the request byte ceiling.
@@ -46,7 +49,7 @@ The runner writes `<id>.capture.json` before any JSON parse. The capture holds o
 
 The transport sends only `eth_signTransaction`, only to the exact approved wallet RPC URL, and uses a frozen `privy-request-expiry` header when the specimen carries one. A refusal before dispatch is `OPERATION_NOT_APPROVED`, `DESTINATION_NOT_APPROVED` or `TRANSPORT_REFUSED`. Every transport failure is raised outside its handler, so no provider or authorizer text remains in `__cause__` or `__context__`.
 
-A qualified profile classifies the reply. A success on a negative specimen is `BREACH`. A signed-field mismatch from the accepted `validate_signed` decoder is `BREACH`. An unrecognized code, a generic 403, an HTML challenge, malformed metadata, an oversized reply, a deep reply, a decode failure or a lost reply stays `UNKNOWN` and stops later specimens. An expected expiry stays `UNKNOWN` with reason `EXPIRY_REFUSAL` and does not stop.
+A qualified profile classifies the reply. It reads the error code from `code`, `error.code` or the string `error`, and never keeps other reply text. A success on a negative specimen is `BREACH`. A signed-field mismatch from the accepted `validate_signed` decoder is `BREACH`. An unrecognized code, a generic 403, an HTML challenge, malformed metadata, an oversized reply, a deep reply, a decode failure or a lost reply stays `UNKNOWN` and stops later specimens. An expected expiry stays `UNKNOWN` with reason `EXPIRY_REFUSAL` and does not stop.
 
 The outcome and capture records carry the exact admitted request hash, the packet, the reply profile, the policy id and the policy content hash. The profile positive control is accepted only when its saved ALLOW binds to the currently admitted packet, positive request and policy. A stale, synthetic, corrupt or mismatched positive control is refused.
 
@@ -62,12 +65,28 @@ The outcome record keeps `evidence_class` `LOCAL_TESTED` and `provider_proof` `U
 - `edge_os_api.research_history.http_clients.http_transport.HttpTransport` and `HttpResponse` as the HTTP seam.
 - `edge_os_api.execution.privy_signer.make_p256_authorizer` as the production authorizer for the injected `authorize` callable.
 
-## Unresolved shared decoder dependency (gate F6)
+## Resolved shared decoder dependency (gate F6)
 
-The accepted `original_transaction.validate_signed` helper compares selected decoded fields and does not yet validate the complete decoded key set or exact value types. That helper is outside this worker's lease and stays unchanged. No decoder is registered as fully qualified, so `QUALIFIED_ACTUAL_PROFILES` stays empty and an actual run refuses. The qualification is completed by the PhaseB owner through a recorded accepted-helper handoff; do not register an arbitrary callable as a qualified decoder.
+The accepted Phase B `original_transaction.validate_signed` helper now requires the complete expected key set, the complete decoded key set and the exact value types before it compares any field. The raw profile `privy.raw.v1` binds that helper as its qualified decoder. Do not register an arbitrary callable as a qualified decoder.
+
+## Frozen policy-layer packet
+
+`UNFUNDED_POLICY_PACKET.md` freezes the one registered packet for the real policy `c30racyru6duaipj815cvjce`. It holds 18 ordered `eth_signTransaction` rows: four allows and fourteen policy-owned negatives. The first row is the positive control. The first negative is a chain-143 request and is the reply-shape bootstrap. The packet uses one profile (`raw`) and one policy, because the real setup has one policy and the proof uses raw-byte binding only. The four swap rows use the five-field selector `0xce1e7030`.
+
+The packet and its table are sealed to reviewed SHA-256 literals. The registry admits the built packet only when its recomputed hash equals the literal; a source edit leaves the registry empty and every actual run refuses. The same rule binds the table manifest. The packet hash is `5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf`; the table manifest is `62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01`.
+
+The packet scope is `POLICY_LAYER`. Controls enforced by the host, the Kuru contract or a later stage stay at their true states and do not block this narrow proof. A successful swap signature is not a trade approval.
+
+Five deposit rows carry a value above `2**53 - 1` wei. The accepted signer and the transport now send such a quantity as a canonical lowercase `0x` string with no leading zeros, and keep a smaller quantity as a JSON number. `chain_id` stays a JSON number in the safe-integer range. The packet's request bytes are the wire form. The signed-field check decodes the wire value back to the exact integer, so a one-wei difference is `SIGNED_VALUE_MISMATCH` and a `BREACH`.
+
+## Operator command
+
+`python -m scripts.privy_unfunded_proof.actual_run --dry-run` validates and lists the packet without a credential, socket or file effect.
+
+The live command needs `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_AGENT_KEY_FILE`, a new `--store` directory and `--confirm-unfunded` after an independent zero-balance read. It runs the frozen order one specimen at a time, stops on the first `BREACH`, `UNKNOWN` or mismatch, and never retries or broadcasts.
 
 ## Limits
 
 Local PASS proves the runner machinery and its refusal and recovery behavior over injected doubles. It does not prove Privy policy enforcement, an actual provider reply, key custody, wallet or policy administration, an actual signed transaction or any onchain effect.
 
-A future actual run needs the frozen inputs in `ACTUAL_PROOF_OPERATION_INPUTS.json` and a separate release. It does not follow from this document.
+The live run needs the frozen inputs in `ACTUAL_PROOF_OPERATION_INPUTS.json` and the recorded operator grant. It does not follow from this document. The packet expires at `1793836800`.

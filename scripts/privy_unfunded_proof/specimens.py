@@ -29,6 +29,11 @@ MAX_REQUEST_BODY_BYTES = 4096
 MAX_RECORD_BYTES = 4096
 MAX_SPECIMENS_PER_PROFILE = 32
 
+# Code-owned manifests admitted for an actual run in addition to the frozen
+# synthetic table. The actual packet module seals exactly one reviewed literal.
+CODE_OWNED_ACTUAL_MANIFESTS: frozenset[str] = frozenset()
+
+
 DESTINATION = "https://api.privy.io/v1/wallets/{wallet_id}/rpc"
 HTTP_METHOD = "POST"
 WALLETS = {
@@ -302,6 +307,13 @@ class SpecimenTable:
 
     def manifest_matches_rows(self) -> bool:
         return _manifest_sha256(self.rows) == self.manifest_sha256 == MANIFEST_SHA256
+
+    def matches_actual_manifest(self) -> bool:
+        """The actual runner accepts the frozen synthetic table or one code-owned actual table."""
+        recomputed = _manifest_sha256(self.rows)
+        return (recomputed == self.manifest_sha256
+                and (self.manifest_sha256 == MANIFEST_SHA256
+                     or self.manifest_sha256 in CODE_OWNED_ACTUAL_MANIFESTS))
 
 
 def build_table(rows: Sequence[Specimen], check_frozen: bool = False) -> SpecimenTable:

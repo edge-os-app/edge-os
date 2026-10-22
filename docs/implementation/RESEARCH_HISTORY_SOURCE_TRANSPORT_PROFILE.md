@@ -40,7 +40,8 @@ The full response field set is observed in one Monad reply: the recorder run
 `moe-wmon-fwd20m-actual-20261021b`, call `03-P1-hypersync`, body SHA256
 `b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1`, carried `archive_height`,
 `next_block`, `total_execution_time`, `data` as a list of batch objects (each with `blocks`, `logs`) and an
-optional `rollback_guard`.
+optional `rollback_guard`. Observed 2026-10-21 in the three `moe-wmon-fwd20m-actual-20261021c` P3 replies: a
+batch with no logs omits the `logs` key.
 
 The controller's pool census (9 `/query` requests) and MOE behavior check (4 `/query` requests; 5 HyperSync
 calls including one `/height`) also received `data` as a list of batch objects and read their `logs`. Those
@@ -81,8 +82,8 @@ timestamp or hash contradicts the page-end block fact (`PAGE_FACTS_CONFLICT`) is
 page `[from_block, next_block)` (`OUT_OF_RANGE_BLOCK_FACT`) or a duplicate block fact
 that disagrees with itself (`DUPLICATE_BLOCK_FACT`) is refused; the page-start and page-end block facts must be
 present;
-every `data[]` batch must carry `logs` (absence is not proved
-emptiness); a batch may omit `blocks`. The page content hash binds the page bounds, edge hashes and logs, so a source contradiction cannot
+a `data[]` batch that carries a `blocks` list and no `logs` key contributes
+zero logs; a batch with neither key is refused. The page content hash binds the page bounds, edge hashes and logs, so a source contradiction cannot
 become qualified coverage.
 
 The request/topic/range echo is rebuilt from the `HistoryRequest`, so the accepted collector's `QUERY_MISMATCH`
@@ -100,8 +101,8 @@ time field is passed through unchanged and counted; the reused decoder refuses i
 
 `SourceContractError` subclasses the accepted `SourceFailure`, so the collector records a partial
 `PROVIDER_ERROR` with no retained page, row or byte. Codes: `WRONG_NETWORK` (the response names a different
-network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data` list, a batch that is not an object, absent or
-non-list batch `logs`, non-list batch `blocks`, a non-object block fact, a non-quantity block number or block timestamp, `next_block` not a
+network or chain id), `MALFORMED_PROVIDER_RESPONSE` (not an object, no `data` list, a batch that is not an object, a batch with neither
+`logs` nor `blocks`, non-list batch `logs`, non-list batch `blocks`, a non-object block fact, a non-quantity block number or block timestamp, `next_block` not a
 positive quantity, a `rollback_guard` that is not an object, a present guard or chain echo that is not a valid
 quantity, or a present block hash or `first_parent_hash` that is not the pinned `0x` + 64-hex block-hash form),
 `PAGE_BOUNDS_CONTRADICTED` (an empty or reversed page, a page past the requested end, or a guard block number

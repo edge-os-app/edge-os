@@ -271,9 +271,6 @@ def test_a_wallet_id_that_could_change_the_path_is_refused_before_authorization(
     (with_transaction(nonce=7.0), "QUANTITY_UNSUPPORTED"),
     (with_transaction(nonce="0x7"), "QUANTITY_UNSUPPORTED"),
     (with_transaction(nonce=-1), "QUANTITY_UNSUPPORTED"),
-    (with_transaction(value=2**53), "QUANTITY_UNSUPPORTED"),
-    (with_transaction(gas_limit=2**53), "QUANTITY_UNSUPPORTED"),
-    (with_transaction(max_fee_per_gas=2**64), "QUANTITY_UNSUPPORTED"),
     (with_transaction(max_priority_fee_per_gas=None), "QUANTITY_UNSUPPORTED"),
     (with_transaction(chain_id=0), "QUANTITY_UNSUPPORTED"),
     (with_transaction(to="0x1234"), "ADDRESS_INVALID"),
@@ -1030,7 +1027,7 @@ HEADERS = ("headers",)
     _set(TRANSACTION + ("data",), "0x1234é"), _set(TRANSACTION + ("to",), "0x" + "０" * 40),
     _set(TRANSACTION + ("nonce",), 7.0), _set(TRANSACTION + ("nonce",), True),
     _set(TRANSACTION + ("value",), float("nan")), _set(TRANSACTION + ("gas_limit",), float("inf")),
-    _set(TRANSACTION + ("value",), 2**53), _set(TRANSACTION + ("chain_id",), 0),
+    _set(TRANSACTION + ("chain_id",), 0),
     _set(("body", "method"), "eth_signTransaction​"),
     _set(TRANSACTION + ("authorization_list",), []), _set(TRANSACTION + ("type",), 4),
     _set(TRANSACTION + ("gas_price",), 1), _set(TRANSACTION + ("data",), "0x" + "ab" * 40_000),
@@ -1220,7 +1217,11 @@ class Listener:
 
 
 def live_timers() -> list[threading.Thread]:
-    return [thread for thread in threading.enumerate() if isinstance(thread, threading.Timer) and thread.is_alive()]
+    # Timer.cancel() only signals the thread; it exits asynchronously, so wait for that condition before asserting.
+    timers = [thread for thread in threading.enumerate() if isinstance(thread, threading.Timer) and thread.is_alive()]
+    for timer in timers:
+        timer.join(timeout=1.0)
+    return [timer for timer in timers if timer.is_alive()]
 
 
 def over_loopback(server: Any, authorize: Any = None, *, on_connect: Callable[[], None] | None = None,

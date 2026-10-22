@@ -599,18 +599,19 @@ def _quantity_or(value: Any) -> int | None:
 def hypersync_batches(reply: Mapping[str, Any]) -> tuple[list[Any], list[Any]] | None:
     """Flatten the reply's `data` list of batches in reply order. None means another shape.
 
-    The live HyperSync JSON reply carries `data` as a list of batch objects. Each batch must carry `logs`;
-    an absent `logs` is not proved emptiness. `blocks` may be absent and then contributes nothing. A non-list
-    `data`, a batch that is not an object, or a non-list `logs` or `blocks` is refused."""
+    The live HyperSync JSON reply carries `data` as a list of batch objects. Observed 2026-10-21: a batch
+    with no logs omits the `logs` key. A batch that carries a `blocks` list and no `logs` key contributes
+    zero logs. A batch with neither key, or a non-list `logs` or `blocks`, is refused, as is a non-list
+    `data` or a batch that is not an object."""
     data = reply.get("data")
     if not isinstance(data, list):
         return None
     blocks: list[Any] = []
     logs: list[Any] = []
     for batch in data:
-        if not isinstance(batch, Mapping) or "logs" not in batch:
+        if not isinstance(batch, Mapping) or ("logs" not in batch and "blocks" not in batch):
             return None
-        batch_logs, batch_blocks = batch["logs"], batch.get("blocks", [])
+        batch_logs, batch_blocks = batch.get("logs", []), batch.get("blocks", [])
         if not isinstance(batch_logs, list) or not isinstance(batch_blocks, list):
             return None
         logs.extend(batch_logs)
@@ -686,8 +687,9 @@ class _Attempt:
 
     def _wait_until(self, target: float) -> None:
         now = self.wire.observe()[0]
-        if target > now:
+        while now < target:
             self.clock.sleep(target - now)
+            now = self.wire.observe()[0]
 
     def _pace(self, provider: str) -> None:
         last = self.journal.last_admission.get(provider)

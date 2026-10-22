@@ -67,7 +67,8 @@ The full response field set is observed in one Monad reply: the recorder run
 `moe-wmon-fwd20m-actual-20261021b`, call `03-P1-hypersync`, body SHA256
 `b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1`, carried
 `archive_height`, `next_block`, `total_execution_time`, `data` as a list of batch objects (each with
-`blocks`, `logs`) and an optional `rollback_guard`.
+`blocks`, `logs`) and an optional `rollback_guard`. Observed 2026-10-21 in the three
+`moe-wmon-fwd20m-actual-20261021c` P3 replies: a batch with no logs omits the `logs` key.
 
 The controller's pool census (9 `/query` requests) and MOE behavior check (4 `/query` requests; 5 HyperSync
 calls including one `/height`) also received `data` as a list of batch objects and read their `logs`. Those

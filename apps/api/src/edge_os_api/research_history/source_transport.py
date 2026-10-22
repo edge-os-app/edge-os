@@ -94,9 +94,10 @@ class SourceContractError(SourceFailure):
 def _page_batches(data: Any) -> tuple[list[Any], list[Any]]:
     """Flatten the reply's `data` list of batches in reply order, or refuse another shape.
 
-    The live HyperSync JSON reply carries `data` as a list of batch objects. Each batch must carry `logs`;
-    an absent `logs` is not proved emptiness. `blocks` may be absent and then contributes nothing. A non-list
-    `data`, a batch that is not an object, or a non-list `logs` or `blocks` is refused."""
+    The live HyperSync JSON reply carries `data` as a list of batch objects. Observed 2026-10-21: a batch
+    with no logs omits the `logs` key. A batch that carries a `blocks` list and no `logs` key contributes
+    zero logs. A batch with neither key, a non-list `logs` or `blocks`, a non-list `data` or a batch that is
+    not an object is refused."""
     if not isinstance(data, list):
         raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data is not a list of batches")
     logs: list[Any] = []
@@ -104,9 +105,9 @@ def _page_batches(data: Any) -> tuple[list[Any], list[Any]]:
     for batch in data:
         if not isinstance(batch, Mapping):
             raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a data batch is not an object")
-        if "logs" not in batch:
-            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a data batch has no logs")
-        batch_logs, batch_blocks = batch["logs"], batch.get("blocks", [])
+        if "logs" not in batch and "blocks" not in batch:
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a data batch has neither logs nor blocks")
+        batch_logs, batch_blocks = batch.get("logs", []), batch.get("blocks", [])
         if not isinstance(batch_logs, list):
             raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a data batch logs is not a list")
         if not isinstance(batch_blocks, list):

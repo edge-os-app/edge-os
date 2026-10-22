@@ -1,4 +1,4 @@
-# Real-model qualification proposal for prompt `p05-interpretation/4`
+# Real-model qualification proposal for prompt `p05-interpretation/5`
 
 Status: PROPOSED. Label: NOT_RUN. This file is not authority and not a budget. It makes no live request and reads no credential. A controller release must name the provider, model, budget, credential route and egress policy first. See `LIVE_RELEASE_CHECKLIST.md`.
 
@@ -23,8 +23,8 @@ All values are in `IDENTITIES.json`. A test recomputes them from the code.
 |---|---|
 | Base commit | `3ab45e7240910433f4bdcd84eae86833dd9f406c` |
 | Candidate | The commit that holds this file. The worker result names it after the commit exists. |
-| Prompt version | `p05-interpretation/4` |
-| System prompt SHA-256 (3,749 characters) | `ea2ae47f810b287b7ad93cd31d7e3e1f0068c4ea4cdc8fe79d8df68fea1ae460` |
+| Prompt version | `p05-interpretation/5` |
+| System prompt SHA-256 (3,906 characters) | `a881ddbf52364b32219029f80d9868047c2906cec71dc58d3b759d8159a1de0f` |
 | Response shape SHA-256 | `e2b561f4f4ce50b85fe18e148174e8db891b5987f9589f444ad12883dd1fe280` |
 | P02 manifest SHA-256 | `e80a9918e14321716f9ce231ada91dc788275b95f0142830d2a7ec4c6f74aff7` |
 | Hermes commit | `54bc5e509c985f37265c3d416bd2c64b10fc77ba` |

@@ -10,8 +10,9 @@ signed-field decoder are reused unchanged.
 
 Every result is ``LOCAL_TESTED``/``UNQUALIFIED``. No provider request, credential,
 wallet, policy, signature or broadcast exists in this unit: the code-owned
-approval registries are empty, so the default actual run refuses. Approval and
-profile resolution read only the code-owned registries; no function argument,
+registries hold exactly one frozen policy-layer packet and one raw profile, so
+every other packet refuses. Approval and profile resolution read only the
+code-owned registries; no function argument,
 flag or environment value can substitute them or authorize dispatch. Reply
 bodies, authorization signatures, credentials, signed bytes and unknown error
 strings are never saved, logged or re-raised. See
@@ -29,14 +30,17 @@ from scripts.privy_unfunded_proof.actual_packet import (
     ACTUAL_EVIDENCE_CLASS,
     PROVIDER_PROOF_UNQUALIFIED,
     ActualProofPacket,
+    reply_code,
     resolve_approved_packet,
     resolve_type4_authority,
 )
 from scripts.privy_unfunded_proof.actual_profile import QualifiedActualProfile, resolve_qualified_profile
 from scripts.privy_unfunded_proof.actual_transport import (
+    QUANTITY_FIELDS,
     TransportLost,
     TransportRefused,
     accepted_request_profile,
+    decode_wire_quantity,
 )
 from scripts.privy_unfunded_proof.evidence import Outcome, RunResult
 from scripts.privy_unfunded_proof.specimens import (
@@ -116,7 +120,15 @@ def _frozen_unsigned(request: FrozenRequest) -> Mapping[str, Any] | None:
     body = _request_body(request)
     params = body.get("params") if isinstance(body, dict) else None
     transaction = params.get("transaction") if isinstance(params, dict) else None
-    return transaction if isinstance(transaction, Mapping) else None
+    if not isinstance(transaction, Mapping):
+        return None
+    logical = dict(transaction)
+    for name in QUANTITY_FIELDS:
+        value = decode_wire_quantity(logical.get(name))
+        if value is None:
+            return None
+        logical[name] = value
+    return logical
 
 
 def _positive_control_allowed(
@@ -329,7 +341,7 @@ def _admit(
     specimen_id: str, packet: ActualProofPacket, store: AttemptStore, table: SpecimenTable,
     profile_id: str, profile: QualifiedActualProfile, type4_authority_id: str | None,
 ) -> tuple[Specimen, FrozenRequest]:
-    if not table.manifest_matches_rows():
+    if not table.matches_actual_manifest():
         raise SpecimenRefused("MANIFEST_MISMATCH")
     accepted = table.get(specimen_id)
     try:
@@ -458,7 +470,7 @@ def run_actual_specimen(
         if not isinstance(data, dict):
             return attempt.finish(Outcome.UNKNOWN, "MALFORMED_SUCCESS")
         return _classify_success(attempt, data, _frozen_unsigned(request), profile)
-    code = parsed.get("code") if isinstance(parsed, dict) else None
+    code = reply_code(parsed)
     entry = profile.codes.get(code) if isinstance(code, str) else None
     if entry is None or entry[0] != status:
         return attempt.finish(Outcome.UNKNOWN, "UNRECOGNIZED_REPLY")

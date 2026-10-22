@@ -10,7 +10,7 @@ from typing import Literal
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from pydantic import Field, ValidationError, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
@@ -220,6 +220,21 @@ class Settings(BaseSettings):
             return "unknown"
 
 
+class _SettingsFromMapping(Settings):
+    """Validate only the supplied mapping. Ambient EDGE_OS_* values never fill a missing field."""
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (init_settings,)
+
+
 def load_settings(environ: dict[str, str] | None = None) -> Settings:
     source = os.environ if environ is None else environ
     forbidden = [name for name in FORBIDDEN_ENV_NAMES if name in source]
@@ -229,7 +244,7 @@ def load_settings(environ: dict[str, str] | None = None) -> Settings:
         if environ is None:
             settings = Settings()  # type: ignore[call-arg]
         else:
-            settings = Settings.model_validate(
+            settings = _SettingsFromMapping.model_validate(
                 {k[len("EDGE_OS_"):].lower(): v for k, v in environ.items() if k.startswith("EDGE_OS_")})
     except ValidationError as error:
         fields = sorted({".".join(str(p) for p in item["loc"]) or "settings" for item in error.errors()})

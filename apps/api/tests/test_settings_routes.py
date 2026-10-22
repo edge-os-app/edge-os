@@ -31,6 +31,16 @@ def test_t7_missing_required_value_names_field_only(env, name):
         assert secret not in message
 
 
+@pytest.mark.parametrize("name", ["EDGE_OS_ENV", "EDGE_OS_DATABASE_URL", "EDGE_OS_PRIVY_APP_ID",
+                                  "EDGE_OS_PRIVY_VERIFICATION_KEY", "EDGE_OS_CORS_ALLOWED_ORIGINS"])
+def test_ambient_environment_does_not_fill_an_explicit_mapping(env, monkeypatch, name):
+    monkeypatch.setenv(name, env[name])
+    broken = {k: v for k, v in env.items() if k != name}
+    with pytest.raises(ConfigError) as caught:
+        load_settings(broken)
+    assert name.removeprefix("EDGE_OS_").lower() in str(caught.value)
+
+
 @pytest.mark.parametrize("name,value", [
     ("EDGE_OS_ENV", "staging"), ("EDGE_OS_DATABASE_URL", "sqlite:///x.db"),
     ("EDGE_OS_DATABASE_URL", "postgresql://u:pw@127.0.0.1/edge_os_test_x"), ("EDGE_OS_PRIVY_APP_ID", " "),

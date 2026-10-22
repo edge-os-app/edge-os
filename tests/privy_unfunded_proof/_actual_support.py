@@ -1,11 +1,11 @@
 """Shared doubles and fixtures for the LOCAL actual proof-runner tests.
 
 Everything here is SYNTHETIC. The test packet and profile exist only to exercise
-the runner machinery; the production code-owned registries are empty in the
-checkout. The helper temporarily injects test entries by patching the module
-registries, which is a test-only mutation of code-owned state. Tests cannot pass
-an approval through the public run signature, and every produced result stays
-LOCAL_TESTED/UNQUALIFIED.
+the runner machinery; the production code-owned registries hold one frozen
+policy-layer packet and one raw profile. The helper temporarily injects test
+entries by patching the module registries, which is a test-only mutation of
+code-owned state. Tests cannot pass an approval through the public run signature,
+and every produced result stays LOCAL_TESTED/UNQUALIFIED.
 """
 
 from __future__ import annotations
