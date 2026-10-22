@@ -1,0 +1,64 @@
+{
+  "format": "edge-os.hermes-release-approval/1",
+  "status": "DRAFT_NOT_APPROVED",
+  "meaning": "A DRAFT of one Orbio relay release (orbio-draft-1), prepared for builder review. It approves nothing: no registry entry, provider, key, request, price or spending. Its SHA256 is not in relay_admission.APPROVED_ACTUAL_RELEASES and it has no RELEASE_DEFINITIONS entry. The current code refuses this record even if its hash were approved, because it names no routing object. See docs/qualification/orbio-release/ORBIO_RELEASE_DRAFT.md.",
+  "prepared_utc": "2026-10-22",
+  "base": "617b9e2add99305b3da1a94f80b8ca7ca1924c9d",
+  "record_values_except_approval": {
+    "release_id": "orbio-draft-1",
+    "route_id": "orbio-openrouter-managed",
+    "kind": "ACTUAL",
+    "stream": false,
+    "destination": {
+      "host": "api.orbio.so",
+      "port": 443,
+      "path": "/api/v1/chat/completions"
+    },
+    "model": "openai/gpt-6.1-sol",
+    "provider": null,
+    "max_tokens": 4096,
+    "reasoning": {
+      "effort": "low"
+    },
+    "response_format_sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60",
+    "prompt_cache_options": {
+      "mode": "explicit"
+    },
+    "allowed_fields": [
+      "model",
+      "messages",
+      "stream",
+      "response_format",
+      "reasoning",
+      "max_tokens",
+      "session_id",
+      "prompt_cache_options"
+    ],
+    "max_request_bytes": 65536,
+    "max_reply_bytes": 262144,
+    "timeout_seconds": 90,
+    "ca_bundle_sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1",
+    "price_snapshot_sha256": "eaa1ad5580c7b1a0296d8830fdbeaeb28ba0d39fb483144e1108ad6db71ae16f"
+  },
+  "inputs": {
+    "price_snapshot": {
+      "path": "docs/qualification/orbio-release/orbio_draft_prices.json",
+      "sha256": "eaa1ad5580c7b1a0296d8830fdbeaeb28ba0d39fb483144e1108ad6db71ae16f"
+    },
+    "ca_bundle": {
+      "path": "docs/qualification/orbio-release/orbio_ca_isrg_root_x1.pem",
+      "sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1",
+      "certificate": "ISRG Root X1, DER SHA256 96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6"
+    },
+    "response_format_sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60"
+  },
+  "open": [
+    "Orbio's catalogue entry for openai/gpt-6.1-sol: listed, at USD 2 / 10 per million, with no override",
+    "routing: whether Orbio forwards, drops or rejects OpenRouter's provider object",
+    "usage.cost: present in Orbio replies, and its meaning",
+    "the reply model field and provider fields",
+    "a cost lookup endpoint",
+    "terms of service and privacy policy",
+    "the served TLS chain reaching ISRG Root X1"
+  ]
+}
