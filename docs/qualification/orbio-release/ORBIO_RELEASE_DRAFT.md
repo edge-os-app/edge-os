@@ -36,6 +36,7 @@ UNKNOWN (not documented, not tested, not assumed below):
 6. Whether `openai/gpt-6.1-sol` is listed now, at what price, and whether it is one of the 78 override models. The catalogue rule (identical to OpenRouter) implies USD 2 / 10 per million only if it has no override. This session did not read the catalogue.
 7. Whether `reasoning`, `response_format`, `max_tokens` and `prompt_cache_options` are forwarded or dropped. Only "sampling parameters" are documented as dropped.
 8. Whether `api.orbio.so` serves the ISRG Root YR cross-certificate signed by X1, which a trust store holding only X1 needs.
+9. Whether the `X-Orbio-Balance` value on a reply is read before or after that reply's charge, and its precision.
 
 ## 2. The draft record
 
@@ -74,7 +75,10 @@ Checked by `tests/hermes_provider_relay/test_orbio_release_draft.py`:
 2. With its hash injected as approved (test only), the loader still refuses it with `ValueError("routing must be an object")`. Two current rules stop an Orbio release that names no routing:
    - the loader requires a routing object with every known field (one provider, no fallbacks, required parameters, a price limit);
    - `REQUIRED_BODY_FIELDS` requires `provider` in every request body.
-   `bind_release` also requires the price snapshot's `provider` to equal the routed provider `provider.only[0]`.
+   `bind_release` also requires the price snapshot's `provider` to equal the routed provider `provider.only[0]`. So the draft snapshot's `provider: "orbio"` cannot bind under any record unless the routed provider is also named `orbio`. Three more places also read the routing object:
+   - `_price` and `_rate` (`hermes_relay_composition.py`) cap the snapshot rates by `provider.max_price`;
+   - `bind_release` builds `LiveRelease(provider=actual.provider["only"][0])`;
+   - `ActualRelease.body_refusal` compares the request's `provider` field with the record's.
    This draft does not relax any of these rules. An Orbio release that names no routing needs a separately reviewed code change. That change must keep these rules unchanged for the OpenRouter record and keep its golden bytes.
 3. Every other field meets the loader as written. The test swaps only the routing object for a synthetic one and loads the result under a test-only registry: destination `api.orbio.so:443/api/v1/chat/completions`, CA pin, release settings, reasoning, cache options and timeout all parse.
 4. The adopted record, approval packet and price bytes keep their SHA256 values. `APPROVED_ACTUAL_RELEASES` is exactly `{3fa94dd7…}`, and `RELEASE_DEFINITIONS` has exactly that one definition. The CLOUD-02 golden test (`test_release_destination_golden.py`) still passes unchanged.
@@ -132,7 +136,7 @@ None of these are done. Each step is a separate builder decision.
 2. Read the public catalogue on `orbio.so` for `openai/gpt-6.1-sol`. Record the date, the rates and whether it has any override. Compare it with OpenRouter's public price. Apply the section 4 rule. If it fails, stop.
 3. Decide the routing question. Either:
    - (a) obtain Orbio's documented or tested behavior for the `provider` object, then redraft the record with the proved fields; or
-   - (b) authorize a separately reviewed code change that admits a release naming no routing, without relaxing any OpenRouter check.
+   - (b) authorize a separately reviewed code change that admits a release naming no routing, without relaxing any OpenRouter check. It must cover every routing use in section 3.2, including the snapshot `provider` and `max_price` rules.
    Either way the record bytes, and so the SHA256, change.
 4. Authorize a handshake-only TLS check of `api.orbio.so:443` with SNI `api.orbio.so` against this bundle, with no HTTP request. It must verify to ISRG Root X1 (UNKNOWN 1.8). If it does not, the pin must be redrafted.
 5. Decide how the paid call observes `X-Orbio-Ignored-Parameters` and `X-Orbio-Balance`. The relay records no response header today. Either authorize a reviewed relay change that records those two named headers, or a separate builder-run observation.
@@ -156,7 +160,7 @@ The one call must observe all of these:
 4. Integer `usage.prompt_tokens`, `completion_tokens` and `total_tokens`, equal to the job's counts.
 5. `usage.cost` present and numeric, with `ceil(cost × 10^9) == prompt_tokens × 2,000 + completion_tokens × 10,000` nano-USD and at most 172,160,000 nano-USD (USD 0.17216). Example: 9,511 prompt and 1,957 completion tokens must cost exactly USD 0.038592.
 6. No cached-token discount or separately priced reasoning tokens, for example `prompt_tokens_details.cached_tokens` absent or 0. Record any such field.
-7. Balance after: `X-Orbio-Balance` on the reply, or `GET /api/v1/key` after the call with no other use of the key in between, gives B1. B0 − B1 equals `usage.cost` exactly. This is what shows that `usage.cost` is Orbio's own charge (UNKNOWN 1.1).
+7. Balance after: `GET /api/v1/key` after the call, with no other use of the key in between, gives B1. B0 − B1 equals `usage.cost` exactly. This is what shows that `usage.cost` is Orbio's own charge (UNKNOWN 1.1). Record `X-Orbio-Balance` from the reply too, but do not use it as B1 until its timing and precision are known (UNKNOWN 1.9). If the balance's precision is coarser than `usage.cost`, exact equality cannot be shown, and this item fails.
 8. Record the generation `id`. If a cost lookup endpoint exists (UNKNOWN 1.2), its cost for that id equals `usage.cost`.
 9. Ledger: the attempt goes RESERVED, then SETTLED at exactly the token charge. Relay `started.json`, gateway `opening` receipts and ledger rows count exactly one request.
 
