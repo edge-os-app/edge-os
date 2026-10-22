@@ -338,14 +338,16 @@ def _parse(raw: bytes) -> Any:
         return None
 
 
-def _quantity(value: Any) -> int | None:
-    """An exact unsigned quantity from a Python int or a canonical large-value lowercase `0x` string, or None.
+def _quantity(name: str, value: Any) -> int | None:
+    """An exact unsigned quantity from a Python int or, except for `chain_id`, a canonical large-value hex string.
 
-    A string is the wire form of a value above 2**53 - 1 only. A small value stays a JSON number, so a small hex
-    string is not the accepted input shape and is refused.
+    A string is the wire form of a value above 2**53 - 1 only. `chain_id` keeps its accepted number-only form. A
+    small hex string is not the accepted input shape and is refused.
     """
     if type(value) is int:
         return value
+    if name == "chain_id":
+        return None
     if isinstance(value, str) and _CANONICAL_QUANTITY_HEX.fullmatch(value):
         parsed = int(value, 16)
         return parsed if parsed > MAX_SAFE_INTEGER else None
@@ -353,13 +355,15 @@ def _quantity(value: Any) -> int | None:
 
 
 def _is_wire_quantity(name: str, value: Any) -> bool:
-    """Whether a quantity is exactly the wire form: a small number or a canonical large-value hex string."""
+    """Whether a quantity is exactly the wire form: a small number, or a canonical large-value hex string."""
     minimum = 1 if name == "chain_id" else 0
     if type(value) is int:
         return minimum <= value <= MAX_SAFE_INTEGER
+    if name == "chain_id":
+        return False
     if isinstance(value, str) and _CANONICAL_QUANTITY_HEX.fullmatch(value):
         parsed = int(value, 16)
-        return MAX_SAFE_INTEGER < parsed <= MAX_UINT256 and parsed >= minimum
+        return MAX_SAFE_INTEGER < parsed <= MAX_UINT256
     return False
 
 
@@ -379,9 +383,11 @@ def _wire_body(body: Mapping[str, Any]) -> dict[str, Any]:
     wire = copy.deepcopy(dict(body))
     transaction: Any = wire["params"]["transaction"]
     for name in QUANTITY_FIELDS:
-        value = _quantity(transaction[name])
+        value = _quantity(name, transaction[name])
         if value is None or value > MAX_UINT256:
             raise ValueError("quantity outside the accepted range")
+        if name == "chain_id" and value > MAX_SAFE_INTEGER:
+            raise ValueError("chain_id must stay a safe integer")
         transaction[name] = value if value <= MAX_SAFE_INTEGER else hex(value)
     return wire
 
@@ -389,9 +395,10 @@ def _wire_body(body: Mapping[str, Any]) -> dict[str, Any]:
 def _refuse_request(wallet_id: Any, body: Any) -> str | None:
     """The stable reason this request is outside the accepted shape, or None. Reads only; never changes the body.
 
-    Every quantity may be an exact unsigned integer from 0 to 2**256 - 1. A canonical lowercase ``0x`` string is the
-    wire form of a value above 2**53 - 1; a smaller hex string is refused. ``_wire_body`` keeps a smaller value as a
-    number and sends a larger value as the canonical string.
+    Every quantity may be an exact unsigned integer from 0 to 2**256 - 1. Except for ``chain_id``, a canonical
+    lowercase ``0x`` string is the wire form of a value above 2**53 - 1; a smaller hex string is refused.
+    ``_wire_body`` keeps a smaller value as a number and sends a larger value as the canonical string. ``chain_id``
+    stays a JSON number in the safe-integer range.
     """
     if not isinstance(wallet_id, str) or not _WALLET_ID.fullmatch(wallet_id):
         return "WALLET_ID_INVALID"
@@ -420,8 +427,11 @@ def _refuse_request(wallet_id: Any, body: Any) -> str | None:
     if not _is_int(transaction["type"]) or transaction["type"] != 2:
         return "TRANSACTION_TYPE_UNSUPPORTED"
     for name in QUANTITY_FIELDS:
-        value = _quantity(transaction[name])
-        if value is None or not (1 if name == "chain_id" else 0) <= value <= MAX_UINT256:
+        value = _quantity(name, transaction[name])
+        if name == "chain_id":
+            if value is None or not 1 <= value <= MAX_SAFE_INTEGER:
+                return "QUANTITY_UNSUPPORTED"
+        elif value is None or not 0 <= value <= MAX_UINT256:
             return "QUANTITY_UNSUPPORTED"
     if not isinstance(transaction["to"], str) or not _ADDRESS.fullmatch(transaction["to"]):
         return "ADDRESS_INVALID"

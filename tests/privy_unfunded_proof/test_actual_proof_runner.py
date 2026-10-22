@@ -182,6 +182,13 @@ def test_policy_owner_inside_executor_control_refused(store_dir: Path) -> None:
     assert caught.value.code == "POLICY_ADMIN_NOT_SEPARATED"
 
 
+def test_executor_cannot_own_the_wallet(store_dir: Path) -> None:
+    packet = make_packet(owner_id="executor-1")
+    with pytest.raises(SpecimenRefused) as caught:
+        run_actual("raw.baseline", store_dir, RecordingTransport(success_reply()), packet=packet)
+    assert caught.value.code == "POLICY_ADMIN_NOT_SEPARATED"
+
+
 def test_policy_owner_may_equal_the_wallet_owner(store_dir: Path) -> None:
     packet = make_packet(policy_resource_owner_id="owner-1")
     transport = RecordingTransport(success_reply())

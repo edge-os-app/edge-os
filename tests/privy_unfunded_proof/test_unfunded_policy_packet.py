@@ -7,6 +7,7 @@ approval; every other packet must still refuse.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -44,10 +45,10 @@ EXPECTED_ORDER = (
     "raw.allow_deposit_at_cap",
     "raw.allow_approve_at_cap",
     "raw.allow_swap_zero_value",
+    "raw.deny_deposit_wrong_to",
     "raw.deny_deposit_wrong_chain",
     "raw.deny_approve_wrong_chain",
     "raw.deny_swap_wrong_chain",
-    "raw.deny_deposit_wrong_to",
     "raw.deny_approve_wrong_to",
     "raw.deny_swap_wrong_to",
     "raw.deny_wmon_wrong_function",
@@ -81,6 +82,7 @@ def _logical_value(specimen_id: str) -> int:
 
 
 def test_registry_holds_exactly_the_frozen_packet() -> None:
+    assert list(CODE_OWNED_PACKET_APPROVALS) == [actual_packet.SEALED_PACKET_SHA256]
     assert list(CODE_OWNED_PACKET_APPROVALS) == [UNFUNDED_POLICY_PACKET.packet_id]
     assert list(actual_profile.QUALIFIED_ACTUAL_PROFILES) == [actual_packet.UNFUNDED_POLICY_PROFILE_ID]
     assert actual_profile.QUALIFIED_ACTUAL_PROFILES[actual_packet.UNFUNDED_POLICY_PROFILE_ID].profile == "raw"
@@ -100,7 +102,27 @@ def test_registered_packet_admits_with_its_table() -> None:
 
 def test_packet_hash_is_stable_and_self_bound() -> None:
     assert UNFUNDED_POLICY_PACKET.packet_id == UNFUNDED_POLICY_PACKET.packet_sha256()
+    assert UNFUNDED_POLICY_PACKET.packet_id == actual_packet.SEALED_PACKET_SHA256
     assert len(UNFUNDED_POLICY_PACKET.packet_id) == 64
+
+
+def test_a_changed_packet_field_is_not_admitted() -> None:
+    tampered = dataclasses.replace(UNFUNDED_POLICY_PACKET, packet_id="",
+                                   attempt_identity="unfunded-policy-proof-2")
+    tampered = dataclasses.replace(tampered, packet_id=tampered.packet_sha256())
+    assert tampered.packet_id != actual_packet.SEALED_PACKET_SHA256
+    assert actual_packet._sealed_packet_registry(tampered, actual_packet.SEALED_PACKET_SHA256) == {}
+    with pytest.raises(SpecimenRefused) as caught:
+        resolve_approved_packet(tampered.packet_id, now_epoch=NOW)
+    assert caught.value.code == "ACTUAL_PACKET_NOT_APPROVED"
+
+
+def test_a_changed_table_row_is_not_admitted() -> None:
+    rows = list(UNFUNDED_POLICY_TABLE.all())
+    rows[-1] = dataclasses.replace(rows[-1], expected=Expected.ALLOW)
+    tampered = specimens.build_table(rows)
+    assert tampered.manifest_sha256 != actual_packet.SEALED_ACTUAL_MANIFEST_SHA256
+    assert not tampered.matches_actual_manifest()
 
 
 def test_packet_binds_the_real_identities() -> None:
@@ -139,9 +161,10 @@ def test_policy_layer_scope_keeps_out_of_scope_controls_honest() -> None:
 
 
 def test_actual_manifest_registry_holds_exactly_the_policy_table() -> None:
-    assert specimens.CODE_OWNED_ACTUAL_MANIFESTS == frozenset({UNFUNDED_POLICY_TABLE.manifest_sha256})
+    assert specimens.CODE_OWNED_ACTUAL_MANIFESTS == frozenset({actual_packet.SEALED_ACTUAL_MANIFEST_SHA256})
+    assert UNFUNDED_POLICY_TABLE.manifest_sha256 == actual_packet.SEALED_ACTUAL_MANIFEST_SHA256
     assert UNFUNDED_POLICY_TABLE.matches_actual_manifest()
-    tampered = __import__("dataclasses").replace(UNFUNDED_POLICY_TABLE, manifest_sha256="deadbeef")
+    tampered = dataclasses.replace(UNFUNDED_POLICY_TABLE, manifest_sha256="deadbeef")
     assert not tampered.matches_actual_manifest()
 
 
@@ -249,8 +272,17 @@ def test_exact_approve_values() -> None:
     assert _transaction("raw.deny_approve_with_value")["value"] == 1
 
 
+def test_execute_swap_selector_matches_the_policy_abi() -> None:
+    from eth_utils import keccak
+
+    signature = ("executeSwap((address,uint256,address,uint256),"
+                 "(address,uint256,address,uint256,bool),bytes)")
+    assert keccak(text=signature)[:4].hex() == actual_packet.EXECUTE_SWAP_SELECTOR[2:]
+    assert actual_packet.EXECUTE_SWAP_SELECTOR == "0xce1e7030"
+
+
 def test_exact_swap_values() -> None:
-    swap = "0xd38afb11"
+    swap = "0xce1e7030"
     for specimen_id in ("raw.allow_swap_zero_value", "raw.deny_swap_with_mon",
                         "raw.deny_swap_wrong_chain", "raw.deny_swap_wrong_to"):
         transaction = _transaction(specimen_id)

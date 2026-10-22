@@ -71,11 +71,13 @@ The accepted Phase B `original_transaction.validate_signed` helper now requires 
 
 ## Frozen policy-layer packet
 
-`UNFUNDED_POLICY_PACKET.md` freezes the one registered packet for the real policy `c30racyru6duaipj815cvjce`. It holds 18 ordered `eth_signTransaction` rows: four allows and fourteen policy-owned negatives. The first row is the positive control. The packet uses one profile (`raw`) and one policy, because the real setup has one policy and the proof uses raw-byte binding only.
+`UNFUNDED_POLICY_PACKET.md` freezes the one registered packet for the real policy `c30racyru6duaipj815cvjce`. It holds 18 ordered `eth_signTransaction` rows: four allows and fourteen policy-owned negatives. The first row is the positive control. The first negative is a chain-143 request and is the reply-shape bootstrap. The packet uses one profile (`raw`) and one policy, because the real setup has one policy and the proof uses raw-byte binding only. The four swap rows use the five-field selector `0xce1e7030`.
+
+The packet and its table are sealed to reviewed SHA-256 literals. The registry admits the built packet only when its recomputed hash equals the literal; a source edit leaves the registry empty and every actual run refuses. The same rule binds the table manifest. The packet hash is `5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf`; the table manifest is `62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01`.
 
 The packet scope is `POLICY_LAYER`. Controls enforced by the host, the Kuru contract or a later stage stay at their true states and do not block this narrow proof. A successful swap signature is not a trade approval.
 
-Five deposit rows carry a value above `2**53 - 1` wei. The accepted signer and the transport now send such a quantity as a canonical lowercase `0x` string with no leading zeros, and keep a smaller quantity as a JSON number. The packet's request bytes are the wire form. The signed-field check decodes the wire value back to the exact integer, so a one-wei difference is `SIGNED_VALUE_MISMATCH` and a `BREACH`.
+Five deposit rows carry a value above `2**53 - 1` wei. The accepted signer and the transport now send such a quantity as a canonical lowercase `0x` string with no leading zeros, and keep a smaller quantity as a JSON number. `chain_id` stays a JSON number in the safe-integer range. The packet's request bytes are the wire form. The signed-field check decodes the wire value back to the exact integer, so a one-wei difference is `SIGNED_VALUE_MISMATCH` and a `BREACH`.
 
 ## Operator command
 

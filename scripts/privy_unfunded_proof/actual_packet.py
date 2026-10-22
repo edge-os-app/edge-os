@@ -30,7 +30,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from scripts.privy_unfunded_proof.actual_transport import QUANTITY_FIELDS, wire_quantity
+from scripts.privy_unfunded_proof import specimens
+from scripts.privy_unfunded_proof.actual_transport import MAX_SAFE_INTEGER, QUANTITY_FIELDS, wire_quantity
 from scripts.privy_unfunded_proof.specimens import (
     DESTINATION,
     FROZEN_TABLE,
@@ -46,7 +47,6 @@ from scripts.privy_unfunded_proof.specimens import (
     build_table,
     canonical_json,
     envelope_sha256,
-    register_actual_manifest,
 )
 
 ACTUAL_EVIDENCE_CLASS = "LOCAL_TESTED"
@@ -275,7 +275,7 @@ def _check_administration(packet: ActualProofPacket) -> None:
     """
     if not _is_identity(packet.policy_resource_owner_id):
         raise SpecimenRefused(POLICY_ADMIN_OWNER_MISSING)
-    if packet.policy_resource_owner_id == packet.executor_id:
+    if packet.policy_resource_owner_id == packet.executor_id or packet.owner_id == packet.executor_id:
         raise SpecimenRefused(POLICY_ADMIN_NOT_SEPARATED)
 
 
@@ -398,10 +398,16 @@ PACKET_EXPIRES_AT_EPOCH = 1_793_836_800
 PACKET_AUTH_HEADER_EXPIRY = "1793836800000"
 PACKET_ATTEMPT_IDENTITY = "unfunded-policy-proof-1"
 
+# The reviewed identities. The registry admits the packet and the table only when
+# their recomputed hashes equal these literals. A source edit cannot approve a
+# new packet or table without a new reviewed literal.
+SEALED_PACKET_SHA256 = "5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf"
+SEALED_ACTUAL_MANIFEST_SHA256 = "62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01"
+
 DEPOSIT_CALLDATA = "0xd0e30db0"
 APPROVE_SELECTOR = "0x095ea7b3"
 TRANSFER_SELECTOR = "0xa9059cbb"
-EXECUTE_SWAP_SELECTOR = "0xd38afb11"
+EXECUTE_SWAP_SELECTOR = "0xce1e7030"
 SWAP_PROGRAM = "01"
 
 
@@ -454,7 +460,13 @@ def _transaction(*, to: str, value: int, data: str, chain_id: int = 143, gas_lim
 def _policy_request(transaction: Mapping[str, Any]) -> FrozenRequest:
     wire = dict(transaction)
     for name in QUANTITY_FIELDS:
-        wire[name] = wire_quantity(transaction[name])
+        if name == "chain_id":
+            value = transaction[name]
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= MAX_SAFE_INTEGER:
+                raise ValueError("chain_id must stay a safe integer")
+            wire[name] = value
+        else:
+            wire[name] = wire_quantity(transaction[name])
     body = {"method": "eth_signTransaction", "params": {"transaction": wire}}
     body_bytes = canonical_json(body)
     if len(body_bytes) > MAX_REQUEST_BODY_BYTES:
@@ -484,6 +496,8 @@ def _policy_rows() -> list[Specimen]:
                                  gas_limit=GAS_APPROVE)),
         _policy_row("allow_swap_zero_value", operation, allow,
                     _transaction(to=ENTRYPOINT, value=0, data=swap_data, gas_limit=GAS_SWAP)),
+        _policy_row("deny_deposit_wrong_to", field, deny,
+                    _transaction(to=SINK, value=MON, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
         _policy_row("deny_deposit_wrong_chain", field, deny,
                     _transaction(to=WMON, value=MON, data=DEPOSIT_CALLDATA, chain_id=10143,
                                  gas_limit=GAS_DEPOSIT)),
@@ -493,8 +507,6 @@ def _policy_rows() -> list[Specimen]:
         _policy_row("deny_swap_wrong_chain", field, deny,
                     _transaction(to=ENTRYPOINT, value=0, data=swap_data, chain_id=10143,
                                  gas_limit=GAS_SWAP)),
-        _policy_row("deny_deposit_wrong_to", field, deny,
-                    _transaction(to=SINK, value=MON, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
         _policy_row("deny_approve_wrong_to", field, deny,
                     _transaction(to=SINK, value=0, data=_approve_calldata(ENTRYPOINT, CAP),
                                  gas_limit=GAS_APPROVE)),
@@ -528,10 +540,10 @@ UNFUNDED_POLICY_ORDER: tuple[str, ...] = (
     "raw.allow_deposit_at_cap",
     "raw.allow_approve_at_cap",
     "raw.allow_swap_zero_value",
+    "raw.deny_deposit_wrong_to",
     "raw.deny_deposit_wrong_chain",
     "raw.deny_approve_wrong_chain",
     "raw.deny_swap_wrong_chain",
-    "raw.deny_deposit_wrong_to",
     "raw.deny_approve_wrong_to",
     "raw.deny_swap_wrong_to",
     "raw.deny_wmon_wrong_function",
@@ -545,7 +557,7 @@ UNFUNDED_POLICY_ORDER: tuple[str, ...] = (
 )
 
 UNFUNDED_POLICY_TABLE = build_table(_policy_rows())
-register_actual_manifest(UNFUNDED_POLICY_TABLE.manifest_sha256)
+specimens.CODE_OWNED_ACTUAL_MANIFESTS = frozenset({SEALED_ACTUAL_MANIFEST_SHA256})
 
 
 def _build_unfunded_policy_packet() -> ActualProofPacket:
@@ -600,8 +612,13 @@ def _build_unfunded_policy_packet() -> ActualProofPacket:
     )
 
 
+def _sealed_packet_registry(packet: ActualProofPacket, sealed_sha256: str) -> dict[str, ActualProofPacket]:
+    """Admit the packet only when its recomputed identity equals the reviewed literal."""
+    return {packet.packet_id: packet} if packet.packet_id == sealed_sha256 else {}
+
+
 UNFUNDED_POLICY_PACKET = _build_unfunded_policy_packet()
-CODE_OWNED_PACKET_APPROVALS = {UNFUNDED_POLICY_PACKET.packet_id: UNFUNDED_POLICY_PACKET}
+CODE_OWNED_PACKET_APPROVALS = _sealed_packet_registry(UNFUNDED_POLICY_PACKET, SEALED_PACKET_SHA256)
 
 
 def reply_code(body: Any) -> str | None:

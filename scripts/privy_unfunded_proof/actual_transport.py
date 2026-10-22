@@ -70,7 +70,8 @@ def accepted_request_profile(body: Any) -> bool:
     """The narrow accepted authorizer profile: exactly one type-2 eth_signTransaction body.
 
     A quantity at or below 2**53 - 1 is a JSON number. A larger quantity is a canonical lowercase ``0x`` string
-    with no leading zeros, so the transport never emits a JSON number above 2**53 - 1.
+    with no leading zeros, so the transport never emits a JSON number above 2**53 - 1. ``chain_id`` stays a JSON
+    number in the safe-integer range.
     """
     if not isinstance(body, Mapping) or set(body) != {"method", "params"}:
         return False
@@ -85,9 +86,14 @@ def accepted_request_profile(body: Any) -> bool:
     if not _is_int(transaction["type"]) or transaction["type"] != 2:
         return False
     for name in QUANTITY_FIELDS:
-        value = decode_wire_quantity(transaction[name])
-        if value is None or not (1 if name == "chain_id" else 0) <= value <= MAX_UINT256:
-            return False
+        if name == "chain_id":
+            value = transaction[name]
+            if not _is_int(value) or not 1 <= value <= MAX_SAFE_INTEGER:
+                return False
+        else:
+            value = decode_wire_quantity(transaction[name])
+            if value is None:
+                return False
     return (_ADDRESS.fullmatch(transaction["to"]) is not None and _DATA.fullmatch(transaction["data"]) is not None)
 
 

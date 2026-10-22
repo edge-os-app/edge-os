@@ -23,7 +23,8 @@ Controls enforced by the host, the Kuru contract or a later stage are outside th
 | Network | `eip155:143` (Monad mainnet) |
 | Signing route | `https://api.privy.io/v1/wallets/bsb2feecuxl81dl5jz4u9xxo/rpc` |
 | Signing method | `eth_signTransaction` |
-| Packet SHA-256 | `3c24e0448c290cb85edb4894bd85585ca5deb4d6f3caf0a835a6f6513b4df138` |
+| Packet SHA-256 | `5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf` |
+| Table manifest SHA-256 | `62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01` |
 | Profile id | `privy.raw.v1` (profile `raw`) |
 | Attempt identity | `unfunded-policy-proof-1` |
 | Packet expiry | `1793836800` (2026-11-05T00:00:00Z) |
@@ -31,7 +32,7 @@ Controls enforced by the host, the Kuru contract or a later stage are outside th
 
 The policy body hash is SHA-256 over the canonical JSON of `policy_body` in `PRIVY_SETUP1.json` (sorted keys, compact separators, UTF-8). The whole setup record has its own SHA-256 `7b272a7fb04546ec8c1729d8c70b308329454c91e90e2e0241c72bb0fefaa9cd`.
 
-The executor is the only identity outside policy administration. The builder owns both the wallet and the policy. The packet records this honestly: the accepted check refused equality between the wallet owner and the policy owner, but this real setup has one human owner and one agent executor. The check now refuses only a policy owner that is the executor. A policy change still needs the builder key.
+The executor is the only identity outside policy administration. The builder owns both the wallet and the policy. The packet records this honestly: the accepted check refused equality between the wallet owner and the policy owner, but this real setup has one human owner and one agent executor. The check now refuses a policy owner or wallet owner that is the executor. A policy change still needs the builder key.
 
 ## Exact request body
 
@@ -53,33 +54,33 @@ A quantity at or below `2**53 - 1` is a JSON number. A quantity above that bound
 | `raw.deny_deposit_wrong_to` | 1000000000000000000 | `0xde0b6b3a7640000` |
 | `raw.deny_deposit_above_cap` | 70000000000000000001 | `0x3cb71f51fc5580001` |
 
-The other rows use small `value` numbers (`0` or `1`). The `approve` amount and the swap tuple live inside `data`, which is a hex string; they are not quantity fields. The signed-field check decodes the wire value back to the exact integer and compares it with the frozen unsigned value. A one-wei difference is `SIGNED_VALUE_MISMATCH` and a `BREACH`.
+The other rows use small `value` numbers (`0` or `1`). The `approve` amount and the swap tuple live inside `data`, which is a hex string; they are not quantity fields. `chain_id` stays a JSON number in the safe-integer range. The signed-field check decodes the wire value back to the exact integer and compares it with the frozen unsigned value. A one-wei difference is `SIGNED_VALUE_MISMATCH` and a `BREACH`.
 
 The fee fields are fixed for signing only. The policy does not constrain them. `nonce` is `0` for the fresh, unfunded wallet. The operator rechecks the wallet nonce and balance before the run.
 
 ## Ordered requests and expected outcomes
 
-The runner runs this exact order. The first row is the positive control; no negative is admitted before its saved `ALLOW` binds to this packet, request and policy.
+The runner runs this exact order. The first row is the positive control; no negative is admitted before its saved `ALLOW` binds to this packet, request and policy. The first negative is the bootstrap: it is a chain-143 request, so the policy engine evaluates a policy-owned condition even if a wrong chain is rejected by a different provider check.
 
 | # | Specimen | Expected | Policy boundary | Chain | `to` | `value` (wei) | `gas_limit` | `data` | `request_sha256` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `raw.allow_deposit_1_mon` | `ALLOW` | R1 all conditions | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 1000000000000000000 | 100000 | `0xd0e30db0` | `f3a177f244b7df7cb97a19b0b448f0c28207e4d799981dc586f94c685b45fbc5` |
 | 2 | `raw.allow_deposit_at_cap` | `ALLOW` | R1 `value` `lte` 70 MON | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 70000000000000000000 | 100000 | `0xd0e30db0` | `ac375d66c36cf3d7499cd1624808035ab853d6316423fe43330430a96926db34` |
-| 3 | `raw.allow_approve_at_cap` | `ALLOW` | R2 all conditions | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 0 | 100000 | `0x095ea7b3000000000000000000000000b3e6778480b2e488385e8205ea05e20060b813cb000000000000000000000000000000000000000000000003cb71f51fc5580000` | `31d39674e5e49b16f918179dd3a8326cbfb4c15fc66a8f35e575336ed708cf81` |
-| 4 | `raw.allow_swap_zero_value` | `ALLOW` | R3 all conditions | 143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 0 | 500000 | `0xd38afb11...` (exact below) | `702c622c280bbf6d596873be8a92ee127ed08abe8e3ea2284fa07df817472863` |
-| 5 | `raw.deny_deposit_wrong_chain` | `POLICY_DENY` | R1 `chain_id` `eq` 143 | 10143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 1000000000000000000 | 100000 | `0xd0e30db0` | `e46b5391dd3454334bc4449ed96442c6fd20ad3cd3f7ce06e1f75d5b1b7460f2` |
-| 6 | `raw.deny_approve_wrong_chain` | `POLICY_DENY` | R2 `chain_id` `eq` 143 | 10143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 0 | 100000 | `0x095ea7b3...` (spender entrypoint, amount 70 MON) | `3ed7df166475122dde27d7aeec4dac97ac29f208d5b321dc85d9fdb3be768f3f` |
-| 7 | `raw.deny_swap_wrong_chain` | `POLICY_DENY` | R3 `chain_id` `eq` 143 | 10143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 0 | 500000 | `0xd38afb11...` | `22b7a29c96e67811b31665aaef305228056e527054b83259ca225856c9a3227d` |
-| 8 | `raw.deny_deposit_wrong_to` | `POLICY_DENY` | R1 `to` `eq` WMON | 143 | `0x000000000000000000000000000000000000dead` | 1000000000000000000 | 100000 | `0xd0e30db0` | `4a06afc533a587960769c568f5462d0a98312d797c08fdb92778859433a75761` |
-| 9 | `raw.deny_approve_wrong_to` | `POLICY_DENY` | R2 `to` `eq` WMON | 143 | `0x000000000000000000000000000000000000dead` | 0 | 100000 | `0x095ea7b3...` | `d0969fa5c4bf781539446ae164fc02dfc9d0ae3540a4c52fb25d63b173480315` |
-| 10 | `raw.deny_swap_wrong_to` | `POLICY_DENY` | R3 `to` `eq` entrypoint | 143 | `0x000000000000000000000000000000000000dead` | 0 | 500000 | `0xd38afb11...` | `a37c694eb67bf9a6cf7fe55fc3efd4fc2e20616ed0261d8c40dae93312257744` |
+| 3 | `raw.allow_approve_at_cap` | `ALLOW` | R2 all conditions | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 0 | 100000 | `0x095ea7b3...` (spender entrypoint, amount 70 MON) | `31d39674e5e49b16f918179dd3a8326cbfb4c15fc66a8f35e575336ed708cf81` |
+| 4 | `raw.allow_swap_zero_value` | `ALLOW` | R3 all conditions | 143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 0 | 500000 | `0xce1e7030...` (exact below) | `f31cde63df34f78379574114e4705415df911a72d78779ba679c294cb98e3946` |
+| 5 | `raw.deny_deposit_wrong_to` | `POLICY_DENY` | R1 `to` `eq` WMON | 143 | `0x000000000000000000000000000000000000dead` | 1000000000000000000 | 100000 | `0xd0e30db0` | `4a06afc533a587960769c568f5462d0a98312d797c08fdb92778859433a75761` |
+| 6 | `raw.deny_deposit_wrong_chain` | `POLICY_DENY` | R1 `chain_id` `eq` 143 | 10143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 1000000000000000000 | 100000 | `0xd0e30db0` | `e46b5391dd3454334bc4449ed96442c6fd20ad3cd3f7ce06e1f75d5b1b7460f2` |
+| 7 | `raw.deny_approve_wrong_chain` | `POLICY_DENY` | R2 `chain_id` `eq` 143 | 10143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 0 | 100000 | `0x095ea7b3...` (spender entrypoint, amount 70 MON) | `3ed7df166475122dde27d7aeec4dac97ac29f208d5b321dc85d9fdb3be768f3f` |
+| 8 | `raw.deny_swap_wrong_chain` | `POLICY_DENY` | R3 `chain_id` `eq` 143 | 10143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 0 | 500000 | `0xce1e7030...` (exact below) | `9692f91e51babf1b2be3dca5a02f4a8a867a18ebfbfa38ca21adab9ed985d827` |
+| 9 | `raw.deny_approve_wrong_to` | `POLICY_DENY` | R2 `to` `eq` WMON | 143 | `0x000000000000000000000000000000000000dead` | 0 | 100000 | `0x095ea7b3...` (spender entrypoint, amount 70 MON) | `d0969fa5c4bf781539446ae164fc02dfc9d0ae3540a4c52fb25d63b173480315` |
+| 10 | `raw.deny_swap_wrong_to` | `POLICY_DENY` | R3 `to` `eq` entrypoint | 143 | `0x000000000000000000000000000000000000dead` | 0 | 500000 | `0xce1e7030...` (exact below) | `4e54dfb167ee31d019b7f9cf621b87a9713205bad94098904913302802bfc058` |
 | 11 | `raw.deny_wmon_wrong_function` | `POLICY_DENY` | R1/R2 `function_name` not `deposit`/`approve` | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 0 | 100000 | `0xa9059cbb...` (`transfer(sink, 1)`) | `6810d9fe5ecf519d5ca4f3aa4a435c6658f8500f8ef34d24eee0da633935b0d3` |
 | 12 | `raw.deny_entrypoint_wrong_function` | `POLICY_DENY` | R3 `function_name` not `executeSwap` | 143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 0 | 100000 | `0xd0e30db0` | `c76af7e72ead99978fac762a685ceafd687ca3cb04bdce92bc5d9250befc35af` |
 | 13 | `raw.deny_approve_other_spender` | `POLICY_DENY` | R2 `approve.spender` `eq` entrypoint | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 0 | 100000 | `0x095ea7b3...` (spender sink, amount 70 MON) | `622e80643d6c122968bab33068b48c6665c0a8e8a363cf7baa5990617220a5af` |
 | 14 | `raw.deny_approve_above_cap` | `POLICY_DENY` | R2 `approve.amount` `lte` 70 MON | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 0 | 100000 | `0x095ea7b3...` (amount 70 MON + 1) | `9e632b9f5be6a385f12525926e55dbbcffb4bdfe9e3e3077236e8f404998b526` |
 | 15 | `raw.deny_approve_with_value` | `POLICY_DENY` | R2 `value` `eq` 0 | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 1 | 100000 | `0x095ea7b3...` (amount 70 MON) | `47bd9c58d2ce5ea6112f807fa9bbbd80a197789cacc413e535917eca395ed3d4` |
 | 16 | `raw.deny_deposit_above_cap` | `POLICY_DENY` | R1 `value` `lte` 70 MON | 143 | `0x3bd359c1119da7da1d913d1c4d2b7c461115433a` | 70000000000000000001 | 100000 | `0xd0e30db0` | `a8b918f8066bba734aea573f4ac6359a8056aa9bbcddf21b0170226729e14f50` |
-| 17 | `raw.deny_swap_with_mon` | `POLICY_DENY` | R3 `value` `eq` 0 | 143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 1 | 500000 | `0xd38afb11...` | `b776dde8402c2a60b52dab45409cb3fd09912ac86dc4987456b5dab1874cd9bf` |
+| 17 | `raw.deny_swap_with_mon` | `POLICY_DENY` | R3 `value` `eq` 0 | 143 | `0xb3e6778480b2e488385e8205ea05e20060b813cb` | 1 | 500000 | `0xce1e7030...` (exact below) | `ac3277ebd460be8fedf0f1745d163eda5e3d8becea9b0027bf727d18d689b652` |
 | 18 | `raw.deny_plain_mon_transfer` | `POLICY_DENY` | No ALLOW rule matches | 143 | `0x000000000000000000000000000000000000dead` | 1 | 100000 | `0x` | `24445a29234ebac7936acaa2c2ca4eb0f8867d122af7303a5afb48dcafe1dae4` |
 
 The sink `0x000000000000000000000000000000000000dead` is a burn address, not a trade recipient. The swap pair is WMON/WMON with a one-byte program `0x01`; it is an inert policy sentinel, not a route.
@@ -87,10 +88,10 @@ The sink `0x000000000000000000000000000000000000dead` is a burn address, not a t
 ### Exact `executeSwap` data
 
 ```
-0xd38afb110000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000
+0xce1e70300000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a0000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010100000000000000000000000000000000000000000000000000000000000000
 ```
 
-The selector `0xd38afb11` is the Keccak-256 selector for `executeSwap((address,uint256,address,uint256),(address,uint256,address,uint256),bytes)`. The accepted Kuru Flow decoder decodes this exact layout: intent tuple (4 words), fees tuple (5 words), bytes offset `320`, length `1`, one program byte `01`, canonical zero padding.
+The selector `0xce1e7030` is the Keccak-256 selector for `executeSwap((address,uint256,address,uint256),(address,uint256,address,uint256,bool),bytes)`, the five-component fees tuple in the real policy ABI. The accepted Kuru Flow decoder decodes this exact layout: intent tuple (4 words), fees tuple (5 words, the last a zero `isInTokenFee`), bytes offset `320`, length `1`, one program byte `01`, canonical zero padding.
 
 ## Policy-owned and out-of-scope controls
 

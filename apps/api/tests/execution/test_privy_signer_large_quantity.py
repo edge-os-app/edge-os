@@ -162,6 +162,17 @@ def test_authorizer_signs_a_large_canonical_hex_string() -> None:
     assert isinstance(signature, str) and signature
 
 
+@pytest.mark.parametrize("chain_id", ["0x8f", 2**53, 2**200, -1, True, 0])
+def test_chain_id_stays_a_safe_integer(chain_id: object) -> None:
+    http, authorize = FakeHttp(signed_reply()), Authorizer()
+
+    result = client(http, authorize).rpc(WALLET_ID, body(chain_id=chain_id))
+
+    assert result["error"]["code"] == "LOCAL_UNSENT"
+    assert http.calls == []
+    assert authorize.payloads == []
+
+
 @pytest.mark.parametrize("value", [-1, True, False, 1.0, "0x1", "0x01", "0X1", "0xzz", "1", MAX_UINT256 + 1])
 def test_non_integer_and_out_of_range_quantities_are_refused(value: object) -> None:
     http, authorize = FakeHttp(signed_reply()), Authorizer()

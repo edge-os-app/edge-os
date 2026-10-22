@@ -30,16 +30,8 @@ MAX_RECORD_BYTES = 4096
 MAX_SPECIMENS_PER_PROFILE = 32
 
 # Code-owned manifests admitted for an actual run in addition to the frozen
-# synthetic table. The actual packet module registers exactly its own table.
+# synthetic table. The actual packet module seals exactly one reviewed literal.
 CODE_OWNED_ACTUAL_MANIFESTS: frozenset[str] = frozenset()
-
-
-def register_actual_manifest(manifest_sha256: str) -> None:
-    """Register one frozen actual table manifest. No caller argument can add one."""
-    global CODE_OWNED_ACTUAL_MANIFESTS
-    if not isinstance(manifest_sha256, str) or len(manifest_sha256) != 64:
-        raise SpecimenTableError("MALFORMED_MANIFEST")
-    CODE_OWNED_ACTUAL_MANIFESTS = CODE_OWNED_ACTUAL_MANIFESTS | {manifest_sha256}
 
 
 DESTINATION = "https://api.privy.io/v1/wallets/{wallet_id}/rpc"
