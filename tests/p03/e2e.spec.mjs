@@ -111,8 +111,8 @@ test.describe.configure({ mode: "serial" });
 test("signed-out and rejected sessions never show data", async ({ page }, info) => {
   await injectAuth(page, tokens.bad);
   await page.goto("/app");
-  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
-  await expect(page.getByText("Signing in does not create a wallet")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Edge OS" })).toBeVisible();
+  await expect(page.getByText("Signing in doesn't move funds")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Saved requests" })).toHaveCount(0);
   await shot(page, info.project.name, "signed-out");
 });

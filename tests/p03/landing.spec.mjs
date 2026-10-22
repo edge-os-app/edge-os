@@ -21,7 +21,7 @@ test("landing at / renders without starting sign-in and records the network it u
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: /Test your trade idea/ })).toBeVisible();
   await expect(page.getByTestId("fixture-banner")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Sign in to start" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Sign in to Edge OS" })).toHaveCount(0);
   await page.waitForLoadState("networkidle");
   const apiCalls = requests.filter((url) => url.includes("/v1/"));
   expect(apiCalls).toEqual([]);
