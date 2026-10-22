@@ -304,6 +304,7 @@ def load_bundle(session: Session, principal: Principal, intake_id: uuid.UUID, he
     return {
         "interpreter": hermes.label() if hermes is not None else INTERPRETER.label(),
         "attempts": attempts["attempts"] if attempts else [],
+        "model_cost": attempts["model_cost"] if attempts else None,
         "late_results": attempts["late_results"] if attempts else [],
         "intake": envelope_of(rows[0]),
         "interpretations": [envelope_of(r) for r in interps],

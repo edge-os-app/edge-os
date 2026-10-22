@@ -17,9 +17,11 @@ import copy
 import datetime as dt
 import json
 import logging
+import re
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from decimal import MAX_EMAX, MIN_EMIN, Decimal, Inexact, localcontext
 from typing import Any
 
 from sqlalchemy import select, text
@@ -140,6 +142,37 @@ def public_attempt(view: AttemptView) -> dict[str, Any]:
             "runtime_label": identity.runtime_label, "model": identity.config.get("model"),
             "route": identity.config.get("route"), "hermes_commit": identity.config.get("hermes_commit"),
             "answer_ref": identity.answer_ref, "previous_revision_id": identity.previous_revision_id}}
+
+
+# The decimal form the guarded runner stores (`str(Decimal.normalize())` of a non-negative cost) and the web reads.
+DECIMAL_USD = re.compile(r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,2})?")
+
+
+def settled_charge(spend: dict[str, Any]) -> Decimal | None:
+    """The attempt's cost when the ledger SETTLED it with a charge in the stored decimal form; otherwise unknown."""
+    charge = spend["charge_usd"]
+    if spend["state"] != "SETTLED" or not isinstance(charge, str) or DECIMAL_USD.fullmatch(charge) is None:
+        return None
+    return Decimal(charge)
+
+
+def study_model_cost(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """The request's model cost from its public attempts: the exact `Decimal` sum of the SETTLED charges.
+
+    The charges are the decimal strings the guarded runner saved from the ledger, summed as `Decimal` and returned as a
+    plain decimal string (no exponent, no float). Every other spend state, and an attempt without a spend record, is
+    unknown: it is counted, never added as zero, and the sum is then only a lower bound. With no settled call there is
+    no amount (`None`), not a zero.
+    """
+    charges = [c for c in (settled_charge(a["spend"]) for a in attempts) if c is not None]
+    if not charges:
+        return {"settled_usd": None, "settled_calls": 0, "unknown_calls": len(attempts)}
+    # Enough digits for the exact sum, so neither the sum nor `normalize` rounds; an inexact result would raise.
+    digits = max(c.adjusted() for c in charges) - min(c.as_tuple().exponent for c in charges) + 1 + len(str(len(charges)))
+    with localcontext(prec=digits, Emax=MAX_EMAX, Emin=MIN_EMIN, traps=[Inexact]):
+        total = sum(charges, Decimal(0)).normalize()
+    return {"settled_usd": format(total, "f"), "settled_calls": len(charges),
+            "unknown_calls": len(attempts) - len(charges)}
 
 
 class HermesResearch:
@@ -497,7 +530,8 @@ class HermesResearch:
                       ("PENDING_SAVE" if parse == "ACCEPTED" else "FAILED")),
                      "reason_code": parse.removeprefix("REJECTED:") if parse.startswith("REJECTED:") else None,
                      "attempt_id": last.start.attempt_id}
-        return {"attempts": [public_attempt(v) for v in history],
+        attempts = [public_attempt(v) for v in history]
+        return {"attempts": attempts, "model_cost": study_model_cost(attempts),
                 "late_results": [self._public_late(o) for o in self.ledger.late_results(owner, iid)],
                 "retry": {"allowed": state.allowed, "retry_of": state.retry_of, "reason": state.reason},
                 "reply": reply}
