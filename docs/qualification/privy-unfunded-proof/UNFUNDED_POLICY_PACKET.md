@@ -105,7 +105,7 @@ The swap allow does not prove an input/output asset bound, a minimum-output boun
 
 The profile `privy.raw.v1` is registered from current Privy documentation: a denied signing request returns HTTP `400` with code `policy_violation`. The accepted code reads `code`, `error.code` and the string `error` from the JSON reply; it never saves reply text.
 
-The first negative, `raw.deny_deposit_wrong_chain`, is the bootstrap. Its bounded capture records `status`, `media_type`, `content_type_sha256`, `byte_count`, `raw_body_sha256`, `metadata_valid` and `captured_at`. It records no body text, credential or signature.
+The first negative, `raw.deny_deposit_wrong_to`, is the bootstrap. Its bounded capture records `status`, `media_type`, `content_type_sha256`, `byte_count`, `raw_body_sha256`, `metadata_valid` and `captured_at`. It records no body text, credential or signature.
 
 If the observed status or code differs from the registered profile, the runner classifies the reply `UNKNOWN`, writes `STOP.json`, and refuses every later specimen. The operator must then stop, keep the capture, and request a reviewed profile update. The packet does not claim a refusal that the provider did not return.
 

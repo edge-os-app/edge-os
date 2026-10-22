@@ -9,11 +9,11 @@ The `privy-authorization-signature` value comes from an injected callable. `make
 already loaded P-256 private-key object: it accepts only the payload this adapter builds, serializes it with the same
 compact sorted-key JSON, and signs those bytes with ECDSA SHA-256. That serialization equals RFC 8785 only for the
 accepted value domain (fixed ASCII keys, ASCII strings, small integers and canonical large-quantity hex strings); it
-is not a general RFC 8785 implementation. A quantity field may be any exact unsigned integer from 0 to 2**256 - 1.
-The wire body keeps a value at or below 2**53 - 1 as a JSON number and sends a larger value as a canonical lowercase
-``0x`` string with no leading zeros, so no JSON number above 2**53 - 1 is ever sent. The fields that can be hex
-strings are ``chain_id``, ``nonce``, ``value``, ``gas_limit``, ``max_fee_per_gas`` and ``max_priority_fee_per_gas``;
-``type`` stays the integer 2.
+is not a general RFC 8785 implementation. A quantity field other than ``chain_id`` may be any exact unsigned integer
+from 0 to 2**256 - 1. The wire body keeps a value at or below 2**53 - 1 as a JSON number and sends a larger value as
+a canonical lowercase ``0x`` string with no leading zeros, so no JSON number above 2**53 - 1 is ever sent. The fields
+that can be hex strings are ``nonce``, ``value``, ``gas_limit``, ``max_fee_per_gas`` and
+``max_priority_fee_per_gas``. ``chain_id`` stays a JSON number in the safe-integer range; ``type`` stays the integer 2.
 The authorizer signs Privy API requests only. It never signs a wallet transaction and loads, stores or creates no key.
 
 Outcomes, matched to the caller's existing vocabulary:
