@@ -65,6 +65,8 @@ export function Shell() {
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
   const current = route.name === "later" || route.name === "account" ? route.area : "Research";
+  // The build-scope notice describes the account views only; research pages must not carry it.
+  const showsBuildScope = route.name === "later" || route.name === "account";
   // An opened agent's account view gets the read-only agent health conversation; Research keeps its own.
   const conversationAgent = route.name === "account" ? route.agentId : undefined;
 
@@ -81,10 +83,10 @@ export function Shell() {
           ))}
         </nav>
         <div className="side-foot">
-          <div className="notice">
-            <strong>Build scope.</strong> Account views show authored synthetic records only, not live wallet data. Saving a
-            Research rule grants no trading permission. This build does not connect a wallet or move funds.
-          </div>
+          {showsBuildScope ? <div className="notice" data-testid="build-scope-notice">
+            <strong>Build scope.</strong> Account views show authored synthetic records only, not live wallet data.
+            Saving a Research rule grants no trading permission. This build does not connect a wallet or move funds.
+          </div> : null}
           <button className="btn btn-ghost" type="button" onClick={auth.logout}>Sign out</button>
         </div>
       </aside>

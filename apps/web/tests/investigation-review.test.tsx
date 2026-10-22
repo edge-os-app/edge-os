@@ -679,3 +679,29 @@ describe("recorded-history declaration lost reply", () => {
     expect(mocks.historySave.mock.calls[1][1]).toEqual(mocks.historySave.mock.calls[0][1]);
   });
 });
+
+describe("an approved ACTUAL release on screen", () => {
+  it("offers only the real source and names it, with no test scenario in the picker", async () => {
+    mocks.historySources.mockResolvedValue({ label: "ACTUAL", mode: "recorded", sources: [MOE_SOURCE] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: MOE_SOURCE.title });
+    const select = screen.getByLabelText("Recorded source");
+    const options = Array.from(select.querySelectorAll("option")).map((item) => item.textContent);
+    expect(options).toEqual(["Choose a recorded source", MOE_SOURCE.title]);
+    expect(await screen.findByText(/This server composes the approved actual operating release actual-moe-history-nansen-20261022\/1/)).toBeInTheDocument();
+    expect(screen.queryByText(/Every other source is a SYNTHETIC recording/)).not.toBeInTheDocument();
+  });
+
+  it("names the real-MOE study and market instead of presenting the example pool as the study market", async () => {
+    mocks.historySources.mockResolvedValue({ label: "ACTUAL", mode: "recorded", sources: [MOE_SOURCE] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    const note = await screen.findByRole("note");
+    await waitFor(() => expect(note).toHaveTextContent("actual-moe-history-nansen-20261022/1"));
+    expect(note).toHaveTextContent("The real-MOE study on this page is the history investigation below.");
+    expect(note).toHaveTextContent("0x97199b34564911936bc850ac45ede785892b5aad");
+    expect(note).toHaveTextContent("not the real-MOE study's market");
+    expect(screen.getByText("Example pool (not the real-MOE study market)")).toBeInTheDocument();
+    expect(screen.queryByText(/Synthetic fixture market/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/unqualified synthetic fixture/)).not.toBeInTheDocument();
+  });
+});

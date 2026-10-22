@@ -8,12 +8,14 @@ from __future__ import annotations
 import copy
 import json
 import uuid
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 
 import history_recordings
+from edge_os_api.core.research import released_runtime_bootstrap
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from edge_os_api.records import contract_adapter as record_contract
@@ -35,8 +37,11 @@ def research_settings(env, migrated):
 
 @pytest.fixture(scope="module")
 def research(research_settings):
-    with TestClient(create_app(research_settings)) as test_client:
-        yield test_client
+    # These checks prove recorded-source behavior. An approved ACTUAL release replaces the recorded catalog, so this
+    # module composes no release: the recorded sources and their existing meaning stay under test here.
+    with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+        with TestClient(create_app(research_settings)) as test_client:
+            yield test_client
 
 
 def worker(client) -> InvestigationWorker:
@@ -64,16 +69,10 @@ def test_source_catalog_lists_only_labelled_recordings(research, owner_a):
     assert catalog["mode"] == "recorded"
     assert "SYNTHETIC" in catalog["label"]
     # SOURCE-LOCAL adds native-shaped recordings; RESEARCH-PORTS-LOCAL adds the same recording through the HTTP
-    # clients (authored transport). All are local recordings and carry the synthetic label. The composed default adds
-    # exactly one other entry: the one approved actual release source, with its release record.
-    released = [item for item in catalog["sources"] if "release" in item]
-    assert len(released) == 1
-    assert released[0]["source_id"] == "actual-moe-wmon-fwd20m/1"
-    assert released[0]["evidence_class"] == "PROVIDER_ACTUAL"
-    assert released[0]["content_label"] == "PROVIDER_HISTORY"
-    assert released[0]["available"] is True
-    assert released[0]["release"]["release_id"] == "actual-moe-history-nansen-20261022/1"
-    recorded = [item for item in catalog["sources"] if "release" not in item]
+    # clients (authored transport). All are local recordings and carry the synthetic label. This module composes no
+    # release (see the fixture), so the real-release entry is absent and every listed source is a recording.
+    assert not [item for item in catalog["sources"] if "release" in item]
+    recorded = catalog["sources"]
     assert {item["evidence_class"] for item in recorded} == {
         "RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE", "AUTHORED_HTTP_RESPONSE"}
     assert {item["content_label"] for item in recorded} == {"SYNTHETIC_FIXTURE"}
