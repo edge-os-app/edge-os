@@ -462,44 +462,26 @@ describe("recorded-history investigation", () => {
     await user.type(screen.getByLabelText("Rule 1 volume threshold"), "1");
   }
 
-  it("derives the MOE window partitions and schedule instead of the fixed hour split", async () => {
+  it.each([1, 3])("refuses predictive MOE lookback %i before save and names DESCRIPTIVE", async (lookback) => {
     const user = userEvent.setup();
-    await declareMoe(user, "1");
-    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
-    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
-    await screen.findByText(/Declaration saved before any collection/);
-    const body = mocks.historySave.mock.calls[0][1];
-    expect(body.configuration.partitions).toEqual([
-      { partition_id: "train", role: "TRAINING", start: "2026-10-22T07:35:00Z", end: "2026-10-22T07:45:00Z" },
-      { partition_id: "validate", role: "VALIDATION", start: "2026-10-22T07:45:00Z", end: "2026-10-22T07:50:00Z" },
-      { partition_id: "holdout", role: "HOLDOUT", start: "2026-10-22T07:50:00Z", end: "2026-10-22T07:55:00Z" },
-    ]);
-    expect(body.configuration.schedule).toEqual({ version: "p09.decision-clock/1",
-      start: "2026-10-22T07:40:00Z", end: "2026-10-22T07:55:00Z", interval_seconds: 300 });
-    expect(body.edge_spec.unknowns).toEqual(MOE_UNKNOWNS);
-  });
-
-  it("accepts lookback 3 on the MOE window with one decision", async () => {
-    const user = userEvent.setup();
-    await declareMoe(user, "3");
-    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
-    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
-    await screen.findByText(/Declaration saved before any collection/);
-    expect(mocks.historySave.mock.calls[0][1].configuration.schedule)
-      .toEqual({ version: "p09.decision-clock/1", start: "2026-10-22T07:50:00Z",
-        end: "2026-10-22T07:55:00Z", interval_seconds: 300 });
-  });
-
-  it("refuses an oversized lookback before save and says which lookback fits", async () => {
-    const user = userEvent.setup();
-    await declareMoe(user, "4");
-    expect(await screen.findByTestId("history-window-refusal")).toHaveTextContent("at most 3 buckets");
+    await declareMoe(user, String(lookback));
+    expect(await screen.findByTestId("history-window-refusal")).toHaveTextContent("No lookback fits");
+    expect(screen.getByTestId("history-window-refusal")).toHaveTextContent("use DESCRIPTIVE");
     await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
     expect(screen.getByRole("button", { name: "Save history declaration" })).toBeDisabled();
     expect(mocks.historySave).not.toHaveBeenCalled();
   });
 
-  it("accepts a descriptive declaration on the MOE window", async () => {
+  it("refuses more descriptive lookback than the MOE window can support", async () => {
+    const user = userEvent.setup();
+    await declareMoe(user, "2", "DESCRIPTIVE");
+    expect(await screen.findByTestId("history-window-refusal")).toHaveTextContent("at most 1 bucket");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    expect(screen.getByRole("button", { name: "Save history declaration" })).toBeDisabled();
+    expect(mocks.historySave).not.toHaveBeenCalled();
+  });
+
+  it("saves a descriptive MOE declaration with a schedule inside the readable partition", async () => {
     const user = userEvent.setup();
     await declareMoe(user, "1", "DESCRIPTIVE");
     await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
@@ -508,7 +490,9 @@ describe("recorded-history investigation", () => {
     const body = mocks.historySave.mock.calls[0][1];
     expect(body.configuration.partitions).toEqual([{ partition_id: "described", role: "DESCRIPTIVE",
       start: "2026-10-22T07:35:00Z", end: "2026-10-22T07:55:00Z" }]);
-    expect(body.configuration.schedule.start).toBe("2026-10-22T07:40:00Z");
+    expect(body.configuration.schedule).toEqual({ version: "p09.decision-clock/1",
+      start: "2026-10-22T07:45:00Z", end: "2026-10-22T07:50:00Z", interval_seconds: 300 });
+    expect(body.edge_spec.unknowns).toEqual(MOE_UNKNOWNS);
   });
 
   it("shows a waiting job and cancels it", async () => {
