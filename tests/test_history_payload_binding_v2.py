@@ -95,7 +95,7 @@ def reanchor(anchor, expected, *, handoff=None, receipts=None, provenance=None):
     return anchor, expected
 
 
-def two_hour_graph(tmp_path, monkeypatch):
+def two_hour_artifacts(tmp_path, monkeypatch):
     clock = FakeClock(T0 - 600)
     clock.mono = time.monotonic()
     providers = SyntheticProviders(clock)
@@ -111,9 +111,43 @@ def two_hour_graph(tmp_path, monkeypatch):
     anchor = {"schema_version": "edge-os.forward-history-binding/2", "handoff_json": h.decode(),
               "handoff_sha256": digest(h), "receipts_sha256": digest(r), "provenance_json": p.decode(),
               "provenance_sha256": digest(p)}
-    expected = {"handoff_sha256": digest(h), "receipts_sha256": digest(r), "provenance_sha256": digest(p),
+    return anchor, h, providers
+
+
+def two_hour_graph(tmp_path, monkeypatch):
+    anchor, h, _ = two_hour_artifacts(tmp_path, monkeypatch)
+    expected = {"handoff_sha256": anchor["handoff_sha256"], "receipts_sha256": anchor["receipts_sha256"],
+                "provenance_sha256": anchor["provenance_sha256"],
                 "recorder_attempt_id": json.loads(h)["attempt_id"]}
     return anchor, expected
+
+
+def two_hour_export(tmp_path, monkeypatch):
+    """A complete saved export for the synthetic two-hour graph, with 24 buckets. Never a registered release."""
+    anchor, h, providers = two_hour_artifacts(tmp_path, monkeypatch)
+    handoff = json.loads(h)
+    raw = [dict(item, block_hash=block_hash(item["block_number"]), block_timestamp=block_ts(item["block_number"]))
+           for item in providers.swaps]
+    owner, dataset, job, attempt = (str(uuid.UUID(int=n)) for n in (1, 2, 3, 4))
+    release = {"release_id": "synthetic-actual-2h/1", "sha256": "a" * 64, "kind": "ACTUAL"}
+    expected = {"owner_id": owner, "dataset_id": dataset, "source_id": handoff["source_id"], "release": release,
+                "handoff_sha256": anchor["handoff_sha256"], "receipts_sha256": anchor["receipts_sha256"],
+                "provenance_sha256": anchor["provenance_sha256"],
+                "recorder_attempt_id": handoff["attempt_id"], "job_id": job, "attempt_id": attempt}
+    content = {"dataset_id": dataset, "owner_id": owner, "job_id": job, "attempt_id": attempt,
+               "source_id": handoff["source_id"], "operating_release": release, "evidence_class": "PROVIDER_ACTUAL",
+               "network": {"chain_id": 143}, "binding_view": {
+                   "pool_address": handoff["market"]["pool"], "base_asset": handoff["market"]["base"],
+                   "quote_asset": handoff["market"]["quote"],
+                   "token_order": [handoff["market"]["base"], handoff["market"]["quote"]]},
+               "window_start": handoff["window"]["start_utc"], "window_end": handoff["window"]["end_utc"],
+               "query": {**handoff["scan"], "address": handoff["market"]["pool"]},
+               "buckets": [{"bucket_start": b["start_utc"], "bucket_end": b["end_utc"],
+                            "available_at": b["received_at_utc"]} for b in handoff["buckets"]],
+               "raw_evidence": {"sha256": raw_sha256(raw), "record_count": len(raw)}}
+    export = {"dataset_id": dataset, "owner_id": owner, "content": content, "content_sha256": sha256_hex(content),
+              "raw_records": raw}
+    return anchor, export, expected
 
 
 def test_two_hour_handoff_with_24_buckets_is_admitted(tmp_path, monkeypatch):
@@ -139,6 +173,23 @@ def test_two_hour_handoff_with_another_bucket_count_is_refused(tmp_path, monkeyp
     anchor, expected = reanchor(anchor, expected, handoff=handoff)
     with pytest.raises(module().PayloadError, match="BUCKET_SET_INVALID"):
         module().check_artifacts(anchor["handoff_json"].encode(), anchor["provenance_json"].encode(), expected)
+
+
+def test_two_hour_saved_export_passes_every_24_buckets(tmp_path, monkeypatch):
+    anchor, export, expected = two_hour_export(tmp_path, monkeypatch)
+    report = check(anchor, export, expected)
+    assert report["overall"] == "PASS"
+    assert [bucket["result"] for bucket in report["buckets"]] == ["PASS"] * 24
+
+
+def test_two_hour_saved_export_keeps_a_changed_bucket_a_mismatch(tmp_path, monkeypatch):
+    anchor, export, expected = two_hour_export(tmp_path, monkeypatch)
+    first = export["content"]["buckets"][0]
+    first["available_at"] = first["bucket_end"]
+    export["content_sha256"] = sha256_hex(export["content"])
+    report = check(anchor, export, expected)
+    assert report["overall"] == "MISMATCH"
+    assert report["buckets"][0]["reason"] == "AVAILABLE_AT_DIFFERS"
 
 
 def test_app_checker_refuses_a_v2_file_with_any_other_bytes(tmp_path, monkeypatch):

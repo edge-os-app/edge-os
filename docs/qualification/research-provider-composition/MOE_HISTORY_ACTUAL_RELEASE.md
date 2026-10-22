@@ -132,12 +132,34 @@ decision replaces operating packet decision D1 for that attempt only. The existi
 - The prepared input `PACKET/root/INPUT14.json` (`moe-wmon-fwd2h-actual-20261022a`, source
   `actual-moe-wmon-fwd2h/1`) passes every input rule with a placeholder T0 only. It is not run.
 
-RELEASE-2H must still:
+### RELEASE-2H phase 1 preparation (2026-10-22)
 
-- add and approve a new release definition and SHA-256 with the run's window, scan, delivery records and limits;
-- change or version the pinned four-bucket projection `scripts/history_payload_binding.py` used by saved-export
-  comparison;
-- update the release history limits for 24 buckets and declare the new observed delivery records;
-- rerun release admission and the saved-dataset comparison on the completed two-hour artifacts.
+The release path now accepts a 7200 s / 24-bucket anchor. These changes register no release and read no run:
+
+- `scripts/history_payload_binding.py` takes the accepted shape's bucket count at its bucket check. The `/1` default
+  stays 4; the `/2` checker passes 4 for 1200 s and 24 for 7200 s after it validates the window shape. The
+  `/2` checker's identity is pinned in `research/history_payload_binding.py` and in its own trusted dependencies.
+- Synthetic tests cover a complete 24-bucket `/2` anchor: ACTUAL admission, 24 saved buckets in the comparison report,
+  one changed bucket or one changed artifact byte refused, and the changed-byte refusal after an outer hash is recomputed.
+  The fixture is the recorder's own SYNTHETIC 7200 s graph and is never registered as a release.
+- The page plan already derives partitions and the decision schedule from the source window. For the 24-bucket shape it
+  keeps a 12-bucket TRAINING partition, so a predictive rule with lookback 8 has 2 usable decisions. The web test uses
+  the real grid `[2026-10-22T21:40:00Z, 2026-10-22T23:40:00Z)`.
+- The release registry still holds exactly one approved release. A test pins that invariant for both shapes.
+
+### D1 disclosure for the projection change
+
+The `/1` and `/2` checker byte hashes changed. A saved dataset whose binding froze the old identities returns
+INCOMPLETE `CHECKER_IDENTITY_DIFFERS` and must be collected again after this change ships. The 20-minute release
+`actual-moe-history-nansen-20261022/1` stays valid and admits the same artifacts; only the checker identity changed.
+`%0` should plan the recollection with the deploy.
+
+### Still pending after `RUN_DONE`
+
+- add and approve the one new release definition and SHA-256 with the run's window, scan, delivery records and limits;
+- replace the old release id in the same change so exactly one approved release remains;
+- set the Nansen window to the 24 hours ending at the new history window end;
+- rerun release admission and the saved-dataset comparison on the completed two-hour artifacts and report the engine's
+  decision counts.
 
 Until then, the two-hour attempt can produce a recorder graph but cannot be registered as a release.

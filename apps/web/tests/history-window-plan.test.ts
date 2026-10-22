@@ -5,6 +5,8 @@ import { deriveHistoryPlan, historyUnknowns } from "../lib/history-declaration";
 const MOE = { start: "2026-10-22T07:35:00Z", end: "2026-10-22T07:55:00Z" };
 // The synthetic recorded source: two hours, the window the old code assumed.
 const SYNTHETIC = { start: "2026-09-25T10:00:00Z", end: "2026-09-25T12:00:00Z" };
+// The two-hour MOE source shape: 24 buckets on the five-minute grid. Synthetic fixture, never registered.
+const MOE_2H = { start: "2026-10-22T21:40:00Z", end: "2026-10-22T23:40:00Z" };
 
 function plan(window: { start: string; end: string }, lookbackBuckets: number,
               direction: "DESCRIPTIVE" | "OUTPERFORM" | "UNDERPERFORM" = "OUTPERFORM") {
@@ -43,6 +45,16 @@ describe("deriveHistoryPlan", () => {
       end: "2026-09-25T10:55:00Z", interval_seconds: 300 });
     expect(result.decisions).toBe(2);
     expect(refusal(SYNTHETIC, 9).reason).toContain("at most 8 buckets");
+  });
+
+  it("offers a predictive lookback with two usable decisions on the two-hour MOE shape", () => {
+    const result = plan(MOE_2H, 8);
+    expect(result.partitions[0]).toEqual({ partition_id: "train", role: "TRAINING",
+      start: "2026-10-22T21:40:00Z", end: "2026-10-22T22:40:00Z" });
+    expect(result.schedule).toEqual({ version: "p09.decision-clock/1", start: "2026-10-22T22:25:00Z",
+      end: "2026-10-22T22:35:00Z", interval_seconds: 300 });
+    expect(result.decisions).toBe(2);
+    expect(refusal(MOE_2H, 9).maxLookbackBuckets).toBe(8);
   });
 
   it("uses one full-window partition for descriptive work", () => {

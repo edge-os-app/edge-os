@@ -41,7 +41,7 @@ refuses with a stable code:
 ## Checker adapter
 
 `research/history_payload_binding.py` loads `scripts/history_payload_binding.py` by repository path, as the P02
-adapter does. It pins the accepted bytes (SHA-256 `1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667`)
+adapter does. It pins the accepted bytes (SHA-256 `813cc91fd10d16222cdc4622071406bc9bb614f0efdaf74c3ab51ab2bf13acaa`)
 and executes exactly the bytes it hashed. A missing or changed checker gives INCOMPLETE, never PASS. The adapter calls
 `check_saved_export(bytes, Mapping, Mapping) -> dict` and `PayloadError.code` and copies no canonicalization. Because
 it bypasses the CLI's bounded file reads, it enforces the CLI ceilings itself: handoff 8 MiB, canonical export 64 MiB

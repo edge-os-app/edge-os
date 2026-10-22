@@ -18,7 +18,7 @@ from typing import Any
 
 # Load the historical projection from the exact accepted bytes, including when the API image has no scripts package.
 _PROJECTION_PATH = Path(__file__).with_name("history_payload_binding.py")
-_PROJECTION_SHA256 = "1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667"
+_PROJECTION_SHA256 = "813cc91fd10d16222cdc4622071406bc9bb614f0efdaf74c3ab51ab2bf13acaa"
 _projection_body = _PROJECTION_PATH.read_bytes()
 if hashlib.sha256(_projection_body).hexdigest() != _PROJECTION_SHA256:
     raise ValueError("PROJECTION_CHANGED")
@@ -40,7 +40,7 @@ MAX_EXPORT_BYTES = _projection.MAX_EXPORT_BYTES
 MAX_EXPECTED_BYTES = _projection.MAX_EXPECTED_BYTES
 MAX_PROVENANCE_BYTES = 2 * 1024 * 1024
 MAX_RECEIPTS_BYTES = 1024 * 1024
-TRUSTED_DEPENDENCIES = {'scripts/history_payload_binding.py': '1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667',
+TRUSTED_DEPENDENCIES = {'scripts/history_payload_binding.py': '813cc91fd10d16222cdc4622071406bc9bb614f0efdaf74c3ab51ab2bf13acaa',
  'apps/api/src/edge_os_api/records/contract_adapter.py': '092a87ea75384138e4663aea1d48249d9e7a8cc92a23b1d493887bae560e1b0e',
  'apps/api/src/edge_os_api/research_history/qualification_engine.py': '6cd74eefaee6a01ba81bdc7641cdf47e3cfa6edcce1cb98fec1e8ee70fc2b782',
  'docs/contracts/p02/check_contract.py': '06f3820a2ccfcf1445aef8240e5808977f8adc708ab32aecfedf28ef323d8f79',
@@ -373,7 +373,7 @@ def check_saved_export(handoff_bytes: bytes, export: Mapping[str, Any], expected
         if h["status"] != "COMPLETED" or h["clock"]["trusted"] is not True:
             report.add("ATTEMPT_COMPLETE", "INCOMPLETE", "ATTEMPT_NOT_COMPLETE")
         projected = _projection._project_saved(report, h, raw) if content_ok and raw_ok else None
-    buckets = _projection._check_buckets(h, _projection._get(content, "buckets"), projected)
+    buckets = _projection._check_buckets(h, _projection._get(content, "buckets"), projected, _bucket_count(h))
     overall = _projection._overall([item["result"] for item in report.checks] + [item["result"] for item in buckets])
     return {"schema_version": REPORT_SCHEMA, "canonicalization_version": CANONICALIZATION_VERSION,
             "dataset_id": _projection._get(export, "dataset_id"), "owner_id": _projection._get(export, "owner_id"),
