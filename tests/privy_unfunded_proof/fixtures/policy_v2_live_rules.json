@@ -1,0 +1,266 @@
+{
+  "source": "R3_TIGHTEN1_RESULT.json live GET after the builder PATCH (sanitized rules extract)",
+  "source_sha256": "a9276df89ff59f12c5380f981218275f2c0333fedbd26c70eabcf87a4a045a2c",
+  "policy_id": "c30racyru6duaipj815cvjce",
+  "live_policy": {
+    "name": "edge-os-agent-1 WMON to MOE via Kuru Flow",
+    "chain_type": "ethereum",
+    "owner_id": "a5gwmgrsn6903ac09lphyv9a",
+    "version": "1.0",
+    "rules": [
+      {
+        "id": "e2qc2t0a9c4vfiy7r8p1v7g4",
+        "name": "R1 wrap MON to WMON, max 70 MON",
+        "method": "eth_signTransaction",
+        "conditions": [
+          {
+            "field_source": "ethereum_transaction",
+            "field": "chain_id",
+            "operator": "eq",
+            "value": "143"
+          },
+          {
+            "field_source": "ethereum_transaction",
+            "field": "to",
+            "operator": "eq",
+            "value": "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A"
+          },
+          {
+            "field_source": "ethereum_transaction",
+            "field": "value",
+            "operator": "lte",
+            "value": "0x3cb71f51fc5580000"
+          },
+          {
+            "field_source": "ethereum_calldata",
+            "field": "function_name",
+            "abi": [
+              {
+                "type": "function",
+                "name": "deposit",
+                "inputs": [],
+                "outputs": [],
+                "stateMutability": "payable"
+              }
+            ],
+            "operator": "eq",
+            "value": "deposit"
+          }
+        ],
+        "action": "ALLOW"
+      },
+      {
+        "id": "d0ylb7k5f5afi0itijxypjrl",
+        "name": "R2 approve Kuru entrypoint, max 70 WMON",
+        "method": "eth_signTransaction",
+        "conditions": [
+          {
+            "field_source": "ethereum_transaction",
+            "field": "chain_id",
+            "operator": "eq",
+            "value": "143"
+          },
+          {
+            "field_source": "ethereum_transaction",
+            "field": "to",
+            "operator": "eq",
+            "value": "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A"
+          },
+          {
+            "field_source": "ethereum_transaction",
+            "field": "value",
+            "operator": "eq",
+            "value": "0x0"
+          },
+          {
+            "field_source": "ethereum_calldata",
+            "field": "function_name",
+            "abi": [
+              {
+                "type": "function",
+                "name": "approve",
+                "inputs": [
+                  {
+                    "name": "spender",
+                    "type": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "",
+                    "type": "bool"
+                  }
+                ],
+                "stateMutability": "nonpayable"
+              }
+            ],
+            "operator": "eq",
+            "value": "approve"
+          },
+          {
+            "field_source": "ethereum_calldata",
+            "field": "approve.spender",
+            "abi": [
+              {
+                "type": "function",
+                "name": "approve",
+                "inputs": [
+                  {
+                    "name": "spender",
+                    "type": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "",
+                    "type": "bool"
+                  }
+                ],
+                "stateMutability": "nonpayable"
+              }
+            ],
+            "operator": "eq",
+            "value": "0xb3e6778480b2E488385E8205eA05E20060B813cb"
+          },
+          {
+            "field_source": "ethereum_calldata",
+            "field": "approve.amount",
+            "abi": [
+              {
+                "type": "function",
+                "name": "approve",
+                "inputs": [
+                  {
+                    "name": "spender",
+                    "type": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "",
+                    "type": "bool"
+                  }
+                ],
+                "stateMutability": "nonpayable"
+              }
+            ],
+            "operator": "lte",
+            "value": "0x3cb71f51fc5580000"
+          }
+        ],
+        "action": "ALLOW"
+      },
+      {
+        "id": "osinqlsjmm9q8lnej21q4mbe",
+        "name": "R3 Kuru executeSwap only, no MON",
+        "method": "eth_signTransaction",
+        "conditions": [
+          {
+            "field_source": "ethereum_transaction",
+            "field": "chain_id",
+            "operator": "eq",
+            "value": "143"
+          },
+          {
+            "field_source": "ethereum_transaction",
+            "field": "to",
+            "operator": "eq",
+            "value": "0xb3e6778480b2E488385E8205eA05E20060B813cb"
+          },
+          {
+            "field_source": "ethereum_transaction",
+            "field": "value",
+            "operator": "eq",
+            "value": "0x0"
+          },
+          {
+            "field_source": "ethereum_calldata",
+            "field": "function_name",
+            "abi": [
+              {
+                "type": "function",
+                "name": "executeSwap",
+                "inputs": [
+                  {
+                    "name": "intent",
+                    "type": "tuple",
+                    "components": [
+                      {
+                        "name": "tokenUserBuys",
+                        "type": "address"
+                      },
+                      {
+                        "name": "minAmountUserBuys",
+                        "type": "uint256"
+                      },
+                      {
+                        "name": "tokenUserSells",
+                        "type": "address"
+                      },
+                      {
+                        "name": "amountUserSells",
+                        "type": "uint256"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "fees",
+                    "type": "tuple",
+                    "components": [
+                      {
+                        "name": "feeCollectorAddress",
+                        "type": "address"
+                      },
+                      {
+                        "name": "feeBps",
+                        "type": "uint256"
+                      },
+                      {
+                        "name": "referrerAddress",
+                        "type": "address"
+                      },
+                      {
+                        "name": "referrerFeeBps",
+                        "type": "uint256"
+                      },
+                      {
+                        "name": "isInTokenFee",
+                        "type": "bool"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "program",
+                    "type": "bytes"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "",
+                    "type": "uint256"
+                  }
+                ],
+                "stateMutability": "payable"
+              }
+            ],
+            "operator": "eq",
+            "value": "executeSwap"
+          }
+        ],
+        "action": "ALLOW"
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 # Local unfunded actual proof runner
 
-Task `ACTUAL-POLICY-PROOF-L3-20261018`, extended by `UNFUNDED-POLICY-PROOF-L3-20261022`. Status `LOCAL`. Provider proof `UNQUALIFIED`. Every result is `LOCAL_TESTED`.
+Task `ACTUAL-POLICY-PROOF-L3-20261018`, extended by `UNFUNDED-POLICY-PROOF-L3-20261022` and `POLICY-PROOF-V2-L3-20261022`. Status `LOCAL`. Provider proof `UNQUALIFIED`. Every result is `LOCAL_TESTED`.
 
 This document describes the successor of the accepted synthetic driver. Exactly one policy-layer packet and one raw profile are registered. It does not approve any trade, funding, route, policy change or provider request. The live proof is run only by the controller as operator.
 
@@ -71,9 +71,9 @@ The accepted Phase B `original_transaction.validate_signed` helper now requires 
 
 ## Frozen policy-layer packet
 
-`UNFUNDED_POLICY_PACKET.md` freezes the one registered packet for the real policy `c30racyru6duaipj815cvjce`. It holds 18 ordered `eth_signTransaction` rows: four allows and fourteen policy-owned negatives. The first row is the positive control. The first negative is a chain-143 request and is the reply-shape bootstrap. The packet uses one profile (`raw`) and one policy, because the real setup has one policy and the proof uses raw-byte binding only. The four swap rows use the five-field selector `0xce1e7030`.
+`UNFUNDED_POLICY_PACKET.md` freezes the one registered packet for the real policy `c30racyru6duaipj815cvjce`. It holds 19 ordered `eth_signTransaction` rows: four allows and fifteen policy-owned negatives. The first row is the positive control. The first negative is a chain-143 request and is the reply-shape bootstrap. The packet uses one profile (`raw`) and one policy, because the real setup has one policy and the proof uses raw-byte binding only. The four `executeSwap` rows use the five-field selector `0xce1e7030`; the receiver refusal row uses `0x31343b21`.
 
-The packet and its table are sealed to reviewed SHA-256 literals. The registry admits the built packet only when its recomputed hash equals the literal; a source edit leaves the registry empty and every actual run refuses. The same rule binds the table manifest. The packet hash is `5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf`; the table manifest is `62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01`.
+The packet and its table are sealed to reviewed SHA-256 literals. The registry admits the built packet only when its recomputed hash equals the literal; a source edit leaves the registry empty and every actual run refuses. The same rule binds the table manifest. Exactly one packet is approved. Packet v2 binds the tightened live R3 policy (function `executeSwap` only). The packet hash is `a84440727360ba470055ec387fc45f110089da6dedecb93a242c5cdac1c2d496`; the table manifest is `f485816e431aae37e30d062df038a3e1d62b8cdadac8e510ebb5d0181c827b63`; the policy body hash is `61860d201ecd9ce6d92bff5e7c2122b40164ecb69d1fa375738cb67b17b0892b`. Packet v1 is refused.
 
 The packet scope is `POLICY_LAYER`. Controls enforced by the host, the Kuru contract or a later stage stay at their true states and do not block this narrow proof. A successful swap signature is not a trade approval.
 
