@@ -576,7 +576,8 @@ class ControlledRuntime:
     def clients(self, factory: sessionmaker[Session], context: OriginalContext,
                 controls: Callable[[], list[str]], *, role: str) -> OriginalClients:
         """Mount the accepted clients; load credentials only after the saved ownership checks."""
-        if role != "worker" or self.quote_token is None or self.signer_access is None:
+        direct_source = self.binding.release.content()["quote"].get("source") == "DIRECT_V2_PROGRAM"
+        if role != "worker" or self.signer_access is None or (self.quote_token is None and not direct_source):
             raise ProviderUnavailable("transport")
         identity = {**context.identity, "owner_id": context.owner_id, "agent_id": context.agent_id,
                     "wallet_id": context.wallet_id, "wallet_address": context.wallet_address, "network_id": context.network_id}
@@ -666,14 +667,27 @@ class ControlledRuntime:
                 saved(None)
                 if "quote" not in holder:
                     runtime.binding.admit(identity, now=runtime.clock(), synthetic_bindings=runtime.synthetic_bindings)
-                    holder["quote"] = KuruQuoteClient(endpoint=release["quote"]["endpoint"], bearer_token=runtime.quote_token(),
-                        accepted_request={"chain_id":143, "sell_token":context.sell.token, "buy_token":context.buy.token,
-                                          "amount":str(context.sell.raw), "user":context.wallet_address},
-                        slippage_bps=release["quote"]["slippage_bps"], http=runtime.http, deadline_monotonic=deadline,
-                        connect_timeout_seconds=limits["deadline_seconds"], max_request_bytes=limits["max_request_bytes"],
-                        max_response_bytes=limits["max_response_bytes"],
-                        evidence_class="SYNTHETIC_FIXTURE" if release["kind"] == "SYNTHETIC_FIXTURE" else "PROVIDER_UNQUALIFIED",
-                        cancel=stopped, wall_clock=runtime.clock, monotonic=runtime.monotonic)
+                    accepted = {"chain_id":143, "sell_token":context.sell.token, "buy_token":context.buy.token,
+                                "amount":str(context.sell.raw), "user":context.wallet_address}
+                    evidence = "SYNTHETIC_FIXTURE" if release["kind"] == "SYNTHETIC_FIXTURE" else "PROVIDER_UNQUALIFIED"
+                    if release["quote"].get("source") == "DIRECT_V2_PROGRAM":
+                        from edge_os_api.execution.direct_route_quote_client import (
+                            DirectRoutePins, DirectRouteQuoteClient)
+                        holder["quote"] = DirectRouteQuoteClient(DirectRoutePins.from_release(release),
+                            accepted_request=accepted, slippage_bps=release["quote"]["slippage_bps"],
+                            http=runtime.http, deadline_monotonic=deadline,
+                            connect_timeout_seconds=limits["deadline_seconds"],
+                            max_request_bytes=limits["max_request_bytes"],
+                            max_response_bytes=limits["max_response_bytes"], evidence_class=evidence,
+                            cancel=stopped, wall_clock=runtime.clock, monotonic=runtime.monotonic)
+                    else:
+                        holder["quote"] = KuruQuoteClient(endpoint=release["quote"]["endpoint"],
+                            bearer_token=runtime.quote_token(), accepted_request=accepted,
+                            slippage_bps=release["quote"]["slippage_bps"], http=runtime.http,
+                            deadline_monotonic=deadline, connect_timeout_seconds=limits["deadline_seconds"],
+                            max_request_bytes=limits["max_request_bytes"],
+                            max_response_bytes=limits["max_response_bytes"], evidence_class=evidence,
+                            cancel=stopped, wall_clock=runtime.clock, monotonic=runtime.monotonic)
                 return holder["quote"].quote(request)
 
         def signer(prepared: PreparedSubmission) -> Any:
