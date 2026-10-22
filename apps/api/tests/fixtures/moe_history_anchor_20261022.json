@@ -1,0 +1,94 @@
+{
+  "accounting": {
+    "admitted": {
+      "hypersync": 5,
+      "quicknode": 17
+    },
+    "ceilings": {
+      "hypersync": 9,
+      "quicknode": 17
+    },
+    "reply_bytes": 589008,
+    "resolved": 22,
+    "unknown_liability": 0
+  },
+  "anchor": {
+    "handoff_sha256": "da8b5bf992471dd5fafd832a8d8473524af72cb3a3013a201d5ea3045390ebee",
+    "provenance_sha256": "fdea4dca865d2b6c1fa6599e818ea20758994d7686ddde0c845c98e3cf2ae5f2",
+    "receipts_sha256": "f6ec0710d9dae26ad72ef3dca6f0f78062815a81c6eb96cda409881eea463332",
+    "schema_version": "edge-os.forward-history-binding/2"
+  },
+  "attempt_id": "moe-wmon-fwd20m-actual-20261022m",
+  "buckets": [
+    {
+      "end_utc": "2026-10-22T07:40:00Z",
+      "index": 0,
+      "payload_sha256": "1059afb58d3d2063e8eaa8abf7b7886091002262368b567a63914c22dc6bd347",
+      "received_at_utc": "2026-10-22T07:40:36Z",
+      "record_count": 4,
+      "reply_body_sha256": "7c20b75a6e0cf131c8c29e5995dd4887fe78cea05e3fa64429a636f51d29b034",
+      "start_utc": "2026-10-22T07:35:00Z",
+      "status": "DELIVERED"
+    },
+    {
+      "end_utc": "2026-10-22T07:45:00Z",
+      "index": 1,
+      "payload_sha256": "8151ff61871a4d0b74758d5a5904ee6fda63cde44a792748ea794213adf24d42",
+      "received_at_utc": "2026-10-22T07:45:33Z",
+      "record_count": 2,
+      "reply_body_sha256": "2d141925eec8479ef24b43bffe7f7f4ea9d925f4b90b826e08de26fd05920a33",
+      "start_utc": "2026-10-22T07:40:00Z",
+      "status": "DELIVERED"
+    },
+    {
+      "end_utc": "2026-10-22T07:50:00Z",
+      "index": 2,
+      "payload_sha256": "8206a26635cbb6a29320831a4955c224ddbf10796f5023e18ffa009446d52b72",
+      "received_at_utc": "2026-10-22T07:50:35Z",
+      "record_count": 4,
+      "reply_body_sha256": "43188b5ba2f9fbe231fa95d1e0178a8e844b59126f5814b392af6358fb9f3b3a",
+      "start_utc": "2026-10-22T07:45:00Z",
+      "status": "DELIVERED"
+    },
+    {
+      "end_utc": "2026-10-22T07:55:00Z",
+      "index": 3,
+      "payload_sha256": "31dda7169cbeaf0b82d5eecb8eb880ad0ab12447c70650de104f1102721e9210",
+      "received_at_utc": "2026-10-22T07:55:33Z",
+      "record_count": 4,
+      "reply_body_sha256": "859281e5f148794324c8bb720f5fd8a059569bc99baab1ceff0fde637ecfb335",
+      "start_utc": "2026-10-22T07:50:00Z",
+      "status": "DELIVERED"
+    }
+  ],
+  "claim_limit": "Frozen manifest for the code-owned anchor. Not provider authentication or source rights.",
+  "delivery_records": {
+    "2026-10-22T07:35:00Z": "2026-10-22T07:40:36Z",
+    "2026-10-22T07:40:00Z": "2026-10-22T07:45:33Z",
+    "2026-10-22T07:45:00Z": "2026-10-22T07:50:35Z",
+    "2026-10-22T07:50:00Z": "2026-10-22T07:55:33Z"
+  },
+  "market": {
+    "base": "0xd8e004acba279417c04c0633cb5a21ceca207777",
+    "pool": "0x97199b34564911936bc850ac45ede785892b5aad",
+    "quote": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+    "token0": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+    "token1": "0xd8e004acba279417c04c0633cb5a21ceca207777"
+  },
+  "network": {
+    "chain_id": 143
+  },
+  "recorder_code_sha256": "e02f3cac6a4500c3c9359544cb064e86671cc16074428b2a5863e51089f77395",
+  "scan": {
+    "from_block": 115554031,
+    "to_block_exclusive": 115558007
+  },
+  "schema_version": "edge-os.moe-history-anchor-fixture/1",
+  "source_id": "actual-moe-wmon-fwd20m/1",
+  "status": "COMPLETED",
+  "window": {
+    "bucket_seconds": 300,
+    "end_utc": "2026-10-22T07:55:00Z",
+    "start_utc": "2026-10-22T07:35:00Z"
+  }
+}

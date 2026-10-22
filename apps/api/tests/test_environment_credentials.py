@@ -206,7 +206,8 @@ def test_a_quicknode_url_on_another_host_keeps_the_endpoint_mismatch(environ: Re
 
 def test_the_default_bootstrap_composes_the_one_approved_release_and_reads_nothing(
         environ: RecordingEnviron) -> None:
-    # The code-owned default now carries exactly the one accepted Nansen-only ACTUAL release and its approved SHA-256.
+    # The code-owned default now carries exactly the one accepted MOE history plus Nansen ACTUAL release and its
+    # approved SHA-256.
     assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == set(operating_release.APPROVED_RELEASES)
     runtime = released_runtime_bootstrap.server_research_runtime(SETTINGS,
                                                                  credentials=EnvironmentCredentialSource())
