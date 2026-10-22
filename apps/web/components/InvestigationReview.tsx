@@ -64,6 +64,18 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
   const [reopenId, setReopenId] = useState("");
   const [configuration, setConfiguration] = useState<InvestigationConfiguration | null>(null);
   const [edgeSpec, setEdgeSpec] = useState<InvestigationProposal["edge_spec"] | null>(null);
+  // The real source this server serves when it composes an approved ACTUAL release. Wording only; the server still
+  // decides which sources exist. A read failure leaves the recorded labels in place.
+  const [realSource, setRealSource] = useState<HistorySource | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    api.historySources().then((catalog) => {
+      if (!current) return;
+      setRealSource(catalog.sources.find((item) => sourceRelease(item)?.kind === "ACTUAL") ?? null);
+    }).catch(() => { /* the recorded wording is the safe fallback */ });
+    return () => { current = false; };
+  }, []);
 
   useEffect(() => {
     let current = true;
@@ -227,6 +239,8 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
 
   if (loading) return <section className="panel" aria-busy="true"><h2>Investigation plan</h2><p role="status">Loading the saved plan.</p></section>;
 
+  const realRelease = realSource ? sourceRelease(realSource) : null;
+
   return (
     <section className="panel stack investigation-review" aria-labelledby="investigation-title" data-testid="investigation-review">
       <div>
@@ -269,7 +283,9 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
         <div className="status ok" data-testid="investigation-saved">
           <p className="visually-hidden" role="status">Declaration saved before outcome review. No study started.</p>
           <h3 ref={savedHeading} tabIndex={-1}>Declaration saved</h3>
-          <p>Saved before outcome review. No study started. This profile uses an unqualified synthetic fixture.</p>
+          <p>{realRelease
+            ? "Saved before outcome review. No study started. This saved profile is an interface example; the real-MOE study on this page is the history investigation below."
+            : "Saved before outcome review. No study started. This profile uses an unqualified synthetic fixture."}</p>
           <dl className="kv">
             <dt>Declaration ID</dt><dd className="mono">{selected.declaration.record_id}</dd>
             <dt>Budget version</dt><dd>{selected.declaration.content.configuration.budget_version}</dd>
@@ -288,7 +304,9 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
 
       {proposal && configuration && edgeSpec ? (
         <div className="stack">
-          <p role="note" className="status stop">{proposal.notice} The proposal keeps your original request unchanged. This synthetic pool is not qualified for production research.</p>
+          <p role="note" className="status stop">{realRelease && realSource
+            ? `The real-MOE study on this page is the history investigation below. It uses the approved operating release ${realRelease.release_id} on pool ${realSource.market.pool_address} (base ${realSource.market.base_asset}, quote ${realSource.market.quote_asset}). This separate bounded review is an interface example: adoption saves a pre-outcome declaration and runs no study. Its example pool is not the real-MOE study's market and is not qualified for production research.`
+            : `${proposal.notice} The proposal keeps your original request unchanged. This synthetic pool is not qualified for production research.`}</p>
           <section aria-labelledby="request-review-title" className="stack">
             <h3 id="request-review-title">Your request and hypothesis</h3>
             <p className="words" data-testid="investigation-original-request">{configuration.question}</p>
@@ -336,10 +354,14 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
           <section aria-labelledby="scope-title" className="stack">
             <h3 id="scope-title">Proposed scope and budget</h3>
             <dl className="kv">
-              <dt>Pool</dt><dd>{configuration.pool_binding.profile_id} · unqualified synthetic fixture</dd>
-              <dt>Limitations</dt><dd>{configuration.pool_binding.limitations.join(" ")}</dd>
-              <dt>Data source</dt><dd>{configuration.sources.join(", ")}</dd>
-              <dt>Permitted access</dt><dd>Fixture only. No provider queries.</dd>
+              <dt>{realRelease ? "Example pool (not the real-MOE study market)" : "Pool"}</dt>
+              <dd>{realRelease ? "Unqualified interface example; the saved declaration keeps its exact identifier."
+                : `${configuration.pool_binding.profile_id} · unqualified synthetic fixture`}</dd>
+              <dt>Limitations</dt><dd>{realRelease
+                ? "Interface example only; no production pool or source is qualified."
+                : configuration.pool_binding.limitations.join(" ")}</dd>
+              <dt>Data source</dt><dd>{realRelease ? "Interface example only" : configuration.sources.join(", ")}</dd>
+              <dt>Permitted access</dt><dd>{realRelease ? "Interface example only. No provider queries." : "Fixture only. No provider queries."}</dd>
               <dt>Budget version</dt><dd>{configuration.budget_version}</dd>
               <dt>Cost ceiling</dt><dd>$0. No paid access is permitted.</dd>
               <dt>Partitions</dt><dd>{configuration.partitions.map((item) => `${item.partition_id}: ${item.role}`).join(", ")}</dd>
@@ -735,12 +757,14 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
     finally { await loadJobs(selected); await refreshBudget(); setBusy(false); }
   };
 
+  const actualSource = sources.find((item) => sourceRelease(item)?.kind === "ACTUAL") ?? null;
+
   return (
     <section className="stack" aria-labelledby="history-title" data-testid="history-investigation"
       style={{ overflowWrap: "anywhere" }}>
-      <h3 id="history-title">Recorded-history investigation</h3>
-      {sources.some((item) => sourceRelease(item)?.kind === "ACTUAL")
-        ? <p className="status stop">This server composes an approved actual operating release: its source calls the named provider within the listed fixed limits. Every other source is a SYNTHETIC recording. Results are descriptive and grant no trading permission.</p>
+      <h3 id="history-title">{actualSource ? "History investigation" : "Recorded-history investigation"}</h3>
+      {actualSource
+        ? <p className="status stop">{`This server composes the approved actual operating release ${sourceRelease(actualSource)!.release_id}: its history source calls the named providers within the fixed limits. Results are descriptive and grant no trading permission.`}</p>
         : <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>}
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p><button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>Retry</button></div> : null}
       {budget ? (
@@ -801,7 +825,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
       ) : null}
 
       <details open={declarations.length === 0}>
-        <summary>Declare a new recorded-history investigation</summary>
+        <summary>{actualSource ? "Declare a new history investigation" : "Declare a new recorded-history investigation"}</summary>
         <div className="stack">
           <div className="field">
             <label htmlFor="history-source">Recorded source</label>

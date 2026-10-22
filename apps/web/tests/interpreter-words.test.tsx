@@ -14,6 +14,7 @@ vi.mock("../lib/api", () => ({
     get: (...a: unknown[]) => mocks.get(...a), retryInterpretation: (...a: unknown[]) => mocks.retry(...a),
     answer: (...a: unknown[]) => mocks.answer(...a), revision: (...a: unknown[]) => mocks.revision(...a),
     investigations: (...a: unknown[]) => mocks.investigations(...a), investigationProposal: (...a: unknown[]) => mocks.investigationProposal(...a),
+    historySources: async () => ({ label: "", mode: "recorded", sources: [] }),
   },
 }));
 
