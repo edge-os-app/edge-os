@@ -267,7 +267,10 @@ def test_controlled_quote_is_an_approved_minimum_and_cannot_change_raw_input(tmp
     runtime = ControlledRuntime(binding=binding, http=no_io, clock=transport._clock, synthetic_bindings=approvals)
     ports = build_provider_ports("controlled", no_io, role="worker", controlled={"agent-1":runtime})
     c = transport._context
-    request = QuoteRequest("ENTRY", c.sell.asset_id, 6, c.buy.asset_id, 18, "100000000", None, transport._clock())
+    identity = binding.identity()
+    request = QuoteRequest("ENTRY", c.sell.asset_id, 6, c.buy.asset_id, 18, "100000000", None, transport._clock(),
+                           owner_id=identity["owner_id"], agent_id=identity["agent_id"],
+                           consent_adoption_id=identity["consent_adoption_id"])
     result = ports.quotes.quote(request)
     assert result.output.raw == "49500000000000000000"
     assert result.basis == "APPROVED_MINIMUM"
@@ -317,3 +320,82 @@ def test_api_and_worker_recorded_holdings_keep_their_own_clocks(tmp_path):
     api.ports.clock, worker.ports.clock = lambda:first, lambda:second
     assert api.ports.holdings._clock() == first
     assert worker.ports.holdings._clock() == second
+
+
+def owner_runtimes(tmp_path, clock=None, **inputs):
+    """Two owners' synthetic runtimes on one route. `inputs` gives an owner a different approved input amount."""
+    from edge_os_api.core.provider_ports import ControlledRuntime
+    from edge_os_api.execution.operating_release import BoundRelease, OperatingRelease, release_sha256
+    from execution.test_privy_signer import original
+    from execution.test_saved_attempt_signing import bound_original
+    transport, _, _ = original(tmp_path, None)
+    prior, _ = bound_original(transport)
+    runtimes = {}
+    for owner in ("a", "b"):
+        release = prior.release
+        if owner in inputs:
+            content = prior.release.content()
+            content.pop("schema")
+            content["route"].update(approved_input_raw=inputs[owner], approved_allowance_raw=inputs[owner])
+            release = OperatingRelease(content)
+        identity = {**prior.identity(), "owner_id": f"owner-{owner}", "agent_id": f"agent-{owner}",
+                    "consent_adoption_id": f"consent-{owner}"}
+        binding = BoundRelease(release, identity, **prior.proofs())
+        runtimes[f"agent-{owner}"] = ControlledRuntime(binding=binding, http=no_io, quote_token=lambda: "token",
+            signer_access=lambda: {}, clock=clock or transport._clock,
+            synthetic_bindings={binding.sha256: release_sha256(release)})
+    return transport, runtimes
+
+
+def quote_for(transport, owner, raw="100000000", **identity):
+    from edge_os_api.core.provider_ports import QuoteRequest
+    c = transport._context
+    values = {"owner_id": f"owner-{owner}", "agent_id": f"agent-{owner}", "consent_adoption_id": f"consent-{owner}",
+              **identity}
+    return QuoteRequest("ENTRY", c.sell.asset_id, 6, c.buy.asset_id, 18, raw, None, transport._clock(), **values)
+
+
+def test_controlled_quote_selects_only_the_requesting_owners_runtime_on_a_shared_route(tmp_path):
+    from edge_os_api.core.provider_ports import build_provider_ports, ProviderUnavailable
+    transport, runtimes = owner_runtimes(tmp_path)
+    ports = build_provider_ports("controlled", no_io, role="worker", controlled=runtimes)
+    for owner in ("a", "b"):
+        result = ports.quotes.quote(quote_for(transport, owner))
+        assert result.source_ref == "approved-minimum:" + runtimes[f"agent-{owner}"].binding.sha256
+        assert result.basis == "APPROVED_MINIMUM"
+    refused = [quote_for(transport, "c"),  # an owner with no runtime
+               quote_for(transport, "a", agent_id="agent-b"),  # another owner's agent
+               quote_for(transport, "a", owner_id="owner-b"),
+               quote_for(transport, "a", consent_adoption_id="consent-b"),
+               quote_for(transport, "a", owner_id=None, agent_id=None, consent_adoption_id=None)]
+    for request in refused:
+        with pytest.raises(ProviderUnavailable, match="approved_minimum"):
+            ports.quotes.quote(request)
+
+
+def test_controlled_quote_with_another_owners_amount_never_reads_that_owners_binding(tmp_path):
+    from edge_os_api.core.provider_ports import build_provider_ports, ProviderUnavailable
+    transport, runtimes = owner_runtimes(tmp_path, clock=no_io, b="200000000")
+    ports = build_provider_ports("controlled", no_io, role="worker", controlled=runtimes)
+    # Owner a asks for owner b's approved amount: refused before any runtime is admitted or its clock is read.
+    with pytest.raises(ProviderUnavailable, match="approved_minimum"):
+        ports.quotes.quote(quote_for(transport, "a", raw="200000000"))
+    with pytest.raises(ProviderUnavailable, match="approved_minimum"):
+        ports.quotes.quote(quote_for(transport, "b", raw="100000000"))
+
+
+@pytest.mark.parametrize("first", ["api", "recurring", "worker"])
+def test_worker_ports_always_build_from_the_full_controlled_set(tmp_path, first):
+    from edge_os_api.core.provider_ports import build_provider_ports
+    _, runtimes = owner_runtimes(tmp_path)
+    reduced = build_provider_ports("controlled", no_io, role=first, controlled=runtimes)
+    worker = reduced.for_role("worker")
+    assert worker.role == "worker"
+    assert {key: (runtime.quote_token, runtime.signer_access) for key, runtime in worker.controlled.items()} == {
+        key: (runtime.quote_token, runtime.signer_access) for key, runtime in runtimes.items()}
+    for role in ("api", "recurring"):
+        assert all(runtime.signer_access is None and runtime.quote_token is None
+                   for runtime in worker.for_role(role).controlled.values())
+    settings = SimpleNamespace(execution_mode="controlled", fixture_effects_path=None, original_recordings_dir=None)
+    services = build_financial_services(no_io, settings, reduced, role="worker")
+    assert all(runtime.signer_access is not None for runtime in services.ports.controlled.values())

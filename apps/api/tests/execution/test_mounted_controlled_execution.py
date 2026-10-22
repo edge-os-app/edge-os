@@ -151,9 +151,9 @@ class CurrentSource:
         return MarketObservations(authored.inputs, provenance, forward)
 
 
-@pytest.fixture
-def mounted(original, owner_a, tmp_path, settings):
-    client, agent_id = original, f"controlled-fx-original-{uuid.uuid4().hex[:8]}"
+def controlled_agent(client, headers, tmp_path, clock):
+    """One owner's adopted agent and its own synthetic controlled runtime, with its own scripted HTTP boundary."""
+    agent_id = f"controlled-fx-original-{uuid.uuid4().hex[:8]}"
     class TestWallet:
         def create_wallet(self, request):
             self.evidence = WalletEvidence(wallet_id="test-wallet-" + uuid.uuid4().hex,
@@ -164,14 +164,11 @@ def mounted(original, owner_a, tmp_path, settings):
             assert wallet_id == self.evidence.wallet_id
             return self.evidence
     client.app.state.wallet_provider = TestWallet()
-    ff.confirmed_agent(client, owner_a, agent_id, network_id=143)
-    declaration = ff.funded(client, owner_a, agent_id)
+    ff.confirmed_agent(client, headers, agent_id, network_id=143)
+    declaration = ff.funded(client, headers, agent_id)
     factory = client.app.state.session_factory
-    original_clock = client.app.state.execution_worker.connected._clock
-    offset = [dt.timedelta()]
-    clock = lambda: original_clock() + offset[0]
     expiry = (decision_slot(clock()) + dt.timedelta(minutes=5)).isoformat()
-    seed = tmp_path / "seed"; seed.mkdir()
+    seed = tmp_path / f"seed-{agent_id}"; seed.mkdir()
     transport, data, _ = pure_original(seed, None)
     prior, _ = bound_original(transport)
     release = prior.release.content()
@@ -184,9 +181,9 @@ def mounted(original, owner_a, tmp_path, settings):
     terms.update(terms_version="connected-one-action/1", supported_actions=["ENTRY"], signer=release["signer_id"],
         policy={"policy_id":release["policy_id"], "status":"UNQUALIFIED", "content_sha256":release["policy_content_sha256"]},
         route={"adapter":"KURU_FLOW_FIXED_INPUT", "identity_state":"KNOWN", "identity":release["route"]["entrypoint_address"]})
-    review = client.post(f"/v1/agents/{agent_id}/consent/review", headers=owner_a, json={"terms":terms})
+    review = client.post(f"/v1/agents/{agent_id}/consent/review", headers=headers, json={"terms":terms})
     assert review.status_code == 200, review.text
-    adoption = client.post(f"/v1/agents/{agent_id}/consent/adopt", headers=owner_a,
+    adoption = client.post(f"/v1/agents/{agent_id}/consent/adopt", headers=headers,
         json={"review_id":review.json()["review_id"], "expected_review_hash":review.json()["review_hash"]})
     assert adoption.status_code == 200, adoption.text
     with factory() as session:
@@ -214,16 +211,31 @@ def mounted(original, owner_a, tmp_path, settings):
         return {"app_id":"fake_app", "app_secret":"fake_worker_secret", "authorize":lambda payload:"ZmFrZQ=="}
     runtime = ControlledRuntime(binding=binding, http=http, clock=clock, quote_token=lambda:"fake_quote_token",
         signer_access=credentials, market_source=source, synthetic_bindings={binding.sha256:release_sha256(binding.release)})
+    return SimpleNamespace(client=client, headers=headers, agent=agent_id, http=http, source=source,
+        acquired=acquired, factory=factory, runtime=runtime, terms=terms)
+
+
+def compose_controlled(client, settings, clock, runtimes):
     configured = settings.model_copy(update={"execution_mode":"controlled"})
     def compose(role):
-        ports = build_provider_ports("controlled", factory, role=role, controlled={agent_id:runtime})
-        services = build_financial_services(factory, configured, ports, role=role)
+        ports = build_provider_ports("controlled", client.app.state.session_factory, role=role, controlled=runtimes)
+        services = build_financial_services(client.app.state.session_factory, configured, ports, role=role)
         services.connected._clock, services.ports.clock = clock, clock
         return services
     client.app.state.financial = compose("api")
     client.app.state.execution_worker = compose("worker")
-    return SimpleNamespace(client=client, headers=owner_a, agent=agent_id, http=http, source=source,
-        acquired=acquired, compose=compose, factory=factory, runtime=runtime, offset=offset, terms=terms)
+    return compose
+
+
+@pytest.fixture
+def mounted(original, owner_a, tmp_path, settings):
+    original_clock = original.app.state.execution_worker.connected._clock
+    offset = [dt.timedelta()]
+    clock = lambda: original_clock() + offset[0]
+    case = controlled_agent(original, owner_a, tmp_path, clock)
+    case.offset = offset
+    case.compose = compose_controlled(original, settings, clock, {case.agent:case.runtime})
+    return case
 
 
 def submit(case):
@@ -417,3 +429,21 @@ def test_mounted_failed_ownership_commit_is_durable_and_has_no_execution_effect(
     assert len(failures) == 1
     assert case.acquired == []
     assert case.http.count("quote") == case.http.count("eth_signTransaction") == case.http.count("eth_sendRawTransaction") == 0
+
+
+def test_two_owners_on_one_route_quote_sign_and_submit_only_through_their_own_runtime(
+        original, owner_a, owner_b, tmp_path, settings):
+    clock = original.app.state.execution_worker.connected._clock
+    first = controlled_agent(original, owner_a, tmp_path, clock)
+    second = controlled_agent(original, owner_b, tmp_path, clock)
+    assert first.runtime.binding.release.content()["route"] == second.runtime.binding.release.content()["route"]
+    compose_controlled(original, settings, clock, {first.agent:first.runtime, second.agent:second.runtime})
+    for case, other in ((first, second), (second, first)):
+        untouched = (len(other.http.calls), list(other.acquired))
+        job = submit(case)
+        assert job["outcome"] == "SUBMITTED_UNKNOWN", job
+        saved = original_of(detail(case, job))
+        assert saved["binding_sha256"] == case.runtime.binding.sha256
+        assert case.acquired == [saved["signing_request_id"]]
+        assert case.http.count("eth_signTransaction") == case.http.count("eth_sendRawTransaction") == 1
+        assert (len(other.http.calls), other.acquired) == untouched
