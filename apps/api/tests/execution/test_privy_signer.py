@@ -1220,7 +1220,11 @@ class Listener:
 
 
 def live_timers() -> list[threading.Thread]:
-    return [thread for thread in threading.enumerate() if isinstance(thread, threading.Timer) and thread.is_alive()]
+    # Timer.cancel() only signals the thread; it exits asynchronously, so wait for that condition before asserting.
+    timers = [thread for thread in threading.enumerate() if isinstance(thread, threading.Timer) and thread.is_alive()]
+    for timer in timers:
+        timer.join(timeout=1.0)
+    return [timer for timer in timers if timer.is_alive()]
 
 
 def over_loopback(server: Any, authorize: Any = None, *, on_connect: Callable[[], None] | None = None,

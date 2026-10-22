@@ -4,7 +4,7 @@
   "docker_turn_runner.py": "03cde6e8f9e37c67b67239647b5129bd3ec01b0ecbbe9f24eb1b756e041da7bb",
   "guarded_docker_runner.py": "4b4a7e0f9642cb2bf39513e612e749228dff5d24c11276693d12fe7ce31fae71",
   "guarded_turn_runner.py": "281d3c2e57f87247abfeac792c54da1df0478dcc6eea3ca8fa107e910e270a73",
-  "hermes_turn_job.py": "3186380733669cb5f7c2d48198ec67117415aa41b90ef1f475033373ee03870d",
+  "hermes_turn_job.py": "38be97227e2eca7997ffa813740d97f2f672009ef35d1286871aff03543e4a0e",
   "provider_guard.py": "d8a1c89cad28c029d4d4dd95c3e34e2d8721f1c0fe641d81eb15cbe61f1a1327",
   "spend_ledger.py": "aaaae6c01c7f62fd0266660fb52fce107849d12bdd237ad5c085fae437505a08"
  },
