@@ -42,6 +42,9 @@ class Preflight:
     nonce: int
     base_fee: int
     priority_fee: int
+    active_gas_total: int
+    required_native_wei: int
+    remaining_native_wei: int
 
 
 def _address_word(value: str) -> str:
@@ -100,12 +103,16 @@ def read_preflight(rpc: OperatorRpc, trade: OperatorTrade) -> Preflight:
             raise OperatorError("CODE_HASH_MISMATCH", f"{role}={observed}")
     if allowance != 0:
         raise OperatorError("ALLOWANCE_NOT_ZERO", str(allowance))
+    if trade.start == "WMON" and wmon_balance < trade.input_raw:
+        raise OperatorError("INSUFFICIENT_WMON_BALANCE", f"{wmon_balance} < {trade.input_raw}")
     nonce = int(rpc.call("eth_getTransactionCount", [trade.wallet_address, "pending"]), 16)
     block = rpc.call("eth_getBlockByNumber", ["latest", False])
     base_fee = int(block["baseFeePerGas"], 16)
     priority_fee = int(rpc.call("eth_maxPriorityFeePerGas", []), 16)
     max_fee = max_fee_per_gas(base_fee, priority_fee)
-    required = trade.input_raw + trade.gas_limits.total() * max_fee
+    active_gas = trade.active_gas_total()
+    value_wei = trade.input_raw if trade.start == "MON" else 0
+    required = value_wei + active_gas * max_fee
     if native < required:
         raise OperatorError("INSUFFICIENT_NATIVE_BALANCE", f"{native} < {required}")
     return Preflight(
@@ -125,4 +132,7 @@ def read_preflight(rpc: OperatorRpc, trade: OperatorTrade) -> Preflight:
         nonce=nonce,
         base_fee=base_fee,
         priority_fee=priority_fee,
+        active_gas_total=active_gas,
+        required_native_wei=required,
+        remaining_native_wei=native - required,
     )

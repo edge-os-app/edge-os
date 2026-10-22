@@ -114,6 +114,9 @@ class FakeRpc:
     priority_fee: int = 10**9
     code: dict[str, str] = field(default_factory=lambda: dict(FAKE_CODE))
     simulation_output: int = 3_737_556_748_405_128_021_448
+    gas_estimates: dict[str, int] = field(
+        default_factory=lambda: {"wrap": 45_000, "approve": 46_000, "swap": 300_000, "revoke": 46_000}
+    )
     receipt_status: str = "0x1"
     receipt_after: int = 0
     receipt_timeout: bool = False
@@ -163,6 +166,8 @@ class FakeRpc:
             return self.receipts.get(tx_hash, self._receipt(tx_hash))
         if method == "eth_call":
             return self._eth_call(params)
+        if method == "eth_estimateGas":
+            return self._eth_estimate_gas(params)
         raise RpcError("FAKE_METHOD_UNKNOWN")
 
     def _role(self, address: str) -> str:
@@ -204,6 +209,28 @@ class FakeRpc:
         if data.startswith("0xd0e30db0") or data.startswith("0x095ea7b3"):
             return "0x" + "0" * 63 + "1"
         return "0x"
+
+    def _eth_estimate_gas(self, params: Any) -> Any:
+        call = params[0]
+        step = self.step_of(call)
+        if step == "swap":
+            overrides = params[2] if len(params) >= 3 else {}
+            diff = overrides.get(WMON, {}).get("stateDiff", {}) if isinstance(overrides, dict) else {}
+            if balance_slot() not in diff or allowance_slot() not in diff:
+                raise RpcError("FAKE_SLOT_MISMATCH")
+        return hex(self.gas_estimates[step])
+
+    @staticmethod
+    def step_of(call: dict[str, Any]) -> str:
+        data = call["data"]
+        if call["to"].lower() == ENTRYPOINT.lower():
+            return "swap"
+        if data == "0xd0e30db0":
+            return "wrap"
+        if data.startswith("0x095ea7b3"):
+            amount = int(data[10 + 64:10 + 128], 16) if len(data) >= 10 + 128 else 0
+            return "revoke" if amount == 0 else "approve"
+        raise RpcError("FAKE_CALL_UNKNOWN")
 
     def send_raw(self, signed: str) -> str:
         index = len(self.sent)

@@ -1,8 +1,9 @@
 """Plan math for one operator trade: expected output, local minimum and the USD ceiling.
 
 The output formula and pinned fee are the merged direct-route formula. The worst-case cost counts
-the MON value plus gas for all four transactions at the same ``max_fee_per_gas`` that each signed
-transaction will carry.
+the input value plus gas for the steps that will run, at the same ``max_fee_per_gas`` that each
+signed transaction will carry. A WMON start runs three steps and still counts the input value,
+because that value leaves the wallet as WMON.
 """
 
 from __future__ import annotations
@@ -80,7 +81,8 @@ def plan_trade(trade: OperatorTrade, *, base_fee: int, priority_fee: int, reserv
                                else (reserve_moe, reserve_wmon))
     expected = expected_output(trade.input_raw, reserve_in, reserve_out, trade.program_fee_ppm)
     minimum = minimum_output(expected, trade.slippage_bps)
-    gas_wei = trade.gas_limits.total() * fee
+    active_gas = trade.active_gas_total()
+    gas_wei = active_gas * fee
     worst_wei = trade.input_raw + gas_wei
     usd = Decimal(worst_wei) * trade.mon_usd_price / Decimal(WEI_PER_MON)
     if usd > trade.usd_ceiling:
@@ -96,7 +98,7 @@ def plan_trade(trade: OperatorTrade, *, base_fee: int, priority_fee: int, reserv
         priority_fee=priority_fee,
         max_fee_per_gas=fee,
         max_priority_fee_per_gas=priority_fee,
-        total_gas=trade.gas_limits.total(),
+        total_gas=active_gas,
         gas_wei=gas_wei,
         worst_case_wei=worst_wei,
         worst_case_usd=usd,

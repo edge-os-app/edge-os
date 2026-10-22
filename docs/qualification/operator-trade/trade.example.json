@@ -18,7 +18,7 @@
   "gas_limits": {
     "wrap": 60000,
     "approve": 60000,
-    "swap": 400000,
+    "swap": 700000,
     "revoke": 60000
   },
   "code_sha256": {

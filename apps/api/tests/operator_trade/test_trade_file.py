@@ -29,6 +29,11 @@ def test_loads_and_hashes_the_frozen_bytes(tmp_path: Path) -> None:
     assert len(trade.file_sha256) == 64
 
 
+def test_the_default_start_is_mon_and_wmon_is_accepted(tmp_path: Path) -> None:
+    assert load_trade_file(_write(tmp_path / "trade.json", trade_dict())).start == "MON"
+    assert load_trade_file(_write(tmp_path / "trade.json", trade_dict(start="WMON"))).start == "WMON"
+
+
 def test_unknown_field_is_refused(tmp_path: Path) -> None:
     value = trade_dict()
     value["unreviewed_extra"] = 1
@@ -66,6 +71,9 @@ def test_unknown_field_is_refused(tmp_path: Path) -> None:
         {"code_sha256": {"entrypoint": "zz", "wmon": "0" * 64, "pool": "0" * 64}},
         {"receipt_timeout_seconds": 0},
         {"receipt_poll_seconds": 0},
+        {"start": "WBTC"},
+        {"start": 1},
+        {"start": None},
     ],
 )
 def test_invalid_field_is_refused(tmp_path: Path, overrides: dict[str, object]) -> None:
