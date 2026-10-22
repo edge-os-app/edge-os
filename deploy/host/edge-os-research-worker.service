@@ -1,0 +1,38 @@
+[Unit]
+Description=Edge OS research worker (host-side guarded Hermes runner)
+Documentation=file:/opt/edge-os/deploy/coolify/RUNBOOK.md
+Requires=edge-os-socket-proxy.service
+After=edge-os-socket-proxy.service
+# Fail closed until the builder approves the exact hosted deployment. The operator creates this marker only after
+# approval; the unit is installed and enabled but inert before then.
+ConditionPathExists=/etc/edge-os/research-worker.enabled
+
+[Service]
+Type=simple
+User=edge-os-research
+Group=edge-os-research
+WorkingDirectory=/opt/edge-os
+EnvironmentFile=/etc/edge-os/research-worker.env
+Environment=DOCKER_HOST=unix:///run/edge-os/research/docker.sock
+Environment=TMPDIR=/var/lib/edge-os/research/tmp
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/opt/edge-os/apps/api/src
+ExecStart=/opt/edge-os/apps/api/.venv/bin/python -m edge_os_api.research.investigation_jobs --interval 2
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/edge-os/research
+
+[Install]
+WantedBy=multi-user.target

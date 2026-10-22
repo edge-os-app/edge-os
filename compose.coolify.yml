@@ -1,0 +1,271 @@
+# Edge OS production deployment for the builder's Contabo VPS under Coolify.
+#
+# This file is a Docker Compose build pack definition. It builds nothing: both application images are built by
+# .github/workflows/images.yml on linux/amd64, pushed to GHCR and referenced here by digest variables. Coolify adds
+# its Traefik labels and the public domains; only `api` and `web` are routable. PostgreSQL and both workers stay on
+# the private network and publish no host port.
+#
+# Fail closed: every secret and every image is a required variable (`:?`). A missing value stops `docker compose
+# config`/`up`; there is no local, fixture or in-memory fallback. Values live in Coolify, never in this file.
+#
+# One explicit migration step runs as the `migrate` service. The API and both workers wait for it to complete; no
+# process migrates on start. The API refuses a schema that is not its migration head.
+
+name: edge-os
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+
+# The API, migration, execution worker and recurring producer share one image and one typed settings contract. The
+# worker processes call `load_settings()`, so they need the same required names as the API. None of them receives the
+# raw PostgreSQL password; each receives only the composed database URL.
+x-api-environment: &api-environment
+  EDGE_OS_ENV: production
+  EDGE_OS_DATABASE_URL: ${EDGE_OS_DATABASE_URL:?set EDGE_OS_DATABASE_URL to the composed sslmode=require URL}
+  EDGE_OS_PRIVY_APP_ID: ${EDGE_OS_PRIVY_APP_ID:?set EDGE_OS_PRIVY_APP_ID}
+  EDGE_OS_PRIVY_VERIFICATION_KEY: ${EDGE_OS_PRIVY_VERIFICATION_KEY:?set EDGE_OS_PRIVY_VERIFICATION_KEY}
+  EDGE_OS_CORS_ALLOWED_ORIGINS: ${EDGE_OS_CORS_ALLOWED_ORIGINS:?set EDGE_OS_CORS_ALLOWED_ORIGINS}
+  EDGE_OS_BUILD_SHA: ${EDGE_OS_BUILD_SHA:?set EDGE_OS_BUILD_SHA to the deployed source commit}
+  EDGE_OS_INTERPRETER: fixture
+  EDGE_OS_WALLET_PROVIDER: unavailable
+  EDGE_OS_EXECUTION_MODE: unavailable
+  EDGE_OS_RESEARCH_HISTORY_MODE: unavailable
+  EDGE_OS_RESEARCH_SOURCE_CLIENTS: recorded
+  EDGE_OS_NANSEN_RESEARCH_MODE: unavailable
+  EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS: ${EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS:-40}
+  EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS: ${EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS:-3600}
+  EDGE_OS_RESEARCH_BUDGET_NANSEN_CREDITS: ${EDGE_OS_RESEARCH_BUDGET_NANSEN_CREDITS:-50}
+  EDGE_OS_USAGE_GLOBAL_PROVIDER_REQUESTS: ${EDGE_OS_USAGE_GLOBAL_PROVIDER_REQUESTS:-100000}
+  EDGE_OS_USAGE_GLOBAL_COMPUTE_SECONDS: ${EDGE_OS_USAGE_GLOBAL_COMPUTE_SECONDS:-10000000}
+  EDGE_OS_USAGE_GLOBAL_NANSEN_CREDITS: ${EDGE_OS_USAGE_GLOBAL_NANSEN_CREDITS:-10000}
+  EDGE_OS_WRITE_RATE_PER_MINUTE: ${EDGE_OS_WRITE_RATE_PER_MINUTE:-600}
+  EDGE_OS_RESEARCH_MAX_ACTIVE_JOBS: ${EDGE_OS_RESEARCH_MAX_ACTIVE_JOBS:-10}
+  EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS: ${EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+  # Coolify can place all environment variables in one shared runtime file. Mask the database password on every
+  # service that must not hold it.
+  POSTGRES_USER: __EDGE_OS_UNSET__
+  POSTGRES_PASSWORD: __EDGE_OS_UNSET__
+  POSTGRES_DB: __EDGE_OS_UNSET__
+
+services:
+  postgres:
+    image: ${EDGE_OS_POSTGRES_IMAGE:?set EDGE_OS_POSTGRES_IMAGE to a digest-pinned postgres:18.6 image}
+    <<: *hardening
+    # The official entrypoint drops from root to the image's postgres user. With `cap_drop: ALL` it cannot chown the
+    # data and socket folders, so it starts directly as that user. The value must match the image's postgres uid/gid.
+    user: "999:999"
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/etc/edge-os/postgres-tls/server.crt
+      - -c
+      - ssl_key_file=/etc/edge-os/postgres-tls/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+    environment:
+      POSTGRES_USER: edge_os
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD for the edge_os role}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      EDGE_OS_DATABASE_URL: __EDGE_OS_UNSET__
+      EDGE_OS_PRIVY_APP_ID: __EDGE_OS_UNSET__
+      EDGE_OS_PRIVY_VERIFICATION_KEY: __EDGE_OS_UNSET__
+      EDGE_OS_CORS_ALLOWED_ORIGINS: __EDGE_OS_UNSET__
+      EDGE_OS_BUILD_SHA: __EDGE_OS_UNSET__
+    volumes:
+      - database:/var/lib/postgresql
+      # The server certificate and key are created on the host and owned by the postgres uid/gid with the key at
+      # 0600. The mount is read-only; the key never enters the image or this file.
+      - ${EDGE_OS_POSTGRES_TLS_DIR:?set EDGE_OS_POSTGRES_TLS_DIR to the host TLS folder}:/etc/edge-os/postgres-tls:ro
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql:uid=999,gid=999,mode=0755
+    shm_size: "256mb"
+    mem_limit: 1536m
+    mem_reservation: 512m
+    pids_limit: 256
+    networks: [private]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+          && [ "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc 'show ssl')" = "on" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # The one explicit migration step. Coolify starts it before the API and both workers; it exits 0 and does not
+  # restart. `alembic check` fails the deploy if the migrated schema differs from the code.
+  migrate:
+    image: ${EDGE_OS_API_IMAGE:?set EDGE_OS_API_IMAGE to the API digest}
+    <<: *hardening
+    command: ["sh", "-c", "python -m alembic upgrade head && python -m alembic check"]
+    environment:
+      EDGE_OS_DATABASE_URL: ${EDGE_OS_DATABASE_URL:?set EDGE_OS_DATABASE_URL}
+      POSTGRES_USER: __EDGE_OS_UNSET__
+      POSTGRES_PASSWORD: __EDGE_OS_UNSET__
+      POSTGRES_DB: __EDGE_OS_UNSET__
+      EDGE_OS_ENV: __EDGE_OS_UNSET__
+      EDGE_OS_PRIVY_APP_ID: __EDGE_OS_UNSET__
+      EDGE_OS_PRIVY_VERIFICATION_KEY: __EDGE_OS_UNSET__
+      EDGE_OS_CORS_ALLOWED_ORIGINS: __EDGE_OS_UNSET__
+      EDGE_OS_BUILD_SHA: __EDGE_OS_UNSET__
+    tmpfs: ["/tmp"]
+    mem_limit: 768m
+    pids_limit: 128
+    networks: [private]
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    image: ${EDGE_OS_API_IMAGE:?set EDGE_OS_API_IMAGE to the API digest}
+    <<: *hardening
+    environment: *api-environment
+    tmpfs: ["/tmp"]
+    mem_limit: 1280m
+    mem_reservation: 256m
+    pids_limit: 256
+    expose: ["8000"]
+    networks: [private, coolify]
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3).status == 200 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  web:
+    image: ${EDGE_OS_WEB_IMAGE:?set EDGE_OS_WEB_IMAGE to the web digest}
+    <<: *hardening
+    # The web runtime receives no Edge OS server configuration. NEXT_PUBLIC_* values are inlined at image build time
+    # by the GitHub Actions workflow, not read here.
+    environment:
+      POSTGRES_USER: __EDGE_OS_UNSET__
+      POSTGRES_PASSWORD: __EDGE_OS_UNSET__
+      POSTGRES_DB: __EDGE_OS_UNSET__
+      EDGE_OS_ENV: __EDGE_OS_UNSET__
+      EDGE_OS_DATABASE_URL: __EDGE_OS_UNSET__
+      EDGE_OS_PRIVY_APP_ID: __EDGE_OS_UNSET__
+      EDGE_OS_PRIVY_VERIFICATION_KEY: __EDGE_OS_UNSET__
+      EDGE_OS_CORS_ALLOWED_ORIGINS: __EDGE_OS_UNSET__
+      EDGE_OS_BUILD_SHA: __EDGE_OS_UNSET__
+    tmpfs:
+      - /tmp
+      - /app/apps/web/.next/cache:uid=1000,gid=1000
+    mem_limit: 768m
+    mem_reservation: 128m
+    pids_limit: 256
+    expose: ["3000"]
+    networks: [private, coolify]
+    restart: unless-stopped
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # The bounded execution loop. `--once` in a shell loop keeps the worker's own schema check on every pass and writes
+  # a heartbeat that the health check reads. A schema drift exits the loop with code 3 before any effect; the restart
+  # policy then retries into the same fail-closed exit and the stale heartbeat marks the service unhealthy.
+  execution-worker:
+    image: ${EDGE_OS_API_IMAGE:?set EDGE_OS_API_IMAGE to the API digest}
+    <<: *hardening
+    command:
+      - sh
+      - -c
+      - >-
+        while true; do python -m edge_os_api.execution.worker --once || exit $$?;
+        touch /tmp/edge-os-worker-heartbeat; sleep 2; done
+    environment: *api-environment
+    tmpfs: ["/tmp"]
+    mem_limit: 768m
+    mem_reservation: 128m
+    pids_limit: 256
+    networks: [private]
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os,sys,time; p='/tmp/edge-os-worker-heartbeat';
+          sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 60 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # The recurring-evaluation producer. It is a separate process from the saved-job worker and has its own heartbeat.
+  recurring-producer:
+    image: ${EDGE_OS_API_IMAGE:?set EDGE_OS_API_IMAGE to the API digest}
+    <<: *hardening
+    command:
+      - sh
+      - -c
+      - >-
+        while true; do python -m edge_os_api.execution.recurring_producer --once || exit $$?;
+        touch /tmp/edge-os-recurring-heartbeat; sleep 30; done
+    environment: *api-environment
+    tmpfs: ["/tmp"]
+    mem_limit: 512m
+    mem_reservation: 128m
+    pids_limit: 256
+    networks: [private]
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os,sys,time; p='/tmp/edge-os-recurring-heartbeat';
+          sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 180 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+networks:
+  # No route out of the host for PostgreSQL, the migration step or the workers. The API verification key is checked
+  # locally, so the API does not need provider egress; provider modes are unavailable in this candidate.
+  private:
+    internal: true
+  # Coolify's Traefik network. Only the API and web join it; the domain and TLS certificate are assigned in Coolify.
+  coolify:
+    external: true
+    name: ${COOLIFY_NETWORK:-coolify}
+
+volumes:
+  database:

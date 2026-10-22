@@ -19,9 +19,11 @@ RUN uv sync --frozen --no-dev --no-install-project --python /usr/local/bin/pytho
 
 FROM ${PYTHON_IMAGE} AS runtime
 ARG EDGE_OS_SOURCE_COMMIT=unknown
+# LOCAL is the rehearsal default; the release workflow passes PRODUCTION. The value is an image label only.
+ARG EDGE_OS_PROFILE=LOCAL
 LABEL org.opencontainers.image.title="edge-os-api" \
       org.opencontainers.image.revision="${EDGE_OS_SOURCE_COMMIT}" \
-      edge-os.profile="LOCAL"
+      edge-os.profile="${EDGE_OS_PROFILE}"
 ENV PATH=/opt/edge-os/venv/bin:${PATH} \
     PYTHONPATH=/app/apps/api/src \
     PYTHONDONTWRITEBYTECODE=1 \
