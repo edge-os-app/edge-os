@@ -187,7 +187,8 @@ services:
       start_period: 30s
 
   # The bounded execution loop. `--once` in a shell loop keeps the worker's own schema check on every pass and writes
-  # a heartbeat that the health check reads. A schema drift exits the process with code 3 and stops the container.
+  # a heartbeat that the health check reads. A schema drift exits the loop with code 3 before any effect; the restart
+  # policy then retries into the same fail-closed exit and the stale heartbeat marks the service unhealthy.
   execution-worker:
     image: ${EDGE_OS_API_IMAGE:?set EDGE_OS_API_IMAGE to the API digest}
     <<: *hardening

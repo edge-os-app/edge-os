@@ -44,6 +44,22 @@ def compose_model(path: str) -> dict[str, Any]:
     return _compose_json(Path(path))
 
 
+def validate_compose(path: Path, values: dict[str, str]) -> None:
+    """A full Compose validation with placeholder values. `--quiet` prints no resolved value."""
+    with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as empty:
+        empty_path = empty.name
+    try:
+        completed = subprocess.run(
+            ["docker", "compose", "--project-directory", str(REPO), "--env-file", empty_path,
+             "-f", str(path), "config", "--quiet"],
+            capture_output=True, text=True, timeout=60, cwd=REPO,
+            env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), **values},
+        )
+    finally:
+        Path(empty_path).unlink(missing_ok=True)
+    assert completed.returncode == 0, f"docker compose rejected {path.name}: {completed.stderr.strip()}"
+
+
 def environment_names(service: dict[str, Any]) -> set[str]:
     environment = service.get("environment") or {}
     if isinstance(environment, list):

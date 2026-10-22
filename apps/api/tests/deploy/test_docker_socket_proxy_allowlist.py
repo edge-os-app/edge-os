@@ -43,6 +43,7 @@ def test_the_proxy_runs_without_a_network_and_with_the_socket_read_only(proxy):
         socket = [mount for mount in support.mounts(service) if mount["target"] == "/var/run/docker.sock"]
         assert len(socket) == 1
         assert socket[0]["read_only"] is True
+        assert service["group_add"] == ["${EDGE_OS_DOCKER_GID:?set EDGE_OS_DOCKER_GID to the group of /var/run/docker.sock}"]
 
 
 def test_each_proxy_writes_an_owner_only_runtime_socket(proxy):
@@ -176,6 +177,9 @@ def test_the_relay_proxy_refuses_exec_into_a_foreign_container(proxy, path):
     ("POST", "/v1.47/containers/relay-run-01/attach"),
     ("POST", "/v1.47/swarm/init"),
     ("POST", "/v1.47/services/create"),
+    ("DELETE", "/v1.47/containers/postgres"),
+    ("DELETE", "/v1.47/networks/abc"),
+    ("DELETE", "/v1.47/volumes/data"),
 ])
 def test_the_relay_proxy_denies_every_extra_call(proxy, method, path):
     assert not _allowed(_rules(proxy, RELAY), method, path)

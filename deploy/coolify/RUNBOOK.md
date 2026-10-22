@@ -163,19 +163,20 @@ are the only new processes that read `/var/run/docker.sock`. No Coolify service 
 
 ### 6.1 Users, groups and folders
 
-Create one service group and one proxy user per role. The service user must **not** be in the `docker` group; only the
-proxy user is.
+Create one service group and one proxy user per role. The service user must **not** be in the `docker` group.
+Neither the service user nor the proxy user needs host Docker group membership: the proxy container receives the
+socket's group with Compose `group_add`, because a numeric container `user:` does not inherit host groups.
 
 ```sh
 groupadd --system edge-os-research
 useradd --system --no-create-home --shell /usr/sbin/nologin --gid edge-os-research edge-os-research
 useradd --system --no-create-home --shell /usr/sbin/nologin --gid edge-os-research edge-os-proxy-research
-usermod -aG docker edge-os-proxy-research
 
 groupadd --system edge-os-relay
 useradd --system --no-create-home --shell /usr/sbin/nologin --gid edge-os-relay edge-os-relay
 useradd --system --no-create-home --shell /usr/sbin/nologin --gid edge-os-relay edge-os-proxy-relay
-usermod -aG docker edge-os-proxy-relay
+
+stat -c '%g' /var/run/docker.sock   # set EDGE_OS_DOCKER_GID to this number
 
 install -d -m 0750 -o edge-os-proxy-research -g edge-os-research /run/edge-os/research
 install -d -m 0750 -o edge-os-research -g edge-os-research /var/lib/edge-os/research /var/lib/edge-os/research/tmp
@@ -183,8 +184,8 @@ install -d -m 0750 -o edge-os-proxy-relay -g edge-os-relay /run/edge-os/relay
 install -d -m 0750 -o edge-os-relay -g edge-os-relay /var/lib/edge-os/relay /etc/edge-os/relay
 ```
 
-The proxy writes its socket at `/run/edge-os/<role>/docker.sock` with mode `0660`. The socket group is the role group,
-so the service can use it and cannot read the real Docker socket.
+The proxy writes its socket at `/run/edge-os/<role>/docker.sock` with mode `0660`. The socket file belongs to the
+proxy uid and the role group, so the service can use it and cannot read the real Docker socket.
 
 ### 6.2 Code and Python environment
 
@@ -206,6 +207,7 @@ EDGE_OS_PROXY_RESEARCH_UID=<numeric uid of edge-os-proxy-research>
 EDGE_OS_RESEARCH_GID=<numeric gid of edge-os-research>
 EDGE_OS_PROXY_RELAY_UID=<numeric uid of edge-os-proxy-relay>
 EDGE_OS_RELAY_GID=<numeric gid of edge-os-relay>
+EDGE_OS_DOCKER_GID=<numeric group of /var/run/docker.sock>
 ```
 
 `/etc/edge-os/research-worker.env` (mode `0600`, owner `root:edge-os-research`) holds the same `EDGE_OS_*` names as the
@@ -226,12 +228,14 @@ path. The provider key is a host-held file at `/etc/edge-os/relay/provider-key`,
 | `guarded_docker_runner.py` | `docker inspect <name>` | `GET /containers/{id}/json` |
 | `guarded_docker_runner.py` | `docker kill <name>` | `POST /containers/{id}/kill` |
 | `guarded_docker_runner.py` | `docker ps -a --filter ...` | `GET /containers/json` |
+| `guarded_docker_runner.py` | Docker CLI basics | `GET /_ping`, `HEAD /_ping`, `GET /version`, `GET /info` (read-only negotiation) |
+| `guarded_docker_runner.py` | observability only | `GET /containers/{id}/logs` (the runner captures the job's stdout by pipe; the packet names logs) |
 | `relay_supervisor.py` | `docker run -d ...` | `POST /containers/create`, `POST /containers/{id}/start` |
 | `relay_supervisor.py` | `docker inspect`, `docker logs` | `GET /containers/{id}/json`, `GET /containers/{id}/logs` |
-| `relay_supervisor.py` | `docker kill`, `docker rm -f` | `POST /containers/{id}/kill`, `DELETE /containers/{id}` |
+| `relay_supervisor.py` | `docker kill`, `docker rm -f` | `POST /containers/{id}/kill`, `DELETE /containers/{id}` (only a `relay-*` name or a full Docker id) |
 | `relay_supervisor.py` | `docker ps`, `docker exec` | `GET /containers/json`, `POST /containers/relay-*/exec`, `POST /exec/{id}/start`, `GET /exec/{id}/json` |
-| `relay_supervisor.py` | `docker network create/rm/ls` | `POST /networks/create`, `DELETE /networks/{id}`, `GET /networks` |
-| `relay_supervisor.py` | `docker volume create/rm/ls` | `POST /volumes/create`, `DELETE /volumes/{name}`, `GET /volumes` |
+| `relay_supervisor.py` | `docker network create/rm/ls` | `POST /networks/create`, `DELETE /networks/{id}`, `GET /networks` (only a `relay-egress-*` name or a full Docker id) |
+| `relay_supervisor.py` | `docker volume create/rm/ls` | `POST /volumes/create`, `DELETE /volumes/{name}`, `GET /volumes` (only a `relay-egress-*` name) |
 | `relay_operator.py` | `docker inspect --type ...`, `docker image inspect` | `GET /containers/{id}/json`, `GET /networks/{id}`, `GET /volumes/{name}`, `GET /images/{name}/json` |
 
 `docker_turn_runner.py` is qualification and test support. Its `PinnedHermesImage` calls `docker build`, `docker image
@@ -257,9 +261,11 @@ The proxy image is pinned by digest through `EDGE_OS_SOCKET_PROXY_IMAGE`. The cl
 listener is exposed. `network_mode: none` is intentional.
 
 Residual limits: a bind-mount filter is a request filter, not a sandbox. A client that can create containers can still
-choose a privileged container unless the daemon or an external policy stops it. The proxies and the allow-lists reduce
-the API surface; they do not make the research worker or the relay untrusted-safe. Keep the service users out of the
-`docker` group and keep the socket proxy off every public network.
+choose a privileged container unless the daemon or an external policy stops it. The proxies deny `POST /images/create`,
+but `POST /containers/create` can make the daemon pull a missing image internally; pre-pull every pinned image and
+treat a missing image as a failed deploy. The proxies and the allow-lists reduce the API surface; they do not make the
+research worker or the relay untrusted-safe. Keep the service users out of the `docker` group and keep the socket proxy
+off every public network.
 
 ### 6.5 Install the units
 

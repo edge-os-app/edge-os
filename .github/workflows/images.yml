@@ -1,6 +1,7 @@
 # Build the two immutable Edge OS images for the Coolify deployment, on manual dispatch only.
 #
-# The worker does not run this workflow. It prepares the file and verifies the Dockerfiles with a local dry build.
+# The worker does not run this workflow. It prepares and reviews the file; the deployment tests check the Dockerfile
+# build arguments and the profile label without running a build.
 # A run needs two repository variables (they are public values, never secrets):
 #   NEXT_PUBLIC_API_BASE_URL  e.g. https://api.edgeos.fun
 #   NEXT_PUBLIC_PRIVY_APP_ID  the Privy application id
