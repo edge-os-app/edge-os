@@ -150,7 +150,9 @@ closes `INCOMPLETE` with a reason, and later replies do not backfill it.
 
 `B_PRE` is the last header `< T0`; `B_START` the first `>= T0`; `B_END` the last `< WE`; `B_POST` the first `>= WE`.
 They must be adjacent. The final scan is `[B_PRE, B_POST+1)`. Every Swap log in the scan counts, including boundary-block
-logs outside the window. More than 61 adds `SCAN_LOG_COUNT_EXCEEDS_61` as weaker evidence.
+logs outside the window. More than 61 adds `SCAN_LOG_COUNT_EXCEEDS_61` as weaker evidence for 1200 s. For the 7200 s
+shape the bound is 366 (the accepted 61 scaled by six windows, about 4.0x the recorded 36-46 swaps per hour), and the
+label names that limit: `SCAN_LOG_COUNT_EXCEEDS_366`.
 
 ## Bytes, journal and private files
 

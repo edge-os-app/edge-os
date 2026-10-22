@@ -69,6 +69,9 @@ RECEIPT_KEYS = {"call_id", "transport_binding_sha256", "request_sha256", "outcom
                 "body_bytes", "received_at_utc_us", "elapsed_us"}
 BUCKET_KEYS = {"index", "start_utc", "end_utc", "status", "reply_id", "received_at_utc", "received_at_utc_us",
                "record_count", "payload_sha256", "reply_body_sha256", "reason"}
+WINDOW_BUCKETS = {1200: 4, 7200: 24}
+P3_READS_PER_BUCKET = 2
+QUICKNODE_LIMIT = 17
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
@@ -103,6 +106,10 @@ def _time(value: Any) -> int:
         raise PayloadError("UTC_INVALID") from None
 
 
+def _bucket_count(h: Mapping[str, Any]) -> int:
+    return WINDOW_BUCKETS[_time(h["window"]["end_utc"]) - _time(h["window"]["start_utc"])]
+
+
 def _handoff_shape(h: Mapping[str, Any]) -> None:
     _require(isinstance(h, Mapping), "HANDOFF_NOT_OBJECT")
     _require(h.get("schema_version") == HANDOFF_SCHEMA, "forward_history_binding_not_admitted")
@@ -126,8 +133,10 @@ def _handoff_shape(h: Mapping[str, Any]) -> None:
              and {m["base"], m["quote"]} == {m["token0"], m["token1"]}, "MARKET_INVALID")
     _keys(h["window"], {"start_utc", "end_utc", "bucket_seconds"}, "WINDOW_KEYS")
     start, end = (_time(h["window"][field]) for field in ("start_utc", "end_utc"))
-    _require(start % 300 == 0 and end - start == 1200 and type(h["window"]["bucket_seconds"]) is int
-             and h["window"]["bucket_seconds"] == 300, "WINDOW_INVALID")
+    _require(start % 300 == 0 and end - start in WINDOW_BUCKETS
+             and type(h["window"]["bucket_seconds"]) is int and h["window"]["bucket_seconds"] == 300,
+             "WINDOW_INVALID")
+    bucket_count = WINDOW_BUCKETS[end - start]
     _keys(h["boundaries"], {"B_ANCHOR", "B_PRE", "B_START", "B_END", "B_POST"}, "BOUNDARY_KEYS")
     _require(all(value is None or _integer(value) for value in h["boundaries"].values()), "BOUNDARIES_INVALID")
     if h["scan"] is not None:
@@ -154,13 +163,15 @@ def _handoff_shape(h: Mapping[str, Any]) -> None:
     _projection.hex_value(h["query"]["topic0"], 32, "topic0")
     _keys(h["query"]["field_selection"], {"block", "log"}, "QUERY_FIELDS")
     _keys(h["accounting"], {"admitted", "resolved", "unknown_liability", "reply_bytes", "ceilings"}, "ACCOUNTING_KEYS")
-    _require(h["accounting"]["ceilings"] == {"quicknode": 17, "hypersync": 9}, "ACCOUNTING_CEILINGS")
+    _require(h["accounting"]["ceilings"] == {"quicknode": QUICKNODE_LIMIT,
+                                              "hypersync": 1 + P3_READS_PER_BUCKET * bucket_count},
+             "ACCOUNTING_CEILINGS")
     for header in h["headers"]:
         _keys(header, {"number", "timestamp", "hash"}, "HEADER_KEYS")
         _require(_integer(header["number"]) and _integer(header["timestamp"]), "HEADER_INVALID")
         _projection.hex_value(header["hash"], 32, "hash")
     _require(len({head["number"] for head in h["headers"]}) == len(h["headers"]), "DUPLICATE_HEADER")
-    _require(len(h["buckets"]) == 4, "BUCKET_SET_INVALID")
+    _require(len(h["buckets"]) == bucket_count, "BUCKET_SET_INVALID")
     for index, bucket in enumerate(h["buckets"]):
         _keys(bucket, BUCKET_KEYS, "BUCKET_KEYS")
         _require(type(bucket["index"]) is int and bucket["index"] == index
@@ -178,6 +189,8 @@ def _handoff_shape(h: Mapping[str, Any]) -> None:
 def _details_shape(h: Mapping[str, Any]) -> None:
     """Recorder-specific nested schemas. Optional fields describe honest partial attempts, never default facts."""
     q = h["query"]
+    bucket_count = _bucket_count(h)
+    p3_limit = P3_READS_PER_BUCKET * bucket_count
     _require(q["topic0"] == "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
              and q["field_selection"] == {
                  "block": ["number", "timestamp", "hash"],
@@ -221,12 +234,12 @@ def _details_shape(h: Mapping[str, Any]) -> None:
             _require(all(_integer(phase[key]) for key in ("number", "timestamp", "observed_utc_us")), "PHASE_HEADER_INVALID")
             _projection.hex_value(phase["hash"], 32, "hash")
         if name == "P3":
-            _require(isinstance(phase["reads"], list) and len(phase["reads"]) <= 8, "PHASE_READ_INVALID")
+            _require(isinstance(phase["reads"], list) and len(phase["reads"]) <= p3_limit, "PHASE_READ_INVALID")
             for read in phase["reads"]:
                 _keys(read, {"bucket", "read", "outcome"}, "PHASE_READ_KEYS")
-                _require(_integer(read["bucket"], 3) and read["read"] in ("first", "second") and _text(read["outcome"]),
-                         "PHASE_READ_INVALID")
-    _require(len(h["p3_replies"]) <= 8, "P3_REPLY_LIMIT")
+                _require(_integer(read["bucket"], bucket_count - 1) and read["read"] in ("first", "second")
+                         and _text(read["outcome"]), "PHASE_READ_INVALID")
+    _require(len(h["p3_replies"]) <= p3_limit, "P3_REPLY_LIMIT")
     for reply in h["p3_replies"]:
         _keys(reply, {"archive_height", "call_id", "from_block", "log_count", "next_block", "received_utc_us"},
               "P3_REPLY_KEYS")
@@ -235,10 +248,12 @@ def _details_shape(h: Mapping[str, Any]) -> None:
     _require(all(_text(item) for item in h["weaker_evidence"]), "WEAKER_EVIDENCE_INVALID")
     a = h["accounting"]
     _keys(a["admitted"], {"quicknode", "hypersync"}, "ADMITTED_KEYS")
-    _require(all(_integer(a["admitted"][provider], limit) for provider, limit in (("quicknode", 17), ("hypersync", 9))),
-             "ADMITTED_INVALID")
-    _require(all(_integer(a[key], cap) for key, cap in (("resolved", 26), ("unknown_liability", 26),
-                                                      ("reply_bytes", 67108864))), "ACCOUNTING_INVALID")
+    _require(all(_integer(a["admitted"][provider], limit) for provider, limit in (
+        ("quicknode", QUICKNODE_LIMIT), ("hypersync", 1 + p3_limit))), "ADMITTED_INVALID")
+    total_limit = QUICKNODE_LIMIT + 1 + p3_limit
+    _require(all(_integer(a[key], cap) for key, cap in (("resolved", total_limit),
+                                                       ("unknown_liability", total_limit),
+                                                       ("reply_bytes", 67108864))), "ACCOUNTING_INVALID")
 
 
 def check_artifacts(handoff_bytes: bytes, provenance_bytes: bytes, expected: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -256,6 +271,8 @@ def check_artifacts(handoff_bytes: bytes, provenance_bytes: bytes, expected: Map
     p = strict_json(provenance_bytes, "PROVENANCE_NOT_STRICT_JSON")
     _handoff_shape(h)
     _details_shape(h)
+    bucket_count = _bucket_count(h)
+    p3_limit = P3_READS_PER_BUCKET * bucket_count
     _keys(p, PROVENANCE_KEYS, "PROVENANCE_KEYS")
     _require(p["schema_version"] == PROVENANCE_SCHEMA, "PROVENANCE_SCHEMA")
     h_sha, p_sha = (hashlib.sha256(body).hexdigest() for body in (handoff_bytes, provenance_bytes))
@@ -279,8 +296,8 @@ def check_artifacts(handoff_bytes: bytes, provenance_bytes: bytes, expected: Map
         _keys(transport, set(TRANSPORT), "TRANSPORT_KEYS")
         _require(transport["construction"] != "LOCAL_FIXTURE", "forward_history_provenance_fixture")
         _require(transport == TRANSPORT, "forward_history_provenance_injected")
-    _require(isinstance(r["receipts"], list) and len(r["receipts"]) <= 26 and len(h["calls"]) <= 26,
-             "RECEIPTS_INVALID")
+    _require(isinstance(r["receipts"], list) and len(r["receipts"]) <= QUICKNODE_LIMIT + 1 + p3_limit
+             and len(h["calls"]) <= QUICKNODE_LIMIT + 1 + p3_limit, "RECEIPTS_INVALID")
     for call in h["calls"]:
         _keys(call, CALL_KEYS, "CALL_KEYS")
         _require(_text(call["call_id"]) and _text(call["slot"]) and _text(call["phase"])
@@ -305,7 +322,7 @@ def check_artifacts(handoff_bytes: bytes, provenance_bytes: bytes, expected: Map
     counts = Counter(call["provider"] for call in calls.values())
     phases = Counter((call["phase"], call["provider"]) for call in calls.values())
     limits = {("P1", "quicknode"): 6, ("P1", "hypersync"): 1, ("P2", "quicknode"): 1,
-              ("P3", "hypersync"): 8, ("P4", "quicknode"): 4, ("P5", "quicknode"): 6}
+              ("P3", "hypersync"): p3_limit, ("P4", "quicknode"): 4, ("P5", "quicknode"): 6}
     _require(all(key in limits and count <= limits[key] for key, count in phases.items()), "CALL_CEILING")
     a = h["accounting"]
     _require(a["admitted"] == dict(counts) and a["resolved"] == len(calls) and a["unknown_liability"] == 0
