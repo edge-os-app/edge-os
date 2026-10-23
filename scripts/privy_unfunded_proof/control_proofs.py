@@ -28,11 +28,13 @@ from pathlib import Path
 from typing import Any
 
 from scripts.privy_unfunded_proof import chain_proof
+from scripts.privy_unfunded_proof.actual_runner import expiry_rerun_store
 from scripts.privy_unfunded_proof.actual_packet import (
     ACTUAL_EVIDENCE_CLASS,
     CONTROL_PROOF_ORDER,
     PROVIDER_PROOF_UNQUALIFIED,
     CONTROL_PROOF_PACKET,
+    CONTROL_PROOF_TABLE,
     UNFUNDED_POLICY_PROFILE_ID,
 )
 from scripts.privy_unfunded_proof.specimens import canonical_json
@@ -42,6 +44,7 @@ CONTROLS = ("input_output_assets", "raw_input", "recipient", "minimum_output", "
             "expiry_freshness", "opaque_program")
 TRANSFER_TOPIC = "0x" + chain_proof.keccak(text="Transfer(address,address,uint256)").hex()
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+_TOPIC = re.compile(r"0x[0-9a-fA-F]{64}")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 _QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)")
 _ACTIVE_STEPS = ("approve", "swap", "revoke")
@@ -64,8 +67,8 @@ _CLAIMS: Mapping[str, tuple[str, ...]] = {
     "recipient": (
         "A call trace of the release swap shows that the whole MOE output reaches the wallet (msg.sender), that "
         "the wallet pays exactly the input, that no other address gains MOE, and that no address gains WMON "
-        "except the pool and the pinned fee recipients, each at most its pinned share of the input (1.00% and "
-        "0.35%).",
+        "except the pool and, when findings.fee_transfers lists them, the pinned fee recipients, each at most "
+        "its pinned share of the input (1.00% and 0.35%).",
         "The Privy policy refuses executeSwapWithReceiver even with the wallet as receiver, and refuses an MOE "
         "transfer, so the agent can sign neither another receiver nor a later move of the output.",
     ),
@@ -357,9 +360,16 @@ def _trace_findings(trace: Any, output: int) -> dict[str, Any]:
                 or frame.get("value", "0x0") not in ("0x0", None)):
             raise _Unproven("TRACE_TRANSFERS_INVALID")
         touched.add(frame["to"].lower())
-        for log in frame.get("logs") or []:
+        logs, calls = frame.get("logs"), frame.get("calls")
+        if not isinstance(logs, (list, type(None))) or not isinstance(calls, (list, type(None))):
+            raise _Unproven("TRACE_TRANSFERS_INVALID")
+        for log in logs or []:
+            # Every log must parse: a log the check cannot read could hide a transfer.
             topics = log.get("topics") if isinstance(log, Mapping) else None
-            if not isinstance(topics, list) or not topics or topics[0] != TRANSFER_TOPIC:
+            if (not isinstance(topics, list) or not topics
+                    or any(type(topic) is not str or _TOPIC.fullmatch(topic) is None for topic in topics)):
+                raise _Unproven("TRACE_TRANSFERS_INVALID")
+            if topics[0].lower() != TRANSFER_TOPIC:
                 continue
             token = str(log.get("address", "")).lower()
             amount = _uint(log.get("data"))
@@ -369,7 +379,7 @@ def _trace_findings(trace: Any, output: int) -> dict[str, Any]:
             net[token][sender] = net[token].get(sender, 0) - amount
             net[token][receiver] = net[token].get(receiver, 0) + amount
             transfers += 1
-        frames.extend(frame.get("calls") or [])
+        frames.extend(calls or [])
     moe, wmon = net[chain_proof.MOE.lower()], net[chain_proof.WMON.lower()]
     pool = chain_proof.POOL.lower()
     wmon_gains = {address: value for address, value in wmon.items() if value > 0}
@@ -416,7 +426,7 @@ class _Privy:
         earlier = self.earlier.get(specimen_id)
         if rerun is None:
             return earlier is None
-        positive = self.records.get(CONTROL_PROOF_ORDER[0])
+        positive = self.records.get(CONTROL_PROOF_TABLE.positive_control("raw").specimen_id)
         return (CONTROL_PROOF_PACKET.specimen_expected[specimen_id] == "EXPIRY_REFUSAL"
                 and isinstance(rerun, Mapping) and isinstance(earlier, Mapping) and isinstance(positive, Mapping)
                 and set(rerun) == {"earlier_outcome_record_sha256", "positive_control_outcome_record_sha256"}
@@ -659,7 +669,10 @@ def _opaque_support(authored: Mapping[str, Any], by_id: Mapping[str, Mapping[str
                      claims=("The approved program, simulated at the pinned block, calls only the entrypoint, "
                              "router, pool, WMON and MOE, and pays the whole output to the wallet.",),
                      limits=("Neither the Privy policy nor the entrypoint bounds the program bytes; only the "
-                             "host's exact program check does. This is not a provider bound.",))
+                             "host's exact program check does. This is not a provider bound.",
+                             "When findings.fee_transfers is not empty, the swap also pays WMON out of the input "
+                             "to those recipients, which are pinned from the live trace of 2026-10-23, not from "
+                             "source (the recipient control's FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND)."))
 
 
 # ---------------------------------------------------------------- command
@@ -677,16 +690,22 @@ def load_privy_store(root: Path) -> tuple[dict[str, Any], dict[str, str]]:
     return records, captures
 
 
-def merge_expiry_rerun(records: dict[str, Any], captures: dict[str, str], rerun_root: Path
+def merge_expiry_rerun(records: dict[str, Any], captures: dict[str, str], privy_root: Path
                        ) -> dict[str, Any]:
-    """Replace the expiry row with its re-run from a separate store; return the earlier record it supersedes.
+    """Replace the expiry row with its one re-run (``<privy_root>.expiry-rerun``); return the earlier record.
 
-    The re-run store must hold the expiry row's outcome and capture and no other row's outcome.
+    The re-run store must hold the expiry row's outcome and capture and no other row's outcome. The earlier
+    expiry capture must still hash to the earlier record's ``capture_record_sha256`` and show a 401.
     """
-    rerun_records, rerun_captures = load_privy_store(rerun_root)
+    rerun_records, rerun_captures = load_privy_store(expiry_rerun_store(privy_root))
     expiry = [sid for sid in CONTROL_PROOF_ORDER if CONTROL_PROOF_PACKET.specimen_expected[sid] == "EXPIRY_REFUSAL"]
     if set(rerun_records) != set(expiry) or set(rerun_captures) != set(expiry) or not set(expiry) <= set(records):
         raise ProofRefused("RERUN_STORE_INVALID")
+    for sid in expiry:
+        capture_path = privy_root / f"{sid}.capture.json"
+        if (not capture_path.exists() or captures.get(sid) != records[sid].get("capture_record_sha256")
+                or json.loads(capture_path.read_text(encoding="utf-8")).get("status") != 401):
+            raise ProofRefused("RERUN_EARLIER_ATTEMPT_INVALID")
     earlier = {sid: records[sid] for sid in expiry}
     records.update(rerun_records)
     captures.update(rerun_captures)
@@ -705,8 +724,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--authored", type=Path, required=True)
     parser.add_argument("--privy-store", type=Path, required=True)
     parser.add_argument("--chain-store", type=Path, required=True)
-    parser.add_argument("--privy-rerun-store", type=Path,
-                        help="the store of the expiry row re-run alone (actual_run --rerun-expiry-from)")
+    parser.add_argument("--with-expiry-rerun", action="store_true",
+                        help="use the expiry row's one re-run, <privy-store>.expiry-rerun (actual_run "
+                             "--rerun-expiry-from)")
     parser.add_argument("--out", type=Path, required=True, help="a new directory for the proof artifacts")
     args = parser.parse_args(argv)
     if args.out.exists():
@@ -714,8 +734,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         records, captures = load_privy_store(args.privy_store)
-        earlier = (merge_expiry_rerun(records, captures, args.privy_rerun_store)
-                   if args.privy_rerun_store is not None else None)
+        earlier = merge_expiry_rerun(records, captures, args.privy_store) if args.with_expiry_rerun else None
         result = build_control_proofs(authored=json.loads(args.authored.read_text(encoding="utf-8")),
                                       privy_records=records, privy_capture_sha256=captures,
                                       chain_records=load_chain_store(args.chain_store),

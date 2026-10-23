@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from scripts.privy_unfunded_proof.actual_packet import (
@@ -196,17 +197,30 @@ def _record_sha256(record: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json(record)).hexdigest()
 
 
+RERUN_STORE_SUFFIX = ".expiry-rerun"
+
+
+def expiry_rerun_store(earlier_root: Path) -> Path:
+    """The one re-run store of an earlier store: its sibling ``<name>.expiry-rerun``.
+
+    The path is fixed by the earlier store, and a store is created only when it does not exist, so each earlier
+    store can be re-run once; a re-run that signed or lost its reply cannot be hidden by a later one.
+    """
+    resolved = Path(earlier_root).resolve()
+    return resolved.parent / (resolved.name + RERUN_STORE_SUFFIX)
+
+
 def _check_rerun(prior: AttemptStore, store: AttemptStore, specimen: Specimen, packet: ActualProofPacket,
                  table: SpecimenTable, profile_id: str) -> dict[str, str]:
-    """Admit one re-run of an expiry row whose earlier reply was an unrecognized error, in a new store.
+    """Admit one re-run of an expiry row whose earlier reply was an unrecognized error, in its derived store.
 
     The earlier store is only read. Its expiry row must have ended ``UNKNOWN``/``UNRECOGNIZED_REPLY`` on a
     captured 401 (an error status, so nothing was signed), every other row of the packet must have matched, and
     its positive control must be the qualified ``ALLOW``. Returns the hashes the new records cite.
     """
     specimen_id = specimen.specimen_id
-    if prior.root.resolve() == store.root.resolve():
-        raise SpecimenRefused("RERUN_SAME_STORE")
+    if store.root.resolve() != expiry_rerun_store(prior.root):
+        raise SpecimenRefused("RERUN_STORE_NOT_DERIVED")
     if specimen.expected is not Expected.EXPIRY_REFUSAL:
         raise SpecimenRefused("RERUN_NOT_ALLOWED", specimen_id)
     earlier = prior.read_outcome(specimen_id)
@@ -472,7 +486,7 @@ def run_actual_specimen(
 ) -> RunResult:
     """Run one actual specimen at most once. Raises ``SpecimenRefused`` before any effect.
 
-    ``rerun_of`` names the earlier store of the same packet when an expiry row is re-run alone in a new store
+    ``rerun_of`` names the earlier store of the same packet when an expiry row is re-run alone in its derived store
     (see ``_check_rerun``). The positive control is then read from the earlier store, and the new intent and
     outcome cite the earlier outcome and positive-control records by hash.
 

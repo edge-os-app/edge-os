@@ -342,6 +342,50 @@ def test_the_wallet_must_pay_exactly_the_input_even_with_fee_payouts() -> None:
     assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
 
 
+def _hidden_transfer(records, shape: str):  # noqa: ANN001, ANN202
+    """Add a WMON transfer of 5e18 from the pool to 0x...dead in a form the old check skipped."""
+    trace = copy.deepcopy(next(r for r in records if r["op_id"] == "chain.swap_trace")["result"])
+    word = lambda address: "0x" + address[2:].lower().rjust(64, "0")  # noqa: E731
+    log = {"address": chain_proof.WMON, "data": "0x" + (5 * 10**18).to_bytes(32, "big").hex(),
+           "topics": [TRANSFER_TOPIC, word(chain_proof.POOL), word("0x000000000000000000000000000000000000dead")]}
+    frame = trace["calls"][1]["calls"][0]
+    if shape == "upper_topic":
+        log["topics"][0] = "0x" + TRANSFER_TOPIC[2:].upper()
+    elif shape == "no_prefix_topic":
+        log["topics"][0] = TRANSFER_TOPIC[2:]
+    elif shape == "wrapped_log":
+        log = [log]
+    elif shape == "topics_dict":
+        log["topics"] = dict(enumerate(log["topics"]))
+    if shape == "logs_dict":
+        frame["logs"] = {"hidden": log, **{str(i): item for i, item in enumerate(frame["logs"])}}
+    elif shape == "calls_dict":
+        frame["calls"] = {"0": {"type": "CALL", "from": chain_proof.POOL, "to": chain_proof.WMON, "value": "0x0",
+                                "logs": [log]}}
+    else:
+        frame["logs"].append(log)
+    return replaced(records, "chain.swap_trace", result=trace)
+
+
+@pytest.mark.parametrize("shape", ["upper_topic", "no_prefix_topic", "wrapped_log", "topics_dict", "logs_dict",
+                                   "calls_dict"])
+def test_a_log_the_check_cannot_read_refuses_the_trace(shape: str) -> None:
+    for records in (recorded_chain(), _fee_trace()):
+        result = _build(chain_records=_hidden_transfer(records, shape))
+        assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+        assert "recipient" not in result["proven"] and "recipient" not in result["decision_required"]
+        assert result["supporting"] == {}
+
+
+def test_an_upper_case_transfer_topic_is_still_counted() -> None:
+    records = _fee_trace()
+    trace = copy.deepcopy(next(r for r in records if r["op_id"] == "chain.swap_trace")["result"])
+    for log in trace["calls"][1]["calls"][0]["logs"]:
+        log["topics"][0] = "0x" + log["topics"][0][2:].upper()
+    result = _build(chain_records=replaced(records, "chain.swap_trace", result=trace))
+    assert result["decision_required"]["recipient"]["reason"] == "FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND"
+
+
 def test_overrides_that_did_not_take_effect_prove_no_contract_control() -> None:
     result = _build(chain_records=recorded_chain(state_overrides_honoured=False))
     for name in ("input_output_assets", "raw_input", "recipient", "minimum_output", "fees", "gas_action_capacity"):

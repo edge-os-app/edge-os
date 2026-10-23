@@ -17,7 +17,7 @@ from scripts.privy_unfunded_proof.actual_profile import (
     is_expiry_refusal,
     safe_reply_field,
 )
-from scripts.privy_unfunded_proof.actual_runner import run_actual_specimen
+from scripts.privy_unfunded_proof.actual_runner import expiry_rerun_store, run_actual_specimen
 from scripts.privy_unfunded_proof.specimens import AttemptStore, SpecimenRefused, canonical_json
 
 from tests.privy_unfunded_proof._actual_support import (
@@ -93,6 +93,12 @@ def _earlier_live_store(tmp_path: Path, expiry_reply: object = None) -> AttemptS
     assert (result.outcome.value, result.reason) == ("UNKNOWN", "UNRECOGNIZED_REPLY")
     assert store.is_stopped()
     return store
+
+
+def _rerun_store(earlier: AttemptStore) -> AttemptStore:
+    path = expiry_rerun_store(earlier.root)
+    path.mkdir()
+    return AttemptStore(path)
 
 
 def _files(root: Path) -> dict[str, bytes]:
@@ -244,7 +250,7 @@ def test_the_rerun_sends_only_the_expiry_row_into_a_new_store_and_cites_the_earl
         tmp_path: Path, privy) -> None:  # noqa: ANN001
     earlier = _earlier_live_store(tmp_path)
     before = _files(earlier.root)
-    new = _store(tmp_path / "rerun")
+    new = _rerun_store(earlier)
     result, transport = _run(new, EXPIRY, code_reply(401, "request_expired"), rerun_of=earlier)
     assert (result.outcome.value, result.reason, result.matches_expectation) == ("UNKNOWN", "EXPIRY_REFUSAL", True)
     assert [request.request_sha256 for request in transport.sent] == [
@@ -263,7 +269,7 @@ def test_the_rerun_sends_only_the_expiry_row_into_a_new_store_and_cites_the_earl
 
 def test_a_rerun_that_is_still_unrecognized_stops_its_own_store(tmp_path: Path, privy) -> None:  # noqa: ANN001
     earlier = _earlier_live_store(tmp_path)
-    new = _store(tmp_path / "rerun")
+    new = _rerun_store(earlier)
     result, _ = _run(new, EXPIRY, code_reply(401, "unlisted_code"), rerun_of=earlier)
     assert result.reason == "UNRECOGNIZED_REPLY" and new.is_stopped()
 
@@ -275,9 +281,35 @@ def _refused_rerun(new: AttemptStore, specimen_id: str, earlier: AttemptStore) -
     return refused.value.code
 
 
+@pytest.mark.parametrize("first", [success_reply(), code_reply(401, "request_expired"), "lost"])
+def test_each_earlier_store_has_one_rerun_so_a_signed_or_lost_rerun_cannot_be_hidden(
+        tmp_path: Path, privy, first: object) -> None:  # noqa: ANN001
+    from scripts.privy_unfunded_proof.actual_transport import TransportLost
+
+    earlier = _earlier_live_store(tmp_path)
+    new = _rerun_store(earlier)
+    if first == "lost":
+        class _Lost(_Transport):
+            def send(self, request):  # noqa: ANN001, ANN201
+                raise TransportLost("lost")
+
+        run_actual_specimen(EXPIRY, store=new, transport=_Lost(EXPIRY, None), packet_id=CONTROL_PROOF_PACKET.packet_id,
+                            profile_id=actual_packet.UNFUNDED_POLICY_PROFILE_ID, clock=lambda: "t", now_epoch=NOW,
+                            started_at_epoch=NOW, table=CONTROL_PROOF_TABLE, rerun_of=earlier)
+    else:
+        _run(new, EXPIRY, first, rerun_of=earlier)
+    with pytest.raises(SpecimenRefused):
+        _run(new, EXPIRY, code_reply(401, "request_expired"), rerun_of=earlier)
+    for elsewhere in (_store(tmp_path / "other"), _store(earlier.root / "inside"), earlier):
+        with pytest.raises(SpecimenRefused) as refused:
+            _run(elsewhere, EXPIRY, code_reply(401, "request_expired"), rerun_of=earlier)
+        assert refused.value.code in ("RERUN_STORE_NOT_DERIVED", "ALREADY_CLAIMED")
+    assert not (tmp_path / "other" / f"{EXPIRY}.intent.json").exists()
+
+
 def test_only_the_expiry_row_can_be_rerun(tmp_path: Path, privy) -> None:  # noqa: ANN001
     earlier = _earlier_live_store(tmp_path)
-    new = _store(tmp_path / "rerun")
+    new = _rerun_store(earlier)
     for specimen_id in DENIALS:
         assert _refused_rerun(new, specimen_id, earlier) == "RERUN_NOT_ALLOWED"
 
@@ -286,14 +318,14 @@ def test_a_rerun_needs_an_earlier_unrecognized_401(tmp_path: Path, privy) -> Non
     matched = _store(tmp_path / "matched")
     _first_four(matched)
     assert _run(matched, EXPIRY, code_reply(400, "request_expired"))[0].matches_expectation
-    assert _refused_rerun(_store(tmp_path / "a"), EXPIRY, matched) == "RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE"
+    assert _refused_rerun(_rerun_store(matched), EXPIRY, matched) == "RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE"
     other_status = _store(tmp_path / "status")
     _first_four(other_status)
     assert _run(other_status, EXPIRY, code_reply(400, "unlisted_code"))[0].reason == "UNRECOGNIZED_REPLY"
-    assert _refused_rerun(_store(tmp_path / "b"), EXPIRY, other_status) == "RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE"
+    assert _refused_rerun(_rerun_store(other_status), EXPIRY, other_status) == "RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE"
     never = _store(tmp_path / "never")
     _first_four(never)
-    assert _refused_rerun(_store(tmp_path / "c"), EXPIRY, never) == "RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE"
+    assert _refused_rerun(_rerun_store(never), EXPIRY, never) == "RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE"
 
 
 def test_a_rerun_needs_every_other_earlier_row_matched(tmp_path: Path, privy) -> None:  # noqa: ANN001
@@ -302,7 +334,7 @@ def test_a_rerun_needs_every_other_earlier_row_matched(tmp_path: Path, privy) ->
     for specimen_id in DENIALS[:2]:
         assert _run(earlier, specimen_id, code_reply(400, "policy_violation"))[0].matches_expectation
     assert _run(earlier, EXPIRY, code_reply(401, "unlisted_code"))[0].reason == "UNRECOGNIZED_REPLY"
-    assert _refused_rerun(_store(tmp_path / "rerun"), EXPIRY, earlier) == "RERUN_EARLIER_ROW_NOT_MATCHED"
+    assert _refused_rerun(_rerun_store(earlier), EXPIRY, earlier) == "RERUN_EARLIER_ROW_NOT_MATCHED"
 
 
 def test_a_rerun_refuses_a_tampered_earlier_capture_and_the_same_store(tmp_path: Path, privy) -> None:  # noqa: ANN001
@@ -310,7 +342,7 @@ def test_a_rerun_refuses_a_tampered_earlier_capture_and_the_same_store(tmp_path:
     capture = earlier.root / f"{EXPIRY}.capture.json"
     original = capture.read_bytes()
     capture.write_bytes(original.replace(b'"status":401', b'"status":402'))
-    assert _refused_rerun(_store(tmp_path / "rerun"), EXPIRY, earlier) == "RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE"
+    assert _refused_rerun(_rerun_store(earlier), EXPIRY, earlier) == "RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE"
     capture.write_bytes(original)
     with pytest.raises(SpecimenRefused):
         _run(earlier, EXPIRY, code_reply(401, "request_expired"), rerun_of=earlier)
@@ -319,7 +351,7 @@ def test_a_rerun_refuses_a_tampered_earlier_capture_and_the_same_store(tmp_path:
 def test_a_rerun_without_a_qualified_earlier_positive_control_is_refused(tmp_path: Path, privy) -> None:  # noqa: ANN001
     earlier = _earlier_live_store(tmp_path)
     (earlier.root / f"{POSITIVE}.outcome.json").unlink()
-    assert _refused_rerun(_store(tmp_path / "rerun"), EXPIRY, earlier) == "POSITIVE_CONTROL_NOT_QUALIFIED"
+    assert _refused_rerun(_rerun_store(earlier), EXPIRY, earlier) == "POSITIVE_CONTROL_NOT_QUALIFIED"
 
 
 # ---------------------------------------------------------------- the operator command
@@ -328,13 +360,20 @@ def test_a_rerun_without_a_qualified_earlier_positive_control_is_refused(tmp_pat
 def test_the_rerun_flag_is_for_the_control_packet_and_an_existing_store(
         tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     new = tmp_path / "new"
-    assert actual_run.main(["--packet", "policy-v3", "--store", str(new), "--confirm-unfunded",
+    assert actual_run.main(["--packet", "policy-v3", "--confirm-unfunded",
                             "--rerun-expiry-from", str(tmp_path)]) == 2
     assert "RERUN_PACKET_UNSUPPORTED" in capsys.readouterr().out
-    assert actual_run.main(["--packet", "control-proofs", "--store", str(new), "--confirm-unfunded",
+    assert actual_run.main(["--packet", "control-proofs", "--confirm-unfunded",
                             "--rerun-expiry-from", str(tmp_path / "missing")]) == 2
     assert "RERUN_STORE_MISSING" in capsys.readouterr().out
+    assert actual_run.main(["--packet", "control-proofs", "--store", str(new), "--confirm-unfunded",
+                            "--rerun-expiry-from", str(tmp_path)]) == 2
+    assert "RERUN_STORE_IS_DERIVED" in capsys.readouterr().out
     assert not new.exists()
+    expiry_rerun_store(tmp_path).mkdir()
+    assert actual_run.main(["--packet", "control-proofs", "--confirm-unfunded",
+                            "--rerun-expiry-from", str(tmp_path)]) == 2
+    assert "STORE_ALREADY_EXISTS" in capsys.readouterr().out
 
 
 def test_the_rerun_command_runs_only_the_expiry_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -365,10 +404,10 @@ def test_the_rerun_command_runs_only_the_expiry_row(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(actual_run, "make_p256_authorizer", lambda private_key: (lambda payload: "sig"))
     monkeypatch.setattr(actual_run, "run_actual_specimen", fake_run)
     (tmp_path / "key.pem").write_bytes(b"not read by the fake")
-    new = tmp_path / "rerun"
-    assert actual_run.main(["--packet", "control-proofs", "--store", str(new), "--confirm-unfunded",
+    assert actual_run.main(["--packet", "control-proofs", "--confirm-unfunded",
                             "--rerun-expiry-from", str(earlier)]) == 0
-    assert called == [(EXPIRY, earlier, new)]
+    assert called == [(EXPIRY, earlier, expiry_rerun_store(earlier))]
+    assert expiry_rerun_store(earlier) == tmp_path / "earlier.expiry-rerun"
     assert f"{EXPIRY} expected=EXPIRY_REFUSAL outcome=UNKNOWN reason=EXPIRY_REFUSAL" in capsys.readouterr().out
 
 
@@ -429,10 +468,10 @@ def test_an_earlier_record_without_a_rerun_or_a_rerun_of_another_row_does_not_co
 
 def test_runner_stores_feed_the_builder_end_to_end(tmp_path: Path, privy) -> None:  # noqa: ANN001
     earlier = _earlier_live_store(tmp_path)
-    new = _store(tmp_path / "rerun")
+    new = _rerun_store(earlier)
     assert _run(new, EXPIRY, code_reply(401, "request_expired"), rerun_of=earlier)[0].matches_expectation
     records, captures = control_proofs.load_privy_store(earlier.root)
-    prior = control_proofs.merge_expiry_rerun(records, captures, new.root)
+    prior = control_proofs.merge_expiry_rerun(records, captures, earlier.root)
     result = control_proofs.build_control_proofs(authored=authored(), privy_records=records,
                                                  privy_capture_sha256=captures, chain_records=recorded_chain(),
                                                  privy_earlier_records=prior)
@@ -445,11 +484,23 @@ def test_runner_stores_feed_the_builder_end_to_end(tmp_path: Path, privy) -> Non
 
 def test_a_rerun_store_with_any_other_row_is_refused(tmp_path: Path, privy) -> None:  # noqa: ANN001
     earlier = _earlier_live_store(tmp_path)
-    new = _store(tmp_path / "rerun")
+    new = _rerun_store(earlier)
     assert _run(new, EXPIRY, code_reply(401, "request_expired"), rerun_of=earlier)[0].matches_expectation
     (new.root / f"{DENIALS[0]}.outcome.json").write_bytes((earlier.root / f"{DENIALS[0]}.outcome.json").read_bytes())
     records, captures = control_proofs.load_privy_store(earlier.root)
     with pytest.raises(control_proofs.ProofRefused) as refused:
-        control_proofs.merge_expiry_rerun(records, captures, new.root)
+        control_proofs.merge_expiry_rerun(records, captures, earlier.root)
     assert refused.value.code == "RERUN_STORE_INVALID"
     assert set(CONTROL_PROOF_ORDER) >= set(records)
+
+
+def test_the_builder_refuses_a_changed_earlier_capture(tmp_path: Path, privy) -> None:  # noqa: ANN001
+    earlier = _earlier_live_store(tmp_path)
+    assert _run(_rerun_store(earlier), EXPIRY, code_reply(401, "request_expired"),
+                rerun_of=earlier)[0].matches_expectation
+    capture = earlier.root / f"{EXPIRY}.capture.json"
+    capture.write_bytes(capture.read_bytes().replace(b'"status":401', b'"status":202'))
+    records, captures = control_proofs.load_privy_store(earlier.root)
+    with pytest.raises(control_proofs.ProofRefused) as refused:
+        control_proofs.merge_expiry_rerun(records, captures, earlier.root)
+    assert refused.value.code == "RERUN_EARLIER_ATTEMPT_INVALID"

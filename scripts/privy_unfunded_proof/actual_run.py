@@ -13,7 +13,8 @@ expected ``EXPIRY_REFUSAL``, and never retries. The runner has no broadcast
 path; the wallet must be unfunded, and the operator must pass ``--confirm-unfunded`` after an independent balance read.
 
 ``--rerun-expiry-from EARLIER_STORE`` (control-proof packet only) sends the
-expiry row alone, once, into a new ``--store``. The earlier store is only read:
+expiry row alone, once, into the new store ``EARLIER_STORE.expiry-rerun`` (no
+``--store``; the fixed path allows one re-run per earlier store). The earlier store is only read:
 its expiry row must have ended ``UNKNOWN``/``UNRECOGNIZED_REPLY`` on a 401, its
 other rows must have matched, and its positive control is reused. No other row
 is sent.
@@ -42,7 +43,7 @@ from scripts.privy_unfunded_proof.actual_packet import (
     resolve_approved_packet,
 )
 from scripts.privy_unfunded_proof.actual_profile import resolve_qualified_profile
-from scripts.privy_unfunded_proof.actual_runner import run_actual_specimen
+from scripts.privy_unfunded_proof.actual_runner import expiry_rerun_store, run_actual_specimen
 from scripts.privy_unfunded_proof.actual_transport import ActualSignOnlyTransport, deadline_bounded_connect
 from scripts.privy_unfunded_proof.evidence import Outcome, RunResult
 from scripts.privy_unfunded_proof.specimens import AttemptStore, SpecimenRefused
@@ -105,7 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--confirm-unfunded", action="store_true",
                         help="the operator confirmed an independent zero-balance read of the agent wallet")
     parser.add_argument("--rerun-expiry-from", type=Path,
-                        help="control-proofs only: the earlier store; send only the expiry row into the new --store")
+                        help="control-proofs only: the earlier store; send only the expiry row into "
+                             "the new store <earlier>.expiry-rerun (no --store)")
     args = parser.parse_args(argv)
 
     if args.dry_run:
@@ -115,22 +117,26 @@ def main(argv: list[str] | None = None) -> int:
     if not args.confirm_unfunded:
         print("UNFUNDED_CONFIRMATION_REQUIRED: read the wallet balance first, then pass --confirm-unfunded")
         return 2
+    rerun_of = None
+    if args.rerun_expiry_from is not None:
+        if args.packet != "control-proofs":
+            print("RERUN_PACKET_UNSUPPORTED: only --packet control-proofs has an expiry re-run")
+            return 2
+        if args.store is not None:
+            print("RERUN_STORE_IS_DERIVED: omit --store; the re-run store is <earlier>.expiry-rerun")
+            return 2
+        if not args.rerun_expiry_from.is_dir():
+            print("RERUN_STORE_MISSING: pass the earlier control-proof store")
+            return 2
+        rerun_of = AttemptStore(args.rerun_expiry_from)
+        args.store = expiry_rerun_store(args.rerun_expiry_from)
+        order = tuple(specimen_id for specimen_id in order if frozen.specimen_expected[specimen_id] == "EXPIRY_REFUSAL")
     if args.store is None:
         print("STORE_REQUIRED: pass a new --store directory")
         return 2
     if args.store.exists():
         print("STORE_ALREADY_EXISTS: one packet uses one new store")
         return 2
-    rerun_of = None
-    if args.rerun_expiry_from is not None:
-        if args.packet != "control-proofs":
-            print("RERUN_PACKET_UNSUPPORTED: only --packet control-proofs has an expiry re-run")
-            return 2
-        if not args.rerun_expiry_from.is_dir():
-            print("RERUN_STORE_MISSING: pass the earlier control-proof store")
-            return 2
-        rerun_of = AttemptStore(args.rerun_expiry_from)
-        order = tuple(specimen_id for specimen_id in order if frozen.specimen_expected[specimen_id] == "EXPIRY_REFUSAL")
 
     now_epoch = int(time.time())
     try:

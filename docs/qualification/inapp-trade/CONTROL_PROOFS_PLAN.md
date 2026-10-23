@@ -63,7 +63,10 @@ Privy run. Privy signed nothing but the revoke-to-zero positive control.
   WMON), with the live trace named as their source. The check still requires the wallet to gain exactly the
   output in MOE and nobody else to gain MOE, and the wallet to pay exactly the input in WMON. A WMON gain is
   accepted only for the pool or a pinned recipient within its bound (net per address, so split payouts sum).
-  Any other WMON or MOE gain, or a pinned recipient above its bound, stays `TRACE_TRANSFERS_INVALID`. Because
+  Any other WMON or MOE gain, or a pinned recipient above its bound, stays `TRACE_TRANSFERS_INVALID`. Every log
+  must be readable (a list of mappings whose topics are 32-byte hex words; the Transfer topic is matched
+  without regard to case); a `logs` or `calls` field that is not a list, or a log the check cannot read, refuses
+  the trace instead of being skipped, so it cannot hide a transfer. Because
   the pins are observed, not justified, a trace that pays them makes `recipient` **decision_required**
   (`FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND`, option A the builder accepted for decision-required
   controls). The artifact lists each observed recipient, amount, ppm bound and raw bound in
@@ -95,19 +98,28 @@ Privy run. Privy signed nothing but the revoke-to-zero positive control.
   with `data` or `method` is never one. Every other 401 stays `UNKNOWN` / `UNRECOGNIZED_REPLY` and stops the
   run. The documented 400 `request_expired` still matches. A 401 expiry code on any other row stays
   `UNRECOGNIZED_REPLY`.
-- Resolution, one-row re-run (`actual_run --rerun-expiry-from`): the expiry row is sent alone, once, into a
-  new store. The earlier store is only read and must show: the expiry row ended `UNKNOWN` /
+- Resolution, one-row re-run (`actual_run --rerun-expiry-from`): the expiry row is sent alone, once, into the
+  new store `<earlier store>.expiry-rerun`. That path is fixed by the earlier store and `--store` is refused, so
+  each earlier store has exactly one re-run: a second attempt finds the store or its claimed row and is refused,
+  and a re-run that signed or lost its reply cannot be replaced by a later clean one. The earlier store is only
+  read and must show: the expiry row ended `UNKNOWN` /
   `UNRECOGNIZED_REPLY` on a captured 401 (an error status, so nothing was signed); every other row matched;
   no unresolved or breached attempt; and the qualified positive-control `ALLOW`, which the re-run reuses. The
   new intent and outcome carry `rerun_of`: the SHA-256 of the earlier expiry outcome record and of the
-  earlier positive-control outcome record. No other row can be re-run this way. The proof builder takes the
-  re-run store with `--privy-rerun-store`; it accepts the re-run record only when both cited hashes match the
-  earlier store, and the artifact's evidence carries `rerun_of`.
+  earlier positive-control outcome record. No other row can be re-run this way. The proof builder reads the
+  re-run with `--with-expiry-rerun` (from `<privy store>.expiry-rerun`); it refuses a re-run store holding any
+  other row, an earlier expiry capture that no longer hashes to its record or does not show 401, and accepts the
+  re-run record only when both cited hashes match the earlier store. The artifact's evidence carries `rerun_of`.
 - The packet, its hash and the row's request bytes are unchanged, so the re-run sends the same idempotency key
   (`control-proofs-1:raw.ctl_deny_expired_request`). Privy may answer with its stored reply for that key,
   which is the same 401 whose code is now saved. If the saved code is not an expiry code (for example an
   authorization-signature or idempotency error), the row stays `UNRECOGNIZED_REPLY`, the run stops, and the
   saved `error_code` tells the builder why; `expiry_freshness` then stays unproven until a reviewed change.
+  If Privy's body carries only a human-readable message (for example `{"error": "Request expired"}`), no code is
+  saved (`error_code` null, by the code/type-only rule), the row stays `UNRECOGNIZED_REPLY`, and the builder
+  must decide from the status and the raw-body hash; the runner never saves message text.
+- The saved code is in the capture, which the proof cites by hash; the builder reads it there, not in the
+  `expiry_freshness` findings.
 
 ## Why these kinds of evidence
 
@@ -316,7 +328,8 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   program calls only the entrypoint, router, pool, WMON and MOE and pays the whole output to the wallet, and
   reports its hash as `supporting_evidence_sha256`. If the live trace calls any other address (for example a
   pair factory or fee contract, which the fee payouts of Finding 1 may involve), the support file is not
-  written.
+  written. When the trace pays the pinned fee recipients, the support file lists them in
+  `findings.fee_transfers` and a limit line says they are observed, not sourced.
 - Smallest alternatives, each a builder decision:
   1. Accept "host-exact program + provider-actual trace of that exact program" as control 12's proof. This
      changes the rule and is a separate reviewed change to the release module or this builder.
@@ -359,19 +372,20 @@ From the checkout root, with `<venv>` = `apps/api/.venv`. Each store is a new di
    It stops on the first `BREACH`, unexpected outcome or unknown reply. The expected `EXPIRY_REFUSAL` on the
    last row does not count as a stop.
 
-   **Expiry row re-run (after the 2026-10-23 run; the builder runs it).** Only `raw.ctl_deny_expired_request`
-   is sent, into a new store; the earlier store is only read and no other row is sent:
+   **Expiry row re-run (after the 2026-10-23 run; the builder runs it once).** Only
+   `raw.ctl_deny_expired_request` is sent, into the new store `<the 2026-10-23 privy store>.expiry-rerun`
+   (created by the command; do not pass `--store`). The earlier store is only read and no other row is sent:
 
    ```sh
    PRIVY_APP_ID=... PRIVY_APP_SECRET=... PRIVY_AGENT_KEY_FILE=<agent pem> \
    PYTHONPATH=apps/api/src:. apps/api/.venv/bin/python -B -s -m scripts.privy_unfunded_proof.actual_run \
-     --packet control-proofs --store <new expiry re-run store> --confirm-unfunded \
-     --rerun-expiry-from <the 2026-10-23 privy store>
+     --packet control-proofs --confirm-unfunded --rerun-expiry-from <the 2026-10-23 privy store>
    ```
 
    It prints one line for `raw.ctl_deny_expired_request`. The capture
-   `<new expiry re-run store>/raw.ctl_deny_expired_request.capture.json` holds `status`, `error_code` and
-   `error_type`. A refusal before sending prints `REFUSED raw.ctl_deny_expired_request <code>`.
+   `<the 2026-10-23 privy store>.expiry-rerun/raw.ctl_deny_expired_request.capture.json` holds `status`,
+   `error_code` and `error_type`. A refusal before sending prints `REFUSED raw.ctl_deny_expired_request <code>`.
+   A second run prints `STORE_ALREADY_EXISTS`: each earlier store has one re-run.
 
 3. Chain reads. The endpoint must support `eth_call` and `eth_estimateGas` with `stateDiff` overrides (the
    operator endpoint did on 2026-10-22) and, for control 6, `debug_traceCall` with `callTracer`, `withLog` and
@@ -390,8 +404,8 @@ From the checkout root, with `<venv>` = `apps/api/.venv`. Each store is a new di
      --privy-store <new privy store> --chain-store <new chain store> --out <new proofs dir>
    ```
 
-   After the expiry re-run, add `--privy-rerun-store <new expiry re-run store>` (the earlier store stays the
-   `--privy-store`). The re-run store must hold only the expiry row.
+   After the expiry re-run, add `--with-expiry-rerun` (the earlier store stays the `--privy-store`; the
+   builder reads `<privy store>.expiry-rerun`, which must hold only the expiry row).
 
    It writes `<control>.proof.json` (the exact canonical bytes whose SHA-256 is the proof hash) for proven and
    decision-required controls, `opaque_program.support.json` when available, and `controls.json`. It prints
