@@ -164,6 +164,7 @@ def test_optional_export_and_import_timestamps_must_be_null():
     {**_record(), "owner_id": "other-owner"},
     {**_record(), "additional_signers": []},
     {**_record(), "additional_signers": [{"signer_id": "other-signer"}]},
+    {**_record(), "additional_signers": [{"signer_id": SIGNER}]},
     {**_record(), "additional_signers": [{"signer_id": SIGNER, "override_policy_ids": []}]},
     {**_record(), "additional_signers": [{"signer_id": SIGNER, "override_policy_ids": ["other-policy"]}]},
     {**_record(), "additional_signers": [{"signer_id": SIGNER,
