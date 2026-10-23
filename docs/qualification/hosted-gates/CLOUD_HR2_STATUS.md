@@ -6,15 +6,10 @@ key or VPS access was used. Both registries (`APPROVED_HOSTED_DEPLOYMENTS`, `APP
 
 ## 1. What this lane is waiting for
 
-**Review: round 6 is running** on the head of `cloud/hosted-record-v2` (the commit that adds this text).
+**Review: done.** Both independent round-6 reviewers PASSED the same commit, **`555353e`**, the final reviewed
+candidate. It includes the builder's option A. The commit that adds this text changes only this status file.
 
-- Round 5 PASSED `056dd65`; both reviewers passed that commit.
-- The builder then chose **option A** for the loopback database route (2026-10-23, relayed by the controller). This
-  round adds it:
-  - RED tests in `2d334b4`;
-  - the settings change and documentation in the next commit.
-
-If both new reviewers pass the same commit, the lane is done; otherwise the lane repairs and reviews again.
+The lane is not blocked.
 
 **Builder decision applied: the host research worker's loopback route, option A.** In production, `core/settings.py`
 admits the database host `127.0.0.1` only when:
@@ -29,11 +24,10 @@ until the builder's record is registered. The research worker unit stays disable
 
 ## 2. Candidate, files, tests, verdicts
 
-- **Candidate:** the round-6 head of `cloud/hosted-record-v2` (the commit that adds this text). `056dd65` was
-  the round-5 PASS candidate, before option A. The RED tests are commit
+- **Final reviewed candidate:** `555353e`. `056dd65` was the round-5 PASS candidate, before option A. The RED tests are commit
   `46c95a5` (tests only), followed by `4897972`, `c1c67f5`, `7f450ce`, `dccb7b5` (this status file only),
   `7ca2a4f`, `056dd65` (the round-4 repair), `a838461` (status only), `2d334b4` (option A RED tests) and the
-  option A implementation.
+  `555353e` (the option A implementation).
 - **Files changed (since 82290e2):**
   - `apps/api/src/edge_os_api/core/hosted_deployment.py`
   - `apps/api/src/edge_os_api/core/settings.py`: the production-gate lines only. The `wallet_provider` line and the
@@ -68,7 +62,7 @@ until the builder's record is registered. The research worker unit stays disable
   | 3 | `7f450ce` | FAIL: runbook container selection and false-pass checks | PASS (non-blocking findings only) |
   | 4 | `7ca2a4f` | FAIL: `must_fail` counted a Docker CLI failure as blocked | FAIL: same finding |
   | 5 | `056dd65` | **PASS** (non-blocking findings only) | **PASS** (non-blocking findings only) |
-  | 6 | option A head | pending | pending |
+  | 6 | `555353e` | **PASS** (non-blocking findings only) | **PASS** (non-blocking findings only) |
 
   After round 1 both reviewers passed, but the hardening they suggested was applied anyway, which is why round 2
   ran. Round 2's blocking finding is fixed in `7f450ce`. The round-3 repair adds runbook §1a: containers are
@@ -88,6 +82,26 @@ until the builder's record is registered. The research worker unit stays disable
   - a root-owned firewall script at `/usr/local/sbin/edge-os-egress-firewall`
   - notes that reload cuts open connections and that the stack runs once per host
 
+- **Correction to the option A wording (found in round 6; the code gap predates this lane).**
+  - **The overstatement:** the `settings.py` comment, `HOSTED_RECORD_V2_RUNBOOK.md` §3.2 and `CONTRACT.md` §5.5 say
+    every other loopback form is refused.
+  - **What the code does:** today's production rule, unchanged since `82290e2`, refuses only the exact hosts
+    `127.0.0.1`, `localhost` and no host.
+  - **What it misses:**
+    - other spellings: `LOCALHOST`, `localhost.`, `127.0.0.1.`, `127.1`;
+    - other loopback addresses: `127.0.0.2`, `[::1]`;
+    - `0.0.0.0` and a multi-host `127.0.0.1,db.example`.
+
+    These were already admitted before this lane, and still are, with or without a record.
+  - **What option A added:** exactly one admitted case, `127.0.0.1` with a registered record and its TLS mode.
+    Both reviewers confirmed this by comparing `056dd65` against `555353e`.
+  - **Recommended follow-up (it widens a production refusal, so the builder decides):**
+    - normalise the host (`rstrip(".").lower()`) and refuse any loopback or unspecified address
+      (`ipaddress.ip_address`, plus short IPv4 forms);
+    - refuse multi-host URLs;
+    - optionally require port 5432 on the loopback route;
+    - add RED tests for each of these forms;
+    - correct the three texts.
 - **Non-blocking follow-ups (not done here).** These are the round-5 findings, all non-blocking; fixing them
   would reopen the review of `056dd65`:
   - Add `enable_ipv6: false` to the `private` network, matching `egress` and `hostdb`; runbook §4.1 says "both
