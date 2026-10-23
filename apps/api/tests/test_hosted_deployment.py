@@ -580,3 +580,78 @@ def test_the_approved_actual_execution_releases_stay_empty() -> None:
     from edge_os_api.execution import operating_release
 
     assert dict(operating_release.APPROVED_ACTUAL_RELEASES) == {}
+
+
+# --- Loopback database route for the host research worker (builder decision 2026-10-23, option A) -------------------
+
+LOOPBACK_URL = "postgresql+psycopg://app@127.0.0.1:5432/edge_os?sslmode={mode}"
+LOOPBACK_REFUSAL = "database_url: production needs a hosted database, not a loopback host"
+
+
+def loopback_env(path: Path | None = None, *, mode: str = "verify-full", host: str = "127.0.0.1",
+                 **changes: str) -> dict[str, str]:
+    env = production_env(EDGE_OS_DATABASE_URL=LOOPBACK_URL.format(mode=mode).replace("127.0.0.1", host), **changes)
+    if path is not None:
+        env.update(EDGE_OS_HOSTED_DEPLOYMENT_ID=DEPLOYMENT, EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=str(path))
+    return env
+
+
+def test_production_refuses_a_loopback_database_without_a_named_record() -> None:
+    with pytest.raises(ConfigError, match=LOOPBACK_REFUSAL):
+        load_settings(loopback_env())
+
+
+def test_production_refuses_a_loopback_database_for_an_unregistered_record(tmp_path: Path) -> None:
+    path, _ = write_record(tmp_path, record())
+    with pytest.raises(ConfigError) as caught:
+        load_settings(loopback_env(path))
+    assert "hosted_deployment: hosted_deployment_not_approved" in str(caught.value)
+    assert LOOPBACK_REFUSAL in str(caught.value)
+
+
+def test_production_refuses_a_loopback_database_whose_sslmode_differs_from_the_record(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    with pytest.raises(ConfigError) as caught:
+        load_settings(loopback_env(path, mode="require"))
+    assert "hosted_deployment: hosted_deployment_tls_mismatch" in str(caught.value)
+    assert LOOPBACK_REFUSAL in str(caught.value)
+
+
+@pytest.mark.parametrize("value", [record(), record_v2()])
+def test_production_admits_127_0_0_1_only_for_a_registered_record_with_its_tls_mode(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: dict[str, Any]) -> None:
+    path, sha = write_record(tmp_path, value)
+    approve(monkeypatch, value, sha)
+    settings = load_settings(loopback_env(path))
+    assert settings.database_url.startswith("postgresql+psycopg://app@127.0.0.1:5432/")
+
+
+@pytest.mark.parametrize("host", ["localhost", ""])
+def test_production_still_refuses_other_loopback_forms_with_a_registered_record(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    with pytest.raises(ConfigError, match=LOOPBACK_REFUSAL):
+        load_settings(loopback_env(path, host=host))
+
+
+def test_a_v1_record_admits_the_loopback_route_but_still_no_controlled_execution(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    with pytest.raises(ConfigError) as caught:
+        load_settings(loopback_env(path, EDGE_OS_EXECUTION_MODE="controlled"))
+    assert "execution_mode: the hosted deployment record binds no execution release" in str(caught.value)
+    assert LOOPBACK_REFUSAL not in str(caught.value)
+
+
+def test_a_non_loopback_production_database_is_unchanged_by_the_loopback_route(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert load_settings(production_env()).database_url == production_env()["EDGE_OS_DATABASE_URL"]
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    named = production_env(EDGE_OS_HOSTED_DEPLOYMENT_ID=DEPLOYMENT, EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=str(path))
+    assert load_settings(named).database_url == named["EDGE_OS_DATABASE_URL"]
