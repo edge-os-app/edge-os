@@ -196,8 +196,9 @@ any DNS lookup, production also refuses these hosts with that reason, record or 
   `[::ffff:127.0.0.1]`;
 - the unspecified addresses `0.0.0.0` and `[::]`, including their mapped and short spellings.
 
-Non-loopback hosts and non-production environments are unchanged. A version 1 or version 2 record admits the route; neither changes anything
-else, and a version 1 record still grants no execution.
+Non-loopback hosts and non-production environments are unchanged. The check reads only the URL, so a name that only a
+hosts file maps to loopback (for example `ip6-localhost`) is not detected. A version 1 or version 2 record admits the
+route; neither changes anything else, and a version 1 record still grants no execution.
 
 The registry is empty in this candidate, so production still refuses the route today. Keep
 `/etc/edge-os/research-worker.enabled` absent until the builder's record is registered. The record's one TLS mode
