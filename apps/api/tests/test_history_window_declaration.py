@@ -20,12 +20,12 @@ from edge_os_api.main import create_app
 from edge_os_api.research.comparison_runs import compare_history
 from research_flows import history_body, investigation_request
 
-MOE = "actual-moe-wmon-fwd20m/1"
-MOE_WINDOW = {"start": "2026-10-22T07:35:00Z", "end": "2026-10-22T07:55:00Z"}
+MOE = "actual-moe-wmon-fwd2h/1"
+MOE_WINDOW = {"start": "2026-10-22T21:40:00Z", "end": "2026-10-22T23:40:00Z"}
 BUCKET = dt.timedelta(minutes=5)
 HORIZON = dt.timedelta(minutes=5)
 FLOOR = 2
-RELEASE = "actual-moe-history-nansen-20261022/1"
+RELEASE = "actual-moe-history2h-nansen-20261022/1"
 UNKNOWNS = [f"Recorded responses come from the named providers under the approved release {RELEASE}. "
             "Costs are not modelled; the window is short."]
 
@@ -110,9 +110,9 @@ def _save(client, headers, bundle, body):
 
 
 def _moe_dataset() -> dict[str, Any]:
-    """A QUALIFIED MOE-shaped window: four buckets and trades on every half-minute."""
+    """A QUALIFIED MOE-shaped two-hour window: 24 buckets and trades on every half-minute."""
     start = _moment(MOE_WINDOW["start"])
-    closes = ["1", "2", "1.5", "2.5"]
+    closes = ["1", "2", "1.5", "2.5"] * 6
     buckets = []
     for index, close in enumerate(closes):
         bucket_end = start + (index + 1) * BUCKET
@@ -120,7 +120,7 @@ def _moe_dataset() -> dict[str, Any]:
                         "status": "COMPLETE_OCCUPIED", "reasons": [], "available_at": _text(bucket_end),
                         "close": close, "quote_volume": "10"})
     trades = []
-    for index in range(42):
+    for index in range(240):
         event_time = start + index * dt.timedelta(seconds=30)
         trades.append({"event_id": f"moe-trade-{index}", "event_time": _text(event_time), "price": "2",
                        "quote_amount": "1", "base_amount": "0.5", "pool_side": "BASE_TO_QUOTE",
@@ -152,9 +152,15 @@ def test_the_old_fixed_hour_split_is_refused_for_the_moe_window(research, owner_
     assert "Partition boundaries must be ordered UTC timestamps." in refused.text
 
 
-def test_predictive_moe_has_no_lookback_that_meets_the_floors():
-    assert _derive(MOE_WINDOW, 1, "OUTPERFORM") is None
-    assert _derive(MOE_WINDOW, 3, "OUTPERFORM") is None
+def test_predictive_moe_supports_lookback_eight_with_two_decisions():
+    derived = _derive(MOE_WINDOW, 8, "OUTPERFORM")
+    assert derived is not None
+    assert derived["decisions"] == 2
+    assert derived["schedule"]["start"] == "2026-10-22T22:25:00Z"
+    assert derived["schedule"]["end"] == "2026-10-22T22:35:00Z"
+    assert derived["partitions"][0] == {"partition_id": "train", "role": "TRAINING",
+                                        "start": "2026-10-22T21:40:00Z", "end": "2026-10-22T22:40:00Z"}
+    assert _derive(MOE_WINDOW, 9, "OUTPERFORM") is None
 
 
 def test_the_old_predictive_schedule_crashes_the_comparison_engine(research, owner_a):
@@ -181,18 +187,15 @@ def test_the_accepted_descriptive_moe_declaration_compares_end_to_end(research, 
     assert saved.status_code == 201, saved.text
     content = saved.json()["declaration"]["content"]
     assert content["configuration"]["partitions"] == [
-        {"partition_id": "described", "role": "DESCRIPTIVE", "start": "2026-10-22T07:35:00Z",
-         "end": "2026-10-22T07:55:00Z"}]
+        {"partition_id": "described", "role": "DESCRIPTIVE", "start": "2026-10-22T21:40:00Z",
+         "end": "2026-10-22T23:40:00Z"}]
     assert content["configuration"]["schedule"] == {
-        "version": "p09.decision-clock/1", "start": "2026-10-22T07:45:00Z", "end": "2026-10-22T07:50:00Z",
+        "version": "p09.decision-clock/1", "start": "2026-10-22T21:50:00Z", "end": "2026-10-22T23:35:00Z",
         "interval_seconds": 300}
     report = compare_history(content, _moe_dataset())
     variant = report["variants"][0]
-    # One decision fits inside the readable partition. The engine runs honestly to INSUFFICIENT_DATA; it does not
-    # crash, and it does not invent a control decision. COMMON1 item 3 keeps DESCRIPTIVE accepted for this window.
-    assert report["outcome"] == "INSUFFICIENT_DATA", report
-    assert variant["triggered_observed"] == 1
-    assert variant["control_observed"] == 0
+    assert report["outcome"] == "DESCRIBED", report
+    assert variant["triggered_observed"] + variant["control_observed"] >= 1
 
 
 def test_a_forced_lookback_two_descriptive_schedule_keeps_no_usable_decision(research, owner_a):

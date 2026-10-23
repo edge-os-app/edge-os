@@ -116,9 +116,9 @@ describe("historyUnknowns", () => {
   });
 
   it("names the providers and release for an actual source, and keeps the limits", () => {
-    const text = historyUnknowns("PROVIDER_ACTUAL", "actual-moe-history-nansen-20261022/1")[0];
+    const text = historyUnknowns("PROVIDER_ACTUAL", "actual-moe-history2h-nansen-20261022/1")[0];
     expect(text).toContain("named providers");
-    expect(text).toContain("actual-moe-history-nansen-20261022/1");
+    expect(text).toContain("actual-moe-history2h-nansen-20261022/1");
     expect(text).toContain("Costs are not modelled");
     expect(text).toContain("window is short");
     expect(text).not.toContain("synthetic");

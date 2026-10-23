@@ -42,11 +42,11 @@ from test_actual_binding_admission import authored_actual_history
 
 SOURCE = stand_in.SOURCE_ID
 QUESTION = "Which holder records does MOE return, and what do basic flow records show?"
-REGISTERED_RELEASE_ID = "actual-moe-history-nansen-20261022/1"
-REGISTERED_RELEASE_SHA256 = "2d359daca6f9ca131ee6f90ca1efb97a6f12af4aa285104ebd062366648564c5"
+REGISTERED_RELEASE_ID = "actual-moe-history2h-nansen-20261022/1"
+REGISTERED_RELEASE_SHA256 = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877"
 REGISTERED_NANSEN_REQUEST: dict[str, Any] = {
     "token_address": "0xd8e004acba279417c04c0633cb5a21ceca207777", "token_symbol": "MOE",
-    "window": {"start_utc": "2026-10-21T07:55:00Z", "end_utc": "2026-10-22T07:55:00Z"},
+    "window": {"start_utc": "2026-10-21T23:40:00Z", "end_utc": "2026-10-22T23:40:00Z"},
     "operations": ["holders", "flows"],
     "holder_query": {"label_type": "all_holders", "aggregate_by_entity": False, "order_field": "token_amount",
                      "value_usd_min": None},

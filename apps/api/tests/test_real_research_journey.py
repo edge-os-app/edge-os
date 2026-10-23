@@ -68,11 +68,11 @@ def test_source_catalog_lists_only_labelled_recordings(research, owner_a):
     # exactly one other entry: the one approved actual release source, with its release record.
     released = [item for item in catalog["sources"] if "release" in item]
     assert len(released) == 1
-    assert released[0]["source_id"] == "actual-moe-wmon-fwd20m/1"
+    assert released[0]["source_id"] == "actual-moe-wmon-fwd2h/1"
     assert released[0]["evidence_class"] == "PROVIDER_ACTUAL"
     assert released[0]["content_label"] == "PROVIDER_HISTORY"
     assert released[0]["available"] is True
-    assert released[0]["release"]["release_id"] == "actual-moe-history-nansen-20261022/1"
+    assert released[0]["release"]["release_id"] == "actual-moe-history2h-nansen-20261022/1"
     recorded = [item for item in catalog["sources"] if "release" not in item]
     assert {item["evidence_class"] for item in recorded} == {
         "RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE", "AUTHORED_HTTP_RESPONSE"}
