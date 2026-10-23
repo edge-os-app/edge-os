@@ -4,8 +4,10 @@ LOCAL only. ``run_actual_specimen`` resolves a code-owned approved packet and a
 code-owned qualified reply/decoder profile, admits one frozen specimen, saves an
 immutable one-use intent with ``O_EXCL``/``fsync`` before a single sign-only
 send, rechecks the stop marker after the claim and before the send, captures
-bounded sanitized reply metadata before any parse, then classifies the reply
-with the qualified profile. The accepted durable store, capture shape and
+bounded sanitized reply metadata, then classifies the reply with the qualified
+profile. For an error reply (status 400 or above, bounded JSON) the capture also
+keeps the error code and type, each only when identifier-shaped; it never keeps
+headers, a message, a key or signed bytes. The accepted durable store, capture shape and
 signed-field decoder are reused unchanged.
 
 Every result is ``LOCAL_TESTED``/``UNQUALIFIED``. No provider request, credential,
@@ -34,7 +36,12 @@ from scripts.privy_unfunded_proof.actual_packet import (
     resolve_approved_packet,
     resolve_type4_authority,
 )
-from scripts.privy_unfunded_proof.actual_profile import QualifiedActualProfile, resolve_qualified_profile
+from scripts.privy_unfunded_proof.actual_profile import (
+    QualifiedActualProfile,
+    error_fields,
+    is_expiry_refusal,
+    resolve_qualified_profile,
+)
 from scripts.privy_unfunded_proof.actual_transport import (
     QUANTITY_FIELDS,
     TransportLost,
@@ -53,6 +60,7 @@ from scripts.privy_unfunded_proof.specimens import (
     Specimen,
     SpecimenRefused,
     SpecimenTable,
+    canonical_json,
     envelope_sha256,
     headers_are_canonical,
     refuse_module_run,
@@ -107,6 +115,23 @@ def _media_type(content_type: str | None) -> str | None:
         return None
     media = content_type.split(";")[0].strip().lower()
     return "application/json" if media == "application/json" else "OTHER"
+
+
+def _capture_error_fields(status: int | None, content_type: str | None, body: bytes, valid: bool
+                          ) -> dict[str, str | None]:
+    """The identifier-shaped error code and type of a bounded JSON error reply; None for anything else.
+
+    A reply below 400 is never parsed here, so a success envelope (and any signature in it) never reaches the
+    capture.
+    """
+    if (not valid or status is None or status < 400 or len(body) > MAX_REPLY_BYTES
+            or _media_type(content_type) != "application/json"):
+        return {"error_code": None, "error_type": None}
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return {"error_code": None, "error_type": None}
+    return error_fields(parsed)
 
 
 def _request_body(request: FrozenRequest) -> Any:
@@ -164,6 +189,47 @@ def _blocking_actual(store: AttemptStore, excluding: str) -> str | None:
                 and record.get("reason") not in _NON_STOPPING_UNKNOWN):
             return "STOPPED_AFTER_UNKNOWN"
     return None
+
+
+def _record_sha256(record: Mapping[str, Any]) -> str:
+    """The SHA-256 of a saved record's canonical bytes, which are the bytes the store wrote."""
+    return hashlib.sha256(canonical_json(record)).hexdigest()
+
+
+def _check_rerun(prior: AttemptStore, store: AttemptStore, specimen: Specimen, packet: ActualProofPacket,
+                 table: SpecimenTable, profile_id: str) -> dict[str, str]:
+    """Admit one re-run of an expiry row whose earlier reply was an unrecognized error, in a new store.
+
+    The earlier store is only read. Its expiry row must have ended ``UNKNOWN``/``UNRECOGNIZED_REPLY`` on a
+    captured 401 (an error status, so nothing was signed), every other row of the packet must have matched, and
+    its positive control must be the qualified ``ALLOW``. Returns the hashes the new records cite.
+    """
+    specimen_id = specimen.specimen_id
+    if prior.root.resolve() == store.root.resolve():
+        raise SpecimenRefused("RERUN_SAME_STORE")
+    if specimen.expected is not Expected.EXPIRY_REFUSAL:
+        raise SpecimenRefused("RERUN_NOT_ALLOWED", specimen_id)
+    earlier = prior.read_outcome(specimen_id)
+    capture = prior._read(prior._path(specimen_id, "capture"))
+    if (earlier is None or capture is None or earlier.get("outcome") != Outcome.UNKNOWN.value
+            or earlier.get("reason") != "UNRECOGNIZED_REPLY" or earlier.get("packet_id") != packet.packet_id
+            or earlier.get("reply_profile_id") != profile_id
+            or earlier.get("request_sha256") != packet.request_for(specimen_id).request_sha256
+            or earlier.get("capture_record_sha256") != _record_sha256(capture)
+            or capture.get("status") != 401 or capture.get("request_sha256") != earlier.get("request_sha256")):
+        raise SpecimenRefused("RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE", specimen_id)
+    if prior.blocking_attempt(excluding=specimen_id) is not None:
+        raise SpecimenRefused("RERUN_EARLIER_STORE_BLOCKED")
+    for other in packet.requests:
+        record = prior.read_outcome(other) if other != specimen_id else None
+        if other != specimen_id and (record is None or record.get("matches_expectation") is not True
+                                     or record.get("packet_id") != packet.packet_id):
+            raise SpecimenRefused("RERUN_EARLIER_ROW_NOT_MATCHED", other)
+    positive = prior.read_outcome(table.positive_control(specimen.profile).specimen_id)
+    if positive is None or not _positive_control_allowed(table, prior, specimen.profile, packet, profile_id):
+        raise SpecimenRefused("POSITIVE_CONTROL_NOT_QUALIFIED")
+    return {"earlier_outcome_record_sha256": _record_sha256(earlier),
+            "positive_control_outcome_record_sha256": _record_sha256(positive)}
 
 
 class _ActualAttempt:
@@ -241,6 +307,7 @@ class _ActualAttempt:
             ),
             "byte_count": len(body),
             "raw_body_sha256": hashlib.sha256(body).hexdigest(),
+            **_capture_error_fields(status, content_type, body, valid),
             "metadata_valid": valid,
             "captured_at": self.clock(),
             "evidence_class": ACTUAL_EVIDENCE_CLASS,
@@ -340,6 +407,7 @@ def _check_transport_binding(transport: object, packet: ActualProofPacket, speci
 def _admit(
     specimen_id: str, packet: ActualProofPacket, store: AttemptStore, table: SpecimenTable,
     profile_id: str, profile: QualifiedActualProfile, type4_authority_id: str | None,
+    control_store: AttemptStore,
 ) -> tuple[Specimen, FrozenRequest]:
     if not table.matches_actual_manifest():
         raise SpecimenRefused("MANIFEST_MISMATCH")
@@ -383,7 +451,7 @@ def _admit(
     if blocking is not None:
         raise SpecimenRefused(blocking)
     if not specimen.is_positive_control and not _positive_control_allowed(
-            table, store, specimen.profile, packet, profile_id):
+            table, control_store, specimen.profile, packet, profile_id):
         raise SpecimenRefused("POSITIVE_CONTROL_NOT_QUALIFIED")
     return specimen, request
 
@@ -400,8 +468,13 @@ def run_actual_specimen(
     started_at_epoch: int,
     table: SpecimenTable = FROZEN_TABLE,
     type4_authority_id: str | None = None,
+    rerun_of: AttemptStore | None = None,
 ) -> RunResult:
     """Run one actual specimen at most once. Raises ``SpecimenRefused`` before any effect.
+
+    ``rerun_of`` names the earlier store of the same packet when an expiry row is re-run alone in a new store
+    (see ``_check_rerun``). The positive control is then read from the earlier store, and the new intent and
+    outcome cite the earlier outcome and positive-control records by hash.
 
     ``transport`` must expose ``binding()`` and ``send(request) -> response`` (see
     ``ActualSignOnlyTransport``). The accepted reply has ``status``,
@@ -412,9 +485,12 @@ def run_actual_specimen(
     profile = resolve_qualified_profile(profile_id)
     if now_epoch - started_at_epoch > packet.time_ceiling_seconds:
         raise SpecimenRefused("TIME_CEILING_EXCEEDED")
-    specimen, request = _admit(specimen_id, packet, store, table, profile_id, profile, type4_authority_id)
+    control_store = rerun_of if rerun_of is not None else store
+    specimen, request = _admit(specimen_id, packet, store, table, profile_id, profile, type4_authority_id,
+                               control_store)
     if profile.profile != specimen.profile:
         raise SpecimenRefused("ACTUAL_PROFILE_UNQUALIFIED", profile_id)
+    rerun = None if rerun_of is None else _check_rerun(rerun_of, store, specimen, packet, table, profile_id)
     _check_transport_binding(transport, packet, specimen_id)
     store.claim_record(specimen_id, {
         "specimen_id": specimen_id,
@@ -430,8 +506,11 @@ def run_actual_specimen(
         "state": "INTENT_SAVED",
         "intent_at": clock(),
         "evidence_class": ACTUAL_EVIDENCE_CLASS,
+        **({} if rerun is None else {"rerun_of": rerun}),
     })
     attempt = _ActualAttempt(specimen, request, packet, profile_id, store, clock)
+    if rerun is not None:
+        attempt.extra["rerun_of"] = rerun
     # Recheck the stop marker after the claim and immediately before the send.
     if store.is_stopped():
         return attempt.finish(Outcome.UNKNOWN, "STOPPED_AFTER_CLAIM")
@@ -473,10 +552,15 @@ def run_actual_specimen(
     code = reply_code(parsed)
     entry = profile.codes.get(code) if isinstance(code, str) else None
     if entry is None or entry[0] != status:
+        # A 401 that says the request or its authorization signature expired, on the expiry row only.
+        if specimen.expected is Expected.EXPIRY_REFUSAL and is_expiry_refusal(status, parsed):
+            if not _positive_control_allowed(table, control_store, specimen.profile, packet, profile_id):
+                return attempt.finish(Outcome.UNKNOWN, "POSITIVE_CONTROL_NOT_QUALIFIED")
+            return attempt.finish(Outcome.UNKNOWN, "EXPIRY_REFUSAL")
         return attempt.finish(Outcome.UNKNOWN, "UNRECOGNIZED_REPLY")
     _, outcome_value, reason = entry
     if profile.denial(outcome_value) and not _positive_control_allowed(
-            table, store, specimen.profile, packet, profile_id):
+            table, control_store, specimen.profile, packet, profile_id):
         return attempt.finish(Outcome.UNKNOWN, "POSITIVE_CONTROL_NOT_QUALIFIED")
     return attempt.finish(Outcome(outcome_value), reason)
 

@@ -18,6 +18,8 @@ from scripts.privy_unfunded_proof.specimens import canonical_json
 
 from tests.privy_unfunded_proof._control_support import (
     BASE_FEE,
+    LIVE_FEE_PAYOUTS,
+    TRANSFER_TOPIC,
     authored,
     pool_output,
     privy_captures,
@@ -223,6 +225,120 @@ def test_a_trace_that_pays_another_address_leaves_the_recipient_unproven() -> No
     changed = copy.deepcopy(trace)
     changed["logs"][0]["topics"][2] = "0x" + "00" * 12 + "000000000000000000000000000000000000dead"
     result = _build(chain_records=replaced(records, "chain.swap_trace", result=changed))
+    assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+
+
+# ---------------------------------------------------------------- recipient: the live trace's fee payouts
+
+FEE_1, FEE_2 = LIVE_FEE_PAYOUTS
+
+
+def _fee_trace(**payouts: int):  # noqa: ANN003, ANN202
+    """Chain records whose trace pays the pool's WMON fee payouts (default: the live trace's)."""
+    return recorded_chain(pool_fee_payouts=payouts or dict(LIVE_FEE_PAYOUTS))
+
+
+def _with_pool_log(records, token: str, receiver: str, amount: int):  # noqa: ANN001, ANN202
+    """Add one Transfer from the pool to the trace's pool frame."""
+    trace = copy.deepcopy(next(r for r in records if r["op_id"] == "chain.swap_trace")["result"])
+    word = lambda address: "0x" + address[2:].lower().rjust(64, "0")  # noqa: E731
+    trace["calls"][1]["calls"][0]["logs"].insert(0, {
+        "address": token, "topics": [TRANSFER_TOPIC, word(chain_proof.POOL), word(receiver)],
+        "data": "0x" + amount.to_bytes(32, "big").hex()})
+    return replaced(records, "chain.swap_trace", result=trace)
+
+
+def test_the_pinned_fee_bounds_are_the_live_trace_shares_of_the_input() -> None:
+    assert dict(chain_proof.OBSERVED_FEE_RECIPIENTS_PPM) == {FEE_1: 10_000, FEE_2: 3_500}
+    assert {address: control_proofs.fee_bound_raw(address) for address in LIVE_FEE_PAYOUTS} == LIVE_FEE_PAYOUTS
+    assert chain_proof.INPUT_RAW - sum(LIVE_FEE_PAYOUTS.values()) == 9_865_000_000_000_000_000
+
+
+def test_the_live_trace_shape_makes_the_recipient_a_builder_decision_with_every_payout_listed() -> None:
+    result = _build(chain_records=_fee_trace())
+    assert "recipient" not in result["proven"] and "recipient" not in result["controls"]
+    assert "recipient" not in result["unproven"]
+    entry = result["decision_required"]["recipient"]
+    assert entry["reason"] == "FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND"
+    artifact = entry["artifact"]
+    assert artifact["state"] == "DECISION_REQUIRED" and artifact["decision_required"] == entry["reason"]
+    assert entry["proof_sha256"] == hashlib.sha256(canonical_json(artifact)).hexdigest()
+    findings = artifact["findings"]
+    assert findings["fee_transfers"] == [
+        {"token": chain_proof.WMON, "recipient": FEE_2, "amount_raw": "35000000000000000",
+         "bound_ppm_of_input": 3500, "bound_raw": "35000000000000000"},
+        {"token": chain_proof.WMON, "recipient": FEE_1, "amount_raw": "100000000000000000",
+         "bound_ppm_of_input": 10000, "bound_raw": "100000000000000000"}]
+    assert findings["wmon_received_by_pool_raw"] == "9865000000000000000"
+    assert findings["wmon_paid_by_wallet_raw"] == str(chain_proof.INPUT_RAW)
+    assert findings["moe_received_by_wallet_raw"] == str(pool_output(chain_proof.INPUT_RAW))
+    assert set(result["proven"]) == set(PROVEN) - {"recipient"}
+
+
+def test_a_trace_without_fee_payouts_keeps_the_recipient_enforced() -> None:
+    result = _build()
+    findings = result["proven"]["recipient"]["artifact"]["findings"]
+    assert findings["fee_transfers"] == []
+    assert findings["wmon_received_by_pool_raw"] == str(chain_proof.INPUT_RAW)
+
+
+def test_a_payout_below_its_bound_is_listed_and_one_unit_above_is_refused() -> None:
+    below = _build(chain_records=_fee_trace(**{FEE_1: 1, FEE_2: LIVE_FEE_PAYOUTS[FEE_2]}))
+    assert below["decision_required"]["recipient"]["artifact"]["findings"]["fee_transfers"][1]["amount_raw"] == "1"
+    for address in LIVE_FEE_PAYOUTS:
+        over = dict(LIVE_FEE_PAYOUTS, **{address: LIVE_FEE_PAYOUTS[address] + 1})
+        result = _build(chain_records=_fee_trace(**over))
+        assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+        assert "recipient" not in result["decision_required"]
+
+
+def test_a_payout_split_into_two_logs_is_bounded_by_its_net_sum() -> None:
+    records = _with_pool_log(_fee_trace(), chain_proof.WMON, FEE_2, 1)
+    assert _build(chain_records=records)["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+
+
+@pytest.mark.parametrize("receiver", ["0x000000000000000000000000000000000000dead", chain_proof.ROUTER,
+                                      chain_proof.ENTRYPOINT, "0x" + "00" * 20])
+def test_any_wmon_gain_to_an_unpinned_address_is_refused(receiver: str) -> None:
+    for records in (recorded_chain(), _fee_trace()):
+        changed = _with_pool_log(records, chain_proof.WMON, receiver, 1)
+        result = _build(chain_records=changed)
+        assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+        assert "recipient" not in result["decision_required"] and "recipient" not in result["proven"]
+
+
+def test_a_fee_paid_to_an_unpinned_address_in_place_of_a_pinned_one_is_refused() -> None:
+    swapped = {"0x000000000000000000000000000000000000dead" if address == FEE_1 else address: value
+               for address, value in LIVE_FEE_PAYOUTS.items()}
+    result = _build(chain_records=_fee_trace(**swapped))
+    assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+
+
+@pytest.mark.parametrize("receiver", [FEE_1, FEE_2, chain_proof.ROUTER,
+                                      "0x000000000000000000000000000000000000dead"])
+def test_any_moe_that_does_not_go_to_the_wallet_is_refused(receiver: str) -> None:
+    records = _fee_trace()
+    trace = copy.deepcopy(next(r for r in records if r["op_id"] == "chain.swap_trace")["result"])
+    word = lambda address: "0x" + address[2:].lower().rjust(64, "0")  # noqa: E731
+    trace["logs"].append({"address": chain_proof.MOE,
+                          "topics": [TRANSFER_TOPIC, word(chain_proof.ENTRYPOINT), word(receiver)],
+                          "data": "0x" + (1).to_bytes(32, "big").hex()})
+    trace["calls"][1]["logs"][1]["data"] = "0x" + (pool_output(chain_proof.INPUT_RAW) + 1).to_bytes(32, "big").hex()
+    trace["calls"][1]["calls"][0]["logs"][-1]["data"] = trace["calls"][1]["logs"][1]["data"]
+    result = _build(chain_records=replaced(records, "chain.swap_trace", result=trace))
+    assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+
+
+def test_a_pinned_fee_recipient_that_gains_moe_is_refused() -> None:
+    records = _with_pool_log(_fee_trace(), chain_proof.MOE, FEE_1, 1)
+    assert _build(chain_records=records)["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+
+
+def test_the_wallet_must_pay_exactly_the_input_even_with_fee_payouts() -> None:
+    records = _fee_trace()
+    trace = copy.deepcopy(next(r for r in records if r["op_id"] == "chain.swap_trace")["result"])
+    trace["calls"][0]["logs"][0]["data"] = "0x" + (chain_proof.INPUT_RAW + 1).to_bytes(32, "big").hex()
+    result = _build(chain_records=replaced(records, "chain.swap_trace", result=trace))
     assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
 
 

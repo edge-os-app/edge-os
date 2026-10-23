@@ -62,8 +62,10 @@ _CLAIMS: Mapping[str, tuple[str, ...]] = {
         "consistent with the entrypoint pulling the full intent amount through the allowance.",
     ),
     "recipient": (
-        "A call trace of the release swap shows that the whole MOE output reaches the wallet (msg.sender) and "
-        "no other address gains MOE or WMON except the pool.",
+        "A call trace of the release swap shows that the whole MOE output reaches the wallet (msg.sender), that "
+        "the wallet pays exactly the input, that no other address gains MOE, and that no address gains WMON "
+        "except the pool and the pinned fee recipients, each at most its pinned share of the input (1.00% and "
+        "0.35%).",
         "The Privy policy refuses executeSwapWithReceiver even with the wallet as receiver, and refuses an MOE "
         "transfer, so the agent can sign neither another receiver nor a later move of the output.",
     ),
@@ -105,6 +107,10 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
     ),
     "recipient": (
         "The trace depends on the node's debug_traceCall with state overrides; it is one block.",
+        "The two fee recipients and their bounds are pinned from the controller's live trace of 2026-10-23, not "
+        "from source: no pair source or ABI in this repository names them or their rates. When the trace pays "
+        "them, the artifact is decision_required (FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND) and lists each "
+        "observed recipient and amount. The bounds are what was observed; no provider bounds them.",
         "The trace covers the release's zero-fee calldata. The Privy policy does not bind the fee fields, so a "
         "host-encoded fee collector could take up to 100% of the output; only the host's zero-fee encoding "
         "(control fees, itself a builder decision) prevents it.",
@@ -132,8 +138,9 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
         "The quote age (30 s) and input age (60 s) are host checks; the provider cannot see the quote time.",
         "The Flow intent has no on-chain deadline; after signing, the minimum output is the on-chain protection.",
         "The expiry row has no same-calldata allow twin in this packet; that its body is in policy rests on rule "
-        "R3 and the v3 row raw.allow_swap_zero_value, and the refusal is read from the distinct request_expired "
-        "code.",
+        "R3 and the v3 row raw.allow_swap_zero_value. The refusal is read from an error code that says the "
+        "request or its authorization signature expired (400 request_expired, or such a code on a 401); the "
+        "capture saves that code. If the row was re-run alone, the record cites the earlier store by hash.",
     ),
 }
 
@@ -144,6 +151,15 @@ DECISION_REQUIRED: Mapping[str, str] = {
     "fees": "FEE_VALUES_NOT_PROVIDER_BOUND",
     "expiry_freshness": "PROVIDER_COVERS_SIGNING_CUTOFF_ONLY",
 }
+
+
+# Complete evidence whose own findings need a builder decision: the release swap paid the observed fee recipients,
+# which this repository cannot justify. A trace that pays only the pool and the wallet stays ENFORCED.
+FEE_RECIPIENTS_DECISION = "FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND"
+
+
+def _evidence_decision(name: str, findings: Mapping[str, Any]) -> str | None:
+    return FEE_RECIPIENTS_DECISION if name == "recipient" and findings.get("fee_transfers") else None
 
 
 class ProofRefused(ValueError):
@@ -320,7 +336,11 @@ class _Chain:
 
 
 def _trace_findings(trace: Any, output: int) -> dict[str, Any]:
-    """Net token movements of the release swap trace. Only the pool may gain WMON; only the wallet may gain MOE."""
+    """Net token movements of the release swap trace.
+
+    Only the wallet may gain MOE, exactly the output. The wallet pays exactly the input in WMON. Only the pool and
+    the pinned fee recipients may gain WMON, each recipient at most its pinned bound. Anything else is refused.
+    """
     wallet, entry = chain_proof.WALLET.lower(), chain_proof.ENTRYPOINT.lower()
     tokens = {chain_proof.WMON.lower(), chain_proof.MOE.lower()}
     if (not isinstance(trace, Mapping) or trace.get("type") != "CALL" or "error" in trace
@@ -351,13 +371,27 @@ def _trace_findings(trace: Any, output: int) -> dict[str, Any]:
             transfers += 1
         frames.extend(frame.get("calls") or [])
     moe, wmon = net[chain_proof.MOE.lower()], net[chain_proof.WMON.lower()]
+    pool = chain_proof.POOL.lower()
+    wmon_gains = {address: value for address, value in wmon.items() if value > 0}
+    fee_gains = {address: value for address, value in wmon_gains.items() if address != pool}
     if (transfers == 0
             or {address for address, value in moe.items() if value > 0} != {wallet} or moe[wallet] != output
             or wmon.get(wallet) != -chain_proof.INPUT_RAW
-            or not {address for address, value in wmon.items() if value > 0} <= {chain_proof.POOL.lower()}):
+            or any(address not in chain_proof.OBSERVED_FEE_RECIPIENTS_PPM
+                   or value > fee_bound_raw(address) for address, value in fee_gains.items())):
         raise _Unproven("TRACE_TRANSFERS_INVALID")
     return {"moe_received_by_wallet_raw": str(output), "wmon_paid_by_wallet_raw": str(chain_proof.INPUT_RAW),
+            "wmon_received_by_pool_raw": str(wmon_gains.get(pool, 0)),
+            "fee_transfers": [{"token": chain_proof.WMON, "recipient": address, "amount_raw": str(value),
+                               "bound_ppm_of_input": chain_proof.OBSERVED_FEE_RECIPIENTS_PPM[address],
+                               "bound_raw": str(fee_bound_raw(address))}
+                              for address, value in sorted(fee_gains.items())],
             "transfer_logs": transfers, "touched_addresses": sorted(touched)}
+
+
+def fee_bound_raw(recipient: str) -> int:
+    """The most WMON one pinned fee recipient may gain from the release swap: its ppm of the input, rounded down."""
+    return chain_proof.INPUT_RAW * chain_proof.OBSERVED_FEE_RECIPIENTS_PPM[recipient] // 10**6
 
 
 # ---------------------------------------------------------------- privy records
@@ -370,9 +404,28 @@ def _expected_reply(specimen_id: str) -> tuple[str, str]:
 
 
 class _Privy:
-    def __init__(self, records: Mapping[str, Mapping[str, Any]], captures: Mapping[str, str]) -> None:
-        self.records, self.captures = records, captures
+    def __init__(self, records: Mapping[str, Mapping[str, Any]], captures: Mapping[str, str],
+                 earlier: Mapping[str, Mapping[str, Any]]) -> None:
+        self.records, self.captures, self.earlier = records, captures, earlier
         self.used: set[str] = set()
+
+    def _rerun_valid(self, specimen_id: str, record: Mapping[str, Any]) -> bool:
+        """A record without ``rerun_of`` stands alone. A re-run expiry record must cite, by hash, the earlier
+        store's positive control and its own earlier attempt, which ended UNKNOWN / UNRECOGNIZED_REPLY."""
+        rerun = record.get("rerun_of")
+        earlier = self.earlier.get(specimen_id)
+        if rerun is None:
+            return earlier is None
+        positive = self.records.get(CONTROL_PROOF_ORDER[0])
+        return (CONTROL_PROOF_PACKET.specimen_expected[specimen_id] == "EXPIRY_REFUSAL"
+                and isinstance(rerun, Mapping) and isinstance(earlier, Mapping) and isinstance(positive, Mapping)
+                and set(rerun) == {"earlier_outcome_record_sha256", "positive_control_outcome_record_sha256"}
+                and rerun["earlier_outcome_record_sha256"] == _sha256(earlier)
+                and rerun["positive_control_outcome_record_sha256"] == _sha256(positive)
+                and earlier.get("specimen_id") == specimen_id and earlier.get("outcome") == "UNKNOWN"
+                and earlier.get("reason") == "UNRECOGNIZED_REPLY"
+                and earlier.get("packet_id") == CONTROL_PROOF_PACKET.packet_id
+                and earlier.get("request_sha256") == record.get("request_sha256"))
 
     def _valid(self, specimen_id: str) -> bool:
         packet, record = CONTROL_PROOF_PACKET, self.records.get(specimen_id)
@@ -393,7 +446,8 @@ class _Privy:
                                             is not None))
                 and type(record.get("capture_record_sha256")) is str
                 and _HEX64.fullmatch(record["capture_record_sha256"]) is not None
-                and self.captures.get(specimen_id) == record["capture_record_sha256"])
+                and self.captures.get(specimen_id) == record["capture_record_sha256"]
+                and self._rerun_valid(specimen_id, record))
 
     def refused(self, specimen_id: str) -> None:
         """The row's provider reply matched, after the packet's positive control signed in policy."""
@@ -407,7 +461,9 @@ class _Privy:
                  "request_sha256": self.records[specimen_id]["request_sha256"],
                  "record_sha256": _sha256(self.records[specimen_id]),
                  "capture_record_sha256": self.records[specimen_id]["capture_record_sha256"],
-                 "outcome": self.records[specimen_id]["outcome"], "reason": self.records[specimen_id]["reason"]}
+                 "outcome": self.records[specimen_id]["outcome"], "reason": self.records[specimen_id]["reason"],
+                 **({"rerun_of": dict(self.records[specimen_id]["rerun_of"])}
+                    if "rerun_of" in self.records[specimen_id] else {})}
                 for specimen_id in sorted(self.used)]
 
 
@@ -526,12 +582,15 @@ def _artifact(name: str, authored: Mapping[str, Any], chain: _Chain | None, priv
 
 def build_control_proofs(*, authored: Mapping[str, Any], privy_records: Mapping[str, Mapping[str, Any]],
                          privy_capture_sha256: Mapping[str, str],
-                         chain_records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+                         chain_records: Sequence[Mapping[str, Any]],
+                         privy_earlier_records: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     """Proofs for the controls the records prove, and a fixed reason for every other control.
 
     ``privy_capture_sha256`` maps each specimen id to the SHA-256 of its saved capture file; an outcome record
-    counts only when its ``capture_record_sha256`` equals it.
+    counts only when its ``capture_record_sha256`` equals it. ``privy_earlier_records`` holds the earlier
+    outcome record of a row that was re-run alone (the expiry row only); the re-run record must cite it.
     """
+    earlier = privy_earlier_records or {}
     if not chain_proof.release_inputs_match(authored):
         raise ProofRefused("AUTHORED_NOT_FROZEN_INPUTS")
     by_id = _check_chain_records(chain_records)
@@ -540,14 +599,14 @@ def build_control_proofs(*, authored: Mapping[str, Any], privy_records: Mapping[
     unproven: dict[str, dict[str, Any]] = {}
 
     def attempt(name: str, rule: Any, needs_chain: bool = True) -> None:
-        chain, privy = _Chain(authored, by_id), _Privy(privy_records, privy_capture_sha256)
+        chain, privy = _Chain(authored, by_id), _Privy(privy_records, privy_capture_sha256, earlier)
         try:
             base = chain.preconditions() if needs_chain else None
             findings = rule(chain, privy, base)
         except _Unproven as missing:
             unproven[name] = {"reason": missing.reason}
             return
-        decision = DECISION_REQUIRED.get(name)
+        decision = DECISION_REQUIRED.get(name) or _evidence_decision(name, findings)
         artifact = _artifact(name, authored, chain if needs_chain else None, privy, base, findings,
                              state="DECISION_REQUIRED" if decision else "ENFORCED", evidence_class="PROVIDER_ACTUAL",
                              claims=_CLAIMS[name], limits=_LIMITS[name], decision=decision)
@@ -618,6 +677,22 @@ def load_privy_store(root: Path) -> tuple[dict[str, Any], dict[str, str]]:
     return records, captures
 
 
+def merge_expiry_rerun(records: dict[str, Any], captures: dict[str, str], rerun_root: Path
+                       ) -> dict[str, Any]:
+    """Replace the expiry row with its re-run from a separate store; return the earlier record it supersedes.
+
+    The re-run store must hold the expiry row's outcome and capture and no other row's outcome.
+    """
+    rerun_records, rerun_captures = load_privy_store(rerun_root)
+    expiry = [sid for sid in CONTROL_PROOF_ORDER if CONTROL_PROOF_PACKET.specimen_expected[sid] == "EXPIRY_REFUSAL"]
+    if set(rerun_records) != set(expiry) or set(rerun_captures) != set(expiry) or not set(expiry) <= set(records):
+        raise ProofRefused("RERUN_STORE_INVALID")
+    earlier = {sid: records[sid] for sid in expiry}
+    records.update(rerun_records)
+    captures.update(rerun_captures)
+    return earlier
+
+
 def load_chain_store(root: Path) -> list[Any]:
     saved = json.loads((root / chain_proof.RESULTS_FILE).read_text(encoding="utf-8"))
     if not isinstance(saved, dict) or saved.get("schema") != chain_proof.RESULTS_SCHEMA:
@@ -630,6 +705,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--authored", type=Path, required=True)
     parser.add_argument("--privy-store", type=Path, required=True)
     parser.add_argument("--chain-store", type=Path, required=True)
+    parser.add_argument("--privy-rerun-store", type=Path,
+                        help="the store of the expiry row re-run alone (actual_run --rerun-expiry-from)")
     parser.add_argument("--out", type=Path, required=True, help="a new directory for the proof artifacts")
     args = parser.parse_args(argv)
     if args.out.exists():
@@ -637,9 +714,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         records, captures = load_privy_store(args.privy_store)
+        earlier = (merge_expiry_rerun(records, captures, args.privy_rerun_store)
+                   if args.privy_rerun_store is not None else None)
         result = build_control_proofs(authored=json.loads(args.authored.read_text(encoding="utf-8")),
                                       privy_records=records, privy_capture_sha256=captures,
-                                      chain_records=load_chain_store(args.chain_store))
+                                      chain_records=load_chain_store(args.chain_store),
+                                      privy_earlier_records=earlier)
     except ProofRefused as refused:
         print(json.dumps({"status": "REFUSED", "code": refused.code}))
         return 2
