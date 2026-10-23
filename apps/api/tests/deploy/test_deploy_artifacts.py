@@ -98,3 +98,61 @@ def test_the_hosted_deployment_registry_is_unchanged():
     text = (support.REPO / "apps" / "api" / "src" / "edge_os_api" / "core" / "hosted_deployment.py").read_text(
         encoding="utf-8")
     assert "APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {}" in text
+
+
+HOSTED_RECORD_V2 = support.REPO / "docs" / "qualification" / "hosted-gates" / "HOSTED_RECORD_V2_RUNBOOK.md"
+
+
+def test_the_hosted_record_v2_runbook_covers_every_host_step():
+    text = HOSTED_RECORD_V2.read_text(encoding="utf-8")
+    for topic in ("edge-os-postgres", "alias", "127.0.0.1:5432", "IP:127.0.0.1", "DNS:edge-os-postgres",
+                  "0.0.0.0", "edgeos-egress", "DOCKER-USER", "api.privy.io", "cannot restrict by host name",
+                  "Contabo", "snapshot", "pg_dump", "pg_restore", "scratch", "sponsored", "execution_release",
+                  "edge-os.hosted-deployment/2", "APPROVED_HOSTED_DEPLOYMENTS", "APPROVED_ACTUAL_RELEASES",
+                  "EDGE_OS_PRIVY_APP_SECRET"):
+        assert topic in text, topic
+    assert "This candidate registers no hosted deployment" in text
+    # Containers are chosen within this stack's Compose project, never by the service label alone: Coolify's own
+    # database is also a Compose service named `postgres`.
+    assert "docker ps --filter label=com.docker.compose.service" not in text
+    assert "head -1" not in text
+    assert "label=com.docker.compose.project=$PROJECT" in text
+    # A negative check passes only on the probe's own "blocked" exit code from a selected, running container.
+    assert 'if [ "$rc" -eq 42 ]; then echo "pass: blocked"' in text
+    assert "running \"$c\" ||" in text
+    assert "-ge 125" not in text
+
+
+def test_the_coolify_runbook_uses_the_unique_database_alias():
+    text = RUNBOOK.read_text(encoding="utf-8")
+    assert "@edge-os-postgres:5432/edge_os?sslmode=require" in text
+    assert "@postgres:5432" not in text
+    assert "DNS:edge-os-postgres" in text
+    assert "edge-os.hosted-deployment/2" in text
+    assert "HOSTED_RECORD_V2_RUNBOOK.md" in text
+
+
+def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
+    host = support.REPO / "deploy" / "host"
+    script = host / "edge-os-egress-firewall.sh"
+    assert os.access(script, os.X_OK)
+    text = script.read_text(encoding="utf-8")
+    for rule in ("-i edgeos-hostdb -j DROP", "-o edgeos-hostdb -j DROP", '-s "$HOSTDB_SUBNET" -j DROP',
+                 '! -i edgeos-egress ! -s "$EGRESS_SUBNET" -j RETURN', '-m set --match-set "$SET" dst -j RETURN',
+                 '-A "$fwd" -j DROP', '-A "$chain" -j DROP', "hook DOCKER-USER",
+                 "hook INPUT", "conntrack -D -s", "flock 9", "conntrack is required",
+                 'replies_only EDGE_OS_IN edgeos-egress "$EGRESS_SUBNET"',
+                 'replies_only EDGE_OS_IN_DB edgeos-hostdb "$HOSTDB_SUBNET"',
+                 'replies_only EDGE_OS_IN_PRIVATE edgeos-private "$PRIVATE_SUBNET"'):
+        assert rule in text, rule
+    assert "ipset flush" not in text and "ipset swap" not in text
+    unit = (host / "edge-os-egress-firewall.service").read_text(encoding="utf-8")
+    assert "Before=docker.service" in unit and "RequiredBy=docker.service" in unit
+    # A failed Condition* skips the unit as a success, so Docker would start without rules.
+    assert not re.search(r"(?m)^Condition", unit)
+    # The unit runs a root-owned installed copy, never the git checkout.
+    assert "ExecStart=/usr/local/sbin/edge-os-egress-firewall apply" in unit
+    assert "ExecReload=/usr/local/sbin/edge-os-egress-firewall apply" in unit
+    assert "/opt/edge-os" not in "".join(line for line in unit.splitlines() if line.startswith("Exec"))
+    timer = (host / "edge-os-egress-refresh.timer").read_text(encoding="utf-8")
+    assert "OnUnitActiveSec=5min" in timer

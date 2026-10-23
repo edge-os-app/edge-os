@@ -3,7 +3,14 @@
 # This file is a Docker Compose build pack definition. It builds nothing: both application images are built by
 # .github/workflows/images.yml on linux/amd64, pushed to GHCR and referenced here by digest variables. Coolify adds
 # its Traefik labels and the public domains; only `api` and `web` are routable. PostgreSQL and both workers stay on
-# the private network and publish no host port.
+# the private network. PostgreSQL publishes one port, on host loopback `127.0.0.1:5432` only, for the host research
+# worker; it is never published on all interfaces. The execution worker alone also joins the `egress` network.
+#
+# Database alias: Coolify's own database answers to `postgres` on the shared `coolify` network, which the API joins.
+# Our PostgreSQL therefore answers to the unique alias `edge-os-postgres`, and EDGE_OS_DATABASE_URL must name it:
+#   postgresql+psycopg://edge_os:${POSTGRES_PASSWORD}@edge-os-postgres:5432/edge_os?sslmode=require
+# with the password URL-encoded. The value lives in Coolify, never here.
+# Production settings refuse a database host named `postgres` or `coolify-db`.
 #
 # Fail closed: every secret and every image is a required variable (`:?`). A missing value stops `docker compose
 # config`/`up`; there is no local, fixture or in-memory fallback. Values live in Coolify, never in this file.
@@ -19,12 +26,12 @@ x-hardening: &hardening
   security_opt: ["no-new-privileges:true"]
   init: true
 
-# The API, migration, execution worker and recurring producer share one image and one typed settings contract. The
-# worker processes call `load_settings()`, so they need the same required names as the API. None of them receives the
+# The API, migration, execution worker and recurring producer share one image and one typed settings contract. The API
+# and the recurring producer use this block; the execution worker has its own block below. None of them receives the
 # raw PostgreSQL password; each receives only the composed database URL.
 x-api-environment: &api-environment
   EDGE_OS_ENV: production
-  EDGE_OS_DATABASE_URL: ${EDGE_OS_DATABASE_URL:?set EDGE_OS_DATABASE_URL to the composed sslmode=require URL}
+  EDGE_OS_DATABASE_URL: ${EDGE_OS_DATABASE_URL:?set EDGE_OS_DATABASE_URL (sslmode=require, host edge-os-postgres)}
   EDGE_OS_PRIVY_APP_ID: ${EDGE_OS_PRIVY_APP_ID:?set EDGE_OS_PRIVY_APP_ID}
   EDGE_OS_PRIVY_VERIFICATION_KEY: ${EDGE_OS_PRIVY_VERIFICATION_KEY:?set EDGE_OS_PRIVY_VERIFICATION_KEY}
   EDGE_OS_CORS_ALLOWED_ORIGINS: ${EDGE_OS_CORS_ALLOWED_ORIGINS:?set EDGE_OS_CORS_ALLOWED_ORIGINS}
@@ -46,6 +53,23 @@ x-api-environment: &api-environment
   EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS: ${EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS:-30000}
   # Coolify can place all environment variables in one shared runtime file. Mask the database password on every
   # service that must not hold it.
+  POSTGRES_USER: __EDGE_OS_UNSET__
+  POSTGRES_PASSWORD: __EDGE_OS_UNSET__
+  POSTGRES_DB: __EDGE_OS_UNSET__
+
+# The execution worker's own block. It is not merged with the API block: it holds only the names `load_settings()`
+# requires and the names the worker reads (execution mode, statement timeout). No interpreter, research, budget or
+# usage value reaches it. Controlled execution stays off here; production admits it only for a registered hosted
+# deployment record that binds the exact approved execution release (core/settings.py). No Privy app secret is named.
+x-worker-environment: &worker-environment
+  EDGE_OS_ENV: production
+  EDGE_OS_DATABASE_URL: ${EDGE_OS_DATABASE_URL:?set EDGE_OS_DATABASE_URL (sslmode=require, host edge-os-postgres)}
+  EDGE_OS_PRIVY_APP_ID: ${EDGE_OS_PRIVY_APP_ID:?set EDGE_OS_PRIVY_APP_ID}
+  EDGE_OS_PRIVY_VERIFICATION_KEY: ${EDGE_OS_PRIVY_VERIFICATION_KEY:?set EDGE_OS_PRIVY_VERIFICATION_KEY}
+  EDGE_OS_CORS_ALLOWED_ORIGINS: ${EDGE_OS_CORS_ALLOWED_ORIGINS:?set EDGE_OS_CORS_ALLOWED_ORIGINS}
+  EDGE_OS_BUILD_SHA: ${EDGE_OS_BUILD_SHA:?set EDGE_OS_BUILD_SHA to the deployed source commit}
+  EDGE_OS_EXECUTION_MODE: unavailable
+  EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS: ${EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS:-30000}
   POSTGRES_USER: __EDGE_OS_UNSET__
   POSTGRES_PASSWORD: __EDGE_OS_UNSET__
   POSTGRES_DB: __EDGE_OS_UNSET__
@@ -89,7 +113,18 @@ services:
     mem_limit: 1536m
     mem_reservation: 512m
     pids_limit: 256
-    networks: [private]
+    # Loopback only, for the host research worker (builder decision B2 option a), never all interfaces. The
+    # certificate carries `DNS:edge-os-postgres` and `IP:127.0.0.1`. See
+    # docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md.
+    # Docker does not publish a port for a container attached only to an `internal` network, so the published port
+    # lives on `hostdb`, a bridge that only PostgreSQL joins and that has no outbound NAT.
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      private:
+        # The unique alias. Never `postgres`: on the `coolify` network that name is Coolify's own database.
+        aliases: [edge-os-postgres]
+      hostdb: {}
     restart: unless-stopped
     healthcheck:
       test:
@@ -202,12 +237,13 @@ services:
       - >-
         while true; do python -m edge_os_api.execution.worker --once || exit $$?;
         touch /tmp/edge-os-worker-heartbeat; sleep 2; done
-    environment: *api-environment
+    environment: *worker-environment
     tmpfs: ["/tmp"]
     mem_limit: 768m
     mem_reservation: 128m
     pids_limit: 256
-    networks: [private]
+    # `private` for PostgreSQL; `egress` for api.privy.io and the Monad RPC only, enforced on the host (see below).
+    networks: [private, egress]
     restart: unless-stopped
     depends_on:
       postgres: {condition: service_healthy}
@@ -259,10 +295,40 @@ services:
       start_period: 60s
 
 networks:
-  # No route out of the host for PostgreSQL, the migration step or the workers. The API verification key is checked
-  # locally, so the API does not need provider egress; provider modes are unavailable in this candidate.
+  # No route out of the host on this network. The API verification key is checked locally, so the API does not need
+  # provider egress. Only the execution worker has a route out (`egress`); PostgreSQL's `hostdb` has no NAT.
   private:
     internal: true
+    # A fixed bridge name and subnet so the host firewall keeps its gateway from reaching host services.
+    driver_opts:
+      com.docker.network.bridge.name: edgeos-private
+    ipam:
+      config:
+        - subnet: 10.203.0.64/26
+  # The execution worker's only route out, intended for https://api.privy.io and the Monad RPC endpoint only. Docker
+  # cannot restrict by host name: this network alone allows every destination. The host firewall (DOCKER-USER chain
+  # on the fixed bridge `edgeos-egress`, subnet 10.203.0.0/28) or an egress gateway enforces the two destinations;
+  # the rule is deploy/host/edge-os-egress-firewall.sh, described in HOSTED_RECORD_V2_RUNBOOK.md §4.1. Install it
+  # before the first deploy that creates this network.
+  # PostgreSQL's loopback publish only. Masquerade is off, so the database has no route out of the host; the host
+  # firewall also drops forwarded traffic from this bridge and its traffic to the host (see the runbook).
+  hostdb:
+    driver: bridge
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: edgeos-hostdb
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+    ipam:
+      config:
+        - subnet: 10.203.0.16/28
+  egress:
+    driver: bridge
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: edgeos-egress
+    ipam:
+      config:
+        - subnet: 10.203.0.0/28
   # Coolify's Traefik network. Only the API and web join it; the domain and TLS certificate are assigned in Coolify.
   coolify:
     external: true

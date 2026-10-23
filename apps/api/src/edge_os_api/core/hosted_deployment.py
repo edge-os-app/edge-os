@@ -8,7 +8,10 @@ compare it with the code-owned hash, and only after the id is registered.
 
 Production admits the Hermes relay application, the `hermes_local` interpreter and the approved research release only
 when the running configuration names a registered record whose canonical hash and bound origins and TLS mode match.
-Every other production refusal stays. See `docs/qualification/hosted-activation/CONTRACT.md`.
+Record version 2 adds `execution_release`, the exact release id and SHA-256 of the one controlled execution release
+the deployment approves. A version 1 record still parses and binds no execution release, so it grants no execution.
+Every other production refusal stays. See `docs/qualification/hosted-activation/CONTRACT.md` and
+`docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md`.
 """
 
 from __future__ import annotations
@@ -30,12 +33,18 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 RECORD_VERSION = "edge-os.hosted-deployment/1"
+RECORD_VERSION_2 = "edge-os.hosted-deployment/2"
 MAX_RECORD_BYTES = 64 * 1024
 TLS_MODES = frozenset({"require", "verify-ca", "verify-full"})
 HOST_GATES = ("h1_egress", "h2_runner_isolation", "h8_provider_spend_cap", "h10_backup_restore")
 RECORD_FIELDS = frozenset({"schema_version", "deployment_id", "public_origins", "cors_origins",
                            "database_tls_mode", "hermes_relay", "research_release", "host_gates",
                            "image_digests", "valid_from", "valid_until"})
+# Version 2 is version 1 plus the bound execution release. Each version has exactly its frozen fields.
+RECORD_FIELDS_BY_VERSION: Mapping[str, frozenset[str]] = {
+    RECORD_VERSION: RECORD_FIELDS,
+    RECORD_VERSION_2: RECORD_FIELDS | {"execution_release"},
+}
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 # Operating release ids carry a version suffix, for example `actual-moe-nansen-demo-20261018/1`.
 RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
@@ -84,6 +93,9 @@ class HostedDeployment:
     image_digests: Mapping[str, str]
     valid_from: datetime
     valid_until: datetime
+    # None for a version 1 record: it binds no execution release and admits none.
+    execution_release_id: str | None = None
+    execution_release_sha256: str | None = None
 
     def admits_hermes_relay(self, release_id: str, record_sha256: str) -> bool:
         """True only for the exact relay release id and record SHA-256 this deployment approves."""
@@ -98,6 +110,15 @@ class HostedDeployment:
         """True only for the exact research release id and release SHA-256 this deployment approves."""
         return (release_id == self.research_release_id
                 and hmac.compare_digest(sha256, self.research_release_sha256))
+
+    def admits_execution_release(self, release_id: str, sha256: str) -> bool:
+        """True only for the exact execution release id and SHA-256 a version 2 record binds. Never for version 1."""
+        if self.execution_release_id is None or self.execution_release_sha256 is None:
+            return False
+        if not isinstance(release_id, str) or not isinstance(sha256, str) or not SHA256.fullmatch(sha256):
+            return False
+        return (release_id == self.execution_release_id
+                and hmac.compare_digest(sha256, self.execution_release_sha256))
 
 
 def canonical(record: Mapping[str, Any]) -> bytes:
@@ -214,7 +235,9 @@ def _strict_object(raw: bytes) -> dict[str, Any]:
 
 
 def _parse(value: dict[str, Any], digest: str) -> HostedDeployment:
-    if set(value) != RECORD_FIELDS or value.get("schema_version") != RECORD_VERSION:
+    version = value.get("schema_version")
+    fields = RECORD_FIELDS_BY_VERSION.get(version) if isinstance(version, str) else None
+    if fields is None or set(value) != fields:
         raise HostedDeploymentRefused("hosted_deployment_invalid", "the record has not the frozen fields and version")
     deployment_id = value["deployment_id"]
     if not isinstance(deployment_id, str) or not IDENTIFIER.fullmatch(deployment_id):
@@ -228,6 +251,8 @@ def _parse(value: dict[str, Any], digest: str) -> HostedDeployment:
         raise HostedDeploymentRefused("hosted_deployment_invalid", "the TLS mode is not accepted")
     relay = _pair(value["hermes_relay"], "release_id", "record_sha256")
     research = _pair(value["research_release"], "release_id", "sha256")
+    execution = (_pair(value["execution_release"], "release_id", "sha256")
+                 if version == RECORD_VERSION_2 else (None, None))
     gates = _host_gates(value["host_gates"])
     images = _images(value["image_digests"])
     start = _timestamp(value["valid_from"])
@@ -238,7 +263,8 @@ def _parse(value: dict[str, Any], digest: str) -> HostedDeployment:
         deployment_id=deployment_id, record_sha256=digest, public_origins=public, cors_origins=cors,
         database_tls_mode=tls, hermes_relay_release_id=relay[0], hermes_relay_record_sha256=relay[1],
         research_release_id=research[0], research_release_sha256=research[1], host_gates=gates,
-        image_digests=images, valid_from=start, valid_until=end)
+        image_digests=images, valid_from=start, valid_until=end,
+        execution_release_id=execution[0], execution_release_sha256=execution[1])
 
 
 def _origins(value: Any) -> tuple[str, ...]:

@@ -18,7 +18,7 @@ def _public_key() -> str:
 def production_env() -> dict[str, str]:
     return {
         "EDGE_OS_ENV": "production",
-        "EDGE_OS_DATABASE_URL": "postgresql+psycopg://edge_os:not-a-real-password@postgres:5432/edge_os?sslmode=require",
+        "EDGE_OS_DATABASE_URL": "postgresql+psycopg://edge_os:not-a-real-password@edge-os-postgres:5432/edge_os?sslmode=require",
         "EDGE_OS_PRIVY_APP_ID": "clz-production-example",
         "EDGE_OS_PRIVY_VERIFICATION_KEY": _public_key(),
         "EDGE_OS_CORS_ALLOWED_ORIGINS": "https://app.edgeos.fun",
@@ -39,8 +39,8 @@ def test_the_production_contract_loads():
 
 
 @pytest.mark.parametrize("change,reason", [
-    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@postgres:5432/edge_os"}, "sslmode"),
-    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@postgres:5432/edge_os?sslmode=disable"}, "sslmode"),
+    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@edge-os-postgres:5432/edge_os"}, "sslmode"),
+    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@edge-os-postgres:5432/edge_os?sslmode=disable"}, "sslmode"),
     ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@127.0.0.1:5432/edge_os?sslmode=require"}, "loopback"),
     ({"EDGE_OS_CORS_ALLOWED_ORIGINS": "http://app.edgeos.fun"}, "https"),
     ({"EDGE_OS_CORS_ALLOWED_ORIGINS": "*"}, "wildcard"),
@@ -51,6 +51,21 @@ def test_the_production_contract_loads():
     ({"EDGE_OS_RESEARCH_SOURCE_CLIENTS": "authored_http"}, "research_source_clients"),
     ({"EDGE_OS_NANSEN_RESEARCH_MODE": "authored_fixture"}, "nansen_research_mode"),
     ({"EDGE_OS_BUILD_SHA": ""}, "build_sha"),
+    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@postgres:5432/edge_os?sslmode=require"},
+     "Coolify's own database alias"),
+    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@POSTGRES:5432/edge_os?sslmode=require"},
+     "Coolify's own database alias"),
+    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@postgres.:5432/edge_os?sslmode=require"},
+     "Coolify's own database alias"),
+    ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@coolify-db:5432/edge_os?sslmode=require"},
+     "Coolify's own database alias"),
+    ({"EDGE_OS_DATABASE_URL":
+      "postgresql+psycopg://u:p@edge-os-postgres:5432/edge_os?sslmode=require&host=postgres"},
+     "host or hostaddr query parameters"),
+    ({"EDGE_OS_DATABASE_URL":
+      "postgresql+psycopg://u:p@edge-os-postgres:5432/edge_os?sslmode=require&hostaddr=127.0.0.1"},
+     "host or hostaddr query parameters"),
+    ({"EDGE_OS_EXECUTION_MODE": "controlled"}, "controlled execution needs an approved hosted deployment"),
 ])
 def test_production_refusals_stay_in_force(change, reason):
     with pytest.raises(ConfigError) as caught:
