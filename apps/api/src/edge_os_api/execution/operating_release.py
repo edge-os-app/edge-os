@@ -23,6 +23,12 @@ _FIELDS = frozenset({"release_id", "kind", "evidence_class", "purpose", "chain_i
     "signer_id", "policy_id", "policy_owner_id", "policy_content_sha256", "independent_proof_sha256", "deployment",
     "route", "quote", "broadcast", "observer", "gas", "transaction", "limits", "valid_until", "finality", "controls"})
 
+_SINGLE_ACTION_LIMITS = frozenset({"actions", "attempts", "broadcasts", "quote_requests", "signer_requests",
+    "observer_requests", "max_request_bytes", "max_response_bytes", "deadline_seconds"})
+# A step release names its steps in this order; each carries its own `signer_requests` 1 and `broadcasts` 1.
+RELEASE_STEPS = ("approve", "swap", "revoke")
+_STEP_LIMITS = (_SINGLE_ACTION_LIMITS - {"broadcasts", "signer_requests"}) | {"steps"}
+
 
 class ReleaseRefused(ValueError):
     """A stable pre-I/O admission refusal."""
@@ -55,6 +61,25 @@ def _json_domain(value: Any, depth: int = 0) -> None:
     else:
         _require(value is None or type(value) is bool or (type(value) is int and 0 <= value < 2**256)
                  or (type(value) is str and len(value) <= 32768))
+
+
+def validate_limits(limits: Any) -> None:
+    """Either the single-action limits, or the ordered steps, each with its own single signer request and broadcast."""
+    _require(type(limits) is dict)
+    if "steps" not in limits:
+        _require(set(limits) == _SINGLE_ACTION_LIMITS)
+        _require(all(type(x) is int and x > 0 for x in limits.values()))
+        _require(all(limits[x] == 1 for x in ("actions", "attempts", "broadcasts", "quote_requests", "signer_requests")))
+        return
+    _require(set(limits) == _STEP_LIMITS)
+    _require(all(type(limits[x]) is int and limits[x] > 0 for x in _STEP_LIMITS - {"steps"}))
+    _require(all(limits[x] == 1 for x in ("actions", "attempts", "quote_requests")))
+    steps = limits["steps"]
+    _require(type(steps) is list and len(steps) == len(RELEASE_STEPS))
+    for step, name in zip(steps, RELEASE_STEPS):
+        _require(type(step) is dict and set(step) == {"step", "signer_requests", "broadcasts"} and step["step"] == name
+                 and type(step["signer_requests"]) is int and step["signer_requests"] == 1
+                 and type(step["broadcasts"]) is int and step["broadcasts"] == 1)
 
 
 def _validate(value: dict[str, Any]) -> None:
@@ -122,11 +147,7 @@ def _validate(value: dict[str, Any]) -> None:
                  and destination["role"] == role and _text(destination["destination_id"]) and _text(destination["credential_slot"]))
     _require(value["broadcast"]["endpoint"] != value["observer"]["endpoint"]
              and value["broadcast"]["destination_id"] != value["observer"]["destination_id"])
-    limits = value["limits"]
-    _require(set(limits) == {"actions", "attempts", "broadcasts", "quote_requests", "signer_requests", "observer_requests",
-        "max_request_bytes", "max_response_bytes", "deadline_seconds"})
-    _require(all(type(x) is int and x > 0 for x in limits.values()))
-    _require(all(limits[x] == 1 for x in ("actions", "attempts", "broadcasts", "quote_requests", "signer_requests")))
+    validate_limits(value["limits"])
     for endpoint in (quote["endpoint"], value["broadcast"]["endpoint"], value["observer"]["endpoint"]):
         validate_endpoint(endpoint)
         parts = urlsplit(endpoint)
@@ -176,6 +197,12 @@ class OperatingRelease:
 
 def release_sha256(release: OperatingRelease) -> str:
     return hashlib.sha256(release._bytes).hexdigest()
+
+
+def release_steps(release: OperatingRelease) -> tuple[str, ...] | None:
+    """The ordered steps a release names, or None for a single-action release."""
+    steps = release.content()["limits"].get("steps")
+    return None if steps is None else tuple(step["step"] for step in steps)
 
 
 def check_release(release: OperatingRelease, *, expected_sha256: str, now: dt.datetime,

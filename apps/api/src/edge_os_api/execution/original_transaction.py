@@ -13,7 +13,9 @@ liability (`SUBMISSION_POSSIBLE`); only the independent receipt reconciliation c
 
 With a release step plan (`TradeSteps`) one approved action runs the release's fixed order instead: an exact
 ERC-20 approve of the input to the swap's entrypoint, the swap, and a revoke to zero. Each step goes through the same
-stages once, in its own journal record (`APPROVE_*`, the swap at the top level as above, `REVOKE_*`). The total gas
+stages once, in its own journal record (`APPROVE_*`, the swap at the top level as above, `REVOKE_*`). A bound release
+must name exactly these steps, each with its own single signer request and broadcast; a release with the
+single-action limits runs only the single swap (`RELEASE_STEPS_MISMATCH` otherwise). The total gas
 of every step counts against the gas reservation and the release's USD ceiling before the first step. An unknown
 approve or swap stops the action with its liability kept; the revoke runs only after the swap's own hash was
 returned or the swap was definitely refused, and an unknown or unsent revoke stays reported as an open allowance.
@@ -584,7 +586,7 @@ class OriginalTransactionTransport:
 
     def _prepare(self, prepared: PreparedSubmission) -> tuple[dict[str, Any] | None, str | None]:
         context, profile = self._context, self._profile
-        refusal = self._release_problem()
+        refusal = self._release_problem() or self._release_steps_problem()
         if refusal is not None:
             return None, refusal
         if context.chain_id != profile.chain_id:
@@ -771,6 +773,15 @@ class OriginalTransactionTransport:
         except ReleaseRefused as error:
             return str(error)
         return None
+
+    def _release_steps_problem(self) -> str | None:
+        """A bound release runs only as it is shaped: the steps it names in this plan's order, or the single swap."""
+        if self._binding is None:
+            return None
+        from edge_os_api.execution.operating_release import release_steps
+
+        planned = None if self._steps is None else self._steps.order
+        return None if release_steps(self._binding.release) == planned else "RELEASE_STEPS_MISMATCH"
 
     @staticmethod
     def _unsent(journal: Callable[[str, dict[str, Any]], None], reason: str,
