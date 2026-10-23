@@ -13,18 +13,21 @@ pending step 1 of `INAPP_TRADE_RELEASE.md`). This plan covers the other eight.
 
 | # | Control | Verdict | Evidence |
 | --- | --- | --- | --- |
-| 4 | `input_output_assets` | Provable | Chain simulations + one Privy refusal |
+| 4 | `input_output_assets` | **Builder decision** (input side only; the output token has no provider bound) | Chain simulations + one Privy refusal |
 | 5 | `raw_input` | Provable | Chain simulations |
 | 6 | `recipient` | Provable if the node supports `debug_traceCall` | Chain trace + two Privy refusals |
 | 7 | `minimum_output` | Provable | Chain simulations |
 | 8 | `fees` | Provable | Chain simulations |
 | 10 | `gas_action_capacity` | Provable for the native gas budget | Chain estimates and base fee |
-| 11 | `expiry_freshness` | Provable for the signing cutoff | One Privy refusal |
+| 11 | `expiry_freshness` | **Builder decision** (provider signing cutoff only; the control is HOST-layer) | One Privy refusal |
 | 12 | `opaque_program` | **Not provable this way** | See "Control 12" |
 
 "Provable" means: if the controller's live run returns the expected results, the proof builder emits an
-artifact and a hash in the `check_release` shape. Any other result leaves the control unproven with a fixed
-reason. The builder never writes a state for a control it did not prove.
+artifact and a hash in the `check_release` shape under `controls`. "Builder decision" means: with complete
+evidence the builder emits the artifact and its hash under `decision_required`, with a fixed reason, but no
+state; putting that hash into the release is a builder decision and a separate reviewed change. Any other
+result leaves the control in `unproven` with a fixed reason. The builder never writes a state for a control it
+did not prove.
 
 ## Why these kinds of evidence
 
@@ -52,7 +55,8 @@ therefore carry temporary storage overrides on WMON: wallet balance `2 x 10 WMON
 allowance `10 WMON` (slot 4). These are the slots the accepted operator dry run uses
 (`scripts/operator_trade/dry_run.py`), confirmed by the builder's live check of 2026-10-22. Two override checks
 (`chain.override_balance`, `chain.override_allowance`) prove the overrides took effect before any swap result
-counts. An override changes only the simulation.
+counts. An override changes only the simulation. The approve estimate overrides the balance only, so it prices
+the live write of the allowance from 0 to the input, as the operator dry run does.
 
 ## Operations
 
@@ -102,9 +106,10 @@ program.
 | `chain.swap_wrong_output` | swap, `tokenUserBuys` = WMON, minimum 1 | revert |
 | `chain.swap_wrong_input` | swap, `tokenUserSells` = MOE, minimum 1 | revert |
 | `chain.swap_fee_over_bound` | swap, `feeBps` 10001, collector `0x…dead` | revert |
+| `chain.swap_fee_sum_over_bound` | swap, `feeBps` 5000 and `referrerFeeBps` 5001, both to `0x…dead` | revert |
 | `chain.swap_fee_charged` | swap, `feeBps` 100, collector `0x…dead`, minimum 1 | success, `0 < output < R` |
 | `chain.swap_trace` * | `debug_traceCall` of swap with minimum `R`, `callTracer` with logs | trace with Transfer logs |
-| `chain.estimate_approve` | `eth_estimateGas` WMON `approve(entrypoint, 10e18)` | estimate |
+| `chain.estimate_approve` | `eth_estimateGas` WMON `approve(entrypoint, 10e18)`, balance override only (allowance 0, as live) | estimate |
 | `chain.estimate_swap` * | `eth_estimateGas` swap with minimum `R` | estimate |
 | `chain.estimate_revoke` | `eth_estimateGas` WMON `approve(entrypoint, 0)` | estimate |
 | `chain.swap_at_release_gas` * | swap with minimum `R` and `gas` 700000 | success, returns `R` |
@@ -116,25 +121,29 @@ router, WMON and pool code hashes equal the authored values; `getRouter()` retur
 tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherwise the control is
 `CHAIN_PRECONDITION_FAILED`. Every Privy-based claim also needs the positive control's `ALLOW` record.
 
-### 4 `input_output_assets`
+### 4 `input_output_assets` (builder decision: `OUTPUT_TOKEN_NOT_PROVIDER_BOUND`)
 
-- Evidence: `chain.swap_wrong_output` and `chain.swap_wrong_input` revert while `chain.swap_probe` succeeds;
-  `raw.ctl_deny_approve_moe_entrypoint` is `POLICY_DENY`.
-- Why: the deployed entrypoint refuses an intent whose named output token is not the token the swap delivers,
-  and pulls the named input token (a token the wallet has not approved fails). Independently, Privy refuses
-  approving the entrypoint on a non-WMON token, so the agent cannot create an input allowance on another asset
-  (with v3 row `raw.deny_approve_wrong_to` and R3's `value` 0, which rules out native input).
-- Not proven: Privy does not bind `tokenUserBuys`; the host chooses the output token named in the intent, and
-  the entrypoint only binds receipt to that named token. One block; the router is owner-mutable (the release's
-  router recheck still applies).
+- Evidence: `chain.swap_wrong_output` (output token WMON, the input token) and `chain.swap_wrong_input` (input
+  token MOE, not approved) revert while `chain.swap_probe` succeeds; `raw.ctl_deny_approve_moe_entrypoint` is
+  `POLICY_DENY`.
+- Why it proves the input side: Privy refuses approving the entrypoint on a non-WMON token, so the agent cannot
+  create an input allowance on another asset (with v3 row `raw.deny_approve_wrong_to` and R3's `value` 0, which
+  rules out native input), and the entrypoint pulls the named input token.
+- Why it is not proven: the control also limits the output token, at the `INDEPENDENT_POLICY` layer. Privy does
+  not bind `tokenUserBuys`; a host could name any token with a matching program. The wrong-output case shows
+  only that the input token is refused as output, not that every other token is. So the builder emits the
+  artifact under `decision_required`, not a state.
+- Smallest alternatives: the builder accepts the input-side proof for this control; or a Privy R3 condition on
+  `executeSwap.intent.tokenUserBuys` (and `tokenUserSells`) equal to the release tokens (a policy edit with the
+  builder's key; nested tuple paths are unqualified) plus an allow/deny row pair.
 
 ### 5 `raw_input`
 
 - Evidence: `R` equals the pool formula `floor(x * 984000 * R_moe / (R_wmon * 10^6 + x * 984000))` for
   `x = 10e18` at the reserves of `chain.pool_reserves`; `chain.swap_input_above_allowance` reverts.
-- Why: the output pins the swapped input to exactly the approved amount at those reserves. With an allowance of
-  exactly the input, one unit more reverts: the entrypoint pulls the full intent amount and the allowance bounds
-  it.
+- Why: the output is consistent with exactly the approved input being swapped at those reserves (at the current
+  price one input unit moves the output by many units). With an allowance of exactly the input, one unit more
+  reverts: the entrypoint pulls the full intent amount and the allowance bounds it.
 - Not proven: Privy caps an approval at 70 WMON (v3 row `raw.deny_approve_above_cap`), not at the release
   input; the host approves exactly the input. Overrides fund the simulation, not the live wallet.
 
@@ -149,20 +158,25 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   stays unproven (`TRACE_UNAVAILABLE` or `TRACE_TRANSFERS_INVALID`). The smallest alternative is an endpoint
   that supports it, or a builder decision to accept the Privy refusals plus the method's signature (no receiver
   argument) without a trace. A different program could route value elsewhere; that is control 12.
+- Not proven either: the trace covers the release's zero-fee calldata. Privy does not bind the fee fields, so a
+  host-encoded fee collector could take up to 100% of the output in one signed swap. Only the host's zero-fee
+  encoding prevents that (control 8's host side).
 
 ### 7 `minimum_output`
 
 - Evidence: `chain.swap_min_equal` succeeds and returns `R`; `chain.swap_min_above` reverts.
-- Why: the deployed entrypoint enforces the minimum received after fees, at the exact boundary.
+- Why: the deployed entrypoint enforces the minimum received at the exact boundary.
 - Not proven: Privy does not bind `minAmountUserBuys`; the host computes the minimum from its reserves read.
+  The boundary is tested with the release's zero fees only.
 
 ### 8 `fees`
 
-- Evidence: `R` equals the pool formula (zero fees take nothing); `chain.swap_fee_over_bound` reverts;
-  `chain.swap_fee_charged` returns less than `R`.
-- Why: the deployed code reads the fee fields, refuses a fee above 10000 bps and deducts a nonzero fee; with the
-  release's all-zero fees no fee is taken.
-- Not proven: Privy does not bind the fee fields; the host encodes zero fees.
+- Evidence: `R` equals the pool formula (zero fees take nothing); `chain.swap_fee_over_bound` and
+  `chain.swap_fee_sum_over_bound` revert; `chain.swap_fee_charged` returns less than `R`.
+- Why: the deployed code reads the fee fields, refuses a fee of 10001 bps and a fee-plus-referrer sum of 10001
+  bps, and deducts a nonzero fee; with the release's all-zero fees no fee is taken.
+- Not proven: Privy does not bind the fee fields; the host encodes zero fees. A fee up to 10000 bps with any
+  collector would be signed and would execute.
 
 ### 10 `gas_action_capacity`
 
@@ -176,7 +190,7 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   signer and broadcast counts are host limits (`LOCAL_TESTED`); no provider bounds them. Refusal reasons:
   `GAS_LIMIT_BELOW_ESTIMATE_MARGIN`, `BASE_FEE_ABOVE_RELEASE_FEE`, `GAS_BUDGET_SHORT`.
 
-### 11 `expiry_freshness`
+### 11 `expiry_freshness` (builder decision: `PROVIDER_COVERS_SIGNING_CUTOFF_ONLY`)
 
 - Evidence: `raw.ctl_deny_expired_request` is refused with `request_expired`; the authored release binds
   `transaction.request_expires_at`, `valid_until` and `route.freshness.intent_expires_at` to the same
@@ -184,6 +198,10 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
 - Why: the worker sends the release's `request_expires_at` as `privy-request-expiry`
   (`core/provider_ports.py`). Privy refusing an otherwise in-policy swap after that time means no signature is
   issued after `valid_until`, which is also the intent expiry and not after the mandate expiry.
+- Why it is a builder decision: control 11 is defined at the HOST layer (quote age, input age, intent and
+  mandate expiry). The proof covers a provider-side property, the signing cutoff. Adopting it as the
+  control's proof is the builder's call, so the artifact is emitted under `decision_required`, not as a state.
+  The smallest alternative is that decision; no provider can see the quote time.
 - Not proven: the quote age (30 s) and input age (60 s) are host checks. The Flow intent has no on-chain
   deadline; after signing, the minimum output (7) is the on-chain protection. The Privy reply code
   `request_expired` is documented, not yet observed. A different code stops the run (`UNRECOGNIZED_REPLY`)
@@ -195,9 +213,10 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   `bytes` equality is undocumented (`UNKNOWN`). The entrypoint forwards `program` opaquely. Only the host's
   exact program check (`LOCAL_TESTED`) stops a different program. A provider-actual proof of a bound that does
   not exist would be fake, so the builder always reports `NO_PROVIDER_BOUND_ON_PROGRAM_BYTES` and no state.
-- Supporting evidence (not a proof): when the trace is valid, the builder hashes an artifact showing that the
-  approved program calls only the entrypoint, router, pool, WMON and MOE and pays the whole output to the
-  wallet (`supporting_evidence_sha256`).
+- Supporting evidence (not a proof): when the trace is valid, the builder writes
+  `opaque_program.support.json` (state `UNPROVEN_SUPPORT`, evidence class null) showing that the approved
+  program calls only the entrypoint, router, pool, WMON and MOE and pays the whole output to the wallet, and
+  reports its hash as `supporting_evidence_sha256`.
 - Smallest alternatives, each a builder decision:
   1. Accept "host-exact program + provider-actual trace of that exact program" as control 12's proof. This
      changes the rule and is a separate reviewed change to the release module or this builder.
@@ -257,11 +276,14 @@ From the checkout root, with `<venv>` = `apps/api/.venv`. Each store is a new di
      --privy-store <new privy store> --chain-store <new chain store> --out <new proofs dir>
    ```
 
-   It writes `<control>.proof.json` (the exact canonical bytes whose SHA-256 is the proof hash) and
-   `controls.json`, and prints `controls` (ready to paste into `release.controls`) and `unproven` with reasons.
+   It writes `<control>.proof.json` (the exact canonical bytes whose SHA-256 is the proof hash) for proven and
+   decision-required controls, `opaque_program.support.json` when available, and `controls.json`. It prints
+   `controls` (ready to paste into `release.controls`), `decision_required` (reason and hash, for the builder)
+   and `unproven` with reasons. A Privy outcome counts only when its saved capture file hashes to the
+   record's `capture_record_sha256`.
 
 5. Commit the two raw stores and the proofs directory, then, as a separate reviewed change, put the printed
-   `controls` entries into `release.authored.json`. That changes the release hash (pending steps 7-8 of
+   `controls` entries (and any `decision_required` entry the builder accepts) into `release.authored.json`. That changes the release hash (pending steps 7-8 of
    `INAPP_TRADE_RELEASE.md`). This task does not do it.
 
 ## Proof artifact format
@@ -271,7 +293,7 @@ those bytes:
 
 | Field | Content |
 | --- | --- |
-| `control`, `state`, `evidence_class` | the control name, `ENFORCED`, `PROVIDER_ACTUAL` |
+| `control`, `state`, `evidence_class`, `decision_required` | the control name; `ENFORCED` or `DECISION_REQUIRED`; `PROVIDER_ACTUAL`; null or the decision reason |
 | `release_id`, `authored_binding_sha256` | the release and a hash of its authored facts without `controls`, so adopting the proof does not invalidate it |
 | `chain` | chain id, block number and hash, or null |
 | `privy` | packet id, policy id, policy hash and reply profile, or null |

@@ -148,8 +148,39 @@ def test_every_planned_request_uses_only_the_wallet_as_sender_and_zero_value() -
                                           chain_proof.POOL.lower()}
             if len(params) == 3:
                 overrides = params[2]["stateOverrides"] if wire["method"] == "debug_traceCall" else params[2]
-                assert overrides == chain_proof.STATE_OVERRIDES
+                assert overrides in (chain_proof.STATE_OVERRIDES, chain_proof.APPROVE_OVERRIDES)
                 assert set(overrides) == {chain_proof.WMON}
+
+
+def test_the_approve_estimate_starts_from_a_zero_allowance() -> None:
+    records = _by_id(recorded_chain())
+    overrides = records["chain.estimate_approve"]["params"][2]
+    assert overrides == chain_proof.APPROVE_OVERRIDES
+    assert set(overrides[chain_proof.WMON]["stateDiff"]) == {chain_proof.balance_slot(chain_proof.WALLET)}
+    assert int(records["chain.estimate_approve"]["result"], 16) == 46_000
+    assert records["chain.estimate_revoke"]["params"][2] == chain_proof.STATE_OVERRIDES
+
+
+def test_a_changed_override_mapping_in_the_process_does_not_widen_the_client(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(chain_proof.STATE_OVERRIDES[chain_proof.WMON]["stateDiff"], "0x" + "11" * 32, "0x" + "22" * 32)
+    fake = FakeChain()
+    with pytest.raises(ChainRefused):
+        chain_client(fake).call("eth_call", [{"to": chain_proof.WMON, "data": "0x"}, "0x1",
+                                             chain_proof.STATE_OVERRIDES])
+    assert fake.requests == []
+    records = chain_proof.run_chain_operations(chain_client(fake), clock=lambda: CLOCK)
+    assert all("0x" + "11" * 32 not in json.dumps(record["params"]) for record in records)
+
+
+def test_a_reply_that_echoes_the_endpoint_is_not_saved() -> None:
+    fake = FakeChain()
+    endpoint = "https://rpc.example.test/secret-key-abc/rpc"
+    fake.replace["eth_chainId:[]"] = endpoint
+    records = chain_proof.run_chain_operations(ReadOnlyChainClient(transport=fake, endpoint=endpoint),
+                                               clock=lambda: CLOCK)
+    assert records[0]["status"] == "REPLY_LOST"
+    assert "secret-key-abc" not in json.dumps(records)
 
 
 def test_state_overrides_touch_only_the_wallet_wmon_balance_and_entrypoint_allowance() -> None:

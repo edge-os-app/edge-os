@@ -817,7 +817,7 @@
     "status": "FROZEN",
     "evidence_class": "LOCAL_TESTED",
     "provider_proof": "UNQUALIFIED",
-    "note": "New operations only. The v3 packet and its 19 rows above are unchanged. Every Privy row is sign-only with nonce 1000000 and no broadcast path; the only expected signature is a revoke to zero. Every chain operation is a read; eth_call and eth_estimateGas use temporary WMON storage overrides. See docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md.",
+    "note": "New operations only. The v3 packet and its 19 rows above are unchanged. Every Privy row is sign-only with nonce 1000000 and no broadcast path; the only expected signature is a revoke to zero. Every chain operation is a read; eth_call and eth_estimateGas use temporary WMON storage overrides (balance and entrypoint allowance; the approve estimate overrides the balance only, so it prices the live zero-to-input allowance write). See docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md.",
     "privy_packet": {
       "packet_id": "501942ec92178a5621f25acb7395b44884a0d9770cbb23f44bc0c459656ae775",
       "sealed_packet_sha256": "501942ec92178a5621f25acb7395b44884a0d9770cbb23f44bc0c459656ae775",
@@ -840,7 +840,7 @@
           "expected": "POLICY_DENY",
           "request_sha256": "da75b7d86aa79409148bfaf72766a83ef60c7287f159d0e11e3662f68f51961f",
           "controls": [
-            "input_output_assets"
+            "input_output_assets (decision required)"
           ]
         },
         {
@@ -864,7 +864,7 @@
           "expected": "EXPIRY_REFUSAL",
           "request_sha256": "aebbdc17b8ffd94a418e97f4840ae6a8b05d0921ecc016f7351f780f209f0f3f",
           "controls": [
-            "expiry_freshness"
+            "expiry_freshness (decision required)"
           ]
         }
       ]
@@ -975,7 +975,7 @@
         "expect": "SUCCESS",
         "controls": [
           "precondition",
-          "input_output_assets",
+          "input_output_assets (decision required)",
           "raw_input",
           "fees"
         ]
@@ -1009,7 +1009,7 @@
         "method": "eth_call",
         "expect": "REVERT",
         "controls": [
-          "input_output_assets"
+          "input_output_assets (decision required)"
         ]
       },
       {
@@ -1017,11 +1017,19 @@
         "method": "eth_call",
         "expect": "REVERT",
         "controls": [
-          "input_output_assets"
+          "input_output_assets (decision required)"
         ]
       },
       {
         "op_id": "chain.swap_fee_over_bound",
+        "method": "eth_call",
+        "expect": "REVERT",
+        "controls": [
+          "fees"
+        ]
+      },
+      {
+        "op_id": "chain.swap_fee_sum_over_bound",
         "method": "eth_call",
         "expect": "REVERT",
         "controls": [

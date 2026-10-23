@@ -141,6 +141,9 @@ class FakeChain:
             if call["to"].lower() == chain_proof.ENTRYPOINT.lower():
                 return hex(ESTIMATES["swap"])
             amount = int(call["data"][-64:], 16)
+            if amount and self._overrides_ok(params) and chain_proof.allowance_slot(
+                    chain_proof.WALLET, chain_proof.ENTRYPOINT) in params[2][chain_proof.WMON]["stateDiff"]:
+                return hex(ESTIMATES["approve"] - 20_000)  # a same-value write is cheaper than the live 0 -> input
             return hex(ESTIMATES["approve"] if amount else ESTIMATES["revoke"])
         if method == "debug_traceCall":
             if not self.debug_supported:
@@ -163,7 +166,9 @@ class FakeChain:
             if data.startswith(chain_proof.BALANCE_OF_SELECTOR):
                 return _word(2 * chain_proof.INPUT_RAW if self._overrides_ok(params) else 0)
             if data.startswith(chain_proof.ALLOWANCE_SELECTOR):
-                return _word(chain_proof.INPUT_RAW if self._overrides_ok(params) else 0)
+                funded = self._overrides_ok(params) and chain_proof.allowance_slot(
+                    chain_proof.WALLET, chain_proof.ENTRYPOINT) in params[2][chain_proof.WMON]["stateDiff"]
+                return _word(chain_proof.INPUT_RAW if funded else 0)
             if data.startswith(chain_proof.APPROVE_SELECTOR):
                 return _word(1)
         if to == chain_proof.ENTRYPOINT.lower() and data.startswith(chain_proof.EXECUTE_SWAP_SELECTOR):
@@ -247,6 +252,11 @@ def privy_records(**changes: dict[str, Any]) -> dict[str, dict[str, Any]]:
         record.update(changes.get(specimen_id, {}))
         records[specimen_id] = record
     return records
+
+
+def privy_captures() -> dict[str, str]:
+    """The SHA-256 of each saved capture file; ``privy_records`` cites the same values."""
+    return {specimen_id: hashlib.sha256(specimen_id.encode()).hexdigest() for specimen_id in CONTROL_PROOF_ORDER}
 
 
 def replaced(records: list[dict[str, Any]], op_id: str, **fields: Any) -> list[dict[str, Any]]:

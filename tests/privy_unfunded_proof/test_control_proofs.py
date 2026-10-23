@@ -20,17 +20,19 @@ from tests.privy_unfunded_proof._control_support import (
     BASE_FEE,
     authored,
     pool_output,
+    privy_captures,
     privy_records,
     recorded_chain,
     replaced,
 )
 
-PROVEN = ("input_output_assets", "raw_input", "recipient", "minimum_output", "fees", "gas_action_capacity",
-          "expiry_freshness")
+PROVEN = ("raw_input", "recipient", "minimum_output", "fees", "gas_action_capacity")
+DECISION = ("input_output_assets", "expiry_freshness")
 
 
 def _build(**changes):  # noqa: ANN003, ANN202
-    arguments = {"authored": authored(), "privy_records": privy_records(), "chain_records": recorded_chain()}
+    arguments = {"authored": authored(), "privy_records": privy_records(), "privy_capture_sha256": privy_captures(),
+                 "chain_records": recorded_chain()}
     arguments.update(changes)
     return control_proofs.build_control_proofs(**arguments)
 
@@ -38,12 +40,24 @@ def _build(**changes):  # noqa: ANN003, ANN202
 # ---------------------------------------------------------------- full recorded run
 
 
-def test_a_matching_recorded_run_proves_seven_controls_and_never_the_opaque_program() -> None:
+def test_a_matching_recorded_run_proves_five_controls_leaves_two_to_the_builder_and_never_the_program() -> None:
     result = _build()
     assert set(result["proven"]) == set(PROVEN)
     assert set(result["unproven"]) == {"opaque_program"}
     assert result["unproven"]["opaque_program"]["reason"] == "NO_PROVIDER_BOUND_ON_PROGRAM_BYTES"
-    assert result["unproven"]["opaque_program"]["supporting_evidence_sha256"] is not None
+    support = result["supporting"]["opaque_program"]
+    assert result["unproven"]["opaque_program"]["supporting_evidence_sha256"] == support["sha256"]
+    assert support["sha256"] == hashlib.sha256(canonical_json(support["artifact"])).hexdigest()
+    assert support["artifact"]["evidence_class"] is None and support["artifact"]["state"] == "UNPROVEN_SUPPORT"
+    assert {name: entry["reason"] for name, entry in result["decision_required"].items()} == {
+        "input_output_assets": "OUTPUT_TOKEN_NOT_PROVIDER_BOUND",
+        "expiry_freshness": "PROVIDER_COVERS_SIGNING_CUTOFF_ONLY"}
+    for name in DECISION:
+        entry = result["decision_required"][name]
+        assert entry["artifact"]["state"] == "DECISION_REQUIRED"
+        assert entry["artifact"]["decision_required"] == entry["reason"]
+        assert entry["proof_sha256"] == hashlib.sha256(canonical_json(entry["artifact"])).hexdigest()
+        assert name not in result["controls"]
     for name in PROVEN:
         proof = result["proven"][name]
         assert proof["proof_sha256"] == hashlib.sha256(canonical_json(proof["artifact"])).hexdigest()
@@ -52,7 +66,8 @@ def test_a_matching_recorded_run_proves_seven_controls_and_never_the_opaque_prog
         assert proof["artifact"]["control"] == name
         assert proof["artifact"]["schema"] == control_proofs.ARTIFACT_SCHEMA
         assert proof["artifact"]["limits"]
-    assert "opaque_program" not in result["controls"]
+        assert proof["artifact"]["state"] == "ENFORCED" and proof["artifact"]["decision_required"] is None
+    assert set(result["controls"]) == set(PROVEN)
 
 
 def test_the_builder_is_deterministic_and_binds_every_record() -> None:
@@ -69,13 +84,13 @@ def test_the_builder_is_deterministic_and_binds_every_record() -> None:
 def test_each_artifact_cites_its_operations() -> None:
     result = _build()
     cited = {name: {item["operation"] for item in proof["artifact"]["evidence"]}
-             for name, proof in result["proven"].items()}
+             for name, proof in {**result["proven"], **result["decision_required"]}.items()}
     assert {"chain.swap_wrong_output", "chain.swap_wrong_input",
             "raw.ctl_deny_approve_moe_entrypoint"} <= cited["input_output_assets"]
     assert {"chain.swap_probe", "chain.pool_reserves", "chain.swap_input_above_allowance"} <= cited["raw_input"]
     assert {"chain.swap_trace", "raw.ctl_deny_swap_receiver_wallet",
             "raw.ctl_deny_moe_transfer_sink"} <= cited["recipient"]
-    assert {"chain.swap_fee_over_bound", "chain.swap_fee_charged"} <= cited["fees"]
+    assert {"chain.swap_fee_over_bound", "chain.swap_fee_sum_over_bound", "chain.swap_fee_charged"} <= cited["fees"]
     assert {"chain.estimate_approve", "chain.estimate_swap", "chain.estimate_revoke", "chain.block",
             "chain.swap_at_release_gas"} <= cited["gas_action_capacity"]
     assert cited["expiry_freshness"] >= {"raw.ctl_allow_revoke_zero", "raw.ctl_deny_expired_request"}
@@ -106,8 +121,9 @@ def test_produced_controls_drop_in_to_the_release_shape() -> None:
                          "reserve_moe": "75000000000000000000000000"},
             "gas_estimates": {"approve": 46000, "swap": 544967, "revoke": 30000}}
     release = inapp.complete_release(value, fill)
-    # Controls 1-3 and 9 still wait on the recorded v3 result and opaque_program stays unproven.
-    assert inapp.unqualified_controls(release) == ["approvals", "chain", "entrypoint_method", "opaque_program",
+    # Controls 1-3 and 9 wait on the recorded v3 result, 4 and 11 on a builder decision, 12 stays unproven.
+    assert inapp.unqualified_controls(release) == ["approvals", "chain", "entrypoint_method", "expiry_freshness",
+                                                   "input_output_assets", "opaque_program",
                                                    "wallet_signer_binding"]
     digest = release_sha256(release)
     import datetime as dt
@@ -133,6 +149,8 @@ def test_produced_controls_drop_in_to_the_release_shape() -> None:
                                                 "error": {"code": 3, "reverted": True, "data": None,
                                                           "message_sha256": None}}),
     ("chain.swap_fee_over_bound", "fees", {"status": "RESULT", "result": "0x" + "00" * 31 + "01", "error": None}),
+    ("chain.swap_fee_sum_over_bound", "fees", {"status": "RESULT", "result": "0x" + "00" * 31 + "01",
+                                               "error": None}),
     ("chain.estimate_swap", "gas_action_capacity", {"result": hex(600_000)}),
     ("chain.swap_at_release_gas", "gas_action_capacity", {"status": "RPC_ERROR", "result": None,
                                                           "error": {"code": 3, "reverted": True, "data": None,
@@ -143,6 +161,7 @@ def test_produced_controls_drop_in_to_the_release_shape() -> None:
 def test_a_contrary_chain_result_leaves_its_control_unproven(op_id: str, control: str, fields: dict) -> None:
     result = _build(chain_records=replaced(recorded_chain(), op_id, **fields))
     assert control not in result["proven"] and control not in result["controls"]
+    assert control not in result["decision_required"]
     assert result["unproven"][control]["reason"]
 
 
@@ -176,6 +195,7 @@ def test_a_missing_trace_leaves_only_the_recipient_unproven() -> None:
     assert result["unproven"]["recipient"]["reason"] == "TRACE_UNAVAILABLE"
     assert set(result["proven"]) == set(PROVEN) - {"recipient"}
     assert result["unproven"]["opaque_program"]["supporting_evidence_sha256"] is None
+    assert result["supporting"] == {}
 
 
 def test_a_trace_without_logs_leaves_the_recipient_unproven() -> None:
@@ -197,7 +217,7 @@ def test_overrides_that_did_not_take_effect_prove_no_contract_control() -> None:
     for name in ("input_output_assets", "raw_input", "recipient", "minimum_output", "fees", "gas_action_capacity"):
         assert name not in result["proven"]
         assert result["unproven"][name]["reason"] == "CHAIN_PRECONDITION_FAILED"
-    assert "expiry_freshness" in result["proven"]
+    assert "expiry_freshness" in result["decision_required"]
 
 
 @pytest.mark.parametrize("op_id", ["chain.code_entrypoint", "chain.code_router", "chain.get_router",
@@ -245,12 +265,24 @@ def test_an_authored_release_with_other_values_is_refused() -> None:
     ("raw.ctl_deny_moe_transfer_sink", "recipient", {"request_sha256": "0" * 64}),
     ("raw.ctl_deny_expired_request", "expiry_freshness", {"outcome": "BREACH", "matches_expectation": False}),
     ("raw.ctl_deny_expired_request", "expiry_freshness", {"packet_id": "8255d003097fd1a0216a6b64c48637f2ef745c7ebbe73035d0b8929403500528"}),
+    ("raw.ctl_deny_moe_transfer_sink", "recipient", {"evidence_class": "PROVIDER_ACTUAL"}),
+    ("raw.ctl_deny_moe_transfer_sink", "recipient", {"provider_proof": "QUALIFIED"}),
+    ("raw.ctl_allow_revoke_zero", "expiry_freshness", {"signed_bytes_sha256": None}),
 ])
 def test_a_privy_record_that_does_not_match_leaves_its_control_unproven(specimen_id: str, control: str,
                                                                        change: dict) -> None:
     result = _build(privy_records=privy_records(**{specimen_id: change}))
-    assert control not in result["proven"]
+    assert control not in result["proven"] and control not in result["decision_required"]
     assert result["unproven"][control]["reason"] == "PRIVY_RECORD_INVALID"
+
+
+def test_an_outcome_record_without_its_saved_capture_does_not_count() -> None:
+    captures = privy_captures()
+    captures["raw.ctl_deny_moe_transfer_sink"] = "0" * 64
+    result = _build(privy_capture_sha256=captures)
+    assert result["unproven"]["recipient"]["reason"] == "PRIVY_RECORD_INVALID"
+    del captures["raw.ctl_deny_moe_transfer_sink"]
+    assert _build(privy_capture_sha256=captures)["unproven"]["recipient"]["reason"] == "PRIVY_RECORD_INVALID"
 
 
 def test_without_the_positive_control_no_privy_refusal_counts() -> None:
@@ -278,6 +310,7 @@ def test_command_reads_a_privy_store_and_a_chain_results_file(tmp_path: Path,
     privy_dir.mkdir()
     for specimen_id, record in privy_records().items():
         (privy_dir / f"{specimen_id}.outcome.json").write_text(json.dumps(record), encoding="utf-8")
+        (privy_dir / f"{specimen_id}.capture.json").write_bytes(specimen_id.encode())
     chain_dir = tmp_path / "chain"
     chain_dir.mkdir()
     (chain_dir / chain_proof.RESULTS_FILE).write_text(
@@ -293,6 +326,11 @@ def test_command_reads_a_privy_store_and_a_chain_results_file(tmp_path: Path,
     for name in PROVEN:
         saved = (out_dir / f"{name}.proof.json").read_bytes()
         assert hashlib.sha256(saved).hexdigest() == printed["controls"][name]["proof_sha256"]
+    for name in DECISION:
+        saved = (out_dir / f"{name}.proof.json").read_bytes()
+        assert hashlib.sha256(saved).hexdigest() == printed["decision_required"][name]["proof_sha256"]
+    support = (out_dir / "opaque_program.support.json").read_bytes()
+    assert hashlib.sha256(support).hexdigest() == printed["unproven"]["opaque_program"]["supporting_evidence_sha256"]
     assert printed["unproven"]["opaque_program"]["reason"] == "NO_PROVIDER_BOUND_ON_PROGRAM_BYTES"
     assert control_proofs.main(["--authored", str(authored_path), "--privy-store", str(privy_dir),
                                 "--chain-store", str(chain_dir), "--out", str(out_dir)]) == 2

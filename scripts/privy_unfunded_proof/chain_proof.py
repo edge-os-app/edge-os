@@ -5,7 +5,7 @@ LOCAL code; the controller runs it. Every operation is a read: ``eth_chainId``, 
 refuses every other method, sender, target, value, field and state override before any I/O. The calls
 simulate the release's exact swap against the deployed entrypoint at one pinned block, with temporary
 storage overrides for the wallet's WMON balance and entrypoint allowance (WMON slots ``3`` and ``4``, as in
-``scripts/operator_trade/dry_run.py``). An override changes only the simulation; nothing is signed or sent.
+``scripts/operator_trade/dry_run.py``); the approve estimate overrides only the balance. An override changes only the simulation; nothing is signed or sent.
 
 Each negative simulation changes exactly one intent or fee word of the baseline swap. Its positive twin
 runs at the same block with the same overrides. ``control_proofs`` turns the saved records into control
@@ -61,6 +61,8 @@ BALANCE_SLOT = 3
 ALLOWANCE_SLOT = 4
 FEE_CHARGED_BPS = 100
 FEE_OVER_BOUND_BPS = 10001
+# feeBps + referrerFeeBps = 10001: the sum bound, with both fee recipients set.
+FEE_SUM_SPLIT_BPS = (5000, 5001)
 
 RPC_URL_ENV = "EDGE_OS_CONTROL_PROOF_RPC_URL"
 RESULTS_FILE = "chain_results.json"
@@ -111,8 +113,18 @@ STATE_OVERRIDES: Mapping[str, Any] = {WMON: {"stateDiff": {
     balance_slot(WALLET): "0x" + _word(2 * INPUT_RAW),
     allowance_slot(WALLET, ENTRYPOINT): "0x" + _word(INPUT_RAW),
 }}}
+# The approve estimate starts from a zero allowance, as the live approve does, so it prices the 0 -> input write.
+APPROVE_OVERRIDES: Mapping[str, Any] = {WMON: {"stateDiff": {balance_slot(WALLET): "0x" + _word(2 * INPUT_RAW)}}}
 TRACE_CONFIG: Mapping[str, Any] = {"tracer": "callTracer", "tracerConfig": {"withLog": True},
                                    "stateOverrides": STATE_OVERRIDES}
+# The client compares requests with these sealed bytes, and every request is built from fresh copies of them,
+# so a later change to the mappings above in the process cannot widen what the client sends.
+_SEALED_OVERRIDES = (json_bytes(STATE_OVERRIDES), json_bytes(APPROVE_OVERRIDES))
+_SEALED_TRACE_CONFIG = json_bytes(TRACE_CONFIG)
+
+
+def _fresh(sealed: bytes) -> Any:
+    return json.loads(sealed)
 
 
 def swap_calldata(*, min_output_raw: int, buy: str = MOE, sell: str = WMON, amount: int = INPUT_RAW,
@@ -158,6 +170,7 @@ _OPERATIONS = (
     ChainOperation("chain.swap_wrong_output", "eth_call", "REVERT"),
     ChainOperation("chain.swap_wrong_input", "eth_call", "REVERT"),
     ChainOperation("chain.swap_fee_over_bound", "eth_call", "REVERT"),
+    ChainOperation("chain.swap_fee_sum_over_bound", "eth_call", "REVERT"),
     ChainOperation("chain.swap_fee_charged", "eth_call", "SUCCESS"),
     ChainOperation("chain.swap_trace", "debug_traceCall", "SUCCESS"),
     ChainOperation("chain.estimate_approve", "eth_estimateGas", "RESULT"),
@@ -181,7 +194,7 @@ def _wallet_call(to: str, data: str, gas: int | None = None) -> dict[str, Any]:
 
 def operation_params(op_id: str, *, block_tag: str, baseline_output: int | None) -> list[Any]:
     """The exact frozen params of one operation for one pinned block and one recorded baseline output."""
-    overrides = dict(STATE_OVERRIDES)
+    overrides, approve_overrides = _fresh(_SEALED_OVERRIDES[0]), _fresh(_SEALED_OVERRIDES[1])
     swap = lambda **fields: _wallet_call(ENTRYPOINT, swap_calldata(**fields))  # noqa: E731
     if op_id in DEPENDS_ON_BASELINE and baseline_output is None:
         raise ChainRefused("BASELINE_OUTPUT_MISSING")
@@ -209,11 +222,14 @@ def operation_params(op_id: str, *, block_tag: str, baseline_output: int | None)
         "chain.swap_wrong_input": [swap(min_output_raw=1, sell=MOE), block_tag, overrides],
         "chain.swap_fee_over_bound": [swap(min_output_raw=1, fee_bps=FEE_OVER_BOUND_BPS, fee_collector=SINK),
                                       block_tag, overrides],
+        "chain.swap_fee_sum_over_bound": [swap(min_output_raw=1, fee_bps=FEE_SUM_SPLIT_BPS[0], fee_collector=SINK,
+                                               referrer_fee_bps=FEE_SUM_SPLIT_BPS[1], referrer=SINK),
+                                          block_tag, overrides],
         "chain.swap_fee_charged": [swap(min_output_raw=1, fee_bps=FEE_CHARGED_BPS, fee_collector=SINK),
                                    block_tag, overrides],
-        "chain.swap_trace": [swap(min_output_raw=r), block_tag, dict(TRACE_CONFIG)],
+        "chain.swap_trace": [swap(min_output_raw=r), block_tag, _fresh(_SEALED_TRACE_CONFIG)],
         "chain.estimate_approve": [_wallet_call(WMON, approve_calldata(ENTRYPOINT, INPUT_RAW)), block_tag,
-                                   overrides],
+                                   approve_overrides],
         "chain.estimate_swap": [swap(min_output_raw=r), block_tag, overrides],
         "chain.estimate_revoke": [_wallet_call(WMON, approve_calldata(ENTRYPOINT, 0)), block_tag, overrides],
         "chain.swap_at_release_gas": [_wallet_call(ENTRYPOINT, swap_calldata(min_output_raw=r), SWAP_GAS_LIMIT),
@@ -271,6 +287,13 @@ def _call_ok(call: Any, *, allow_gas: bool) -> bool:
     return "gas" not in call or (type(call["gas"]) is str and _QUANTITY.fullmatch(call["gas"]) is not None)
 
 
+def _sealed(value: Any) -> bytes | None:
+    try:
+        return json_bytes(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _allowed(method: str, params: Any) -> bool:
     if type(params) is not list:
         return False
@@ -284,10 +307,10 @@ def _allowed(method: str, params: Any) -> bool:
     if method in ("eth_call", "eth_estimateGas"):
         return (len(params) in (2, 3) and _call_ok(params[0], allow_gas=method == "eth_call")
                 and _tag(params[1]) and params[1] != "latest"
-                and (len(params) == 2 or params[2] == STATE_OVERRIDES))
+                and (len(params) == 2 or _sealed(params[2]) in _SEALED_OVERRIDES))
     if method == "debug_traceCall":
         return (len(params) == 3 and _call_ok(params[0], allow_gas=False) and "from" in params[0]
-                and _tag(params[1]) and params[1] != "latest" and params[2] == TRACE_CONFIG)
+                and _tag(params[1]) and params[1] != "latest" and _sealed(params[2]) == _SEALED_TRACE_CONFIG)
     return False
 
 
@@ -327,7 +350,8 @@ class ReadOnlyChainClient:
             reply = post_json(http=self._transport, endpoint=self._endpoint, wire=wire,
                               headers={"content-type": "application/json"},
                               deadline=self._monotonic() + self._timeout, timeout=self._timeout,
-                              max_response_bytes=self._max_response_bytes, monotonic=self._monotonic, cancel=None)
+                              max_response_bytes=self._max_response_bytes, monotonic=self._monotonic, cancel=None,
+                              secrets=(self._endpoint,))
         except (ReplyLost, RpcError):
             lost = True
         if lost or type(reply) is not dict or reply.get("jsonrpc") != "2.0" or reply.get("id") != 1:

@@ -7,8 +7,10 @@ the authored release, the Privy outcome records of the sealed control-proof pack
 credential; the command reads three local paths and writes one new directory.
 
 A control is proven only when every rule below holds. Anything else leaves it in ``unproven`` with a fixed
-reason, and no state is produced for it. ``opaque_program`` is never proven here: neither the Privy policy
-nor the entrypoint bounds the program bytes. See ``docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md``.
+reason, and no state is produced for it. Two controls are ``decision_required`` even when their evidence is
+complete, because the provider covers only part of the control: their artifact and hash are produced, but no
+state, until the builder decides. ``opaque_program`` is never proven here: neither the Privy policy nor the
+entrypoint bounds the program bytes. See ``docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md``.
 
 The artifacts are only as authentic as the records. Chain records can be re-checked by anyone at the pinned
 block; Privy records cannot, so the controller commits the raw store with the artifacts.
@@ -27,7 +29,9 @@ from typing import Any
 
 from scripts.privy_unfunded_proof import chain_proof
 from scripts.privy_unfunded_proof.actual_packet import (
+    ACTUAL_EVIDENCE_CLASS,
     CONTROL_PROOF_ORDER,
+    PROVIDER_PROOF_UNQUALIFIED,
     CONTROL_PROOF_PACKET,
     UNFUNDED_POLICY_PROFILE_ID,
 )
@@ -45,14 +49,15 @@ _ACTIVE_STEPS = ("approve", "swap", "revoke")
 # Each proven artifact states what its evidence shows and what it does not.
 _CLAIMS: Mapping[str, tuple[str, ...]] = {
     "input_output_assets": (
-        "The deployed entrypoint, simulated at the pinned block, refuses the release swap when the intent "
-        "names another output token or another input token; the release tokens succeed.",
+        "The deployed entrypoint, simulated at the pinned block, refuses the release swap when the intent names "
+        "WMON (the input token) as the output token, or MOE (not approved) as the input token; the release "
+        "tokens succeed.",
         "The Privy policy refuses an approval of the entrypoint on MOE, so the agent cannot give the entrypoint "
         "an input allowance on a token other than WMON (rule R2 allows WMON only).",
     ),
     "raw_input": (
-        "The release swap's output equals the pool formula for exactly the approved input at the pinned "
-        "reserves, so exactly that input was swapped.",
+        "The release swap's output equals the pool formula for the approved input at the pinned reserves, which "
+        "is consistent with exactly that input being swapped.",
         "With an allowance of exactly the approved input, an intent one unit above it reverts: the entrypoint "
         "pulls the full intent amount and the allowance bounds it.",
     ),
@@ -63,13 +68,13 @@ _CLAIMS: Mapping[str, tuple[str, ...]] = {
         "transfer, so the agent can sign neither another receiver nor a later move of the output.",
     ),
     "minimum_output": (
-        "At the pinned block the release swap succeeds with the minimum equal to its output and reverts with "
-        "the minimum one unit above it: the deployed entrypoint enforces the minimum after fees.",
+        "At the pinned block the release swap (zero fees) succeeds with the minimum equal to its output and "
+        "reverts with the minimum one unit above it: the deployed entrypoint enforces the minimum exactly.",
     ),
     "fees": (
         "With the release's zero fees the output equals the pool formula, so no fee is taken.",
-        "A fee above 10000 bps reverts, and a 100 bps fee lowers the output: the deployed entrypoint reads and "
-        "bounds the fee fields.",
+        "A fee of 10001 bps reverts, a fee of 5000 bps plus a referrer fee of 5001 bps reverts, and a 100 bps "
+        "fee lowers the output: the deployed entrypoint reads the fee fields and bounds their sum.",
     ),
     "gas_action_capacity": (
         "At the pinned block each step's gas limit is at least ceil(1.2 x eth_estimateGas), the swap succeeds "
@@ -84,8 +89,9 @@ _CLAIMS: Mapping[str, tuple[str, ...]] = {
 }
 _LIMITS: Mapping[str, tuple[str, ...]] = {
     "input_output_assets": (
-        "The Privy policy does not bind tokenUserBuys or tokenUserSells; the host chooses the intent tokens "
-        "and the entrypoint binds the received token to the named one.",
+        "The Privy policy does not bind tokenUserBuys or tokenUserSells. The output token has no provider "
+        "bound: the host names it, and the test shows only that the entrypoint refuses the input token as "
+        "output, not that it refuses every other token.",
         "The simulation shows one block; the router is mutable by its owner, so the release's router recheck "
         "still applies before the run.",
     ),
@@ -96,23 +102,37 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
     ),
     "recipient": (
         "The trace depends on the node's debug_traceCall with state overrides; it is one block.",
+        "The trace covers the release's zero-fee calldata. The Privy policy does not bind the fee fields, so a "
+        "host-encoded fee collector could take up to 100% of the output; only the host's zero-fee encoding "
+        "(control fees) prevents it.",
         "A different program could route value elsewhere; that is the opaque_program control.",
     ),
     "minimum_output": (
         "The host computes the minimum from its own reserves read; the Privy policy does not bind it.",
         "The pool can move between the read and the trade; the check then reverts the swap.",
+        "The boundary is tested with the release's zero fees only.",
     ),
     "fees": (
-        "The Privy policy does not bind the fee fields; the host encodes zero fees.",
+        "The Privy policy does not bind the fee fields; the host encodes zero fees. A nonzero fee up to 10000 "
+        "bps, with any collector, would be signed and would execute.",
     ),
     "gas_action_capacity": (
         "The estimate is for the pinned block; a later state change is covered only by the 1.2 margin.",
         "The action, attempt, signer and broadcast counts are host limits (LOCAL_TESTED), not provider limits.",
     ),
     "expiry_freshness": (
+        "Control 11 is defined at the HOST layer (quote age, input age, intent and mandate expiry). This proof "
+        "covers the provider-side signing cutoff only.",
         "The quote age (30 s) and input age (60 s) are host checks; the provider cannot see the quote time.",
         "The Flow intent has no on-chain deadline; after signing, the minimum output is the on-chain protection.",
     ),
+}
+
+
+# Complete evidence that covers only part of the control. Adopting it as the control's proof is a builder decision.
+DECISION_REQUIRED: Mapping[str, str] = {
+    "input_output_assets": "OUTPUT_TOKEN_NOT_PROVIDER_BOUND",
+    "expiry_freshness": "PROVIDER_COVERS_SIGNING_CUTOFF_ONLY",
 }
 
 
@@ -339,8 +359,8 @@ def _expected_reply(specimen_id: str) -> tuple[str, str]:
 
 
 class _Privy:
-    def __init__(self, records: Mapping[str, Mapping[str, Any]]) -> None:
-        self.records = records
+    def __init__(self, records: Mapping[str, Mapping[str, Any]], captures: Mapping[str, str]) -> None:
+        self.records, self.captures = records, captures
         self.used: set[str] = set()
 
     def _valid(self, specimen_id: str) -> bool:
@@ -355,8 +375,14 @@ class _Privy:
                 and record.get("expected") == packet.specimen_expected[specimen_id]
                 and record.get("outcome") == outcome and record.get("reason") == reason
                 and record.get("matches_expectation") is True
+                and record.get("evidence_class") == ACTUAL_EVIDENCE_CLASS
+                and record.get("provider_proof") == PROVIDER_PROOF_UNQUALIFIED
+                and (outcome != "ALLOW" or (type(record.get("signed_bytes_sha256")) is str
+                                            and re.fullmatch(r"sha256:[0-9a-f]{64}", record["signed_bytes_sha256"])
+                                            is not None))
                 and type(record.get("capture_record_sha256")) is str
-                and _HEX64.fullmatch(record["capture_record_sha256"]) is not None)
+                and _HEX64.fullmatch(record["capture_record_sha256"]) is not None
+                and self.captures.get(specimen_id) == record["capture_record_sha256"])
 
     def refused(self, specimen_id: str) -> None:
         """The row's provider reply matched, after the packet's positive control signed in policy."""
@@ -417,12 +443,14 @@ def _fees(chain: _Chain, privy: _Privy, base: dict[str, Any]) -> dict[str, Any]:
     if base["baseline_output"] != base["formula_output"]:
         raise _Unproven("CHAIN_RESULT_CONTRARY")
     chain.reverted("chain.swap_fee_over_bound")
+    chain.reverted("chain.swap_fee_sum_over_bound")
     charged = chain.success("chain.swap_fee_charged")
     if not 0 < charged < base["baseline_output"]:
         raise _Unproven("CHAIN_RESULT_CONTRARY")
     return {"zero_fee_output_raw": str(base["baseline_output"]), "formula_output_raw": str(base["formula_output"]),
             "fee_bps_charged": chain_proof.FEE_CHARGED_BPS, "charged_output_raw": str(charged),
-            "fee_bps_refused": chain_proof.FEE_OVER_BOUND_BPS}
+            "fee_bps_refused": chain_proof.FEE_OVER_BOUND_BPS,
+            "fee_and_referrer_bps_refused": list(chain_proof.FEE_SUM_SPLIT_BPS)}
 
 
 def _gas_action_capacity(chain: _Chain, privy: _Privy, base: dict[str, Any], authored: Mapping[str, Any]
@@ -464,11 +492,13 @@ def _expiry_freshness(privy: _Privy, authored: Mapping[str, Any]) -> dict[str, A
 
 
 def _artifact(name: str, authored: Mapping[str, Any], chain: _Chain | None, privy: _Privy | None,
-              base: dict[str, Any] | None, findings: dict[str, Any], *, state: str = "ENFORCED",
-              claims: tuple[str, ...], limits: tuple[str, ...]) -> dict[str, Any]:
+              base: dict[str, Any] | None, findings: dict[str, Any], *, state: str,
+              evidence_class: str | None, claims: tuple[str, ...], limits: tuple[str, ...],
+              decision: str | None = None) -> dict[str, Any]:
     packet = CONTROL_PROOF_PACKET
     return {
-        "schema": ARTIFACT_SCHEMA, "control": name, "state": state, "evidence_class": "PROVIDER_ACTUAL",
+        "schema": ARTIFACT_SCHEMA, "control": name, "state": state, "evidence_class": evidence_class,
+        "decision_required": decision,
         "release_id": authored["release"]["release_id"], "authored_binding_sha256": authored_binding_sha256(authored),
         "chain": None if base is None else {"chain_id": chain_proof.CHAIN_ID, "block_number": base["block_number"],
                                             "block_hash": base["block_hash"]},
@@ -481,25 +511,37 @@ def _artifact(name: str, authored: Mapping[str, Any], chain: _Chain | None, priv
 
 
 def build_control_proofs(*, authored: Mapping[str, Any], privy_records: Mapping[str, Mapping[str, Any]],
+                         privy_capture_sha256: Mapping[str, str],
                          chain_records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Proofs for the controls the records prove, and a fixed reason for every other control."""
+    """Proofs for the controls the records prove, and a fixed reason for every other control.
+
+    ``privy_capture_sha256`` maps each specimen id to the SHA-256 of its saved capture file; an outcome record
+    counts only when its ``capture_record_sha256`` equals it.
+    """
     if not chain_proof.release_inputs_match(authored):
         raise ProofRefused("AUTHORED_NOT_FROZEN_INPUTS")
     by_id = _check_chain_records(chain_records)
     proven: dict[str, dict[str, Any]] = {}
+    decision_required: dict[str, dict[str, Any]] = {}
     unproven: dict[str, dict[str, Any]] = {}
 
     def attempt(name: str, rule: Any, needs_chain: bool = True) -> None:
-        chain, privy = _Chain(authored, by_id), _Privy(privy_records)
+        chain, privy = _Chain(authored, by_id), _Privy(privy_records, privy_capture_sha256)
         try:
             base = chain.preconditions() if needs_chain else None
             findings = rule(chain, privy, base)
         except _Unproven as missing:
-            unproven[name] = {"reason": missing.reason, "supporting_evidence_sha256": None}
+            unproven[name] = {"reason": missing.reason}
             return
+        decision = DECISION_REQUIRED.get(name)
         artifact = _artifact(name, authored, chain if needs_chain else None, privy, base, findings,
-                             claims=_CLAIMS[name], limits=_LIMITS[name])
-        proven[name] = {"artifact": artifact, "proof_sha256": _sha256(artifact)}
+                             state="DECISION_REQUIRED" if decision else "ENFORCED", evidence_class="PROVIDER_ACTUAL",
+                             claims=_CLAIMS[name], limits=_LIMITS[name], decision=decision)
+        entry = {"artifact": artifact, "proof_sha256": _sha256(artifact)}
+        if decision:
+            decision_required[name] = {**entry, "reason": decision}
+        else:
+            proven[name] = entry
 
     attempt("input_output_assets", _input_output_assets)
     attempt("raw_input", _raw_input)
@@ -508,18 +550,22 @@ def build_control_proofs(*, authored: Mapping[str, Any], privy_records: Mapping[
     attempt("fees", _fees)
     attempt("gas_action_capacity", lambda c, p, b: _gas_action_capacity(c, p, b, authored))
     attempt("expiry_freshness", lambda c, p, b: _expiry_freshness(p, authored), needs_chain=False)
+    support = _opaque_support(authored, by_id)
     unproven["opaque_program"] = {"reason": "NO_PROVIDER_BOUND_ON_PROGRAM_BYTES",
-                                  "supporting_evidence_sha256": _opaque_support(authored, by_id)}
+                                  "supporting_evidence_sha256": None if support is None else _sha256(support)}
     return {
         "schema": "edge-os.inapp-control-proofs/1",
         "proven": {name: proven[name] for name in CONTROLS if name in proven},
         "controls": {name: {"state": "ENFORCED", "evidence_class": "PROVIDER_ACTUAL",
                             "proof_sha256": proven[name]["proof_sha256"]} for name in CONTROLS if name in proven},
+        "decision_required": {name: decision_required[name] for name in CONTROLS if name in decision_required},
         "unproven": {name: unproven[name] for name in CONTROLS if name in unproven},
+        "supporting": {} if support is None else {"opaque_program": {"artifact": support,
+                                                                     "sha256": _sha256(support)}},
     }
 
 
-def _opaque_support(authored: Mapping[str, Any], by_id: Mapping[str, Mapping[str, Any]]) -> str | None:
+def _opaque_support(authored: Mapping[str, Any], by_id: Mapping[str, Mapping[str, Any]]) -> dict[str, Any] | None:
     """Evidence of what the one approved program does, for a builder decision. It is not a control proof."""
     chain = _Chain(authored, by_id)
     try:
@@ -534,25 +580,28 @@ def _opaque_support(authored: Mapping[str, Any], by_id: Mapping[str, Mapping[str
                                                 chain_proof.WMON, chain_proof.MOE)}
     if not set(findings["touched_addresses"]) <= allowed:
         return None
-    artifact = _artifact("opaque_program", authored, chain, None, base,
-                         {"program_hex": chain_proof.PROGRAM_HEX, **findings}, state="UNPROVEN_SUPPORT",
-                         claims=("The approved program, simulated at the pinned block, calls only the entrypoint, "
-                                 "router, pool, WMON and MOE, and pays the whole output to the wallet.",),
-                         limits=("Neither the Privy policy nor the entrypoint bounds the program bytes; only the "
-                                 "host's exact program check does. This is not a provider bound.",))
-    return _sha256(artifact)
+    return _artifact("opaque_program", authored, chain, None, base,
+                     {"program_hex": chain_proof.PROGRAM_HEX, **findings}, state="UNPROVEN_SUPPORT",
+                     evidence_class=None,
+                     claims=("The approved program, simulated at the pinned block, calls only the entrypoint, "
+                             "router, pool, WMON and MOE, and pays the whole output to the wallet.",),
+                     limits=("Neither the Privy policy nor the entrypoint bounds the program bytes; only the "
+                             "host's exact program check does. This is not a provider bound.",))
 
 
 # ---------------------------------------------------------------- command
 
 
-def load_privy_store(root: Path) -> dict[str, Any]:
-    records = {}
+def load_privy_store(root: Path) -> tuple[dict[str, Any], dict[str, str]]:
+    """The outcome records and the SHA-256 of each saved capture file of the control-proof packet."""
+    records, captures = {}, {}
     for specimen_id in CONTROL_PROOF_ORDER:
-        path = root / f"{specimen_id}.outcome.json"
-        if path.exists():
-            records[specimen_id] = json.loads(path.read_text(encoding="utf-8"))
-    return records
+        outcome, capture = root / f"{specimen_id}.outcome.json", root / f"{specimen_id}.capture.json"
+        if outcome.exists():
+            records[specimen_id] = json.loads(outcome.read_text(encoding="utf-8"))
+        if capture.exists():
+            captures[specimen_id] = hashlib.sha256(capture.read_bytes()).hexdigest()
+    return records, captures
 
 
 def load_chain_store(root: Path) -> list[Any]:
@@ -573,8 +622,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"status": "REFUSED", "code": "OUT_ALREADY_EXISTS"}))
         return 2
     try:
+        records, captures = load_privy_store(args.privy_store)
         result = build_control_proofs(authored=json.loads(args.authored.read_text(encoding="utf-8")),
-                                      privy_records=load_privy_store(args.privy_store),
+                                      privy_records=records, privy_capture_sha256=captures,
                                       chain_records=load_chain_store(args.chain_store))
     except ProofRefused as refused:
         print(json.dumps({"status": "REFUSED", "code": refused.code}))
@@ -582,10 +632,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError, KeyError, TypeError):
         print(json.dumps({"status": "REFUSED", "code": "INPUT_UNREADABLE"}))
         return 2
-    args.out.mkdir(parents=True)
-    for name, proof in result["proven"].items():
+    try:
+        args.out.mkdir(parents=True)
+    except FileExistsError:
+        print(json.dumps({"status": "REFUSED", "code": "OUT_ALREADY_EXISTS"}))
+        return 2
+    for name, proof in {**result["proven"], **result["decision_required"]}.items():
         (args.out / f"{name}.proof.json").write_bytes(canonical_json(proof["artifact"]))
-    summary = {"status": "BUILT", "controls": result["controls"], "unproven": result["unproven"]}
+    for name, support in result["supporting"].items():
+        (args.out / f"{name}.support.json").write_bytes(canonical_json(support["artifact"]))
+    summary = {"status": "BUILT", "controls": result["controls"],
+               "decision_required": {name: {"reason": entry["reason"], "proof_sha256": entry["proof_sha256"]}
+                                     for name, entry in result["decision_required"].items()},
+               "unproven": result["unproven"]}
     (args.out / "controls.json").write_bytes(canonical_json(summary))
     print(json.dumps(summary, sort_keys=True))
     return 0

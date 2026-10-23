@@ -5,8 +5,8 @@ This command never reads ``.env``. It reads exactly three environment values
 PEM file, and only for a live run. ``--dry-run`` reads nothing and sends nothing.
 
 The live path runs the packet's specimens one at a time in the frozen order. It
-stops on the first ``BREACH``, ``UNKNOWN`` or unexpected outcome and never
-retries. The runner has no broadcast path; the wallet must be unfunded, and the
+stops on the first ``BREACH``, unexpected outcome or ``UNKNOWN`` other than an
+expected ``EXPIRY_REFUSAL``, and never retries. The runner has no broadcast path; the wallet must be unfunded, and the
 operator must pass ``--confirm-unfunded`` after an independent balance read.
 """
 
@@ -88,7 +88,7 @@ def _credentials() -> tuple[str, str, Path] | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the frozen unfunded policy-layer packet once.")
+    parser = argparse.ArgumentParser(description="Run one frozen unfunded packet once.")
     parser.add_argument("--dry-run", action="store_true", help="validate and list the packet; read no credential")
     parser.add_argument("--packet", choices=sorted(PACKETS), default="policy-v3",
                         help="the registered packet to run (default: the v3 policy packet)")
