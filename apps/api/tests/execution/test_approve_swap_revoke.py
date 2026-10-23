@@ -437,32 +437,57 @@ def test_a_failed_save_before_the_approve_signature_is_definitely_unsent(tmp_pat
 
 # ------------------------------------------------------------------------------------------- recovery reads
 
-def test_a_revoke_receipt_closes_the_allowance_only_when_bound_and_successful(tmp_path):
+def test_a_revoke_receipt_closes_the_allowance_only_when_bound_final_and_successful(tmp_path):
     transport, _, stages = multi(tmp_path)
     run(transport, stages)
     saved = envelope(stages)
     revoke = saved["revoke"]
+    block, final = "0x" + "ab" * 32, "0x" + "cd" * 32
 
     class Observer:
-        def __init__(self, receipt):
+        def __init__(self, receipt, *, chain_id="0x8f", final_number="0x1e8482", canonical_hash=block):
             self.receipt, self.calls = receipt, []
+            self.chain_id, self.final_number, self.canonical_hash = chain_id, final_number, canonical_hash
 
         def call(self, method, params):
             self.calls.append((method, params))
-            return self.receipt
+            if method == "eth_chainId":
+                return self.chain_id
+            if method == "eth_getTransactionReceipt":
+                return self.receipt
+            assert method == "eth_getBlockByNumber"
+            if params == ["finalized", False]:
+                return {"number": self.final_number, "hash": final}
+            return {"number": params[0], "hash": self.canonical_hash, "baseFeePerGas": "0x3b9aca00"}
 
     good = {"transactionHash": revoke["transaction_hash"], "from": PUBLISHED_WALLET.lower(),
-            "to": transport._context.sell.token.lower(), "status": "0x1"}
+            "to": transport._context.sell.token.lower(), "status": "0x1",
+            "blockNumber": "0x10", "blockHash": block}
     assert read_revoke_receipt(saved, Observer(good))["state"] == "CLOSED"
     assert read_revoke_receipt(saved, Observer({**good, "status": "0x0"}))["state"] == "REVOKE_REVERTED"
     assert read_revoke_receipt(saved, Observer({**good, "to": PUBLISHED_WALLET}))["open"] is True
     assert read_revoke_receipt(saved, Observer(None))["state"] == "REVOKE_UNCONFIRMED"
+    assert read_revoke_receipt(saved, Observer(good, chain_id="0x8e"))["open"] is True
+    assert read_revoke_receipt(saved, Observer(good, final_number="0x1"))["open"] is True
+    assert read_revoke_receipt(saved, Observer(good, canonical_hash=final))["open"] is True
 
     class Down:
         def call(self, method, params):
             raise ReplyLost("down")
 
     assert read_revoke_receipt(saved, Down())["open"] is True
+
+
+def test_a_saved_revoke_receipt_proof_never_hides_an_unsent_approve_or_revoke(tmp_path):
+    transport, _, stages = multi(tmp_path)
+    run(transport, stages)
+    saved = envelope(stages)
+    closed = {"state": "CLOSED", "open": False, "reason": None}
+    assert allowance_status({**saved, "allowance_receipt": closed})["state"] == "CLOSED"
+    assert allowance_status({**saved, "revoke": {**saved["revoke"], "stage": "NOT_ATTEMPTED"},
+                             "allowance_receipt": closed})["state"] == "REVOKE_NOT_SENT"
+    assert allowance_status({**saved, "approve": {**saved["approve"], "stage": "PREPARED"},
+                             "allowance_receipt": closed})["state"] == "NOT_APPROVED"
 
 
 def test_a_single_swap_envelope_has_no_allowance_record(tmp_path):
