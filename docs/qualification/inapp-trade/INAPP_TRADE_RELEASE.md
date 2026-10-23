@@ -214,11 +214,74 @@ in the authored file.
 
    The last assertion passes only after steps 1 and 2.
 
+## Worker execution runtime settings
+
+`CLOUD-A4a` adds `apps/api/src/edge_os_api/execution/released_execution_bootstrap.py`. Only the worker process
+(`python -m edge_os_api.execution.worker`) calls it, and only in `EDGE_OS_EXECUTION_MODE=controlled`. The API
+process never calls it. A call with `role="api"` refuses before it reads a setting, file or key, so the API
+never receives a signer.
+
+The settings are worker-only environment values. They are not `Settings` fields, so the API configuration
+cannot carry them and `load_settings` ignores them:
+
+| Setting | Required form |
+| --- | --- |
+| `EDGE_OS_EXECUTION_PRIVY_APP_ID` | 1-128 characters of `[A-Za-z0-9_-]` |
+| `EDGE_OS_EXECUTION_PRIVY_APP_SECRET` | non-empty printable ASCII without spaces |
+| `EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH` | absolute path to a regular file, owned by the worker's user, with no group or other permission bits; it holds a PEM P-256 private key |
+| `EDGE_OS_EXECUTION_SERVER_WALLET_ID` | 1-128 characters of `[A-Za-z0-9_-]`; must equal the binding's `wallet_id` |
+| `EDGE_OS_EXECUTION_MONAD_RPC_URL` | `https` URL with a host, no user-info and no fragment |
+
+`EDGE_OS_EXECUTION_MONAD_RPC_URL` is read and validated so a worker without a chain endpoint refuses at startup.
+The approved release keeps its own broadcast and observer endpoints, so this value is not written into a request.
+Worker egress and health checks that use it belong to the A4b hosted gate.
+
+The worker builds one runtime only when code-owned candidate objects exist for an exact release hash in
+`APPROVED_ACTUAL_RELEASES` and an exact binding hash in `APPROVED_ACTUAL_BINDINGS`. The candidate list is
+`released_execution_bootstrap.RELEASE_CANDIDATES` and is empty at this ticket. Registration is a reviewed code
+change with the two registry lines. The module never writes either registry and never builds a runtime from an
+environment value alone. `CONTROLLED_RUNTIMES` in `core.provider_ports` stays empty; the worker passes the one
+runtime to the existing ports factory.
+
+The binding must name the configured server wallet and the release wallet, and the release must use the
+`DIRECT_V2_PROGRAM` quote, because no worker setting carries a Kuru quote token. When a caller supplies the
+saved `owner_id`, `agent_id` and `consent_adoption_id`, the bootstrap also refuses a mismatch. At run time the
+runtime compares the request's owner, agent and consent with the binding on every quote, holdings read, market
+observation, attempt begin and signer call.
+
+`env` other than `local` is refused in this ticket. Production stays behind the cloud hosted-record-v2 gate.
+
+### Refusal reasons
+
+Every refusal is `ExecutionBootstrapRefused` with one stable code. No message repeats a setting value, path or
+key material.
+
+| Code | Meaning |
+| --- | --- |
+| `EXECUTION_BOOTSTRAP_ROLE_NOT_WORKER` | The caller is the API or another non-worker role. |
+| `EXECUTION_BOOTSTRAP_ENV_NOT_LOCAL` | `settings.env` is not `local`. |
+| `EXECUTION_BOOTSTRAP_APP_ID_MISSING` / `_INVALID` | The Privy app id is absent, blank or malformed. |
+| `EXECUTION_BOOTSTRAP_APP_SECRET_MISSING` / `_INVALID` | The app secret is absent, blank or not printable ASCII without spaces. |
+| `EXECUTION_BOOTSTRAP_KEY_PATH_MISSING` / `_INVALID` | The key path is absent, blank, relative, too long or contains NUL. |
+| `EXECUTION_BOOTSTRAP_WALLET_ID_MISSING` / `_INVALID` | The server wallet id is absent, blank or malformed. |
+| `EXECUTION_BOOTSTRAP_RPC_URL_MISSING` / `_INVALID` | The Monad RPC URL is absent, blank or not the accepted `https` form. |
+| `EXECUTION_BOOTSTRAP_KEY_FILE_UNREADABLE` | The key path is missing, not a regular file or unreadable. |
+| `EXECUTION_BOOTSTRAP_KEY_FILE_NOT_OWNED` | The key file is owned by another user. |
+| `EXECUTION_BOOTSTRAP_KEY_FILE_NOT_OWNER_ONLY` | Group or other permission bits are set. |
+| `EXECUTION_BOOTSTRAP_KEY_INVALID` | The file is not a loadable PEM P-256 private key. |
+| `EXECUTION_BOOTSTRAP_APPROVAL_SEAM_INCOMPLETE` | Only one synthetic approval map was supplied. |
+| `EXECUTION_RELEASE_NOT_APPROVED` | No candidate matches an approved release id and exact hash. An empty registry gives this code. |
+| `EXECUTION_BINDING_NOT_APPROVED` | The binding hash is absent from the approved registry. |
+| `EXECUTION_BOOTSTRAP_MULTIPLE_RELEASES` | More than one candidate is admitted; a worker composes at most one. |
+| `EXECUTION_BOOTSTRAP_IDENTITY_MISMATCH` | A supplied saved owner, agent or consent differs from the binding. |
+| `EXECUTION_BOOTSTRAP_WALLET_MISMATCH` | The binding wallet, the configured server wallet and the release wallet do not agree. |
+| `EXECUTION_BOOTSTRAP_QUOTE_TOKEN_UNAVAILABLE` | The release needs a Kuru quote token and no worker setting carries one. |
+| `EXECUTION_RELEASE_HASH_MISMATCH`, `ACTUAL_EXECUTION_RELEASE_NOT_APPROVED`, `EXECUTION_RELEASE_EXPIRED`, `EXECUTION_CONTROL_UNQUALIFIED`, `ACTUAL_EXECUTION_BINDING_NOT_APPROVED`, `EXECUTION_BINDING_MISMATCH` | The binding's own admission refused with its existing code. |
+
 ## What else must exist before the app can run the action
 
 These items are outside this task and are owned by other lanes:
 
-- A `ControlledRuntime` mount. No application code builds one today.
 - The `/rpc` relay behind the three endpoints.
 - The worker and runtime wiring for the approve, swap and revoke steps. The transaction seam now runs them (see
   "In-app approve, swap and revoke" below), but no mounted runtime passes a step plan yet.

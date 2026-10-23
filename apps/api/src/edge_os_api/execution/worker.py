@@ -36,7 +36,9 @@ from edge_os_api.admission.models import PositionRow
 from edge_os_api.admission.types import (AdmissionContext, ApprovalSnapshot, AssetAmount, Holding,
                                          HoldingsSnapshot, IdentityBinding, PositionState, ValueState)
 from edge_os_api.core.provider_ports import (FIXTURE_EVIDENCE, FIXTURE_MODE, MarketObservationRequest,
-                                             ControlledRuntime, PlannedFixtureEffect, ProviderUnavailable, QuoteRequest)
+                                             ControlledRuntime, PlannedFixtureEffect, ProviderPorts, ProviderUnavailable,
+                                             QuoteRequest, build_provider_ports)
+from edge_os_api.core.settings import Settings
 from edge_os_api.execution.connected_identity import (AdoptedConsent, ConnectedAgent, adopted_consent,
                                                       derive_approval, resolve_agent, saved_release_identity)
 from edge_os_api.execution.current_holdings import HoldingsUnavailable
@@ -921,11 +923,27 @@ class ConnectedExecution:
         return self._apply(owner_id, intent.action_id, evidence, outcome)
 
 
+def build_worker_ports(settings: Settings, factory: sessionmaker[Session] | None,
+                       **bootstrap: Any) -> ProviderPorts | None:
+    """The worker's ports. `controlled` composes its one runtime from worker-only settings, else `None`.
+
+    An admitted runtime is passed to the existing factory; `core.provider_ports.CONTROLLED_RUNTIMES` stays empty.
+    """
+    if settings.execution_mode != "controlled":
+        return None
+    from edge_os_api.execution.released_execution_bootstrap import build_worker_execution_runtime
+
+    built = build_worker_execution_runtime(role="worker", settings=settings, **bootstrap)
+    return build_provider_ports("controlled", factory, settings.fixture_effects_path,
+                                settings.original_recordings_dir, role="worker", controlled=built.ports)
+
+
 def main() -> None:
     """Bounded worker loop. Each pass advances runnable jobs; nothing here schedules new work."""
     from edge_os_api.core.database import make_engine, make_session_factory
     from edge_os_api.core.financial_services import build_financial_services
     from edge_os_api.core.settings import load_settings
+    from edge_os_api.execution.released_execution_bootstrap import ExecutionBootstrapRefused
 
     parser = argparse.ArgumentParser(description="Advance saved evaluation jobs.")
     parser.add_argument("--once", action="store_true", help="run one pass and exit")
@@ -934,7 +952,13 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
     engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
-    services = build_financial_services(make_session_factory(engine), settings, role="worker")
+    factory = make_session_factory(engine)
+    try:
+        ports = build_worker_ports(settings, factory)
+    except ExecutionBootstrapRefused as refused:
+        log.error("execution bootstrap refused: %s", refused.code)
+        raise SystemExit(2) from None
+    services = build_financial_services(factory, settings, ports, role="worker")
     from edge_os_api.core import worker_loop
 
     worker_loop.exit_with(worker_loop.run("worker", engine, services.connected.run_pending, once=args.once,
