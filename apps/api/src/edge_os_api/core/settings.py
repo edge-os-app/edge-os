@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import functools
+import ipaddress
 import os
+import re
+import socket
 import subprocess
 from typing import Literal
 
@@ -22,6 +25,28 @@ TEST_APP_ID = "edge-os-test-app"
 # the unique alias `edge-os-postgres`.
 COOLIFY_RESERVED_DATABASE_HOSTS = frozenset({"postgres", "coolify-db"})
 FORBIDDEN_ENV_NAMES = ("EDGE_OS_PRIVY_APP_SECRET", "EDGE_OS_AUTH_DISABLED", "EDGE_OS_DEV_AUTH_BYPASS")
+
+
+def is_loopback_database_host(host: str | None) -> bool:
+    """True for a host-less URL, any multi-host list and any loopback or unspecified name or address. No DNS lookup."""
+    if not host or "," in host:
+        return True
+    name = host.strip().strip("[]").split("%", 1)[0].rstrip(".").lower()
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        # Short and legacy IPv4 spellings that libpq's resolver still accepts: 127.1, 2130706433, 0x7f000001, 0177.0.0.1.
+        if not re.fullmatch(r"[0-9a-fx.]+", name):
+            return False
+        try:
+            address = ipaddress.IPv4Address(socket.inet_aton(name))
+        except OSError:
+            return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_loopback or address.is_unspecified
 
 
 class ConfigError(RuntimeError):
@@ -174,9 +199,10 @@ class Settings(BaseSettings):
             # Names only: no message repeats a configured value, key or token.
             if not (self.build_sha or "").strip():
                 problems.append("build_sha: production needs the exact build identity")
-            # The one loopback route is the host research worker's 127.0.0.1 (builder decision 2026-10-23): only with a
-            # registered hosted deployment record whose TLS mode is the URL's sslmode. Every other loopback is refused.
-            if url.host in {"127.0.0.1", "localhost", None} and not (
+            # Refused: no host, a multi-host list, any spelling of localhost and any loopback or unspecified address.
+            # The one exception is the host research worker's literal 127.0.0.1 (builder decision 2026-10-23, option A):
+            # only with a registered hosted deployment record whose TLS mode is the URL's sslmode.
+            if is_loopback_database_host(url.host) and not (
                     url.host == "127.0.0.1" and deployment is not None
                     and url.query.get("sslmode") == deployment.database_tls_mode):
                 problems.append("database_url: production needs a hosted database, not a loopback host")

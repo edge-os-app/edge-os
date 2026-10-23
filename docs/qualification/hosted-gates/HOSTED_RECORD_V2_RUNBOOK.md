@@ -186,8 +186,17 @@ Builder decision, option A (2026-10-23). In production, `core/settings.py` admit
 - the URL's `sslmode` equals the record's `database_tls_mode`.
 
 Every other case keeps the refusal `database_url: production needs a hosted database, not a loopback host`. That
-includes no named record, an unregistered or refused record, an `sslmode` that differs from the record, `localhost`,
-and a URL with no host (a Unix socket). A version 1 or version 2 record admits the route; neither changes anything
+includes no named record, an unregistered or refused record, and an `sslmode` that differs from the record. Without
+any DNS lookup, production also refuses these hosts with that reason, record or not:
+
+- a URL with no host (a Unix socket) and a multi-host list such as `127.0.0.1,db.example`;
+- `localhost` and any `*.localhost` name in any letter case, with or without a trailing dot;
+- every other loopback address: the rest of `127.0.0.0/8`, `127.0.0.1.`, short and legacy IPv4 spellings
+  (`127.1`, `2130706433`, `0x7f000001`), `[::1]` in any spelling or with a zone, and IPv4-mapped forms such as
+  `[::ffff:127.0.0.1]`;
+- the unspecified addresses `0.0.0.0` and `[::]`, including their mapped and short spellings.
+
+Non-loopback hosts and non-production environments are unchanged. A version 1 or version 2 record admits the route; neither changes anything
 else, and a version 1 record still grants no execution.
 
 The registry is empty in this candidate, so production still refuses the route today. Keep
