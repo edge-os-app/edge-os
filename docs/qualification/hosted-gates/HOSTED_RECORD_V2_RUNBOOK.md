@@ -216,7 +216,10 @@ they cannot be masked with a placeholder because the settings parse them as inte
 Worker signing settings belong to the execution lanes; activating them is a later reviewed change.
 
 The worker alone joins `egress`: a bridge with the fixed name `edgeos-egress` and subnet `10.203.0.0/28`. It is
-intended for `https://api.privy.io` and the Monad RPC endpoint only.
+intended for `https://api.privy.io` and the Monad RPC endpoint only. The Monad RPC endpoint is the keyless `/rpc` relay
+(`https://rpc-a.edgeos.fun/rpc` and `https://rpc-b.edgeos.fun/rpc`, see
+[`RPC_RELAY.md`](../inapp-trade/RPC_RELAY.md)). The provider host and its key are never in the worker's allowlist; only
+the relay reaches the provider.
 
 **Docker cannot restrict by host name.** The network alone allows every destination. The host firewall or an egress
 gateway enforces the two destinations. Do not set controlled execution before this rule is installed and its checks
@@ -234,12 +237,26 @@ What `apply` installs:
 | Chain (hooked from) | Rules, in order |
 |---|---|
 | `EDGE_OS_FWD_A/B` (first rule of `DOCKER-USER`) | `-i edgeos-hostdb`, `-o edgeos-hostdb`, `-s 10.203.0.16/28` and `-d 10.203.0.16/28` `-j DROP`; `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j RETURN`; UDP and TCP 53 to each upstream resolver `-j RETURN`; TCP to `EDGE_OS_EGRESS_PORTS` (default 443) with `--match-set edgeos-egress-allow dst -j RETURN`; `-j DROP` |
-| `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+| `EDGE_OS_RELAY_MARK_A/B` (first rule of mangle `PREROUTING`) | `-i edgeos-egress -s 10.203.0.0/28 -p tcp --dport 443 --match-set edgeos-egress-relay dst --ctstate NEW -j CONNMARK --set-mark 0x2031` |
+| `EDGE_OS_FWD_A/B`, relay rules (after the hostdb drops) | `-o edgeos-egress -d 10.203.0.0/28` and `-i edgeos-egress -s 10.203.0.0/28` with `--mark 0x2031 --ctstate ESTABLISHED,RELATED -j ACCEPT`; `-i edgeos-egress -s 10.203.0.0/28 -p tcp --mark 0x2031 --ctstate DNAT --ctorigdstport 443 -j ACCEPT` |
+| `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-i edgeos-egress -s 10.203.0.0/28 -p tcp --dport 443 --match-set edgeos-egress-relay dst --dst-type LOCAL --ctstate NEW -j ACCEPT` (the relay through docker-proxy); `-j DROP` |
 | `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb ! -s 10.203.0.16/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 | `EDGE_OS_IN_PRIVATE_A/B` (first rule of `INPUT`) | `! -i edgeos-private ! -s 10.203.0.64/26 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 
 - The upstream resolvers are every IPv4 `nameserver` in the file Docker uses (below), without loopback stubs.
   Docker's embedded resolver forwards from the container's namespace, so these queries cross `edgeos-egress`.
+- The relay names (`EDGE_OS_EGRESS_RELAY_HOSTS`) resolve to this host's own public address, where Coolify's Traefik
+  publishes port 443. They fill their own set, `edgeos-egress-relay`, never `edgeos-egress-allow`. Docker delivers a
+  worker connection there one of two ways, and the rule admits both for TCP 443 only:
+  - With Docker's default `userland-proxy: true`, Docker's per-bridge "skip DNAT" rule leaves it un-DNATed; it
+    reaches `docker-proxy` through `INPUT`, where `EDGE_OS_IN` accepts new TCP 443 to a local relay address.
+  - With `userland-proxy: false`, Docker DNATs it to Traefik on another bridge. It is marked in mangle `PREROUTING`
+    while its destination is still a relay address; only that marked, DNATed flow from original port 443 is accepted,
+    in both directions, ahead of Docker's inter-bridge isolation.
+
+  Either way Traefik sees a host bridge gateway as the source (docker-proxy's connection or Docker's masquerade): the
+  gateway of the network that carries Traefik's published port, which the relay's `ipallowlist` lists with every
+  other network `coolify-proxy` joins (see `RPC_RELAY.md`, deploy step 3). A relay name that stops resolving to this host is dropped.
 - `edgeos-egress-allow` is a `hash:ip` set with a 900-second entry timeout. `refresh` resolves
   `EDGE_OS_EGRESS_HOSTS` on the host and only adds addresses; an empty answer never clears the set, and an address
   the providers stop using expires. A missing address fails closed (dropped), never open.
@@ -262,7 +279,8 @@ apt-get install -y ipset conntrack
 install -d -m 0755 -o root -g root /etc/edge-os
 install -m 0600 -o root -g root /dev/null /etc/edge-os/egress.env
 cat > /etc/edge-os/egress.env <<'ENV'
-EDGE_OS_EGRESS_HOSTS="api.privy.io <the Monad RPC host name in the approved execution release>"
+EDGE_OS_EGRESS_HOSTS="api.privy.io"
+EDGE_OS_EGRESS_RELAY_HOSTS="rpc-a.edgeos.fun rpc-b.edgeos.fun"
 EDGE_OS_EGRESS_PORTS="443"
 ENV
 # Root-owned copy: the unit never runs a script from the git checkout, which other steps switch between commits.
@@ -274,7 +292,7 @@ systemctl daemon-reload
 systemctl enable --now edge-os-egress-firewall.service edge-os-egress-refresh.timer
 ```
 
-If the Monad RPC endpoint is not served on 443, add its port to `EDGE_OS_EGRESS_PORTS`. The firewall unit runs before
+The relay is served on 443 only; `EDGE_OS_EGRESS_PORTS` does not apply to the relay rule. The firewall unit runs before
 `docker.service` and is `RequiredBy` it, so after a reboot no container starts before the rules exist. If `apply`
 fails (for example, no upstream resolver found), Docker and therefore Coolify do not start; this is deliberate
 fail-closed behavior. Fix the cause and run `systemctl start edge-os-egress-firewall docker`. No `ipset` or iptables
@@ -291,7 +309,8 @@ script in the repository, install it again to `/usr/local/sbin/edge-os-egress-fi
 
 Limits:
 
-- An address allowlist admits every name that shares a CDN address with `api.privy.io` or the RPC host. A
+- An address allowlist admits every name that shares a CDN address with `api.privy.io`. The relay rule admits every
+  name Traefik serves on this host (for example `api.edgeos.fun`); only the relay routes check the worker's source. A
   TLS-inspecting or SNI-allowlisting egress gateway is stricter; if one is used, route `edgeos-egress` through it and
   keep the final `DROP`.
 - The set holds what the host resolves. A rotating CDN name can answer the worker's resolver with an address the
@@ -313,6 +332,11 @@ import urllib.error as e, urllib.request as u
 try: print(u.urlopen('https://api.privy.io', timeout=5).status)
 except e.HTTPError as error: print(error.code)"                                                       # any HTTP status
 GW=$(docker network inspect "${PROJECT}_private" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')
+running "$W" && docker exec "$W" python -c "
+import json, urllib.request as u
+r = u.Request('https://rpc-a.edgeos.fun/rpc', data=b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_chainId\",\"params\":[]}',
+              headers={'Content-Type': 'application/json'})
+print(json.load(u.urlopen(r, timeout=10))['result'])"                                                # 0x8f (chain 143), RPC_RELAY.md
 must_fail "$W" python -c "$PY_PROBE" example.com 443       # the internet beyond the allowlist
 must_fail "$W" python -c "$PY_PROBE" 10.203.0.1 22         # the host, through the egress gateway
 [ -z "$GW" ] || must_fail "$W" python -c "$PY_PROBE" "$GW" 22   # the host, through the private gateway, if any
