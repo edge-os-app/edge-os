@@ -177,6 +177,7 @@ A sensitivity check that treats each bucket as available at its end (the `SCHEDU
 The missing outcome references are sparse trades in the one-minute response window, not missing buckets. This run
 therefore supports the release binding but does not give a predictive outcome under the current page plan. A schedule
 offset, a denser window or a different outcome reference is a separate builder decision. No result is chosen here.
+These are the release's known limits.
 
 ## Limits and unproved scope
 
