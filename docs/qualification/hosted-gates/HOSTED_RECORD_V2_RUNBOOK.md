@@ -220,12 +220,13 @@ The execution worker has its own environment block (`x-worker-environment`), not
 | `EDGE_OS_EXECUTION_SERVER_WALLET_ID` | `${EDGE_OS_EXECUTION_SERVER_WALLET_ID:-}` |
 | `EDGE_OS_EXECUTION_MONAD_RPC_URL` | `${EDGE_OS_EXECUTION_MONAD_RPC_URL:-}` |
 
-An empty value is refused by `released_execution_bootstrap.read_worker_execution_settings` at startup, so the worker
-trades nothing until §4.2 sets all five. The API block and the API service name none of them. `load_settings()` also
-refuses the unprefixed `EDGE_OS_PRIVY_APP_SECRET` in every process. This guarantee covers the Compose file. If Coolify
-writes every variable into one shared runtime file, optional non-secret names such as `EDGE_OS_RESEARCH_BUDGET_*` can
-still reach the worker; the worker does not read them, and they cannot be masked with a placeholder because the
-settings parse them as integers.
+With `EDGE_OS_EXECUTION_MODE=controlled`, an empty value is refused by
+`released_execution_bootstrap.read_worker_execution_settings` at startup, so the worker trades nothing until §4.2 sets
+all five. With `unavailable`, the worker starts as today and reads none of them. The API block and the API service name
+none of them. `load_settings()` also refuses the unprefixed `EDGE_OS_PRIVY_APP_SECRET` in every process. This guarantee
+covers the Compose file. If Coolify writes every variable into one shared runtime file, optional non-secret names such
+as `EDGE_OS_RESEARCH_BUDGET_*` can still reach the worker; the worker does not read them, and they cannot be masked
+with a placeholder because the settings parse them as integers.
 
 The worker alone joins `egress`: a bridge with the fixed name `edgeos-egress` and subnet `10.203.0.0/28`. It is
 intended for `https://api.privy.io` and the Monad RPC endpoint only.
@@ -337,8 +338,21 @@ as blocked. A refused connection (`FAIL: not proven blocked (1)`) means the pack
 
 ### 4.2 Turning on controlled execution
 
-Do the steps in this order. Each step fails closed. If one is missing, the worker refuses with a named
-`EXECUTION_BOOTSTRAP_*` code and sends nothing.
+Do the steps in this order. Execution stays off while `EDGE_OS_EXECUTION_MODE` is `unavailable`: the worker starts
+as today and reads no key. After step 3 sets `controlled`, a missing or invalid value refuses with a named
+`EXECUTION_BOOTSTRAP_*` code and the worker sends nothing.
+
+**Precondition, before any redeploy of this commit.** Create the empty root-owned directory that the worker mounts
+read-only. The key file is not needed for a deploy with execution off:
+
+```sh
+install -d -m 0755 -o root -g root /etc/edge-os/execution
+stat -c '%F %U %G %a' /etc/edge-os/execution    # must print: directory root root 755
+```
+
+The Compose mount source is this directory, never the key file. A deploy with no key file starts the worker and leaves
+the key path absent. Docker creates a missing directory source as an empty directory; run the command above so the
+ownership and mode are explicit. Do not mount the key file directly.
 
 1. Register the v2 record.
 2. Install the key file.
@@ -355,16 +369,17 @@ refuses `EDGE_OS_EXECUTION_MODE=controlled`.
 user owns the file, the directory stays root-owned, and the file has mode `0600`:
 
 ```sh
-install -d -m 0755 -o root -g root /etc/edge-os/execution
+test ! -d /etc/edge-os/execution/agent-authorization.pem
 install -m 0600 -o 10001 -g 10001 /root/agent-authorization.pem /etc/edge-os/execution/agent-authorization.pem
 chown 10001:10001 /etc/edge-os/execution/agent-authorization.pem
 chmod 0600 /etc/edge-os/execution/agent-authorization.pem
-stat -c '%u %g %a' /etc/edge-os/execution/agent-authorization.pem    # must print 10001 10001 600
+stat -c '%F %u %g %a' /etc/edge-os/execution/agent-authorization.pem   # must print: regular file 10001 10001 600
 ```
 
-The host path is `/etc/edge-os/execution/agent-authorization.pem`; it is the bind source and the value of
-`EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH`. The mount is read-only. The bootstrap refuses a symlink, a directory, a
-foreign owner or any group/other permission bit. Do not keep a copy in the checkout.
+The host path is `/etc/edge-os/execution/agent-authorization.pem`; it is the value of
+`EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH` and it lives inside the read-only directory mount. A directory at that
+path is refused by the guard and by the bootstrap. The bootstrap also refuses a symlink, a foreign owner or any
+group/other permission bit. Do not keep a copy in the checkout.
 
 **3. Set the Coolify variables.** Add these values to the execution worker only. Never add them to the API service:
 
@@ -381,16 +396,17 @@ Coolify must scope these six values to the execution worker. Do not put them in 
 reaches the API service. The Compose file cannot control what Coolify injects at run time.
 
 **4. Redeploy the stack.** Redeploy from the reviewed commit. The API and worker start under the same record; only the
-worker receives the signing values and the key mount.
+worker receives the signing values and the key directory mount.
 
 **5. Check the result.**
 
 ```sh
 # §1a first; READY must be 1.
 running "$W" && docker inspect "$W" --format '{{.Config.User}} {{range .Mounts}}{{.Source}}->{{.Destination}} {{.RW}}{{end}}'
-# The user is 10001:10001; the key source ends in /etc/edge-os/execution/agent-authorization.pem and RW is false.
+# The user is 10001:10001; the source is /etc/edge-os/execution (a directory) and RW is false.
 running "$W" && docker exec "$W" printenv EDGE_OS_EXECUTION_MODE     # controlled
-running "$W" && docker exec "$W" stat -c '%u %g %a' /etc/edge-os/execution/agent-authorization.pem  # 10001 10001 600
+running "$W" && docker exec "$W" stat -c '%F %u %g %a' /etc/edge-os/execution/agent-authorization.pem
+# must print: regular file 10001 10001 600
 docker logs --tail 100 "$W" 2>&1 | grep EXECUTION_BOOTSTRAP_ || echo "no bootstrap refusal"
 ```
 

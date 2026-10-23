@@ -44,7 +44,8 @@ WORKER_SETTINGS = {
     "EDGE_OS_CORS_ALLOWED_ORIGINS", "EDGE_OS_BUILD_SHA", "EDGE_OS_EXECUTION_MODE",
     "EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS", *WORKER_EXECUTION_SETTINGS,
 }
-WORKER_KEY_PATH = "/etc/edge-os/execution/agent-authorization.pem"
+WORKER_KEY_DIR = "/etc/edge-os/execution"
+WORKER_KEY_PATH = f"{WORKER_KEY_DIR}/agent-authorization.pem"
 POSTGRES_ALIAS = "edge-os-postgres"
 EGRESS_BRIDGE = "edgeos-egress"
 ENV_ALLOW = {
@@ -272,17 +273,26 @@ def test_the_api_service_and_its_compose_block_never_name_the_secret_or_key_path
     assert not any("agent-authorization" in str(mount) for mount in support.mounts(api))
 
 
-def test_the_execution_worker_mounts_the_authorization_key_read_only_as_its_owner(compose):
+def test_the_execution_worker_mounts_the_key_directory_read_only_as_its_owner(compose):
     worker = compose["services"]["execution-worker"]
-    mounts = [mount for mount in support.mounts(worker) if mount["target"] == WORKER_KEY_PATH]
+    mounts = [mount for mount in support.mounts(worker) if mount["target"] == WORKER_KEY_DIR]
     assert len(mounts) == 1
     assert mounts[0]["type"] == "bind"
-    assert mounts[0]["source"] == WORKER_KEY_PATH
+    assert mounts[0]["source"] == WORKER_KEY_DIR
     assert mounts[0]["read_only"] is True
     # The API image runs as uid 10001; the operator gives that user the key file with mode 0600.
     assert worker["user"] == "10001:10001"
     key_setting = support.environment_values(worker)["EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH"]
     assert key_setting == f"${{EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH:-{WORKER_KEY_PATH}}}"
+
+
+def test_no_service_mounts_the_key_file_so_a_deploy_without_it_starts(compose):
+    """A deploy with execution off has no key file. Only the parent directory may be a mount source or target."""
+    for name, service in compose["services"].items():
+        for mount in support.mounts(service):
+            assert mount["source"] != WORKER_KEY_PATH, name
+            assert mount["target"] != WORKER_KEY_PATH, name
+    assert WORKER_KEY_PATH.startswith(WORKER_KEY_DIR + "/")
 
 
 def test_the_workers_use_a_heartbeat_command(compose):

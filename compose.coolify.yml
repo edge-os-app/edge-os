@@ -60,7 +60,7 @@ x-api-environment: &api-environment
 # The execution worker's own block. It is not merged with the API block: it holds only the names `load_settings()`
 # requires and the names the worker reads (execution mode, statement timeout). No interpreter, research, budget or
 # usage value reaches it. The five signing values are worker-only Coolify variables; the API block and the API service
-# never name one. They stay empty while execution is off, and the bootstrap refuses a missing value at startup.
+# never name one. They stay empty while execution is off; when execution is on, the bootstrap refuses a missing value.
 # Controlled execution stays off here; production admits it only for a registered hosted deployment record that binds
 # the exact approved execution release (core/settings.py and execution/released_execution_bootstrap.py).
 x-worker-environment: &worker-environment
@@ -247,11 +247,14 @@ services:
     environment: *worker-environment
     # The API image runs as uid 10001. The operator makes that uid the owner of the key file with mode 0600 and keeps
     # /etc/edge-os/execution root-owned; the bootstrap refuses any other owner or any group/other permission bit.
+    # Mount the root-owned DIRECTORY, not the key file: a deploy with execution off and no key file must start as
+    # today and must not create the key path. Docker creates a missing bind source as an empty directory; the key file
+    # inside it is created only when execution is turned on.
     user: "10001:10001"
     volumes:
       - type: bind
-        source: /etc/edge-os/execution/agent-authorization.pem
-        target: /etc/edge-os/execution/agent-authorization.pem
+        source: /etc/edge-os/execution
+        target: /etc/edge-os/execution
         read_only: true
     tmpfs: ["/tmp"]
     mem_limit: 768m
