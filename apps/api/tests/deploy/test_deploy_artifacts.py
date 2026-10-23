@@ -128,12 +128,16 @@ def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
     script = host / "edge-os-egress-firewall.sh"
     assert os.access(script, os.X_OK)
     text = script.read_text(encoding="utf-8")
-    for rule in ("-i edgeos-hostdb -j DROP", "! -i edgeos-egress -j RETURN", '-m set --match-set "$SET" dst -j RETURN',
+    for rule in ("-i edgeos-hostdb -j DROP", "-o edgeos-hostdb -j DROP", '-s "$HOSTDB_SUBNET" -j DROP',
+                 '! -i edgeos-egress ! -s "$EGRESS_SUBNET" -j RETURN', '-m set --match-set "$SET" dst -j RETURN',
                  '-A "$fwd" -j DROP', '-A "$in_egress" -j DROP', '-A "$in_db" -j DROP', "hook DOCKER-USER",
-                 "hook INPUT", "conntrack -D -s"):
+                 "hook INPUT", "conntrack -D -s", "flock 9", "conntrack is required"):
         assert rule in text, rule
     assert "ipset flush" not in text and "ipset swap" not in text
     unit = (host / "edge-os-egress-firewall.service").read_text(encoding="utf-8")
     assert "Before=docker.service" in unit and "RequiredBy=docker.service" in unit
+    # A failed Condition* skips the unit as a success, so Docker would start without rules.
+    assert not re.search(r"(?m)^Condition", unit)
+    assert "ExecReload=/opt/edge-os/deploy/host/edge-os-egress-firewall.sh apply" in unit
     timer = (host / "edge-os-egress-refresh.timer").read_text(encoding="utf-8")
     assert "OnUnitActiveSec=5min" in timer

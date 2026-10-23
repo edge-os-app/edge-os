@@ -144,9 +144,9 @@ What `apply` installs:
 
 | Chain (hooked from) | Rules, in order |
 |---|---|
-| `EDGE_OS_FWD_A/B` (first rule of `DOCKER-USER`) | `-i edgeos-hostdb -j DROP`; `! -i edgeos-egress -j RETURN`; `ESTABLISHED,RELATED -j RETURN`; UDP and TCP 53 to each upstream resolver `-j RETURN`; TCP to `EDGE_OS_EGRESS_PORTS` (default 443) with `--match-set edgeos-egress-allow dst -j RETURN`; `-j DROP` |
-| `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
-| `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+| `EDGE_OS_FWD_A/B` (first rule of `DOCKER-USER`) | `-i edgeos-hostdb`, `-o edgeos-hostdb`, `-s 10.203.0.16/28` and `-d 10.203.0.16/28` `-j DROP`; `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j RETURN`; UDP and TCP 53 to each upstream resolver `-j RETURN`; TCP to `EDGE_OS_EGRESS_PORTS` (default 443) with `--match-set edgeos-egress-allow dst -j RETURN`; `-j DROP` |
+| `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+| `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb ! -s 10.203.0.16/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 
 - The upstream resolvers are every IPv4 `nameserver` in `/run/systemd/resolve/resolv.conf` (or `/etc/resolv.conf`),
   without loopback stubs. Docker's embedded resolver forwards from the container's namespace, so these queries cross
@@ -156,8 +156,11 @@ What `apply` installs:
   the providers stop using expires. A missing address fails closed (dropped), never open.
 - Each re-run builds the idle `_A`/`_B` chain, hooks it first and only then removes the old one, so no hook is ever
   left pointing at an empty chain.
-- After `apply`, conntrack entries from `10.203.0.0/28` are deleted, so a connection opened before the rules does not
-  survive on the `ESTABLISHED` allowance.
+- Every rule matches the bridge name or its fixed subnet, so a bridge that loses its fixed name is still filtered.
+- After `apply`, conntrack entries from both subnets are deleted, so a connection opened before the rules does not
+  survive on the `ESTABLISHED` allowance. `conntrack` is required; a failed flush fails `apply`.
+- `apply` holds a lock (`flock`), so two runs never build the same idle chain at once.
+- Both networks set `enable_ipv6: false`, so the IPv4 rules cover them.
 - The `INPUT` chains keep both bridges off host services (SSH, Coolify, the loopback database). Replies to the
   loopback publish still arrive (`ESTABLISHED`).
 
@@ -181,26 +184,38 @@ If the Monad RPC endpoint is not served on 443, add its port to `EDGE_OS_EGRESS_
 `docker.service` and is `RequiredBy` it, so after a reboot no container starts before the rules exist. If `apply`
 fails (for example, no upstream resolver found), Docker and therefore Coolify do not start; this is deliberate
 fail-closed behavior. Fix the cause and run `systemctl start edge-os-egress-firewall docker`. No `ipset` or iptables
-persistence package is needed; the unit rebuilds both at every boot.
+persistence package is needed; the unit rebuilds both at every boot. The unit has no `Condition*` line on purpose: a
+failed condition would skip it as a success and let Docker start without rules.
+
+To re-apply after editing `egress.env`, run `systemctl reload edge-os-egress-firewall` (it runs `apply` without
+touching Docker). Do not `restart` the unit: `RequiredBy=docker.service` also restarts Docker and every container. A
+host removed from `EDGE_OS_EGRESS_HOSTS` keeps its addresses allowed until their 900-second entries expire; to cut it
+off at once, `ipset flush edgeos-egress-allow` and then `systemctl start edge-os-egress-refresh`.
 
 Limits:
 
 - An address allowlist admits every name that shares a CDN address with `api.privy.io` or the RPC host. A
   TLS-inspecting or SNI-allowlisting egress gateway is stricter; if one is used, route `edgeos-egress` through it and
   keep the final `DROP`.
+- The set holds what the host resolves. A rotating CDN name can answer the worker's resolver with an address the
+  host has not seen yet; that connection is dropped until the next refresh (at most 5 minutes). This fails closed.
 - DNS to the upstream resolvers allows any query, so DNS tunnelling remains possible from the worker. This is an
   accepted limit. A filtering resolver that answers only for the allowed names would remove it.
 
 Checks (record the output; repeat after a reboot):
 
 ```sh
+ip link show edgeos-egress && ip link show edgeos-hostdb    # both bridges carry their fixed names
 iptables -S DOCKER-USER | head -3; iptables -S INPUT | head -3; ipset list edgeos-egress-allow | head
 W=$(docker ps --filter label=com.docker.compose.service=execution-worker --format '{{.Names}}' | head -1)
-docker exec "$W" python -c "import urllib.request as u; print(u.urlopen('https://api.privy.io', timeout=5).status)"  # any HTTP status
+docker exec "$W" python -c "
+import urllib.error as e, urllib.request as u
+try: print(u.urlopen('https://api.privy.io', timeout=5).status)
+except e.HTTPError as error: print(error.code)"                                                     # any HTTP status
 docker exec "$W" python -c "import urllib.request as u; u.urlopen('https://example.com', timeout=5)"   # must time out
 docker exec "$W" python -c "import socket; socket.create_connection(('10.203.0.1', 22), 3)"         # must fail
 PG=$(docker ps --filter label=com.docker.compose.service=postgres --format '{{.Names}}' | head -1)
-docker exec "$PG" bash -c 'exec 3<>/dev/tcp/10.203.0.17/22' && echo "OPEN: fix" || echo "host closed to postgres"
+docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/10.203.0.17/22"' && echo "OPEN: fix" || echo "host closed to postgres"
 docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/1.1.1.1/443"' && echo "OPEN: fix" || echo "no route out"
 ```
 

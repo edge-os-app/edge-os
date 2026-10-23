@@ -239,6 +239,7 @@ def _controlled_execution_refusal(deployment: HostedDeployment | None) -> str | 
         return "controlled execution needs an approved hosted deployment"
     if deployment.execution_release_id is None:
         return "the hosted deployment record binds no execution release"
+    # Imported here so loading settings does not load the execution packages; read at call time, never cached.
     from edge_os_api.execution import operating_release
 
     approved = operating_release.APPROVED_ACTUAL_RELEASES.get(deployment.execution_release_id)

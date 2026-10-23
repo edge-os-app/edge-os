@@ -26,8 +26,8 @@ x-hardening: &hardening
   security_opt: ["no-new-privileges:true"]
   init: true
 
-# The API, migration, execution worker and recurring producer share one image and one typed settings contract. The
-# worker processes call `load_settings()`, so they need the same required names as the API. None of them receives the
+# The API, migration, execution worker and recurring producer share one image and one typed settings contract. The API
+# and the recurring producer use this block; the execution worker has its own block below. None of them receives the
 # raw PostgreSQL password; each receives only the composed database URL.
 x-api-environment: &api-environment
   EDGE_OS_ENV: production
@@ -295,8 +295,8 @@ services:
       start_period: 60s
 
 networks:
-  # No route out of the host for PostgreSQL, the migration step or the workers. The API verification key is checked
-  # locally, so the API does not need provider egress; provider modes are unavailable in this candidate.
+  # No route out of the host on this network. The API verification key is checked locally, so the API does not need
+  # provider egress. Only the execution worker has a route out (`egress`); PostgreSQL's `hostdb` has no NAT.
   private:
     internal: true
   # The execution worker's only route out, intended for https://api.privy.io and the Monad RPC endpoint only. Docker
@@ -308,6 +308,7 @@ networks:
   # firewall also drops forwarded traffic from this bridge and its traffic to the host (see the runbook).
   hostdb:
     driver: bridge
+    enable_ipv6: false
     driver_opts:
       com.docker.network.bridge.name: edgeos-hostdb
       com.docker.network.bridge.enable_ip_masquerade: "false"
@@ -316,6 +317,7 @@ networks:
         - subnet: 10.203.0.16/28
   egress:
     driver: bridge
+    enable_ipv6: false
     driver_opts:
       com.docker.network.bridge.name: edgeos-egress
     ipam:

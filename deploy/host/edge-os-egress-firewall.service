@@ -2,16 +2,19 @@
 Description=Edge OS host firewall for the execution-worker egress and PostgreSQL loopback bridges
 Documentation=file:/opt/edge-os/docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md
 # Before Docker, so no container joins edgeos-egress before the rules exist. iptables accepts `-i <bridge>` before
-# the interface exists. A failure here stops docker.service from starting (Requires on the Docker side below).
+# the interface exists. A failure here stops docker.service from starting (RequiredBy below). There is deliberately no
+# Condition*: a failed condition skips the unit as a success and Docker would start without rules. A missing
+# /etc/edge-os/egress.env makes the script exit non-zero instead. Re-apply with `systemctl reload`, which runs the
+# script without restarting Docker; `systemctl restart` of this unit also restarts Docker.
 Wants=network-online.target
 After=network-online.target
 Before=docker.service
-ConditionPathExists=/etc/edge-os/egress.env
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/edge-os/deploy/host/edge-os-egress-firewall.sh apply
+ExecReload=/opt/edge-os/deploy/host/edge-os-egress-firewall.sh apply
 
 [Install]
 WantedBy=multi-user.target

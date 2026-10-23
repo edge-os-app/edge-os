@@ -100,6 +100,7 @@ def test_only_the_execution_worker_joins_the_egress_network(compose):
     assert egress["driver"] == "bridge"
     assert egress["driver_opts"]["com.docker.network.bridge.name"] == EGRESS_BRIDGE
     assert egress["ipam"]["config"] == [{"subnet": "10.203.0.0/28"}]
+    assert egress["enable_ipv6"] is False
     members = {name for name, service in compose["services"].items() if "egress" in service["networks"]}
     assert members == {"execution-worker"}
 
@@ -110,6 +111,7 @@ def test_the_loopback_publish_network_has_no_route_out_and_only_postgres(compose
     assert hostdb["driver_opts"]["com.docker.network.bridge.name"] == "edgeos-hostdb"
     assert hostdb["driver_opts"]["com.docker.network.bridge.enable_ip_masquerade"] == "false"
     assert hostdb["ipam"]["config"] == [{"subnet": "10.203.0.16/28"}]
+    assert hostdb["enable_ipv6"] is False
     members = {name for name, service in compose["services"].items() if "hostdb" in service["networks"]}
     assert members == {"postgres"}
 
