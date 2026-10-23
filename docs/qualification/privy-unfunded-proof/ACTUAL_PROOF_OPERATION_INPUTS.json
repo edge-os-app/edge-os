@@ -811,5 +811,289 @@
       "scripts.privy_unfunded_proof.actual_packet.CODE_OWNED_TYPE4_AUTHORITIES",
       "scripts.privy_unfunded_proof.specimens.CODE_OWNED_ACTUAL_MANIFESTS"
     ]
+  },
+  "control_proof_operations": {
+    "task": "CLOUD-CONTROL-PROOFS-20261023",
+    "status": "FROZEN",
+    "evidence_class": "LOCAL_TESTED",
+    "provider_proof": "UNQUALIFIED",
+    "note": "New operations only. The v3 packet and its 19 rows above are unchanged. Every Privy row is sign-only with nonce 1000000 and no broadcast path; the only expected signature is a revoke to zero. Every chain operation is a read; eth_call and eth_estimateGas use temporary WMON storage overrides (balance and entrypoint allowance; the approve estimate overrides the balance only, so it prices the live zero-to-input allowance write). See docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md.",
+    "privy_packet": {
+      "packet_id": "501942ec92178a5621f25acb7395b44884a0d9770cbb23f44bc0c459656ae775",
+      "sealed_packet_sha256": "501942ec92178a5621f25acb7395b44884a0d9770cbb23f44bc0c459656ae775",
+      "table_manifest_sha256": "556fdeb5fb8101cc35b3f2b119cc7c86680544155a731b81680b920f4f5fff1d",
+      "attempt_identity": "control-proofs-1",
+      "expires_at_epoch": 1796083200,
+      "auth_header_expiry": "1796083200000",
+      "nonce": 1000000,
+      "rows": [
+        {
+          "specimen_id": "raw.ctl_allow_revoke_zero",
+          "expected": "ALLOW",
+          "request_sha256": "0c6b1abfdec2859afa6fa8c10ff6d3f5ff4acb5719accc5c2a6b9fa6fb3570e9",
+          "controls": [
+            "positive control for every control-proof refusal"
+          ]
+        },
+        {
+          "specimen_id": "raw.ctl_deny_approve_moe_entrypoint",
+          "expected": "POLICY_DENY",
+          "request_sha256": "da75b7d86aa79409148bfaf72766a83ef60c7287f159d0e11e3662f68f51961f",
+          "controls": [
+            "input_output_assets (decision required)"
+          ]
+        },
+        {
+          "specimen_id": "raw.ctl_deny_swap_receiver_wallet",
+          "expected": "POLICY_DENY",
+          "request_sha256": "765468dd9de392f96e17dd484728efcb3083e6eec0d32c6ea4e949f5ea2f5bea",
+          "controls": [
+            "recipient"
+          ]
+        },
+        {
+          "specimen_id": "raw.ctl_deny_moe_transfer_sink",
+          "expected": "POLICY_DENY",
+          "request_sha256": "99df29a1ee47b68a114ebad7ce6157c8fa1f96b48572f95a5ec7ac4503801c16",
+          "controls": [
+            "recipient"
+          ]
+        },
+        {
+          "specimen_id": "raw.ctl_deny_expired_request",
+          "expected": "EXPIRY_REFUSAL",
+          "request_sha256": "aebbdc17b8ffd94a418e97f4840ae6a8b05d0921ecc016f7351f780f209f0f3f",
+          "controls": [
+            "expiry_freshness (decision required)"
+          ]
+        }
+      ]
+    },
+    "chain_operations": [
+      {
+        "op_id": "chain.chain_id",
+        "method": "eth_chainId",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.block",
+        "method": "eth_getBlockByNumber",
+        "expect": "RESULT",
+        "controls": [
+          "precondition",
+          "gas_action_capacity"
+        ]
+      },
+      {
+        "op_id": "chain.code_entrypoint",
+        "method": "eth_getCode",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.code_router",
+        "method": "eth_getCode",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.code_wmon",
+        "method": "eth_getCode",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.code_pool",
+        "method": "eth_getCode",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.get_router",
+        "method": "eth_call",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.pool_token0",
+        "method": "eth_call",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.pool_token1",
+        "method": "eth_call",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.pool_reserves",
+        "method": "eth_call",
+        "expect": "RESULT",
+        "controls": [
+          "precondition",
+          "raw_input",
+          "fees (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.override_balance",
+        "method": "eth_call",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.override_allowance",
+        "method": "eth_call",
+        "expect": "RESULT",
+        "controls": [
+          "precondition"
+        ]
+      },
+      {
+        "op_id": "chain.swap_probe",
+        "method": "eth_call",
+        "expect": "SUCCESS",
+        "controls": [
+          "precondition",
+          "input_output_assets (decision required)",
+          "raw_input",
+          "fees (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.swap_min_equal",
+        "method": "eth_call",
+        "expect": "SUCCESS",
+        "controls": [
+          "minimum_output"
+        ]
+      },
+      {
+        "op_id": "chain.swap_min_above",
+        "method": "eth_call",
+        "expect": "REVERT",
+        "controls": [
+          "minimum_output"
+        ]
+      },
+      {
+        "op_id": "chain.swap_input_above_allowance",
+        "method": "eth_call",
+        "expect": "REVERT",
+        "controls": [
+          "raw_input"
+        ]
+      },
+      {
+        "op_id": "chain.swap_wrong_output",
+        "method": "eth_call",
+        "expect": "REVERT",
+        "controls": [
+          "input_output_assets (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.swap_wrong_input",
+        "method": "eth_call",
+        "expect": "REVERT",
+        "controls": [
+          "input_output_assets (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.swap_fee_over_bound",
+        "method": "eth_call",
+        "expect": "REVERT",
+        "controls": [
+          "fees (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.swap_fee_sum_over_bound",
+        "method": "eth_call",
+        "expect": "REVERT",
+        "controls": [
+          "fees (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.swap_fee_sum_at_bound",
+        "method": "eth_call",
+        "expect": "SUCCESS",
+        "controls": [
+          "fees (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.swap_fee_charged",
+        "method": "eth_call",
+        "expect": "SUCCESS",
+        "controls": [
+          "fees (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.swap_trace",
+        "method": "debug_traceCall",
+        "expect": "SUCCESS",
+        "controls": [
+          "recipient",
+          "opaque_program (support only)"
+        ]
+      },
+      {
+        "op_id": "chain.estimate_approve",
+        "method": "eth_estimateGas",
+        "expect": "RESULT",
+        "controls": [
+          "gas_action_capacity"
+        ]
+      },
+      {
+        "op_id": "chain.estimate_swap",
+        "method": "eth_estimateGas",
+        "expect": "RESULT",
+        "controls": [
+          "gas_action_capacity"
+        ]
+      },
+      {
+        "op_id": "chain.estimate_revoke",
+        "method": "eth_estimateGas",
+        "expect": "RESULT",
+        "controls": [
+          "gas_action_capacity"
+        ]
+      },
+      {
+        "op_id": "chain.swap_at_release_gas",
+        "method": "eth_call",
+        "expect": "SUCCESS",
+        "controls": [
+          "gas_action_capacity"
+        ]
+      }
+    ],
+    "chain_endpoint_env": "EDGE_OS_CONTROL_PROOF_RPC_URL"
   }
 }

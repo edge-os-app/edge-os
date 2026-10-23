@@ -30,7 +30,7 @@ MAX_RECORD_BYTES = 4096
 MAX_SPECIMENS_PER_PROFILE = 32
 
 # Code-owned manifests admitted for an actual run in addition to the frozen
-# synthetic table. The actual packet module seals exactly one reviewed literal.
+# synthetic table. The actual packet module seals one reviewed literal per packet.
 CODE_OWNED_ACTUAL_MANIFESTS: frozenset[str] = frozenset()
 
 

@@ -1,13 +1,16 @@
-"""Operator entry point for the one frozen unfunded policy-layer packet.
+"""Operator entry point for the frozen unfunded packets.
+
+The registered packets are the v3 policy packet (default) and the control-proof
+packet (``--packet control-proofs``).
 
 This command never reads ``.env``. It reads exactly three environment values
 (``PRIVY_APP_ID``, ``PRIVY_APP_SECRET``, ``PRIVY_AGENT_KEY_FILE``) and one P-256
 PEM file, and only for a live run. ``--dry-run`` reads nothing and sends nothing.
 
 The live path runs the packet's specimens one at a time in the frozen order. It
-stops on the first ``BREACH``, ``UNKNOWN`` or unexpected outcome and never
-retries. The runner has no broadcast path; the wallet must be unfunded, and the
-operator must pass ``--confirm-unfunded`` after an independent balance read.
+stops on the first ``BREACH``, unexpected outcome or ``UNKNOWN`` other than an
+expected ``EXPIRY_REFUSAL``, and never retries. The runner has no broadcast
+path; the wallet must be unfunded, and the operator must pass ``--confirm-unfunded`` after an independent balance read.
 """
 
 from __future__ import annotations
@@ -23,6 +26,9 @@ from edge_os_api.execution.privy_signer import make_p256_authorizer
 from edge_os_api.research_history.http_clients.http_transport import StdlibHttpTransport
 
 from scripts.privy_unfunded_proof.actual_packet import (
+    CONTROL_PROOF_ORDER,
+    CONTROL_PROOF_PACKET,
+    CONTROL_PROOF_TABLE,
     UNFUNDED_POLICY_ORDER,
     UNFUNDED_POLICY_PACKET,
     UNFUNDED_POLICY_PROFILE_ID,
@@ -32,22 +38,34 @@ from scripts.privy_unfunded_proof.actual_packet import (
 from scripts.privy_unfunded_proof.actual_profile import resolve_qualified_profile
 from scripts.privy_unfunded_proof.actual_runner import run_actual_specimen
 from scripts.privy_unfunded_proof.actual_transport import ActualSignOnlyTransport, deadline_bounded_connect
-from scripts.privy_unfunded_proof.evidence import Outcome
+from scripts.privy_unfunded_proof.evidence import Outcome, RunResult
 from scripts.privy_unfunded_proof.specimens import AttemptStore, SpecimenRefused
 
 MAX_RESPONSE_BYTES = 16384
 CONNECT_TIMEOUT_SECONDS = 15.0
 PER_REQUEST_DEADLINE_SECONDS = 60.0
+# The registered packets this command runs: the v3 policy packet (default) and the control-proof packet.
+PACKETS = {
+    "policy-v3": (UNFUNDED_POLICY_PACKET, UNFUNDED_POLICY_TABLE, UNFUNDED_POLICY_ORDER),
+    "control-proofs": (CONTROL_PROOF_PACKET, CONTROL_PROOF_TABLE, CONTROL_PROOF_ORDER),
+}
 
 
 def _clock() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _dry_run() -> int:
+def should_stop(result: RunResult) -> bool:
+    """Stop on a breach, a mismatch or an unknown reply; an expected expiry refusal is a matched result."""
+    if result.outcome is Outcome.BREACH or not result.matches_expectation:
+        return True
+    return result.outcome is Outcome.UNKNOWN and result.reason != "EXPIRY_REFUSAL"
+
+
+def _dry_run(name: str) -> int:
+    frozen, table, order = PACKETS[name]
     try:
-        packet = resolve_approved_packet(UNFUNDED_POLICY_PACKET.packet_id, now_epoch=int(time.time()),
-                                         table=UNFUNDED_POLICY_TABLE)
+        packet = resolve_approved_packet(frozen.packet_id, now_epoch=int(time.time()), table=table)
         profile = resolve_qualified_profile(UNFUNDED_POLICY_PROFILE_ID)
     except SpecimenRefused as refused:
         print(f"REFUSED {refused.code}")
@@ -55,7 +73,7 @@ def _dry_run() -> int:
     print(f"packet={packet.packet_id}")
     print(f"profile_id={UNFUNDED_POLICY_PROFILE_ID} profile={profile.profile}")
     print(f"expires_at_epoch={packet.expires_at_epoch} auth_header_expiry={packet.auth_header_expiry}")
-    for specimen_id in UNFUNDED_POLICY_ORDER:
+    for specimen_id in order:
         request = packet.requests[specimen_id]
         print(f"{specimen_id} expected={packet.specimen_expected[specimen_id]} "
               f"request_sha256={request.request_sha256}")
@@ -73,15 +91,18 @@ def _credentials() -> tuple[str, str, Path] | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the frozen unfunded policy-layer packet once.")
+    parser = argparse.ArgumentParser(description="Run one frozen unfunded packet once.")
     parser.add_argument("--dry-run", action="store_true", help="validate and list the packet; read no credential")
+    parser.add_argument("--packet", choices=sorted(PACKETS), default="policy-v3",
+                        help="the registered packet to run (default: the v3 policy packet)")
     parser.add_argument("--store", type=Path, help="a new empty directory for the one-use attempt store")
     parser.add_argument("--confirm-unfunded", action="store_true",
                         help="the operator confirmed an independent zero-balance read of the agent wallet")
     args = parser.parse_args(argv)
 
     if args.dry_run:
-        return _dry_run()
+        return _dry_run(args.packet)
+    frozen, table, order = PACKETS[args.packet]
 
     if not args.confirm_unfunded:
         print("UNFUNDED_CONFIRMATION_REQUIRED: read the wallet balance first, then pass --confirm-unfunded")
@@ -95,8 +116,7 @@ def main(argv: list[str] | None = None) -> int:
 
     now_epoch = int(time.time())
     try:
-        packet = resolve_approved_packet(UNFUNDED_POLICY_PACKET.packet_id, now_epoch=now_epoch,
-                                         table=UNFUNDED_POLICY_TABLE)
+        packet = resolve_approved_packet(frozen.packet_id, now_epoch=now_epoch, table=table)
         resolve_qualified_profile(UNFUNDED_POLICY_PROFILE_ID)
     except SpecimenRefused as refused:
         print(f"REFUSED {refused.code}")
@@ -123,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     args.store.mkdir(parents=True, exist_ok=False)
     store = AttemptStore(args.store)
     started_at_epoch = now_epoch
-    for specimen_id in UNFUNDED_POLICY_ORDER:
+    for specimen_id in order:
         deadline = time.monotonic() + PER_REQUEST_DEADLINE_SECONDS
         http = StdlibHttpTransport(connect=deadline_bounded_connect(deadline_monotonic=deadline))
         transport = ActualSignOnlyTransport(
@@ -149,15 +169,14 @@ def main(argv: list[str] | None = None) -> int:
                 clock=_clock,
                 now_epoch=int(time.time()),
                 started_at_epoch=started_at_epoch,
-                table=UNFUNDED_POLICY_TABLE,
+                table=table,
             )
         except SpecimenRefused as refused:
             print(f"REFUSED {specimen_id} {refused.code}")
             return 2
         print(f"{specimen_id} expected={result.expected} outcome={result.outcome.value} "
               f"reason={result.reason} matches={str(result.matches_expectation).lower()}")
-        if (result.outcome is Outcome.BREACH or result.outcome is Outcome.UNKNOWN
-                or not result.matches_expectation):
+        if should_stop(result):
             print("STOP: review the saved capture and outcome; do not run the next specimen")
             return 2
     return 0

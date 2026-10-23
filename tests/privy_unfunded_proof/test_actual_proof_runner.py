@@ -2,8 +2,8 @@
 
 Every result here is LOCAL_TESTED/UNQUALIFIED. No provider request, credential,
 wallet, policy, signature or broadcast is used. The code-owned registries hold
-exactly one frozen policy-layer packet and one raw profile, so any other packet
-refuses. Tests inject their own approval only to exercise the machinery.
+two sealed packets (v3 policy layer, control proofs) and one raw profile, so any
+other packet refuses. Tests inject their own approval only to exercise the machinery.
 """
 
 from __future__ import annotations
@@ -106,8 +106,9 @@ def test_default_actual_run_refused_before_effect(store_dir: Path) -> None:
     assert list(store_dir.iterdir()) == []
 
 
-def test_code_owned_registries_hold_exactly_one_packet_and_profile() -> None:
-    assert list(actual_packet.CODE_OWNED_PACKET_APPROVALS) == [actual_packet.UNFUNDED_POLICY_PACKET.packet_id]
+def test_code_owned_registries_hold_the_sealed_packets_and_one_profile() -> None:
+    assert list(actual_packet.CODE_OWNED_PACKET_APPROVALS) == [actual_packet.UNFUNDED_POLICY_PACKET.packet_id,
+                                                               actual_packet.CONTROL_PROOF_PACKET.packet_id]
     assert list(actual_profile.QUALIFIED_ACTUAL_PROFILES) == [actual_packet.UNFUNDED_POLICY_PROFILE_ID]
     assert dict(actual_packet.CODE_OWNED_TYPE4_AUTHORITIES) == {}
     assert actual_packet.ACTUAL_EVIDENCE_CLASS == "LOCAL_TESTED"

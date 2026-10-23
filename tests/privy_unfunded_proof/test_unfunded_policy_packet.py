@@ -92,9 +92,11 @@ def _logical_value(specimen_id: str) -> int:
 # ---------------------------------------------------------------- registry and admission
 
 
-def test_registry_holds_exactly_the_frozen_packet() -> None:
-    assert list(CODE_OWNED_PACKET_APPROVALS) == [actual_packet.SEALED_PACKET_SHA256]
-    assert list(CODE_OWNED_PACKET_APPROVALS) == [UNFUNDED_POLICY_PACKET.packet_id]
+def test_registry_holds_the_frozen_packet_and_the_control_packet() -> None:
+    # The control-proof packet (test_control_proof_packet.py) is the only other sealed entry.
+    assert list(CODE_OWNED_PACKET_APPROVALS) == [actual_packet.SEALED_PACKET_SHA256,
+                                                 actual_packet.SEALED_CONTROL_PROOF_PACKET_SHA256]
+    assert CODE_OWNED_PACKET_APPROVALS[actual_packet.SEALED_PACKET_SHA256] is UNFUNDED_POLICY_PACKET
     assert list(actual_profile.QUALIFIED_ACTUAL_PROFILES) == [actual_packet.UNFUNDED_POLICY_PROFILE_ID]
     assert actual_profile.QUALIFIED_ACTUAL_PROFILES[actual_packet.UNFUNDED_POLICY_PROFILE_ID].profile == "raw"
 
@@ -229,8 +231,9 @@ def test_policy_layer_scope_keeps_out_of_scope_controls_honest() -> None:
     assert UNFUNDED_POLICY_PACKET.position_inventory is actual_packet.ControlState.UNSUPPORTED
 
 
-def test_actual_manifest_registry_holds_exactly_the_policy_table() -> None:
-    assert specimens.CODE_OWNED_ACTUAL_MANIFESTS == frozenset({actual_packet.SEALED_ACTUAL_MANIFEST_SHA256})
+def test_actual_manifest_registry_holds_the_policy_and_control_tables() -> None:
+    assert specimens.CODE_OWNED_ACTUAL_MANIFESTS == frozenset({
+        actual_packet.SEALED_ACTUAL_MANIFEST_SHA256, actual_packet.SEALED_CONTROL_PROOF_MANIFEST_SHA256})
     assert UNFUNDED_POLICY_TABLE.manifest_sha256 == actual_packet.SEALED_ACTUAL_MANIFEST_SHA256
     assert UNFUNDED_POLICY_TABLE.matches_actual_manifest()
     tampered = dataclasses.replace(UNFUNDED_POLICY_TABLE, manifest_sha256="deadbeef")
