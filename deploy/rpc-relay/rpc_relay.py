@@ -26,6 +26,7 @@ Usage: python rpc_relay.py (configuration from the environment).
 
 from __future__ import annotations
 
+import base64
 import http.client
 import ipaddress
 import json
@@ -107,6 +108,11 @@ class Upstream:
         found = {self.url, f"https://{netloc}{self.path}", self.host, netloc, self.path, self.path.strip("/")}
         segments = [segment for segment in self.path.split("/") if len(segment) >= 8]
         found.update(segments)
+        label = self.host.split(".", 1)[0]
+        if len(label) >= 8:  # the account-specific first label of the provider host
+            found.add(label)
+        for text in [self.url, *segments]:
+            found.add(base64.b64encode(text.encode()).decode().rstrip("="))
         for segment in segments:  # partial and hex-encoded echoes of the key
             found.add(segment.encode().hex())
             found.update(segment[i:i + KEY_FRAGMENT_CHARS] for i in range(len(segment) - KEY_FRAGMENT_CHARS + 1))
@@ -349,6 +355,7 @@ class RelayCore:
             raise ValueError("RELAY_ROLE_INVALID")
         self.role, self.upstream, self.clock = role, upstream, clock
         self.secrets = tuple(secret.lower() for secret in secrets if secret)
+        self.base64_secrets = tuple(secret for secret in secrets if secret)
         self.log = log or log_line
         rate, burst = RATE_LIMITS[role]
         self.bucket = TokenBucket(rate, burst, clock)
@@ -411,9 +418,16 @@ class RelayCore:
         return self._reply(ident, answer), logged, answer.status if type(answer.status) is int else None
 
     def _leaks(self, text: str) -> bool:
-        lowered = text.lower()
-        decoded = unquote(lowered).lower()  # a percent-encoded echo
-        return any(secret in lowered or secret in decoded for secret in self.secrets)
+        forms = [text]
+        for _ in range(4):  # percent-encoded, also repeatedly
+            decoded = unquote(forms[-1])
+            if decoded == forms[-1]:
+                break
+            forms.append(decoded)
+        lowered = [form.lower() for form in forms]
+        if any(secret in form for secret in self.secrets for form in lowered):
+            return True
+        return any(secret in form for secret in self.base64_secrets for form in forms)  # base64 is case-sensitive
 
     def _reply(self, ident: Any, answer: UpstreamReply) -> Reply:
         try:

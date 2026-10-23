@@ -402,6 +402,10 @@ def test_an_upstream_reply_that_names_the_key_or_host_is_withheld(leak, where):
     "%71%6e" + SENTINEL_KEY[2:],
     SENTINEL_KEY.encode().hex(),
     SENTINEL_KEY.encode().hex().upper(),
+    __import__("base64").b64encode(SENTINEL_KEY.encode()).decode(),
+    __import__("base64").b64encode(SENTINEL_URL.encode()).decode(),
+    "".join(f"%25{ord(c):02x}" for c in SENTINEL_KEY),
+    "account sentinel-wild-dawn refused",
 ])
 def test_a_partial_or_encoded_key_echo_is_withheld(echo):
     upstream = FakeUpstream(lambda r: reply_for(r, {"error": {"code": -32000, "message": echo}}))

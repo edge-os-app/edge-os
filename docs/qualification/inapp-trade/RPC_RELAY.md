@@ -83,7 +83,8 @@ It is answered with exact framing (`Content-Length`, no `Content-Encoding`, `Cac
 `post_json` requires. Anything else becomes a fixed relay error. Before sending, both the raw provider body and the
 re-serialized reply are searched, case-insensitively and after JSON unescaping, for the configured URL, the provider
 host, the key path, each path segment of 8 or more characters, every 16-character piece of such a segment and the
-segment's hex encoding; each text is also checked after percent-decoding. Any match withholds the reply (`502`,
+segment's hex encoding, the base64 of the URL and of each segment, and the host's account-specific first label; each
+text is also checked after repeated percent-decoding. Any match withholds the reply (`502`,
 `upstream reply withheld`). An echo split into pieces shorter than 16 characters is not caught; this needs the
 provider itself to echo key material. A provider exception is dropped without its text.
 
@@ -201,7 +202,8 @@ Controller steps, in order. Nothing here was run.
    `docker network inspect coolify --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`. The range is that address as
    `/32`, for example `10.0.1.1/32`.
 4. **Environment.** In the relay resource only:
-   - `EDGE_OS_RPC_RELAY_UPSTREAM_URL`: the QuickNode Monad mainnet HTTPS URL, marked secret (locked) in Coolify. It must
+   - `EDGE_OS_RPC_RELAY_UPSTREAM_URL`: the QuickNode Monad mainnet HTTPS URL, marked secret (locked) in Coolify and
+     **not** a Build Variable (a build variable can be passed as a `--build-arg` and appear in build logs). It must
      be `https`, a host name, a non-root path (the key), no user-info, query or fragment; anything else stops the relay
      with `RELAY_UPSTREAM_URL_INVALID`.
    - `EDGE_OS_RPC_RELAY_SOURCE_COMMIT`: the deployed commit (tags the built image and its revision label).
@@ -303,7 +305,8 @@ count; it stays in root's `/tmp` on the VPS and is shredded at once.
 - **The allowlisted source is shared.** Docker masquerades every container that reaches this host's public address
   from another bridge to the `coolify` gateway, so other Coolify applications on this VPS pass the `ipallowlist` too.
   They can only make the allowlisted calls within the rate limits; they cannot read the key, sign, or choose a role.
-  Internet callers are refused.
+  Internet callers are refused. Likewise a container on the `coolify` network can give itself the network alias
+  `coolify-proxy` and pass the relay's peer gate without Traefik; it gains the same allowlisted calls, nothing more.
 - **Shared Traefik.** The worker's relay rule admits any name Traefik serves on this host (for example
   `api.edgeos.fun`); only the relay routes check the source.
 - **Global rate limits.** All callers arrive through Traefik, so the limits are per role, not per caller. A caller

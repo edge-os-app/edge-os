@@ -178,7 +178,7 @@ def test_the_image_is_pinned_non_root_and_holds_only_the_relay():
 def test_the_relay_uses_the_standard_library_only():
     text = (RELAY / "rpc_relay.py").read_text(encoding="utf-8")
     imports = set(re.findall(r"(?m)^(?:from|import) ([a-zA-Z_][\w]*)", text))
-    assert imports <= {"__future__", "dataclasses", "hmac", "http", "ipaddress", "json", "math", "os", "re",
+    assert imports <= {"__future__", "base64", "dataclasses", "hmac", "http", "ipaddress", "json", "math", "os", "re",
                        "signal", "socket", "socketserver", "ssl", "sys", "threading", "time", "typing", "collections",
                        "urllib"}, imports
 
