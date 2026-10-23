@@ -150,7 +150,7 @@ def test_traefik_routes_one_host_to_each_role_over_https_only(service):
         assert found[f"{prefix}.middlewares"] == "edgeos-rpc-allow,edgeos-rpc-body"
         assert found[f"traefik.http.services.{router}.loadbalancer.server.port"] == port
     assert found["traefik.http.middlewares.edgeos-rpc-allow.ipallowlist.sourcerange"] == (
-        "${EDGE_OS_RPC_RELAY_ALLOWED_SOURCES:?set EDGE_OS_RPC_RELAY_ALLOWED_SOURCES to the worker's source range}")
+        "${EDGE_OS_RPC_RELAY_ALLOWED_SOURCES:?set EDGE_OS_RPC_RELAY_ALLOWED_SOURCES to the proxy networks' gateways, comma-separated /32s}")
     assert found["traefik.http.middlewares.edgeos-rpc-body.buffering.maxRequestBodyBytes"] == "32768"
     assert not any(".entrypoints" in key and value == "http" for key, value in found.items())
 

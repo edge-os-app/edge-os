@@ -52,8 +52,8 @@ ROLES = {"observer": 8545, "broadcast": 8546}
 MAX_REQUEST_BYTES = 32 * 1024  # a 8 KiB raw transaction is 16,386 hex characters; the worker sends far less
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_RAW_TRANSACTION_CHARS = 16386  # the worker's own bound (transaction_rpc_client._allowed)
-MAX_FEE_HISTORY_BLOCKS = 1024
-MAX_PERCENTILES = 100
+MAX_FEE_HISTORY_BLOCKS = 128
+MAX_PERCENTILES = 10
 RATE_LIMITS = {"observer": (20.0, 60), "broadcast": (2.0, 10)}  # (requests per second, burst)
 MAX_CONCURRENT = {"observer": 8, "broadcast": 2}
 MAX_CONNECTIONS = 32  # open sockets per role, each with its own thread; more are closed at once
@@ -112,9 +112,13 @@ class Upstream:
         if len(label) >= 8:  # the account-specific first label of the provider host
             found.add(label)
         for text in [self.url, *segments]:
-            found.add(base64.b64encode(text.encode()).decode().rstrip("="))
+            for pad in range(3):  # base64 at each of the three byte alignments; edge characters dropped
+                encoded = base64.b64encode(b"\0" * pad + text.encode()).decode().rstrip("=")
+                found.add(encoded[(pad * 4 + 2) // 3:][:-2] if pad else encoded)
         for segment in segments:  # partial and hex-encoded echoes of the key
             found.add(segment.encode().hex())
+            found.update(segment[i:i + KEY_FRAGMENT_CHARS].encode().hex()
+                         for i in range(len(segment) - KEY_FRAGMENT_CHARS + 1))
             found.update(segment[i:i + KEY_FRAGMENT_CHARS] for i in range(len(segment) - KEY_FRAGMENT_CHARS + 1))
         return tuple(sorted(value for value in found if value and value != "/"))
 
@@ -562,7 +566,7 @@ class ProxyGate:
             if self.resolved_at is not None and now - self.resolved_at <= PROXY_CACHE_SECONDS:
                 return self.addresses
             if self.failed_at is not None and now - self.failed_at <= PROXY_FAILURE_SECONDS:
-                return frozenset()
+                return self._fallback(now)
         # The lookup runs outside the lock, so one slow answer never stalls requests that use a fresh cache.
         found: frozenset[Any] = frozenset()
         try:
@@ -571,12 +575,18 @@ class ProxyGate:
                 found = frozenset(answers)
         except Exception:
             found = frozenset()
-        with self.lock:  # a failure refuses for PROXY_FAILURE_SECONDS only, never longer
+        with self.lock:  # a failure is retried after PROXY_FAILURE_SECONDS
             if found:
                 self.addresses, self.resolved_at, self.failed_at = found, now, None
-            else:
-                self.failed_at = now
-        return found
+                return found
+            self.failed_at = now
+            return self._fallback(now)
+
+    def _fallback(self, now: float) -> frozenset[Any]:
+        """During a lookup outage the last good answer stays valid for one more cache period, never longer."""
+        if self.resolved_at is not None and now - self.resolved_at <= 2 * PROXY_CACHE_SECONDS:
+            return self.addresses
+        return frozenset()
 
     def __call__(self, peer: str) -> bool:
         address = _address(peer)
@@ -638,7 +648,14 @@ class RelayServer(ThreadingHTTPServer):
             self.reading.pop(request, None)
 
     def service_actions(self) -> None:
-        # Called by serve_forever between polls: cut off callers still sending their request after the deadline.
+        # Called by serve_forever between polls, outside its error handling: nothing here may raise.
+        try:
+            self._cut_late_readers()
+        except Exception:
+            pass
+
+    def _cut_late_readers(self) -> None:
+        # Cut off callers still sending their request after the deadline.
         now = time.monotonic()
         with self.reading_lock:
             late = [sock for sock, until in self.reading.items() if until <= now]
@@ -770,10 +787,17 @@ def main() -> int:  # pragma: no cover - exercised by the deployment checks in R
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
+    threads = []
     for server in servers:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        threads.append(thread)
         log_line({"outcome": "listening", "role": server.core.role, "port": server.server_address[1]})
-    stop.wait()
+    # A serve loop that ends on its own (an unexpected error) exits the process, so Docker restarts it.
+    while not stop.wait(1.0):
+        if not all(thread.is_alive() for thread in threads):
+            log_line({"outcome": "serve_loop_ended"})
+            return 3
     for server in servers:
         server.shutdown()
         server.server_close()

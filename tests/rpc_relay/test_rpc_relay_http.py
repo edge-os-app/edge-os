@@ -249,6 +249,35 @@ def test_a_failed_proxy_lookup_is_retried_only_after_a_short_pause():
     assert gate("10.0.1.5") is True and len(lookups) == 2
 
 
+def test_the_last_good_proxy_address_survives_one_more_period_of_lookup_failure():
+    answers: list[Any] = [["10.0.1.5"]] + [OSError("down")] * 10
+
+    def resolve(name: str) -> list[str]:
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    clock = [0.0]
+    gate = relay.ProxyGate("coolify-proxy", resolve=resolve, clock=lambda: clock[0])
+    assert gate("10.0.1.5") is True
+    clock[0] = relay.PROXY_CACHE_SECONDS + 1  # stale, lookup fails: the last good answer still holds
+    assert gate("10.0.1.5") is True and gate("10.0.1.6") is False
+    clock[0] = 2 * relay.PROXY_CACHE_SECONDS + 1  # never longer than one more period
+    assert gate("10.0.1.5") is False
+
+
+def test_an_error_in_the_service_loop_never_ends_it(served, monkeypatch):
+    port, _, _ = served()
+
+    def broken(self: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(relay.RelayServer, "_cut_late_readers", broken)
+    time.sleep(1.2)  # several poll intervals
+    assert request(port, method="GET", path="/healthz")[0] == 200
+
+
 def test_the_proxy_gate_compares_normalized_addresses():
     gate = relay.ProxyGate("p", resolve=lambda name: ["10.0.1.5"], clock=lambda: 0.0)
     assert gate("::ffff:10.0.1.5") is True

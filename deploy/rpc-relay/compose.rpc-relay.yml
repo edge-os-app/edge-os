@@ -9,7 +9,7 @@
 #
 # Coolify's Traefik terminates TLS with Let's Encrypt (resolver `letsencrypt`, entrypoint `https`) and routes by these
 # labels; leave the Coolify "Domains" field of this service empty so Coolify adds no router of its own. Two gates
-# decide who may call: Traefik admits only EDGE_OS_RPC_RELAY_ALLOWED_SOURCES (the worker's hairpin source, see
+# decide who may call: Traefik admits only EDGE_OS_RPC_RELAY_ALLOWED_SOURCES (the proxy networks' gateways, see
 # docs/qualification/inapp-trade/RPC_RELAY.md), and the relay admits only connections from `coolify-proxy`, so no
 # other container on the `coolify` network can call the ports directly.
 #
@@ -40,13 +40,17 @@ services:
       EDGE_OS_RPC_RELAY_UPSTREAM_URL: ${EDGE_OS_RPC_RELAY_UPSTREAM_URL:?set EDGE_OS_RPC_RELAY_UPSTREAM_URL to the provider https URL (secret)}
       EDGE_OS_RPC_RELAY_TRUSTED_PROXY: coolify-proxy
     tmpfs: ["/tmp"]
-    mem_limit: 128m
+    mem_limit: 256m
     mem_reservation: 32m
     pids_limit: 128
     expose: ["8545", "8546"]
     # The proxy network only: Traefik reaches the relay here and the relay reaches the provider through it.
     networks: [coolify]
     restart: unless-stopped
+    # Every refused connection writes a line; rotation keeps a flood from filling the disk.
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     healthcheck:
       test:
         - CMD
@@ -81,7 +85,7 @@ services:
       traefik.http.routers.edgeos-rpc-broadcast.middlewares: edgeos-rpc-allow,edgeos-rpc-body
       traefik.http.services.edgeos-rpc-broadcast.loadbalancer.server.port: "8546"
       # Who may call through Traefik, and the body bound before the relay sees a byte.
-      traefik.http.middlewares.edgeos-rpc-allow.ipallowlist.sourcerange: ${EDGE_OS_RPC_RELAY_ALLOWED_SOURCES:?set EDGE_OS_RPC_RELAY_ALLOWED_SOURCES to the worker's source range}
+      traefik.http.middlewares.edgeos-rpc-allow.ipallowlist.sourcerange: ${EDGE_OS_RPC_RELAY_ALLOWED_SOURCES:?set EDGE_OS_RPC_RELAY_ALLOWED_SOURCES to the proxy networks' gateways, comma-separated /32s}
       traefik.http.middlewares.edgeos-rpc-body.buffering.maxRequestBodyBytes: "32768"
 
 networks:

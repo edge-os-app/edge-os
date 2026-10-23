@@ -255,7 +255,8 @@ def test_the_broadcast_endpoint_serves_no_general_reads(method, params):
     ("eth_feeHistory", ["0x401", "latest", []]),
     ("eth_feeHistory", [1025, "latest"]),
     ("eth_feeHistory", [True, "latest"]),
-    ("eth_feeHistory", ["0x4", "latest", [50] * 101]),
+    ("eth_feeHistory", ["0x4", "latest", [50] * 11]),
+    ("eth_feeHistory", ["0x81", "latest"]),
     ("eth_feeHistory", ["0x4", "latest", [101]]),
 ])
 def test_bad_observer_params_are_refused(method, params):
@@ -406,6 +407,10 @@ def test_an_upstream_reply_that_names_the_key_or_host_is_withheld(leak, where):
     __import__("base64").b64encode(SENTINEL_URL.encode()).decode(),
     "".join(f"%25{ord(c):02x}" for c in SENTINEL_KEY),
     "account sentinel-wild-dawn refused",
+    __import__("base64").b64encode(b"x" + SENTINEL_KEY.encode()).decode(),
+    __import__("base64").b64encode(b"xy" + SENTINEL_KEY.encode()).decode(),
+    __import__("base64").b64encode(json.dumps({"url": SENTINEL_URL}).encode()).decode(),
+    SENTINEL_KEY[3:23].encode().hex(),
 ])
 def test_a_partial_or_encoded_key_echo_is_withheld(echo):
     upstream = FakeUpstream(lambda r: reply_for(r, {"error": {"code": -32000, "message": echo}}))

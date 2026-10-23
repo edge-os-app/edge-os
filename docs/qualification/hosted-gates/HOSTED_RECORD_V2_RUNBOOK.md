@@ -254,8 +254,9 @@ What `apply` installs:
     while its destination is still a relay address; only that marked, DNATed flow from original port 443 is accepted,
     in both directions, ahead of Docker's inter-bridge isolation.
 
-  Either way Traefik sees the Coolify bridge gateway as the source (docker-proxy's connection or Docker's masquerade),
-  which is what the relay's `ipallowlist` admits. A relay name that stops resolving to this host is dropped.
+  Either way Traefik sees a host bridge gateway as the source (docker-proxy's connection or Docker's masquerade): the
+  gateway of the network that carries Traefik's published port, which the relay's `ipallowlist` lists with every
+  other network `coolify-proxy` joins (see `RPC_RELAY.md`, deploy step 3). A relay name that stops resolving to this host is dropped.
 - `edgeos-egress-allow` is a `hash:ip` set with a 900-second entry timeout. `refresh` resolves
   `EDGE_OS_EGRESS_HOSTS` on the host and only adds addresses; an empty answer never clears the set, and an address
   the providers stop using expires. A missing address fails closed (dropped), never open.

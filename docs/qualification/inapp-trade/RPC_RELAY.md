@@ -57,8 +57,9 @@ the provider through that network's NAT.
    `userland-proxy: false` Docker DNATs it to Traefik. The rule admits each path for TCP 443 to a relay address and
    nothing else. The provider host is not in the worker's allowlist, so the worker cannot reach the provider directly.
 2. Traefik's `ipallowlist` admits only `EDGE_OS_RPC_RELAY_ALLOWED_SOURCES`. The worker's connection reaches Traefik from
-   the `coolify` bridge gateway on both paths (docker-proxy connects from it; Docker's masquerade rewrites to it), so
-   the range is that gateway as a `/32` (read it in deploy step 3). Internet callers keep their own address and are refused with `403 Forbidden` by Traefik.
+   the gateway of the network that carries Traefik's published port (docker-proxy connects from it; Docker's masquerade
+   rewrites to it). Docker picks that network among those `coolify-proxy` joins, so the list holds every such
+   gateway as a `/32` (deploy step 3). Internet callers keep their own address and are refused with `403 Forbidden` by Traefik.
 3. The relay admits a socket peer only when it is the current address of `coolify-proxy` (resolved on the shared
    network, cached 30 s, a failed lookup cached for 2 s, the lookup runs outside the request lock). The check runs at
    accept, before a thread or connection slot is spent: any other peer is closed at once (outcome `peer_refused`).
@@ -106,7 +107,7 @@ or exception text is logged. `http.server`'s request and traceback logging is re
 | `eth_blockNumber` | yes | no | `[]` | dry run, checks |
 | `eth_gasPrice` | yes | no | `[]` | dry run (fees) |
 | `eth_maxPriorityFeePerGas` | yes | no | `[]` | dry run (fees) |
-| `eth_feeHistory` | yes | no | `[count, tag]` or `[count, tag, percentiles]`; count 1-1024; at most 100 non-decreasing percentiles in 0-100 | dry run (fees) |
+| `eth_feeHistory` | yes | no | `[count, tag]` or `[count, tag, percentiles]`; count 1-128; at most 10 non-decreasing percentiles in 0-100 | dry run (fees) |
 | `eth_call` | yes | no | `[call, tag]`; no third (state override) argument | quote (`getReserves`), observer (`decimals`, `balanceOf`) |
 | `eth_estimateGas` | yes | no | `[call]` or `[call, tag]` | dry run (approve, swap, revoke estimates) |
 | `eth_getBalance` | yes | no | `[address, tag]` | observer |
@@ -186,7 +187,7 @@ The controller adds, in the `edgeos.fun` zone:
 
 Add no `AAAA` record: the egress rule and both Docker networks are IPv4 only, and `getent ahostsv4` fills the relay
 set. Serve both names directly (no CDN proxy), so Let's Encrypt's HTTP-01 challenge reaches Traefik on port 80 and the
-worker's connection is DNATed on this host.
+worker's connection is delivered to Traefik on this host (docker-proxy or DNAT).
 
 ## Deploy
 
@@ -198,9 +199,19 @@ Controller steps, in order. Nothing here was run.
    Directory `/deploy/rpc-relay`, Docker Compose location `/compose.rpc-relay.yml`. Leave the service's Domains field
    empty: the file's labels define both routers, and a Coolify domain would add a third router without the
    allowlist. Do not enable previews.
-3. **Allowed source.** On the VPS, read the `coolify` network gateway:
-   `docker network inspect coolify --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`. The range is that address as
-   `/32`, for example `10.0.1.1/32`.
+3. **Allowed sources.** The worker reaches Traefik from the gateway of whichever network carries Traefik's published
+   port 443. Docker chooses that network among all networks `coolify-proxy` joins (Coolify connects the proxy to each
+   resource's own network), and the choice can change when Coolify resources are added. Allow the gateway of every
+   network the proxy joins; each is a host-local bridge address, so internet callers stay refused:
+
+   ```sh
+   docker inspect coolify-proxy --format '{{range $n, $e := .NetworkSettings.Networks}}{{println $n}}{{end}}' \
+     | while read -r n; do [ -n "$n" ] && docker network inspect "$n" --format '{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}}/32{{println}}{{end}}{{end}}'; done \
+     | grep . | sort -u | paste -sd, -
+   ```
+
+   The result, for example `10.0.1.1/32,10.0.7.1/32`, is `EDGE_OS_RPC_RELAY_ALLOWED_SOURCES`. Repeat this step and
+   redeploy the relay whenever a Coolify resource is added or removed (hosted check 8 compares the two).
 4. **Environment.** In the relay resource only:
    - `EDGE_OS_RPC_RELAY_UPSTREAM_URL`: the QuickNode Monad mainnet HTTPS URL, marked secret (locked) in Coolify and
      **not** a Build Variable (a build variable can be passed as a `--build-arg` and appear in build logs). It must
@@ -227,8 +238,9 @@ Controller steps, in order. Nothing here was run.
 
    Install the script again to `/usr/local/sbin/edge-os-egress-firewall` and run
    `systemctl reload edge-os-egress-firewall`. Record which path Docker uses (both are admitted):
-   `docker info --format '{{json .}}' | grep -o '"userland-proxy[^,]*' ; iptables -t nat -S DOCKER | grep -- '-i edgeos-egress -j RETURN'`
-   (a line from the second command means the docker-proxy path).
+   `grep userland-proxy /etc/docker/daemon.json; pgrep -a docker-proxy | grep -- '-host-port 443'; iptables -t nat -S DOCKER | grep -- '-i edgeos-egress -j RETURN'`
+   (a docker-proxy process for 443 and the RETURN line mean the docker-proxy path; no `userland-proxy` line means
+   Docker's default, `true`).
 7. **Worker and release.** Set `EDGE_OS_EXECUTION_MONAD_RPC_URL=https://rpc-a.edgeos.fun/rpc` when the execution lane
    activates the worker settings, and use the fill values above. Both belong to other lanes.
 
@@ -286,24 +298,29 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' -d
 curl -sS -o /dev/null -w '%{http_code}\n' https://rpc-a.edgeos.fun/healthz                                            # 404
 curl -sS -o /dev/null -w '%{http_code}\n' http://rpc-a.edgeos.fun/rpc     # a redirect or 404, never a relay reply
 
-# 7. The relay's logs name neither the provider host nor any key segment (prints counts only).
-docker exec "$R" python -I -c 'import os, urllib.parse as p
+# 7. The relay's logs name neither the provider host nor any key segment. The key never leaves the container: the
+#    logs are piped in and counted there; only the count is printed.
+docker logs "$R" 2>&1 | docker exec -i "$R" python -I -c 'import os, sys, urllib.parse as p
 u = p.urlsplit(os.environ["EDGE_OS_RPC_RELAY_UPSTREAM_URL"])
-print("\n".join([u.hostname] + [s for s in u.path.split("/") if len(s) >= 8]))' > /tmp/relay-needles
-docker logs "$R" 2>&1 | grep -ciF -f /tmp/relay-needles; shred -u /tmp/relay-needles          # 0
+needles = [x.lower() for x in [u.hostname] + [s for s in u.path.split("/") if len(s) >= 8]]
+print(sum(1 for line in sys.stdin if any(n in line.lower() for n in needles)))'                   # 0
+
+# 8. The allowlist still covers every network the proxy joins (repeat after any Coolify resource change).
+docker inspect "$R" --format '{{index .Config.Labels "traefik.http.middlewares.edgeos-rpc-allow.ipallowlist.sourcerange"}}'
+#   must equal the output of deploy step 3, run now
 ```
 
-Every expected value must match. A `200` in check 6 from outside, a reply from check 5, or a non-zero count in check 7
-is a failed check: stop and fix before the release fill. The file in check 7 holds key material for the moment of the
-count; it stays in root's `/tmp` on the VPS and is shredded at once.
+Every expected value must match. A `200` in check 6 from outside, a reply from check 5, a non-zero count in check 7
+or a difference in check 8 is a failed check: stop and fix before the release fill.
 
 ## Limits and accepted risks
 
 - **Relay egress is not host-filtered.** The relay reaches the provider through the `coolify` network's NAT, which also
   allows other destinations. The code connects only to the configured host with certificate verification and no
   redirects. A dedicated relay bridge with its own host rule would remove this; it is not part of this task.
-- **The allowlisted source is shared.** Docker masquerades every container that reaches this host's public address
-  from another bridge to the `coolify` gateway, so other Coolify applications on this VPS pass the `ipallowlist` too.
+- **The allowlisted sources are shared.** Every container that reaches this host's public address from another bridge
+  arrives from one of the proxy networks' gateways, so other Coolify applications on this VPS pass the `ipallowlist`
+  too.
   They can only make the allowlisted calls within the rate limits; they cannot read the key, sign, or choose a role.
   Internet callers are refused. Likewise a container on the `coolify` network can give itself the network alias
   `coolify-proxy` and pass the relay's peer gate without Traefik; it gains the same allowlisted calls, nothing more.
@@ -319,4 +336,7 @@ count; it stays in root's `/tmp` on the VPS and is shredded at once.
   that changes the workflow and its tests.
 - **Traefik version.** The labels use Traefik v3 names (`ipallowlist`). On Traefik v2 the middleware is `ipwhitelist`.
   Check 6 proves the allowlist is active.
+- **Fee and lookup methods.** `eth_gasPrice`, `eth_maxPriorityFeePerGas`, `eth_feeHistory` and
+  `eth_getTransactionByHash` are allowed because the task names fee methods and the transaction lookup, although no
+  current caller sends them; `eth_feeHistory` is bounded to 128 blocks and 10 percentiles.
 - **Plain HTTP inside the host.** Traefik reaches the relay over the host-local `coolify` bridge without TLS.

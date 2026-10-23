@@ -4,7 +4,8 @@
 #   edgeos-egress  the execution worker's only route out: DNS to the host's upstream resolvers, TCP to the
 #                  resolved addresses of EDGE_OS_EGRESS_HOSTS on EDGE_OS_EGRESS_PORTS, and TCP 443 to the resolved
 #                  addresses of EDGE_OS_EGRESS_RELAY_HOSTS (the keyless /rpc relay names served by this host's
-#                  Traefik) only when Docker's DNAT sends it to a container. Everything else is dropped.
+#                  Traefik) only when it is delivered to Traefik on this host (docker-proxy or DNAT). Everything
+#                  else is dropped.
 #   edgeos-hostdb  PostgreSQL's loopback publish: nothing is forwarded in or out, and only replies reach the host.
 #   edgeos-private the internal service network: only replies reach the host (its gateway must not expose SSH or
 #                  Coolify to the containers).
