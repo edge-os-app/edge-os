@@ -10,8 +10,8 @@ signed-field decoder are reused unchanged.
 
 Every result is ``LOCAL_TESTED``/``UNQUALIFIED``. No provider request, credential,
 wallet, policy, signature or broadcast exists in this unit: the code-owned
-registries hold exactly one frozen policy-layer packet and one raw profile, so
-every other packet refuses. Approval and profile resolution read only the
+registries hold two sealed packets (v3 policy layer, control proofs) and one raw
+profile, so every other packet refuses. Approval and profile resolution read only the
 code-owned registries; no function argument,
 flag or environment value can substitute them or authorize dispatch. Reply
 bodies, authorization signatures, credentials, signed bytes and unknown error

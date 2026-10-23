@@ -154,10 +154,20 @@ def test_a_fee_that_takes_nothing_is_not_proof_that_fee_fields_are_honoured() ->
 
 def test_an_output_that_differs_from_the_formula_proves_neither_input_nor_fees() -> None:
     records = recorded_chain()
-    changed = hex(pool_output(chain_proof.INPUT_RAW) - 1)
-    padded = "0x" + changed[2:].rjust(64, "0")
-    result = _build(chain_records=replaced(records, "chain.swap_probe", result=padded))
-    assert "raw_input" not in result["proven"] and "fees" not in result["proven"]
+    reserves = next(r for r in records if r["op_id"] == "chain.pool_reserves")["result"]
+    other = "0x" + f"{int(reserves[2:66], 16) * 2:064x}" + reserves[66:]
+    result = _build(chain_records=replaced(records, "chain.pool_reserves", result=other))
+    assert result["unproven"]["raw_input"]["reason"] == "CHAIN_RESULT_CONTRARY"
+    assert result["unproven"]["fees"]["reason"] == "CHAIN_RESULT_CONTRARY"
+    assert "minimum_output" in result["proven"]
+
+
+def test_a_changed_baseline_output_breaks_every_dependent_request() -> None:
+    records = recorded_chain()
+    changed = "0x" + f"{pool_output(chain_proof.INPUT_RAW) - 1:064x}"
+    with pytest.raises(control_proofs.ProofRefused) as caught:
+        _build(chain_records=replaced(records, "chain.swap_probe", result=changed))
+    assert caught.value.code == "CHAIN_RECORD_MISMATCH"
 
 
 def test_a_missing_trace_leaves_only_the_recipient_unproven() -> None:

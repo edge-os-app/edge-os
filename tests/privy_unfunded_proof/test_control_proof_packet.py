@@ -306,3 +306,23 @@ def test_an_expected_expiry_refusal_does_not_stop_the_command() -> None:
     assert actual_run.should_stop(matched) is False
     assert actual_run.should_stop(lost) is True
     assert actual_run.should_stop(dataclasses.replace(matched, outcome=Outcome.BREACH)) is True
+
+
+# ---------------------------------------------------------------- frozen operation inputs
+
+
+def test_operation_inputs_list_exactly_the_new_operations() -> None:
+    path = Path(__file__).resolve().parents[2] / "docs/qualification/privy-unfunded-proof/ACTUAL_PROOF_OPERATION_INPUTS.json"
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    section = saved["control_proof_operations"]
+    packet = section["privy_packet"]
+    assert packet["packet_id"] == packet["sealed_packet_sha256"] == CONTROL_PROOF_PACKET.packet_id
+    assert packet["table_manifest_sha256"] == CONTROL_PROOF_TABLE.manifest_sha256
+    assert [(row["specimen_id"], row["expected"], row["request_sha256"]) for row in packet["rows"]] == [
+        (sid, CONTROL_PROOF_PACKET.specimen_expected[sid], CONTROL_PROOF_PACKET.requests[sid].request_sha256)
+        for sid in CONTROL_PROOF_ORDER]
+    assert [(op["op_id"], op["method"], op["expect"]) for op in section["chain_operations"]] == [
+        (op_id, chain_proof.OPERATIONS[op_id].method, chain_proof.OPERATIONS[op_id].expect)
+        for op_id in chain_proof.OPERATION_ORDER]
+    # The v3 inputs are unchanged.
+    assert saved["packet_fields"][0]["current"] == UNFUNDED_POLICY_PACKET.packet_id
