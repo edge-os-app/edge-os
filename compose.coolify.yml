@@ -59,8 +59,10 @@ x-api-environment: &api-environment
 
 # The execution worker's own block. It is not merged with the API block: it holds only the names `load_settings()`
 # requires and the names the worker reads (execution mode, statement timeout). No interpreter, research, budget or
-# usage value reaches it. Controlled execution stays off here; production admits it only for a registered hosted
-# deployment record that binds the exact approved execution release (core/settings.py). No Privy app secret is named.
+# usage value reaches it. The five signing values are worker-only Coolify variables; the API block and the API service
+# never name one. They stay empty while execution is off, and the bootstrap refuses a missing value at startup.
+# Controlled execution stays off here; production admits it only for a registered hosted deployment record that binds
+# the exact approved execution release (core/settings.py and execution/released_execution_bootstrap.py).
 x-worker-environment: &worker-environment
   EDGE_OS_ENV: production
   EDGE_OS_DATABASE_URL: ${EDGE_OS_DATABASE_URL:?set EDGE_OS_DATABASE_URL (sslmode=require, host edge-os-postgres)}
@@ -68,7 +70,12 @@ x-worker-environment: &worker-environment
   EDGE_OS_PRIVY_VERIFICATION_KEY: ${EDGE_OS_PRIVY_VERIFICATION_KEY:?set EDGE_OS_PRIVY_VERIFICATION_KEY}
   EDGE_OS_CORS_ALLOWED_ORIGINS: ${EDGE_OS_CORS_ALLOWED_ORIGINS:?set EDGE_OS_CORS_ALLOWED_ORIGINS}
   EDGE_OS_BUILD_SHA: ${EDGE_OS_BUILD_SHA:?set EDGE_OS_BUILD_SHA to the deployed source commit}
-  EDGE_OS_EXECUTION_MODE: unavailable
+  EDGE_OS_EXECUTION_MODE: ${EDGE_OS_EXECUTION_MODE:-unavailable}
+  EDGE_OS_EXECUTION_PRIVY_APP_ID: ${EDGE_OS_EXECUTION_PRIVY_APP_ID:-}
+  EDGE_OS_EXECUTION_PRIVY_APP_SECRET: ${EDGE_OS_EXECUTION_PRIVY_APP_SECRET:-}
+  EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH: ${EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH:-/etc/edge-os/execution/agent-authorization.pem}
+  EDGE_OS_EXECUTION_SERVER_WALLET_ID: ${EDGE_OS_EXECUTION_SERVER_WALLET_ID:-}
+  EDGE_OS_EXECUTION_MONAD_RPC_URL: ${EDGE_OS_EXECUTION_MONAD_RPC_URL:-}
   EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS: ${EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS:-30000}
   POSTGRES_USER: __EDGE_OS_UNSET__
   POSTGRES_PASSWORD: __EDGE_OS_UNSET__
@@ -238,6 +245,14 @@ services:
         while true; do python -m edge_os_api.execution.worker --once || exit $$?;
         touch /tmp/edge-os-worker-heartbeat; sleep 2; done
     environment: *worker-environment
+    # The API image runs as uid 10001. The operator makes that uid the owner of the key file with mode 0600 and keeps
+    # /etc/edge-os/execution root-owned; the bootstrap refuses any other owner or any group/other permission bit.
+    user: "10001:10001"
+    volumes:
+      - type: bind
+        source: /etc/edge-os/execution/agent-authorization.pem
+        target: /etc/edge-os/execution/agent-authorization.pem
+        read_only: true
     tmpfs: ["/tmp"]
     mem_limit: 768m
     mem_reservation: 128m

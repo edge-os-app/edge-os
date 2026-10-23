@@ -15,9 +15,14 @@ carry them):
 - ``EDGE_OS_EXECUTION_SERVER_WALLET_ID``
 - ``EDGE_OS_EXECUTION_MONAD_RPC_URL``
 
-`env != "local"` is refused here. Production execution stays behind the separate hosted-record-v2 gate.
-Construction reads the key file only after a release and binding are admitted; it opens no socket and reads no
-`.env`, credential slot or agent key. See `docs/qualification/inapp-trade/INAPP_TRADE_RELEASE.md`.
+`env == "local"` runs as before. `env == "production"` is admitted only when the loaded settings carry an admitted
+hosted record v2 (resolved by the existing settings check, not a second parser) whose `execution_release` is exactly
+the admitted candidate's release id and SHA-256. Every other environment, a missing or refused record, a v1 record or
+a record that binds another release refuses with a stable code before any key read. See
+`docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md`.
+
+Construction reads the key file only after a release, a binding and, in production, the hosted record are admitted;
+it opens no socket and reads no `.env`, credential slot or agent key.
 """
 from __future__ import annotations
 
@@ -29,7 +34,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -50,8 +55,13 @@ from edge_os_api.execution.privy_signer import make_p256_authorizer
 from edge_os_api.research_history.http_clients import StdlibHttpTransport
 from edge_os_api.research_history.http_clients.http_transport import HttpTransport
 
+if TYPE_CHECKING:
+    from edge_os_api.core.hosted_deployment import HostedDeployment
+
 WORKER_ROLE = "worker"
 LOCAL_ENV = "local"
+PRODUCTION_ENV = "production"
+ADMITTED_ENVS = (LOCAL_ENV, PRODUCTION_ENV)
 APP_ID_SETTING = "EDGE_OS_EXECUTION_PRIVY_APP_ID"
 APP_SECRET_SETTING = "EDGE_OS_EXECUTION_PRIVY_APP_SECRET"
 KEY_PATH_SETTING = "EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH"
@@ -194,6 +204,23 @@ def _admitted_candidate(candidates: tuple[ReleaseCandidate, ...], approvals: Map
     return admitted[0]
 
 
+def _production_hosted_record(settings: Settings) -> HostedDeployment:
+    """The loaded hosted record, resolved by the existing settings check. This module adds no second parser.
+
+    A missing, unregistered, unreadable, stale or otherwise refused record is one stable refusal: production
+    cannot name the deployment that binds this release.
+    """
+    from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
+
+    try:
+        deployment = check_hosted_deployment(settings)
+    except HostedDeploymentRefused:
+        raise ExecutionBootstrapRefused("EXECUTION_BOOTSTRAP_HOSTED_RECORD_REFUSED") from None
+    if deployment is None:
+        raise ExecutionBootstrapRefused("EXECUTION_BOOTSTRAP_HOSTED_RECORD_REFUSED")
+    return deployment
+
+
 def _check_identity(binding: BoundRelease, settings: WorkerExecutionSettings,
                     expected: Mapping[str, str] | None) -> dict[str, str]:
     identity, release = binding.identity(), binding.release.content()
@@ -215,8 +242,8 @@ def build_worker_execution_runtime(*, role: str, settings: Settings,
     """Build the one controlled runtime, or refuse with a named reason. Reads no key before admission."""
     if role != WORKER_ROLE:
         raise ExecutionBootstrapRefused("EXECUTION_BOOTSTRAP_ROLE_NOT_WORKER")
-    if settings.env != LOCAL_ENV:
-        raise ExecutionBootstrapRefused("EXECUTION_BOOTSTRAP_ENV_NOT_LOCAL")
+    if settings.env not in ADMITTED_ENVS:
+        raise ExecutionBootstrapRefused("EXECUTION_BOOTSTRAP_ENV_NOT_ADMITTED")
     if (approvals is None) != (bindings is None):
         raise ExecutionBootstrapRefused("EXECUTION_BOOTSTRAP_APPROVAL_SEAM_INCOMPLETE")
     worker = read_worker_execution_settings(environ)
@@ -224,6 +251,12 @@ def build_worker_execution_runtime(*, role: str, settings: Settings,
     binding_map = APPROVED_ACTUAL_BINDINGS if bindings is None else bindings
     candidate = _admitted_candidate(RELEASE_CANDIDATES if candidates is None else candidates,
                                     approval_map, binding_map)
+    if settings.env == PRODUCTION_ENV:
+        # Only the exact release the registered v2 record binds may start. A v1 record binds none, so it refuses.
+        deployment = _production_hosted_record(settings)
+        digest = release_sha256(candidate.release)
+        if not deployment.admits_execution_release(candidate.release.content()["release_id"], digest):
+            raise ExecutionBootstrapRefused("EXECUTION_BOOTSTRAP_HOSTED_RELEASE_MISMATCH")
     identity = _check_identity(candidate.binding, worker, expected_identity)
     content = candidate.release.content()
     if candidate.steps is not None:

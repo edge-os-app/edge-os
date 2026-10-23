@@ -6,6 +6,8 @@ used, and no socket is opened. The API role must never receive a signer.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import os
 import socket
 from pathlib import Path
@@ -16,6 +18,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 import edge_os_api.core.provider_ports as provider_ports
+from edge_os_api.core import hosted_deployment
 from edge_os_api.core.provider_ports import build_provider_ports
 import edge_os_api.execution.released_execution_bootstrap as bootstrap
 from edge_os_api.execution.direct_route_quote_client import build_program_hex
@@ -209,12 +212,12 @@ def test_the_api_role_is_refused_before_any_setting_or_key_read():
     assert refused.value.code == "EXECUTION_BOOTSTRAP_ROLE_NOT_WORKER"
 
 
-@pytest.mark.parametrize("env", ["test", "production"])
-def test_a_non_local_environment_is_refused_before_the_key_file(tmp_path, env):
+@pytest.mark.parametrize("env", ["test"])
+def test_a_non_local_non_production_environment_is_refused_before_the_key_file(tmp_path, env):
     with pytest.raises(ExecutionBootstrapRefused) as refused:
         build_worker_execution_runtime(role="worker", settings=app_settings(env=env), candidates=(),
                                        environ=environment(tmp_path / "absent.pem"), clock=lambda: NOW)
-    assert refused.value.code == "EXECUTION_BOOTSTRAP_ENV_NOT_LOCAL"
+    assert refused.value.code == "EXECUTION_BOOTSTRAP_ENV_NOT_ADMITTED"
 
 
 # ----------------------------------------------------------------------------------------- release and binding
@@ -338,3 +341,146 @@ def test_worker_ports_are_built_only_in_controlled_mode_and_fail_closed(tmp_path
 def test_the_module_has_no_environment_loaded_registry():
     assert provider_ports.CONTROLLED_RUNTIMES == {}
     assert not hasattr(provider_ports, "register")
+
+
+# ------------------------------------------------ production admission: a hosted record v2 that binds this release
+
+RECORD_DEPLOYMENT = "hosted-exec-1"
+RECORD_ORIGIN = "https://app.example.com"
+RECORD_DATABASE_URL = "postgresql+psycopg://app@db.internal.example:5432/edge_os?sslmode=verify-full"
+
+
+def record_v2(*, execution_id: str, execution_sha: str) -> dict:
+    """One synthetic v2 record. Only its execution binding changes between cases."""
+    return {
+        "schema_version": hosted_deployment.RECORD_VERSION_2,
+        "deployment_id": RECORD_DEPLOYMENT,
+        "public_origins": [RECORD_ORIGIN],
+        "cors_origins": [RECORD_ORIGIN],
+        "database_tls_mode": "verify-full",
+        "hermes_relay": {"release_id": "synthetic-relay/1", "record_sha256": "9" * 64},
+        "research_release": {"release_id": "synthetic-research/1", "sha256": "a" * 64},
+        "host_gates": {
+            "h1_egress": {"path": "docs/qualification/hosted-gates/H1.md", "sha256": "b" * 64},
+            "h2_runner_isolation": {"path": "docs/qualification/hosted-gates/H2.md", "sha256": "c" * 64},
+            "h8_provider_spend_cap": {"path": "docs/qualification/hosted-gates/H8.md", "sha256": "d" * 64},
+            "h10_backup_restore": {"path": "docs/qualification/hosted-gates/H10.md", "sha256": "e" * 64},
+        },
+        "image_digests": {"api": "sha256:" + "f" * 64},
+        "valid_from": "2026-01-01T00:00:00Z",
+        "valid_until": "2027-01-01T00:00:00Z",
+        "execution_release": {"release_id": execution_id, "sha256": execution_sha},
+    }
+
+
+def write_record(folder: Path, value: dict) -> tuple[Path, str]:
+    data = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    path = folder / "deployment.json"
+    path.write_bytes(data)
+    return path, hashlib.sha256(data).hexdigest()
+
+
+def production_settings(record_path: Path | None, *, deployment_id: str | None = RECORD_DEPLOYMENT):
+    return SimpleNamespace(
+        env="production", execution_mode="controlled", hosted_deployment_id=deployment_id,
+        hosted_deployment_record_path=None if record_path is None else str(record_path),
+        cors_origins=[RECORD_ORIGIN], database_url=RECORD_DATABASE_URL)
+
+
+def production_refused(tmp_path, path, *, candidates, approvals, bindings, deployment_id=RECORD_DEPLOYMENT):
+    """Build in production with an absent key file: admission must refuse before any key read."""
+    return build_worker_execution_runtime(
+        role="worker", settings=production_settings(path, deployment_id=deployment_id), candidates=candidates,
+        environ=environment(tmp_path / "absent.pem"), approvals=approvals, bindings=bindings, clock=lambda: NOW)
+
+
+def test_production_admits_a_v2_record_that_binds_the_admitted_release(tmp_path, monkeypatch):
+    candidate, approvals, bindings = synthetic_candidate()
+    digest = release_sha256(candidate.release)
+    path, sha = write_record(tmp_path, record_v2(execution_id=candidate.release.content()["release_id"],
+                                                 execution_sha=digest))
+    monkeypatch.setattr(hosted_deployment, "APPROVED_HOSTED_DEPLOYMENTS", {RECORD_DEPLOYMENT: sha})
+    write_key(tmp_path / "key.pem")
+    built = build_worker_execution_runtime(
+        role="worker", settings=production_settings(path), candidates=(candidate,),
+        environ=environment(tmp_path / "key.pem"), approvals=approvals, bindings=bindings, clock=lambda: NOW,
+        http=object())
+    assert built.agent_id == "agent-a"
+
+
+def test_production_refuses_without_a_named_record_before_the_key_file(tmp_path):
+    candidate, approvals, bindings = synthetic_candidate()
+    with pytest.raises(ExecutionBootstrapRefused) as refused:
+        production_refused(tmp_path, None, deployment_id=None, candidates=(candidate,),
+                           approvals=approvals, bindings=bindings)
+    assert refused.value.code == "EXECUTION_BOOTSTRAP_HOSTED_RECORD_REFUSED"
+
+
+def test_production_refuses_an_unregistered_record_before_the_key_file(tmp_path):
+    candidate, approvals, bindings = synthetic_candidate()
+    path, _ = write_record(tmp_path, record_v2(execution_id=candidate.release.content()["release_id"],
+                                               execution_sha=release_sha256(candidate.release)))
+    with pytest.raises(ExecutionBootstrapRefused) as refused:
+        production_refused(tmp_path, path, candidates=(candidate,), approvals=approvals, bindings=bindings)
+    assert refused.value.code == "EXECUTION_BOOTSTRAP_HOSTED_RECORD_REFUSED"
+
+
+def test_production_refuses_a_v1_record_before_the_key_file(tmp_path, monkeypatch):
+    candidate, approvals, bindings = synthetic_candidate()
+    value = record_v2(execution_id=candidate.release.content()["release_id"],
+                      execution_sha=release_sha256(candidate.release))
+    value = {key: item for key, item in value.items() if key != "execution_release"}
+    value["schema_version"] = hosted_deployment.RECORD_VERSION
+    path, sha = write_record(tmp_path, value)
+    monkeypatch.setattr(hosted_deployment, "APPROVED_HOSTED_DEPLOYMENTS", {RECORD_DEPLOYMENT: sha})
+    with pytest.raises(ExecutionBootstrapRefused) as refused:
+        production_refused(tmp_path, path, candidates=(candidate,), approvals=approvals, bindings=bindings)
+    assert refused.value.code == "EXECUTION_BOOTSTRAP_HOSTED_RELEASE_MISMATCH"
+
+
+@pytest.mark.parametrize("execution_id, execution_sha", [
+    ("another-release/1", None),
+    (None, "0" * 64),
+])
+def test_production_refuses_a_record_that_binds_another_release_before_the_key_file(
+        tmp_path, monkeypatch, execution_id, execution_sha):
+    candidate, approvals, bindings = synthetic_candidate()
+    digest = release_sha256(candidate.release)
+    path, sha = write_record(tmp_path, record_v2(
+        execution_id=candidate.release.content()["release_id"] if execution_id is None else execution_id,
+        execution_sha=digest if execution_sha is None else execution_sha))
+    monkeypatch.setattr(hosted_deployment, "APPROVED_HOSTED_DEPLOYMENTS", {RECORD_DEPLOYMENT: sha})
+    with pytest.raises(ExecutionBootstrapRefused) as refused:
+        production_refused(tmp_path, path, candidates=(candidate,), approvals=approvals, bindings=bindings)
+    assert refused.value.code == "EXECUTION_BOOTSTRAP_HOSTED_RELEASE_MISMATCH"
+
+
+def test_the_production_record_check_uses_the_existing_settings_check_not_a_new_parse(tmp_path, monkeypatch):
+    candidate, approvals, bindings = synthetic_candidate()
+    path, sha = write_record(tmp_path, record_v2(execution_id=candidate.release.content()["release_id"],
+                                                 execution_sha=release_sha256(candidate.release)))
+    monkeypatch.setattr(hosted_deployment, "APPROVED_HOSTED_DEPLOYMENTS", {RECORD_DEPLOYMENT: sha})
+    calls = []
+    original = hosted_deployment.check_hosted_deployment
+
+    def recording(settings, **kwargs):
+        calls.append(settings)
+        return original(settings, **kwargs)
+
+    monkeypatch.setattr(hosted_deployment, "check_hosted_deployment", recording)
+    with pytest.raises(ExecutionBootstrapRefused, match="KEY_FILE_UNREADABLE"):
+        production_refused(tmp_path, path, candidates=(candidate,), approvals=approvals, bindings=bindings)
+    assert len(calls) == 1
+    assert calls[0].env == "production"
+
+
+def test_production_refuses_a_record_outside_its_validity_window_before_the_key_file(tmp_path, monkeypatch):
+    candidate, approvals, bindings = synthetic_candidate()
+    value = record_v2(execution_id=candidate.release.content()["release_id"],
+                      execution_sha=release_sha256(candidate.release))
+    value["valid_until"] = "2026-02-01T00:00:00Z"
+    path, sha = write_record(tmp_path, value)
+    monkeypatch.setattr(hosted_deployment, "APPROVED_HOSTED_DEPLOYMENTS", {RECORD_DEPLOYMENT: sha})
+    with pytest.raises(ExecutionBootstrapRefused) as refused:
+        production_refused(tmp_path, path, candidates=(candidate,), approvals=approvals, bindings=bindings)
+    assert refused.value.code == "EXECUTION_BOOTSTRAP_HOSTED_RECORD_REFUSED"

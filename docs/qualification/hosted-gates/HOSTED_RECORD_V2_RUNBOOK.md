@@ -208,12 +208,24 @@ also binds the Coolify services, so they use the same `sslmode` on `edge-os-post
 
 The execution worker has its own environment block (`x-worker-environment`), not the API block. It holds only
 `EDGE_OS_ENV`, `EDGE_OS_DATABASE_URL`, `EDGE_OS_PRIVY_APP_ID`, `EDGE_OS_PRIVY_VERIFICATION_KEY`,
-`EDGE_OS_CORS_ALLOWED_ORIGINS`, `EDGE_OS_BUILD_SHA`, `EDGE_OS_EXECUTION_MODE` (pinned `unavailable`) and
-`EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS`, plus the three masked `POSTGRES_*` names. It names no Privy app secret.
-This guarantee covers the Compose file. If Coolify writes every variable into one shared runtime file, optional
-non-secret names such as `EDGE_OS_RESEARCH_BUDGET_*` can still reach the worker; the worker does not read them, and
-they cannot be masked with a placeholder because the settings parse them as integers.
-Worker signing settings belong to the execution lanes; activating them is a later reviewed change.
+`EDGE_OS_CORS_ALLOWED_ORIGINS`, `EDGE_OS_BUILD_SHA`, `EDGE_OS_EXECUTION_MODE` (a variable whose default is
+`unavailable`), the five worker-only signing settings, `EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS`, plus the three masked
+`POSTGRES_*` names. The five signing settings are:
+
+| Setting | Compose value |
+|---|---|
+| `EDGE_OS_EXECUTION_PRIVY_APP_ID` | `${EDGE_OS_EXECUTION_PRIVY_APP_ID:-}` |
+| `EDGE_OS_EXECUTION_PRIVY_APP_SECRET` | `${EDGE_OS_EXECUTION_PRIVY_APP_SECRET:-}` |
+| `EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH` | `${EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH:-/etc/edge-os/execution/agent-authorization.pem}` |
+| `EDGE_OS_EXECUTION_SERVER_WALLET_ID` | `${EDGE_OS_EXECUTION_SERVER_WALLET_ID:-}` |
+| `EDGE_OS_EXECUTION_MONAD_RPC_URL` | `${EDGE_OS_EXECUTION_MONAD_RPC_URL:-}` |
+
+An empty value is refused by `released_execution_bootstrap.read_worker_execution_settings` at startup, so the worker
+trades nothing until §4.2 sets all five. The API block and the API service name none of them. `load_settings()` also
+refuses the unprefixed `EDGE_OS_PRIVY_APP_SECRET` in every process. This guarantee covers the Compose file. If Coolify
+writes every variable into one shared runtime file, optional non-secret names such as `EDGE_OS_RESEARCH_BUDGET_*` can
+still reach the worker; the worker does not read them, and they cannot be masked with a placeholder because the
+settings parse them as integers.
 
 The worker alone joins `egress`: a bridge with the fixed name `edgeos-egress` and subnet `10.203.0.0/28`. It is
 intended for `https://api.privy.io` and the Monad RPC endpoint only.
@@ -322,6 +334,73 @@ must_fail "$PG" bash -c "$SH_PROBE" 1.1.1.1 443            # the internet, from 
 
 Every `must_fail` line must print `pass: blocked`. Any `FAIL` line is a failed check: fix the cause, never record it
 as blocked. A refused connection (`FAIL: not proven blocked (1)`) means the packet reached its target.
+
+### 4.2 Turning on controlled execution
+
+Do the steps in this order. Each step fails closed. If one is missing, the worker refuses with a named
+`EXECUTION_BOOTSTRAP_*` code and sends nothing.
+
+1. Register the v2 record.
+2. Install the key file.
+3. Set the Coolify variables.
+4. Redeploy the stack.
+5. Check the result.
+
+**1. Register the v2 record.** Write the record with `execution_release` set to the exact release id and SHA-256 of
+the one execution release, then add its canonical SHA-256 to `APPROVED_HOSTED_DEPLOYMENTS` and the release to
+`APPROVED_ACTUAL_RELEASES` in a reviewed code change. §1 lists the three conditions. Until this step, production
+refuses `EDGE_OS_EXECUTION_MODE=controlled`.
+
+**2. Install the key file.** Put the P-256 authorization key on the host. The API image runs as uid `10001`, so that
+user owns the file, the directory stays root-owned, and the file has mode `0600`:
+
+```sh
+install -d -m 0755 -o root -g root /etc/edge-os/execution
+install -m 0600 -o 10001 -g 10001 /root/agent-authorization.pem /etc/edge-os/execution/agent-authorization.pem
+chown 10001:10001 /etc/edge-os/execution/agent-authorization.pem
+chmod 0600 /etc/edge-os/execution/agent-authorization.pem
+stat -c '%u %g %a' /etc/edge-os/execution/agent-authorization.pem    # must print 10001 10001 600
+```
+
+The host path is `/etc/edge-os/execution/agent-authorization.pem`; it is the bind source and the value of
+`EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH`. The mount is read-only. The bootstrap refuses a symlink, a directory, a
+foreign owner or any group/other permission bit. Do not keep a copy in the checkout.
+
+**3. Set the Coolify variables.** Add these values to the execution worker only. Never add them to the API service:
+
+| Variable | Value |
+|---|---|
+| `EDGE_OS_EXECUTION_MODE` | `controlled` |
+| `EDGE_OS_EXECUTION_PRIVY_APP_ID` | the execution app id |
+| `EDGE_OS_EXECUTION_PRIVY_APP_SECRET` | the execution app secret |
+| `EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH` | `/etc/edge-os/execution/agent-authorization.pem` |
+| `EDGE_OS_EXECUTION_SERVER_WALLET_ID` | the server wallet id the record binds |
+| `EDGE_OS_EXECUTION_MONAD_RPC_URL` | the `https` RPC URL the record binds |
+
+Coolify must scope these six values to the execution worker. Do not put them in a shared runtime file that also
+reaches the API service. The Compose file cannot control what Coolify injects at run time.
+
+**4. Redeploy the stack.** Redeploy from the reviewed commit. The API and worker start under the same record; only the
+worker receives the signing values and the key mount.
+
+**5. Check the result.**
+
+```sh
+# §1a first; READY must be 1.
+running "$W" && docker inspect "$W" --format '{{.Config.User}} {{range .Mounts}}{{.Source}}->{{.Destination}} {{.RW}}{{end}}'
+# The user is 10001:10001; the key source ends in /etc/edge-os/execution/agent-authorization.pem and RW is false.
+running "$W" && docker exec "$W" printenv EDGE_OS_EXECUTION_MODE     # controlled
+running "$W" && docker exec "$W" stat -c '%u %g %a' /etc/edge-os/execution/agent-authorization.pem  # 10001 10001 600
+docker logs --tail 100 "$W" 2>&1 | grep EXECUTION_BOOTSTRAP_ || echo "no bootstrap refusal"
+```
+
+A healthy worker with no `EXECUTION_BOOTSTRAP_*` line means admission passed. Any refusal line names the failed
+condition; fix that condition and redeploy. The API service must still show none of the six execution names:
+
+```sh
+running "$A" && docker inspect "$A" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -E '^EDGE_OS_EXECUTION_(PRIVY_APP_SECRET|AUTHORIZATION_KEY_PATH)=' || echo "API holds no signing setting"
+```
 
 ## 5. Backups and the restore drill
 
