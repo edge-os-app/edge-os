@@ -69,7 +69,7 @@ def raw_request(port: int, data: bytes) -> bytes:
         while True:
             try:
                 chunk = sock.recv(65536)
-            except TimeoutError:
+            except (TimeoutError, ConnectionResetError):  # macOS reports a server-side abort as a reset
                 break
             if not chunk:
                 break
