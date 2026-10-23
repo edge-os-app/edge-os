@@ -378,8 +378,10 @@ stat -c '%F %u %g %a' /etc/edge-os/execution/agent-authorization.pem   # must pr
 
 The host path is `/etc/edge-os/execution/agent-authorization.pem`; it is the value of
 `EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH` and it lives inside the read-only directory mount. A directory at that
-path is refused by the guard and by the bootstrap. The bootstrap also refuses a symlink, a foreign owner or any
-group/other permission bit. Do not keep a copy in the checkout.
+path is refused by the guard and by the bootstrap. The bootstrap checks the file the path resolves to: it refuses a
+non-regular file, a foreign owner or any group/other permission bit. It does not reject a symlink that resolves to a
+compliant file, so the `%F` check above (`regular file`) is the symlink guard. Do not use a symlink. Do not keep a
+copy in the checkout.
 
 **3. Set the Coolify variables.** Add these values to the execution worker only. Never add them to the API service:
 
@@ -407,17 +409,24 @@ running "$W" && docker inspect "$W" --format '{{.Config.User}} {{range .Mounts}}
 running "$W" && docker exec "$W" printenv EDGE_OS_EXECUTION_MODE     # controlled
 running "$W" && docker exec "$W" stat -c '%F %u %g %a' /etc/edge-os/execution/agent-authorization.pem
 # must print: regular file 10001 10001 600
-docker logs --tail 100 "$W" 2>&1 | grep EXECUTION_BOOTSTRAP_ || echo "no bootstrap refusal"
+if running "$W" && docker logs --tail 100 "$W" > /tmp/edge-os-worker.log 2>&1; then
+  grep EXECUTION_BOOTSTRAP_ /tmp/edge-os-worker.log || echo "no bootstrap refusal"
+else
+  echo "FAIL: cannot read the worker log"
+fi
 ```
 
 A healthy worker with no `EXECUTION_BOOTSTRAP_*` line means admission passed. Any refusal line names the failed
-condition; fix that condition and redeploy. The API service keeps its own pinned `EDGE_OS_EXECUTION_MODE=unavailable`
-and must show none of the five signing names:
+condition; fix that condition and redeploy. A `FAIL` line is a failed check, never a pass. The API service keeps its
+own pinned `EDGE_OS_EXECUTION_MODE=unavailable` and must show none of the five signing names:
 
 ```sh
-running "$A" && docker inspect "$A" --format '{{range .Config.Env}}{{println .}}{{end}}' \
-  | grep -E '^EDGE_OS_EXECUTION_(PRIVY_APP_ID|PRIVY_APP_SECRET|AUTHORIZATION_KEY_PATH|SERVER_WALLET_ID|MONAD_RPC_URL)=' \
-  || echo "API holds no signing setting"
+if running "$API" && docker inspect "$API" --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/edge-os-api.env; then
+  grep -E '^EDGE_OS_EXECUTION_(PRIVY_APP_ID|PRIVY_APP_SECRET|AUTHORIZATION_KEY_PATH|SERVER_WALLET_ID|MONAD_RPC_URL)=' \
+    /tmp/edge-os-api.env || echo "API holds no signing setting"
+else
+  echo "FAIL: cannot read the API environment"
+fi
 ```
 
 ## 5. Backups and the restore drill
